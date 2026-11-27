@@ -15,16 +15,12 @@ The design is op_design.md. What each test covers:
   * test_groupnorm_affine_modes: gamma_only and no_affine.
   * test_groupnorm_large: a combine fan-in above 32 cores (gather tile rows R >= 2),
     plus refiner- and VAE-like sizes.
-  * test_groupnorm_residency_regimes: the regime pins, through TUNING_OVERRIDES:
-      - pure streaming (max_resident_chunks=0);
-      - partial tail residency (1, 5);
-      - full residency (default);
-    each with a 2-core cross-core combine.
-  * test_groupnorm_multi_unit_per_core: U >= P (cpi = 1, several blocks per core).
+  * test_groupnorm_residency_regimes: shapes whose default plan is pure streaming (K = 0),
+    partial tail residency (0 < K < B) or full residency, each with a cross-core combine.
+  * test_groupnorm_multi_unit_per_core: U > P (cpi = 1, several blocks per core), resident and
+    partially resident.
   * test_groupnorm_validation_errors: the structural ValueErrors.
 """
-
-import importlib
 
 import pytest
 import torch
@@ -37,8 +33,6 @@ from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import (
     create_ttnn_input_tensor,
     pytorch_groupnorm_sc_N_1_HW_C,
 )
-
-_OP_PKG = importlib.import_module("ttnn.operations.groupnorm_sc_N_1_HW_C_b")
 
 LAYOUTS = [
     pytest.param(ttnn.TILE_LAYOUT, id="TILE"),
@@ -64,13 +58,15 @@ def _to_device_affine(t, device):
     return create_ttnn_input_tensor(t, device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def _run_and_check(device, shape, num_groups, *, layout, affine="gamma_beta", eps=1e-5):
+def _run_and_check(device, shape, num_groups, *, layout, affine="gamma_beta", eps=1e-5, check_regime=None, regime=()):
     torch_input, gamma, beta = _make_inputs(shape, affine)
     expected = pytorch_groupnorm_sc_N_1_HW_C(torch_input, num_groups, gamma=gamma, beta=beta, eps=eps)
 
     tt_input = create_ttnn_input_tensor(torch_input, device, dtype=ttnn.bfloat16, layout=layout)
     tt_gamma = _to_device_affine(gamma, device)
     tt_beta = _to_device_affine(beta, device)
+    if check_regime is not None:
+        check_regime(regime, tt_input, num_groups, gamma=tt_gamma, beta=tt_beta, eps=eps)
 
     tt_output = groupnorm_sc_N_1_HW_C_b(tt_input, num_groups, gamma=tt_gamma, beta=tt_beta, eps=eps)
 
@@ -134,34 +130,39 @@ def test_groupnorm_large(device, shape, num_groups, eps):
     _run_and_check(device, shape, num_groups, layout=ttnn.TILE_LAYOUT, affine="gamma_beta", eps=eps)
 
 
-@pytest.mark.parametrize("layout", LAYOUTS)
+# Regime shapes are sized for the default plan on a 110-core Blackhole grid; assert_regime checks
+# that the planner still picks the intended regime.
 @pytest.mark.parametrize(
-    "max_resident_chunks",
+    "layout, shape, num_groups, regime",
     [
-        pytest.param(0, id="stream_only"),
-        pytest.param(1, id="partial_resident_1"),
-        pytest.param(5, id="partial_resident_5"),
-        pytest.param(None, id="fully_resident"),
+        pytest.param(ttnn.TILE_LAYOUT, (2, 1, 4096, 1760), 2, {"stream"}, id="TILE-stream_only"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, (1, 1, 4096, 1600), 1, {"stream"}, id="RM-stream_only"),
+        pytest.param(ttnn.TILE_LAYOUT, (1, 1, 131072, 512), 32, {"partial"}, id="TILE-partial_resident"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, (1, 1, 131072, 512), 32, {"partial"}, id="RM-partial_resident"),
+        pytest.param(ttnn.TILE_LAYOUT, (1, 1, 1024, 64), 1, {"full"}, id="TILE-fully_resident"),
+        pytest.param(ttnn.ROW_MAJOR_LAYOUT, (1, 1, 1024, 64), 1, {"full"}, id="RM-fully_resident"),
     ],
 )
-def test_groupnorm_residency_regimes(device, monkeypatch, max_resident_chunks, layout):
-    # With these overrides: 2 cores, one unit (G=1 gives one 2-tile span), cpi=2 (cross-core
-    # combine), 16 rows per core in 1-row chunks of T=2 tiles, so B=16 chunks per block.
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "max_cores", 2)
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "chunk_tiles_target", 2)
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "max_resident_chunks", max_resident_chunks)
-    _run_and_check(device, (1, 1, 1024, 64), 1, layout=layout, affine="gamma_beta")
+def test_groupnorm_residency_regimes(device, assert_regime, layout, shape, num_groups, regime):
+    _run_and_check(
+        device, shape, num_groups, layout=layout, affine="gamma_beta", check_regime=assert_regime, regime=regime
+    )
 
 
 @pytest.mark.parametrize("layout", LAYOUTS)
-@pytest.mark.parametrize("max_resident_chunks", [pytest.param(None, id="resident"), pytest.param(1, id="partial")])
-def test_groupnorm_multi_unit_per_core(device, monkeypatch, max_resident_chunks, layout):
-    # 2 cores, U = N*gx >= 4 units, so cpi = 1 and every core runs several blocks back to back.
+@pytest.mark.parametrize(
+    "shape, num_groups, regime",
+    [
+        pytest.param((112, 1, 32, 32), 32, {"full", "multi"}, id="resident"),
+        pytest.param((112, 1, 8192, 96), 2, {"partial", "multi"}, id="partial"),
+    ],
+)
+def test_groupnorm_multi_unit_per_core(device, assert_regime, layout, shape, num_groups, regime):
+    # U = N * gx > P units, so cpi = 1 and every core runs several blocks back to back.
     # This exercises the per-block pointer cycles of the alias groups and the gather semaphore reset.
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "max_cores", 2)
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "chunk_tiles_target", 4)
-    monkeypatch.setitem(_OP_PKG.TUNING_OVERRIDES, "max_resident_chunks", max_resident_chunks)
-    _run_and_check(device, (4, 1, 256, 128), 4, layout=layout, affine="gamma_beta")
+    _run_and_check(
+        device, shape, num_groups, layout=layout, affine="gamma_beta", check_regime=assert_regime, regime=regime
+    )
 
 
 def test_groupnorm_validation_errors(device, expect_error):

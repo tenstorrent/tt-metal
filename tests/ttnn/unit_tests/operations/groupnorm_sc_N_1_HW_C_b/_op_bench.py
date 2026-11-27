@@ -11,26 +11,11 @@ The cases are the DRAM-interleaved PERF FOCUS loose cases (feature_spec._PERF_CA
 of mid-size shapes. No correctness check here (the golden suite owns that).
 """
 
-import os
-
 import pytest
 import torch
 import ttnn
 
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES, groupnorm_sc_N_1_HW_C_b
-
-
-@pytest.fixture(autouse=True)
-def _tuning_from_env():
-    """A/B knobs: GN_BENCH_CHUNK=<tiles> overrides chunk_tiles_target for the whole bench run;
-    GN_BENCH_CHUNK_ZONES=1 compiles the per-chunk device zones in (breakdowns only: they add profiling overhead)."""
-    saved = dict(TUNING_OVERRIDES)
-    if os.environ.get("GN_BENCH_CHUNK"):
-        TUNING_OVERRIDES["chunk_tiles_target"] = int(os.environ["GN_BENCH_CHUNK"])
-    if os.environ.get("GN_BENCH_CHUNK_ZONES"):
-        TUNING_OVERRIDES["chunk_zones"] = True
-    yield
-    TUNING_OVERRIDES.update(saved)
+from ttnn.operations.groupnorm_sc_N_1_HW_C_b import groupnorm_sc_N_1_HW_C_b
 
 
 CASES = [

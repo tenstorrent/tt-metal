@@ -263,10 +263,6 @@ ttsl::hash::hash_t GroupnormScN1HwCbDeviceOperation::compute_program_hash(
     ttsl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<GroupnormScN1HwCbDeviceOperation>(
         attrs.num_groups,
         attrs.in_place,
-        attrs.max_resident_chunks,
-        attrs.chunk_tiles_target,
-        attrs.max_cores,
-        attrs.chunk_zones,
         tensor_args.input.tensor_spec(),
         tensor_args.gamma.has_value(),
         tensor_args.beta.has_value(),

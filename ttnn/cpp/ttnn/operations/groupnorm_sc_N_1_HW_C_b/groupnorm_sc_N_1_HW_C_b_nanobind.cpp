@@ -42,67 +42,6 @@ void translate_support_refusal(const std::exception_ptr& exception, void* /*payl
     }
 }
 
-std::optional<int32_t> tuning_int(const nb::dict& tuning, const char* key) {
-    if (!tuning.contains(key)) {
-        return std::nullopt;
-    }
-    const nb::object value = tuning[key];
-    if (value.is_none()) {
-        return std::nullopt;
-    }
-    return nb::cast<int32_t>(nb::int_(value));
-}
-
-struct TuningOverrides {
-    std::optional<int32_t> max_resident_chunks;
-    std::optional<int32_t> chunk_tiles_target;
-    std::optional<int32_t> max_cores;
-    bool chunk_zones = false;
-};
-
-// The package's TUNING_OVERRIDES (tests monkeypatch it) is read on every call. ttnn::bind_function calls the bound
-// function with the GIL released, so the dict is read under a re-acquired GIL, and no Python object outlives the call
-// (a function-static one would be released after the interpreter finalizes).
-TuningOverrides read_tuning_overrides() {
-    const nb::gil_scoped_acquire gil;
-    const nb::dict tuning =
-        nb::cast<nb::dict>(nb::module_::import_("ttnn.operations.groupnorm_sc_N_1_HW_C_b").attr("TUNING_OVERRIDES"));
-    bool chunk_zones = false;
-    if (tuning.contains("chunk_zones")) {
-        const nb::object zones = tuning["chunk_zones"];
-        chunk_zones = !zones.is_none() && nb::cast<bool>(nb::bool_(zones));
-    }
-    return TuningOverrides{
-        .max_resident_chunks = tuning_int(tuning, "max_resident_chunks"),
-        .chunk_tiles_target = tuning_int(tuning, "chunk_tiles_target"),
-        .max_cores = tuning_int(tuning, "max_cores"),
-        .chunk_zones = chunk_zones,
-    };
-}
-
-Tensor groupnorm_with_tuning(
-    const Tensor& input_tensor,
-    int num_groups,
-    const std::optional<Tensor>& gamma,
-    const std::optional<Tensor>& beta,
-    float eps,
-    bool in_place,
-    const std::optional<Tensor>& output_tensor) {
-    const TuningOverrides tuning = read_tuning_overrides();
-    return ttnn::groupnorm_sc_N_1_HW_C_b(
-        input_tensor,
-        num_groups,
-        gamma,
-        beta,
-        eps,
-        in_place,
-        output_tensor,
-        tuning.max_resident_chunks,
-        tuning.chunk_tiles_target,
-        tuning.max_cores,
-        tuning.chunk_zones);
-}
-
 // validate()'s shape-class gate: the planner the op runs, without a launch. Raises the op's refusals; returns the
 // solved plan's scalars.
 nb::dict plan_groupnorm(
@@ -112,15 +51,10 @@ nb::dict plan_groupnorm(
     const std::optional<Tensor>& beta,
     float eps,
     bool in_place) {
-    const TuningOverrides tuning = read_tuning_overrides();
     const GroupnormScN1HwCbParams params{
         .num_groups = static_cast<uint32_t>(num_groups),
         .eps = eps,
         .in_place = in_place,
-        .max_resident_chunks = tuning.max_resident_chunks,
-        .chunk_tiles_target = tuning.chunk_tiles_target,
-        .max_cores = tuning.max_cores,
-        .chunk_zones = tuning.chunk_zones,
     };
     const std::optional<Tensor> no_output;
     const GroupnormScN1HwCbInputs tensors{.input = input_tensor, .gamma = gamma, .beta = beta, .output = no_output};
@@ -206,7 +140,7 @@ void bind_groupnorm_sc_N_1_HW_C_b_operation(nb::module_& mod) {
             UnsupportedAxisValue, ExcludedCell: inputs outside the support contract.
             NotImplementedError: no feasible plan for the shape.
         )doc",
-        &groupnorm_with_tuning,
+        &ttnn::groupnorm_sc_N_1_HW_C_b,
         nb::arg("input_tensor"),
         nb::arg("num_groups"),
         nb::kw_only(),

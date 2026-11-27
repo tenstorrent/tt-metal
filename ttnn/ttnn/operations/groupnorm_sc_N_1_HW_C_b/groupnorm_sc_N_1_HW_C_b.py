@@ -6,8 +6,7 @@ groupnorm_sc_N_1_HW_C_b — GroupNorm over an (N, 1, HW, C) channels-last activa
 
 The operation is the native C++ ttnn.groupnorm_sc_N_1_HW_C_b (ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b),
 which plans, checks this support contract and refuses inputs outside it with the same exceptions; this module
-keeps the contract tables, validate() and TUNING_OVERRIDES (read by the binding on every call). Two-pass statistics (shifted moments Σ(x−k), Σx(x−k) per
-channel, k one sample per group) on a row-split, multi-core grid; per-core partials are collapsed to
+keeps the contract tables and validate(). Two-pass statistics (shifted moments Σ(x−k), Σx(x−k) per channel, k one sample per group) on a row-split, multi-core grid; per-core partials are collapsed to
 group lanes, gathered to a per-unit root, finalized to [rstd, mean], multicast back, expanded to
 per-channel a = rstd·γ and b' = mean·a − β, and applied as y = x·a − b'. Design: op_design.md.
 
@@ -22,21 +21,6 @@ from __future__ import annotations
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
-
-
-# ---------------------------------------------------------------------------
-# Tuning overrides (module-level, mutated in place; never rebound)
-# ---------------------------------------------------------------------------
-#
-# None = use the derived default. Read at every call and folded into the program
-# descriptor (CB sizes, RT args), so a monkeypatched value always takes effect.
-TUNING_OVERRIDES = {
-    "max_resident_chunks": None,
-    "chunk_tiles_target": None,
-    "max_cores": None,
-    # Profiling only: compile the per-chunk device zones in (perf_instrumentation.hpp). No effect without the profiler.
-    "chunk_zones": None,
-}
 
 
 # ---------------------------------------------------------------------------

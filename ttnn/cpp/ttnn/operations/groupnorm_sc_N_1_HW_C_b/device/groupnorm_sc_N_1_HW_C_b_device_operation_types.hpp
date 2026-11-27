@@ -22,12 +22,6 @@ struct GroupnormScN1HwCbParams {
     uint32_t num_groups = 1;
     float eps = 1e-5f;  // Python float; the kernel takes its fp32 bits
     bool in_place = false;
-    // The Python package's TUNING_OVERRIDES, read by the binding from the package on every call (tests monkeypatch
-    // them). std::nullopt = the derived default.
-    std::optional<int32_t> max_resident_chunks;
-    std::optional<int32_t> chunk_tiles_target;
-    std::optional<int32_t> max_cores;
-    bool chunk_zones = false;
 };
 
 struct GroupnormScN1HwCbInputs {

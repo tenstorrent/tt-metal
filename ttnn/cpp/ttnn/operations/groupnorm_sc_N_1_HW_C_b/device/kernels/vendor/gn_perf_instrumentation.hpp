@@ -30,28 +30,3 @@
 #ifndef MaybeDeviceZoneScope
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)
 #endif
-
-// MaybeDeviceZoneScopeIf(ENABLED, "stage_name"): the same zone, gated by a COMPILE-TIME bool. Use it for a zone
-// inside a loop whose trip count the host knows: the host sets ENABLED (a CT arg) only when every execution fits
-// the marker budget, so a long loop never silently exhausts it and hides the zones that follow. ENABLED = false
-// is an empty struct (no markers, no code), as is the whole macro with the profiler off.
-#if defined(PROFILE_STREAMING)
-// Not supported by the streaming profiler: these template-gated zones use the DRAM profiler's hash ids.
-#define MaybeDeviceZoneScopeIf(ENABLED, name)
-#elif defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL)
-namespace gn_perf_instrumentation {
-template <bool Enabled, uint32_t timer_id>
-struct GatedScope {
-    inline __attribute__((always_inline)) GatedScope() {}
-    inline __attribute__((always_inline)) ~GatedScope() {}
-};
-template <uint32_t timer_id>
-struct GatedScope<true, timer_id> : kernel_profiler::profileScope<timer_id> {};
-}  // namespace gn_perf_instrumentation
-#define MaybeDeviceZoneScopeIf(ENABLED, name)                                  \
-    DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
-    auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    gn_perf_instrumentation::GatedScope<(ENABLED), hash> zone;
-#else
-#define MaybeDeviceZoneScopeIf(ENABLED, name)
-#endif

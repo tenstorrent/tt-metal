@@ -26,7 +26,7 @@ from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import (
     pytorch_groupnorm_sc_N_1_HW_C,
     run_groupnorm_sc_N_1_HW_C,
 )
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES, groupnorm_sc_N_1_HW_C_b
+from ttnn.operations.groupnorm_sc_N_1_HW_C_b import groupnorm_sc_N_1_HW_C_b
 
 B8, BF16, F32 = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32
 TILE, RM = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
@@ -122,32 +122,42 @@ def test_op_error_quantized_input(device, shape, num_groups):
     check_output(out, expected, shape=shape, dtype=B8, expected_layout=TILE, tolerance=(0.9995, 0.03))
 
 
-def _run_with_tuning(device, inputs, **tuning):
-    saved = dict(TUNING_OVERRIDES)
-    TUNING_OVERRIDES.update(tuning)
-    try:
-        torch.manual_seed(0)
-        run_groupnorm_sc_N_1_HW_C(
-            inputs, device=device, dtype=B8, layout=TILE, affine="gamma_beta", affine_dtype=B8, affine_layout=TILE
-        )
-    finally:
-        TUNING_OVERRIDES.clear()
-        TUNING_OVERRIDES.update(saved)
+def _run_in_regime(device, assert_inputs_regime, inputs, regime):
+    """Runs a shape after checking the default plan puts it in `regime` (shapes are sized for a
+    110-core Blackhole grid)."""
+    kw = dict(dtype=B8, layout=TILE, affine_dtype=B8, affine_layout=TILE)
+    assert_inputs_regime(regime, inputs, **kw)
+    torch.manual_seed(0)
+    run_groupnorm_sc_N_1_HW_C(inputs, device=device, affine="gamma_beta", **kw)
 
 
 @pytest.mark.parametrize(
-    "inputs", [((1, 1, 4096, 320), 32), ((2, 1, 1000, 320), 32)], ids=["aligned", "hw_non_aligned"]
+    "inputs, regime",
+    [
+        # No hw-non-aligned bfloat8_b shape streams with default tuning; the streaming re-read is
+        # the same as the aligned case's.
+        pytest.param(((2, 1, 4096, 4096), 8), {"stream"}, id="aligned-stream_only"),
+        pytest.param(((2, 1, 32768, 1280), 32), {"partial"}, id="aligned-partial"),
+        pytest.param(((2, 1, 32744, 1280), 32), {"partial"}, id="hw_non_aligned-partial"),
+    ],
 )
-@pytest.mark.parametrize("max_resident", [0, 1], ids=["stream_only", "partial"])
-def test_bf8b_residency(device, inputs, max_resident):
+def test_bf8b_residency(device, assert_inputs_regime, inputs, regime):
     """K < B: the non-resident head is re-read in bfloat8_b for pass 2 (hw_non_aligned: the k-filled last chunk
     resident or re-read)."""
-    _run_with_tuning(device, inputs, max_resident_chunks=max_resident, chunk_tiles_target=10)
+    _run_in_regime(device, assert_inputs_regime, inputs, regime)
 
 
-def test_bf8b_multi_unit_per_core(device):
+@pytest.mark.parametrize(
+    "inputs, regime",
+    [
+        pytest.param(((112, 1, 32, 32), 32), {"full", "multi"}, id="aligned-resident"),
+        pytest.param(((112, 1, 16384, 96), 2), {"partial", "multi"}, id="aligned-partial"),
+        pytest.param(((112, 1, 100, 32), 32), {"full", "multi"}, id="hw_non_aligned-resident"),
+    ],
+)
+def test_bf8b_multi_unit_per_core(device, assert_inputs_regime, inputs, regime):
     """Several statistic units per core: the per-block pilot decode / k quantization / affine decode."""
-    _run_with_tuning(device, ((3, 1, 100, 640), 32), max_cores=4)
+    _run_in_regime(device, assert_inputs_regime, inputs, regime)
 
 
 @pytest.mark.parametrize(

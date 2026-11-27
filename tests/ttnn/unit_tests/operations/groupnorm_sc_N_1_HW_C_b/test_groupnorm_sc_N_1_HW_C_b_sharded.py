@@ -15,12 +15,13 @@ The output contract (BLOCK_SHARDED L1, identical shard spec, input layout, value
 input's buffer) is checked by the golden helper run_groupnorm_sc_N_1_HW_C.
 """
 
+import gc
+
 import pytest
 import torch
 import ttnn
 
 from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import run_groupnorm_sc_N_1_HW_C
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES
 
 AXES = dict(
     dtype=ttnn.bfloat16,
@@ -60,31 +61,40 @@ def test_sharded_inplace(device, inputs, layout):
     run_groupnorm_sc_N_1_HW_C(inputs, device=device, layout=layout, **{**AXES, "in_place": True})
 
 
-def _run_rm_partial_residency(device, max_resident, in_place):
-    TUNING_OVERRIDES["max_resident_chunks"] = max_resident
-    TUNING_OVERRIDES["chunk_tiles_target"] = 10
-    try:
-        torch.manual_seed(0)
-        run_groupnorm_sc_N_1_HW_C(
-            ((1, 1, 4096, 320), 32, (8, 8)),
-            device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            **{**AXES, "in_place": in_place},
-        )
-    finally:
-        TUNING_OVERRIDES["max_resident_chunks"] = None
-        TUNING_OVERRIDES["chunk_tiles_target"] = None
+# 8x8 RM shards too large for a resident ring with default tuning: 20480x1280 keeps a partial tail
+# (K = 9 of B = 16 chunks), 30720x1280 streams every chunk (K = 0). The streaming shard only fits
+# L1 in place: out of place, the input and output shards together overflow it.
+RM_PARTIAL = pytest.param(((1, 1, 20480, 1280), 32, (8, 8)), {"partial"}, id="partial")
+RM_STREAM = pytest.param(((1, 1, 30720, 1280), 32, (8, 8)), {"stream"}, id="stream_only")
 
 
-@pytest.mark.parametrize("max_resident", [0, 1])
-def test_sharded_rm_partial_residency(device, max_resident):
+def _run_rm_partial_residency(device, assert_inputs_regime, inputs, regime, in_place):
+    # These shards take over half of each core's L1, so the previous case's output shard must be
+    # freed before this case allocates its input.
+    gc.collect()
+    axes = {**AXES, "in_place": in_place}
+    assert_inputs_regime(
+        regime,
+        inputs,
+        dtype=axes["dtype"],
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        affine_dtype=axes["affine_dtype"],
+        affine_layout=axes["affine_layout"],
+        in_place=in_place,
+    )
+    torch.manual_seed(0)
+    run_groupnorm_sc_N_1_HW_C(inputs, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, **axes)
+
+
+@pytest.mark.parametrize("inputs, regime", [RM_PARTIAL])
+def test_sharded_rm_partial_residency(device, assert_inputs_regime, inputs, regime):
     """RM with K < B: the head chunks are re-tilized from the shard in pass 2 and the output shard is
     written tail-first behind head-skip credits."""
-    _run_rm_partial_residency(device, max_resident, in_place=False)
+    _run_rm_partial_residency(device, assert_inputs_regime, inputs, regime, in_place=False)
 
 
-@pytest.mark.parametrize("max_resident", [0, 1])
-def test_sharded_rm_partial_residency_inplace(device, max_resident):
+@pytest.mark.parametrize("inputs, regime", [RM_PARTIAL, RM_STREAM])
+def test_sharded_rm_partial_residency_inplace(device, assert_inputs_regime, inputs, regime):
     """In place with K < B: the tail is written over rows tilized in pass 1, and each head chunk is re-tilized
     from the shard right before its rows are overwritten."""
-    _run_rm_partial_residency(device, max_resident, in_place=True)
+    _run_rm_partial_residency(device, assert_inputs_regime, inputs, regime, in_place=True)

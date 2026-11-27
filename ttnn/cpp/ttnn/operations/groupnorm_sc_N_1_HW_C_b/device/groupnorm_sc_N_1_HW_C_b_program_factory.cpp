@@ -38,9 +38,6 @@ constexpr const char* kGnKernelDir = "ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_
 
 // The reader's output share holds one chunk (OUT_READER_CHUNKS).
 constexpr uint32_t kGnOutReaderChunks = 1;
-// Per-chunk device zones are compiled in only when a core's chunk steps fit the marker budget (Python
-// CHUNK_ZONE_MAX_STEPS).
-constexpr uint32_t kGnChunkZoneMaxSteps = 16;
 
 std::string gn_kernel_path(const char* name) { return std::string(kGnKernelDir) + name; }
 
@@ -216,10 +213,6 @@ ProgramDescriptor gn_descriptor(
     const uint32_t out_page_bytes = static_cast<uint32_t>(output.buffer()->page_size());
     const std::optional<Tensor>& aff_ref = gamma.has_value() ? gamma : beta;
     const uint32_t aff_page_bytes = aff_ref.has_value() ? static_cast<uint32_t>(aff_ref->buffer()->page_size()) : 0u;
-    const uint32_t chunk_zones =
-        (attrs.chunk_zones && plan.B_max + (plan.B_max - std::min(plan.K_alloc, plan.B_max)) <= kGnChunkZoneMaxSteps)
-            ? 1u
-            : 0u;
 
     std::vector<uint32_t> reader_ct(gargs::reader_ct::COUNT);
     {
@@ -237,7 +230,6 @@ ProgramDescriptor gn_descriptor(
         reader_ct[rc::IN_PAGE_BYTES] = in_page_bytes;
         reader_ct[rc::MAP_PERIOD] = map_period;
         reader_ct[rc::SHARDED] = sharded ? 1 : 0;
-        reader_ct[rc::CHUNK_ZONES] = chunk_zones;
         reader_ct[rc::HAS_STAGE] = has_stage ? 1 : 0;
         reader_ct[rc::OPS] = plan.ops_path ? 1 : 0;
         reader_ct[rc::IN_TILE_BYTES] = in_tile;
@@ -266,7 +258,6 @@ ProgramDescriptor gn_descriptor(
         ct[cc::R] = R;
         ct[cc::SHARDED] = sharded ? 1 : 0;
         ct[cc::IS_ROOT] = is_root;
-        ct[cc::CHUNK_ZONES] = chunk_zones;
         ct[cc::NU] = NU;
         ct[cc::MAP_PERIOD] = map_period;
         ct[cc::COL_MASK] = plan.col_mask ? 1 : 0;
@@ -290,7 +281,6 @@ ProgramDescriptor gn_descriptor(
         ct[wc::IS_ROOT] = is_root;
         ct[wc::IS_RM] = is_rm ? 1 : 0;
         ct[wc::SHARDED] = sharded ? 1 : 0;
-        ct[wc::CHUNK_ZONES] = chunk_zones;
         ct[wc::NU] = NU;
         ct[wc::HAS_STAGE] = has_stage ? 1 : 0;
         ct[wc::OPS] = plan.ops_path ? 1 : 0;

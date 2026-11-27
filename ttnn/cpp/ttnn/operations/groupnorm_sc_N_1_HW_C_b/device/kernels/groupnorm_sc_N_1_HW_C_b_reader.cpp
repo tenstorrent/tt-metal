@@ -178,8 +178,6 @@ void kernel_main() {
     // MAP_PERIOD: channels per slice (sharded: the shard width)
     constexpr uint32_t P = get_compile_time_arg_val(rct::MAP_PERIOD);
     constexpr bool SHARDED = get_compile_time_arg_val(rct::SHARDED) != 0;
-    // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
-    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(rct::CHUNK_ZONES) != 0;
     // Sharded RM (Refinement 3): partial / image-mixed tile rows are staged here (k-filled) for compute to tilize.
     constexpr bool HAS_STAGE = get_compile_time_arg_val(rct::HAS_STAGE) != 0;
     // Sharded, fully resident: the shard's pieces are walked once (no pass-2 re-read credits).
@@ -539,7 +537,6 @@ void kernel_main() {
         const uint32_t la = is_root ? 0 : sh_l0;
         const uint32_t lb = is_root ? g_unit : sh_l0 + n_own;
         {
-            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_pilot_issue");
             uint32_t l = la, c = la * CG;
             if constexpr (IS_RM) {
                 uint32_t pos = 0;
@@ -592,10 +589,7 @@ void kernel_main() {
             cb_push_back(cb_input_rm, pages);
         }
 
-        {
-            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_pilot_wait");
-            noc_async_read_barrier();
-        }
+        noc_async_read_barrier();
         for (uint32_t l = la; l < lb; ++l) {
             kv[l] = sv[kv[l]];
         }
@@ -830,7 +824,6 @@ void kernel_main() {
 
             {
                 // Back-pressure: compute has not freed the ring slot yet.
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_reserve");
                 // Pass-2 re-read: compute may be blocked on cb_output_b (this RISC's share), so write the share
                 // out while the ring has no room for the next chunk.
                 if (step > num_chunks) {
@@ -856,7 +849,6 @@ void kernel_main() {
             }
             const uint32_t chunk_base = IS_RM ? get_write_ptr(cb_input_rm) : get_write_ptr(cb_input_tiles);
             if constexpr (IS_RM) {
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 uint32_t page = n * HW + row0 * 32;
                 uint32_t dst = chunk_base;
                 // The image's last tile row holds HR valid sticks (the sticks after it are the next image's).
@@ -869,7 +861,6 @@ void kernel_main() {
                     dst += SLICE_BYTES;
                 }
             } else {
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_issue");
                 for (uint32_t r = 0; r < rows_valid; ++r) {
                     const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;
                     uint32_t dst = chunk_base + r * W * IN_TILE_BYTES;
@@ -880,10 +871,7 @@ void kernel_main() {
                 }
             }
 
-            {
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "r_barrier");
-                noc_async_read_barrier();
-            }
+            noc_async_read_barrier();
 
             if constexpr (HR != 0) {
                 if (step == 0) {

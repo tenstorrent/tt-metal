@@ -20,8 +20,6 @@ namespace ttnn {
 //   eps            > 0
 //   in_place       BLOCK_SHARDED only: the result overwrites the input shard and the input is returned
 //   output_tensor  preallocated output; must match the spec the op would allocate
-//   max_resident_chunks, chunk_tiles_target, max_cores, chunk_zones
-//                  the Python package's TUNING_OVERRIDES (nullopt / false = derived default)
 //
 // Refusals: std::invalid_argument (structural), UnsupportedAxisValue / ExcludedCell (support contract),
 // PlanNotImplemented (no feasible plan).
@@ -32,10 +30,6 @@ Tensor groupnorm_sc_N_1_HW_C_b(
     const std::optional<Tensor>& beta = std::nullopt,
     float eps = 1e-5f,
     bool in_place = false,
-    const std::optional<Tensor>& output_tensor = std::nullopt,
-    std::optional<int32_t> max_resident_chunks = std::nullopt,
-    std::optional<int32_t> chunk_tiles_target = std::nullopt,
-    std::optional<int32_t> max_cores = std::nullopt,
-    bool chunk_zones = false);
+    const std::optional<Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn

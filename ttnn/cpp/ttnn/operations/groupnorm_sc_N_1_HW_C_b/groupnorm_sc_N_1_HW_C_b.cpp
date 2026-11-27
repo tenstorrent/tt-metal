@@ -18,11 +18,7 @@ Tensor groupnorm_sc_N_1_HW_C_b(
     const std::optional<Tensor>& beta,
     float eps,
     bool in_place,
-    const std::optional<Tensor>& output_tensor,
-    std::optional<int32_t> max_resident_chunks,
-    std::optional<int32_t> chunk_tiles_target,
-    std::optional<int32_t> max_cores,
-    bool chunk_zones) {
+    const std::optional<Tensor>& output_tensor) {
     using namespace operations::groupnorm_sc_N_1_HW_C_b;
     if (num_groups < 1) {
         throw std::invalid_argument(fmt::format(
@@ -34,10 +30,6 @@ Tensor groupnorm_sc_N_1_HW_C_b(
         .num_groups = static_cast<uint32_t>(num_groups),
         .eps = eps,
         .in_place = in_place,
-        .max_resident_chunks = max_resident_chunks,
-        .chunk_tiles_target = chunk_tiles_target,
-        .max_cores = max_cores,
-        .chunk_zones = chunk_zones,
     };
     // The framework allocates the output before it validates: refuse here, before anything is allocated.
     check_support(params, {.input = input_tensor, .gamma = gamma, .beta = beta, .output = output_tensor});

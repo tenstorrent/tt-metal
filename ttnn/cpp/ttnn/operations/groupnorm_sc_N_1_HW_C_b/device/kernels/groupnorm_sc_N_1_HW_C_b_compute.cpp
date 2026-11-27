@@ -111,9 +111,6 @@ constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
 constexpr bool IS_ROOT = get_compile_time_arg_val(gct::IS_ROOT) != 0;
-// Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
-// the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
-constexpr bool CHUNK_ZONES = get_compile_time_arg_val(gct::CHUNK_ZONES) != 0;
 // Images per statistic unit (sharded: an image band of the grid; interleaved: 1). cb_group_stats holds
 // [rstd, mean*rstd] per image, then e.
 constexpr uint32_t NU = get_compile_time_arg_val(gct::NU);
@@ -171,7 +168,6 @@ ALWI void push_pad(uint32_t cb, uint32_t pad) {
 // RM: tilize one chunk (rows_valid tile-rows of W tiles) from cb_input_rm into the input ring, then consume
 // the rm pad pages and push the pad so every ring advances by the nominal T (both ring views in lockstep).
 NOINLINE_BLOCK_OP void tilize_chunk(uint32_t rows_valid) {
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_tilize");
     DataflowBuffer rm_dfb(cb_input_rm);
     DataflowBuffer x_dfb(cb_input_tiles);
     cb_reserve_back(cb_input_keep, T);
@@ -188,7 +184,6 @@ NOINLINE_BLOCK_OP void tilize_chunk(uint32_t rows_valid) {
 // Sharded ops path: one piece (rows tile rows) -> the input ring, both views in lockstep; a staged piece (one tile
 // row) comes from cb_rm_stage_in, a full one from the shard (cb_input_rm).
 NOINLINE_BLOCK_OP void tilize_piece(uint32_t rows, [[maybe_unused]] bool staged) {
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_tilize");
     DataflowBuffer x_dfb(cb_input_tiles);
     cb_reserve_back(cb_input_keep, rows * W);
     if constexpr (HAS_STAGE) {
@@ -412,7 +407,6 @@ sfpi_inline void col_mask_sfpu(const int base, const int vc) {
 // Channel tiles c >= w_valid (a padded TILE slice) contribute nothing (their accumulators stay at DEST's zero).
 NOINLINE_BLOCK_OP void moments_rows(
     uint32_t row0, uint32_t rows, bool first, bool last, uint32_t w_valid, [[maybe_unused]] uint32_t vc) {
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_moments");
     constexpr uint32_t x_cb = cb_input_tiles;
     pack_reconfig_data_format(cb_sum_acc);  // every target (7, 8, 9, 10) is Float32
     for (uint32_t c = 0; c < W; ++c) {
@@ -637,11 +631,7 @@ ALWI void normalize_tiles(uint32_t x_cb, uint32_t x0, uint32_t n, uint32_t out_c
 ALWI void normalize_chunk(uint32_t rows_valid, uint32_t q) {
     constexpr uint32_t x_cb = cb_input_keep;
     const uint32_t out_cb = output_cb_for(q);
-    {
-        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
-        cb_wait_front(x_cb, T);
-    }
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
+    cb_wait_front(x_cb, T);
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
     const uint32_t n = rows_valid * W;
@@ -699,11 +689,7 @@ ALWI void normalize_untilize_rows(uint32_t x_cb, uint32_t x_row0, uint32_t rows)
 
 ALWI void normalize_untilize_chunk(uint32_t rows_valid) {
     constexpr uint32_t x_cb = cb_input_keep;
-    {
-        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_wait_x");
-        cb_wait_front(x_cb, T);
-    }
-    MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p2_normalize");
+    cb_wait_front(x_cb, T);
     cb_wait_front(cb_chan_scale, W);
     cb_wait_front(cb_bprime, W);
     normalize_untilize_rows<cb_output_rm>(x_cb, 0, rows_valid);
@@ -1061,10 +1047,7 @@ void kernel_main() {
                     if constexpr (IS_RM) {
                         tilize_chunk(rows_valid);
                     }
-                    {
-                        MaybeDeviceZoneScopeIf(CHUNK_ZONES, "c_p1_wait_x");
-                        cb_wait_front(cb_input_tiles, T);
-                    }
+                    cb_wait_front(cb_input_tiles, T);
                     if (j == 0) {
                         wait_pilot();
                     }

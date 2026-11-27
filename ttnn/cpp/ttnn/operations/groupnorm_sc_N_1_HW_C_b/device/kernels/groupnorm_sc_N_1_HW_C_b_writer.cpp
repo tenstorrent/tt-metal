@@ -69,8 +69,6 @@ void kernel_main() {
     constexpr bool IS_ROOT = get_compile_time_arg_val(wct::IS_ROOT) != 0;  // one binary per role (root / member)
     constexpr bool IS_RM = get_compile_time_arg_val(wct::IS_RM) != 0;
     constexpr bool SHARDED = get_compile_time_arg_val(wct::SHARDED) != 0;
-    // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
-    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(wct::CHUNK_ZONES) != 0;
     constexpr uint32_t NU = get_compile_time_arg_val(wct::NU);  // images per statistic unit (2 stats pages each)
     constexpr bool HAS_STAGE = get_compile_time_arg_val(wct::HAS_STAGE) != 0;
     constexpr bool OPS = get_compile_time_arg_val(wct::OPS) != 0;      // sharded, fully resident pieces
@@ -275,11 +273,7 @@ void kernel_main() {
             const uint32_t row0 = row_start + j * CHUNK_HT;
             const uint32_t rows_left = rows_core - j * CHUNK_HT;
             const uint32_t rows_valid = rows_left < CHUNK_HT ? rows_left : CHUNK_HT;
-            {
-                MaybeDeviceZoneScopeIf(CHUNK_ZONES, "w_wait_out");
-                cb_wait_front(cb_output_tiles, T);
-            }
-            MaybeDeviceZoneScopeIf(CHUNK_ZONES, "w_issue");
+            cb_wait_front(cb_output_tiles, T);
             const uint32_t src0 = get_read_ptr(cb_output_tiles);
             for (uint32_t r = 0; r < rows_valid; ++r) {
                 const uint32_t tile0 = (n * HT + row0 + r) * WT_TOTAL + wt0;

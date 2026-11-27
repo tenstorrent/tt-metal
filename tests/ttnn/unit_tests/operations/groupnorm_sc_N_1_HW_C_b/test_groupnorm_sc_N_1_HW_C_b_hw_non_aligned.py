@@ -23,7 +23,7 @@ from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import (
     pytorch_groupnorm_sc_N_1_HW_C,
     run_groupnorm_sc_N_1_HW_C,
 )
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES, groupnorm_sc_N_1_HW_C_b
+from ttnn.operations.groupnorm_sc_N_1_HW_C_b import groupnorm_sc_N_1_HW_C_b
 
 F32, BF16 = ttnn.float32, ttnn.bfloat16
 TILE, RM = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
@@ -126,37 +126,43 @@ def test_offset_heavy(device, layout, dtype):
     _run_direct(device, x, 8, dtype, layout)
 
 
-def _run_with_tuning(device, inputs, layout, dtype, **tuning):
-    saved = dict(TUNING_OVERRIDES)
-    TUNING_OVERRIDES.update(tuning)
-    try:
-        torch.manual_seed(0)
-        run_groupnorm_sc_N_1_HW_C(
-            inputs,
-            device=device,
-            dtype=dtype,
-            layout=layout,
-            affine="gamma_beta",
-            affine_dtype=BF16,
-            affine_layout=RM,
-        )
-    finally:
-        TUNING_OVERRIDES.clear()
-        TUNING_OVERRIDES.update(saved)
+def _run_in_regime(device, assert_inputs_regime, inputs, layout, dtype, regime):
+    """Runs a shape after checking the default plan puts it in `regime` (shapes are sized for a
+    110-core Blackhole grid)."""
+    kw = dict(dtype=dtype, layout=layout, affine_dtype=BF16, affine_layout=RM)
+    assert_inputs_regime(regime, inputs, **kw)
+    torch.manual_seed(0)
+    run_groupnorm_sc_N_1_HW_C(inputs, device=device, affine="gamma_beta", **kw)
 
 
-@pytest.mark.parametrize("dtype", [BF16, F32], ids=["bf16", "fp32"])
-@pytest.mark.parametrize("layout", [TILE, RM], ids=["tile", "rm"])
-@pytest.mark.parametrize("max_resident", [0, 1], ids=["stream_only", "partial"])
-def test_residency(device, layout, dtype, max_resident):
+@pytest.mark.parametrize(
+    "dtype, layout, inputs, regime",
+    [
+        # bf16 TILE has no hw-non-aligned shape that streams with default tuning (it stays resident
+        # up to the shape limits); the streaming re-read is covered by fp32 TILE and bf16 RM.
+        pytest.param(BF16, RM, ((2, 1, 2024, 1568), 1), {"stream"}, id="bf16-rm-stream_only"),
+        pytest.param(F32, TILE, ((2, 1, 2024, 2496), 2), {"stream"}, id="fp32-tile-stream_only"),
+        pytest.param(F32, RM, ((2, 1, 1000, 2240), 2), {"stream"}, id="fp32-rm-stream_only"),
+        pytest.param(BF16, TILE, ((2, 1, 65512, 512), 32), {"partial"}, id="bf16-tile-partial"),
+        pytest.param(BF16, RM, ((2, 1, 65512, 512), 32), {"partial"}, id="bf16-rm-partial"),
+        pytest.param(F32, TILE, ((2, 1, 32744, 512), 32), {"partial"}, id="fp32-tile-partial"),
+        pytest.param(F32, RM, ((2, 1, 16360, 640), 32), {"partial"}, id="fp32-rm-partial"),
+    ],
+)
+def test_residency(device, assert_inputs_regime, dtype, layout, inputs, regime):
     """K < B: several chunks per core, the last (k-filled) chunk resident or re-read in pass 2 (RM: valid sticks
     only, re-tilized)."""
-    _run_with_tuning(
-        device, ((2, 1, 1000, 320), 32), layout, dtype, max_resident_chunks=max_resident, chunk_tiles_target=10
-    )
+    _run_in_regime(device, assert_inputs_regime, inputs, layout, dtype, regime)
 
 
 @pytest.mark.parametrize("layout", [TILE, RM], ids=["tile", "rm"])
-def test_multi_unit_per_core(device, layout):
+@pytest.mark.parametrize(
+    "inputs, regime",
+    [
+        pytest.param(((112, 1, 100, 32), 32), {"full", "multi"}, id="resident"),
+        pytest.param(((112, 1, 16360, 64), 1), {"partial", "multi"}, id="partial"),
+    ],
+)
+def test_multi_unit_per_core(device, assert_inputs_regime, layout, inputs, regime):
     """Several units (images x slices) per core: every block has a partial last tile row and fills it."""
-    _run_with_tuning(device, ((3, 1, 100, 640), 32), layout, BF16, max_cores=4)
+    _run_in_regime(device, assert_inputs_regime, inputs, layout, BF16, regime)

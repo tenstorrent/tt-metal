@@ -20,7 +20,6 @@ import torch
 import ttnn
 
 from eval.golden_tests.groupnorm_sc_N_1_HW_C_b.helpers import run_groupnorm_sc_N_1_HW_C
-from ttnn.operations.groupnorm_sc_N_1_HW_C_b import TUNING_OVERRIDES
 
 F32, BF16 = ttnn.float32, ttnn.bfloat16
 TILE, RM = ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT
@@ -101,36 +100,41 @@ def test_fp32_input_odd_cg(device, inputs, layout):
     )
 
 
-def _run_with_tuning(device, inputs, layout, **tuning):
-    saved = dict(TUNING_OVERRIDES)
-    TUNING_OVERRIDES.update(tuning)
-    try:
-        torch.manual_seed(0)
-        run_groupnorm_sc_N_1_HW_C(
-            inputs,
-            device=device,
-            dtype=F32,
-            layout=layout,
-            affine="gamma_beta",
-            affine_dtype=F32,
-            affine_layout=TILE,
-        )
-    finally:
-        TUNING_OVERRIDES.clear()
-        TUNING_OVERRIDES.update(saved)
+def _run_in_regime(device, assert_inputs_regime, inputs, layout, regime):
+    """Runs a Float32 shape after checking the default plan puts it in `regime` (shapes are sized
+    for a 110-core Blackhole grid)."""
+    kw = dict(dtype=F32, layout=layout, affine_dtype=F32, affine_layout=TILE)
+    assert_inputs_regime(regime, inputs, **kw)
+    torch.manual_seed(0)
+    run_groupnorm_sc_N_1_HW_C(inputs, device=device, affine="gamma_beta", **kw)
 
 
-@pytest.mark.parametrize("layout", [TILE, RM], ids=["tile", "rm"])
-@pytest.mark.parametrize("max_resident", [0, 1], ids=["stream_only", "partial"])
-def test_fp32_residency(device, layout, max_resident):
+@pytest.mark.parametrize(
+    "layout, inputs, regime",
+    [
+        pytest.param(TILE, ((2, 1, 4096, 1120), 1), {"stream"}, id="tile-stream_only"),
+        pytest.param(RM, ((1, 1, 4096, 992), 1), {"stream"}, id="rm-stream_only"),
+        pytest.param(TILE, ((1, 1, 65536, 512), 32), {"partial"}, id="tile-partial"),
+        pytest.param(RM, ((1, 1, 32768, 640), 32), {"partial"}, id="rm-partial"),
+    ],
+)
+def test_fp32_residency(device, assert_inputs_regime, layout, inputs, regime):
     """K < B: the non-resident head is re-read in Float32 for pass 2 (and re-tilized for RM)."""
-    _run_with_tuning(device, ((1, 1, 4096, 320), 32), layout, max_resident_chunks=max_resident, chunk_tiles_target=10)
+    _run_in_regime(device, assert_inputs_regime, inputs, layout, regime)
 
 
-@pytest.mark.parametrize("layout", [TILE, RM], ids=["tile", "rm"])
-def test_fp32_multi_unit_per_core(device, layout):
-    """Several statistic units per core (max_cores small): the per-block pilot / affine / output share in Float32."""
-    _run_with_tuning(device, ((2, 1, 1024, 640), 32), layout, max_cores=4)
+@pytest.mark.parametrize(
+    "layout, inputs, regime",
+    [
+        pytest.param(TILE, ((112, 1, 32, 32), 32), {"full", "multi"}, id="tile-resident"),
+        pytest.param(RM, ((112, 1, 32, 32), 32), {"full", "multi"}, id="rm-resident"),
+        pytest.param(TILE, ((112, 1, 4096, 96), 2), {"partial", "multi"}, id="tile-partial"),
+        pytest.param(RM, ((112, 1, 8192, 32), 4), {"partial", "multi"}, id="rm-partial"),
+    ],
+)
+def test_fp32_multi_unit_per_core(device, assert_inputs_regime, layout, inputs, regime):
+    """Several statistic units per core (U > P): the per-block pilot / affine / output share in Float32."""
+    _run_in_regime(device, assert_inputs_regime, inputs, layout, regime)
 
 
 @pytest.mark.parametrize(

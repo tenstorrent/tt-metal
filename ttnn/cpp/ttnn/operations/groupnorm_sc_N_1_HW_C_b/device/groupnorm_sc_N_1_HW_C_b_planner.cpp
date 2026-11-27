@@ -263,12 +263,8 @@ Plan plan_interleaved(const PlanInputs& in) {
     const int64_t gps = L / Cg;
     const int64_t S = tt::div_up(C, L);
 
-    int64_t P = static_cast<int64_t>(in.grid_x) * in.grid_y;
-    if (in.max_cores.has_value()) {
-        P = std::max<int64_t>(1, std::min<int64_t>(P, *in.max_cores));
-    }
-    int64_t chunk_target = in.chunk_tiles_target.has_value() ? *in.chunk_tiles_target : kChunkTilesTarget;
-    chunk_target = std::max<int64_t>(1, chunk_target);
+    const int64_t P = static_cast<int64_t>(in.grid_x) * in.grid_y;
+    const int64_t chunk_target = kChunkTilesTarget;
     const int64_t l1_budget = in.l1_budget;
 
     const InterleavedGeometry geom{
@@ -312,12 +308,7 @@ Plan plan_interleaved(const PlanInputs& in) {
     if (floor_div(l1_budget - f_resident, chunk_bytes) >= B_max) {
         K_max = std::max(K_max, B_max);
     }
-    int64_t K_alloc = 0;
-    if (!in.max_resident_chunks.has_value()) {
-        K_alloc = std::min(B_max, K_max);
-    } else {
-        K_alloc = std::max<int64_t>(0, std::min({static_cast<int64_t>(*in.max_resident_chunks), K_max, B_max}));
-    }
+    const int64_t K_alloc = std::min(B_max, K_max);
     const bool stream = B_max > K_alloc;
     fp.K_alloc = K_alloc;
     fp.stream = stream;
@@ -375,7 +366,7 @@ struct ShardGeometry {
     int64_t k = 1, W = 0, tr = 0;
     bool split_cols = false;
     int64_t cl_cols = 0, lanes_max = 0, bh = 0, unit_cores = 0, R = 0;
-    int64_t rows_nominal = 0, cap = 0;
+    int64_t rows_nominal = 0;
 
     int64_t vrows(int64_t y) const { return std::min(sh, NHW - (y * sh)); }
     int64_t vcols(int64_t x) const { return std::min(sw, C - (x * sw)); }
@@ -470,7 +461,6 @@ ShardGeometry shard_geometry(const PlanInputs& in) {
     g.unit_cores = g.bh * g.cl_cols;
     g.R = tt::div_up(g.unit_cores, kTileDim);
     g.rows_nominal = tt::div_up(sh, g.tr);
-    g.cap = !in.chunk_tiles_target.has_value() ? g.rows_nominal : std::max<int64_t>(1, *in.chunk_tiles_target) / g.W;
     return g;
 }
 
@@ -567,7 +557,6 @@ Plan plan_sharded(const PlanInputs& in) {
     const int64_t l1_budget = in.l1_budget;
 
     const int64_t rows_nominal = g.rows_nominal;
-    const int64_t cap = g.cap;
     auto fp_common = [&](int64_t T) {
         Footprint fp;
         fp.W = W;
@@ -589,7 +578,7 @@ Plan plan_sharded(const PlanInputs& in) {
     // RM: each shard row's ring rows and staged rows, counted from its op words without storing them.
     int64_t h_ops = 0, fp_ops = 0, stage_pages = 0, max_ring_rows = 0;
     if (is_rm) {
-        h_ops = std::min(cap, rows_nominal);
+        h_ops = rows_nominal;
         int64_t n_staged = 0;
         for (int64_t y = 0; y < gy; ++y) {
             int64_t rr = 0;
@@ -617,14 +606,7 @@ Plan plan_sharded(const PlanInputs& in) {
     bool ops_path = false;
     if (!is_rm) {
         rows_core = rows_nominal;
-        h = 0;
-        for (int64_t d = std::min(cap, rows_core); d > 0; --d) {
-            if (rows_core % d == 0) {
-                h = d;
-                break;
-            }
-        }
-        TT_FATAL(h > 0, "groupnorm_sc_N_1_HW_C_b: no chunk height divides {} tile rows under cap {}", rows_core, cap);
+        h = rows_core;
         T = h * W;
         B = rows_core / h;
         K_alloc = B;
@@ -650,8 +632,7 @@ Plan plan_sharded(const PlanInputs& in) {
             refuse_sharded(
                 fmt::format("the static CBs ({} B) exceed the L1 left beside the shards ({} B)", f_fixed, l1_budget));
         }
-        K_alloc =
-            std::min(!in.max_resident_chunks.has_value() ? K_part : std::max<int64_t>(0, *in.max_resident_chunks), B);
+        K_alloc = std::min(K_part, B);
         fp.K_alloc = K_alloc;
         fp.stream = B > K_alloc;
         footprint = footprint_bytes(fp);
@@ -665,28 +646,11 @@ Plan plan_sharded(const PlanInputs& in) {
         }
         rows_core = rows_nominal;
         h = h_ops;
-        TT_FATAL(h > 0, "groupnorm_sc_N_1_HW_C_b: chunk height 0 (chunk_tiles_target below the slice width)");
         T = h * W;
         B = tt::div_up(rows_core, h);
         K_alloc = B;
         footprint = fp_ops;
         ops_path = true;
-        const int64_t h_l = largest_divisor_at_most(rows_core, std::min(cap, rows_core));
-        if (in.max_resident_chunks.has_value() && simple && *in.max_resident_chunks < rows_core / h_l) {
-            h = h_l;
-            T = h * W;
-            B = rows_core / h;
-            Footprint fp = fp_common(T);
-            fp.K_alloc = 0;
-            fp.stream = true;
-            const int64_t K_part = floor_div(l1_budget - footprint_bytes(fp), in_tile(fmt) * T);
-            K_alloc = std::max<int64_t>(0, std::min<int64_t>(*in.max_resident_chunks, K_part));
-            stage_pages = 0;
-            fp.K_alloc = K_alloc;
-            fp.stream = true;
-            footprint = footprint_bytes(fp);
-            ops_path = false;
-        }
     }
     if (footprint > l1_budget) {
         refuse_sharded(
@@ -749,7 +713,7 @@ std::vector<CoreWork> sharded_work(const PlanInputs& in) {
     const int64_t cl_cols = g.cl_cols;
     const bool split_cols = g.split_cols;
     const bool is_rm = in.is_rm;
-    const int64_t h_ops = std::min(g.cap, g.rows_nominal);
+    const int64_t h_ops = g.rows_nominal;
 
     std::vector<CoreWork> work;
     work.reserve(static_cast<size_t>(gx * gy));
@@ -839,9 +803,6 @@ struct PlanInputsHash {
         mix(p.grid_x);
         mix(p.grid_y);
         mix(p.l1_budget);
-        mix(p.max_resident_chunks.value_or(-1));
-        mix(p.chunk_tiles_target.value_or(-1));
-        mix(p.max_cores.value_or(-1));
         mix(p.sharded);
         mix(p.sh);
         mix(p.sw);
@@ -888,9 +849,6 @@ PlanInputs plan_inputs(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1
     in.grid_x = static_cast<uint32_t>(grid.x);
     in.grid_y = static_cast<uint32_t>(grid.y);
     in.l1_budget = l1_cb_budget(device);
-    in.max_resident_chunks = attrs.max_resident_chunks;
-    in.chunk_tiles_target = attrs.chunk_tiles_target;
-    in.max_cores = attrs.max_cores;
     if (input.is_sharded()) {
         const auto& mem = input.memory_config();
         TT_FATAL(mem.shard_spec().has_value(), "groupnorm_sc_N_1_HW_C_b: a sharded input needs a shard spec");

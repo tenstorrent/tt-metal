@@ -40,9 +40,6 @@ struct PlanInputs {
     Formats fmt;
     uint32_t grid_x = 0, grid_y = 0;  // device->compute_with_storage_grid_size()
     uint32_t l1_budget = 0;
-    std::optional<int32_t> max_resident_chunks;
-    std::optional<int32_t> chunk_tiles_target;
-    std::optional<int32_t> max_cores;
     // Block-sharded input only (sharded == false: all zero).
     bool sharded = false;
     bool shard_in_l1 = false;
