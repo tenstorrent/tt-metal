@@ -120,7 +120,7 @@ granule of each slot / write only a 32 B partial slot. That needs per-row NoC tr
 which the transaction issue cost makes slower. Trid multi-block issue is not needed: one ≈43 KB block per
 core in flight already exceeds the per-core bandwidth Little's law asks for at this aggregate rate.
 
-### [ ] Refinement 4 — Speed up the flagged TILE profiles (Q2185, P39): read/convert/write overlap
+### [x] Refinement 4 — Speed up the flagged TILE profiles (Q2185, P39): read/convert/write overlap
 
 **Type**: perf
 
@@ -136,3 +136,22 @@ cap wins, derive it in `plan_blocks` (single source), not as a literal in the ke
 **Done when**: measured device-ns improves on Q2185 and P39 with their gates intact, the golden suite is green,
 and no regression across the config-spanning guard set (R1 TILE DRAM/L1 per arm family, R2 ROW_MAJOR DRAM, and a
 decode shape such as Q2191/Q2227 where a smaller block cannot help).
+
+**Outcome**: the R1 block is now capped at `TILE_BLOCK_TILES = 4` (in `plan_blocks`), with depth 2. Device-kernel ns
+(BH, 110 cores, one fresh run each): P39 69.5 → 17.3 µs (4.0×); Q2185 36.6 → 35.2 µs (≈4%, near the noise band).
+Guards: Q2187 7.6 → 7.5, i32 [8,1024,256] DRAM 38.8 → 35.3, f32 L1 [4,512,512] 9.3 → 8.4, Q2191 1.28 → 1.25 µs.
+F322 1.55 ms and F317 ≈ 0.37 ms are unchanged (R2 is untouched).
+Bottlenecks now:
+- Q2185 is DRAM-bound. Ablation: writes alone 28.9 µs, reads alone 11.9 µs, both stubbed 1.5 µs. The 12.6 MB of
+  physical traffic moves at about 366 GB/s; 8 MB of it is fp32 tile padding of W=12 that the TILE ABI fixes.
+- P39 is NoC-congestion-bound on the L1 banks. More reads in flight makes it slower: trid window 2 → 19.9 µs, 3 → 25.2 µs.
+  The 69.5 µs single-block run is the extreme of the same effect.
+Measured and not kept:
+- `READ_INFLIGHT` trid window: no win at 2–3. Parked at 1 as a live knob; that path issues the same reads and barriers
+  as before.
+- Swapping the NoCs (reads on NoC1, writes on NoC0): Q2185 53.0 µs, a big regression.
+- `UnpackToDestFp32` on the bf16 source: flat at 35.6 µs (compute is off the critical path).
+- `bank_stagger`: not implemented. Per-core tile counts (18/19, 74/75) are not multiples of 8 DRAM / 110 L1 banks, so
+  core starts already fall on spread-out banks.
+Next to try: on P39, pace the reads, for example by striding each core's walk across banks to reduce hot spots. On
+Q2185, nothing short of fewer bytes.

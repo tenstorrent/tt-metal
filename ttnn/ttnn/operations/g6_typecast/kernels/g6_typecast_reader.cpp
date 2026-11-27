@@ -21,6 +21,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "g6_typecast_rm_rows.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 
 namespace {
 
@@ -70,7 +71,10 @@ void kernel_main() {
     constexpr uint32_t values_per_row = get_compile_time_arg_val(10);
     constexpr uint32_t staging_align = get_compile_time_arg_val(11);
     constexpr uint32_t staging_depth = get_compile_time_arg_val(12);
-    constexpr auto input_args = TensorAccessorArgs<13>();
+    // TILE only: blocks of reads kept in flight (1 = one barrier per block); CB depth in blocks.
+    constexpr uint32_t read_inflight = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_blocks = get_compile_time_arg_val(14);
+    constexpr auto input_args = TensorAccessorArgs<15>();
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
@@ -140,20 +144,9 @@ void kernel_main() {
     CircularBuffer cb_in(cb_input_tiles);
 
     const uint32_t end_tile = start_tile + core_tiles;
-    for (uint32_t block_start = start_tile; block_start < end_tile; block_start += block_tiles) {
-        DeviceZoneScopedN("READ_BLOCK");
-        const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
-        {
-            DeviceZoneScopedN("READ_WAIT_SPACE");
-            cb_reserve_back(cb_input_tiles, block_extent);
-        }
-        uint32_t l1_addr = get_write_ptr(cb_input_tiles);
-        for (uint32_t t = 0; t < block_extent; ++t) {
-            noc_async_read_page(block_start + t, input_accessor, l1_addr);
-            l1_addr += in_page_bytes;
-        }
-        noc_async_read_barrier();
-
+    // Retire a landed block (the oldest unpushed one, so it sits at the CB write pointer): bf8b pad-column
+    // mask, then publish it.
+    auto finish_block = [&](uint32_t block_start, uint32_t block_extent) {
         if constexpr (mask_pad_columns) {
             // Last-tile-column tiles of this block: page id % tensor_tile_cols == tensor_tile_cols - 1.
             for (uint32_t t = 0; t < block_extent; ++t) {
@@ -163,7 +156,66 @@ void kernel_main() {
             }
             noc.write_zeros_l1_barrier();
         }
-
         cb_push_back(cb_input_tiles, block_extent);
+    };
+    auto issue_block = [&](uint32_t block_start, uint32_t block_extent, uint32_t l1_addr) {
+        for (uint32_t t = 0; t < block_extent; ++t) {
+            noc_async_read_page(block_start + t, input_accessor, l1_addr);
+            l1_addr += in_page_bytes;
+        }
+    };
+
+    uint32_t block_start = start_tile;
+    if constexpr (read_inflight > 1) {
+        // Sliding window of `read_inflight` full blocks on the wire (catalog `trid_double_issue`): block k is
+        // tagged with id (k % read_inflight) + 1, which block k - read_inflight also carried, so ONE
+        // trid-scoped barrier retires the oldest block and frees its id while the younger blocks keep the
+        // NoC busy. The CB write pointer only advances on push, so block k lands `in_flight` block slots past
+        // it (wrapped by hand); reserving (in_flight + 1) blocks makes that slot safe. The ragged tail (and a
+        // core with fewer tiles than one block) takes the plain path below.
+        static_assert(read_inflight <= NOC_MAX_TRANSACTION_ID, "read_inflight exceeds the NoC transaction id range");
+        static_assert(block_tiles <= NOC_MAX_TRANSACTION_ID_COUNT, "block exceeds the per-id pending-read counter");
+        constexpr uint32_t block_bytes = block_tiles * in_page_bytes;
+        const uint32_t cb_base = get_write_ptr(cb_input_tiles);  // nothing pushed yet: start of the CB region
+        const uint32_t cb_end = cb_base + cb_blocks * block_bytes;
+        const uint32_t full_blocks = core_tiles / block_tiles;
+        for (uint32_t k = 0; k < full_blocks; ++k) {
+            DeviceZoneScopedN("READ_BLOCK");
+            const uint32_t trid = (k % read_inflight) + 1;
+            if (k >= read_inflight) {
+                dataflow_kernel_lib::async_read_barrier_with_trid(noc, trid);
+                finish_block(start_tile + (k - read_inflight) * block_tiles, block_tiles);
+            }
+            const uint32_t in_flight = (k < read_inflight) ? k : (read_inflight - 1);
+            {
+                DeviceZoneScopedN("READ_WAIT_SPACE");
+                cb_reserve_back(cb_input_tiles, (in_flight + 1) * block_tiles);
+            }
+            uint32_t l1_addr = get_write_ptr(cb_input_tiles) + in_flight * block_bytes;
+            if (l1_addr >= cb_end) {
+                l1_addr -= cb_end - cb_base;
+            }
+            dataflow_kernel_lib::set_read_trid(noc, trid);
+            issue_block(start_tile + k * block_tiles, block_tiles, l1_addr);
+        }
+        const uint32_t to_drain = (full_blocks < read_inflight) ? full_blocks : read_inflight;
+        for (uint32_t d = 0; d < to_drain; ++d) {
+            const uint32_t k = full_blocks - to_drain + d;
+            dataflow_kernel_lib::async_read_barrier_with_trid(noc, (k % read_inflight) + 1);
+            finish_block(start_tile + k * block_tiles, block_tiles);
+        }
+        dataflow_kernel_lib::set_read_trid(noc, 0);  // restore untagged reads
+        block_start = start_tile + full_blocks * block_tiles;
+    }
+    for (; block_start < end_tile; block_start += block_tiles) {
+        DeviceZoneScopedN("READ_BLOCK");
+        const uint32_t block_extent = (end_tile - block_start < block_tiles) ? (end_tile - block_start) : block_tiles;
+        {
+            DeviceZoneScopedN("READ_WAIT_SPACE");
+            cb_reserve_back(cb_input_tiles, block_extent);
+        }
+        issue_block(block_start, block_extent, get_write_ptr(cb_input_tiles));
+        noc_async_read_barrier();
+        finish_block(block_start, block_extent);
     }
 }

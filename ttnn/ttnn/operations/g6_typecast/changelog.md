@@ -97,3 +97,41 @@
   equivalents of Q2185/P39).
 - Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_perf.py (F322/F317 profile pins,
   odd / tiny / ragged / 6 B-row shapes for the funnel and tail paths).
+
+## Refinement 4 — Speed up the flagged TILE profiles (Q2185, P39): read/convert/write overlap
+- Date: 2026-11-27
+- What was done:
+  - New R1 knob `TILE_BLOCK_TILES = 4`, min'd into `plan_blocks` together with `BLOCK_TILES_CAP` (single source).
+    Each core now walks its range in 4-tile blocks at depth 2, so read, convert and write overlap. Before, the
+    whole range was one block, so the three stages ran serially.
+  - Sweep (cap None/16/8/6/4/3/2 × depth 2/3/4): P39 69.5/38.6/20.4/18.1/17.4/17.2/20.3; Q2185 is flat around 35 µs.
+    Depth 3 is within noise of depth 2, so `BUFFER_DEPTH` stays 2 and R2 is unchanged.
+  - New knob `READ_INFLIGHT` (reader TILE path): a transaction-id sliding window that keeps N blocks of reads on the
+    wire (catalog `trid_double_issue`), clamped to the effective depth. It does not win (P39 slows with more reads in
+    flight), so it ships at 1, which issues the same reads and barriers as before.
+  - Writer twin: already in place. The writer flushes per block and does a single final barrier, so its writes stay
+    on the wire.
+  - Also measured and not kept: NoC swap (Q2185 53 µs, much worse) and `UnpackToDestFp32` on the bf16 source (flat).
+  - `bank_stagger` analysis: core starts are already spread over banks (see the Outcome line).
+  - Both knobs are in the program-cache key.
+  - Reused: reader block loop (refactored into issue/finish lambdas), `plan_blocks`, CBs, compute, writer.
+  - Added: 2 knobs and 2 reader CT args (inert on R2).
+- Perf (device kernel ns, BH 110 cores):
+  - P39 69.5 → 17.3 µs; Q2185 36.6 → 35.2 µs.
+  - Guards: Q2187 7.6 → 7.5, i32 DRAM [8,1024,256] 38.8 → 35.3, f32 L1 [4,512,512] 9.3 → 8.4, Q2191 1.28 → 1.25 µs.
+  - R2 F322 1.55 ms and F317 0.36–0.37 ms are unchanged.
+- Remaining headroom (finding):
+  - Q2185 is DRAM-bound. Ablation: writes only 28.9 µs, reads only 11.9 µs, compute only 1.5 µs; about 366 GB/s on
+    12.6 MB of physical traffic.
+  - P39 is limited by NoC/L1-bank congestion.
+- Accuracy achieved: Q2185 bit-exact (gate `exact`); P39 within the `bfp8_group` gate. Unit cases bit-exact or bfp8-group.
+- Golden test progress: targeted slice (Q2185, P39, P46, P50, Q2187, Q2191, Q2227, Q2228, Q2229, F315, F317, F322)
+  16/16. Unit dir: 79 passed, 1 expected xfail. Forced `READ_INFLIGHT=3, BUFFER_DEPTH=3` on the blocking and main
+  unit tests: 30/30.
+- Issues encountered:
+  - `tracy-capture` occasionally crashes (exit 3); a re-run works.
+  - A `-k` filter with spaces is mangled under `--profile`, so the sweep test filters by the `G6_CASES` environment
+    variable instead.
+- Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_tile_perf.py. It covers the flagged
+  TILE shapes and guards at the shipped knobs, plus a forced trid window (cap 3, depth 3, 2 or 3 in flight, ragged
+  tails). `G6_SWEEP` / `G6_CASES` drive knob sweeps for profiling.

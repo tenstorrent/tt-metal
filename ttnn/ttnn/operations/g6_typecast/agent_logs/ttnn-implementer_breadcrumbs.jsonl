@@ -32,3 +32,4 @@
 {"event":"test_run","status":"pass","tests":"test_g6_typecast_rm.py 11/11; test_g6_typecast.py+blocking 30/30; golden slice 23 pass 1 xfail","perf":"F322 2330848ns F317 952224ns","ts":"2026-11-27T21:41:00+01:00"}
 {"event":"test_run","status":"pass","tests":"unit dir 55 pass/1 xfail; golden slice 12/12 (F315,F316,F318,F319,F320,F323,F324,Q2228,Q2231 + reps)","note":"int32->bf16 direct LLK arm rounds ties half-away; composed via fp32 two-step chain","ts":"2026-11-27T21:46:57+01:00"}
 {"event":"test_run","status":"pass","tests":"test_g6_typecast_perf.py + test_g6_typecast_rm.py","note":"R3 funnel row movers + staging depth 2","ts":"2026-11-27T21:52:57+01:00"}
+{"event":"test_run","status":"pass","detail":"R4: TILE_BLOCK_TILES=4: P39 69.5->17.3us, Q2185 36.6->35.2us; trid READ_INFLIGHT parked at 1 (P39 worse with more in flight); unit dir 79p/1xf; golden slice 16/16","ts":"2026-11-27T22:13:17+01:00"}

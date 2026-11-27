@@ -84,3 +84,14 @@ One NoC transaction per bank run per block (≤ num_banks per block), not per ro
 F322 / F317 (bf16 → u8, 6 B / 3 B rows, 64 B slots): `rows_per_block = 682` (2 pseudo-tiles), staging 2 × 682 × 128 B ≈ 175 KB,
 dense CBs 2 × 2 × 3 KB = 12 KB per core. The L1 footprint fell (old single 8.8 K-row staging ≈ 1.1 MB).
 Data-movement budget unchanged: input ×1, output ×1, one NoC transaction per bank run per block, no cross-core traffic.
+
+## Refinement 4 — R1 block cap (`TILE_BLOCK_TILES`) and trid read window (`READ_INFLIGHT`)
+
+- `block_tiles` symbol: bound becomes `1 ≤ block_tiles ≤ min(core_tiles_max, BLOCK_TILES_CAP, TILE_BLOCK_TILES = 4, block_tiles_l1_cap)`
+  (host `plan_blocks`, single source). `effective_depth` is now 2 for every R1 shape with more than 4 tiles per core.
+- Both R1 CB rows: capacity = live set = `effective_depth · block_tiles` ≤ 2 · 4 = 8 pages. Per-core CB footprint
+  drops from P39 ≈ 75 × 3136 B ≈ 235 KB and Q2185 ≈ 19 × 6144 B ≈ 117 KB to ≤ 8 × 6144 B = 48 KB (fp32/int32 output)
+  and 8 × 3136 B ≈ 25 KB (bf8b output). No CB added, removed or shared; `Shares with / why not` unchanged.
+- `READ_INFLIGHT` (default 1) is clamped to `effective_depth`: a block in flight owns a CB slot that was already in
+  the ledger, so the trid window adds no L1.
+- Data-movement budget unchanged: input ×1, output ×1, no cross-core traffic.

@@ -20,6 +20,8 @@ Knobs (single source each — every dependent quantity derives from them):
   BLOCK_TILES_CAP  — optional upper bound on block_tiles (None = coarsest block that fits L1)
   STAGING_DEPTH    — R2 only: staging slots per dataflow direction (2 = DMA / row-move overlap)
   RM_BLOCK_TILES   — R2 only: target pseudo-tiles per block (min'd with BLOCK_TILES_CAP)
+  TILE_BLOCK_TILES — R1 only: target tiles per block (min'd with BLOCK_TILES_CAP)
+  READ_INFLIGHT    — R1 only: blocks of reads in flight (trid window), clamped to the effective depth
   L1_OP_BUDGET_BYTES / L1_SLACK_BYTES — L1 grant (BB-05) and allocator headroom
 """
 
@@ -42,6 +44,16 @@ STAGING_DEPTH = 2
 # (last write). Sweep on F322/F317 (Blackhole, 110 cores): 1 -> 1568/384 us, 2 -> 1572/364 us,
 # 3 -> 1604/379 us, 4 -> 1631/394 us, None (14) -> 1673/438 us. Bank runs stay >= rows/nb aligned pages.
 RM_BLOCK_TILES = 2
+# R1 block size in tiles (None = coarsest block that fits L1). The default whole-range block gave ONE block per
+# core, so read -> convert -> write serialized on every core (effective depth 1). A small block pipelines the
+# three stages. Sweep (Blackhole, 110 cores, depth 2; device-kernel us), cap None/16/8/6/4/3/2:
+#   P39 [1,128,256,256] bf16->bf8b L1:  69.5/38.6/20.4/18.1/17.4/17.2/20.3(d4)
+#   Q2185 [16,4096,12] bf16->fp32 DRAM: 36.6/37.5/35.2/35.7/34.6/35.0/34.9(d4)  (DRAM-write-bound)
+# Depth 3 is within noise of depth 2 at block 3-4, so BUFFER_DEPTH stays 2 (keeps R2 unchanged).
+TILE_BLOCK_TILES = 4
+# R1 only: blocks of reads kept on the wire (transaction-id sliding window); 1 = one read barrier per block.
+# Clamped to the effective CB depth (a block in flight owns a CB slot).
+READ_INFLIGHT = 1
 L1_OP_BUDGET_BYTES = 1347776
 L1_SLACK_BYTES = 65536
 
@@ -97,8 +109,9 @@ def plan_blocks(core_tiles_max, in_page_bytes, out_page_bytes, out_l1_bytes_per_
     cb_budget = L1_OP_BUDGET_BYTES - L1_SLACK_BYTES - out_l1_bytes_per_bank
     pair_bytes = in_page_bytes + out_page_bytes
     block_tiles = core_tiles_max
-    if BLOCK_TILES_CAP is not None:
-        block_tiles = min(block_tiles, BLOCK_TILES_CAP)
+    for cap in (BLOCK_TILES_CAP, TILE_BLOCK_TILES):
+        if cap is not None:
+            block_tiles = min(block_tiles, cap)
     # Depth depends on the number of blocks, which depends on the block; iterate to a fixpoint.
     while True:
         depth = min(BUFFER_DEPTH, _div_up(core_tiles_max, block_tiles))
@@ -155,6 +168,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         out_l1_bytes_per_bank = _div_up(tensor_tiles, _num_l1_banks(device)) * out_page_bytes
     block_tiles, effective_depth = plan_blocks(core_tiles_max, in_page_bytes, out_page_bytes, out_l1_bytes_per_bank)
     cb_pages = effective_depth * block_tiles
+    read_inflight = max(1, min(READ_INFLIGHT, effective_depth))
 
     # ---- bf8b padding-column masking (shared exponent must not see padding values) ----
     w = logical_shape[-1]
@@ -198,7 +212,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     # ---- kernels ----
     # RM-only CT slots (6..11) are inert zeros on the TILE path.
     reader_ct = [CB_INPUT_TILES, block_tiles, in_page_bytes, mask_pad_columns, tensor_tile_cols, w_tail]
-    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1]
+    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1, read_inflight, effective_depth]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
@@ -241,6 +255,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         "core_tiles_max": core_tiles_max,
         "block_tiles": block_tiles,
         "effective_depth": effective_depth,
+        "read_inflight": read_inflight,
         "mask_pad_columns": bool(mask_pad_columns),
     }
     return program_descriptor, plan
@@ -349,6 +364,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     # mask_pad_columns / tensor_tile_cols / w_tail are TILE-only (0 here).
     reader_ct = [CB_INPUT_TILES, block_tiles, in_aligned, 0, 0, 0]
     reader_ct += [1, CB_INPUT_STAGING, rows_per_block, in_row_bytes, values_per_row, STAGING_ALIGN, staging_depth]
+    reader_ct += [1, effective_depth]  # TILE-only read_inflight / cb_blocks: inert here
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
