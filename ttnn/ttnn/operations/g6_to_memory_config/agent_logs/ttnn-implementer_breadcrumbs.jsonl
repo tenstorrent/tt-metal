@@ -16,3 +16,4 @@
 {"event":"note","detail":"Resumed session: staged files are this run's post-boundary work (mtimes 06:27-06:58 > boundary 06:23:47); reviewed against op_design.md, no HEAD content read via git.","ts":"2026-11-27T07:15:23-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 24/24 --dev and plain; golden 179 passed / 26 xfailed (bf8b/bf4b + dram width-sharded only) --dev and plain; knob test 15/15 (movers_per_owner 1/2, bounce_depth 2/4, all five regimes)","ts":"2026-11-27T07:15:23-05:00"}
 {"event":"profile","detail":"device kernel ns: Qwen2078 pull_bank 53739 (20.9MB, ~390GB/s); bounce 16x128x1536 31057; Qwen2067 pull_shard 3021; Qwen2073 push_shard 3649; Qwen2071 push_shard 3203; push_bank 1531; single-core shard cases 385-792","ts":"2026-11-27T07:15:23-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T08:20:13-05:00"}

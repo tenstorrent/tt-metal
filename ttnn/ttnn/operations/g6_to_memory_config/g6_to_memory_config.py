@@ -83,7 +83,9 @@ INPUT_TAGGERS = {
 _SCHEMES = ["interleaved", "height_sharded", "width_sharded", "block_sharded"]
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    # Pages move whole, so a block format is just a smaller page: page_size comes from
+    # buffer_aligned_page_size() and the bounce CB takes the input dtype.
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
     "layout": [ttnn.TILE_LAYOUT],
     "rank": [2, 3, 4],
     "alignment": ["tile_aligned", "h_non_aligned"],
@@ -98,11 +100,7 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = [
-    # DRAM width-sharded targets: only the bfloat4_b weights use them; they arrive with the
-    # block-format refinement (bounce_dram_shard).
-    {"out_scheme": "width_sharded", "out_buffer": "dram"},
-]
+EXCLUSIONS = []
 
 
 # ---------------------------------------------------------------------------

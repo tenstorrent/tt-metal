@@ -6,8 +6,9 @@
 Cases are production cases only (BB-22): shapes and both placements are copied verbatim from
 eval/golden_tests/g6_to_memory_config/feature_spec.py, every shard spec row-major as written there.
 On top of them come the cells the design's rules require: a regime pin for every built regime
-(push_bank and bounce have no bfloat16 production case), program-cache reuse and determinism
-(BB-06, BB-07), the support refusals of the registry contract, and the host validation errors.
+(push_bank and bounce have no bfloat16 production case), the block-format production cases in their
+own dtype, program-cache reuse and determinism (BB-06, BB-07), the support refusals of the registry
+contract, and the host validation errors.
 
 Graded exactly: helpers.TOLERANCES is ("exact", None) for every dtype, so values are compared with
 torch.equal against the identity reference, and the result's memory configuration is compared with
@@ -20,7 +21,7 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+from ttnn.operations._op_contract import UnsupportedAxisValue
 from ttnn.operations.g6_to_memory_config import g6_to_memory_config, plan_of
 
 SEED = 42
@@ -141,7 +142,7 @@ CASES = {
         {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 256]},
         {"buffer": "dram", "scheme": "interleaved"},
     ),
-    # bfloat4_b in production; used here only for its target placement (DRAM width sharded).
+    # bfloat4_b in production.
     "Qwen 2178": (
         [1536, 5120],
         {"buffer": "dram", "scheme": "interleaved"},
@@ -173,6 +174,12 @@ PRODUCTION_REGIMES = {
     "Qwen 2155": "push_shard",  # block sharded source -> L1 interleaved
     "Qwen 2062": "push_shard",  # H = 6
     "FLUX 314": "push_shard",  # width grid of two ranges -> DRAM
+}
+
+# Block-format production cases, in their production dtype: (dtype, regime).
+BLOCK_FORMAT_REGIMES = {
+    "Panoptic 11": (ttnn.bfloat8_b, "push_shard"),  # 64 L1 block shards -> DRAM interleaved
+    "Qwen 2178": (ttnn.bfloat4_b, "bounce"),  # DRAM interleaved -> DRAM width sharded on 8 banks
 }
 
 # SUPPORTED cells with no bfloat16 production case; production shapes, pinned to their regime.
@@ -299,6 +306,24 @@ def test_production_case(device, case_id):
     _check_result(output, tt_input, out_config)
 
 
+@pytest.mark.parametrize("case_id", list(BLOCK_FORMAT_REGIMES))
+def test_block_format_case(device, case_id):
+    shape, in_memory, out_memory = CASES[case_id]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    dtype, regime = BLOCK_FORMAT_REGIMES[case_id]
+    tt_input = _make_input(device, shape, in_memory, dtype=dtype)
+    out_config = _memory_config(out_memory)
+
+    plan = plan_of(tt_input, out_config)
+    assert plan["regime"] == regime
+    assert plan["page_size"] == tt_input.buffer_aligned_page_size()
+    if regime == "push_shard":
+        assert len(plan["movers"]) == _num_shards(shape, in_memory)
+
+    output = g6_to_memory_config(tt_input, out_config)
+    _check_result(output, tt_input, out_config)
+
+
 @pytest.mark.parametrize("regime", list(SUPPORTED_CELLS))
 def test_supported_cell_regimes(device, regime):
     shape, in_memory, out_memory = SUPPORTED_CELLS[regime]
@@ -337,17 +362,12 @@ def test_repeat_call_cache_and_determinism(device, case_id):
 
 
 def test_refused_cells(device, expect_error):
+    # SUPPORTED equals TARGET and EXCLUSIONS is empty, so only a value outside TARGET is refused.
     shape, in_memory, out_memory = CASES["Panoptic 11"]
     _skip_unless_grid_fits(device, in_memory, out_memory)
-    block_format_input = _make_input(device, shape, in_memory, dtype=ttnn.bfloat8_b)
+    float32_input = _make_input(device, shape, in_memory, dtype=ttnn.float32)
     with expect_error(UnsupportedAxisValue, ANY_MESSAGE):
-        g6_to_memory_config(block_format_input, _memory_config(out_memory))
-
-    shape, in_memory, out_memory = CASES["Qwen 2178"]
-    _skip_unless_grid_fits(device, in_memory, out_memory)
-    bf16_input = _make_input(device, shape, in_memory)
-    with expect_error(ExcludedCell, ANY_MESSAGE):
-        g6_to_memory_config(bf16_input, _memory_config(out_memory))
+        g6_to_memory_config(float32_input, _memory_config(out_memory))
 
 
 def test_validation_errors(device, expect_error):

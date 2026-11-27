@@ -31,6 +31,8 @@ BASELINE = {
     "Qwen 2105 pull_bank": (CASES[("Qwen", 2105)][0], "pull_bank"),
     "Qwen 2071 push_shard": (CASES[("Qwen", 2071)][0], "push_shard"),
     "Qwen 2077-shape bounce": (_BOUNCE_CELL, "bounce"),
+    "Panoptic 11 bf8b push_shard": (CASES[("Panoptic", 11)][0], "push_shard"),
+    "Qwen 2178 bf4b bounce": (CASES[("Qwen", 2178)][0], "bounce"),
 }
 
 
