@@ -1732,6 +1732,36 @@
   },
   "waiting": null
  },
+ "WA.4R": {
+  "attempts": 0,
+  "duration_s": 898.9,
+  "history": [
+   {
+    "s": 898.9,
+    "status": "PASS",
+    "t": "2026-11-27T21:21:14"
+   }
+  ],
+  "last_run": "2026-11-27T21:21:11",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/WA.4R.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "WA.4R#test_determinism": "7a2b28aaeecf9d44",
+    "WA.4R#test_packed_walls": "364e7caf17cd9fa7",
+    "WA.4R#test_skip_positions": "894d5f456f4f5371"
+   }
+  },
+  "started": "2026-11-27T21:06:12",
+  "status": "PASS",
+  "units": {
+   "WA.4R#test_determinism": "PASS",
+   "WA.4R#test_packed_walls": "PASS",
+   "WA.4R#test_skip_positions": "PASS"
+  }
+ },
  "WA.5": {
   "agent": {
    "defs": {

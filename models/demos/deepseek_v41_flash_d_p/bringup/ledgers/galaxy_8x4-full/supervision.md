@@ -1545,3 +1545,20 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   WA.5 renders them). classify framework; gate --continue (only test_no_rebuild left).
 - 20:47 WA.4 gate PASS -> 628fc2263bc (no_rebuild 206 s; 5 units kept). DS41_WOA_BANK default on (batching). Next WA.5 (report; re-render WA.4 ladders from the real A/B, OV-80). Then MB.WA on model_bringup (owner 15:33; text /home/dnijemcevic/handoff_20261127/MBWA_task.yaml).
 - 20:50 heartbeat: WA.5 agent active; RAM used 58 GB; / 71G free.
+- 21:02 WA.5's agent DISAGREED with OV-80, with evidence: the A/B's OFF side ran every ladder with DS41_WOA_BANK=on (ab/WA.4/old/batch0.json: the gate commands set the switch inline; the batch env lets the segment prefix win). FRAMEWORK bug F308. WA.4's accept stands (decided on test_woa_offon's same-load off/on device numbers, which toggle internally); its off-ladder columns are not real. Paused (stops after WA.5). Fix ready (/scratch/dnijemcevic/native/f308.py: side_cmd() rewrites inline switch assignments to the side's value; selftest); then re-measure only the off side through the framework (orchestrator measure --task WA.4) and a fix job re-renders WA.4_ladder.md.
+- 21:15 WA.5 PASS -> f4e5c3d1de8 (the plan's WA.0-WA.5 all done). FRAMEWORK F308 committed 33cf3751be2 (selftest; test_perf_ab
+  16 failed / 34 passed with and without: pre-existing). Real off side: QUEUED WA.4R (8192 single + 4x2k + 4x1792s ladders,
+  DS41_WOA_BANK=off, measurement only) and WA.4R5 (5120 ladder off; own load); validate: valid. Fix job (held until they
+  pass): re-render WA.4_ladder.md / WA.5_report.md part 1 with the real off side. orchestrator measure only does the 'on'
+  side, hence tasks.
+- 21:18 orchestrator resume --until WA.4R5 (the off ladders).
+- 21:12 OWNER asked about the C++ conversion: ported + tested in the separate checkout, not in the tree. Task NC.1 written (/home/dnijemcevic/handoff_20261127/NC1_task.yaml; appended when the orchestrator stops after WA.4R5 / FIX.40): take the port as is, layer-level checks only (exact vs the Python route, repeats, no cache growth, host us).
+- 21:20 OWNER (binding for the C++ port series): no intermediate perf runs; no 40-layer load. Per op: op-level checks
+  only. ONE end check: the ladder (layers 0-20; single 8192, 4x2k, 4x1792s, 51200 .. 1024000) + cold no-rebuild on the
+  batching branch, then the same on model_bringup (5120 ladder + no-rebuild). Report to the owner in descriptive names,
+  not task ids. Order: (1) wo_a off-side re-measure (WA.4R / WA.4R5, running), (2) FIX.40 report tables, (3) C++ grouped_matmul
+  into the tree (NC.1; gate op level only), (4) the 5 other prepared forks (block_select, ckv_bfp4, fabric_reduce_scatter,
+  fp8_rows, pair_pool), (5) the model's own prepared programs (~16 in tt/), (6) final batching ladder + no-rebuild,
+  (7) model_bringup: wo_a bank layout + the shared C++ ops, its 5120 ladder + no-rebuild (MB.WA's 40-layer test_ladder
+  unit to be dropped per this word). Then the wq_b / wo_b C++ bank probe.
+- 21:20 heartbeat: WA.4R (off ladders) running; RAM used 69 GB; / 71G free.
