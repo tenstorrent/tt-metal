@@ -21,7 +21,8 @@ void kernel_main() {
     constexpr uint32_t tile_rows_per_image = get_compile_time_arg_val(6);
     constexpr uint32_t tensor_tile_cols = get_compile_time_arg_val(7);
     constexpr uint32_t block_tile_cols = get_compile_time_arg_val(8);
-    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr bool bank_stagger = get_compile_time_arg_val(9) != 0;
+    constexpr auto input_args = TensorAccessorArgs<10>();
 
     // Tile/face geometry of the CB, which the host formats as one tile of the input.
     constexpr uint32_t tile_h = unpack_tile_r_dim[cb_row_block];
@@ -43,6 +44,9 @@ void kernel_main() {
 
     const g6_untilize::CoreRows mine = g6_untilize::core_rows<tensor_rows, num_cores, rect_w>();
     const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(0));
+    // With bank_stagger each core starts its tile-column walk at a different column, so the first
+    // requests of all cores spread over the banks of the block's tiles instead of queueing on one.
+    const uint32_t first_c = bank_stagger ? mine.core_idx % block_tile_cols : 0;
 
     for (uint32_t col_block_idx = 0; col_block_idx < num_col_blocks; ++col_block_idx) {
         const uint32_t tile_col0 = col_block_idx * block_tile_cols;
@@ -59,7 +63,7 @@ void kernel_main() {
                 l1_block = get_write_ptr(cb_row_block);
 
                 // Tile-column outer, rows inner: consecutive pieces come from the same source tile.
-                for (uint32_t c = 0; c < block_tile_cols; ++c) {
+                for (uint32_t step = 0, c = first_c; step < block_tile_cols; ++step) {
                     const uint32_t tile_col = tile_col0 + c;
                     uint32_t valid_faces = faces_per_tile_row;
                     while (valid_faces > 1 && tile_col * tile_w + (valid_faces - 1) * face_w >= row_elems) {
@@ -68,20 +72,24 @@ void kernel_main() {
 
                     uint32_t b = b0, r = r0;
                     uint32_t cur_tile_row = 0xFFFFFFFF;
-                    uint64_t tile_noc_addr = 0;
+                    uint32_t tile_local_addr = 0;
                     uint32_t l1_dst = l1_block + c * tile_row_bytes;
                     for (uint32_t j = 0; j < block_rows; ++j) {
                         const uint32_t tile_row = b * tile_rows_per_image + r / tile_h;
                         if (tile_row != cur_tile_row) {
+                            // Bank coordinate and piece size are programmed once per source tile;
+                            // each piece then only rewrites the two addresses.
                             cur_tile_row = tile_row;
-                            tile_noc_addr = input.get_noc_addr(tile_row * tensor_tile_cols + tile_col);
+                            const uint64_t tile_noc_addr = input.get_noc_addr(tile_row * tensor_tile_cols + tile_col);
+                            noc_async_read_one_packet_set_state(tile_noc_addr, face_row_bytes);
+                            tile_local_addr = static_cast<uint32_t>(tile_noc_addr);
                         }
                         const uint32_t in_tile_r = r % tile_h;
-                        uint64_t src = tile_noc_addr + (in_tile_r / face_h) * face_band_bytes +
+                        uint32_t src = tile_local_addr + (in_tile_r / face_h) * face_band_bytes +
                                        (in_tile_r % face_h) * face_row_bytes;
                         uint32_t dst = l1_dst;
                         for (uint32_t f = 0; f < valid_faces; ++f) {
-                            noc_async_read_one_packet(src, dst, face_row_bytes);
+                            noc_async_read_one_packet_with_state(src, dst);
                             src += face_bytes;
                             dst += face_row_bytes;
                         }
@@ -90,6 +98,9 @@ void kernel_main() {
                             r = 0;
                             ++b;
                         }
+                    }
+                    if (++c == block_tile_cols) {
+                        c = 0;
                     }
                 }
             }

@@ -10,6 +10,7 @@
 namespace g6_untilize {
 
 struct CoreRows {
+    uint32_t core_idx;
     uint32_t start;
     uint32_t count;
 };
@@ -22,7 +23,7 @@ FORCE_INLINE CoreRows core_rows() {
     constexpr uint32_t extra = tensor_rows % num_cores;
     const uint32_t core_idx = get_relative_logical_y() * rect_w + get_relative_logical_x();
     const uint32_t start = core_idx * base + (core_idx < extra ? core_idx : extra);
-    return {start, base + (core_idx < extra ? 1u : 0u)};
+    return {core_idx, start, base + (core_idx < extra ? 1u : 0u)};
 }
 
 }  // namespace g6_untilize

@@ -24,6 +24,8 @@ WRITER_KERNEL = KERNEL_DIR / "g6_untilize_writer.cpp"
 # Block knobs. None = no cap beyond the work units and the grid.
 CORE_LIMIT = None
 ROW_BLOCK_DEPTH = 2
+# Start each core's tile-column walk at core_idx mod block_tile_cols (reader CT switch).
+BANK_STAGGER = True
 # Free L1 per core the model leaves to the op (BB-05).
 L1_OP_BUDGET_BYTES = 1347776
 
@@ -162,6 +164,7 @@ def _build_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["tile_rows_per_image"],
         plan["tensor_tile_cols"],
         plan["block_tile_cols"],
+        int(BANK_STAGGER),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -221,6 +224,7 @@ def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescripto
         grid.y,
         CORE_LIMIT,
         ROW_BLOCK_DEPTH,
+        BANK_STAGGER,
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
