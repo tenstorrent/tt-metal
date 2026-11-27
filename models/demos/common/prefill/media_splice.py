@@ -14,29 +14,17 @@ from models.demos.common.prefill.media_embedding import SplicePlan
 
 
 class MediaSpliceBuffers:
-    """Per-SP-row image rows, on device, for an embedding's splice_media.
+    """Per-SP-row image rows, on device, for splice_media.
 
-    table [h, hidden/tp] per chip (row 0 zeros) and lookup per chip (0 = not this SP row's). An embedding that
-    looks up all s_total gathered positions before a reduce-scatter (vocab sharded over SP) has lookup [1,1,s_total]
-    and is_img [1,1,s_total,1] replicated. One that looks up only the chip's own s_local positions (by_position:
-    full vocab per SP row, no collective) has both SP-sharded. lookup and is_img are chunk-shaped and allocated
-    once; only the table tracks the image count, and plan_media_splice snaps its height to a few buckets. All are
-    refilled with copy_host_to_device_tensor, so a forward pays no host tilize.
+    Per chip: a ROW_MAJOR table [h, hidden/tp] (ttnn.embedding's weight layout) with row 0 zeros, and a lookup
+    (0 = not this SP row's). With the vocab sharded over SP, lookup [1,1,s_total] and is_img [1,1,s_total,1] cover
+    every gathered position and are replicated; by_position, they cover the chip's own s_local and are SP-sharded.
 
-    A height's tables are allocated on first use and kept: the device table and a host tensor laid out
-    [sp, tp*h, hidden/tp], so every chip's shard is one contiguous host buffer. refill copies the media rows
-    straight into those buffers, so a forward builds no host tensor. Reusing them is safe:
-    copy_host_to_device_tensor either copies the shards into the command queue before it returns or, on its
-    pinned path, blocks until the transfer is done. compile() warms every height and releases its tables, so
-    serving holds only the heights its requests reach.
-
-    The table goes up row-major because ttnn.embedding requires a ROW_MAJOR weight and converts a tiled
-    one back on every call (ttnn/cpp/ttnn/operations/embedding/embedding.cpp). is_img goes up row-major
-    and is tilized here instead: ttnn.where needs a TILE condition, and tilizing a width-1 tensor on the
-    host pads that dimension to a full tile, so a tiled upload would send 32 uint32 per position to
-    carry one bit. Refilling frees the previous tile, which is safe only because a command queue
-    completes in order: the forward still reading it runs before anything writes the reused address.
-    Keep the uploads on one queue.
+    lookup and is_img are allocated once. Each table height's device table and host table are allocated on first
+    use and kept; refill writes the rows into the host table's shards in place, which is safe because
+    copy_host_to_device_tensor is done with them when it returns. is_img is tilized on device, as ttnn.where needs
+    a TILE condition; refilling frees the previous one, which relies on the queue completing in order. Keep the
+    uploads on one queue.
     """
 
     def __init__(

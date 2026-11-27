@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Post-splice embeddings on one chip and on a galaxy: TtParallelEmbedding over an expanded prompt with image rows spliced chunk by
-chunk through TtPrefillRuntime._media_splice, against a torch merge and against Hugging Face minimax_m3_vl's merge.
+chunk through TtPrefillRuntime._media_splice, against a torch merge and against Hugging Face minimax_m3_vl's merge; and
+on a galaxy, the K and V a forward with images writes.
 
 Run: pytest models/demos/minimax_m3/tests/unit/test_media_splice_vs_ref.py
 """
@@ -23,10 +24,14 @@ from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.multimodal import format as media_format
 from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
 from models.demos.minimax_m3.tt import tt_prefill_runtime
+from models.demos.minimax_m3.tt.attention.kv_cache import allocate_kv_caches
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.parallel_embedding import TtParallelEmbedding
-from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime
+from models.demos.minimax_m3.tt.runners.prefill_kv_validation import naturalize_kv_block
+from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config, with_layer_schedule
+from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -378,6 +383,72 @@ def test_failed_fetch_frees_the_input(monkeypatch, expect_error):
     with expect_error(Missing, bytes(32).hex()):
         runtime.prefill_forward(tokens, None, [PrefillChunk(0, 0, CHUNK)], media_refs=[MediaRef(0, 0, 10, bytes(32))])
     assert freed == [tokens]
+
+
+def one_dense_layer_state(cfg: dict, inter: int) -> dict:
+    hidden, hd = cfg["hidden_size"], cfg["head_dim"]
+    nq, nkv = cfg["num_attention_heads"] * hd, cfg["num_key_value_heads"] * hd
+    rand, norm = (lambda *s: torch.randn(*s) * 0.02), (lambda n: torch.randn(n) * 0.1)
+    p = "model.layers.0."
+    state = {
+        "model.embed_tokens.weight": rand(VOCAB, hidden),
+        "model.norm.weight": norm(hidden),
+        "lm_head.weight": rand(VOCAB, hidden),
+        p + "input_layernorm.weight": norm(hidden),
+        p + "post_attention_layernorm.weight": norm(hidden),
+        p + "self_attn.q_proj.weight": rand(nq, hidden),
+        p + "self_attn.k_proj.weight": rand(nkv, hidden),
+        p + "self_attn.v_proj.weight": rand(nkv, hidden),
+        p + "self_attn.o_proj.weight": rand(hidden, nq),
+        p + "self_attn.q_norm.weight": norm(hd),
+        p + "self_attn.k_norm.weight": norm(hd),
+        p + "mlp.gate_proj.weight": rand(inter, hidden),
+        p + "mlp.up_proj.weight": rand(inter, hidden),
+        p + "mlp.down_proj.weight": rand(hidden, inter),
+    }
+    return convert_hf_qkv_to_meta_format_partial(state, hd, cfg["rotary_dim"])
+
+
+@parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize("shard_vocab_on_sp", ["1", "0"], ids=["vocab_sharded_2d", "by_position_1d"])
+def test_prefill_forward_writes_image_rows_to_kv(mesh_device, device_params, monkeypatch, shard_vocab_on_sp):
+    """prefill_chunk with media refs on a one-layer runtime with random weights. Layer 0's K and V at a position
+    depend only on that position's embedding, so exactly the image positions' K and V change, and not with the
+    tokens under the images."""
+    monkeypatch.setenv("M3_EMBED_SHARD_VOCAB", shard_vocab_on_sp)
+    sp, chunk = mesh_device.shape[0], 1024
+    torch.manual_seed(0)
+    cfg = with_layer_schedule(load_config(), [0], [0])
+    cfg.update(intermediate_size=512, vocab_size=VOCAB)
+    hf_config = SimpleNamespace(**cfg)
+    images = [(100, 300, bytes([1]) * 32), (700, 60, bytes([2]) * 32)]
+    embs = {key: torch.randn(n, hf_config.hidden_size).to(torch.bfloat16) * 0.02 for _, n, key in images}
+    config = TtPrefillRuntimeConfig(
+        num_layers=1, max_seq_len=chunk, mesh_shape=tuple(mesh_device.shape), chunk_size=chunk, num_users=3
+    )
+    runtime = TtPrefillRuntime(mesh_device, hf_config, one_dense_layer_state(cfg, 512), config, Store(embs))
+    kv_cache = allocate_kv_caches(
+        mesh_device, num_layers=1, max_seq_len=chunk, num_users=3, head_dim=hf_config.head_dim
+    )
+
+    tokens = torch.randint(0, VOCAB, (chunk,), dtype=torch.int32)
+    is_image = image_mask(images, 0, chunk)
+    refs = [MediaRef(0, s, s + n, key) for s, n, key in images]
+    for slot, (slot_tokens, slot_refs) in enumerate(
+        [(tokens, []), (tokens, refs), (torch.where(is_image, 0, tokens), refs)]
+    ):
+        inp = runtime.make_chunk_input(slot_tokens.tolist(), 0)
+        runtime.prefill_chunk(inp, kv_cache, slot_id=slot, actual_start=0, actual_end=chunk, media_refs=slot_refs)
+    ttnn.synchronize_device(mesh_device)
+
+    slots_kv = [runtime.read_slot_kv(kv_cache, slot) for slot in range(3)]
+    for i, name in enumerate(("k", "v")):
+        text, image, other_tokens = (naturalize_kv_block(kv[i][0], chunk, sp, chunk, chunk) for kv in slots_kv)
+        changed = (image != text).any(-1).any(0)
+        assert torch.equal(changed, is_image), f"{name}: the positions an image changed are not the image's"
+        assert torch.equal(image, other_tokens), f"{name}: the tokens under an image changed its {name}"
+    kv_cache.deallocate()
+    runtime.release_sub_device_managers()
 
 
 def tiny_hf_model():

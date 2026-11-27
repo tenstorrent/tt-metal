@@ -78,18 +78,13 @@ def plan_media_splice(
     chunk_local: int,
     by_position: bool = False,
 ) -> SplicePlan:
-    """Where each image row of a forward with refs goes. height is table_height(k + 1), so a forward reuses one of
-    a few table shapes. Each run puts consecutive media rows viewed from rows_of at table slots slot.. of its SP
-    row; the caller copies them straight into the table, so the media rows are copied once. Row 0 of every table
-    is zeros and lookup 0 means "not this row's", so a row contributes nothing where it was not assigned.
+    """Where each image row of a forward goes: runs of consecutive rows from rows_of at table slots 1.. of an SP
+    row, and a lookup into them (0 = keep the token), in the forward's chip-major token order (_positions).
+    height is table_height(k + 1), so forwards share a few table shapes.
 
-    The 2D embedding (vocab sharded over SP) splices before its reduce-scatter. by_position is for the 1D
-    embedding, which has no reduce-scatter: each image row goes to the SP row whose chips hold its position, and
-    lookup is [sp, s_local], over that row's own positions.
-
-    Positions are in the forward's chip-major token order (_positions), not natural order: ``is_img`` and the 2D
-    ``lookup`` follow the all-gathered tokens _forward_2d looks up, and row r of the 1D ``lookup`` follows SP row r's
-    own tokens.
+    2D (vocab sharded over SP): each image row goes to one SP row, and the reduce-scatter sums it into place.
+    by_position (1D, no reduce-scatter): each image row goes to the SP row holding its position, and lookup is
+    [sp, s_local].
     """
     positions = torch.cat([_positions(c.actual_start, sp, chunk_local) for c in chunks], dim=1)
     chunk_of = torch.arange(len(chunks)).repeat_interleave(chunk_local).expand(sp, -1)

@@ -38,7 +38,7 @@ Env the operator sets (mirrors the rest of the M3 ecosystem):
                                 checkpoint when present, else the checkpoint dir)
   PREFILL_TRACE_DIR             golden trace dir (metadata.json + kv_cache/) for KV-PCC validation
   PREFILL_MEDIA_STORE_*         media embedding store on the first rank's host (models/common/multimedia_store/
-                                config.py); on when PREFILL_MEDIA_STORE_MASTER is set
+                                config.py); on when PREFILL_MEDIA_STORE_MASTER is set and PREFILL_MEDIA_MAX_REFS > 0
 """
 
 from __future__ import annotations
@@ -200,20 +200,21 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
         # The first rank injects media embeddings, so its host holds this runner's part of the media embedding
         # store. Start it before the weights load, so a bad store config fails in seconds, not minutes.
         media_embedding_reader = None
-        media_store_config = MediaEmbeddingStoreConfig.from_env() if params.is_first_rank else None
-        if media_store_config is not None:  # imports Mooncake only when the store is on
-            from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
+        if params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
+            media_store_config = MediaEmbeddingStoreConfig.from_env()
+            if media_store_config is not None:  # imports Mooncake only when the store is on
+                from models.common.multimedia_store.mooncake_store import MooncakeEmbeddingReader
 
-            media_embedding_reader = MooncakeEmbeddingReader.open(media_store_config)
-        elif params.is_first_rank and int(os.environ.get("PREFILL_MEDIA_MAX_REFS", 0)):
-            if os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") != "1":
+                media_embedding_reader = MooncakeEmbeddingReader.open(media_store_config)
+            elif os.environ.get("PREFILL_MEDIA_STUB_EMBEDDINGS") == "1":
+                from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
+
+                media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
+            else:
                 raise ValueError(
                     "PREFILL_MEDIA_MAX_REFS > 0 needs the media embedding store (PREFILL_MEDIA_STORE_MASTER) "
                     "or PREFILL_MEDIA_STUB_EMBEDDINGS=1"
                 )
-            from models.demos.minimax_m3.multimodal.stub_reader import StubEmbeddingReader
-
-            media_embedding_reader = StubEmbeddingReader(hf_config.hidden_size)
 
         # EXPERT_DTYPE selects the MoE routed-expert weight dtype (bf4 default here / bf8). The tilized
         # cache holds both, so either stays on the fast cache path. Same knob name as the M3 generate +
