@@ -24,7 +24,6 @@ JSON line.
 from __future__ import annotations
 
 import ctypes
-import ctypes.util
 import json
 import math
 import time
@@ -107,7 +106,7 @@ def _retain_freed_heap() -> dict[str, int]:
     lasting: freed heap up to the scoring peak stays resident, for tt-metal's host allocations too. In code, not in
     ``MALLOC_*`` environment variables, so every launcher times the same. Returns each ``mallopt`` result (1 set,
     0 refused)."""
-    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    libc = ctypes.CDLL(None)  # the process's global symbols, where glibc's mallopt is bound
     return {name: libc.mallopt(param, value) for name, (param, value) in _HEAP_REUSE.items()}
 
 
