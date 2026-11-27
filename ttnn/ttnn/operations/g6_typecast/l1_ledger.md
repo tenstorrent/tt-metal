@@ -6,8 +6,8 @@ Built regime: `tile_convert`.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_tiles` | `IN_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`) | `IN_DEPTH · block_tiles`: block `k` held by compute for the whole `convert_block` (Upfront wait, AtEnd pop) while block `k+1` lands from the reader | `{tile_page: spans → block_tiles (× IN_DEPTH); batch: streams (folded into tile_page); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a (TILE regime); rm_width: n/a (TILE regime)}` | input dtype. Phase 0: Float16_b (bf16 tile, 2048 B). Under `fp32_dest_acc_en=1` (→f32, →int32) this 16-bit page is the **input ABI** (the tensor arrives as bf16 from DRAM / L1), not a DEST-fed intermediate, so audit 2's "under" case does not apply: nothing accumulated is truncated | reader | compute | whole program | cannot share with `cb_output_tiles`: concurrent lifetime (depth-2 pipelining keeps blocks `k` and `k+1` of both CBs live) and a different page format/size (2048 B vs 4096 / 1088 B), so in-place transform is impossible. Capacity = live set; nothing to account for |
-| `cb_output_tiles` | `OUT_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`) | `OUT_DEPTH · block_tiles`: block `k` being written by the writer while compute packs block `k+1` (Upfront reserve, AtEnd push) | `{tile_page: spans → block_tiles (× OUT_DEPTH); batch: streams (folded); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a; rm_width: n/a}` | output dtype: Float32 (4096 B) when `fp32_dest_acc_en=1` (→f32); Int32 (4096 B) when `fp32_dest_acc_en=1` (→int32); Bfp8_b (1088 B) when `fp32_dest_acc_en=0` (→bf8b). The Float32/Int32 pages are the **output ABI** and pair with 32-bit DEST, so audit 2's "over" case does not apply | compute | writer | whole program | cannot share with `cb_input_tiles` (same reason). No intermediate CB exists: the conversion packs straight into the output CB, which is the "pack into destination" pattern. Capacity = live set |
+| `cb_input_tiles` | `IN_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`, `block_tiles ≤ 4`) | `IN_DEPTH · block_tiles`: block `k` held by compute for the whole `convert_block` (Upfront wait, AtEnd pop) while block `k+1` lands from the reader | `{tile_page: spans → block_tiles (× IN_DEPTH); batch: streams (folded into tile_page); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a (TILE regime); rm_width: n/a (TILE regime)}` | input dtype. Phase 0: Float16_b (bf16 tile, 2048 B). Under `fp32_dest_acc_en=1` (→f32, →int32) this 16-bit page is the **input ABI** (the tensor arrives as bf16 from DRAM / L1), not a DEST-fed intermediate, so audit 2's "under" case does not apply: nothing accumulated is truncated | reader | compute | whole program | cannot share with `cb_output_tiles`: concurrent lifetime (depth-2 pipelining keeps blocks `k` and `k+1` of both CBs live) and a different page format/size (2048 B vs 4096 / 1088 B), so in-place transform is impossible. Capacity = live set; nothing to account for |
+| `cb_output_tiles` | `OUT_DEPTH · block_tiles` (Phase 0: `2 · block_tiles`, `block_tiles ≤ 4`) | `OUT_DEPTH · block_tiles`: block `k` being written by the writer while compute packs block `k+1` (Upfront reserve, AtEnd push) | `{tile_page: spans → block_tiles (× OUT_DEPTH); batch: streams (folded); tile_row: streams (folded); tile_col: streams (folded); tile_elements: spans → 1 tile per page (fixed); rm_row: n/a; rm_width: n/a}` | output dtype: Float32 (4096 B) when `fp32_dest_acc_en=1` (→f32); Int32 (4096 B) when `fp32_dest_acc_en=1` (→int32); Bfp8_b (1088 B) when `fp32_dest_acc_en=0` (→bf8b). The Float32/Int32 pages are the **output ABI** and pair with 32-bit DEST, so audit 2's "over" case does not apply | compute | writer | whole program | cannot share with `cb_input_tiles` (same reason). No intermediate CB exists: the conversion packs straight into the output CB, which is the "pack into destination" pattern. Capacity = live set |
 
 Deferred regimes (sizes stated so the refinement inherits the bound; not allocated in Phase 0):
 
@@ -21,7 +21,7 @@ Deferred regimes (sizes stated so the refinement inherits the bound; not allocat
 
 | Symbol | Bound | Established by |
 |--------|-------|----------------|
-| `block_tiles` | `1 ≤ block_tiles = min(core_tiles_g1, BLOCK_TILES_CAP) ≤ 8` | host derivation from `BLOCK_TILES_CAP = 8` (single source) |
+| `block_tiles` | `1 ≤ block_tiles = min(core_tiles_g1, BLOCK_TILES_CAP) ≤ 4` | host derivation from `BLOCK_TILES_CAP = 4` (single source). Measured: DRAM shapes flat over caps 1–32; P39 (L1) 17.4 µs at 4, 19.3 at 8, 36.6 at 16 — more remote reads in flight per core congest the mesh |
 | `core_tiles_g1` | `ceil(tensor_pages / num_cores)`; unbounded in the op's contract, but it **never** sizes a CB (it is clamped through `block_tiles`) | `ttnn.split_work_to_cores` |
 | `tensor_pages` | `input_tensor.buffer_num_pages()`; 1 … 8192 in Phase 0 INPUTS (P39) | the input tensor; it sizes no CB |
 | `IN_DEPTH`, `OUT_DEPTH` | 2 | host constants |
@@ -39,11 +39,11 @@ OUT_bytes = ceil(tensor_pages / NB_L1) · out_page_bytes    # only when buffer =
 
 | Case | `block_tiles` | `CB_bytes` | `OUT_bytes` (L1 only) | Total vs. 1,347,776 B budget |
 |------|---------------|------------|-----------------------|-------------------------------|
-| Phase 0 worst CB (bf16 → f32 / int32) | 8 | 2·8·2048 + 2·8·4096 = 98,304 | — (DRAM) | 98,304 (7.3%) |
-| P39 bf16 → bf8b, L1 (largest L1 output) | 8 | 2·8·2048 + 2·8·1088 = 50,176 | `ceil(8192/NB_L1)·1088` ≈ 68.6 KiB at `NB_L1 ≈ 130` | ≈ 120 KiB (9%) |
-| TARGET worst CB (32-bit in and out, refinement) | 8 | 2·8·4096 + 2·8·4096 = 131,072 | — | 131,072 (9.7%) |
+| Phase 0 worst CB (bf16 → f32 / int32) | 4 | 2·4·2048 + 2·4·4096 = 49,152 | — (DRAM) | 49,152 (3.6%) |
+| P39 bf16 → bf8b, L1 (largest L1 output) | 4 | 2·4·2048 + 2·4·1088 = 25,088 | `ceil(8192/NB_L1)·1088` ≈ 81 KiB at `NB_L1 = 110` | ≈ 106 KiB (8%) |
+| TARGET worst CB (32-bit in and out, refinement) | 4 | 2·4·4096 + 2·4·4096 = 65,536 | — | 65,536 (4.9%) |
 
-No term scales with an op dimension: `tensor_pages` enters only the L1 output allocation, which is the tensor the op must return, divided by the bank count. A budget solve is unnecessary. The inventory is the minimum two CBs, and the block cap is set by the overlap lamp, not by L1 pressure.
+No term scales with an op dimension: `tensor_pages` enters only the L1 output allocation, which is the tensor the op must return, divided by the bank count. A budget solve is unnecessary. The inventory is the minimum two CBs, and the block cap is set by the measured overlap lamp (mesh congestion on L1 placements), not by L1 pressure.
 
 ## Data-movement budget (chosen split: contiguous `tile_page` ranges, full grid)
 

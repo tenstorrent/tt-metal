@@ -19,9 +19,12 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # Blocking knobs (op_design.md, Blocking Model). Every CB capacity, loop trip count and the block
 # size the kernels see derive from these; none is restated elsewhere.
-BLOCK_TILES_CAP = 8  # pages per block; cap below the whole per-core range so read/convert/write overlap
+# Pages per block. DRAM shapes are flat over 1..32 (DRAM/NoC-write bound); L1 shapes lose to mesh
+# congestion as more remote reads fly per core (P39: 17.4 us at 4, 19.3 at 8, 36.6 at 16).
+BLOCK_TILES_CAP = 4
 IN_DEPTH = 2  # cb_input_tiles depth in blocks
 OUT_DEPTH = 2  # cb_output_tiles depth in blocks
+MIN_PAGES_PER_CORE = 1  # core count = min(grid, ceil(pages / this)); 1 spreads every page to its own core
 PAGE_STRIDE = 1  # page walk stride; NB_L1 under the deferred bank-local regime
 ROW_WISE = True  # core order of the split (row spreads beat column spreads on the NoC)
 
@@ -69,20 +72,19 @@ def make_plan(input_tensor: ttnn.Tensor, dtype: ttnn.DataType) -> Plan:
 
     tensor_pages = input_tensor.buffer_num_pages()
     grid = input_tensor.device().compute_with_storage_grid_size()
-    num_cores, all_cores, group_1, group_2, tiles_g1, tiles_g2 = ttnn.split_work_to_cores(
-        grid, tensor_pages, row_wise=ROW_WISE
-    )
-    block_tiles = min(tiles_g1, BLOCK_TILES_CAP)
+    # The helper picks (and clips) the core set; pages then spread +-1 over it in the same core order,
+    # which at MIN_PAGES_PER_CORE = 1 is exactly the helper's own page split.
+    core_slots = -(-tensor_pages // MIN_PAGES_PER_CORE)
+    num_cores, all_cores, _, _, _, _ = ttnn.split_work_to_cores(grid, core_slots, row_wise=ROW_WISE)
+    pages_lo, num_cores_hi = divmod(tensor_pages, num_cores)
+    block_tiles = min(pages_lo + (1 if num_cores_hi else 0), BLOCK_TILES_CAP)
 
-    groups = [(group_1, tiles_g1)]
-    if tiles_g2 > 0:
-        groups.append((group_2, tiles_g2))
     assignment = []
     first_page = 0
-    for group, core_tiles in groups:
-        for core in ttnn.corerange_to_cores(group, row_wise=ROW_WISE):
-            assignment.append((core, first_page, core_tiles))
-            first_page += core_tiles
+    for i, core in enumerate(ttnn.corerange_to_cores(all_cores, row_wise=ROW_WISE)):
+        core_tiles = pages_lo + (1 if i < num_cores_hi else 0)
+        assignment.append((core, first_page, core_tiles))
+        first_page += core_tiles
     assert first_page == tensor_pages, f"g6_typecast: split covers {first_page} of {tensor_pages} pages"
     assert len(assignment) == num_cores
 
