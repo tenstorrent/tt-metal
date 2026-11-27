@@ -91,9 +91,11 @@ inline void calculate_erf() {
 #ifdef INP_FLOAT32
         sfpi::vFloat a = sfpi::min(sfpi::abs(x), ERF_INPUT_CLAMP);
         sfpi::vFloat u = a * a;
-        sfpi::vFloat p = ERF_P[6];
-#pragma GCC unroll 6
-        for (int k = 5; k >= 0; k--) {
+        // ERF_P[6], ERF_P[5] and ERF_P[4] are held in the programmable constants (see erf_init).
+        sfpi::vFloat p = sfpi::vConstFloatPrgm0 * u + sfpi::vConstFloatPrgm1;
+        p = p * u + sfpi::vConstFloatPrgm2;
+#pragma GCC unroll 4
+        for (int k = 3; k >= 0; k--) {
             p = p * u + ERF_P[k];
         }
         sfpi::vFloat s = a * 16777216.0f;                           // 2^24
@@ -107,6 +109,8 @@ inline void calculate_erf() {
         v_if(a < ERF_SPLIT) { result = inner; }
         v_endif;
         result = sfpi::copysgn(result, x);
+        // No saturation on this path: with a <= 3.921875 the result never exceeds 0x3f7fffff
+        // (1 - 2^-24) in magnitude, checked on every input with a bit-exact SFPMAD model.
 #else
         // Clamp |x| to 10.0 before evaluation (erf is odd, rational is exact at boundary)
         x = sfpi::symmetric_clamp(x, 10.0f);
@@ -117,11 +121,11 @@ inline void calculate_erf() {
             ERF_LUT_SIZE,
             true,
             APPROXIMATION_MODE>(ERF_LUT, x);
-#endif
-        // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
-        // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
-        // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).
+        // Saturate to [-1, 1]: the rational fit is not bounded and overshoots by
+        // up to ~2e-4 in the tail. Persists in the dest register and biases
+        // downstream ops (e.g. decomposed GELU in CLIP).
         result = sfpi::clamp(result, -1.0f, +1.0f);
+#endif
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
@@ -130,7 +134,15 @@ inline void calculate_erf() {
 template <bool APPROXIMATION_MODE>
 void erf_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
+#ifdef INP_FLOAT32
+    // The FP32 path has no reciprocal, so the programmable constants hold three P coefficients
+    // instead, which saves six SFPLOADIs per row. GELU has its own init and does not rely on this one.
+    sfpi::vConstFloatPrgm0 = ERF_P[6];
+    sfpi::vConstFloatPrgm1 = ERF_P[5];
+    sfpi::vConstFloatPrgm2 = ERF_P[4];
+#else
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
+#endif
 }
 
 }  // namespace ckernel::sfpu
