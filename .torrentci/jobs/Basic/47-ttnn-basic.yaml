@@ -7,8 +7,8 @@ jobs:
     name: TTNN basic n150 (ASan)
     checkout: false
     description: "Run the Merge Gate ttnn basic test on one n150 with the ASan packages"
-    # The test's 15 min plus a few minutes for the step around it. Image pull
-    # and package restore happen before this clock starts.
+    # The test step's 15 min plus a few minutes for the rest of the job. Image
+    # pull and package restore happen before this clock starts.
     timeout: 20m
     runs-on:
       kubernetes:
@@ -55,19 +55,20 @@ jobs:
         value: warn
     steps:
       - id: basic
+        # 15 min fails a hung test as fast as the Merge Gate does. Measured
+        # runs with cold kernel JIT took at most 11.5 min.
+        timeout: 15m
         kind: shell
         shell:
           run:
             - mkdir -p "$TT_METAL_CACHE" test-reports
-            # 15 min fails a hung test as fast as the Merge Gate does. Measured
-            # runs with cold kernel JIT took at most 11.5 min.
-            - ulimit -n 4096; timeout 15m tt-nn-validation-basic --gtest_output=xml:test-reports/
+            - ulimit -n 4096; tt-nn-validation-basic --gtest_output=xml:test-reports/
   - id: ttnn-basic-p150b-asan
     name: TTNN basic p150b (ASan)
     checkout: false
     description: "Run the Merge Gate ttnn basic test on one p150b with the ASan packages"
-    # The test's 15 min plus a few minutes for the step around it. Image pull
-    # and package restore happen before this clock starts.
+    # The test step's 15 min plus a few minutes for the rest of the job. Image
+    # pull and package restore happen before this clock starts.
     timeout: 20m
     runs-on:
       kubernetes:
@@ -114,10 +115,11 @@ jobs:
         value: warn
     steps:
       - id: basic
+        # 15 min fails a hung test as fast as the Merge Gate does. Measured
+        # runs with cold kernel JIT took at most 11.5 min.
+        timeout: 15m
         kind: shell
         shell:
           run:
             - mkdir -p "$TT_METAL_CACHE" test-reports
-            # 15 min fails a hung test as fast as the Merge Gate does. Measured
-            # runs with cold kernel JIT took at most 11.5 min.
-            - ulimit -n 4096; timeout 15m tt-nn-validation-basic --gtest_output=xml:test-reports/
+            - ulimit -n 4096; tt-nn-validation-basic --gtest_output=xml:test-reports/
