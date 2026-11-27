@@ -14,3 +14,6 @@
 {"event":"perf_lamp","lamp":"num_writer_lanes=1","p2_ns":1466,"p1_ns":2116,"verdict":"keep L=2: p2 within noise, p1 +15%","ts":"2026-11-27T04:25:19-05:00"}
 {"event":"perf_lamp","lamp":"kernel grid = bounding rectangle","p2_ns":1552,"p1_ns":1918,"verdict":"keep shard grid: p1 +4.5%","ts":"2026-11-27T04:25:19-05:00"}
 {"event":"note","detail":"test_g6_sharded_to_interleaved_trace_perf.py (pre-boundary) is stale: imports NUM_WRITER_RISCS and an older acceptance module; left untouched, unread","ts":"2026-11-27T04:25:19-05:00"}
+{"event":"test_run","mode":"dev+plain","test":"test_g6_sharded_to_interleaved.py","result":"12 passed, 3 xfailed (out-of-SUPPORTED cells refused)","ts":"2026-11-27T06:02:08-05:00"}
+{"event":"test_run","test":"eval/golden_tests/g6_sharded_to_interleaved","result":"13 passed, 4 xfailed","ts":"2026-11-27T06:02:08-05:00"}
+{"event":"test_run","test":"probe_006 (validate bypass)","result":"p1 bf8 height->L1, p1 other spec, p2->L1, p1 bf16->DRAM all bit-exact through the same program","ts":"2026-11-27T06:02:08-05:00"}
