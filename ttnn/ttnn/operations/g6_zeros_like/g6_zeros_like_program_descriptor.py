@@ -25,6 +25,10 @@ NUM_CORES_CAP = None
 # Grid fill order of the page split. Column-major keeps both production shapes on one core rectangle.
 ROW_WISE = False
 
+# Writer placement: BRISC on the DRAM-write-preferred NoC.
+WRITER_PROCESSOR = ttnn.DataMovementProcessor.RISCV_0
+WRITER_NOC = ttnn.NOC.NOC_1
+
 # Buffer-depth knob: pages of zero scratch per core. One page is the source of every write.
 ZERO_SCRATCH_PAGES = 1
 
@@ -88,6 +92,8 @@ def cache_key(tensor):
         grid.y,
         NUM_CORES_CAP,
         ROW_WISE,
+        WRITER_PROCESSOR,
+        WRITER_NOC,
         ZERO_SCRATCH_PAGES,
     )
 
@@ -134,7 +140,7 @@ def build(output_tensor) -> CachedProgram:
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
-        config=ttnn.WriterConfigDescriptor(),
+        config=ttnn.DataMovementConfigDescriptor(processor=WRITER_PROCESSOR, noc=WRITER_NOC),
     )
     return CachedProgram(writer, [cb_zero_page])
 
