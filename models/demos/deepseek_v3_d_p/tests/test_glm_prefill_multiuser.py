@@ -1646,8 +1646,8 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
     layer, with the activation and every chunk's GLM-5.3 indexer indices handed from rank 0 to rank 1 the way the
     runner's D2D sockets hand them over (the same per-chip tensors).
 
-    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
-    chunk's records contiguous and in pack order (#63438's packed contract), all after the forward's KV writes.
+    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, layer by
+    layer in pack order, each after its chunk's KV write.
 
     Eager: the split must be bit-exact against one rank holding every layer (same programs on the same inputs).
     Traced: the ranks replay their captures (per-chunk metadata, MoE padding config, persistent input and indices
@@ -1762,13 +1762,17 @@ def test_glm_packed_pipeline_matches_one_rank(variant, config_only, mesh_device,
             if not traced:
                 ttnn.deallocate(out)
             assert ranks[1].prefill_forward(act, rank_caches[1], chunks, indexer_indices=idx) is None
+            # Layer by layer in pack order. The full-capture fallback (short of trace region) sends (0, 0, 0) for
+            # empty positions; skip those as the LayerAckService does.
             want = [
                 (c.slot_id, c.actual_start, c.actual_end)
+                for _ in range(acks_per_chunk)
                 for c in chunks
                 if not c.is_empty
-                for _ in range(acks_per_chunk)
             ]
-            got = _read_d2h_records(d2h, len(want))
+            got = []
+            while len(got) < len(want):
+                got += [r for r in _read_d2h_records(d2h, len(want) - len(got)) if r != (0, 0, 0)]
             assert got == want, f"forward {f}: D2H records {got} != {want}"
         if traced:
             # Eager reference on the same two models (their host-scalar programs, not the captured ones), slots 4..7.
