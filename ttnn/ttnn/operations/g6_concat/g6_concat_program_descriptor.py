@@ -1,244 +1,297 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_concat — plan selection and ProgramDescriptor.
+"""g6_concat program: host plan, program cache and ProgramDescriptor.
 
-Blocking Model (op_design.md): one linear output-page axis, split output-stationary into contiguous
-ranges over the full compute grid (split_work_to_cores, row-wise); each core's range is processed
-in blocks of `block_pages` consecutive output pages, double-buffered through `cb_out_tiles`
-(reader NCRISC/NoC0 -> writer BRISC/NoC1). Two regimes:
+One program, two data-movement kernels per core (reader on NCRISC / NoC0, writer on
+BRISC / NoC1) joined by `cb_moved_pages`. No compute kernel: nothing is computed.
 
-  page_relocation — every output page is one whole input page (outer / w / tile-aligned h).
-  row_gather      — "h" concat with a misaligned input offset: each output tile is assembled from
-                    row pieces (aligned DRAM windows -> cb_row_stage -> L1->L1 placement).
-
-Knobs (each defined ONCE here; every CB size / loop bound derives from them):
-  BLOCK_PAGES_MAX       -> block_pages = min(core_pages_max, BLOCK_PAGES_MAX)  (CT arg)
-  OUT_BUFFER_DEPTH      -> cb_out_tiles capacity = OUT_BUFFER_DEPTH * block_pages
-  STAGE_PAGES_PER_TILE  -> cb_row_stage page = STAGE_PAGES_PER_TILE * tile_bytes (mechanism cap)
-  grid                  -> device.compute_with_storage_grid_size()
+Work unit: one output page. The P output pages are split into contiguous ranges over
+the grid; a block is `block_pages` consecutive pages of a core's range (row_gather:
+also cut at output tile-row ends). Shape quantities and addresses travel as common
+runtime args, so one binary serves a shape key; per-core args are the page range only.
 """
 
 from __future__ import annotations
 
+import hashlib
 import math
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# ---- Knobs (single source of truth) ----
-BLOCK_PAGES_MAX = 32
-OUT_BUFFER_DEPTH = 2
-STAGE_PAGES_PER_TILE = 2
-K_MAX = 128
+# --- Blocking knobs (op_design.md, Blocking Model). Each is defined once here. ---
+BUFFER_DEPTH = 2
+MIN_PAGES_PER_CORE = 1
+# Per-core L1 the model leaves to the op (BB-05).
+L1_OP_BUDGET = 1347776
 
-TILE_H = 32
-TILE_W = 32
-FACE_H = 16
-FACE_W = 16
+TILE_DIM = 32
+FACE_DIM = 16
 
-CB_OUT_TILES = 0
-CB_ROW_STAGE = 1
+CB_MOVED_PAGES = 0
+CB_PARITY_STAGE = 1
 
-REGIME_PAGE_RELOCATION = "page_relocation"
+# Common runtime-arg table: fixed header, then (address, count) per input.
+READER_HEADER_WORDS = 5
+WORDS_PER_INPUT = 2
+PER_CORE_RT_WORDS = 2
+# Portable floor for unique + common runtime args per kernel (kernel_types.hpp max_runtime_args).
+MAX_RUNTIME_ARGS = 341
+K_MAX = (MAX_RUNTIME_ARGS - READER_HEADER_WORDS - PER_CORE_RT_WORDS) // WORDS_PER_INPUT
+
+REGIME_PAGE_COPY = "page_copy"
 REGIME_ROW_GATHER = "row_gather"
 
 
-@dataclass
-class Plan:
-    regime: str
-    tensor_slices: int  # P
-    per_input: list  # run_k pages (page_relocation) or n_k rows (row_gather)
-    wt: int
-    out_h_tiles: int  # row_gather: ceil(N/32) per slice
-    total_rows: int  # row_gather: N
-    tensor_out_pages: int
-    block_pages: int
-    num_cores: int
-    core_ranges: object = field(repr=False)
-    cores: list = field(repr=False)  # [(CoreCoord, start_page, core_pages)]
-
-    def core_roles(self):
-        """{(x, y): role} for every active core (BB-21): every core is a reader+writer peer."""
-        return {(c.x, c.y): "reader+writer" for c, _, _ in self.cores}
+def _prod(values):
+    out = 1
+    for v in values:
+        out *= int(v)
+    return out
 
 
-def _tile_grid(shape):
-    """Per-image tile grid: leading dims + [Ht, Wt] (alignment-aware ceil)."""
-    return list(shape[:-2]) + [math.ceil(shape[-2] / TILE_H), math.ceil(shape[-1] / TILE_W)]
+def _buffer_name(buffer_type):
+    return "l1" if buffer_type == ttnn.BufferType.L1 else "dram"
 
 
-def select_plan(shapes, d, dtype, layout, grid):
-    """Pure host function: regime, block size and core assignment for a call."""
+def output_shape(shapes, d):
+    out = list(shapes[0])
+    out[d] = sum(int(s[d]) for s in shapes)
+    return out
+
+
+def select_regime(shapes, d, layout):
+    """row_gather iff some input offset o_k (k >= 1) along h is not tile-aligned."""
     rank = len(shapes[0])
-    K = len(shapes)
-    wt = math.ceil(shapes[0][-1] / TILE_W)
-    offsets = [sum(s[d] for s in shapes[:k]) for k in range(K)]
-    total = sum(s[d] for s in shapes)
+    if layout == ttnn.TILE_LAYOUT and d == rank - 2:
+        if any(int(s[d]) % TILE_DIM != 0 for s in shapes[:-1]):
+            return REGIME_ROW_GATHER
+    return REGIME_PAGE_COPY
 
-    is_h = d == rank - 2
-    if is_h and any(o % TILE_H for o in offsets[1:]):
-        regime = REGIME_ROW_GATHER
-        P = math.prod(shapes[0][: rank - 2])
-        per_input = [s[d] for s in shapes]  # rows
-        out_h_tiles = math.ceil(total / TILE_H)
-        tensor_out_pages = P * out_h_tiles * wt
+
+def _geometry(shapes, d, regime):
+    """Output-page geometry and the per-input count of the common RT table."""
+    rank = len(shapes[0])
+    out = output_shape(shapes, d)
+    h_out, w_out = out[-2], out[-1]
+    out_tile_cols = math.ceil(w_out / TILE_DIM)
+    out_tile_rows_per_image = math.ceil(h_out / TILE_DIM)
+    out_rows_tail = h_out % TILE_DIM
+    out_images = _prod(out[: rank - 2])
+    num_pages = out_images * out_tile_rows_per_image * out_tile_cols
+
+    if regime == REGIME_ROW_GATHER:
+        # Kernel derives row offsets and source tile rows from the per-input row count.
+        per_input_count = [int(s[d]) for s in shapes]
+        pm_cols = out_tile_cols
     else:
-        regime = REGIME_PAGE_RELOCATION
-        grids = [_tile_grid(s) for s in shapes]
-        P = math.prod(grids[0][:d])
-        per_input = [math.prod(g[d:]) for g in grids]  # run_k
-        out_h_tiles = 0
-        tensor_out_pages = P * sum(per_input)
+        ht = math.ceil(int(shapes[0][-2]) / TILE_DIM)
+        wt = math.ceil(int(shapes[0][-1]) / TILE_DIM)
+        if d == rank - 1:
+            pm_rows = out_images * ht
+            per_input_count = [math.ceil(int(s[-1]) / TILE_DIM) for s in shapes]
+        elif d == rank - 2:
+            pm_rows = out_images
+            per_input_count = [math.ceil(int(s[-2]) / TILE_DIM) * wt for s in shapes]
+        else:
+            pm_rows = _prod(shapes[0][:d])
+            inner = _prod(shapes[0][d + 1 : rank - 2])
+            per_input_count = [int(s[d]) * inner * ht * wt for s in shapes]
+        pm_cols = sum(per_input_count)
+        assert pm_rows * pm_cols == num_pages, (pm_rows, pm_cols, num_pages)
 
-    num_cores, all_cores, g1, g2, pages_g1, pages_g2 = ttnn.split_work_to_cores(grid, tensor_out_pages, True)
-    n_g1 = g1.num_cores()
-    core_list = ttnn.grid_to_cores(num_cores, grid.x, grid.y, True)
-    cores = []
+    return dict(
+        out_shape=out,
+        num_pages=num_pages,
+        pm_cols=pm_cols,
+        out_tile_cols=out_tile_cols,
+        out_tile_rows_per_image=out_tile_rows_per_image,
+        out_rows_tail=out_rows_tail,
+        per_input_count=per_input_count,
+    )
+
+
+def _block_pages(regime, core_out_pages_max, page_bytes, has_stage, dram_read_align, out_tile_cols):
+    """Coarsest block that keeps `BUFFER_DEPTH` meaningful and fits L1_OP_BUDGET (closed form)."""
+    by_depth = math.ceil(core_out_pages_max / BUFFER_DEPTH)
+    stage = 1 if has_stage else 0
+    cap_l1 = (L1_OP_BUDGET - stage * dram_read_align) // ((BUFFER_DEPTH + stage) * page_bytes)
+    block = min(by_depth, cap_l1)
+    if regime == REGIME_ROW_GATHER:
+        block = min(block, out_tile_cols)
+    return max(1, block)
+
+
+def _work_split(grid, num_pages):
+    """Contiguous out_page ranges over min(grid, ceil(P / MIN_PAGES_PER_CORE)) cores, row-wise."""
+    grid_cores = grid.x * grid.y
+    target_cores = min(grid_cores, math.ceil(num_pages / MIN_PAGES_PER_CORE))
+    candidate = ttnn.num_cores_to_corerangeset(target_cores, grid, True)
+    num_cores, all_cores, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(candidate, num_pages, True)
+    ranges = []
     start = 0
-    for i, c in enumerate(core_list):
-        pages = pages_g1 if i < n_g1 else pages_g2
-        cores.append((c, start, pages))
-        start += pages
-    assert start == tensor_out_pages, (start, tensor_out_pages)
-
-    block_pages = max(1, min(max(pages_g1, pages_g2), BLOCK_PAGES_MAX))
-    return Plan(
-        regime=regime,
-        tensor_slices=P,
-        per_input=per_input,
-        wt=wt,
-        out_h_tiles=out_h_tiles,
-        total_rows=total,
-        tensor_out_pages=tensor_out_pages,
-        block_pages=block_pages,
-        num_cores=num_cores,
-        core_ranges=all_cores,
-        cores=cores,
-    )
+    for group, pages in ((group_1, pages_1), (group_2, pages_2)):
+        if pages == 0 or group.num_cores() == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            ranges.append((core, start, pages))
+            start += pages
+    assert start == num_pages and len(ranges) == num_cores, (start, num_pages, len(ranges), num_cores)
+    return num_cores, all_cores, ranges, pages_1
 
 
-# Memoized programs (BB-07): key -> (reader KernelDescriptor, writer KernelDescriptor, cbs, plan)
-_PROGRAM_CACHE = {}
-
-
-def _cache_key(tensors, d, output, grid):
+def _key(tensors, d, out_buffer_type, grid):
+    first = tensors[0]
     return (
-        tuple(tuple(t.shape) for t in tensors),
-        d,
-        tensors[0].dtype,
-        tensors[0].layout,
-        tuple(t.memory_config().buffer_type for t in tensors),
-        output.memory_config().buffer_type,
         (grid.x, grid.y),
+        tuple(tuple(int(v) for v in t.shape) for t in tensors),
+        d,
+        first.dtype,
+        first.layout,
+        tuple(_buffer_name(t.memory_config().buffer_type) for t in tensors),
+        _buffer_name(out_buffer_type),
+        tuple(ttnn.TensorAccessorArgs(first).get_compile_time_args()),
     )
 
 
-def _build(tensors, d, output, grid):
+def _build(tensors, d, grid, out_buffer_type):
+    first = tensors[0]
     shapes = [list(t.shape) for t in tensors]
-    dtype = tensors[0].dtype
-    plan = select_plan(shapes, d, dtype, tensors[0].layout, grid)
+    regime = select_regime(shapes, d, first.layout)
+    geo = _geometry(shapes, d, regime)
 
-    tile_bytes = output.buffer_page_size()
-    assert all(t.buffer_page_size() == tile_bytes for t in tensors)
-    assert output.buffer_num_pages() == plan.tensor_out_pages, (output.buffer_num_pages(), plan.tensor_out_pages)
-    dram_align = ttnn.get_dram_alignment()
-    elem_bytes = tensors[0].element_size()
-    face_row_bytes = FACE_W * elem_bytes
-    face_bytes = FACE_H * face_row_bytes
+    page_bytes = first.buffer_page_size()
+    face_row_bytes = FACE_DIM * first.element_size()
+    dram_read_align = ttnn.get_dram_alignment()
+    # A face row narrower than the DRAM-read congruence puts odd row shifts in another class.
+    has_stage = regime == REGIME_ROW_GATHER and face_row_bytes % dram_read_align != 0
 
-    all_cores = plan.core_ranges
-    block_pages = plan.block_pages
+    num_cores, all_cores, ranges, core_out_pages_max = _work_split(grid, geo["num_pages"])
+    block_pages = _block_pages(regime, core_out_pages_max, page_bytes, has_stage, dram_read_align, geo["out_tile_cols"])
+
+    per_core_rt = ttnn.RuntimeArgs()
+    for core, start, pages in ranges:
+        per_core_rt[core.x][core.y] = [start, pages]
 
     cbs = [
         ttnn.CBDescriptor(
-            total_size=OUT_BUFFER_DEPTH * block_pages * tile_bytes,
+            total_size=BUFFER_DEPTH * block_pages * page_bytes,
             core_ranges=all_cores,
             format_descriptors=[
-                ttnn.CBFormatDescriptor(buffer_index=CB_OUT_TILES, data_format=dtype, page_size=tile_bytes)
+                ttnn.CBFormatDescriptor(buffer_index=CB_MOVED_PAGES, data_format=first.dtype, page_size=page_bytes)
             ],
         )
     ]
-    is_gather = plan.regime == REGIME_ROW_GATHER
-    if is_gather:
-        # Mechanism cap: a staged window is at most 2x its live bytes iff 2 * face_row_bytes >= A.
-        assert STAGE_PAGES_PER_TILE * face_row_bytes >= dram_align, (face_row_bytes, dram_align)
-        stage_page = STAGE_PAGES_PER_TILE * tile_bytes
+    if has_stage:
+        # One destination-image tile per block column, plus slack to shift the base into the odd class.
+        stage_bytes = block_pages * page_bytes + dram_read_align
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=block_pages * stage_page,
+                total_size=stage_bytes,
                 core_ranges=all_cores,
                 format_descriptors=[
-                    ttnn.CBFormatDescriptor(buffer_index=CB_ROW_STAGE, data_format=dtype, page_size=stage_page)
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_PARITY_STAGE, data_format=first.dtype, page_size=dram_read_align
+                    )
                 ],
             )
         )
 
-    K = len(tensors)
-    # ---- Reader ----
-    # CT: [regime, num_inputs, P, Wt, out_h_tiles, total_rows, block_pages, tile_bytes, A,
-    #      face_bytes, face_row_bytes, cb_out, cb_stage, per_input[K]..., TensorAccessorArgs(input)]
+    is_row_gather = 1 if regime == REGIME_ROW_GATHER else 0
     reader_ct = [
-        1 if is_gather else 0,
-        K,
-        plan.tensor_slices,
-        plan.wt,
-        plan.out_h_tiles,
-        plan.total_rows,
+        CB_MOVED_PAGES,
+        CB_PARITY_STAGE,
         block_pages,
-        tile_bytes,
-        dram_align,
-        face_bytes,
+        page_bytes,
         face_row_bytes,
-        CB_OUT_TILES,
-        CB_ROW_STAGE,
+        dram_read_align,
+        is_row_gather,
+        1 if has_stage else 0,
     ]
-    reader_ct.extend(plan.per_input)
-    reader_ct.extend(ttnn.TensorAccessorArgs(tensors[0]).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(first).get_compile_time_args())
 
-    writer_ct = [block_pages, tile_bytes, CB_OUT_TILES]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+    # Header of the reader's common table; addresses are filled per call.
+    reader_common_header = [
+        len(tensors),
+        geo["pm_cols"],
+        geo["out_tile_cols"],
+        geo["out_tile_rows_per_image"],
+        geo["out_rows_tail"],
+    ]
+    assert len(reader_common_header) == READER_HEADER_WORDS
+    writer_common_shape = [geo["out_tile_cols"], geo["out_tile_rows_per_image"], geo["out_rows_tail"]]
 
-    reader_rt = ttnn.RuntimeArgs()
-    writer_rt = ttnn.RuntimeArgs()
-    for c, start, pages in plan.cores:
-        reader_rt[c.x][c.y] = [start, pages]
-        writer_rt[c.x][c.y] = [start, pages]
+    plan = {
+        "regime": regime,
+        "num_cores": num_cores,
+        "block_pages": block_pages,
+        "buffer_depth": BUFFER_DEPTH,
+        "output_pages": geo["num_pages"],
+        "core_out_pages_max": core_out_pages_max,
+        "parity_stage": has_stage,
+        "l1_bytes_per_core": sum(cb.total_size for cb in cbs),
+        "roles": {(core.x, core.y): "mover" for core, _, _ in ranges},
+    }
+    key_digest = hashlib.blake2b(repr(("g6_concat", _key(tensors, d, out_buffer_type, grid))).encode(), digest_size=8)
+    return dict(
+        plan=plan,
+        out_shape=geo["out_shape"],
+        all_cores=all_cores,
+        per_core_rt=per_core_rt,
+        cbs=cbs,
+        reader_ct=reader_ct,
+        reader_common_header=reader_common_header,
+        per_input_count=geo["per_input_count"],
+        writer_ct_head=[CB_MOVED_PAGES, block_pages, page_bytes, face_row_bytes, is_row_gather],
+        writer_common_shape=writer_common_shape,
+        program_hash=int.from_bytes(key_digest.digest(), "little"),
+    )
+
+
+_PROGRAMS: dict = {}
+
+
+def built_program(tensors, d, out_memory_config):
+    """The cached plan and descriptor parts of a shape key (BB-07); built on the first call."""
+    grid = tensors[0].device().compute_with_storage_grid_size()
+    key = _key(tensors, d, out_memory_config.buffer_type, grid)
+    built = _PROGRAMS.get(key)
+    if built is None:
+        built = _build(tensors, d, grid, out_memory_config.buffer_type)
+        _PROGRAMS[key] = built
+    return built
+
+
+def create_program_descriptor(built, tensors, output_tensor) -> ttnn.ProgramDescriptor:
+    """Thin per-call wrapper: cached CBs / CT args / per-core args, fresh common args (addresses)."""
+    reader_common = list(built["reader_common_header"])
+    for t, count in zip(tensors, built["per_input_count"]):
+        reader_common.extend([t.buffer_address(), count])
+    writer_common = [output_tensor.buffer_address(), *built["writer_common_shape"]]
+    writer_ct = list(built["writer_ct_head"]) + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_concat_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct,
-        runtime_args=reader_rt,
-        common_runtime_args=[t.buffer_address() for t in tensors],
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=built["all_cores"],
+        compile_time_args=built["reader_ct"],
+        runtime_args=built["per_core_rt"],
+        common_runtime_args=reader_common,
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_concat_writer.cpp"),
-        core_ranges=all_cores,
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=built["all_cores"],
         compile_time_args=writer_ct,
-        runtime_args=writer_rt,
-        common_runtime_args=[output.buffer_address()],
+        runtime_args=built["per_core_rt"],
+        common_runtime_args=writer_common,
         config=ttnn.WriterConfigDescriptor(),
     )
-    return reader, writer, cbs, plan
-
-
-def build_program(tensors, d, output):
-    """Return (ProgramDescriptor, plan). A cache hit only patches the K + 1 address common RT args."""
-    grid = tensors[0].device().compute_with_storage_grid_size()
-    key = _cache_key(tensors, d, output, grid)
-    entry = _PROGRAM_CACHE.get(key)
-    if entry is None:
-        entry = _build(tensors, d, output, grid)
-        _PROGRAM_CACHE[key] = entry
-    else:
-        reader, writer, _, _ = entry
-        reader.common_runtime_args = [t.buffer_address() for t in tensors]
-        writer.common_runtime_args = [output.buffer_address()]
-    reader, writer, cbs, plan = entry
-    program = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
-    return program, plan
+    program = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=built["cbs"])
+    program.custom_program_hash = built["program_hash"]
+    return program
