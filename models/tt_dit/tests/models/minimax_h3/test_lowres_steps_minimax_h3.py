@@ -84,6 +84,8 @@ def test_lowres_noise_is_the_low_frequencies_of_the_noise():
     assert abs(float(lowres.std()) - 1.0) < 0.02
     spectrum, lowres_spectrum = torch.fft.fft2(video, norm="ortho"), torch.fft.fft2(lowres, norm="ortho")
     assert torch.allclose(lowres_spectrum[..., :8, :12], spectrum[..., :8, :12], atol=1e-4)
+    # The one frequency that is the highest on both axes has the power of every other.
+    assert torch.allclose(lowres_spectrum[..., 8, 12].real, spectrum[..., -8, -12].real * 2**0.5, atol=1e-4)
 
 
 def test_handoff_is_the_upscale_renoised_to_sigma():

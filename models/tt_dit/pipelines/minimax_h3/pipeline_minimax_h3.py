@@ -665,9 +665,9 @@ def lowres_noise_rows(
     top, left = (latent_height - lowres_height) // 2, (latent_width - lowres_width) // 2
     spectrum = spectrum[..., top : top + lowres_height, left : left + lowres_width].clone()
     # The crop keeps one of the two rows and one of the two columns at the highest frequency, so the real part
-    # below has half their power: double it first.
+    # below has half their power: double it first (once for the corner the row and the column share).
     spectrum[..., 0, :] *= 2**0.5
-    spectrum[..., 0] *= 2**0.5
+    spectrum[..., 1:, 0] *= 2**0.5
     lowres = torch.fft.ifft2(torch.fft.ifftshift(spectrum, dim=(-2, -1)), norm="ortho").real
     return patchify_video_latents(lowres, patch_size)
 
@@ -3566,8 +3566,10 @@ class MiniMaxH3Pipeline:
             or layout.num_condition_video_rows
             or layout.num_condition_audio_rows
         ):
+            logger.info(f"{LOWRES_STEPS_ENV}={steps} does not apply to this request: all at full resolution")
             return video_rows, audio_rows, scheduler, audio_scheduler
         lowres_size = (int(lowres_height), int(lowres_width))
+        logger.info(f"low-res first stage: {steps} of {total} forwards at latent {lowres_size[0]}x{lowres_size[1]}")
         video_shape = (
             num_latent_frames,
             latent_height,
