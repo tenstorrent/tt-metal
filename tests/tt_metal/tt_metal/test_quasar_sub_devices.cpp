@@ -6,15 +6,15 @@
 #include "context/metal_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 

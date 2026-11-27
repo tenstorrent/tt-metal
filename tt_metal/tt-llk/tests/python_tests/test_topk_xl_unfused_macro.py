@@ -41,6 +41,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    PerfRunType,
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
@@ -49,7 +50,14 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import DEST_SYNC, TOPK_XL, TemplateParameter
+from helpers.test_variant_parameters import (
+    DEST_SYNC,
+    LOOP_FACTOR,
+    PERF_RUN_TYPE,
+    TILE_COUNT,
+    TOPK_XL,
+    TemplateParameter,
+)
 from test_topk_xl import (
     ELEMENTS_PER_TILE,
     FORMATS,
@@ -112,6 +120,7 @@ def _variant(
         test_name="sources/topk_xl_test.cpp",
         formats=FORMATS,
         templates=[
+            PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(DestSync.Full),
             TOPK_XL(
                 k=K,
@@ -130,6 +139,10 @@ def _variant(
                 blaze_compat=blaze_compat,
             ),
             TOPK_XL_MACRO_KNOBS(opt_out=opt_out, mutate=mutate),
+        ],
+        runtimes=[
+            LOOP_FACTOR(1),
+            TILE_COUNT(tile_cnt=num_rows * num_chunks * tiles_per_seq),
         ],
         variant_stimuli=StimuliConfig(
             src_A,

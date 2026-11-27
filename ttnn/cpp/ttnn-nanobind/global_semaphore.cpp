@@ -11,7 +11,7 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 #include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <nanobind/stl/optional.h>
 

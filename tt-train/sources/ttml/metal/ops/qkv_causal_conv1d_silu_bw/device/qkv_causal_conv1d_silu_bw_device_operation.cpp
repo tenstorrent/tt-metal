@@ -5,8 +5,8 @@
 #include "qkv_causal_conv1d_silu_bw_device_operation.hpp"
 
 #include <array>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"

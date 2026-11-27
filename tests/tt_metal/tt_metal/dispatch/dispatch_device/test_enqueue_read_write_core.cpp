@@ -4,12 +4,12 @@
 
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "llrt.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/host_transfer_stats_scope.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "distributed/mesh_device_impl.hpp"
 

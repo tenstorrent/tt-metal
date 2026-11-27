@@ -174,6 +174,7 @@ and `router/router_receiver.hpp`.
 #include "api/dataflow/dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_init.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/router/router_inter_domain.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_receiver.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_sender.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router/router_single_erisc.hpp"
@@ -223,6 +224,9 @@ void kernel_main() {
     finish_phase<Phase::SETUP_DONE>();
 
     // Phase: handshakes.
+    if constexpr (is_inter_domain_router && is_teardown_master) {
+        set_inter_domain_state(InterDomainState::LOCAL_HANDSHAKE);
+    }
     run_handshakes();
     finish_phase<Phase::HANDSHAKE_DONE>();
 
@@ -248,7 +252,11 @@ void kernel_main() {
         router_state()->state = RouterState::INITIALIZING;
     }
 
-    run_loop(downstreams);
+    if constexpr (is_inter_domain_router) {
+        run_inter_domain(args, [&] { run_loop(downstreams); });
+    } else {
+        run_loop(downstreams);
+    }
     WAYPOINT("LPDN");
     teardown();
     WAYPOINT("TEDN");

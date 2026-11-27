@@ -8,8 +8,8 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 namespace tt::tt_metal {
 namespace {

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "impl/context/context_descriptor.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-umd/types/xy_pair.hpp>

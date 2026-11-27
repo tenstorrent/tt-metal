@@ -10,8 +10,8 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "impl/kernels/kernel.hpp"

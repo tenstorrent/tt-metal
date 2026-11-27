@@ -13,9 +13,9 @@
 #include <unordered_map>
 #include <utility>
 
-#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>

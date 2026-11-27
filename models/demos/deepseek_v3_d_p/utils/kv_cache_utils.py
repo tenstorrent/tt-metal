@@ -309,6 +309,7 @@ def create_kv_chunk_address_table_block_cyclic(
     layer_rows=None,
     tp_axis=None,
     chunk_size_global=PREFILL_CHUNK_TOKENS,
+    cache_num_users=None,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
@@ -338,6 +339,8 @@ def create_kv_chunk_address_table_block_cyclic(
             is what DeepSeek / Kimi-K2 / GLM want.
         tp_axis: None for a TP-replicated cache, the TP axis for a deduped one (see is_tp_deduped_kv_cache).
         chunk_size_global: the cache's block-cyclic period, the prefill chunk size it was written with.
+        cache_num_users: slots the cache is allocated with, when more than the ``num_users`` it publishes
+            (a traced packed forward's scratch slot, which sits after them in the user-major fold).
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -354,10 +357,11 @@ def create_kv_chunk_address_table_block_cyclic(
 
     rows = mesh_shape[0]
 
-    # This (building) rank's cache must hold exactly its own stage's layers, folded with num_users.
+    # This (building) rank's cache must hold exactly its own stage's layers, folded with its allocated slots.
+    cache_users = cache_num_users or num_users
     assert (
-        kvpe_cache.shape[0] == num_users * num_my_layers
-    ), f"cache batch dim {kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
+        kvpe_cache.shape[0] == cache_users * num_my_layers
+    ), f"cache batch dim {kvpe_cache.shape[0]} != cache slots({cache_users}) * num_my_layers({num_my_layers})"
 
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = merged_num_layers(stage_layout)
@@ -912,22 +916,25 @@ def populate_kv_chunk_address_table_dflash(
     return lookup_table
 
 
-def _kda_local_segments(geometry, kind: str, tp_col: int):
-    """One device's segments of one layer: ``(global segment, shard index within the layer's batch)``."""
+def _kda_local_segments(geometry, kind: str, sp_row: int, tp_col: int):
+    """One chip's segments of one layer: ``(global segment, shard index within the layer's batch)``."""
     if kind == "kda_recurrent":
         return [
-            (geometry.recurrent_segment(tp_col, head, band), geometry.recurrent_local_shard(0, head, band))
-            for head in range(geometry.local_heads)
+            (
+                geometry.recurrent_segment(tp_col, geometry.local_head(sp_row, j), band),
+                geometry.recurrent_local_shard(0, j, band),
+            )
+            for j in range(geometry.stored_heads)
             for band in range(geometry.bands)
         ]
     if kind == "kda_convolution":
         return [
             (
-                geometry.convolution_segment(branch, tp_col, head, half),
-                geometry.convolution_local_column(branch, head, half),
+                geometry.convolution_segment(branch, tp_col, geometry.local_head(sp_row, j), half),
+                geometry.convolution_stored_page(branch, j, half),
             )
             for branch in range(3)
-            for head in range(geometry.local_heads)
+            for j in range(geometry.stored_heads)
             for half in range(geometry.halves)
         ]
     raise ValueError(f"unknown KDA state kind {kind!r} (expected 'kda_recurrent' or 'kda_convolution')")
@@ -995,12 +1002,13 @@ def populate_kv_chunk_address_table_kda(
 
       * **No token axis.** A KDA layer's state is a fixed set of segments, each set once at
         ``kda_position(geometry, kind, i)`` (see the constants above); the config is tagged Snapshot.
-      * **TP shards heads, SP replicates.** Column ``g // H_local`` is the only column holding global
-        head ``g``, and every SP row of that column holds the same bytes, so a device group is one TP
-        column spanning all SP rows -- the worker reads any member as a replica. (The MLA cache is the
-        transpose: SP-sharded, TP-replicated, one group per row.)
+      * **One device per group.** TP shards heads (column ``g // H_local`` holds global head ``g``) and SP
+        shards each column's heads (SP row ``r`` stores only its ``H_store`` heads), so every segment lives
+        on exactly one chip and each ``(sp_row, tp_col)`` is a singleton group, as the TP-deduped MLA cache
+        and the dflash caches publish theirs.
       * **Batch-major shards.** Both slabs fold ``(slot, layer)`` into their leading dim, so a layer's
-        segments are one contiguous shard run ``[batch * shards_per_layer, +shards_per_layer)`` with
+        segments are one contiguous shard run ``[batch * shards_per_layer, +shards_per_layer)`` of the
+        chip's ``H_store`` heads with
         ``batch = slot * count + local_layer``; shard ``s`` lives in bank ``s % num_banks`` at
         ``base + (s // num_banks) * segment_bytes``. The recurrent slab is ND-sharded with one
         ``[128, 32]`` band per shard (four 4 KiB tile pages); the convolution slab is interleaved
@@ -1034,6 +1042,9 @@ def populate_kv_chunk_address_table_kda(
         config.chunk_size_bytes == segment_bytes
     ), f"KDA {kind} config chunk is {config.chunk_size_bytes} bytes but a segment is {segment_bytes}"
     assert sp_axis != tp_axis, f"sp_axis and tp_axis must differ; both are {sp_axis}"
+    assert (
+        sp_axis == geometry.sequence_parallel_axis
+    ), f"table walk sp_axis {sp_axis} != the slabs' geometry SP axis {geometry.sequence_parallel_axis}"
     sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     assert (sp, tp) == (
         geometry.sequence_parallel_size,
@@ -1050,24 +1061,27 @@ def populate_kv_chunk_address_table_kda(
         first = int(stage["first_layer"])
         fnids = stage["fnids"]
         for tp_col in range(tp):
-            # TP column tp_col across every SP row, in the MLA table's coordinates (tp_axis is 1 - sp_axis).
-            coords = [_sp_row_coords(mesh_shape, sp_axis, sp_row)[tp_col] for sp_row in range(sp)]
-            members = [fnids[r][c] for r, c in coords]
-            group_idx = lookup_table.add_device_group(members)
-            for fid in members:
+            for sp_row in range(sp):
+                # Each SP row stores its own heads: one chip per device group, in the MLA table's coordinates
+                # (tp_axis is 1 - sp_axis).
+                row_coord, col_coord = _sp_row_coords(mesh_shape, sp_axis, sp_row)[tp_col]
+                fid = fnids[row_coord][col_coord]
+                group_idx = lookup_table.add_device_group([fid])
                 lookup_table.set_fabric_node_host(fid, host_name=host_name)
-            local_segments = _kda_local_segments(geometry, kind, tp_col)
-            for slot in range(num_users):
-                for local_layer in range(count):
-                    batch = slot * count + local_layer
-                    row = layer_rows[first + local_layer] if layer_rows is not None else first + local_layer
-                    for segment, shard_in_layer in local_segments:
-                        shard = batch * shards_per_layer + shard_in_layer
-                        location = ttnn.experimental.disaggregation.KvCacheLocation()
-                        location.noc_addr = ((shard % num_banks) << 32) | (base + (shard // num_banks) * segment_bytes)
-                        location.size_bytes = segment_bytes
-                        location.device_group_index = group_idx
-                        lookup_table.set(row, segment * stride, slot, location, config_id)  # kda_position()
+                local_segments = _kda_local_segments(geometry, kind, sp_row, tp_col)
+                for slot in range(num_users):
+                    for local_layer in range(count):
+                        batch = slot * count + local_layer
+                        row = layer_rows[first + local_layer] if layer_rows is not None else first + local_layer
+                        for segment, shard_in_layer in local_segments:
+                            shard = batch * shards_per_layer + shard_in_layer
+                            location = ttnn.experimental.disaggregation.KvCacheLocation()
+                            location.noc_addr = ((shard % num_banks) << 32) | (
+                                base + (shard // num_banks) * segment_bytes
+                            )
+                            location.size_bytes = segment_bytes
+                            location.device_group_index = group_idx
+                            lookup_table.set(row, segment * stride, slot, location, config_id)  # kda_position()
     return lookup_table
 
 

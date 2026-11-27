@@ -20,6 +20,7 @@ _INTS = {
     ttnn.uint32: (torch.uint32, 0, 2**32 - 1),
     ttnn.uint16: (torch.uint16, 0, 2**16 - 1),
     ttnn.uint8: (torch.uint8, 0, 2**8 - 1),
+    ttnn.int8: (torch.int8, -(2**7), 2**7 - 1),
 }
 _BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
