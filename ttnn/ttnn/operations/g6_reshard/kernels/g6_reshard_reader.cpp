@@ -1,111 +1,101 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_reshard PULL issuer. One source, instantiated num_issuers times per out-block core (issuer 0 on
-// RISCV_1/NOC_0, issuer 1 on RISCV_0/NOC_1). Each issuer pulls one row band of this core's out block straight
-// from the in0 shards that hold it: every run lands at its final slot of the out shard, so there is no CB.
+// g6_reshard issuer (PULL). One source, one instance per data-movement RISC-V of each out-block holder.
+// The instance owns rows [row_begin, row_end) x cols [col_begin, col_end) of the out block (tiles of the padded
+// 2-D view), reads every overlapping piece of in0's blocks straight into out's shard, then waits once.
 //
-// Raw NoC calls instead of a kernel_lib helper: local_copy_helpers' read-state helpers are self-aimed and
-// single-packet with a compile-time size, while these runs are remote and runtime-length (1 tile .. a shard).
+// Raw noc_async_read / noc_async_read_barrier: no kernel_lib helper reads from a remote core into a strided
+// destination with multi-packet runs (local_copy_helpers are self-aimed and single-packet, mcast is one-to-many).
+// The source address comes from in0's TensorAccessor, so any legal placement of in0 is served.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/assert.h"
-#include "api/debug/kernel_profiler.hpp"
 
 namespace {
 
-FORCE_INLINE uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
-FORCE_INLINE uint32_t max_u32(uint32_t a, uint32_t b) { return a > b ? a : b; }
+// Shard slots keep the full shard row stride even in a cut-short tail shard, so rows of a piece merge into one
+// run only when the piece spans the whole shard row on both sides.
+template <uint32_t in_block_width_tiles, uint32_t block_width_tiles, uint32_t aligned_page_bytes>
+FORCE_INLINE void move_piece(uint64_t src, uint32_t dst, uint32_t piece_rows, uint32_t piece_width) {
+    constexpr uint32_t in_row_stride_bytes = in_block_width_tiles * aligned_page_bytes;
+    constexpr uint32_t out_row_stride_bytes = block_width_tiles * aligned_page_bytes;
+    if (in_block_width_tiles == block_width_tiles && piece_width == block_width_tiles) {
+        noc_async_read(src, dst, piece_rows * out_row_stride_bytes);
+        return;
+    }
+    const uint32_t run_bytes = piece_width * aligned_page_bytes;
+    for (uint32_t r = 0; r < piece_rows; ++r) {
+        noc_async_read(src, dst, run_bytes);
+        src += in_row_stride_bytes;
+        dst += out_row_stride_bytes;
+    }
+}
 
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t issuer_idx = get_compile_time_arg_val(0);
-    constexpr uint32_t num_issuers = get_compile_time_arg_val(1);
-    constexpr uint32_t tensor_row_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tensor_col_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t in_shard_row_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t in_shard_col_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t in_block_cols = get_compile_time_arg_val(6);
-    constexpr uint32_t out_shard_row_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t out_shard_col_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t tile_stride_bytes = get_compile_time_arg_val(9);
-    constexpr auto in0_args = TensorAccessorArgs<10>();
-
-    static_assert(issuer_idx < num_issuers, "issuer_idx out of range");
+    constexpr uint32_t tensor_width_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t block_width_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t in_block_height_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t in_block_width_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t aligned_page_bytes = get_compile_time_arg_val(4);
+    constexpr auto in0_args = TensorAccessorArgs<5>();
 
     const uint32_t in0_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t block_row = get_arg_val<uint32_t>(0);
-    const uint32_t block_col = get_arg_val<uint32_t>(1);
 
-    // The out block, clipped to the tensor on a tail block row / column.
-    const uint32_t block_row_begin = block_row * out_shard_row_tiles;
-    const uint32_t block_row_end = min_u32(block_row_begin + out_shard_row_tiles, tensor_row_tiles);
-    const uint32_t block_col_begin = block_col * out_shard_col_tiles;
-    const uint32_t block_col_end = min_u32(block_col_begin + out_shard_col_tiles, tensor_col_tiles);
+    const uint32_t block_row_begin = get_arg_val<uint32_t>(0);
+    const uint32_t row_begin = get_arg_val<uint32_t>(1);
+    const uint32_t row_end = get_arg_val<uint32_t>(2);
+    const uint32_t col_begin = get_arg_val<uint32_t>(3);
+    const uint32_t col_end = get_arg_val<uint32_t>(4);
 
-    const uint32_t band_height_tiles = (block_row_end - block_row_begin + num_issuers - 1) / num_issuers;
-    const uint32_t band_row_begin = min_u32(block_row_begin + issuer_idx * band_height_tiles, block_row_end);
-    const uint32_t band_row_end = min_u32(band_row_begin + band_height_tiles, block_row_end);
-
-    const auto in0 = TensorAccessor(in0_args, in0_addr, tile_stride_bytes);
+    constexpr uint32_t out_row_stride_bytes = block_width_tiles * aligned_page_bytes;
 
     {
-        DeviceZoneScopedN("G6R-PULL-ISSUE");
-        if (band_row_begin < band_row_end) {
-            const uint32_t src_block_row_first = band_row_begin / in_shard_row_tiles;
-            const uint32_t src_block_row_last = (band_row_end - 1) / in_shard_row_tiles;
-            const uint32_t src_block_col_first = block_col_begin / in_shard_col_tiles;
-            const uint32_t src_block_col_last = (block_col_end - 1) / in_shard_col_tiles;
+        DeviceZoneScopedN("g6_reshard_issue");
+        if (row_begin < row_end) {
+            const auto in0 = TensorAccessor(in0_args, in0_addr, aligned_page_bytes);
 
-            for (uint32_t src_block_row = src_block_row_first; src_block_row <= src_block_row_last; ++src_block_row) {
-                const uint32_t src_row_origin = src_block_row * in_shard_row_tiles;
-                const uint32_t h0 = max_u32(band_row_begin, src_row_origin);
-                const uint32_t h1 = min_u32(band_row_end, src_row_origin + in_shard_row_tiles);
+            // locate_pieces: first in0 block boundary past the sub-block's origin on each axis; the walk then
+            // advances by whole in0 blocks.
+            const uint32_t first_col_boundary = (col_begin / in_block_width_tiles + 1) * in_block_width_tiles;
+            uint32_t row_boundary = (row_begin / in_block_height_tiles + 1) * in_block_height_tiles;
+            uint32_t piece_row0 = row_begin;
+            uint32_t dst_row = out_addr + (row_begin - block_row_begin) * out_row_stride_bytes;
+            uint32_t src_row_page = row_begin * tensor_width_tiles;
 
-                for (uint32_t src_block_col = src_block_col_first; src_block_col <= src_block_col_last;
-                     ++src_block_col) {
-                    const uint32_t src_col_origin = src_block_col * in_shard_col_tiles;
-                    const uint32_t w0 = max_u32(block_col_begin, src_col_origin);
-                    const uint32_t w1 = min_u32(block_col_end, src_col_origin + in_shard_col_tiles);
-                    const uint32_t run_width = w1 - w0;
+            // move_pieces
+            while (piece_row0 < row_end) {
+                const uint32_t piece_row1 = row_boundary < row_end ? row_boundary : row_end;
+                const uint32_t piece_rows = piece_row1 - piece_row0;
 
-                    const uint32_t shard_id = src_block_row * in_block_cols + src_block_col;
-                    ASSERT(shard_id < in0.dspec().num_shards());
-                    const uint64_t shard_noc_addr = in0.get_shard_noc_addr(shard_id, 0, noc_index);
-                    noc_async_read_set_state(shard_noc_addr, noc_index);
-
-                    // Strides are the allocated shard widths, also on a tail shard (in-shard page order).
-                    uint32_t src_l1 =
-                        static_cast<uint32_t>(shard_noc_addr) +
-                        ((h0 - src_row_origin) * in_shard_col_tiles + (w0 - src_col_origin)) * tile_stride_bytes;
-                    uint32_t dst_l1 =
-                        out_addr +
-                        ((h0 - block_row_begin) * out_shard_col_tiles + (w0 - block_col_begin)) * tile_stride_bytes;
-
-                    // Full rows of both allocated shards are contiguous on both ends: one run for the whole
-                    // intersection. A tail intersection is narrower than the allocated width, so it never merges.
-                    if (run_width == in_shard_col_tiles && run_width == out_shard_col_tiles) {
-                        noc_async_read_with_state(src_l1, dst_l1, (h1 - h0) * run_width * tile_stride_bytes, noc_index);
-                    } else {
-                        const uint32_t run_bytes = run_width * tile_stride_bytes;
-                        for (uint32_t h = h0; h < h1; ++h) {
-                            noc_async_read_with_state(src_l1, dst_l1, run_bytes, noc_index);
-                            src_l1 += in_shard_col_tiles * tile_stride_bytes;
-                            dst_l1 += out_shard_col_tiles * tile_stride_bytes;
-                        }
-                    }
+                uint32_t col_boundary = first_col_boundary;
+                uint32_t piece_col0 = col_begin;
+                uint32_t dst = dst_row;
+                while (piece_col0 < col_end) {
+                    const uint32_t piece_col1 = col_boundary < col_end ? col_boundary : col_end;
+                    const uint32_t piece_width = piece_col1 - piece_col0;
+                    move_piece<in_block_width_tiles, block_width_tiles, aligned_page_bytes>(
+                        in0.get_noc_addr(src_row_page + piece_col0), dst, piece_rows, piece_width);
+                    dst += piece_width * aligned_page_bytes;
+                    piece_col0 = piece_col1;
+                    col_boundary += in_block_width_tiles;
                 }
+
+                dst_row += piece_rows * out_row_stride_bytes;
+                src_row_page += piece_rows * tensor_width_tiles;
+                piece_row0 = piece_row1;
+                row_boundary += in_block_height_tiles;
             }
         }
     }
 
     {
-        DeviceZoneScopedN("G6R-PULL-DRAIN");
-        noc_async_read_barrier(noc_index);
+        // complete_block: nothing may stay in flight past return (BB-03).
+        DeviceZoneScopedN("g6_reshard_wait");
+        noc_async_read_barrier();
     }
 }

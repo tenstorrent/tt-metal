@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_reshard: move every tile of a BLOCK_SHARDED L1 tensor, as stored, into a new tensor
-BLOCK_SHARDED in L1 on the placement memory_config names. One device program (regime PULL, see
-g6_reshard_program_descriptor.py); nothing is computed or converted.
-"""
+"""g6_reshard: move every tile of a BLOCK_SHARDED L1 tensor, as stored, into a new BLOCK_SHARDED L1 tensor on
+the placement memory_config names. One device program (PULL regime, see op_design.md)."""
 
 from __future__ import annotations
 
@@ -14,13 +11,13 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_reshard_program_descriptor import (
-    NUM_ISSUERS,
+    ISSUERS_PER_CORE,
+    L1_FREE_BYTES,
     TILE_DIM,
-    ReshardPlan,
+    compute_geometry,
     create_program_descriptor,
-    patch_addresses,
-    placement_from_shard_spec,
-    tile_grid,
+    issuer_roles,
+    set_buffer_addresses,
 )
 
 
@@ -39,13 +36,13 @@ SUPPORTED = {
 EXCLUSIONS = []
 
 
-def validate(input_tensor, memory_config):
+def validate(input_tensor, memory_config=None):
     axes = {
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
     }
     for axis_name, tagger in INPUT_TAGGERS.items():
-        axes[axis_name] = tagger((input_tensor.shape,), axes)
+        axes[axis_name] = tagger((tuple(input_tensor.shape),), axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -57,132 +54,94 @@ def validate(input_tensor, memory_config):
 
 
 # ---------------------------------------------------------------------------
-# Host validation and planning
+# Input validation (beyond the support contract)
 # ---------------------------------------------------------------------------
 
-# L1 per core the model leaves to the op (BB-05); out's shard is the op's only allocation.
-L1_BUDGET_BYTES = 1347776
+
+def _is_block_sharded_l1(memory_config) -> bool:
+    return (
+        memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        and memory_config.buffer_type == ttnn.BufferType.L1
+        and memory_config.shard_spec is not None
+    )
 
 
-def _is_one_rectangle(grid) -> bool:
-    box = grid.bounding_box()
-    area = (box.end.x - box.start.x + 1) * (box.end.y - box.start.y + 1)
-    return grid.num_cores() == area
-
-
-def _check_block_sharded_l1(memory_config, what: str) -> None:
-    if memory_config.memory_layout != ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        raise ValueError(f"g6_reshard: {what} must be BLOCK_SHARDED, got {memory_config.memory_layout}")
-    if memory_config.buffer_type != ttnn.BufferType.L1:
-        raise ValueError(f"g6_reshard: {what} must be in L1, got {memory_config.buffer_type}")
-    if memory_config.shard_spec is None:
-        raise ValueError(f"g6_reshard: {what} has no shard spec")
-
-
-def _check_2d_view_matches_buffer(images: int, row_tiles_per_image: int, shard_row_tiles: int, what: str) -> None:
-    # The buffer distributes shards over the padded shape per image; it coincides with the 2-D view's
-    # block grid (which the kernel indexes) only if no shard straddles an image boundary.
-    if images > 1 and row_tiles_per_image % shard_row_tiles != 0:
-        raise RuntimeError(
-            f"g6_reshard: {what} shard height ({shard_row_tiles} tiles) does not divide the per-image height "
-            f"({row_tiles_per_image} tiles) of a {images}-image tensor; its shards do not follow the 2-D view"
-        )
-
-
-def _plan(input_tensor, memory_config) -> ReshardPlan:
+def _check_inputs(input_tensor, memory_config):
     if not ttnn.is_tensor_storage_on_device(input_tensor):
         raise ValueError("g6_reshard: input_tensor must be on a device")
-    _check_block_sharded_l1(input_tensor.memory_config(), "input_tensor")
-    _check_block_sharded_l1(memory_config, "memory_config")
+    if not _is_block_sharded_l1(input_tensor.memory_config()):
+        raise ValueError("g6_reshard: input_tensor must be BLOCK_SHARDED in L1 with a shard spec")
+    if not isinstance(memory_config, ttnn.MemoryConfig) or not _is_block_sharded_l1(memory_config):
+        raise ValueError("g6_reshard: memory_config must be BLOCK_SHARDED in L1 with a shard spec")
 
     shape = list(input_tensor.shape)
     if len(shape) != 4:
         raise ValueError(f"g6_reshard: input_tensor must be rank 4, got rank {len(shape)}")
     height = shape[0] * shape[1] * shape[2]
-    if height % TILE_DIM != 0 or shape[-1] % TILE_DIM != 0:
-        raise ValueError(f"g6_reshard: the 2-D view ({height}, {shape[-1]}) must have H and W multiples of {TILE_DIM}")
+    if height % TILE_DIM or shape[3] % TILE_DIM:
+        raise ValueError(f"g6_reshard: 2-D view ({height}, {shape[3]}) must have H and W multiples of {TILE_DIM}")
 
-    out_spec = memory_config.shard_spec
-    if int(out_spec.shape[0]) % TILE_DIM != 0 or int(out_spec.shape[1]) % TILE_DIM != 0:
+    spec = memory_config.shard_spec
+    sh, sw = spec.shape[0], spec.shape[1]
+    if sh <= 0 or sw <= 0 or sh % TILE_DIM or sw % TILE_DIM:
+        raise ValueError(f"g6_reshard: memory_config shard shape ({sh}, {sw}) must be positive multiples of {TILE_DIM}")
+    ranges = spec.grid.ranges()
+    if len(ranges) != 1:
+        raise ValueError("g6_reshard: memory_config core grid must be one rectangle")
+    rng = ranges[0]
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    if rng.end.x >= grid.x or rng.end.y >= grid.y:
         raise ValueError(
-            f"g6_reshard: memory_config shard shape {list(out_spec.shape)} must be multiples of {TILE_DIM}"
+            f"g6_reshard: memory_config grid ({rng.start.x},{rng.start.y})-({rng.end.x},{rng.end.y}) "
+            f"outside the {grid.x}x{grid.y} worker grid"
         )
-    if not _is_one_rectangle(out_spec.grid):
-        raise ValueError(f"g6_reshard: memory_config core grid must be one rectangle, got {out_spec.grid}")
 
-    in_spec = input_tensor.memory_config().shard_spec
-    padded = input_tensor.padded_shape
-    tensor_row_tiles, tensor_col_tiles, images = tile_grid(padded)
-    out_placement = placement_from_shard_spec(out_spec)
-    plan = ReshardPlan(
-        tensor_row_tiles=tensor_row_tiles,
-        tensor_col_tiles=tensor_col_tiles,
-        tile_stride_bytes=input_tensor.buffer_aligned_page_size(),
-        in_placement=placement_from_shard_spec(in_spec),
-        out_placement=out_placement,
-        num_issuers=NUM_ISSUERS,
+    geom = compute_geometry(input_tensor, memory_config)
+    grid_cols = rng.end.x - rng.start.x + 1
+    grid_rows = rng.end.y - rng.start.y + 1
+    need_cols, need_rows = (
+        (geom.num_block_cols, geom.num_block_rows) if geom.out.row_major else (geom.num_block_rows, geom.num_block_cols)
     )
-
-    x_span, y_span = out_placement.used_extent(*plan.out_blocks)
-    if out_placement.grid_width < x_span or out_placement.grid_height < y_span:
+    if grid_cols < need_cols or grid_rows < need_rows:
         raise ValueError(
-            f"g6_reshard: memory_config grid {out_placement.grid_width}x{out_placement.grid_height} cores "
-            f"cannot hold {plan.out_blocks[0]}x{plan.out_blocks[1]} blocks (rows x cols) in its orientation"
+            f"g6_reshard: memory_config grid {grid_cols}x{grid_rows} (cols x rows) cannot hold "
+            f"{geom.num_block_rows}x{geom.num_block_cols} blocks in its orientation"
         )
-
-    device_grid = input_tensor.device().compute_with_storage_grid_size()
-    if out_placement.x1 >= device_grid.x or out_placement.y1 >= device_grid.y:
-        raise ValueError(
-            f"g6_reshard: memory_config grid ends at ({out_placement.x1}, {out_placement.y1}), outside the "
-            f"{device_grid.x}x{device_grid.y} worker grid"
-        )
-
-    out_shard_bytes = out_placement.shard_row_tiles * out_placement.shard_col_tiles * plan.tile_stride_bytes
-    if out_shard_bytes > L1_BUDGET_BYTES:
+    if geom.out_shard_bytes > L1_FREE_BYTES:
         raise RuntimeError(
-            f"g6_reshard: out shard of {out_shard_bytes} B exceeds the {L1_BUDGET_BYTES} B of L1 left to the op"
+            f"g6_reshard: out shard of {geom.out_shard_bytes} B exceeds the {L1_FREE_BYTES} B of L1 left to the op"
         )
-
-    l1_alignment = ttnn.get_l1_alignment()
-    if plan.tile_stride_bytes % l1_alignment != 0:
-        raise RuntimeError(
-            f"g6_reshard: tile stride {plan.tile_stride_bytes} B is not a multiple of the L1 alignment {l1_alignment} B"
-        )
-
-    row_tiles_per_image = int(padded[-2]) // TILE_DIM
-    _check_2d_view_matches_buffer(images, row_tiles_per_image, plan.in_placement.shard_row_tiles, "input_tensor")
-    _check_2d_view_matches_buffer(images, row_tiles_per_image, out_placement.shard_row_tiles, "memory_config")
-    return plan
-
-
-def g6_reshard_plan(input_tensor, memory_config) -> dict:
-    """The plan a call selects (BB-08) and the role of every core of out's grid (BB-21)."""
-    return _plan(input_tensor, memory_config).report()
+    return geom
 
 
 # ---------------------------------------------------------------------------
-# Program cache (BB-07)
+# Host plan cache (BB-07) and plan report (BB-08)
 # ---------------------------------------------------------------------------
 
-# Cache key -> ProgramDescriptor. A hit only rewrites the two buffer addresses.
-_DESCRIPTOR_CACHE = {}
+_PLAN_CACHE: dict = {}
+_LAST_PLAN: dict | None = None
 
 
-def _device_key(device):
-    try:
-        return device.id()
-    except (AttributeError, TypeError):
-        return id(device)
-
-
-def _cache_key(input_tensor, plan: ReshardPlan):
+def _plan_key(input_tensor, geom, device) -> tuple:
     return (
-        _device_key(input_tensor.device()),
-        tuple(int(d) for d in input_tensor.padded_shape),
-        input_tensor.dtype,
-        input_tensor.layout,
-        plan,
+        tuple(input_tensor.padded_shape),
+        str(input_tensor.dtype),
+        str(input_tensor.layout),
+        geom.in0.key(),
+        geom.out.key(),
+        device.id(),
+        ISSUERS_PER_CORE,
     )
+
+
+def last_plan() -> dict | None:
+    """Plan the last call selected: regime and the issuer group's core rectangle."""
+    return _LAST_PLAN
+
+
+def dump_roles(input_tensor, memory_config) -> list[dict]:
+    """Per core of the kernel range: its out block and each issuer's row range and piece count (BB-21)."""
+    return issuer_roles(compute_geometry(input_tensor, memory_config))
 
 
 # ---------------------------------------------------------------------------
@@ -192,27 +151,33 @@ def _cache_key(input_tensor, plan: ReshardPlan):
 
 def g6_reshard(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     validate(input_tensor, memory_config)
-    plan = _plan(input_tensor, memory_config)
+    global _LAST_PLAN
+
+    geom = _check_inputs(input_tensor, memory_config)
+    device = input_tensor.device()
 
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,
         input_tensor.dtype,
         input_tensor.layout,
-        input_tensor.device(),
+        device,
         memory_config,
     )
-    if output_tensor.buffer_aligned_page_size() != plan.tile_stride_bytes:
-        raise RuntimeError(
-            f"g6_reshard: out page stride {output_tensor.buffer_aligned_page_size()} B differs from the input's "
-            f"{plan.tile_stride_bytes} B"
-        )
 
-    key = _cache_key(input_tensor, plan)
-    descriptor = _DESCRIPTOR_CACHE.get(key)
-    if descriptor is None:
-        descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
-        _DESCRIPTOR_CACHE[key] = descriptor
+    key = _plan_key(input_tensor, geom, device)
+    program_descriptor = _PLAN_CACHE.get(key)
+    if program_descriptor is None:
+        program_descriptor = create_program_descriptor(input_tensor, output_tensor, geom)
+        program_descriptor.custom_program_hash = hash(("g6_reshard",) + key) & 0xFFFFFFFFFFFFFFFF
+        _PLAN_CACHE[key] = program_descriptor
     else:
-        patch_addresses(descriptor, input_tensor, output_tensor)
+        set_buffer_addresses(program_descriptor, input_tensor.buffer_address(), output_tensor.buffer_address())
 
-    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
+    _LAST_PLAN = {
+        "regime": "PULL",
+        "issuers_per_core": ISSUERS_PER_CORE,
+        "issuer_rectangle": geom.holder_rectangle(),
+        "out_blocks": (geom.num_block_rows, geom.num_block_cols),
+    }
+
+    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)

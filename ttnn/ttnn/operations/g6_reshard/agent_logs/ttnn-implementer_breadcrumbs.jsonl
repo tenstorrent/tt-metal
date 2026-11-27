@@ -6,3 +6,6 @@
 {"event":"test_run","what":"acceptance (dev+prod) + golden","result":"21/21 dev, 21/21 prod, golden 9/9","ts":"2026-11-26T19:12:58-05:00"}
 {"event":"env_fix","what":"libtt_metal RUNPATH /opt/openmpi-v5.0.7-ulfm missing on host; LD_PRELOAD generated/mpix_stub/libmpix_stub.so (MPIX_Comm_revoke/shrink abort stubs) to import ttnn","ts":"2026-11-27T04:03:46-05:00"}
 {"event":"test_run","what":"acceptance --dev and plain, golden suite","result":"16/16, 16/16, golden 12/12","classification":"pass","ts":"2026-11-27T04:03:46-05:00"}
+{"event":"test_run","what":"acceptance --dev + non-dev","result":"PASS 7/7, 7/7","classification":"pass","ts":"2026-11-27T06:22:54-05:00"}
+{"event":"perf_measure","variant":"design default (issuer0 NCRISC/NoC0, issuer1 BRISC/NoC1, dedicated)","device_kernel_ns":{"P":2481,"I0":903,"I3":2196,"I5":4659,"O1":2787},"P_ncrisc_ns":2481,"P_brisc_ns":1294,"I5_ncrisc_ns":4659,"I5_brisc_ns":1176,"stock_P_ns":1990,"ts":"2026-11-27T06:22:54-05:00"}
+{"event":"hypothesis","what":"NoC0 issuer binds: P/I5/O1 sources sit east/south of targets, so read data returning on NoC0 (+x,+y) wraps the torus while NoC1 (-x,-y) is direct. Per-piece NoC choice by return-path hops in DM_DYNAMIC_NOC should bring NCRISC down to the NoC1 issuer time.","ts":"2026-11-27T06:22:55-05:00"}

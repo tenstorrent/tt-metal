@@ -1,195 +1,226 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_reshard program descriptor: the PULL regime.
+"""g6_reshard ProgramDescriptor: PULL regime (op_design.md, Blocking Model).
 
-Every core that holds an out block pulls that block's tiles straight from the L1 of the cores holding
-them, each run landing at its final slot of the out shard. One dataflow kernel source runs as
-NUM_ISSUERS instances per out-block core, each pulling one row band of the block. No CB, no compute
-kernel, no semaphore.
-
-All tile geometry is taken from the padded 2-D view: rows = prod(padded_shape[:-1]) / 32,
-cols = padded_shape[-1] / 32. Every placement value is a compile-time arg, so two placements never
-share a compiled program; the per-core block coordinates are runtime args and the two buffer
-addresses are common runtime args, rewritten on every call.
+Every core that holds a block of out runs ISSUERS_PER_CORE instances of one dataflow kernel. Each instance
+owns a contiguous range of the block's tile rows, walks the pieces of in0's blocks that overlap it on device,
+and reads them straight into out's shard. No CB, no compute kernel, no semaphore.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import prod
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-PULL_KERNEL = KERNEL_DIR / "g6_reshard_reader.cpp"
+ISSUER_KERNEL = str(KERNEL_DIR / "g6_reshard_reader.cpp")
 
 TILE_DIM = 32
 
-# Row bands per out block = pull kernels per out-block core (1 or 2: one per data-movement RISC).
-NUM_ISSUERS = 2
+# L1 the model leaves to the op on every core (BB-05).
+L1_FREE_BYTES = 1347776
 
-# issuer_idx -> (RISC, NoC). Issuer 0 takes the reader slot, issuer 1 the writer slot, so the two bands
-# travel on different NoCs.
-ISSUER_PLACEMENT = (
+# (processor, NoC) of each issuer slot. Issuer k of a core runs on ISSUER_PLACEMENTS[k].
+ISSUER_PLACEMENTS = (
     (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
     (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
 )
 
-REGIME_PULL = "PULL"
+# Knob: data-movement RISC-Vs that split one out block's tile rows (1 or 2).
+ISSUERS_PER_CORE = 2
 
-# Common RT arg slots, patched on every call.
-_COMMON_ARG_IN0_ADDR = 0
-_COMMON_ARG_OUT_ADDR = 1
+# Per-core RT args of an issuer, in kernel order.
+RT_BLOCK_ROW_BEGIN, RT_ROW_BEGIN, RT_ROW_END, RT_COL_BEGIN, RT_COL_END = range(5)
+# Common RT args, in kernel order.
+CRT_IN0_ADDR, CRT_OUT_ADDR = range(2)
 
 
-def div_up(a: int, b: int) -> int:
-    return (a + b - 1) // b
+def _div_up(a: int, b: int) -> int:
+    return -(-a // b)
 
 
 @dataclass(frozen=True)
-class BlockPlacement:
-    """A BLOCK_SHARDED placement of the 2-D view: block (r, c) sits on core (x0 + c, y0 + r) for
-    ROW_MAJOR and on (x0 + r, y0 + c) for COL_MAJOR."""
+class Placement:
+    """BLOCK_SHARDED placement of the padded 2-D view, in tiles."""
 
     x0: int
     y0: int
     x1: int
     y1: int
-    shard_row_tiles: int
-    shard_col_tiles: int
+    block_height_tiles: int
+    block_width_tiles: int
     row_major: bool
 
-    @property
-    def grid_width(self) -> int:
-        return self.x1 - self.x0 + 1
+    @classmethod
+    def from_memory_config(cls, memory_config: ttnn.MemoryConfig) -> "Placement":
+        spec = memory_config.shard_spec
+        (rng,) = spec.grid.ranges()
+        return cls(
+            x0=rng.start.x,
+            y0=rng.start.y,
+            x1=rng.end.x,
+            y1=rng.end.y,
+            block_height_tiles=spec.shape[0] // TILE_DIM,
+            block_width_tiles=spec.shape[1] // TILE_DIM,
+            row_major=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
+        )
 
-    @property
-    def grid_height(self) -> int:
-        return self.y1 - self.y0 + 1
+    def key(self) -> tuple:
+        return (self.x0, self.y0, self.x1, self.y1, self.block_height_tiles, self.block_width_tiles, self.row_major)
 
-    def block_counts(self, tensor_row_tiles: int, tensor_col_tiles: int) -> tuple[int, int]:
-        return div_up(tensor_row_tiles, self.shard_row_tiles), div_up(tensor_col_tiles, self.shard_col_tiles)
-
-    def core_of(self, block_row: int, block_col: int) -> tuple[int, int]:
-        if self.row_major:
-            return self.x0 + block_col, self.y0 + block_row
-        return self.x0 + block_row, self.y0 + block_col
-
-    def used_extent(self, block_rows: int, block_cols: int) -> tuple[int, int]:
-        """(x span, y span) of the cores that hold a block."""
-        return (block_cols, block_rows) if self.row_major else (block_rows, block_cols)
-
-
-def placement_from_shard_spec(shard_spec) -> BlockPlacement:
-    """The caller has checked that the grid is one rectangle and the shard dims are multiples of 32."""
-    box = shard_spec.grid.bounding_box()
-    return BlockPlacement(
-        x0=box.start.x,
-        y0=box.start.y,
-        x1=box.end.x,
-        y1=box.end.y,
-        shard_row_tiles=int(shard_spec.shape[0]) // TILE_DIM,
-        shard_col_tiles=int(shard_spec.shape[1]) // TILE_DIM,
-        row_major=shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-
-def tile_grid(padded_shape) -> tuple[int, int, int]:
-    """(rows, cols, images) of the padded 2-D view in tiles; images = prod(padded_shape[:-2])."""
-    dims = [int(d) for d in padded_shape]
-    return prod(dims[:-1]) // TILE_DIM, dims[-1] // TILE_DIM, prod(dims[:-2])
+    def block_core(self, r: int, c: int) -> tuple[int, int]:
+        """Core (x, y) holding block (r, c)."""
+        return (self.x0 + c, self.y0 + r) if self.row_major else (self.x0 + r, self.y0 + c)
 
 
 @dataclass(frozen=True)
-class ReshardPlan:
-    tensor_row_tiles: int
-    tensor_col_tiles: int
-    tile_stride_bytes: int
-    in_placement: BlockPlacement
-    out_placement: BlockPlacement
-    num_issuers: int = NUM_ISSUERS
-    regime: str = REGIME_PULL
+class Geometry:
+    tensor_height_tiles: int
+    tensor_width_tiles: int
+    in0: Placement
+    out: Placement
+    aligned_page_bytes: int
 
     @property
-    def in_blocks(self) -> tuple[int, int]:
-        return self.in_placement.block_counts(self.tensor_row_tiles, self.tensor_col_tiles)
+    def num_block_rows(self) -> int:
+        return _div_up(self.tensor_height_tiles, self.out.block_height_tiles)
 
     @property
-    def out_blocks(self) -> tuple[int, int]:
-        return self.out_placement.block_counts(self.tensor_row_tiles, self.tensor_col_tiles)
+    def num_block_cols(self) -> int:
+        return _div_up(self.tensor_width_tiles, self.out.block_width_tiles)
 
-    def out_block_cores(self) -> list[tuple[tuple[int, int], int, int]]:
-        """((x, y), block_row, block_col) for every out block."""
-        out_block_rows, out_block_cols = self.out_blocks
-        return [
-            (self.out_placement.core_of(block_row, block_col), block_row, block_col)
-            for block_row in range(out_block_rows)
-            for block_col in range(out_block_cols)
-        ]
+    @property
+    def out_shard_bytes(self) -> int:
+        return self.out.block_height_tiles * self.out.block_width_tiles * self.aligned_page_bytes
 
-    def pull_core_range(self) -> ttnn.CoreRangeSet:
-        """The out-block cores: one rectangle from out's grid start, trimmed to the block counts."""
-        p = self.out_placement
-        x_span, y_span = p.used_extent(*self.out_blocks)
-        return ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(p.x0, p.y0), ttnn.CoreCoord(p.x0 + x_span - 1, p.y0 + y_span - 1))}
+    def holder_rectangle(self) -> tuple[tuple[int, int], tuple[int, int]]:
+        """Inclusive core rectangle of out's block holders (the kernel range)."""
+        nx, ny = (
+            (self.num_block_cols, self.num_block_rows)
+            if self.out.row_major
+            else (self.num_block_rows, self.num_block_cols)
         )
+        return (self.out.x0, self.out.y0), (self.out.x0 + nx - 1, self.out.y0 + ny - 1)
 
-    def issuer_role(self) -> str:
-        return "pull:" + "+".join(f"issuer{i}/{ISSUER_PLACEMENT[i][1].name}" for i in range(self.num_issuers))
+    def blocks(self):
+        """Yield (r, c, core, row_begin, row_end, col_begin, col_end) of every out block, clipped to the tensor."""
+        bh, bw = self.out.block_height_tiles, self.out.block_width_tiles
+        for r in range(self.num_block_rows):
+            row_begin = r * bh
+            row_end = min(row_begin + bh, self.tensor_height_tiles)
+            for c in range(self.num_block_cols):
+                col_begin = c * bw
+                col_end = min(col_begin + bw, self.tensor_width_tiles)
+                yield r, c, self.out.block_core(r, c), row_begin, row_end, col_begin, col_end
 
-    def core_roles(self) -> dict[tuple[int, int], str]:
-        """Role of every core of out's grid (BB-21): pullers, and grid cores beyond the block count idle."""
-        p = self.out_placement
-        roles = {(x, y): "idle" for x in range(p.x0, p.x1 + 1) for y in range(p.y0, p.y1 + 1)}
-        for core, _, _ in self.out_block_cores():
-            roles[core] = self.issuer_role()
-        return roles
 
-    def report(self) -> dict:
-        return {"regime": self.regime, "num_issuers": self.num_issuers, "cores": self.core_roles()}
+def compute_geometry(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> Geometry:
+    padded = list(input_tensor.padded_shape)
+    height = 1
+    for d in padded[:-1]:
+        height *= d
+    return Geometry(
+        tensor_height_tiles=height // TILE_DIM,
+        tensor_width_tiles=padded[-1] // TILE_DIM,
+        in0=Placement.from_memory_config(input_tensor.memory_config()),
+        out=Placement.from_memory_config(memory_config),
+        aligned_page_bytes=input_tensor.buffer_aligned_page_size(),
+    )
+
+
+def issuer_row_ranges(row_begin: int, row_end: int, issuers_per_core: int = ISSUERS_PER_CORE):
+    """Contiguous row range of each issuer: the first `rows % n` issuers take one row more."""
+    rows = row_end - row_begin
+    base, extra = divmod(rows, issuers_per_core)
+    ranges = []
+    begin = row_begin
+    for k in range(issuers_per_core):
+        end = begin + base + (1 if k < extra else 0)
+        ranges.append((begin, end))
+        begin = end
+    return ranges
+
+
+def piece_count(geom: Geometry, row_begin: int, row_end: int, col_begin: int, col_end: int) -> int:
+    """Pieces = in0 blocks overlapping the issuer's sub-block (mirrors the kernel walk)."""
+    if row_begin >= row_end or col_begin >= col_end:
+        return 0
+    ih, iw = geom.in0.block_height_tiles, geom.in0.block_width_tiles
+    rows = (row_end - 1) // ih - row_begin // ih + 1
+    cols = (col_end - 1) // iw - col_begin // iw + 1
+    return rows * cols
+
+
+def issuer_roles(geom: Geometry, issuers_per_core: int = ISSUERS_PER_CORE) -> list[dict]:
+    """Role of every core in the kernel range: its out block and each issuer's rows and piece count (BB-21)."""
+    roles = []
+    for r, c, core, row_begin, row_end, col_begin, col_end in geom.blocks():
+        issuers = []
+        for k, (ib, ie) in enumerate(issuer_row_ranges(row_begin, row_end, issuers_per_core)):
+            processor, noc = ISSUER_PLACEMENTS[k]
+            issuers.append(
+                {
+                    "issuer": k,
+                    "processor": str(processor),
+                    "noc": str(noc),
+                    "rows": (ib, ie),
+                    "cols": (col_begin, col_end),
+                    "pieces": piece_count(geom, ib, ie, col_begin, col_end),
+                }
+            )
+        roles.append({"core": core, "out_block": (r, c), "issuers": issuers})
+    return roles
 
 
 def create_program_descriptor(
-    input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor, plan: ReshardPlan
+    input_tensor: ttnn.Tensor,
+    output_tensor: ttnn.Tensor,
+    geom: Geometry,
+    issuers_per_core: int = ISSUERS_PER_CORE,
 ) -> ttnn.ProgramDescriptor:
-    assert 1 <= plan.num_issuers <= len(ISSUER_PLACEMENT), plan.num_issuers
-    in_block_rows, in_block_cols = plan.in_blocks
-    core_range = plan.pull_core_range()
+    assert 1 <= issuers_per_core <= len(ISSUER_PLACEMENTS), issuers_per_core
+    assert output_tensor.buffer_aligned_page_size() == geom.aligned_page_bytes, "in0 and out slot strides differ"
 
-    geometry_ct_args = [
-        plan.num_issuers,
-        plan.tensor_row_tiles,
-        plan.tensor_col_tiles,
-        plan.in_placement.shard_row_tiles,
-        plan.in_placement.shard_col_tiles,
-        in_block_cols,
-        plan.out_placement.shard_row_tiles,
-        plan.out_placement.shard_col_tiles,
-        plan.tile_stride_bytes,
+    (hx0, hy0), (hx1, hy1) = geom.holder_rectangle()
+    holders = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(hx0, hy0), ttnn.CoreCoord(hx1, hy1))})
+
+    ct_args = [
+        geom.tensor_width_tiles,
+        geom.out.block_width_tiles,
+        geom.in0.block_height_tiles,
+        geom.in0.block_width_tiles,
+        geom.aligned_page_bytes,
     ]
-    in0_accessor_ct_args = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    common_rt_args = [0, 0]
-    common_rt_args[_COMMON_ARG_IN0_ADDR] = input_tensor.buffer_address()
-    common_rt_args[_COMMON_ARG_OUT_ADDR] = output_tensor.buffer_address()
+    ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    block_rt_args = ttnn.RuntimeArgs()
-    for (x, y), block_row, block_col in plan.out_block_cores():
-        block_rt_args[x][y] = [block_row, block_col]
+    common_rt_args = [0, 0]
+    common_rt_args[CRT_IN0_ADDR] = input_tensor.buffer_address()
+    common_rt_args[CRT_OUT_ADDR] = output_tensor.buffer_address()
+
+    rt_args = [ttnn.RuntimeArgs() for _ in range(issuers_per_core)]
+    for _r, _c, (x, y), row_begin, row_end, col_begin, col_end in geom.blocks():
+        for k, (ib, ie) in enumerate(issuer_row_ranges(row_begin, row_end, issuers_per_core)):
+            args = [0] * 5
+            args[RT_BLOCK_ROW_BEGIN] = row_begin
+            args[RT_ROW_BEGIN] = ib
+            args[RT_ROW_END] = ie
+            args[RT_COL_BEGIN] = col_begin
+            args[RT_COL_END] = col_end
+            rt_args[k][x][y] = args
 
     kernels = []
-    for issuer_idx in range(plan.num_issuers):
-        processor, noc = ISSUER_PLACEMENT[issuer_idx]
+    for k in range(issuers_per_core):
+        processor, noc = ISSUER_PLACEMENTS[k]
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=str(PULL_KERNEL),
-                core_ranges=core_range,
-                compile_time_args=[issuer_idx] + geometry_ct_args + in0_accessor_ct_args,
-                runtime_args=block_rt_args,
-                common_runtime_args=list(common_rt_args),
+                kernel_source=ISSUER_KERNEL,
+                core_ranges=holders,
+                compile_time_args=ct_args,
+                runtime_args=rt_args[k],
+                common_runtime_args=common_rt_args,
                 config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
             )
         )
@@ -197,10 +228,9 @@ def create_program_descriptor(
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
 
 
-def patch_addresses(descriptor: ttnn.ProgramDescriptor, input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor) -> None:
-    """Rewrite the only per-call values: the in0 and out base addresses of every pull kernel."""
-    in0_addr = input_tensor.buffer_address()
-    out_addr = output_tensor.buffer_address()
-    for kernel in descriptor.kernels:
-        kernel.common_runtime_args[_COMMON_ARG_IN0_ADDR] = in0_addr
-        kernel.common_runtime_args[_COMMON_ARG_OUT_ADDR] = out_addr
+def set_buffer_addresses(program_descriptor: ttnn.ProgramDescriptor, in0_addr: int, out_addr: int) -> None:
+    """Rewrite the per-call addresses of a cached descriptor (the only values that change on a cache hit)."""
+    for kernel in program_descriptor.kernels:
+        args = kernel.common_runtime_args  # bound by reference: writes land in the cached descriptor
+        args[CRT_IN0_ADDR] = in0_addr
+        args[CRT_OUT_ADDR] = out_addr
