@@ -78,11 +78,13 @@ inline void kahan_step_tile() {
 #define QSR_DUMMY_UNPACK(dfb_id)
 #endif
 
-// Quasar binds the pack destination buffer at pack_init; pack_reconfig_data_format only changes the format
-// there, so every switch of pack destination needs a pack_init. WH/BH need no re-init.
+// Quasar binds the unpack source buffer at copy_init and the pack destination buffer at pack_init;
+// the *_reconfig_data_format calls only change formats there. WH/BH need neither re-init.
 #ifdef ARCH_QUASAR
+#define QSR_COPY_INIT(dfb_id) copy_init(dfb_id)
 #define QSR_PACK_INIT(dfb_id) pack_init(dfb_id)
 #else
+#define QSR_COPY_INIT(dfb_id)
 #define QSR_PACK_INIT(dfb_id)
 #endif
 
@@ -193,11 +195,13 @@ void kernel_main() {
 
 #ifdef COMPENSATED_SUM
             // in, acc and comp are all Float32 here (the factory sets COMPENSATED_SUM only then): one unpack
-            // configuration serves the three copies.
+            // format configuration serves the three copies (on Quasar each still needs its own copy_init).
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
             ACC_COPY_TILE(dfb::in, DST_IN);
+            QSR_COPY_INIT(dfb::acc);
             ACC_COPY_TILE(dfb::acc, DST_ACC);
+            QSR_COPY_INIT(dfb::comp);
             ACC_COPY_TILE(dfb::comp, DST_COMP);
 #else
             reconfig_data_format(dfb::in, dfb::in);
