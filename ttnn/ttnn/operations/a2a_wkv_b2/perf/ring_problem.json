@@ -1,0 +1,48 @@
+{
+  "name": "a2a_wkv_b2 (4-chip ring, matmul first)",
+  "math": "out_r[h, 160*j + t, v] = sum_l attn_j[24*r + h, t, l] * W[24*r + h, l, v]",
+  "shape": {
+    "attn_per_chip": [
+      96,
+      160,
+      512
+    ],
+    "W": [
+      96,
+      512,
+      128
+    ],
+    "out_per_chip": [
+      24,
+      640,
+      128
+    ]
+  },
+  "dtype": {
+    "attn": "bf16",
+    "W": "bfp8_b",
+    "out": "bfp8_b"
+  },
+  "placement": {
+    "attn": "chip j: its own [96,160,512] in DRAM, row-major pages of 1024 B",
+    "W": "every chip: all 96 heads in DRAM (replicated), bfp8_b tiles of 1088 B",
+    "out": "chip r: heads 24r..24r+23 of every ring member's tokens, L1 interleaved bfp8_b tiles"
+  },
+  "hardware": {
+    "system": "bh_loudbox",
+    "torus": "x",
+    "links": 2,
+    "line_rate_gbs": 50
+  },
+  "constraints": {
+    "fidelity": "HiFi2",
+    "fp32_dest_acc": false
+  },
+  "must": {
+    "link_bytes": 8355840
+  },
+  "reference": {
+    "source": "pipeline_spec.json spec; SOL 43,776 ns from feature_spec.py"
+  },
+  "must_about": "ring total of link byte-hops (graph holds all 4 chips): per chip 2 neighbour chunks x 522,240 B x 1 hop + the opposite chip's 522,240 B x 2 hops = 2,088,960; DRAM bytes (22,413,312 per chip) are in the rdW/rdA tasks"
+}

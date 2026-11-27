@@ -1,0 +1,18 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "layout": [
+      "ROW_MAJOR"
+    ],
+    "weight_dtype": [
+      "BFLOAT8_B"
+    ],
+    "fp32_dest_acc_en": [
+      false
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}

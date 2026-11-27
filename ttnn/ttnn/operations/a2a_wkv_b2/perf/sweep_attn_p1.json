@@ -1,0 +1,4 @@
+{"op": "a2a_wkv_b2", "case": "Perf 1: attn [96,160,512] bf16 RM, 1024 B sticks, one head (160 consecutive pages) per core; current = halves split (approx. split), barrier per 32-stick tile row",
+ "work_bytes": 15728640, "top": 6, "max_l1_bytes": 131072,
+ "candidates": [{"name": "attn_sticks", "family": "dram_read", "placement": "interleaved", "bytes": 1024, "cores": 96}],
+ "vary": {"batch": [8, 16, 32, 64, 160], "noc": [0, 1, "split"]}}

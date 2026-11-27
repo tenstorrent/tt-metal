@@ -1,0 +1,69 @@
+{
+  "summary": {
+    "total": 7,
+    "supported_pass": 2,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 5
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_golden.py::test_op[blackhole-A1x96x160x512_W1x96x512x128-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=ROW_MAJOR-weight_dtype=BFLOAT8_B-device_params0-mesh_device0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "weight_dtype": "BFLOAT8_B",
+          "fp32_dest_acc_en": false
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_golden.py::test_op_loose[blackhole-A1x96x160x512_W1x96x512x128-dtype=BFLOAT16-fp32_dest_acc_en=False-layout=ROW_MAJOR-weight_dtype=BFLOAT8_B-device_params0-mesh_device0]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "ROW_MAJOR",
+          "weight_dtype": "BFLOAT8_B",
+          "fp32_dest_acc_en": false
+        },
+        "status": "passed"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_regression.py::test_back_to_back_calls_bit_identical[blackhole-mesh_device0-device_params0]",
+        "test_name": "test_back_to_back_calls_bit_identical[blackhole-mesh_device0-device_params0]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_regression.py::test_trace_replay_matches_eager[blackhole-mesh_device0-device_params0]",
+        "test_name": "test_trace_replay_matches_eager[blackhole-mesh_device0-device_params0]",
+        "status": "failed"
+      },
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_regression.py::test_shape_contract_refused[blackhole-latent_mismatch-mesh_device0-device_params0]",
+        "test_name": "test_shape_contract_refused[blackhole-latent_mismatch-mesh_device0-device_params0]",
+        "status": "error"
+      },
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_regression.py::test_shape_contract_refused[blackhole-heads_not_divisible-mesh_device0-device_params0]",
+        "test_name": "test_shape_contract_refused[blackhole-heads_not_divisible-mesh_device0-device_params0]",
+        "status": "error"
+      },
+      {
+        "nodeid": "eval/golden_tests/a2a_wkv_b2/test_regression.py::test_shape_contract_refused[blackhole-weight_not_replicated_shape-mesh_device0-device_params0]",
+        "test_name": "test_shape_contract_refused[blackhole-weight_not_replicated_shape-mesh_device0-device_params0]",
+        "status": "error"
+      }
+    ]
+  }
+}

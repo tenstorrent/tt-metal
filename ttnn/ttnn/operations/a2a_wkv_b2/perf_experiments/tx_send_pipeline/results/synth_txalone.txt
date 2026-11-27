@@ -1,0 +1,36 @@
+TXP=synth A2A_ABLATE=NO_READ,NO_COMPUTE
+PASSED
+SAFE_PYTEST_RESULT: PASS
+chip 0: 205.5 178.8(+28010.1) 179.7(+7.6) 175.3(+7.6) 178.4(+7.6) 176.3(+7.6) 178.4(+7.6)
+chip 1: 174.2 181.1(+28012.3) 176.0(+7.5) 179.3(+7.6) 175.3(+7.6) 179.1(+7.6) 175.5(+7.5)
+chip 2: 204.1 178.6(+28039.8) 175.7(+7.6) 179.5(+7.5) 175.5(+7.5) 179.1(+7.5) 175.9(+7.6)
+chip 3: 257.0 176.1(+28012.6) 178.3(+7.6) 176.1(+7.5) 179.6(+7.6) 175.0(+7.6) 179.3(+7.6)
+chip 4: 208.4 178.4(+28121.7) 180.8(+7.6) 177.3(+7.6) 179.9(+7.5) 177.3(+7.5) 178.9(+7.5)
+chip 5: 174.2 180.8(+28123.3) 178.9(+7.5) 181.2(+7.6) 177.3(+7.6) 178.9(+7.6) 177.8(+7.6)
+chip 6: 243.1 181.1(+28153.7) 177.0(+7.6) 177.8(+7.6) 178.5(+7.6) 179.3(+7.6) 178.1(+7.6)
+chip 7: 240.0 177.3(+28123.7) 179.7(+7.5) 177.2(+7.5) 180.5(+7.5) 177.4(+7.6) 178.6(+7.6)
+span per chip (us): 0:178.4 1:175.5 2:175.9 3:179.3 4:178.9 5:177.8 6:178.1 7:178.6
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     8.3    36.9    179.3
+tx_writer_close          BRISC      32     0.9     1.1    176.9
+tx_writer_stream         BRISC      32    21.8    30.6    175.9
+tx_reader_reset          NCRISC     32     1.2     1.5    174.3
+tx_reader_stream         NCRISC     32   149.6   172.2    172.8
+synth_sc4b               BRISC      32    30.3    46.8    145.1
+synth_uni1088            BRISC      32    22.2    31.2    115.3
+synth_uni4352            BRISC      32    22.6    35.3     91.8
+synth_sc2                BRISC      32    18.3    27.4     68.8
+synth_sc4                BRISC      32    26.2    38.3     47.0
+tx_writer_await_ready    BRISC      32     0.0     0.0     10.9
+tx_writer_addr_table     BRISC      32     7.2     9.6     10.8
+writer_local_write       BRISC     192     2.5     2.6      3.5
+writer_wait_block        BRISC     768     0.3     0.3      3.0
+compute_matmul           TRISC_0   768     0.1     0.1      1.4
+compute_tilize           TRISC_0   768     0.4     0.5      1.4
+reader_attn_block        NCRISC    768     0.6     0.7      1.4
+compute_matmul           TRISC_2   768     0.2     0.2      1.2
+compute_tilize           TRISC_2   768     0.1     0.1      1.1
+compute_matmul           TRISC_1   768     0.1     0.1      0.9
+compute_tilize           TRISC_1   768     0.1     0.1      0.9
+reader_w_issue           NCRISC    768     0.0     0.1      0.6
+max markers per (core, RISC) in this instance: 20 (cap 250 per program run)

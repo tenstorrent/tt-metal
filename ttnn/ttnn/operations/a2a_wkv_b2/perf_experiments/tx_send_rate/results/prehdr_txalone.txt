@@ -1,0 +1,32 @@
+TXV=prehdr A2A_ABLATE=NO_READ,NO_COMPUTE
+PASSED
+SAFE_PYTEST_RESULT: PASS
+chip 0: 72.4 45.6(+21230.2) 45.7(+11.5) 42.8(+11.5) 46.0(+11.3) 42.6(+11.5) 45.8(+11.5)
+chip 1: 41.2 48.2(+21232.3) 43.2(+11.4) 45.8(+11.4) 42.7(+11.4) 46.1(+11.4) 42.6(+11.4)
+chip 2: 82.6 45.8(+21250.5) 42.9(+11.5) 45.7(+11.5) 42.8(+11.5) 45.7(+11.5) 42.7(+11.5)
+chip 3: 130.3 43.3(+21232.7) 45.8(+11.4) 42.9(+11.4) 45.9(+11.4) 42.8(+11.4) 45.9(+11.4)
+chip 4: 73.6 45.4(+21352.2) 44.9(+11.5) 43.5(+11.5) 45.0(+11.5) 43.5(+11.5) 45.0(+11.5)
+chip 5: 41.3 47.3(+21354.3) 43.6(+11.5) 45.1(+11.4) 43.6(+11.4) 45.0(+11.5) 43.5(+11.4)
+chip 6: 122.6 45.1(+21372.3) 43.6(+11.5) 45.0(+11.4) 43.6(+11.4) 45.0(+11.4) 43.6(+11.4)
+chip 7: 106.1 43.7(+21354.1) 45.1(+11.4) 43.4(+11.5) 45.0(+11.5) 43.6(+11.5) 45.1(+11.4)
+span per chip (us): 0:45.8 1:42.6 2:42.7 3:45.9 4:45.0 5:43.5 6:43.6 7:45.1
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.5     7.2     45.9
+tx_writer_close          BRISC      32     0.9     1.0     41.4
+tx_writer_stream         BRISC      32    23.5    28.1     40.4
+tx_reader_reset          NCRISC     32     1.2     1.5     38.8
+tx_reader_stream         NCRISC     32    30.4    36.6     37.2
+tx_writer_await_ready    BRISC      32     0.0     0.0     10.8
+tx_writer_addr_table     BRISC      32     7.1     9.5     10.7
+writer_local_write       BRISC     192     2.1     2.4      3.2
+writer_wait_block        BRISC     768     0.3     0.4      2.8
+compute_matmul           TRISC_0   768     0.1     0.1      1.2
+compute_tilize           TRISC_0   768     0.2     0.2      1.2
+compute_matmul           TRISC_2   768     0.2     0.2      1.1
+compute_tilize           TRISC_2   768     0.1     0.1      1.1
+reader_attn_block        NCRISC    768     0.3     0.3      1.0
+compute_matmul           TRISC_1   768     0.1     0.1      0.9
+compute_tilize           TRISC_1   768     0.1     0.1      0.9
+reader_w_issue           NCRISC    768     0.0     0.0      0.6
+max markers per (core, RISC) in this instance: 20 (cap 250 per program run)
+chip x y    PACKETS   BATCHES      WAIT       HDR      SLOT SLOTSTALLS       PAY        HW     FLUSH      NBUF   (cycle fields in us; mean over calls 1..)

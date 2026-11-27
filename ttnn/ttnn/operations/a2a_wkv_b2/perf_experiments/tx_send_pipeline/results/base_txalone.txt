@@ -1,0 +1,31 @@
+TXP=base A2A_ABLATE=NO_READ,NO_COMPUTE
+PASSED
+SAFE_PYTEST_RESULT: PASS
+chip 0: 73.0 46.4(+27457.9) 46.2(+7.6) 44.1(+7.6) 46.1(+7.6) 44.1(+7.6) 46.3(+7.4)
+chip 1: 42.1 48.7(+27459.9) 44.2(+7.5) 46.1(+7.6) 44.3(+7.5) 46.1(+7.6) 44.1(+7.5)
+chip 2: 78.4 46.2(+27478.1) 44.1(+7.6) 46.0(+7.7) 44.2(+7.5) 46.2(+7.5) 44.0(+7.5)
+chip 3: 121.8 44.4(+27460.0) 46.1(+7.5) 44.1(+7.6) 46.1(+7.5) 44.0(+7.6) 46.4(+7.6)
+chip 4: 76.3 46.3(+27563.2) 46.2(+7.6) 44.0(+7.7) 46.5(+7.5) 43.8(+7.6) 46.4(+7.6)
+chip 5: 42.0 48.7(+27565.2) 44.2(+7.5) 46.2(+7.6) 43.9(+7.6) 46.6(+7.5) 43.7(+7.5)
+chip 6: 119.2 46.1(+27583.5) 44.2(+7.6) 46.3(+7.5) 44.0(+7.5) 46.4(+7.6) 43.9(+7.5)
+chip 7: 106.1 44.3(+27565.4) 46.2(+7.5) 44.1(+7.6) 46.3(+7.5) 43.7(+7.7) 46.6(+7.5)
+span per chip (us): 0:46.3 1:44.1 2:44.0 3:46.4 4:46.4 5:43.7 6:43.9 7:46.6
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     4.6     7.2     46.6
+tx_writer_close          BRISC      32     0.9     1.2     42.1
+tx_writer_stream         BRISC      32    23.3    28.0     41.2
+tx_reader_reset          NCRISC     32     1.2     1.5     39.7
+tx_reader_stream         NCRISC     32    31.0    37.6     38.2
+tx_writer_await_ready    BRISC      32     0.0     0.0     10.9
+tx_writer_addr_table     BRISC      32     7.2     9.6     10.8
+writer_local_write       BRISC     192     2.4     2.6      3.5
+writer_wait_block        BRISC     768     0.3     0.3      3.0
+compute_matmul           TRISC_0   768     0.1     0.1      1.4
+compute_tilize           TRISC_0   768     0.4     0.5      1.4
+reader_attn_block        NCRISC    768     0.6     0.7      1.4
+compute_matmul           TRISC_2   768     0.2     0.2      1.2
+compute_tilize           TRISC_2   768     0.1     0.1      1.1
+compute_matmul           TRISC_1   768     0.1     0.1      0.9
+compute_tilize           TRISC_1   768     0.1     0.1      0.9
+reader_w_issue           NCRISC    768     0.0     0.1      0.6
+max markers per (core, RISC) in this instance: 20 (cap 250 per program run)

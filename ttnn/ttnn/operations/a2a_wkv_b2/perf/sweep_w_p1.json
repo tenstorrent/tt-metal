@@ -1,0 +1,4 @@
+{"op": "a2a_wkv_b2", "case": "Perf 1: W [96,512,128] bf8_b tiles 1088 B, one head (64 tiles) per core; current = halves split (approx. split), one barrier per head",
+ "work_bytes": 6684672, "top": 6, "max_l1_bytes": 131072,
+ "candidates": [{"name": "w_tiles", "family": "dram_read", "placement": "interleaved", "bytes": 1088, "cores": 96}],
+ "vary": {"batch": [8, 16, 32, 64], "noc": [0, 1, "split"]}}

@@ -1,0 +1,161 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// a2a_wkv_b2 fabric_tx reader (NCRISC, NoC 0) — pull_block, in ready order.
+//
+// One stream = the heads this chip sends to one destination over one (direction, link). Each head's
+// packets are a fixed sequence (mt block 0..num_mt_blocks-1, then the packets of that block), but
+// heads are independent: every packet carries its own destination addresses, so the stream need not
+// follow any cross-head order. The workers finish their blocks at very different times (their DRAM
+// reads are not uniform), so a strict mt-major order stalls the stream on the slowest worker of every
+// round and then bursts. Instead the reader fills each batch with whatever packets are published:
+//
+//   scan   : walk the heads round-robin; a head contributes its next packets while its cached
+//            sem_blocks_done value covers their block (the counter is monotonic, so a cached value
+//            never goes stale in the unsafe direction).
+//   poll   : if the batch is not full, read the counter of every head that is short (4 B remote reads,
+//            all behind one barrier) and scan again; repeat only while the batch is still empty.
+//   pull   : issue every packet's read from the worker's cb_out (same L1 address on every program
+//            core) behind one barrier, push the whole batch region of cb_tx_stage (tx_batch packets,
+//            always reserved and pushed whole so batch regions stay contiguous) and one cb_tx_meta
+//            page describing it: word 0 = k packets, then per packet (head s, mb << 16 | tile offset p).
+//
+// No helper: this is a one-to-one pull of one worker's block by address (the mcast helper is a
+// sender-driven multicast; the ccl helpers own fabric egress only) — op_design.md.
+
+#include <cstdint>
+
+#include "api/dataflow/dataflow_api.h"
+
+void kernel_main() {
+    constexpr uint32_t cb_tx_stage = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(1);
+    constexpr uint32_t sem_blocks_done_id = get_compile_time_arg_val(2);
+    constexpr uint32_t Mt = get_compile_time_arg_val(3);
+    constexpr uint32_t Nt = get_compile_time_arg_val(4);
+    constexpr uint32_t mt_block = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_packet = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t tx_batch = get_compile_time_arg_val(8);
+    constexpr uint32_t max_stream_heads = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_tx_meta = get_compile_time_arg_val(10);
+    constexpr uint32_t poll_stride = get_compile_time_arg_val(11);  // L1 alignment of a poll scratch word
+    constexpr bool ready_order = get_compile_time_arg_val(12) != 0;
+
+    constexpr uint32_t num_mt_blocks = (Mt + mt_block - 1) / mt_block;
+    constexpr uint32_t packet_bytes = tiles_per_packet * tile_bytes;
+    constexpr uint32_t batch_pages = tx_batch * tiles_per_packet;
+    static_assert(max_stream_heads * poll_stride <= packet_bytes, "poll scratch must fit one free packet slot");
+
+    const uint32_t num_heads = get_arg_val<uint32_t>(0);
+    constexpr uint32_t head_args_base = 1;  // then (worker noc x, worker noc y, head idx in worker) per head
+
+    // Every CB spans all program cores, so the workers' cb_out starts at this core's cb_out base.
+    const uint32_t remote_cb_out_base = get_read_ptr(cb_out);
+    const uint32_t sem_addr = get_semaphore(sem_blocks_done_id);
+
+    uint32_t seen[max_stream_heads];     // last sem_blocks_done value read from the head's worker
+    uint32_t next_mb[max_stream_heads];  // next mt block to send, per head
+    uint32_t next_p[max_stream_heads];   // next tile offset within that block
+    for (uint32_t s = 0; s < max_stream_heads; ++s) {
+        seen[s] = 0;
+        next_mb[s] = 0;
+        next_p[s] = 0;
+    }
+    uint32_t heads_left = num_heads;
+    uint32_t cursor = 0;  // ready order: round-robin start of the next scan; strict order: current head
+    uint32_t strict_mb = 0;  // strict order: current mt round
+
+    auto head_arg = [&](uint32_t s, uint32_t field) { return get_arg_val<uint32_t>(head_args_base + 3 * s + field); };
+    auto published = [&](uint32_t s) { return seen[s] >= head_arg(s, 2) * num_mt_blocks + next_mb[s] + 1; };
+
+    while (heads_left > 0) {
+        cb_reserve_back(cb_tx_stage, batch_pages);
+        cb_reserve_back(cb_tx_meta, 1);
+        const uint32_t base = get_write_ptr(cb_tx_stage);
+        volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_tx_meta));
+        uint32_t k = 0;
+
+        // Take head s's next packet: issue its pull (one barrier for the batch below), describe it in
+        // the meta page, advance the head. Returns true when the head's block is complete.
+        auto take = [&](uint32_t s) {
+            const uint32_t mb = next_mb[s];
+            const uint32_t mt0 = mb * mt_block;
+            const uint32_t mt_rows = (Mt - mt0) < mt_block ? (Mt - mt0) : mt_block;
+            const uint32_t block_tiles = mt_rows * Nt;
+            const uint32_t p = next_p[s];
+            const uint32_t chunks = (block_tiles - p) < tiles_per_packet ? (block_tiles - p) : tiles_per_packet;
+            const uint32_t first_tile = (head_arg(s, 2) * Mt + mt0) * Nt;
+            noc_async_read(
+                get_noc_addr(head_arg(s, 0), head_arg(s, 1), remote_cb_out_base + (first_tile + p) * tile_bytes),
+                base + k * packet_bytes,
+                chunks * tile_bytes);
+            meta[1 + 2 * k] = s;
+            meta[2 + 2 * k] = (mb << 16) | p;
+            ++k;
+            if (p + chunks < block_tiles) {
+                next_p[s] = p + chunks;
+                return false;
+            }
+            next_p[s] = 0;
+            if (++next_mb[s] == num_mt_blocks) {
+                --heads_left;
+            }
+            return true;
+        };
+
+        for (;;) {
+            if constexpr (ready_order) {
+                // scan: take published packets, head by head, starting at the round-robin cursor.
+                for (uint32_t n = 0; n < num_heads && k < tx_batch; ++n) {
+                    const uint32_t s = cursor;
+                    cursor = cursor + 1 == num_heads ? 0 : cursor + 1;
+                    while (k < tx_batch && next_mb[s] < num_mt_blocks && published(s)) {
+                        take(s);
+                    }
+                }
+            } else {
+                // scan: take packets in the strict (mt round, head, packet) sequence up to the first
+                // unpublished one.
+                while (k < tx_batch && strict_mb < num_mt_blocks && published(cursor)) {
+                    if (take(cursor) && ++cursor == num_heads) {
+                        cursor = 0;
+                        ++strict_mb;
+                    }
+                }
+            }
+            if (k == tx_batch || heads_left == 0) {  // a batch is sent only full (or at the stream end)
+                break;
+            }
+            // poll: read the counter of every candidate head that is short (ready order: every
+            // unfinished head; strict order: the heads of the rest of this batch in sequence), into
+            // scratch past the slots already pulled into.
+            const uint32_t scratch_base = base + k * packet_bytes;
+            uint32_t first = 0, count = num_heads;
+            if constexpr (!ready_order) {
+                first = cursor;
+                const uint32_t rest = tx_batch - k;
+                count = rest < num_heads ? rest : num_heads;
+            }
+            for (uint32_t n = 0, s = first; n < count; ++n, s = s + 1 == num_heads ? 0 : s + 1) {
+                if (next_mb[s] < num_mt_blocks && !published(s)) {
+                    noc_async_read(
+                        get_noc_addr(head_arg(s, 0), head_arg(s, 1), sem_addr),
+                        scratch_base + s * poll_stride,
+                        sizeof(uint32_t));
+                }
+            }
+            noc_async_read_barrier();
+            for (uint32_t n = 0, s = first; n < count; ++n, s = s + 1 == num_heads ? 0 : s + 1) {
+                if (next_mb[s] < num_mt_blocks && !published(s)) {
+                    seen[s] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_base + s * poll_stride);
+                }
+            }
+        }
+
+        noc_async_read_barrier();
+        meta[0] = k;
+        cb_push_back(cb_tx_stage, batch_pages);
+        cb_push_back(cb_tx_meta, 1);
+    }
+}

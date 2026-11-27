@@ -1,0 +1,6 @@
+TXV=diag A2A_ABLATE=
+FAILED2026-11-26 20:05:28.925 | INFO     | conftest:pytest_runtest_teardown:1227 - In custom teardown, open device ids: {0, 1, 2, 3, 4, 5, 6, 7}
+FAILED ttnn/ttnn/operations/a2a_wkv_b2/perf_experiments/tx_send_rate/probe_tx_profile.py::test_probe_tx_profile[blackhole-mesh_device0-device_params0]
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+span per chip (us):
+chip x y    PACKETS   BATCHES      WAIT       HDR      SLOT SLOTSTALLS       PAY        HW     FLUSH      NBUF   (cycle fields in us; mean over calls 1..)

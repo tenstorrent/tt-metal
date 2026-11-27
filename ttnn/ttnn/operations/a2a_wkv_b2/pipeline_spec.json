@@ -1,0 +1,232 @@
+{
+  "spec": {
+    "name": "a2a_wkv_b2",
+    "hyperparams": {
+      "H": {
+        "value": 96,
+        "meaning": "heads (all, on every chip before the exchange)"
+      },
+      "T": {
+        "value": 160,
+        "meaning": "tokens per chip"
+      },
+      "L": {
+        "value": 512,
+        "meaning": "latent"
+      },
+      "V": {
+        "value": 128,
+        "meaning": "v head dim"
+      },
+      "N": {
+        "value": 4,
+        "meaning": "chips on the TP ring (mesh axis 1, wraps)"
+      }
+    },
+    "math": "out_r[h, 160*j + t, v] = sum_l attn_j[24*r + h, t, l] * W[24*r + h, l, v]",
+    "tensors": {
+      "attn": {
+        "about": "sparse_sdpa output, this chip's 160 tokens of all 96 heads",
+        "dir": "in",
+        "axes": [
+          "h",
+          "m",
+          "k"
+        ],
+        "shape": [
+          96,
+          160,
+          512
+        ],
+        "dtype": "bf16",
+        "page": {
+          "bytes": 1024,
+          "is": "row: one token of one head, 512 bf16 values"
+        },
+        "where": "dram",
+        "banks": "interleaved",
+        "chips": {
+          "m": "mesh_x"
+        }
+      },
+      "W": {
+        "about": "wkv_b2, the same on every chip",
+        "dir": "in",
+        "axes": [
+          "h",
+          "k",
+          "n"
+        ],
+        "shape": [
+          96,
+          512,
+          128
+        ],
+        "dtype": "bfp8_b",
+        "page": {
+          "bytes": 1088,
+          "is": "tile"
+        },
+        "where": "dram",
+        "banks": "interleaved",
+        "chips": {
+          "h": "replicated"
+        }
+      },
+      "out": {
+        "about": "this chip's 24 heads, all 640 tokens of its line",
+        "dir": "out",
+        "axes": [
+          "h",
+          "m",
+          "n"
+        ],
+        "shape": [
+          24,
+          640,
+          128
+        ],
+        "dtype": "bfp8_b",
+        "page": {
+          "bytes": 1088,
+          "is": "tile"
+        },
+        "where": "l1",
+        "banks": "interleaved",
+        "chips": {
+          "h": "mesh_x"
+        }
+      }
+    },
+    "constraints": {
+      "fidelity": "HiFi2",
+      "fp32_dest_acc": false
+    },
+    "hardware": {
+      "system": "bh_loudbox",
+      "torus": "x",
+      "links": 2,
+      "line_rate_gbs": "$line_rate"
+    },
+    "reference": {
+      "sol_ns": 43776,
+      "source": "eval/golden_tests/a2a_wkv_b2/feature_spec.py LOOSE_CASES extras"
+    }
+  },
+  "pipeline": {
+    "axes": {
+      "h": 96,
+      "m": 5,
+      "k": 16,
+      "n": 4
+    },
+    "groups": {
+      "workers": {
+        "cores": "$cores"
+      },
+      "fabric_tx": {
+        "cores": 4
+      }
+    },
+    "split": {
+      "h": {
+        "over": "workers"
+      }
+    },
+    "unit": {
+      "h": 1,
+      "m": "$mt_block"
+    },
+    "order": [
+      "h",
+      "m"
+    ],
+    "stages": [
+      {
+        "name": "read_w",
+        "op": "read",
+        "tensor": "W",
+        "on": "workers.reader"
+      },
+      {
+        "name": "read_attn",
+        "op": "read",
+        "tensor": "attn",
+        "on": "workers.reader"
+      },
+      {
+        "name": "tilize",
+        "op": "compute",
+        "fn": "tilize",
+        "tensor": "attn",
+        "on": "workers.math",
+        "after": "read_attn"
+      },
+      {
+        "name": "mm",
+        "op": "matmul",
+        "on": "workers.math",
+        "after": [
+          "tilize",
+          "read_w"
+        ],
+        "reduce": "k"
+      },
+      {
+        "name": "send",
+        "op": "send",
+        "tensor": "out",
+        "to": "workers",
+        "on": "fabric_tx.eth",
+        "after": "mm"
+      }
+    ],
+    "queues": {
+      "read_attn->tilize": {
+        "depth": 2,
+        "lives_on": "workers"
+      },
+      "tilize->mm": {
+        "depth": 1,
+        "lives_on": "workers"
+      },
+      "mm->send": {
+        "depth": 5,
+        "lives_on": "workers"
+      }
+    },
+    "resident": {
+      "W": {
+        "across": "m",
+        "lives_on": "workers"
+      }
+    },
+    "programs": 1,
+    "fabric": {
+      "axis": 1,
+      "slices": "h",
+      "rounds": "crossing_first",
+      "block": "$block",
+      "payload": 4352
+    }
+  },
+  "knobs": {
+    "line_rate": [
+      50,
+      25
+    ],
+    "cores": [
+      96,
+      110
+    ],
+    "mt_block": [
+      1,
+      5
+    ],
+    "block": [
+      4,
+      8,
+      24
+    ]
+  }
+}

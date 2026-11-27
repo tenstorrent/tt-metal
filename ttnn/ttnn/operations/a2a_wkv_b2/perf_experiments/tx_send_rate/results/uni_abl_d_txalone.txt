@@ -1,0 +1,33 @@
+TXV=uni_abl_d A2A_ABLATE=NO_READ,NO_COMPUTE
+PASSED
+SAFE_PYTEST_RESULT: PASS
+chip 0: 61.6 36.1(+21801.8) 33.1(+11.5) 33.0(+11.5) 34.1(+11.5) 33.7(+11.5) 32.6(+11.6)
+chip 1: 31.0 36.6(+21802.4) 33.7(+11.5) 33.1(+11.5) 33.1(+11.5) 34.1(+11.5) 33.6(+11.6)
+chip 2: 80.4 34.4(+21815.9) 32.8(+11.6) 33.4(+11.4) 33.4(+11.4) 33.7(+11.5) 33.8(+11.5)
+chip 3: 121.6 31.9(+21804.0) 34.2(+11.5) 33.5(+11.4) 32.9(+11.5) 33.2(+11.5) 34.0(+11.5)
+chip 4: 60.0 34.0(+21921.3) 35.2(+11.6) 32.9(+11.5) 34.2(+11.4) 32.4(+11.4) 35.1(+11.6)
+chip 5: 31.0 36.4(+21922.1) 33.7(+11.5) 34.8(+11.5) 31.9(+11.5) 34.1(+11.5) 32.6(+11.6)
+chip 6: 112.0 35.2(+21935.5) 32.6(+11.5) 34.3(+11.5) 32.5(+11.5) 35.0(+11.5) 32.5(+11.6)
+chip 7: 88.9 32.3(+21923.6) 34.5(+11.4) 32.6(+11.4) 35.1(+11.4) 32.3(+11.5) 34.5(+11.5)
+span per chip (us): 0:32.6 1:33.6 2:33.8 3:34.0 4:35.1 5:32.6 6:32.5 7:34.5
+zone                     risc    cores    mean     max  end_max
+tx_writer_await_done     BRISC      32     3.3     6.2     35.1
+tx_writer_close          BRISC      32     0.9     1.3     32.4
+tx_writer_stream         BRISC      32    18.0    23.9     31.5
+tx_reader_reset          NCRISC     32     1.2     1.6     31.2
+tx_reader_stream         NCRISC     32    21.7    29.1     29.6
+tx_writer_await_ready    BRISC      32     0.2     1.7      6.0
+tx_writer_addr_table     BRISC      32     2.9     3.9      6.0
+writer_local_write       BRISC     192     2.1     2.3      3.2
+writer_wait_block        BRISC     768     0.3     0.4      2.7
+compute_matmul           TRISC_0   768     0.1     0.1      1.2
+compute_tilize           TRISC_0   768     0.2     0.2      1.1
+compute_matmul           TRISC_2   768     0.2     0.2      1.1
+compute_tilize           TRISC_2   768     0.1     0.1      1.1
+reader_attn_block        NCRISC    768     0.3     0.3      1.0
+compute_matmul           TRISC_1   768     0.1     0.1      0.9
+compute_tilize           TRISC_1   768     0.1     0.1      0.9
+reader_w_issue           NCRISC    768     0.0     0.0      0.6
+max markers per (core, RISC) in this instance: 20 (cap 250 per program run)
+link-0 (>=100 pkt) mean: PACKETS=120.00 BATCHES=15.00 WAIT=0.65 HDR=0.00 SLOT=10.83 SLOTSTALLS=71.61 PAY=0.00 HW=7.82 FLUSH=0.79 NBUF=17.00
+per packet (cycles): WAIT=7 HDR=0 SLOT=122 PAY=0 HW=88 FLUSH=9
