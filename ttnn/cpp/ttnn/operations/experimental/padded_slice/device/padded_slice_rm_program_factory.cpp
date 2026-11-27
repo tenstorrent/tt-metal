@@ -89,7 +89,9 @@ PaddedSliceRmReaderOffset padded_slice_rm_reader_offset(
 
     uint32_t core_w_index = 0;
     if (is_block_sharded) {
-        core_w_index = rm_orientation ? core.x : core.y;
+        // Shard indices count from the shard grid's origin, which need not be (0, 0).
+        const auto grid_origin = output_shard_spec.grid.bounding_box().start_coord;
+        core_w_index = rm_orientation ? core.x - grid_origin.x : core.y - grid_origin.y;
     } else if (is_width_sharded) {
         core_w_index = core_index;
     }
@@ -206,8 +208,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         uint32_t core_w_index = 0;
         uint32_t core_h_index = core_index;
         if (is_block_sharded) {
-            core_w_index = rm_orientation ? core.x : core.y;
-            core_h_index = rm_orientation ? core.y : core.x;
+            // Shard indices count from the shard grid's origin, which need not be (0, 0).
+            const auto grid_origin = output_shard_spec.grid.bounding_box().start_coord;
+            core_w_index = rm_orientation ? core.x - grid_origin.x : core.y - grid_origin.y;
+            core_h_index = rm_orientation ? core.y - grid_origin.y : core.x - grid_origin.x;
         } else if (is_width_sharded) {
             core_h_index = 0;
             core_w_index = core_index;
