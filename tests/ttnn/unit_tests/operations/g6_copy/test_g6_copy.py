@@ -26,7 +26,7 @@ PRODUCTION_SHAPES = [
     (8, 12, 128, 128),  # Qwen 177, 179
     (16, 12, 128, 128),  # Qwen 168, 170: the perf-focus shape
 ]
-# The only float32 h_non_aligned (and non-square) shape: SUPPORTED claims
+# The only h_non_aligned and non-square shape run in float32: SUPPORTED claims
 # h_non_aligned from Phase 0, so it must run natively.
 H_NON_ALIGNED_SHAPE = (1, 1, 1, 256)
 PHASE0_SHAPES = PRODUCTION_SHAPES + [H_NON_ALIGNED_SHAPE]
@@ -38,6 +38,10 @@ FLOAT32_SPECIAL_BITS = [
     0x7F800000, 0xFF800000, 0x80000000, 0x00000000, 0x00000001, 0x007FFFFF,
     0x80000001, 0x00800000, 0x7F7FFFFF, 0xFF7FFFFF,
 ]  # fmt: skip
+
+
+def shape_id(shape):
+    return "x".join(map(str, shape))
 
 
 def torch_g6_copy(input_tensor, output_tensor):
@@ -58,9 +62,8 @@ def bits(t):
 
 
 def assert_bit_identical(actual, expected, what):
-    assert tuple(actual.shape) == tuple(
-        expected.shape
-    ), f"{what}: shape {tuple(actual.shape)} != {tuple(expected.shape)}"
+    if tuple(actual.shape) != tuple(expected.shape):
+        pytest.fail(f"{what}: shape {tuple(actual.shape)} != {tuple(expected.shape)}")
     wrong = bits(actual) != bits(expected)
     if bool(wrong.any()):
         first = int(wrong.reshape(-1).nonzero()[0])
@@ -84,7 +87,7 @@ class CopyCase:
         self.dst_before = ttnn.to_torch(self.dst)
         # Graded against the source as the device holds it.
         self.src_before = ttnn.to_torch(self.src)
-        self.expected = torch_g6_copy(self.src_before, dst_torch)
+        self.expected = torch_g6_copy(self.src_before, self.dst_before)
 
 
 def call_and_check(case):
@@ -112,7 +115,7 @@ def copy_and_check(device, src_torch, dst_torch, *, poison_padding=None):
     return case
 
 
-@pytest.mark.parametrize("shape", PHASE0_SHAPES, ids=lambda s: "x".join(map(str, s)))
+@pytest.mark.parametrize("shape", PHASE0_SHAPES, ids=shape_id)
 def test_g6_copy_values(device, shape):
     torch.manual_seed(42)
     src = torch.randn(shape, dtype=torch.float32)
@@ -133,7 +136,7 @@ def test_g6_copy_adversarial_bits(device):
     copy_and_check(device, src, dst)
 
 
-@pytest.mark.parametrize("shape", [(1, 1), H_NON_ALIGNED_SHAPE], ids=lambda s: "x".join(map(str, s)))
+@pytest.mark.parametrize("shape", [(1, 1), H_NON_ALIGNED_SHAPE], ids=shape_id)
 def test_g6_copy_poisoned_padding(device, shape):
     torch.manual_seed(42)
     src = torch.randn(shape, dtype=torch.float32)
@@ -142,8 +145,8 @@ def test_g6_copy_poisoned_padding(device, shape):
 
 
 def test_g6_copy_rebinds_buffers(device):
-    """A repeat call of one shape with other buffers must write its own
-    destination and no other (BB-07); repeating a call gives the same bits (BB-06).
+    """A repeat call of one shape with other buffers writes its own destination
+    and no other (BB-07); repeating a call gives the same bits (BB-06).
     Both pairs stay alive so their buffers cannot share addresses."""
     torch.manual_seed(42)
     shape = (1, 12, 128, 128)
@@ -163,42 +166,56 @@ def test_g6_copy_rebinds_buffers(device):
 
 
 @pytest.mark.parametrize(
-    "shape,block_pages,max_cores",
+    "shape,max_block_pages,max_cores,bank_stagger",
     [
-        ((16, 12, 128, 128), 3, None),  # full grid: 28/27 pages per core in 10/9 blocks, ragged tail, ring wrap
-        ((1, 12, 128, 128), 5, 3),  # 64 pages per core spanning 3-4 banks, runs cut by block edges
+        # 28/27 pages per core in blocks of 3: blocks shorter than the bank count,
+        # 1-page runs, a ragged 1-page last block, ring wrap at depth 2.
+        ((16, 12, 128, 128), 3, None, False),
+        ((16, 12, 128, 128), 3, None, True),
+        # 64 pages per core on 3 cores in blocks of 11: multi-page bank runs,
+        # a capped grid, a ragged 9-page last block, a rotated walk.
+        ((1, 12, 128, 128), 11, 3, True),
     ],
-    ids=["full_grid_block3", "3cores_block5"],
+    ids=["full_grid_block3", "full_grid_block3_stagger", "3cores_block11_stagger"],
 )
-def test_g6_copy_forced_multi_block(device, monkeypatch, shape, block_pages, max_cores):
-    """Runs the multi-block and multi-bank walk that no production shape reaches
-    with the default knobs, but every shape past the L1 clamp or a capped grid does."""
-    page_bytes = 4096  # float32 tile
-    monkeypatch.setattr(plan_knobs, "L1_BUDGET_BYTES", plan_knobs.CB_DEPTH_BLOCKS * block_pages * page_bytes)
+def test_g6_copy_streamed_plan(device, monkeypatch, shape, max_block_pages, max_cores, bank_stagger):
+    """Pins the streamed plan, which no production shape selects with the
+    default knobs but every shape past the L1 clamp does."""
+    monkeypatch.setattr(plan_knobs, "MAX_BLOCK_PAGES", max_block_pages)
     monkeypatch.setattr(plan_knobs, "MAX_CORES", max_cores)
+    monkeypatch.setattr(plan_knobs, "BANK_STAGGER", bank_stagger)
 
     torch.manual_seed(42)
     src = torch.randn(shape, dtype=torch.float32)
     dst = torch.randn(shape, dtype=torch.float32)
 
     plan = describe_plan(to_device(src, device))
-    assert plan["block_pages"] == block_pages
+    assert plan["plan"] == "streamed"
+    assert plan["block_pages"] == max_block_pages
+    assert plan["cb_depth_blocks"] == plan_knobs.STREAM_DEPTH_BLOCKS
     assert max(plan["core_pages"]) > plan["block_pages"], "the forced plan must hold more than one block per core"
+    assert plan["bank_stagger"] == bank_stagger
     if max_cores is not None:
         assert plan["num_cores"] == max_cores
 
     copy_and_check(device, src, dst)
 
 
-@pytest.mark.parametrize("shape", PHASE0_SHAPES, ids=lambda s: "x".join(map(str, s)))
+@pytest.mark.parametrize("shape", PHASE0_SHAPES, ids=shape_id)
 def test_g6_copy_plan(device, shape):
     x = to_device(torch.zeros(shape, dtype=torch.float32), device)
     plan = describe_plan(x)
+    grid = device.compute_with_storage_grid_size()
     assert plan == describe_plan(x), "the plan must be deterministic (BB-08)"
-    assert plan["regime"] == "dram_page_stream"
-    assert plan["num_pages"] == x.buffer_num_pages()
-    assert plan["num_cores"] == len(plan["core_pages"])
-    assert sum(plan["core_pages"]) == plan["num_pages"]
+    assert plan["regime"] == "page_copy"
+    assert plan["plan"] == "one_block", "every production shape must get the one-block plan (BB-08)"
+    assert plan["tensor_pages"] == x.buffer_num_pages()
+    assert plan["page_bytes"] == x.buffer_aligned_page_size()
+    assert plan["num_cores"] == len(plan["core_pages"]) == min(x.buffer_num_pages(), grid.x * grid.y)
+    assert sum(plan["core_pages"]) == plan["tensor_pages"]
+    assert max(plan["core_pages"]) - min(plan["core_pages"]) <= 1
+    assert plan["block_pages"] == max(plan["core_pages"])
+    assert plan["l1_bytes_per_core"] == plan["cb_pages"] * plan["page_bytes"]
     assert plan["l1_bytes_per_core"] <= L1_BYTES_LEFT_BY_MODEL
     assert sum(1 for role in plan["roles"].values() if role != "idle") == plan["num_cores"]
 
