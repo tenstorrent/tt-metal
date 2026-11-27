@@ -18,16 +18,16 @@
 #include <internal/service/service_core_manager.hpp>
 #include "context/metal_env_accessor.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "metal_env_impl.hpp"
 #include "context_descriptor.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "device/firmware/risc_firmware_initializer.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "jit_build/build_env_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_tensix_builder.hpp"
 #include "llrt/core_descriptor.hpp"
@@ -43,16 +43,16 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
-#include <distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
-#include <tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
 #include "dispatch/host_transfer_stats.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>

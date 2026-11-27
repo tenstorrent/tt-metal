@@ -6,6 +6,9 @@
 // reader_binary_interleaved_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file
 // serves the consumers still on the legacy API. Until the last of them migrates and this file is
 // retired, changes here likely belong in the fork too.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 // This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
 // the new ability to keep the CircularBufferConfigs continuous during dispatching.  See the use of CBIndex::c_2 below.

@@ -12,8 +12,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <ttnn/operations/core/to_layout/to_layout_op.hpp>
 #include <ttnn/operations/data_movement/concat/concat.hpp>
 #include <ttnn/operations/data_movement/pad/pad.hpp>

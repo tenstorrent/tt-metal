@@ -61,6 +61,9 @@ struct FilterReport {
 //
 // allocation (optional): after the host filter, keep only the ASICs at these addresses -- see
 // filter_factory_descriptor_to_allocation. Empty = keep every ASIC of the retained hosts.
+//
+// umd_unique_id, the local host and is_bh_galaxy_rev_c are filled as discovery on the descriptors
+// generate_cluster_descriptor_from_fsd writes would fill them, run as the first host.
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
     const std::string& fsd_path,
     const std::vector<std::string>& host_filter = {},
