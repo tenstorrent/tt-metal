@@ -484,6 +484,14 @@ void MeshGraph::initialize_from_mgd(
                 "Mesh {}: per-mesh fabric config must be resolved before building the mesh graph, got MGD_DEFAULT",
                 *mesh_id);
             effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
+            // On non-Galaxy systems, get_fabric_type(FABRIC_1D_RING, false) returns MESH so 2D meshes
+            // (e.g., 2x4 T3K) do not require non-existent wrap-around links. When a 1D (1xN or Nx1)
+            // MGD explicitly declares ring connectivity, preserve the MGD topology so the closing
+            // wrap-around link stays intact.
+            if (mesh_fabric_config == FabricConfig::FABRIC_1D_RING && effective_fabric_type == FabricType::MESH &&
+                mgd_fabric_type != FabricType::MESH && (mesh_shape[0] == 1 || mesh_shape[1] == 1)) {
+                effective_fabric_type = mgd_fabric_type;
+            }
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
