@@ -38,6 +38,24 @@ def shard_grid(mesh, tensor, sp_axis: int) -> list[list[torch.Tensor]]:
     return grid
 
 
+def stage_input(x: torch.Tensor, chunk: int, mesh, layout: k31_stage.StageLayout):
+    """Host rows ``x`` ``[n, hidden]`` (n <= ``chunk``) as a K3.1 stage's device input: zero-padded to ``chunk`` rows
+    in bf16, ``[1, 1, chunk, hidden]`` with rows over the stage's SP axis and the hidden over its TP axis, tiled in
+    DRAM. The Block passes the real span (``lo``, ``hi``) to the model, as the runtime does."""
+    padded = torch.zeros(chunk, x.shape[-1], dtype=torch.bfloat16)
+    padded[: x.shape[0]] = x
+    dims = [None, None]
+    dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1
+    return ttnn.from_torch(
+        padded.reshape(1, 1, chunk, -1),
+        device=mesh,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=tuple(dims)),
+    )
+
+
 def sp_tp_rows(mesh, tensor, sp_axis: int, rows: int) -> torch.Tensor:
     """A ``[1, 1, seq/sp, width/tp]``-sharded activation (sequence over SP, width over TP) as host ``[rows, width]``
     in token order: SP shards stacked along rows, each SP position's TP shards side by side."""
@@ -103,8 +121,8 @@ class KimiK31MoeBlock:
 
     def __init__(self, layer: int) -> None:
         self.layer = layer
-        self.mesh = self.ffn = self.mapper = None
-        self.chunk = self.sp_axis = 0
+        self.mesh = self.ffn = self.layout = None
+        self.chunk = 0
 
     def build(self, mesh, context_len: int, chunk: int) -> None:
         from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
@@ -121,27 +139,15 @@ class KimiK31MoeBlock:
             cache_path=k31_stage.weight_cache_path(mesh_shape),
             options=MoEBlockFfnOptions(sp_axis=layout.sp_axis),
         )
-        dims = [None, None]
-        dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1
-        self.mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh_shape, dims=tuple(dims))
-        self.mesh, self.chunk, self.sp_axis = mesh, chunk, layout.sp_axis
+        self.mesh, self.chunk, self.layout = mesh, chunk, layout
 
     def forward(self, x: torch.Tensor, lo: int, hi: int) -> BlockOutputs:
         rows = hi - lo
-        x_rows = torch.zeros(self.chunk, KimiK31Config.EMB_SIZE, dtype=torch.bfloat16)
-        x_rows[:rows] = x
-        tt_x = ttnn.from_torch(
-            x_rows.reshape(1, 1, self.chunk, -1),
-            device=self.mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mapper,
-        )
+        tt_x = stage_input(x, self.chunk, self.mesh, self.layout)
         y = self.ffn(tt_x, actual_isl=rows, actual_start=lo)  # (the runtime passes every chunk's real span)
         ttnn.deallocate(tt_x)
         ids, weights = moe_routing(self.ffn, self.ffn._block(self.chunk), rows)  # (the call's cached block)
-        output = sp_tp_rows(self.mesh, y, self.sp_axis, rows)
+        output = sp_tp_rows(self.mesh, y, self.layout.sp_axis, rows)
         ttnn.deallocate(y)
         return BlockOutputs(output, {"expert_ids": ids, "expert_weights": weights})
 
@@ -153,7 +159,7 @@ class KimiK31MoeBlock:
 
         if self.mesh is not None:
             release_blocks(self.mesh)
-        self.ffn = self.mapper = None
+        self.ffn = None
 
 
 def topk_rows(mesh, indices, rows: int, sp_axis: int) -> torch.Tensor:
@@ -187,7 +193,7 @@ class KimiK31DsaBlock:
 
     def __init__(self, layer: int):
         self.layer = layer
-        self._mesh = self._layout = self._caches = self._mla = self._mapper = None
+        self._mesh = self._layout = self._caches = self._mla = None
         self._rows = self._chunk = 0
 
     def build(self, mesh, context_len: int, chunk: int) -> None:
@@ -224,22 +230,10 @@ class KimiK31DsaBlock:
             tp_shard_kv=True,
             sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         )
-        shard_dims = [None, None]
-        shard_dims[layout.sp_axis], shard_dims[layout.tp_axis] = -2, -1
-        self._mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh_shape, dims=tuple(shard_dims))
 
     def forward(self, x: torch.Tensor, lo: int, hi: int) -> BlockOutputs:
         mesh, layout, chunk = self._mesh, self._layout, self._chunk
-        padded = torch.zeros(chunk, x.shape[-1], dtype=torch.bfloat16)
-        padded[: hi - lo] = x
-        x_tt = ttnn.from_torch(
-            padded.reshape(1, 1, chunk, -1),
-            device=mesh,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self._mapper,
-        )
+        x_tt = stage_input(x, chunk, mesh, layout)
         attn, indices = self._mla.forward(
             x_tt,
             {},  # K3.1's MLA is NoPE: no rotary tables
