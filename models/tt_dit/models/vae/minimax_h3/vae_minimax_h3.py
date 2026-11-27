@@ -156,7 +156,7 @@ def wave_calls(num_waves: int, waves_per_call: int) -> list[list[int]]:
 def call_tokens(waves: list[torch.Tensor]) -> torch.Tensor:
     """Waves of `(devices, tokens, channels)` as one upload: `ShardTensorToMesh(dim=0)` hands each
     device its unit of every wave, as a batch in wave order."""
-    return torch.stack(waves, dim=1).flatten(0, 1)
+    return waves[0] if len(waves) == 1 else torch.stack(waves, dim=1).flatten(0, 1)
 
 
 def strip_waves(num_chunks: int, grid_cols: int, mesh_cols: int, pack_spare_columns: bool = False) -> list[dict]:
