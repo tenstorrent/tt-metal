@@ -156,6 +156,8 @@ def _check_begins_tensor(name, tensor, rank):
 
 def _structural_checks(input_tensor, starts, ends, steps, slice_dim, num_devices):
     """ValueError for malformed calls; returns (scenario, begins, out_shape)."""
+    if not ttnn.is_tensor_storage_on_device(input_tensor):
+        raise ValueError("g6_slice: input_tensor must be on device")
     shape = tuple(int(d) for d in input_tensor.shape)
     rank = len(shape)
     if rank < 2 or rank > 4:
@@ -265,11 +267,9 @@ def _pad4(values, fill):
 
 
 def _select_regime(b4, m4):
-    row_offset_in_tile = b4[2] % TILE
-    col_offset_in_tile = b4[3] % TILE
-    if col_offset_in_tile != 0:
+    if b4[3] % TILE != 0:
         return "col_realign"
-    if row_offset_in_tile == 0 and m4[2] % TILE == 0:
+    if b4[2] % TILE == 0 and m4[2] % TILE == 0:
         return "page_copy"
     return "row_runs"
 
@@ -318,20 +318,21 @@ def _plan(input_tensor, begins, out_shape):
 
     grid, num_cores, all_cores, assignment, core_pages_max = _split(device, total_out_pages)
 
-    cb_depth = CB_DEPTH
     num_cbs = 2 if regime == "col_realign" else 1
-    slots_per_page = cb_depth + (1 if regime == "col_realign" else 0)
+    right_col_slots = 1 if regime == "col_realign" else 0
     out_l1_bytes_per_core = 0  # out is DRAM interleaved
     l1_budget = min(L1_BUDGET_BYTES, ttnn.device.get_max_worker_l1_unreserved_size())
     fixed_bytes = out_l1_bytes_per_core + CB_ALLOC_ALIGN_BYTES * num_cbs
-    block_pages_cap = (l1_budget - fixed_bytes) // (slots_per_page * page_bytes)
+    block_pages_cap = (l1_budget - fixed_bytes) // ((CB_DEPTH + right_col_slots) * page_bytes)
     if BLOCK_PAGES_CAP is not None:
         block_pages_cap = min(block_pages_cap, BLOCK_PAGES_CAP)
     if block_pages_cap < 1:
         raise ValueError(f"g6_slice: one page per CB slot exceeds the {l1_budget} B L1 budget (BB-05)")
     block_pages = min(core_pages_max, block_pages_cap)
     num_blocks_max = math.ceil(core_pages_max / block_pages)
-    l1_bytes_per_core = slots_per_page * block_pages * page_bytes + out_l1_bytes_per_core
+    # A core with a single block never has a second block in flight: a deeper ring would never be live.
+    cb_depth = min(CB_DEPTH, num_blocks_max)
+    l1_bytes_per_core = (cb_depth + right_col_slots) * block_pages * page_bytes + out_l1_bytes_per_core
 
     return {
         "regime": regime,
@@ -346,6 +347,16 @@ def _plan(input_tensor, begins, out_shape):
         "b4": b4,
         "m4": m4,
         "page_bytes": page_bytes,
+        "tensor_in_ht_tiles": math.ceil(n4[2] / TILE),
+        "tensor_in_wt_tiles": math.ceil(n4[3] / TILE),
+        "tensor_out_ht_tiles": tensor_out_ht_tiles,
+        "tensor_out_wt_tiles": tensor_out_wt_tiles,
+        "rows_last_tile_row": m4[2] - TILE * (tensor_out_ht_tiles - 1),
+        "cols_last_tile_col": m4[3] - TILE * (tensor_out_wt_tiles - 1),
+        "first_input_tile_row": b4[2] // TILE,
+        "row_offset_in_tile": b4[2] % TILE,
+        "first_input_tile_col": b4[3] // TILE,
+        "col_offset_in_tile": b4[3] % TILE,
         "total_out_pages": total_out_pages,
         "all_cores": all_cores,
         "assignment": assignment,

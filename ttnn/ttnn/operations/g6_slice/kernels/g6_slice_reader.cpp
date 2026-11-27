@@ -81,27 +81,31 @@ void kernel_main() {
     [[maybe_unused]] g6_slice::RunList fetch_full, fetch_last, fetch_full_narrow, fetch_last_narrow;
     [[maybe_unused]] g6_slice::RunList right_full, right_last;
     [[maybe_unused]] bool last_col_needs_right = false;
-    if constexpr (ROW_RUNS) {
-        // col_realign: output columns [0, 32 - c) come from the left input tile's columns [c, 32), the
-        // rest from the right tile's columns [0, c); only the face halves holding those columns move.
-        const uint32_t c = col_offset_in_tile;
-        const uint32_t left_halves =
-            W_SHIFT && c >= g6_slice::FACE_DIM ? g6_slice::COL_HALF_RIGHT : g6_slice::COL_HALF_BOTH;
-        fetch_full = Geometry::fetch_runs(row_offset_in_tile, g6_slice::TILE_DIM, left_halves);
-        fetch_last = Geometry::fetch_runs(row_offset_in_tile, rows_last_tile_row, left_halves);
-        if constexpr (W_SHIFT) {
-            const uint32_t right_halves = c <= g6_slice::FACE_DIM ? g6_slice::COL_HALF_LEFT : g6_slice::COL_HALF_BOTH;
-            right_full = Geometry::fetch_runs(row_offset_in_tile, g6_slice::TILE_DIM, right_halves);
-            right_last = Geometry::fetch_runs(row_offset_in_tile, rows_last_tile_row, right_halves);
-            last_col_needs_right = cols_last_tile_col + c > g6_slice::TILE_DIM;
+    {
+        DeviceZoneScopedN("G6_SETUP");
+        if constexpr (ROW_RUNS) {
+            // col_realign: output columns [0, 32 - c) come from the left input tile's columns [c, 32), the
+            // rest from the right tile's columns [0, c); only the face halves holding those columns move.
+            const uint32_t c = col_offset_in_tile;
+            const uint32_t left_halves =
+                W_SHIFT && c >= g6_slice::FACE_DIM ? g6_slice::COL_HALF_RIGHT : g6_slice::COL_HALF_BOTH;
+            fetch_full = Geometry::fetch_runs(row_offset_in_tile, g6_slice::TILE_DIM, left_halves);
+            fetch_last = Geometry::fetch_runs(row_offset_in_tile, rows_last_tile_row, left_halves);
+            if constexpr (W_SHIFT) {
+                const uint32_t right_halves =
+                    c <= g6_slice::FACE_DIM ? g6_slice::COL_HALF_LEFT : g6_slice::COL_HALF_BOTH;
+                right_full = Geometry::fetch_runs(row_offset_in_tile, g6_slice::TILE_DIM, right_halves);
+                right_last = Geometry::fetch_runs(row_offset_in_tile, rows_last_tile_row, right_halves);
+                last_col_needs_right = cols_last_tile_col + c > g6_slice::TILE_DIM;
+            }
         }
-    }
-    if constexpr (LEFT_HALF_LAST_COL) {
-        // page_copy has whole tile rows (off == 0, rv == 32), so its narrow list is fetch_full_narrow.
-        const uint32_t off = ROW_RUNS ? row_offset_in_tile : 0;
-        fetch_full_narrow = Geometry::fetch_runs(off, g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
-        fetch_last_narrow =
-            Geometry::fetch_runs(off, ROW_RUNS ? rows_last_tile_row : g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+        if constexpr (LEFT_HALF_LAST_COL) {
+            // page_copy has whole tile rows (off == 0, rv == 32), so its narrow list is fetch_full_narrow.
+            const uint32_t off = ROW_RUNS ? row_offset_in_tile : 0;
+            fetch_full_narrow = Geometry::fetch_runs(off, g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+            fetch_last_narrow =
+                Geometry::fetch_runs(off, ROW_RUNS ? rows_last_tile_row : g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+        }
     }
 
     const uint32_t num_blocks = (core_pages + block_pages - 1) / block_pages;

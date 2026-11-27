@@ -37,16 +37,19 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr, page_bytes);
 
     [[maybe_unused]] g6_slice::RunList store_full, store_last, store_full_narrow, store_last_narrow;
-    if constexpr (ROW_RUNS) {
-        store_full = Geometry::store_runs(row_offset_in_tile, g6_slice::TILE_DIM, g6_slice::COL_HALF_BOTH);
-        store_last = Geometry::store_runs(row_offset_in_tile, rows_last_tile_row, g6_slice::COL_HALF_BOTH);
-    }
-    if constexpr (LEFT_HALF_LAST_COL) {
-        // page_copy has whole tile rows (off == 0, rv == 32), so its narrow list is store_full_narrow.
-        const uint32_t off = ROW_RUNS ? row_offset_in_tile : 0;
-        store_full_narrow = Geometry::store_runs(off, g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
-        store_last_narrow =
-            Geometry::store_runs(off, ROW_RUNS ? rows_last_tile_row : g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+    {
+        DeviceZoneScopedN("G6_SETUP");
+        if constexpr (ROW_RUNS) {
+            store_full = Geometry::store_runs(row_offset_in_tile, g6_slice::TILE_DIM, g6_slice::COL_HALF_BOTH);
+            store_last = Geometry::store_runs(row_offset_in_tile, rows_last_tile_row, g6_slice::COL_HALF_BOTH);
+        }
+        if constexpr (LEFT_HALF_LAST_COL) {
+            // page_copy has whole tile rows (off == 0, rv == 32), so its narrow list is store_full_narrow.
+            const uint32_t off = ROW_RUNS ? row_offset_in_tile : 0;
+            store_full_narrow = Geometry::store_runs(off, g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+            store_last_narrow =
+                Geometry::store_runs(off, ROW_RUNS ? rows_last_tile_row : g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+        }
     }
 
     auto issue_runs = [&](const g6_slice::RunList& runs, uint32_t page_l1, uint32_t page) {

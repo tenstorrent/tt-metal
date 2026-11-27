@@ -14,6 +14,8 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
+FACE_DIM = 16  # face height/width of a 32x32 tile (g6_slice::FACE_DIM in g6_slice_runs.hpp)
+
 CB_SLICE_PAGES = 0  # staging pages: reader -> writer
 CB_RIGHT_COL_TILE = 1  # col_realign only: right input tile column, reader-private scratch
 
@@ -45,20 +47,19 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
     cb_depth = plan["cb_depth"]
     all_cores = plan["all_cores"]
     regime = plan["regime"]
+    tensor_in_ht_tiles = plan["tensor_in_ht_tiles"]
+    tensor_in_wt_tiles = plan["tensor_in_wt_tiles"]
+    tensor_out_ht_tiles = plan["tensor_out_ht_tiles"]
+    tensor_out_wt_tiles = plan["tensor_out_wt_tiles"]
+    rows_last_tile_row = plan["rows_last_tile_row"]
+    cols_last_tile_col = plan["cols_last_tile_col"]
 
     row_runs = int(regime in ("row_runs", "col_realign"))
     w_shift = int(regime == "col_realign")
 
-    tile = 32
-    tensor_in_ht_tiles = -(-n4[2] // tile)
-    tensor_in_wt_tiles = -(-n4[3] // tile)
-    tensor_out_ht_tiles = -(-m4[2] // tile)
-    tensor_out_wt_tiles = -(-m4[3] // tile)
-    rows_last_tile_row = m4[2] - tile * (tensor_out_ht_tiles - 1)
-    cols_last_tile_col = m4[3] - tile * (tensor_out_wt_tiles - 1)
     # The last tile column's right face half (cols 16..31) holds no logical column: leave it unmoved.
     # col_realign chooses its face halves from the column offset instead.
-    left_half_last_col = int(not w_shift and cols_last_tile_col <= tile // 2)
+    left_half_last_col = int(not w_shift and cols_last_tile_col <= FACE_DIM)
 
     cbs = [_cb(CB_SLICE_PAGES, cb_depth * block_pages, page_bytes, input_tensor.dtype, all_cores)]
     if w_shift:
@@ -100,14 +101,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
         input_tensor.buffer_address(),  # READER_X_ADDR_SLOT
         b4[0],
         b4[1],
-        b4[2] // tile,  # first_input_tile_row
-        b4[2] % tile,  # row_offset_in_tile
-        b4[3] // tile,  # first_input_tile_col
-        b4[3] % tile,  # col_offset_in_tile
+        plan["first_input_tile_row"],
+        plan["row_offset_in_tile"],
+        plan["first_input_tile_col"],
+        plan["col_offset_in_tile"],
     ]
     writer_common_rt = [
         output_tensor.buffer_address(),  # WRITER_OUT_ADDR_SLOT
-        b4[2] % tile,  # row_offset_in_tile
+        plan["row_offset_in_tile"],
     ]
 
     reader_rt = ttnn.RuntimeArgs()

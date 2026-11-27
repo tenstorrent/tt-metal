@@ -57,7 +57,7 @@ Begins are **RT**, regime flags and shapes are **CT**: the generic-op program ha
 | Plan cache (BB-07) | The built `ProgramDescriptor` is cached in a module dict keyed by `(shape, padded_shape, dtype, layout, memory_config, b4, M4, device id, grid, effective BLOCK_PAGES_CAP, CB_DEPTH, MAX_CORES, slice_dim, num_devices)`. A hit rewrites only the RT slots that hold buffer addresses (x, out, starts tensor); nothing else is rebuilt. |
 | Knob module constants | In `ttnn/ttnn/operations/g6_slice/g6_slice.py`: `BLOCK_PAGES_CAP = None` (None → derived from the L1 budget), `CB_DEPTH = 2`, `MAX_CORES = None` (None → full `compute_with_storage_grid_size()`), `L1_BUDGET_BYTES = 1347776`. Read at call time (not captured at import) so a test can override them. |
 | Plan report (BB-08, BB-21) | `describe_plan(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None) -> dict`, importable from `ttnn.operations.g6_slice`, runs the same validation and planning without dispatch and returns at least `{"regime", "num_cores", "block_pages", "cb_depth", "num_blocks_max", "l1_bytes_per_core", "core_roles"}`; `regime` ∈ `{"page_copy", "row_runs", "col_realign"}` in Phase 0; `core_roles` maps every used core to `"reader+writer"`. |
-| Zones (BB-21) | Zone build only (no change to the plain build): reader zones `G6_FETCH_ISSUE`, `G6_READ_BARRIER`, `G6_CB_RESERVE`, `G6_COL_REALIGN`; writer zones `G6_CB_WAIT`, `G6_WRITE_ISSUE`, `G6_WRITE_FLUSH`, `G6_WRITE_BARRIER`. |
+| Zones (BB-21) | Zone build only (no change to the plain build): reader zones `G6_SETUP`, `G6_FETCH_ISSUE`, `G6_READ_BARRIER`, `G6_CB_RESERVE`, `G6_COL_REALIGN`; writer zones `G6_SETUP`, `G6_CB_WAIT`, `G6_WRITE_ISSUE`, `G6_WRITE_FLUSH`, `G6_WRITE_BARRIER`. `G6_SETUP` is the per-kernel run-list build (~710 cycles on BH). |
 | Trace (BB-16) | Nothing on the call path allocates besides `out`, nothing is compiled after the first eager call of a signature; the begin of the device form is read by the kernel, so replay with a new begin needs no host work. |
 | Completion (BB-03) | Writer ends with `noc_async_write_barrier()`; reader's last block ends with a read barrier before its last push. |
 
@@ -109,7 +109,7 @@ Why the fold is honest: in every regime one output page is produced from a fixed
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_slice_pages` | `cb_depth` (`CB_DEPTH`) | 2 | reader fetches block k+1 (NoC0) while the writer stores block k (NoC1) — catalog `double_buffer` |
+| `cb_slice_pages` | `cb_depth` (`CB_DEPTH`, clamped to `num_blocks_max`) | 2 (1 when every core holds one block) | reader fetches block k+1 (NoC0) while the writer stores block k (NoC1) — catalog `double_buffer`; with a single block per core there is no k+1, so the second slot is not allocated |
 | `cb_right_col_tile` | none (fixed 1 block) | 1 | consumed by the reader itself between the block's barrier and its push; a second slot would sit idle (same thread) |
 
 ### Mechanism caps

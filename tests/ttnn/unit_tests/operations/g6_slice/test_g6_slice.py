@@ -111,18 +111,39 @@ def test_phase0_spreads_over_full_grid(device):
     assert plan["num_cores"] == min(6144, grid.x * grid.y)
 
 
-@pytest.mark.parametrize("case", ["c179_non_square_rows", "c1175_row_15_wide"])
+@pytest.mark.parametrize("case", ["c179_non_square_rows", "c1175_row_15_wide", "rule_w_and_h_begin_in_tile"])
 def test_several_blocks_per_core(device, monkeypatch, case):
-    """A small BLOCK_PAGES_CAP forces several blocks per core: CB ring wrap and ragged last blocks."""
+    """A small BLOCK_PAGES_CAP forces several blocks per core: CB ring wrap and ragged last blocks
+    (col_realign also reuses its reader-private right-column scratch across blocks)."""
     monkeypatch.setattr(g6_module, "BLOCK_PAGES_CAP", 3)
+    if case == "rule_w_and_h_begin_in_tile":
+        monkeypatch.setattr(g6_module, "MAX_CORES", 2)  # 12 output pages: 6 per core, 2 blocks each
     shape, starts, ends, steps, _ = CASES[case]
     torch_x, x = _make_input(shape, device)
 
     plan = _call(describe_plan, x, starts, ends, steps)
-    assert plan["block_pages"] == 3
+    assert plan["num_blocks_max"] > 1
+    assert plan["cb_depth"] == g6_module.CB_DEPTH
 
     out = _call(g6_slice, x, starts, ends, steps)
     _assert_bit_exact(out, x, _reference(torch_x, starts, ends, steps))
+
+
+def test_single_block_cores_allocate_one_slot(device):
+    """With one block per core the second cb_slice_pages slot would never be live: it is not allocated."""
+    shape, starts, ends, steps, _ = CASES["c587_row_4095"]
+    _, x = _make_input(shape, device)
+    plan = _call(describe_plan, x, starts, ends, steps)
+    assert plan["num_blocks_max"] == 1
+    assert plan["cb_depth"] == 1
+    assert plan["l1_bytes_per_core"] == plan["block_pages"] * 2048
+
+
+def test_host_tensor_is_refused(expect_error):
+    torch_x = torch.randn((1, 1, 64, 64), dtype=torch.bfloat16)
+    x = ttnn.from_torch(torch_x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    with expect_error(ValueError, "on device"):
+        g6_slice(x, [0, 0, 0, 0], [1, 1, 32, 64])
 
 
 def test_repeat_is_bit_identical(device):
