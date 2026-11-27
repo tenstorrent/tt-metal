@@ -60,6 +60,12 @@ def get_num_frames(duration_s: float) -> int:
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
 
 
+MINIMAX_H3_DEFAULT_DURATION_S = 5
+# Frame counts the shortest and longest served durations resolve to: 107 and 362.
+MINIMAX_H3_MIN_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[0])
+MINIMAX_H3_MAX_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[-1])
+
+
 @dataclass(frozen=True)
 class SolSchedule:
     """Where one generation's ring attention runs Sol-Attn: the first `dense_steps` denoise steps and the first
@@ -94,11 +100,6 @@ def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
         raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")
     return schedule
 
-
-MINIMAX_H3_DEFAULT_DURATION_S = 5
-# Frame counts the shortest and longest served durations resolve to: 107 and 362.
-MINIMAX_H3_MIN_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[0])
-MINIMAX_H3_MAX_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[-1])
 
 # Served denoising step count.
 MINIMAX_H3_NUM_INFERENCE_STEPS = 50

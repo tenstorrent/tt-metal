@@ -147,6 +147,7 @@ from .policy import (
     MINIMAX_H3_MAX_REFERENCE_PATCHES,
     MINIMAX_H3_MAX_TEXT_TOKENS,
     MINIMAX_H3_SERVED_REFERENCE_RESIZE_MODE,
+    SolSchedule,
     align_num_frames,
     decodable_canvases,
     get_num_frames,
@@ -830,6 +831,7 @@ class MiniMaxH3Pipeline:
         self._request_state = _BucketState()
         # Sol-Attn request the transformer's ring attention is set up for (None: dense); see `_set_sol_attention`.
         self._sol_key: tuple | None = None
+        self._sol_schedule: SolSchedule | None = None
         self._force_bucket: int | None = None
         self._force_pad_to: int | None = None
         self._force_prompt_pad: int | None = None
@@ -2947,8 +2949,12 @@ class MiniMaxH3Pipeline:
             self._force_bucket = rung
         else:
             self._force_pad_to = rung
+        # With Sol-Attn on, run one step past its dense steps: a sparse step must run untraced, and then be
+        # captured, here, because `run_blocks` captures a new trace key without a prep run.
+        schedule = self._requested_sol_schedule()
+        steps = 2 if schedule is None else max(2, schedule.dense_steps + 1)
         try:
-            self(prompt, num_inference_steps=2, **generation_kwargs)
+            self(prompt, num_inference_steps=steps, **generation_kwargs)
         finally:
             self._force_bucket = self._force_pad_to = None
 
@@ -3416,6 +3422,10 @@ class MiniMaxH3Pipeline:
             return
         transformer.release_traces()
 
+    def _requested_sol_schedule(self) -> SolSchedule | None:
+        """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
+        return None if self.dynamic_length else sol_schedule(os.environ)
+
     def _set_sol_attention(
         self, transformer: MiniMaxH3Transformer3DModel, rung: int, logical_n: int, sink_tokens: int
     ) -> None:
@@ -3423,15 +3433,16 @@ class MiniMaxH3Pipeline:
 
         The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
-        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The sparse op compiles `logical_n` into its kernels, so each
-        new packed length pays a compile, and the pre-pass buffers change with it: a change of request or schedule
-        releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
+        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The sparse op compiles
+        `logical_n` into its kernels, so each new packed length pays a compile, and the pre-pass buffers change
+        with it: a change of request or schedule releases the denoise traces and marks every bucket cold, so the
+        gen runs eager and recaptures.
         """
         sol = None
-        schedule = None if self.dynamic_length else sol_schedule(os.environ)
+        schedule = self._requested_sol_schedule()
         if schedule is not None:
-            sol = (rung // self.sp_factor, logical_n, sink_tokens if schedule.sinks else 0, schedule)
-        if sol == self._sol_key:
+            sol = (rung // self.sp_factor, logical_n, sink_tokens if schedule.sinks else 0)
+        if (sol, schedule) == (self._sol_key, self._sol_schedule):
             return
         self._release_denoise_traces()
         for state in (*self._buckets.values(), self._request_state):
@@ -3439,8 +3450,8 @@ class MiniMaxH3Pipeline:
         if sol is None:
             transformer.set_sol_request(None)
         else:
-            transformer.set_sol_request(sol[:3], tau=schedule.tau, dense_layers=schedule.dense_layers)
-        self._sol_key = sol
+            transformer.set_sol_request(sol, tau=schedule.tau, dense_layers=schedule.dense_layers)
+        self._sol_key, self._sol_schedule = sol, schedule
         self._log(
             "attention: dense ring"
             if sol is None
@@ -3759,7 +3770,8 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
-                    transformer.set_sol_dense_step(self._sol_key is not None and self._sol_key[3].is_dense_step(i))
+                    schedule = self._sol_schedule
+                    transformer.set_sol_dense_step(schedule is not None and schedule.is_dense_step(i))
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,
