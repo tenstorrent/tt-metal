@@ -95,17 +95,16 @@ _TARGETS_MS = {
     },
 }
 # Real-data cases (Galaxy 8x4 only), per case and layer: (untraced, traced) at 64k and 512k; 128k and 256k only report.
-# Mean of 4 runs on one Galaxy, scaled onto the CI host by the ratio of the Galaxy targets above to the gate cases
-# measured in the same session (per case and mode, mean of warm and long).
+# Measured on CI (run 45978129731).
 REAL_GATED = ("64k", "512k")
 _REAL_TARGETS_MS = {
     "glm_5_3": {
-        "L58-median": (3.19, 2.81, 6.75, 6.35),
-        "L42-max": (3.24, 2.86, 8.34, 7.96),
+        "L58-median": (3.23, 2.84, 6.84, 6.43),
+        "L42-max": (3.27, 2.92, 8.46, 8.02),
     },
     "glm_5_3-no_indexer": {
-        "L58-median": (2.06, 1.74, 2.14, 1.84),
-        "L42-max": (2.11, 1.79, 3.62, 3.34),
+        "L58-median": (2.14, 1.81, 2.28, 1.98),
+        "L42-max": (2.19, 1.89, 3.85, 3.64),
     },
 }
 PERF_TARGETS_MS = {
