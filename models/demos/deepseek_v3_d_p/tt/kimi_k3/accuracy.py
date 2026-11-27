@@ -17,7 +17,8 @@ They are read from the environment each time a module asks, so set them before t
     K3_ACC_FIDELITY          HiFi4 with fp32 DEST accumulation where the op takes a compute config: KDA input /
                              output projections and gated norm output (fp32), MLA projections, sparse SDPA (the
                              approximate exp kept), the indexer's score matmul and key LayerNorm, the MoE head's
-                             shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8)
+                             shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
+                             MoE combine without its 2^-14 snap of every routed term (fp32 sums)
 
 The weight-dtype knobs change the TTNN cache file names (as_tensor encodes the dtype), so a layer built with them
 needs a writable weight cache (it is built from the checkpoint the first time); the production cache is never

@@ -270,6 +270,8 @@ class TtMoEBlockFfn:
             cfg.forward_chunks = int(forward_chunks)
             if opts.combine_snap is not None:  # (else the config's default snap)
                 cfg.combine_snap = opts.combine_snap
+            elif accuracy.fidelity():  # (K3_ACC_FIDELITY: no 2^-14 snap of the routed terms - fp32 sums, any order)
+                cfg.combine_snap = 0.0
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
