@@ -90,6 +90,11 @@ FACES_PER_TILE = 4
 ELEMENTS_PER_TILE = 1024  # 4 faces × 256 elements
 TILE_SIZE = 32
 TILE_DIM = 32
+
+# Fixed row ranges [begin, end) of the fuser's fill_rows / fill_rows_ct ops.
+# Keep in sync with FILL_ROWS_FUSER_* / FILL_ROWS_CT_FUSER_* in sfpu_operations_quasar.h.
+FILL_ROWS_FUSER_RANGE = (3, 21)
+FILL_ROWS_CT_FUSER_RANGE = (9, 31)
 TILE_DIMENSIONS = (32, 32)  # Tile dimensions as tuple
 
 # Destination register capacity (in tiles)
@@ -2444,7 +2449,10 @@ class UnarySFPUGolden:
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
             MathOperation.Cumsum: self._cumsum,
+            MathOperation.Cumprod: self._cumprod,
             MathOperation.Ema: self._ema,
+            MathOperation.FillRows: self._fill_rows,
+            MathOperation.FillRowsCt: self._fill_rows_ct,
             MathOperation.Dropout: self._dropout,
             MathOperation.Typecast: self._typecast,
             # Integer unary ops (routed through the integer path in __call__).
@@ -2731,11 +2739,17 @@ class UnarySFPUGolden:
 
         result = tensor.clone().flatten()
 
-        # Cumsum and EMA accumulate down each tile's columns, so they cannot go through the
-        # per-element map below and are evaluated here on the untilized (row-major) view.
-        # The tilize that follows puts them in the layout the element-wise path produces, so
-        # every later stage (dest rounding, untilize, output conversion) stays shared.
-        if operation not in (MathOperation.Cumsum, MathOperation.Ema):
+        # Cumsum, cumprod and EMA accumulate down each tile's columns, and fill_rows writes
+        # whole tile rows, so they cannot go through the per-element map below and are
+        # evaluated here on the untilized (row-major) view. The tilize that follows puts them
+        # in the layout the element-wise path produces, so every later stage (dest rounding,
+        # untilize, output conversion) stays shared.
+        def whole_tensor_op(row_major):
+            if operation in self._FILL_ROWS_OPS:
+                return self.ops[operation](row_major, dimensions, fill_const_value)
+            return self.ops[operation](row_major, dimensions)
+
+        if operation not in self._WHOLE_TENSOR_OPS:
             whole_tensor_res = None
         elif skip_tilize:
             # The fuser passes Dest already tilized; permute in Float32 so neither direction rounds.
@@ -2743,13 +2757,13 @@ class UnarySFPUGolden:
                 result.to(torch.float32), DataFormat.Float32, dimensions
             ).flatten()
             whole_tensor_res = tilize_block(
-                self.ops[operation](row_major, dimensions),
+                whole_tensor_op(row_major),
                 dimensions,
                 DataFormat.Float32,
                 tile_dimensions=tile_dimensions,
             ).flatten()
         else:
-            whole_tensor_res = self.ops[operation](result, dimensions)
+            whole_tensor_res = whole_tensor_op(result)
 
         if not skip_tilize:
             # Permute in Float32 so only the output cast rounds.
@@ -3849,6 +3863,43 @@ class UnarySFPUGolden:
         # Golden is the exact sigmoid; the kernel is a LUT approximation of it.
         return self._torch_unary(x, torch.sigmoid)
 
+    _FILL_ROWS_OPS = (MathOperation.FillRows, MathOperation.FillRowsCt)
+    _WHOLE_TENSOR_OPS = (
+        MathOperation.Cumsum,
+        MathOperation.Cumprod,
+        MathOperation.Ema,
+        *_FILL_ROWS_OPS,
+    )
+
+    def _cumprod(self, x, dimensions: tuple[int, int]):
+        """Column-wise (top-to-bottom) cumulative product inside each 32x32 tile.
+
+        Same contract as :meth:`_cumsum`: tiles are independent (carry seeded 1.0 per tile),
+        the product is accumulated in float32 and the caller applies the Dest-format rounding.
+        """
+        rows, cols = dimensions[0], dimensions[1]
+        tiles = x.reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
+        return torch.cumprod(tiles.to(torch.float32), dim=1).flatten()
+
+    @staticmethod
+    def _fill_tile_rows(x, dimensions, value, row_range):
+        """Rows [begin, end) of every 32x32 tile <- value, every other datum unchanged."""
+        begin, end = row_range
+        rows, cols = dimensions[0], dimensions[1]
+        tiles = (
+            x.to(torch.float32)
+            .reshape(rows // TILE_DIM, TILE_DIM, cols // TILE_DIM, TILE_DIM)
+            .clone()
+        )
+        tiles[:, begin:end, :, :] = float(value)
+        return tiles.flatten()
+
+    def _fill_rows(self, x, dimensions: tuple[int, int], value):
+        return self._fill_tile_rows(x, dimensions, value, FILL_ROWS_FUSER_RANGE)
+
+    def _fill_rows_ct(self, x, dimensions: tuple[int, int], value):
+        return self._fill_tile_rows(x, dimensions, value, FILL_ROWS_CT_FUSER_RANGE)
+
     def _cumsum(self, x, dimensions: tuple[int, int]):
         """Column-wise (top-to-bottom) cumulative sum inside each 32x32 tile.
 
@@ -4287,6 +4338,12 @@ class EltwiseBinaryGolden(FidelityMasking):
         return (t1 >= t2).to(torch.int32)
 
 
+# Fixed (in_band, out_band) of the fuser's SfpuCopyDestRows and the (from_row, to_row) pairs,
+# applied in order, of its SfpuCopyDestRow.
+# Keep in sync with COPY_DEST_ROWS_FUSER_* / COPY_DEST_ROW_FUSER_* in sfpu_operations_quasar.h.
+COPY_DEST_ROWS_FUSER_BANDS = (1, 6)
+COPY_DEST_ROW_FUSER_ROWS = ((5, 18), (9, 1))
+
 # Keep in sync with RESHUFFLE_ROWS_FUSER_MASK in sfpu_operations_quasar.h.
 RESHUFFLE_ROWS_FUSER_MASK = [
     *(31, 30, 16, 15, 255, 32, 0, 0, 0, 47, 5, 5, 48, 254, 17, 3),
@@ -4441,6 +4498,9 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuElwLogicalRightShift: self._logical_right_shift,
                 MathOperation.SfpuAddTopRow: self._add_top_row,
                 MathOperation.SfpuReshuffleRows: self._reshuffle_rows,
+                # Dispatched with their fixed pairs ahead of the element-wise path in __call__.
+                MathOperation.SfpuCopyDestRows: self._copy_dest_rows,
+                MathOperation.SfpuCopyDestRow: self._copy_dest_rows,
                 MathOperation.SfpuElwLt: self._lt,
                 MathOperation.SfpuElwGt: self._gt,
                 MathOperation.SfpuElwLe: self._le,
@@ -4568,6 +4628,22 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 dst_idx,
                 data_format,
             )
+
+        if operation in (
+            MathOperation.SfpuCopyDestRows,
+            MathOperation.SfpuCopyDestRow,
+        ):
+            if not skip_tilize or tile_dimensions != TILE_DIMENSIONS:
+                raise ValueError(
+                    f"{operation} works on a tilized Dest image of 32x32 tiles "
+                    "(skip_tilize=True)"
+                )
+            if operation == MathOperation.SfpuCopyDestRows:
+                in_band, out_band = COPY_DEST_ROWS_FUSER_BANDS
+                pairs = [(4 * in_band + j, 4 * out_band + j) for j in range(4)]
+            else:
+                pairs = COPY_DEST_ROW_FUSER_ROWS
+            return self._copy_dest_rows(tensor.flatten(), src1_idx, dst_idx, pairs)
 
         if operation == MathOperation.SfpuReshuffleRows:
             if not skip_tilize or tile_dimensions != TILE_DIMENSIONS:
@@ -5142,6 +5218,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
         # so it is matched under the PCC tolerance. Evaluated in fp32.
         return torch.nn.functional.logsigmoid(t1.to(torch.float32))
+
+    @staticmethod
+    def _tilized_tile_row(tile, row):
+        """Indices of the 32 datums of tile row *row* in a tilized Dest image (left face, then right)."""
+        face = (row // FACE_DIM) * 2
+        base = tile * ELEMENTS_PER_TILE + face * FACE_DIM * FACE_DIM
+        start = base + (row % FACE_DIM) * FACE_DIM
+        left = torch.arange(start, start + FACE_DIM)
+        return torch.cat([left, left + FACE_DIM * FACE_DIM])
+
+    def _copy_dest_rows(self, tensor, src_idx, dst_idx, row_pairs):
+        """copy_dest_rows / copy_dest_row on a tilized Dest image: raw row copies, bit-exact, in order."""
+        result = tensor.clone()
+        for from_row, to_row in row_pairs:
+            src = self._tilized_tile_row(src_idx, from_row)
+            dst = self._tilized_tile_row(dst_idx, to_row)
+            result[dst] = result[src].clone()
+        return result
 
     def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
         """reshuffle_rows on a tilized Dest image; every row's SFPSTORE truncates to the Dest width."""

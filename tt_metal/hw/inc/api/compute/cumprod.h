@@ -15,7 +15,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Calculates the columnwise (top to bottom) cumulative product. Same tile order, *first* flag and restrictions as
- * *cumsum_tile*. Only available on Wormhole and Blackhole. Not supported on Quasar (compile error).
+ * *cumsum_tile*.
  *
  * Return value: None
  *

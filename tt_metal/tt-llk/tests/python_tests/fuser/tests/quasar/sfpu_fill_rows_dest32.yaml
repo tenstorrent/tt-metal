@@ -1,0 +1,38 @@
+# fill_rows_tile, run-time and compile-time forms, over the fixed row ranges FILL_ROWS_FUSER_RANGE [3, 21) and
+# FILL_ROWS_CT_FUSER_RANGE [9, 31) (the fuser cannot pass a row range). Two stacked tiles: every tile is filled.
+# Bit-exact (atol/rtol 0): the filled rows hold the exact constant and every other row must keep its bits.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-1000.0, -10.5]
+        - [-9.5, -0.01]
+        - [0.01, 9.5]
+        - [10.5, 1000.0]
+        - -1.0e-30
+        - -1.0
+        - 0.0
+        - 1.0
+        - 1.0e-30
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float32
+    atol: 0.0
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [FillRows, FillRowsCt]
+        approximation_mode: false
+        iterations: 32
+        fill_const_value: -3.25
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

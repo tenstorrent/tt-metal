@@ -269,6 +269,8 @@ enum class SfpuType : std::uint32_t
     quick_gelu,
     gelu_tanh,
     gelu_derivative,
+    fill_rows,
+    fill_rows_ct,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

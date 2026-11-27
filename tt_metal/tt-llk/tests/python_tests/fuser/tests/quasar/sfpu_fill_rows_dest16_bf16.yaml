@@ -1,0 +1,36 @@
+# fill_rows_tile as in sfpu_fill_rows_dest32.yaml, on a 16-bit Dest. The constant is exact in bf16. Bit-exact.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b]
+    stimuli:
+      include:
+        - [-1000.0, -10.5]
+        - [-9.5, -0.01]
+        - [0.01, 9.5]
+        - [10.5, 1000.0]
+        - -1.0e-30
+        - -1.0
+        - 0.0
+        - 1.0
+        - 1.0e-30
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float16_b
+    atol: 0.0
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [FillRows, FillRowsCt]
+        approximation_mode: false
+        iterations: 32
+        fill_const_value: -3.25
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}
