@@ -2,7 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Inputs over each dtype's whole range and an exact comparison, for tests of ops that must not change values."""
+"""Inputs over each dtype's whole range, an exact comparison, and shared memory-config helpers, for tests of ops
+that must not change values."""
 
 import math
 
@@ -127,3 +128,22 @@ def convertible_input(shape, input_dtype, output_dtype, seed=0):
         return full_range_input(shape, input_dtype, seed=seed)
     assert {input_dtype, output_dtype} <= {ttnn.bfloat16, ttnn.float32}, f"no convertible input for {input_dtype}"
     return full_range_input(shape, ttnn.bfloat16, seed=seed, nan=False).float()
+
+
+def int8_with_min_value(shape, seed=0):
+    """Whole-range int8 values in which every third element is -128, the one value the sign-magnitude Int8 format loses."""
+    values = full_range_input(shape, ttnn.int8, seed=seed)
+    values.view(-1)[::3] = -128
+    return values
+
+
+def height_sharded_l1_config(shape, num_cores):
+    """L1 height-sharded config that splits the rows of the 4D ``shape`` evenly over ``num_cores`` cores in one row."""
+    rows = shape[0] * shape[1] * shape[2]
+    return ttnn.create_sharded_memory_config(
+        shape=(rows // num_cores, shape[3]),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
