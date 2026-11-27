@@ -9,3 +9,4 @@
 {"event":"test_run","what":"knob-variant probe (probe_003): 16c/8c/1c, block_rows 1-3, block_tile_cols 1-4, depth 1/2, unrotated","result":"all bit-exact","ts":"2026-11-27T04:20:37-05:00"}
 {"event":"test_run","what":"geometry probe: (2,3,40,100),(1,1,64,64),(1,2,17,33),(1,1,1,16),(3,1,96,4096)","result":"all bit-exact","ts":"2026-11-27T04:20:37-05:00"}
 {"event":"perf","shape":"(1,1,32,128)","device_kernel_ns":[1674,1776],"cores":32,"zones_median_cycles":{"gather-issue":330,"gather-wait":890,"store-issue":50,"drain-wait":300,"BRISC-KERNEL":1715},"classification":"latency-bound on the DRAM read round trip","ts":"2026-11-27T04:20:37-05:00"}
+{"event":"test_run","result":"pass","modes":["dev","prod"],"acceptance":"11/11","golden":"6/6","note":"row_gather 8x4 rect, raw one-packet 64B reads + write_sticks_after_untilize","ts":"2026-11-27T06:01:52-05:00"}

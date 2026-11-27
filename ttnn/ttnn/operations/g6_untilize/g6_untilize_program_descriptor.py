@@ -1,212 +1,234 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_untilize program descriptor: plan() (the single source of every block knob) and the one-kernel program.
+"""g6_untilize program descriptor: regime `row_gather`.
 
-Regime R1 `gather_rows`: one data-movement kernel on BRISC/NOC_0 over one rectangle of cores. Each core owns a
-balanced contiguous run of output rows, gathers their 64 B face-row pieces from DRAM into row-major L1, and writes
-each row as one page. No compute kernel, no semaphores, one CB.
+The output rows are split into contiguous balanced ranges over one core rectangle. On each core the
+reader gathers the 64-B face-row pieces of its rows from the TILE input straight into row-major
+positions of `cb_row_block`; the writer stores each row as one ROW_MAJOR page. No compute kernel.
+
+Every block knob (core limit, block_tile_cols, buffer depth) is set here once and reaches the kernels
+as a compile-time arg; the kernels derive every loop bound and per-core range from those args.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-UNTILIZE_ROWS_KERNEL = str(KERNEL_DIR / "g6_untilize_untilize_rows.cpp")
+READER_KERNEL = KERNEL_DIR / "g6_untilize_reader.cpp"
+WRITER_KERNEL = KERNEL_DIR / "g6_untilize_writer.cpp"
 
-REGIME = "gather_rows"
+# Block knobs. None = no cap beyond the work units and the grid.
+CORE_LIMIT = None
+ROW_BLOCK_DEPTH = 2
+# Free L1 per core the model leaves to the op (BB-05).
+L1_OP_BUDGET_BYTES = 1347776
 
-# Per-core L1 the model leaves to the op (BB-05).
-L1_BUDGET = 1347776
+CB_ROW_BLOCK = 0
 
-TILE_H = 32
-TILE_W = 32
-FACE_W = 16
-
-CB_ROW_STAGING = 0
-
-
-@dataclass(frozen=True)
-class Plan:
-    x0: int
-    y0: int
-    cx: int
-    cy: int
-    total_rows: int
-    H: int
-    Ht: int
-    W: int
-    Wt: int
-    elem: int
-    block_rows: int
-    block_tile_cols: int
-    staging_depth: int
-    rotate_tile_order: bool
-
-    @property
-    def num_cores(self) -> int:
-        return self.cx * self.cy
-
-    @property
-    def staged_row_bytes(self) -> int:
-        return self.block_tile_cols * TILE_W * self.elem
-
-    @property
-    def staging_bytes(self) -> int:
-        return self.staging_depth * self.block_rows * self.staged_row_bytes
-
-    def rows_of_core(self, i: int) -> tuple[int, int]:
-        q, rem = divmod(self.total_rows, self.num_cores)
-        return i * q + min(i, rem), q + (1 if i < rem else 0)
-
-    def core_range(self) -> ttnn.CoreRange:
-        return ttnn.CoreRange(
-            ttnn.CoreCoord(self.x0, self.y0), ttnn.CoreCoord(self.x0 + self.cx - 1, self.y0 + self.cy - 1)
-        )
+REGIME_ROW_GATHER = "row_gather"
 
 
-def _rectangle(num_cores_target: int, grid_x: int, grid_y: int) -> tuple[int, int]:
-    """Smallest cx*cy >= target inside the grid; ties go to the wider rectangle (row-wise placement)."""
+def select_regime(input_tensor) -> str:
+    return REGIME_ROW_GATHER
+
+
+def choose_core_rectangle(num_units, grid, core_limit=None):
+    """Largest w x h rectangle with w*h <= min(units, grid, limit); ties go to w >= h, then squarest."""
+    cap = min(num_units, grid.x * grid.y)
+    if core_limit is not None:
+        cap = min(cap, core_limit)
+    cap = max(cap, 1)
     best = None
-    for cy in range(1, grid_y + 1):
-        cx = min(grid_x, -(-num_cores_target // cy))
-        if cx * cy < num_cores_target:
-            continue
-        key = (cx * cy, -cx)
-        if best is None or key < best[0]:
-            best = (key, (cx, cy))
-    return best[1]
+    for h in range(1, grid.y + 1):
+        w = min(grid.x, cap // h)
+        if w < 1:
+            break
+        key = (w * h, w >= h, -abs(w - h))
+        if best is None or key > best[0]:
+            best = (key, w, h)
+    return best[1], best[2]
 
 
-def plan(
-    shape,
-    elem: int,
-    grid,
-    *,
-    max_cores: int | None = None,
-    block_rows: int | None = None,
-    block_tile_cols: int | None = None,
-    staging_depth: int | None = None,
-    rotate_tile_order: bool = True,
-) -> Plan:
-    """Pure host function of (shape, elem, grid). Keyword overrides exist to turn knobs for perf lamps; the entry
-    point passes none, so the defaults are the design's: as many cores as rows (up to the grid), each core's whole
-    run as one block clamped by L1, one staging slot unless a core owns more than one block."""
-    *lead, H, W = (int(d) for d in shape)
-    B = 1
-    for d in lead:
-        B *= d
-    total_rows = B * H
-    Ht = -(-H // TILE_H)
-    Wt = -(-W // TILE_W)
-    grid_x, grid_y = int(grid.x), int(grid.y)
+def derive_block_tile_cols(tensor_tile_cols, tile_bytes, depth=ROW_BLOCK_DEPTH, budget=L1_OP_BUDGET_BYTES):
+    """Largest divisor of tensor_tile_cols whose CB at full depth fits the L1 budget.
 
-    face_row_bytes = FACE_W * elem
-    dram_align = ttnn.get_dram_alignment()
-    if face_row_bytes % dram_align != 0:
-        raise ValueError(f"g6_untilize: face row of {face_row_bytes} B breaks the {dram_align} B DRAM read alignment")
+    A divisor keeps the push quantum identical for every col block, so the CB ring never wraps
+    mid-block.
+    """
+    for cols in range(tensor_tile_cols, 0, -1):
+        if tensor_tile_cols % cols == 0 and depth * cols * tile_bytes <= budget:
+            return cols
+    raise ValueError(f"g6_untilize: one tile column at depth {depth} exceeds the {budget}-B L1 budget")
 
-    target = max(1, min(total_rows, grid_x * grid_y))
-    if max_cores is not None:
-        target = max(1, min(target, max_cores))
-    cx, cy = _rectangle(target, grid_x, grid_y)
-    num_cores = cx * cy
-    rows_max = max(1, -(-total_rows // num_cores))
 
-    tile_col_bytes = TILE_W * elem
-    cols = Wt if block_tile_cols is None else max(1, min(block_tile_cols, Wt))
-    if block_rows is None:
-        if rows_max * cols * tile_col_bytes <= L1_BUDGET:
-            rows = rows_max
-        else:
-            depth = 2 if staging_depth is None else staging_depth
-            rows = min(rows_max, L1_BUDGET // (depth * cols * tile_col_bytes))
-            if rows == 0:
-                rows = 1
-                cols = max(1, min(cols, L1_BUDGET // (depth * tile_col_bytes)))
-    else:
-        rows = max(1, min(block_rows, rows_max))
+def _plan(input_tensor):
+    shape = tuple(input_tensor.shape)
+    batch = 1
+    for d in shape[:-2]:
+        batch *= d
+    rows_per_image, row_elems = shape[-2], shape[-1]
+    tile_h, tile_w = input_tensor.tile.tile_shape
+    tile_bytes = input_tensor.tile.get_tile_size(input_tensor.dtype)
 
-    blocks_per_core_max = -(-rows_max // rows) * -(-Wt // cols)
-    depth = staging_depth if staging_depth is not None else (1 if blocks_per_core_max == 1 else 2)
-    depth = max(1, min(depth, blocks_per_core_max))
+    tensor_rows = batch * rows_per_image
+    tile_rows_per_image = -(-rows_per_image // tile_h)
+    tensor_tile_cols = -(-row_elems // tile_w)
 
-    p = Plan(
-        x0=0,
-        y0=0,
-        cx=cx,
-        cy=cy,
-        total_rows=total_rows,
-        H=H,
-        Ht=Ht,
-        W=W,
-        Wt=Wt,
-        elem=elem,
-        block_rows=rows,
-        block_tile_cols=cols,
-        staging_depth=depth,
-        rotate_tile_order=rotate_tile_order,
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    rect_w, rect_h = choose_core_rectangle(tensor_rows, grid, CORE_LIMIT)
+    num_cores = rect_w * rect_h
+
+    block_tile_cols = derive_block_tile_cols(tensor_tile_cols, tile_bytes)
+    num_col_blocks = tensor_tile_cols // block_tile_cols
+    max_core_rows = -(-tensor_rows // num_cores)
+    max_blocks_per_core = -(-max_core_rows // tile_h) * num_col_blocks
+    buffer_depth = min(ROW_BLOCK_DEPTH, max_blocks_per_core)
+
+    return {
+        "regime": select_regime(input_tensor),
+        "grid": (grid.x, grid.y),
+        "rect_w": rect_w,
+        "rect_h": rect_h,
+        "num_cores": num_cores,
+        "tensor_rows": tensor_rows,
+        "rows_per_image": rows_per_image,
+        "row_elems": row_elems,
+        "tile_rows_per_image": tile_rows_per_image,
+        "tensor_tile_cols": tensor_tile_cols,
+        "block_tile_cols": block_tile_cols,
+        "buffer_depth": buffer_depth,
+        "tile_bytes": tile_bytes,
+    }
+
+
+def _core_rows(core_idx, tensor_rows, num_cores):
+    """Contiguous balanced row range; the kernels evaluate the same formula."""
+    base, extra = divmod(tensor_rows, num_cores)
+    return core_idx * base + min(core_idx, extra), base + (1 if core_idx < extra else 0)
+
+
+def _core_ranges(plan):
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan["rect_w"] - 1, plan["rect_h"] - 1))]
     )
-    if p.staging_bytes > L1_BUDGET:
-        raise ValueError(f"g6_untilize: staging needs {p.staging_bytes} B per core, over the {L1_BUDGET} B L1 bound")
-    return p
 
 
-def create_program_descriptor(
-    p: Plan, input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor
-) -> tuple[ttnn.ProgramDescriptor, ttnn.KernelDescriptor]:
-    """Returns the descriptor and its one kernel descriptor (the object whose common RT args a cache hit patches)."""
-    cores = ttnn.CoreRangeSet([p.core_range()])
+def describe_plan(input_tensor) -> dict:
+    """Report the plan a call on this input selects. Dispatches nothing."""
+    plan = _plan(input_tensor)
+    roles = {}
+    for y in range(plan["rect_h"]):
+        for x in range(plan["rect_w"]):
+            start, rows = _core_rows(y * plan["rect_w"] + x, plan["tensor_rows"], plan["num_cores"])
+            roles[(x, y)] = {
+                "reader": "gather_row_block",
+                "writer": "store_row_block",
+                "row_start": start,
+                "rows": rows,
+            }
+    return {
+        "regime": plan["regime"],
+        "core_ranges": _core_ranges(plan),
+        "num_cores": plan["num_cores"],
+        "block_tile_cols": plan["block_tile_cols"],
+        "buffer_depth": plan["buffer_depth"],
+        "roles": roles,
+    }
 
-    cb_row_staging = ttnn.CBDescriptor(
-        total_size=p.staging_bytes,
-        core_ranges=cores,
+
+def _build_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.ProgramDescriptor:
+    core_ranges = _core_ranges(plan)
+    tile_bytes = plan["tile_bytes"]
+
+    cb_row_block = ttnn.CBDescriptor(
+        total_size=plan["block_tile_cols"] * plan["buffer_depth"] * tile_bytes,
+        core_ranges=core_ranges,
         format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_ROW_STAGING,
-                data_format=input_tensor.dtype,
-                page_size=p.staged_row_bytes,
-            )
+            ttnn.CBFormatDescriptor(buffer_index=CB_ROW_BLOCK, data_format=input_tensor.dtype, page_size=tile_bytes)
         ],
     )
 
-    ct_args = [
-        p.x0,
-        p.y0,
-        p.cx,
-        p.num_cores,
-        p.total_rows,
-        p.H,
-        p.Ht,
-        p.W,
-        p.Wt,
-        p.elem,
-        p.block_rows,
-        p.block_tile_cols,
-        p.staging_depth,
-        1 if p.rotate_tile_order else 0,
-        input_tensor.buffer_aligned_page_size(),
-        output_tensor.buffer_aligned_page_size(),
-        CB_ROW_STAGING,
+    reader_ct_args = [
+        CB_ROW_BLOCK,
+        plan["tensor_rows"],
+        plan["num_cores"],
+        plan["rect_w"],
+        plan["rows_per_image"],
+        plan["row_elems"],
+        plan["tile_rows_per_image"],
+        plan["tensor_tile_cols"],
+        plan["block_tile_cols"],
     ]
-    ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    kernel = ttnn.KernelDescriptor(
-        kernel_source=UNTILIZE_ROWS_KERNEL,
-        core_ranges=cores,
-        compile_time_args=ct_args,
-        common_runtime_args=[input_tensor.buffer_address(), output_tensor.buffer_address()],
-        config=ttnn.DataMovementConfigDescriptor(
-            processor=ttnn.DataMovementProcessor.RISCV_0,
-            noc=ttnn.NOC.NOC_0,
-        ),
+    writer_ct_args = [
+        CB_ROW_BLOCK,
+        plan["tensor_rows"],
+        plan["num_cores"],
+        plan["rect_w"],
+        plan["row_elems"],
+        plan["tensor_tile_cols"],
+        plan["block_tile_cols"],
+    ]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(READER_KERNEL),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct_args,
+        common_runtime_args=[input_tensor.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
     )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(WRITER_KERNEL),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct_args,
+        common_runtime_args=[output_tensor.buffer_address()],
+        config=ttnn.WriterConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_row_block])
 
-    descriptor = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[cb_row_staging])
-    return descriptor, kernel
+
+READER_IDX, WRITER_IDX = 0, 1
+
+# Built once per program-shaping key; a hit only rewrites the two buffer addresses (BB-07).
+_DESCRIPTOR_CACHE: dict = {}
+
+
+def _device_key(device):
+    try:
+        return device.id()
+    except (AttributeError, TypeError):
+        return id(device)
+
+
+def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescriptor:
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    in_mc = input_tensor.memory_config()
+    key = (
+        tuple(input_tensor.shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+        in_mc.memory_layout,
+        in_mc.buffer_type,
+        _device_key(device),
+        grid.x,
+        grid.y,
+        CORE_LIMIT,
+        ROW_BLOCK_DEPTH,
+    )
+    descriptor = _DESCRIPTOR_CACHE.get(key)
+    if descriptor is None:
+        descriptor = _build_program_descriptor(input_tensor, output_tensor, _plan(input_tensor))
+        _DESCRIPTOR_CACHE[key] = descriptor
+        return descriptor
+    # Elements of descriptor.kernels alias the stored C++ descriptors, so these writes persist.
+    kernels = descriptor.kernels
+    kernels[READER_IDX].common_runtime_args[0] = input_tensor.buffer_address()
+    kernels[WRITER_IDX].common_runtime_args[0] = output_tensor.buffer_address()
+    return descriptor
