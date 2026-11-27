@@ -55,6 +55,7 @@ from diag.snapshot import (  # noqa: E402
 from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
+from diag.verdict import verdict_lines  # noqa: E402
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 
@@ -526,6 +527,8 @@ def run_diag(
     else:
         report["overall_status"] = PASS
 
+    report["verdict"] = verdict_lines(report)
+
     # Only the phases that write logs create this directory, and any of them can
     # be skipped — don't lose a completed run's report to a missing parent dir.
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -536,6 +539,10 @@ def run_diag(
     # A dry run reads nothing, so there is nothing to summarise.
     if plan.eth_summary and not dry_run:
         _print_eth_summary(report, output, logs_dir)
+    # Last, so the end of the log says what needs fixing.
+    print("  " + "─" * 70)
+    for line in report["verdict"]:
+        print(f"  {line}")
     return (0 if report["overall_status"] != FAIL else 1), report
 
 

@@ -577,6 +577,34 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
+## Captures phase
+
+Every tier reads the BMC SEL (`ipmitool sel elist`) and the kernel log since the
+run began (`journalctl -k --since`), with `sudo -n` when not root. Lines that bear
+on a lost chip or tray WARN: SEL FRB, power, voltage, AC loss and watchdog
+records; kernel AER, pciehp, link-down and driver errors, with the chips they
+mention in `parts`. Full output goes to `logs/sel.log` and
+`logs/kernel_events.log`. A read that cannot run (no ipmitool, no sudo, no BMC)
+SKIPs with one line. The phase does not gate: these lines say where to look,
+and the verdict lists them as evidence. lspci, CPLD DIAG and the firmware stack
+come from the sys-triage bundle, firmware versions from the snapshot.
+
+## Verdict
+
+The run ends with one line per WARN/FAIL check of a gating phase, then the
+final line, also stored in the report as `verdict`:
+
+```
+Fault 1: FAIL pcie_enum_count: 31/32 ... | 0000:46:00.0 (UBB2/U6) | tt-smi -glx_reset and recount; ...
+Evidence: kernel_events: ... pciehp: Slot(3): Link Down ...
+Final verdict: FAIL: 1 fault(s)
+```
+
+Each fault says what failed, where (the chips by BDF, tray and ASIC, or `host`)
+and what to do. The same check naming the same chips in several snapshots is
+one fault. `Final verdict` is `PASS`, `WARN: n warning(s)`, `FAIL: n fault(s)`,
+or `INCOMPLETE (not a fault)` when a gating phase errored and nothing failed.
+
 ## sys-triage phase
 
 The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
