@@ -132,6 +132,84 @@
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 
+// Fused BF16 backward kernels (<op>_bw_tile), dispatched as BinaryOp::<OP>_BW. To add one, include
+// its header here and list it in SFPU_BW_BF16_OPS.
+#include "llk_sfpu/ckernel_sfpu_abs_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_acos_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_asin_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_asinh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_atanh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_cosh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_elu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_erf_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_erfinv_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_exp2_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_expm1_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_hardshrink_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_hardsigmoid_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_hardswish_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_hardtanh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_leaky_relu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log10_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log1p_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log2_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_log_sigmoid_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_logit_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_multigammaln_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_reciprocal_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_relu6_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_relu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_rsqrt_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_selu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_silu_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_sinh_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_softplus_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_softshrink_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_square_bw_bf16.h"
+#include "llk_sfpu/ckernel_sfpu_tanh_bw_bf16.h"
+
+// X(BinaryOp enumerator, kernel name): calculate_<name>_bw_bf16.
+#define SFPU_BW_BF16_OPS(X)          \
+    X(ABS_BW, abs)                   \
+    X(ACOS_BW, acos)                 \
+    X(ASIN_BW, asin)                 \
+    X(ASINH_BW, asinh)               \
+    X(ATANH_BW, atanh)               \
+    X(COSH_BW, cosh)                 \
+    X(ELU_BW, elu)                   \
+    X(ERF_BW, erf)                   \
+    X(ERFINV_BW, erfinv)             \
+    X(EXP2_BW, exp2)                 \
+    X(EXPM1_BW, expm1)               \
+    X(HARDSHRINK_BW, hardshrink)     \
+    X(HARDSIGMOID_BW, hardsigmoid)   \
+    X(HARDSWISH_BW, hardswish)       \
+    X(HARDTANH_BW, hardtanh)         \
+    X(LEAKY_RELU_BW, leaky_relu)     \
+    X(LOG_BW, log)                   \
+    X(LOG10_BW, log10)               \
+    X(LOG1P_BW, log1p)               \
+    X(LOG2_BW, log2)                 \
+    X(LOG_SIGMOID_BW, log_sigmoid)   \
+    X(LOGIT_BW, logit)               \
+    X(MULTIGAMMALN_BW, multigammaln) \
+    X(RECIPROCAL_BW, reciprocal)     \
+    X(RELU_BW, relu)                 \
+    X(RELU6_BW, relu6)               \
+    X(RSQRT_BW, rsqrt)               \
+    X(SELU_BW, selu)                 \
+    X(SIGMOID_BW, sigmoid)           \
+    X(SILU_BW, silu)                 \
+    X(SINH_BW, sinh)                 \
+    X(SOFTPLUS_BW, softplus)         \
+    X(SOFTSHRINK_BW, softshrink)     \
+    X(SQRT_BW, sqrt)                 \
+    X(SQUARE_BW, square)             \
+    X(TANH_BW, tanh)
+
 // Ternary SFPU op headers (consumed by the ternary dispatchers below).
 // To add a new Quasar ternary SFPU op:
 // 1. Include its ckernel header below.
@@ -1727,6 +1805,13 @@ constexpr bool quasar_binary_op_is_max_min(ckernel::BinaryOp op)
     return op == ckernel::BinaryOp::MAX || op == ckernel::BinaryOp::MIN;
 }
 
+constexpr bool quasar_binary_op_is_bw_bf16(ckernel::BinaryOp op)
+{
+#define SFPU_BW_BF16_MATCH(ENUM, NAME) op == ckernel::BinaryOp::ENUM ||
+    return SFPU_BW_BF16_OPS(SFPU_BW_BF16_MATCH) false;
+#undef SFPU_BW_BF16_MATCH
+}
+
 constexpr bool quasar_binary_op_is_quant(ckernel::BinaryOp op)
 {
     return op == ckernel::BinaryOp::QUANT || op == ckernel::BinaryOp::REQUANT || op == ckernel::BinaryOp::DEQUANT;
@@ -1957,6 +2042,11 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
         SFPU_BINARY_INIT_FN_NO_ARGS(bitwise_and, sfpu::binary_bitwise_init);
     }
     // RSHFT / LSHFT / LOGICAL_RSHFT need no init beyond the shared SFPU one.
+    else if constexpr (OP == BinaryOp::ERF_BW)
+    {
+        // erf_bw_tile_init's kernel step (the other <op>_bw_tile_init need only the shared SFPU init).
+        init_erf_bw_bf16();
+    }
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
     {
         // logsigmoid_tile_init: loads the polynomial tail d6..d8 into vConstFloatPrgm0..2.
@@ -2703,6 +2793,27 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         // after it (dst_reg[32]), and write in place, so position Dest at src0_tile.
         LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "Mask requires adjacent inputs and an in-place output");
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_int_mask, (APPROXIMATION_MODE, ITERATIONS), src0_tile, VectorMode::RC);
+    }
+    else if constexpr (quasar_binary_op_is_bw_bf16(OP))
+    {
+        // The Compute API's <op>_bw_tile(idst): one call per tile (VectorMode::None) reads x from
+        // tile idst and grad from the tile after it (dst_reg[32 + d]) and writes grad * f'(x) over
+        // x, so the fuser's ITERATIONS and vector_mode do not apply. <op>_bw_tile_init is the
+        // generator's _llk_math_eltwise_sfpu_init_ alone.
+        static_assert(!is_fp32_dest_acc_en, "The fused backward kernels evaluate a BF16 Dest");
+        LLK_ASSERT(dst_tile == src0_tile && src1_tile == src0_tile + 1, "bw: x at src0, grad at src0 + 1, result in place");
+        LLK_ASSERT(
+            (src1_tile < trisc::get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, trisc::DstTileShape::Tile32x32>()), "bw: grad tile exceeds max dest tiles");
+#define SFPU_BW_BF16_CALL(ENUM, NAME)                                                                                                 \
+    if constexpr (OP == BinaryOp::ENUM)                                                                                               \
+    {                                                                                                                                 \
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_##NAME##_bw_bf16, (32 /*ITERATIONS*/), src0_tile, VectorMode::None); \
+    }                                                                                                                                 \
+    else
+        SFPU_BW_BF16_OPS(SFPU_BW_BF16_CALL)
+        {
+        }
+#undef SFPU_BW_BF16_CALL
     }
     else if constexpr (OP == BinaryOp::LOGSIGMOID)
     {

@@ -4294,6 +4294,78 @@ RESHUFFLE_ROWS_FUSER_MASK = [
 ]
 
 
+def _multigammaln_p4(x):
+    # torch.mvlgamma(x, p=4) spelled out: it raises for x <= (p - 1) / 2, so the stimuli stay above 1.5.
+    terms = sum(torch.special.gammaln(x - i / 2) for i in range(4))
+    return terms + 3.0 * math.log(math.pi)
+
+
+# The fused BF16 backward kernels (<op>_bw_tile) at the parameters TT-NN fits them to: the
+# golden is grad * f'(x), by torch autograd in float64.
+_BW_FUNCTIONS = {
+    MathOperation.SfpuAbsBw: torch.abs,
+    MathOperation.SfpuAcosBw: torch.acos,
+    MathOperation.SfpuAsinBw: torch.asin,
+    MathOperation.SfpuAsinhBw: torch.asinh,
+    MathOperation.SfpuAtanhBw: torch.atanh,
+    MathOperation.SfpuCoshBw: torch.cosh,
+    MathOperation.SfpuEluBw: lambda x: torch.nn.functional.elu(x, alpha=1.0),
+    MathOperation.SfpuErfBw: torch.erf,
+    MathOperation.SfpuErfinvBw: torch.erfinv,
+    MathOperation.SfpuExp2Bw: torch.exp2,
+    MathOperation.SfpuExpm1Bw: torch.expm1,
+    MathOperation.SfpuHardshrinkBw: lambda x: torch.nn.functional.hardshrink(x, 0.5),
+    MathOperation.SfpuHardsigmoidBw: torch.nn.functional.hardsigmoid,
+    MathOperation.SfpuHardswishBw: torch.nn.functional.hardswish,
+    MathOperation.SfpuHardtanhBw: lambda x: torch.nn.functional.hardtanh(x, -1.0, 1.0),
+    MathOperation.SfpuLeakyReluBw: lambda x: torch.nn.functional.leaky_relu(x, 0.01),
+    MathOperation.SfpuLogBw: torch.log,
+    MathOperation.SfpuLog10Bw: torch.log10,
+    MathOperation.SfpuLog1pBw: torch.log1p,
+    MathOperation.SfpuLog2Bw: torch.log2,
+    MathOperation.SfpuLogSigmoidBw: torch.nn.functional.logsigmoid,
+    MathOperation.SfpuLogitBw: torch.logit,
+    MathOperation.SfpuMultigammalnBw: _multigammaln_p4,
+    MathOperation.SfpuReciprocalBw: torch.reciprocal,
+    MathOperation.SfpuReluBw: torch.relu,
+    MathOperation.SfpuRelu6Bw: torch.nn.functional.relu6,
+    MathOperation.SfpuRsqrtBw: torch.rsqrt,
+    MathOperation.SfpuSeluBw: torch.nn.functional.selu,
+    MathOperation.SfpuSigmoidBw: torch.sigmoid,
+    MathOperation.SfpuSiluBw: torch.nn.functional.silu,
+    MathOperation.SfpuSinhBw: torch.sinh,
+    MathOperation.SfpuSoftplusBw: lambda x: torch.nn.functional.softplus(
+        x, beta=1.0, threshold=20.0
+    ),
+    MathOperation.SfpuSoftshrinkBw: lambda x: torch.nn.functional.softshrink(x, 0.5),
+    MathOperation.SfpuSqrtBw: torch.sqrt,
+    MathOperation.SfpuSquareBw: torch.square,
+    MathOperation.SfpuTanhBw: torch.tanh,
+}
+
+
+def _bw_golden(function):
+    """grad * f'(x) for x = t1 and grad = t2, by autograd in float64.
+
+    The kernels round the fp32 product to bf16 once and flush a result below the smallest
+    normal to zero; returning fp32 leaves the caller's bf16 cast as that rounding.
+    """
+
+    def golden(t1, t2):
+        x = t1.to(torch.float64).detach().requires_grad_()
+        with torch.enable_grad():
+            function(x).backward(t2.to(torch.float64))
+        result = x.grad
+        result = torch.where(
+            result.abs() < torch.finfo(torch.float32).tiny,
+            torch.zeros_like(result),
+            result,
+        )
+        return result.to(torch.float32)
+
+    return golden
+
+
 @register_golden
 class BinarySFPUGolden(EltwiseBinaryGolden):
     # Atan2, pow, logaddexp/logaddexp2, fmod, and remainder stay scalar to preserve rounding and overflow behavior.
@@ -4338,10 +4410,14 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             MathOperation.SfpuMaxUint32,
             MathOperation.SfpuMinUint32,
         }
+        | _BW_FUNCTIONS.keys()
     )
 
     def __init__(self):
         super().__init__()
+        self.ops.update(
+            {op: _bw_golden(function) for op, function in _BW_FUNCTIONS.items()}
+        )
         self.ops.update(
             {
                 MathOperation.SfpuElwadd: self._add,
