@@ -26,6 +26,7 @@ sys.path.insert(0, str(SUITE_DIR))
 from diag import eth_status  # noqa: E402
 from diag.eth_status import (  # noqa: E402
     judge_eth_status,
+    name_parts,
     parse_chip_bdfs,
     parse_eth_links,
     parse_triage_tables,
@@ -35,7 +36,7 @@ from diag.eth_status import (  # noqa: E402
     sysfs_chip_bdfs,
 )
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
-from diag.galaxy import UBB_ETH_PORTS, expected_bdf  # noqa: E402
+from diag.galaxy import UBB_ETH_PORTS, expected_bdf, format_link_end  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 
 ETH_HEADER = (
@@ -149,6 +150,19 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(len(parse_eth_links(parse_triage_tables(text))), len(galaxy_rows()))
 
 
+class TestNaming(unittest.TestCase):
+    def test_link_end(self):
+        self.assertEqual(format_link_end("0000:45:00.0", 2), "0000:45:00.0 (UBB2/U5) ch2, QSFP-DD port 1")
+        self.assertEqual(format_link_end("0000:07:00.0", 2), "0000:07:00.0 (UBB1/U7) ch2, TRACE port 10")
+        self.assertEqual(format_link_end("0000:45:00.0", 11), "0000:45:00.0 (UBB2/U5) ch11")
+        self.assertEqual(format_link_end("0000:2a:00.0", 0), "0000:2a:00.0 ch0")
+
+    def test_parts_from_findings(self):
+        c = Check(name="x", status=FAIL, data={"findings": [{"text": "0000:46:00.0 (UBB2/U6) ch1: down"}] * 2})
+        self.assertEqual(name_parts(c).parts, ["0000:46:00.0 (UBB2/U6)"])
+        self.assertEqual(name_parts(Check(name="x", status=PASS)).parts, [])
+
+
 class TestHealthy(unittest.TestCase):
     def test_xy_torus_passes_and_is_named(self):
         checks = judge(galaxy_rows(), galaxy_rows())
@@ -179,13 +193,15 @@ class TestLinkFaults(unittest.TestCase):
         rows = galaxy_rows(overrides={(1, 5, 0): {"Link": "Down"}})
         c = judge(rows, rows)["eth_status_links_down"]
         self.assertEqual(c.status, FAIL)
-        self.assertIn(f"UBB1/U5 ch0 (TRACE P1, dev {CHIP_OF[1, 5]}): link down", c.details)
+        self.assertIn("0000:05:00.0 (UBB1/U5) ch0, TRACE port 1: link down", c.details)
+        self.assertEqual(c.parts, ["0000:05:00.0 (UBB1/U5)"])
 
     def test_link_gone_between_the_reads(self):
         c = judge(galaxy_rows(), galaxy_rows(drop={(4, 8, 2)}))["eth_status_links_down"]
         self.assertEqual(c.status, FAIL)
-        self.assertIn("UBB4/U8 ch2 (TRACE P16", c.details)
+        self.assertIn("0000:88:00.0 (UBB4/U8) ch2, TRACE port 16", c.details)
         self.assertIn("gone between the reads", c.details)
+        self.assertEqual(c.parts, ["0000:88:00.0 (UBB4/U8)"])
 
     def test_unreadable_core(self):
         rows = galaxy_rows(overrides={(3, 1, 4): {"Port Status": "Unreadable", "Link": "Unreadable"}})
@@ -257,7 +273,7 @@ class TestTopology(unittest.TestCase):
         checks = judge(rows, rows)
         c = checks["eth_status_builtin_links"]
         self.assertEqual(c.status, FAIL)
-        self.assertIn("UBB2 TRACE P1: U5 ch0 (on-board trace, nothing to reseat)", c.details)
+        self.assertIn("UBB2 TRACE port 1: U5 ch0 (on-board trace, nothing to reseat)", c.details)
         # A link that never came up is not listed, so it is not "down".
         self.assertEqual(checks["eth_status_links_down"].status, PASS)
 
@@ -269,7 +285,7 @@ class TestTopology(unittest.TestCase):
         rows = galaxy_rows(drop={(3, 2, 1)})
         checks = judge(rows, rows)
         self.assertEqual(checks["eth_status_cable_lanes"].status, FAIL)
-        self.assertIn("UBB3 QSFP P4: 1 of 2 lanes", checks["eth_status_cable_lanes"].details)
+        self.assertIn("UBB3 QSFP-DD port 4: 1 of 2 lanes", checks["eth_status_cable_lanes"].details)
         self.assertEqual(checks["eth_status_cable_trays_alike"].status, PASS)
         self.assertIn("not linked alike on every UBB", checks["eth_status_cabling"].details)
 
@@ -277,7 +293,7 @@ class TestTopology(unittest.TestCase):
         rows = galaxy_rows(only_on={7: (1, 2, 3)})
         c = judge(rows, rows)["eth_status_cable_trays_alike"]
         self.assertEqual(c.status, WARN)
-        self.assertIn("QSFP P7: linked on UBB1, UBB2, UBB3, not on UBB4", c.details)
+        self.assertIn("QSFP-DD port 7: linked on UBB1, UBB2, UBB3, not on UBB4", c.details)
 
     def test_missing_chip_leaves_topology_unjudged(self):
         checks = judge(galaxy_rows(), galaxy_rows(), chips_on_pcie=31)
@@ -322,6 +338,7 @@ class TestPcieGate(unittest.TestCase):
         self.assertEqual(gate.status, FAIL)
         self.assertIn("0000:46:00.0 (UBB2/U6) not answering", gate.details)
         self.assertIn("0000:c3:00.0 (UBB3/U3) memory decoding off (Command=0x0004)", gate.details)
+        self.assertEqual(name_parts(gate).parts, ["0000:46:00.0 (UBB2/U6)", "0000:c3:00.0 (UBB3/U3)"])
 
     def test_unreadable_config_is_kept_and_stops_the_read(self):
         for how in ("short", "error"):
@@ -406,7 +423,7 @@ class TestRunEthStatus(unittest.TestCase):
         self.assertEqual(checks["eth_status_read"].status, PASS, checks["eth_status_read"].details)
         self.assertEqual(checks["eth_status_read"].data["chips_mapped_by"], "device_info")
         self.assertEqual(checks["eth_status_retrains"].status, FAIL)
-        self.assertIn("UBB2/U4 ch6 (TRACE P20", checks["eth_status_retrains"].details)
+        self.assertIn("0000:44:00.0 (UBB2/U4) ch6, TRACE port 20", checks["eth_status_retrains"].details)
         self.assertEqual(checks["eth_status_builtin_links"].status, PASS)
         self.assertTrue((self.logs / "eth_status_read_1.csv").is_file())
         self.assertTrue((self.logs / "eth_status_read_2.log").is_file())
@@ -501,7 +518,7 @@ class TestSummary(unittest.TestCase):
         rows = galaxy_rows(overrides={(1, 7, 2): {"Retrain Count": "5"}})
         text = judged_report(rows)
         self.assertIn("VERDICT: WARNING - nothing proven broken, worth a look (1 found)", text)
-        self.assertIn(f"- UBB1/U7 ch2 (TRACE P10, dev {CHIP_OF[1, 7]}): 5 retrains since the last reset", text)
+        self.assertIn("- 0000:07:00.0 (UBB1/U7) ch2, TRACE port 10: 5 retrains since the last reset", text)
         self.assertRegex(text, r"retrains since last reset\s+1 link\(s\) at >= 3\s+< 3 per link\s+\*\* WARNING \*\*")
 
     def test_problems_first_then_warnings(self):

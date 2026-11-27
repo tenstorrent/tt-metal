@@ -38,7 +38,17 @@ from pathlib import Path
 from typing import Sequence
 
 from .common import emit_result, emit_running, log, run_with_timeout, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT, QSFP_PORT_IDS, UBB_ETH_PORT_OF, UBB_ETH_PORTS, format_bdf, parse_bdf_physical
+from .galaxy import (
+    BDF_RE,
+    EXPECTED_CHIP_COUNT,
+    QSFP_PORT_IDS,
+    UBB_ETH_PORT_OF,
+    UBB_ETH_PORTS,
+    format_bdf,
+    format_link_end,
+    format_port,
+    parse_bdf_physical,
+)
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 TRIAGE_SCRIPT = "tools/triage/triage.py"
@@ -387,19 +397,20 @@ def _ubbs(trays: Sequence[int]) -> str:
     return ", ".join(f"UBB{t}" for t in sorted(trays))
 
 
-def _port_name(ptype: str, pid: int) -> str:
-    return f"{'QSFP' if ptype == 'QSFP_DD' else ptype} P{pid}"
-
-
 def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
-    """'UBB2/U6 ch4 (TRACE P9, dev 13)', or 'dev 13 ch4' when the chip's place is not known."""
-    ch = "" if channel is None else f" ch{channel}"
-    pos = parse_bdf_physical(chip_bdfs.get(dev, ""))
-    if pos is None:
-        return f"dev {dev}{ch}"
-    tray, asic = pos
-    port = UBB_ETH_PORT_OF.get((asic, channel)) if channel is not None else None
-    return f"UBB{tray}/U{asic}{ch} ({f'{_port_name(*port)}, ' if port else ''}dev {dev})"
+    """'0000:46:00.0 (UBB2/U6) ch4, QSFP-DD port 5', or 'dev 13 ch4' when the chip's BDF is not known."""
+    bdf = chip_bdfs.get(dev)
+    if bdf is None:
+        return f"dev {dev}" + ("" if channel is None else f" ch{channel}")
+    return format_bdf(bdf) if channel is None else format_link_end(bdf, channel)
+
+
+def name_parts(check: Check) -> Check:
+    """Name the chips a check's findings point at in ``check.parts``, so the
+    verdict and the CSV can say which chip to look at."""
+    texts = [f["text"] for f in check.data.get("findings", [])]
+    check.parts = list(dict.fromkeys(format_bdf(b) for t in texts for b in BDF_RE.findall(t)))
+    return check
 
 
 def _link_state_checks(
@@ -714,7 +725,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
         for tray in range(1, 5):
             off = [(asic, ch) for asic, ch in lanes if (slot[tray, asic], ch) not in linked]
             lanes_txt = ", ".join(f"U{asic} ch{ch}" for asic, ch in off)
-            port = f"UBB{tray} {_port_name(ptype, pid)}"
+            port = f"UBB{tray} {format_port(ptype, pid)}"
             if ptype == "QSFP_DD":
                 qsfp_lanes.setdefault(pid, {})[tray] = len(lanes) - len(off)
                 if 0 < len(off) < len(lanes):
@@ -737,7 +748,7 @@ def _topology_checks(now: dict[tuple[int, str], EthLink], chip_bdfs: dict[int, s
         full = [t for t, k in qsfp_lanes[pid].items() if k == n]
         none = [t for t, k in qsfp_lanes[pid].items() if k == 0]
         if full and none:
-            uneven.append(f"QSFP P{pid}: linked on {_ubbs(full)}, not on {_ubbs(none)}")
+            uneven.append(f"{format_port('QSFP_DD', pid)}: linked on {_ubbs(full)}, not on {_ubbs(none)}")
     even = tuple(p for p in QSFP_PORT_IDS if all(k == len(UBB_ETH_PORTS["QSFP_DD", p]) for k in qsfp_lanes[p].values()))
 
     on_cables = sum(sum(per_tray.values()) for per_tray in qsfp_lanes.values())
@@ -845,11 +856,12 @@ def judge_eth_status(
     def where(l: EthLink) -> str:
         return _where(l.dev, l.channel, chip_bdfs)
 
-    return (
+    checks = (
         _link_state_checks(now, before, where)
         + _counter_checks(now, before, interval_s, where)
         + _topology_checks(now, chip_bdfs, chips_on_pcie)
     )
+    return [name_parts(c) for c in checks]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -972,7 +984,7 @@ def run_eth_status(
         return
 
     functions = read_pcie_functions(sys_root)
-    gate = pcie_gate_check(functions)
+    gate = name_parts(pcie_gate_check(functions))
     phase.add(gate)
     if gate.status != PASS:
         reason = {

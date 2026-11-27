@@ -265,11 +265,11 @@ def _worst_links(fec: dict | None) -> list[str]:
     lines = [
         "",
         "  WORST LINKS (by uncorrected FEC errors)",
-        f"    {'link':<34} {'uncorr/s':>9} {'crc/s':>8} {'uncorr total':>13} {'retrains':>9}  ERR_STAT",
+        f"    {'link':<44} {'uncorr/s':>9} {'crc/s':>8} {'uncorr total':>13} {'retrains':>9}  ERR_STAT",
     ]
     for w in worst:
         lines.append(
-            f"    {w.get('link', ''):<34} {rate(w.get('uncorr_per_s')):>9} {rate(w.get('crc_per_s')):>8} "
+            f"    {w.get('link', ''):<44} {rate(w.get('uncorr_per_s')):>9} {rate(w.get('crc_per_s')):>8} "
             f"{w.get('uncorr_total') or 0:>13,} {w.get('retrains') or 0:>9}  0x{w.get('err_stat') or 0:x}"
         )
     return lines

@@ -205,7 +205,7 @@ def _recommend_fw_init_failed(analysis: LogAnalysis) -> list[str]:
     """Generate recommendations for firmware initialization failures."""
     return [
         f"{Colors.RED}• Firmware initialization failed.{Colors.NC}",
-        "• Reset boards with: tt-smi -r",
+        "• Reset boards with: tt-smi -glx_reset",
         "• Wait 30 seconds and retry fabric test.",
         "• If issue persists after reset, escalate to SYSENG.",
     ]
@@ -217,7 +217,7 @@ def _recommend_fabric_router_sync_timeout(analysis: LogAnalysis) -> list[str]:
     return [
         f"{Colors.RED}• Fabric Router Sync timeout detected.{Colors.NC}",
         "• Check fabric connectivity and router status.",
-        "• Try reset with: tt-smi -r",
+        "• Try reset with: tt-smi -glx_reset",
         "• Escalate to SYSENG if issue persists.",
     ]
 
@@ -241,7 +241,7 @@ def _recommend_noc_conflict(analysis: LogAnalysis) -> list[str]:
         f"{Colors.RED}• NOC address conflict detected.{Colors.NC}",
         "• UMD detected mismatch between expected and actual NOC addresses.",
         "• This typically indicates memory mapping or firmware issue.",
-        "• Try resetting boards with: tt-smi -r",
+        "• Try resetting boards with: tt-smi -glx_reset",
         "• If issue persists, escalate to SYSENG - may require firmware update.",
     ]
 
@@ -253,7 +253,7 @@ def _recommend_ethernet_core_timeout(analysis: LogAnalysis) -> list[str]:
         f"{Colors.RED}• Ethernet core activation timeout detected.{Colors.NC}",
         "• One or more ethernet cores failed to become active.",
         "• This indicates a hardware or firmware issue with ethernet cores.",
-        "• Reset boards with: tt-smi -r",
+        "• Reset boards with: tt-smi -glx_reset",
         "• Wait 30 seconds and retry fabric test.",
         "• If issue persists, escalate to SYSENG - board may need replacement.",
     ]

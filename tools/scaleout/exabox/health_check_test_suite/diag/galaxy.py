@@ -22,6 +22,10 @@ def expected_bdf(tray: int, asic_loc: int) -> str:
     return f"0000:{TRAY_TO_UBB_NIBBLE[tray]:x}{asic_loc:x}:00.0"
 
 
+# A PCIe BDF in free text, e.g. a check's findings.
+BDF_RE = re.compile(r"\b[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\b", re.IGNORECASE)
+
+
 def parse_bdf_physical(bdf: str) -> tuple[int, int] | None:
     """Parse a BDF '0000:XY:00.0' into (tray, asic_loc). None if unparseable."""
     m = re.match(r"^[0-9a-f]+:([0-9a-f])([0-9a-f]):", bdf or "", re.IGNORECASE)
@@ -136,6 +140,19 @@ UBB_ETH_PORT_OF: dict[tuple[int, int], tuple[str, int]] = {
     lane: port for port, lanes in UBB_ETH_PORTS.items() for lane in lanes
 }
 QSFP_PORT_IDS: tuple[int, ...] = tuple(sorted(pid for ptype, pid in UBB_ETH_PORTS if ptype == "QSFP_DD"))
+
+
+def format_port(ptype: str, pid: int) -> str:
+    """('QSFP_DD', 5) -> 'QSFP-DD port 5'; ('TRACE', 9) -> 'TRACE port 9'."""
+    return f"{'QSFP-DD' if ptype == 'QSFP_DD' else ptype} port {pid}"
+
+
+def format_link_end(bdf: str, channel: int) -> str:
+    """One end of an ETH link: '0000:46:00.0 (UBB2/U6) ch4, QSFP-DD port 5'.
+    The port is left out when the chip's place or the channel's wiring is not known."""
+    pos = parse_bdf_physical(bdf)
+    port = UBB_ETH_PORT_OF.get((pos[1], channel)) if pos else None
+    return f"{format_bdf(bdf)} ch{channel}" + (f", {format_port(*port)}" if port else "")
 
 # BH Galaxy board ID prefixes → hardware revision.
 # board_id source: tt-smi -s `device_info[].board_info.board_id` (hex string).
