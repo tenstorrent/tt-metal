@@ -9,6 +9,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#if !defined(ARCH_QUASAR)
+// ckernel.h is unusable from a Quasar DM build and Quasar has no load_blocking.
+#include "ckernel.h"
+#endif
 
 void kernel_main() {
     const uint32_t num_unpadded_W = get_arg(args::num_unpadded_W);
@@ -38,6 +42,14 @@ void kernel_main() {
     for (uint32_t z = 0; z < num_elems; z++) {
         pad_buffer[z] = pad_value;
     }
+    // The NoC writes below source the words just stored, so the stores must reach L1 first.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    flush_l2_cache_range(static_cast<uintptr_t>(pad_buffer_l1_addr), static_cast<size_t>(tile_size));
+#else
+    (void)ckernel::load_blocking(
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_buffer_l1_addr) +
+        (tile_size + sizeof(uint32_t) - 1) / sizeof(uint32_t) - 1);
+#endif
 
     uint32_t src_tile_id = 0;
     uint32_t dst_tile_id = 0;
