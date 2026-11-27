@@ -1,0 +1,109 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# Schema for the LLK contract (JSON Schema, written as YAML).
+$schema: "https://json-schema.org/draft/2020-12/schema"
+title: LLK contract
+type: object
+required: [contract, state, operations]
+additionalProperties: false
+
+$defs:
+  reg_names:
+    oneOf:
+      - {type: string, pattern: "^[A-Z][A-Za-z0-9_]*$"}
+      - {type: array, items: {type: string, pattern: "^[A-Z][A-Za-z0-9_]*$"}}
+  field_ref:                   # unit.Field or unit.Field[index]; index: an operand (in0, in1, out) or an instance
+    type: string
+    pattern: "^(unpack|math|pack)\\.[A-Za-z][A-Za-z0-9_]*(\\[[A-Za-z0-9_]+\\])?$"
+  value:
+    type: [string, integer, boolean]
+  field_values:
+    type: object
+    propertyNames: {$ref: "#/$defs/field_ref"}
+    additionalProperties: {$ref: "#/$defs/value"}
+  field_list:
+    type: array
+    items: {$ref: "#/$defs/field_ref"}
+  entry:                                # where it is in the code: llk_bindings.yaml
+    type: object
+    required: [requires, ensures]
+    additionalProperties: false
+    properties:
+      requires: {$ref: "#/$defs/field_values"}
+      ensures: {$ref: "#/$defs/field_values"}
+      may_change: {$ref: "#/$defs/field_list"}
+      why:                                # reason for a requires/ensures item, keyed by the item's field
+        type: object
+        propertyNames: {$ref: "#/$defs/field_ref"}
+        additionalProperties: {type: string}
+  field:
+    type: object
+    additionalProperties: false
+    properties:
+      software: {type: boolean}           # a variable in the LLK, not hardware
+      thread: {enum: [unpack, math, pack]}  # the thread that writes it, when not its unit's own
+      meaning: {type: string}
+      instances:                          # for a field that exists once per slot (e.g. ADDR_MOD 0-7)
+        type: array
+        items: {type: string, pattern: "^[A-Za-z0-9_]+$"}
+      regs:                               # cfg_defines.h names; per unpacker instance where there are two
+        oneOf:
+          - $ref: "#/$defs/reg_names"
+          - type: object
+            propertyNames: {enum: [srcA, srcB]}
+            additionalProperties: {$ref: "#/$defs/reg_names"}
+      detect:                             # for a field with no register: a regex that finds code setting it;
+        type: string                      # {n} stands for the digits of the instance name
+
+properties:
+  contract:
+    type: object
+    required: [name, version, arch]
+  state:
+    type: object
+    propertyNames: {enum: [unpack, math, pack]}
+    additionalProperties:
+      type: object
+      propertyNames: {pattern: "^[A-Za-z][A-Za-z0-9_]*$"}
+      additionalProperties: {$ref: "#/$defs/field"}
+  invariants:
+    type: array
+    items:
+      type: object
+      required: [id, fields, holds]
+      additionalProperties: false
+      properties:
+        id: {type: string, pattern: "^INV-[A-Z0-9-]+$"}
+        fields: {type: array, minItems: 2, items: {$ref: "#/$defs/field_ref"}}
+        holds: {type: string}
+        source: {type: string}
+  kernel_start:
+    type: object
+    additionalProperties: false
+    properties:
+      assumes: {$ref: "#/$defs/field_values"}
+      notes: {type: array, items: {type: string}}
+  operations:
+    type: object
+    additionalProperties:
+      type: object
+      additionalProperties: false
+      properties:
+        description: {type: string}
+        operands:
+          type: object
+          propertyNames: {enum: [in0, in1, out]}
+          additionalProperties:
+            type: object
+            additionalProperties: false
+            properties:
+              unpacker: {enum: [srcA, srcB]}
+              layout: {enum: [tiled, row_major]}
+        supports: {type: object}
+        open: {type: array, items: {type: string}}
+        hw_configure: {$ref: "#/$defs/entry"}
+        reconfigure: {$ref: "#/$defs/entry"}
+        init: {$ref: "#/$defs/entry"}
+        execute: {$ref: "#/$defs/entry"}
+        uninit: {$ref: "#/$defs/entry"}

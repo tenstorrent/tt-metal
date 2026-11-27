@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+# tilize's execute right after configure, 8-bit (Int8) input. Expected: fewer requirements than for bf16:
+# the 8-bit path keeps configure's x dim and face count, and needs no unpack MOP.
+kernel: {fp32_dest_acc: false, fpu_srnd: false, pack_srnd: false, relu: 0}
+operands:                                   # what the kernel configured on each unpacker, and its output
+  srcA: {format: {l1: Int8, unpacked: Int8}, tile: {face_r_dim: 16, num_faces: 4, partial_face: false}}
+  srcB: {format: {l1: Float16_b, unpacked: Float16_b}, tile: {face_r_dim: 16, num_faces: 4, partial_face: false}}
+  out:  {format: {dest: Float16_b, l1: Float16_b},     tile: {face_r_dim: 16, num_faces: 4, partial_face: false}}
+calls:
+  - configure.hw_configure
+  - tilize.execute
