@@ -5,19 +5,22 @@
 
 IMMUTABLE SPEC: the implementer must not modify this file.
 
-g6_reshape is a pure move, so every logical output value must equal the input value at the
-same row-major linear position bit for bit (helpers.TOLERANCES is ("exact", None) for every
-dtype). The gate is bit equality of every logical value, never PCC.
+g6_reshape is a pure move: every logical output value must equal the input value at the same
+row-major linear position bit for bit (helpers.TOLERANCES is ("exact", None) for every dtype),
+so the gate is bit equality of every logical value, never PCC.
 
 Case selection (BB-22): the bfloat16 TILE production cases of feature_spec.INPUTS, each pinned
-to the regime op_design.md assigns it; the gather_general regime pinned with production
-geometries of the int32 / float32 cases run in the Phase 0 dtype; the spec's rules (poisoned
-padding, special values, -1, tuple shape, cache key, round trip, validation errors); and the
-multi-block / staging-flush path, reached on production shapes by turning the knobs that
-op_design.md names in g6_reshape_program_descriptor.
+to the regime op_design.md assigns it; gather_general pinned with production geometries of the
+int32 / float32 cases run in the Phase 0 dtype; one scatter_aligned shape whose lanes write two
+halves of one DRAM granule; the spec's rules (poisoned padding, special values, -1, tuple shape,
+cache key, round trip, validation errors); and the multi-block / staging-flush / override /
+single-lane paths, reached on production shapes by turning the knobs op_design.md names in
+g6_reshape_program_descriptor.
 """
 
 from __future__ import annotations
+
+import math
 
 import pytest
 import torch
@@ -74,15 +77,21 @@ def run_and_check(x_torch: torch.Tensor, ttnn_input: ttnn.Tensor, shape):
     return got
 
 
-# Above the largest MIN_STRIPS_PER_CORE the grid-synchronization lamp measures (32), a shape
-# must spread over more than one core whatever value the lamp settles on.
-MULTI_CORE_MIN_WORK_UNITS = 64
+# With MIN_STRIPS_PER_LANE tuned as high as the grid-synchronization lamp measures (16) and two
+# lanes per core, a shape with this many strips still needs more than one core.
+MULTI_CORE_MIN_WORK_UNITS = 128
 
 
 def check_plan(ttnn_input: ttnn.Tensor, shape, expected_regime):
     plan = g6_reshape_plan(ttnn_input, shape)
     assert plan["regime"] == expected_regime, f"regime {plan['regime']!r}, design says {expected_regime!r}"
     assert plan["num_core_ranges"] <= 2, f"{plan['num_core_ranges']} core ranges (BB-17)"
+    expected_lanes = min(
+        plan["lanes_per_core"] * plan["grid_cores"],
+        math.ceil(plan["work_units"] / plan["min_strips_per_lane"]),
+    )
+    assert plan["n_lanes"] == expected_lanes, f"n_lanes {plan['n_lanes']} is not the blocking knobs' choice"
+    assert plan["n_cores"] == math.ceil(plan["n_lanes"] / plan["lanes_per_core"])
     if plan["work_units"] >= MULTI_CORE_MIN_WORK_UNITS:
         assert plan["n_cores"] > 1, f"{plan['work_units']} work units ran on one core"
     return plan
@@ -131,9 +140,9 @@ def test_production_bf16_tile(case, device):
 GENERAL_BF16_TILE = [
     ((1, 185), [1, 1, 185, 1]),  # FLUX #168 geometry: one row -> one column
     ((1, 77), [77, 1]),  # Qwen #456 geometry
-    ((1, 4096), [4096, 1]),  # Qwen #529 geometry (flagged p1), 128 output tiles
+    ((1, 4096), [4096, 1]),  # Qwen #529 geometry (flagged p1): 128 output tiles over the grid
     ((8,), [8, 1]),  # Qwen #400 geometry: rank 1 -> rank 2
-    ((8, 1), [8]),  # Qwen #399 geometry: rank 2 -> rank 1, a single output strip
+    ((8, 1), [8]),  # Qwen #399 geometry: rank 2 -> rank 1, one output strip
 ]
 
 
@@ -143,6 +152,21 @@ def test_general_bf16_tile(case, device):
     x = random_input(in_shape)
     tt_x = to_device(x, device)
     check_plan(tt_x, out_shape, GATHER_GENERAL)
+    run_and_check(x, tt_x, out_shape)
+
+
+# ---------------------------------------------------------------------------
+# scatter_aligned map-side writes of two lanes into one 64-B DRAM granule
+# ---------------------------------------------------------------------------
+
+
+def test_scatter_lanes_share_output_granule(device):
+    # Output image 1 rows 0 and 1 come from input rows 3 and 4, i.e. two different strips.
+    in_shape, out_shape = (1, 1, 30, 64), [10, 3, 64]
+    x = random_input(in_shape)
+    tt_x = to_device(x, device)
+    plan = check_plan(tt_x, out_shape, SCATTER_ALIGNED)
+    assert plan["n_lanes"] > 2
     run_and_check(x, tt_x, out_shape)
 
 
@@ -173,8 +197,12 @@ def test_poisoned_padding(case, device):
 
 @pytest.mark.parametrize(
     "case",
-    [((1, 16, 6, 256), [1, 1, 16, 1536]), ((1, 1, 16, 4608), [16, 1, 4608])],
-    ids=["gather_aligned", "scatter_aligned"],
+    [
+        ((1, 16, 6, 256), [1, 1, 16, 1536]),
+        ((1, 1, 16, 4608), [16, 1, 4608]),
+        ((1, 185), [1, 1, 185, 1]),
+    ],
+    ids=["gather_aligned", "scatter_aligned", "gather_general"],
 )
 def test_special_values(case, device):
     in_shape, out_shape = case
@@ -182,9 +210,9 @@ def test_special_values(case, device):
     flat = torch.randn(in_shape, dtype=torch.float32).to(torch.bfloat16).reshape(-1)
     flat = (flat.view(torch.int16) | 1).view(torch.bfloat16).clone()
     specials = [float("nan"), float("inf"), float("-inf"), -0.0, 9.18e-41, 3.0e38]
-    stride = flat.numel() // len(specials)
+    stride = max(flat.numel() // len(specials), 1)
     for i, v in enumerate(specials):
-        flat[i * stride] = v
+        flat[min(i * stride, flat.numel() - 1)] = v
     x = flat.reshape(in_shape)
     run_and_check(x, to_device(x, device), out_shape)
 
@@ -253,7 +281,8 @@ def test_round_trip(case, device):
 
 
 # ---------------------------------------------------------------------------
-# Multi-block cores, ring wrap and staging flushes, per regime, on production shapes
+# Knob paths on production shapes: multi-block lanes, slot reuse, staging flushes,
+# forced regimes, one lane per core
 # ---------------------------------------------------------------------------
 
 MULTI_BLOCK_CASES = [
@@ -263,17 +292,40 @@ MULTI_BLOCK_CASES = [
 ]
 
 
+@pytest.mark.parametrize("slot_depth", [1, 2], ids=["depth1", "depth2"])
 @pytest.mark.parametrize("case", MULTI_BLOCK_CASES, ids=[_id(c) for c in MULTI_BLOCK_CASES])
-def test_multi_block_knobs(case, device, monkeypatch):
+def test_multi_block_knobs(case, slot_depth, device, monkeypatch):
     in_shape, out_shape, regime = case
     monkeypatch.setattr(g6_desc, "BLOCK_SLOT_BYTES_CAP", 2048)
-    monkeypatch.setattr(g6_desc, "STAGING_GRANULES_CAP", 4)
-    monkeypatch.setattr(g6_desc, "COPY_TABLE_CAP", 4)
-    monkeypatch.setattr(g6_desc, "MIN_STRIPS_PER_CORE", 64)
+    monkeypatch.setattr(g6_desc, "STAGING_SLOTS_CAP", 4)
+    monkeypatch.setattr(g6_desc, "COPY_ENTRIES_CAP", 4)
+    monkeypatch.setattr(g6_desc, "MIN_STRIPS_PER_LANE", 64)
+    monkeypatch.setattr(g6_desc, "SLOT_DEPTH", slot_depth)
     x = random_input(in_shape)
     tt_x = to_device(x, device)
     plan = check_plan(tt_x, out_shape, regime)
-    assert plan["max_blocks_per_core"] > 1, "the knob override did not produce multi-block cores"
+    assert plan["max_blocks_per_lane"] > 1, "the knob override did not produce multi-block lanes"
+    assert plan["slot_depth"] == slot_depth
+    run_and_check(x, tt_x, out_shape)
+
+
+@pytest.mark.parametrize("regime", [GATHER_ALIGNED, SCATTER_ALIGNED, GATHER_GENERAL])
+def test_regime_override(regime, device, monkeypatch):
+    in_shape, out_shape = (1, 16, 6, 256), [1, 1, 16, 1536]
+    monkeypatch.setattr(g6_desc, "REGIME_OVERRIDE", regime)
+    x = random_input(in_shape)
+    tt_x = to_device(x, device)
+    check_plan(tt_x, out_shape, regime)
+    run_and_check(x, tt_x, out_shape)
+
+
+def test_single_lane_per_core(device, monkeypatch):
+    in_shape, out_shape = (16, 1, 5120), [1, 1, 16, 5120]
+    monkeypatch.setattr(g6_desc, "LANES_PER_CORE", 1)
+    x = random_input(in_shape)
+    tt_x = to_device(x, device)
+    plan = check_plan(tt_x, out_shape, GATHER_ALIGNED)
+    assert plan["lanes_per_core"] == 1
     run_and_check(x, tt_x, out_shape)
 
 
