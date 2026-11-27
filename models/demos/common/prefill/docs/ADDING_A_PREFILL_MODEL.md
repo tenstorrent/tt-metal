@@ -62,6 +62,8 @@ class MyModelAdapter(PrefillModelAdapter):
                                # it, a forward of several chunks runs prefill_chunk once per chunk.
     passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Unless
                                # supports_packed_forward_indexer_indices, the runner refuses F > 1 across ranks.
+    supports_media: bool = False  # does the first rank's runtime splice media embeddings (section 2.2)? Without
+                               # it, the runner refuses PREFILL_MEDIA_MAX_REFS > 0.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -285,6 +287,25 @@ forward then carries every chunk's MTP lookahead, chunk by chunk:
   refreshes one level geometry per chunk position before each replay
   (an empty chunk provides every level). The MTP region is captured twice: "generate", replayed when any chunk
   generates a level, and "provided", when none does.
+
+### 2.2 Media embeddings (optional)
+
+A multimodal prompt holds one placeholder token per media token (an image's patches); an encoder service stores
+each item's embedding rows in the media embedding store (`models/common/multimedia_store/`) under a 32-byte media
+key. With `PREFILL_MEDIA_MAX_REFS > 0` (the engine must use the same value) the first rank's H2D metadata continues
+after the chunk records with up to that many `prefill_chunk.MediaRef(chunk_index, start_pos, end_pos, media_key)`
+records (layout in `prefill_chunk.py`). The runner decodes and validates them (`validate_media_refs`: chunk order,
+then position order, no overlaps) and passes them to the first rank's runtime as `media_refs=`: the forward's refs
+to `prefill_forward`, or each chunk's own refs, renumbered to `chunk_index=0`, to `prefill_chunk`. It passes the
+keyword only when there are refs, and the D2D, D2H and indices records keep their sizes.
+
+Positions are absolute positions in the chunk's slot, and a ref names the whole item even when only part of it falls
+in the chunk. The runtime replaces the token embeddings at the ref's positions inside the chunk with the item's
+rows; then set `supports_media = True`. The runner refuses `PREFILL_MEDIA_MAX_REFS > 0` without it, together with
+`PREFILL_USE_TRACE=1` or `PREFILL_MTP_LEVELS > 0`, and above what one H2D socket page holds. The model-independent
+parts are `media_embedding.py` (which chip supplies each row, in the forward's chip-major order) and
+`media_splice.py` (the per-chip image table and the `embedding` + `where` splice); MiniMax-M3's
+`tt/tt_prefill_runtime.py` wires them in.
 
 ---
 
