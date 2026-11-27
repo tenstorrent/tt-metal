@@ -43,9 +43,10 @@ bool fabric_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
 // directions differ (else the topology was misread, e.g. a line taken for a ring), and the fabric's first hop from
 // every chip to every other is one of them (the kernels send each requester's rows on that hop's channel).
 //
-// Computed once per (mesh device, fabric config, num_links) and cached for the process, so the support check, the
-// op's validation and every chip's program read the same routes. Mesh device ids are never reused, so a closed mesh's
-// entry is never served to another.
+// Computed once per (mesh device, mesh view, fabric config, num_links) and cached for the process, so the support
+// check, the op's validation and every chip's program read the same routes. Mesh device ids are never reused, so a
+// closed mesh's entry is never served to another; the view is in the key since reshape() keeps the id but moves the
+// chips.
 struct FabricRoutes {
     std::vector<std::vector<FabricDirection>> chips;  // empty when problem is set
     std::string problem;

@@ -12,6 +12,7 @@
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -179,10 +180,28 @@ uint32_t FabricRoutes::max_directions() const {
 }
 
 const FabricRoutes& fabric_routes(tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t num_links) {
-    using Key = std::tuple<int, tt::tt_fabric::FabricConfig, uint32_t>;
+    // The view (shape and each position's fabric node, row-major) is part of the key: reshape() keeps the mesh id but
+    // swaps the view, which changes every chip's neighbours and routes.
+    using Key = std::tuple<
+        int,
+        tt::tt_fabric::FabricConfig,
+        uint32_t,
+        std::vector<uint32_t>,
+        std::vector<tt::tt_fabric::FabricNodeId>>;
     static ttsl::Indestructible<std::map<Key, FabricRoutes>> cache;
     static ttsl::Indestructible<std::mutex> mutex;
-    const Key key{mesh_device->id(), tt::tt_fabric::GetFabricConfig(*mesh_device), num_links};
+    const auto& shape = mesh_device->shape();
+    std::vector<tt::tt_fabric::FabricNodeId> nodes;
+    nodes.reserve(shape.mesh_size());
+    for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(shape)) {
+        nodes.push_back(mesh_device->get_fabric_node_id(coord));
+    }
+    const Key key{
+        mesh_device->id(),
+        tt::tt_fabric::GetFabricConfig(*mesh_device),
+        num_links,
+        std::vector<uint32_t>(shape.cbegin(), shape.cend()),
+        std::move(nodes)};
     std::lock_guard lock(mutex.get());
     auto it = cache.get().find(key);
     if (it == cache.get().end()) {

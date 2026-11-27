@@ -807,7 +807,11 @@ UNSUPPORTED = [
     indirect=["device_params", "mesh_device"],
 )
 def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error, expect_error):
-    mesh = _mesh(mesh_device, submesh)
+    _assert_unsupported(_mesh(mesh_device, submesh), links, error, expect_error)
+
+
+def _assert_unsupported(mesh, links, error, expect_error):
+    """The support check says no, and the op raises `error` on the host before it dispatches anything."""
     sc, page_bytes = 160, 704
     max_rows = sc * mesh.get_num_devices() * 4
     assert not ttnn.experimental.is_sparse_kv_push_supported(mesh, sc, max_rows, links)
@@ -825,3 +829,17 @@ def test_sparse_kv_push_unsupported(mesh_device, submesh, links, error, expect_e
             ready_semaphore=sems[0],
             done_semaphore=sems[1],
         )
+
+
+@galaxy
+def test_sparse_kv_push_after_reshape(mesh_device, expect_error):
+    """reshape() keeps the mesh id but moves every chip, so the routes cached for one view must not be served to
+    another: after a push on the 8x4, the 1x32 line (whose routes run off it) must be refused, and the 8x4 must push
+    again once restored."""
+    _run_pattern(mesh_device, "routing_ties", 92160, 0)
+    mesh_device.reshape(ttnn.MeshShape(1, 32))
+    try:
+        _assert_unsupported(mesh_device, 2, "cannot route on this mesh", expect_error)
+    finally:
+        mesh_device.reshape(ttnn.MeshShape(8, 4))
+    _run_pattern(mesh_device, "routing_ties", 92160, 0)
