@@ -41,7 +41,6 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 
 
-
 def _probe_sealed_planes(hidden, count: int):
     """`count` copies of the live stream standing in for a capacity probe's sealed snapshots (a first rank past layer 0).
 
@@ -53,6 +52,7 @@ def _probe_sealed_planes(hidden, count: int):
     if count == 1:
         return ttnn.clone(hidden)
     return ttnn.concat([hidden] * count, dim=1)
+
 
 class TtKimiK3Transformer(LightweightModule):
     """A slice of Kimi-K3's layers, plus the tail when this rank holds it."""
