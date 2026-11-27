@@ -5,7 +5,8 @@
 // g6_to_memory_config pull mover and bounce reader: every NoC read lands in this core's own L1.
 //   WALK_SHARD  pull_shard  read each page of the owned target shard straight into its final slot
 //   WALK_BANK   pull_bank   read each page of this core's target L1 bank stripe into its final slot
-//   WALK_BOUNCE bounce      read bounce_block_pages pages per block into cb_bounce_pages for the writer
+//   WALK_BOUNCE bounce      read bounce_block_pages pages per block into cb_bounce_pages for the writer, in
+//                           page order or in the target's storage order (bounce_order)
 // No kernel_lib helper applies: the op moves whole pages as bytes (no compute phase), and the
 // self-aimed local-copy helpers cannot read a remote source.
 
@@ -62,33 +63,66 @@ FORCE_INLINE void pull_bank(const Src& src, const Dst& dst) {
     }
 }
 
-template <typename Src>
-FORCE_INLINE void bounce_read(const Src& src, uint32_t start_page, uint32_t core_pages) {
-    for (uint32_t done = 0; done < core_pages;) {
-        const uint32_t remaining = core_pages - done;
-        const uint32_t block_pages = remaining < g6::bounce_block_pages ? remaining : g6::bounce_block_pages;
-        {
-            DeviceZoneScopedN("G6_BOUNCE_RD_WAIT_FREE");
-            // Nominal count even for the short last block: slots stay aligned to the CB ring.
-            cb_reserve_back(g6::cb_bounce_pages, g6::bounce_block_pages);
-        }
-        {
-            DeviceZoneScopedN("G6_BOUNCE_RD_ISSUE");
-            uint32_t slot = get_write_ptr(g6::cb_bounce_pages);
-            const uint32_t first = start_page + done;
-            for (uint32_t i = 0; i < block_pages; ++i) {
-#ifndef G6_ABLATE_READ
-                noc_async_read(src.get_noc_addr(first + i), slot, g6::page_size);
-#endif
-                slot += g6::page_size;
+// Fills cb_bounce_pages block by block: reserve the nominal block, read its pages, one barrier, push.
+// The nominal count is reserved and pushed even for the short last block, so slots stay aligned to the ring.
+class BounceFill {
+public:
+    explicit BounceFill(uint32_t core_pages) : left_(core_pages) {}
+
+    // CB slot of the next page; opens a block when none is open.
+    FORCE_INLINE uint32_t next_slot() {
+        if (in_block_ == 0) {
+            block_pages_ = left_ < g6::bounce_block_pages ? left_ : g6::bounce_block_pages;
+            {
+                DeviceZoneScopedN("G6_BOUNCE_RD_WAIT_FREE");
+                cb_reserve_back(g6::cb_bounce_pages, g6::bounce_block_pages);
             }
+            slot_ = get_write_ptr(g6::cb_bounce_pages);
         }
-        {
-            DeviceZoneScopedN("G6_BOUNCE_RD_DRAIN");
-            noc_async_read_barrier();
+        const uint32_t slot = slot_;
+        slot_ += g6::page_size;
+        return slot;
+    }
+
+    // Closes the block once its last read is issued.
+    FORCE_INLINE void page_issued() {
+        if (++in_block_ == block_pages_) {
+            {
+                DeviceZoneScopedN("G6_BOUNCE_RD_DRAIN");
+                noc_async_read_barrier();
+            }
+            cb_push_back(g6::cb_bounce_pages, g6::bounce_block_pages);
+            left_ -= block_pages_;
+            in_block_ = 0;
         }
-        cb_push_back(g6::cb_bounce_pages, g6::bounce_block_pages);
-        done += block_pages;
+    }
+
+private:
+    uint32_t left_;
+    uint32_t in_block_ = 0;
+    uint32_t block_pages_ = 0;
+    uint32_t slot_ = 0;
+};
+
+template <typename Src, typename Dst>
+FORCE_INLINE void bounce_read(const Src& src, const Dst& dst, uint32_t first, uint32_t core_pages, uint32_t rotation) {
+    BounceFill fill(core_pages);
+    auto read_page = [&](uint32_t page_id) {
+#ifndef G6_ABLATE_READ
+        noc_async_read(src.get_noc_addr(page_id), fill.next_slot(), g6::page_size);
+#else
+        fill.next_slot();
+#endif
+        fill.page_issued();
+    };
+    if constexpr (g6::bounce_order == g6::BOUNCE_STORAGE_ORDER) {
+        g6::for_each_storage_page(dst, first, core_pages, [&](const auto& page) { read_page(page.page_id()); });
+    } else {
+        g6::for_each_page_segment(first, core_pages, rotation, [&](uint32_t begin, uint32_t end) {
+            for (uint32_t page_id = begin; page_id < end; ++page_id) {
+                read_page(page_id);
+            }
+        });
     }
 }
 
@@ -105,6 +139,6 @@ void kernel_main() {
     } else if constexpr (g6::walk == g6::WALK_BANK) {
         pull_bank(src, dst);
     } else {
-        bounce_read(src, get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1));
+        bounce_read(src, dst, get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2));
     }
 }

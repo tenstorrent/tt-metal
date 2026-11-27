@@ -14,6 +14,7 @@ A plan depends only on placements, shapes and the device, so plan_of() and the o
 
 from __future__ import annotations
 
+import bisect
 import math
 from pathlib import Path
 
@@ -29,6 +30,14 @@ MOVERS_PER_OWNER = 1  # data-movement RISCs sharing one owner's block (1 or 2)
 # Pages per bounce NoC write: 0 = the whole run contiguous in the target (a sharded DRAM target holds a
 # shard row back to back in one bank), 1 = one write per page, N = runs capped at N pages.
 BOUNCE_WRITE_RUN_PAGES = 0
+# Bounce assignment for a sharded DRAM target: True = contiguous ranges of the target's storage order (each
+# mover writes one bank, in runs as long as its share of a shard row), False = contiguous page-id ranges.
+BOUNCE_TARGET_ORDER = False
+# Page-order bounce into a sharded target: rotate each mover's walk so mover i starts on target shard i mod the
+# shard count (bank_stagger); False = every mover starts at its first page.
+BOUNCE_BANK_STAGGER = False
+# Kernel defines of both movers; perf ablation only (G6_ABLATE_READ / G6_ABLATE_WRITE stub the transfers).
+ABLATE_DEFINES = ()
 L1_OP_BUDGET_BYTES = 1347776  # per-core L1 the model leaves the op (BB-05)
 
 CB_BOUNCE_PAGES = 0
@@ -42,6 +51,8 @@ _WALK = {
     "push_bank": WALK_BANK,
     "bounce": WALK_BOUNCE,
 }
+
+_BOUNCE_ORDER = {"page": 0, "target_storage": 1}  # g6::BOUNCE_PAGE_ORDER, g6::BOUNCE_STORAGE_ORDER
 
 _bank_cover_by_device = {}
 
@@ -89,6 +100,43 @@ def owner_cores(memory_config, n_shard_rows, n_shard_cols):
         start = grid.ranges()[0].start
         return [(start.x + c, start.y + r) for r in range(n_shard_rows) for c in range(n_shard_cols)]
     return grid_cores_row_wise(grid)[: n_shard_rows * n_shard_cols]
+
+
+def storage_slot_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w):
+    """Map the i-th page of a sharded placement's storage order to its storage slot.
+
+    Storage order is shard by shard (row-major over the shard grid), each shard's pages row-major, skipping the
+    slots of a ragged edge shard that lie past the tensor; slot = shard_id * shard_volume + slot in the shard.
+    This is the order g6::for_each_storage_page walks.
+    """
+    shard_h, shard_w, n_rows, n_cols = shard_grid(memory_config, rows_tiles, cols_tiles, tile_h, tile_w)
+    valid_cols = []
+    first_page = [0]
+    for shard in range(n_rows * n_cols):
+        row, col = divmod(shard, n_cols)
+        rows = min(shard_h, rows_tiles - row * shard_h)
+        cols = min(shard_w, cols_tiles - col * shard_w)
+        valid_cols.append(cols)
+        first_page.append(first_page[-1] + rows * cols)
+
+    def slot_of(index):
+        shard = bisect.bisect_right(first_page, index) - 1
+        row, col = divmod(index - first_page[shard], valid_cols[shard])
+        return shard * shard_h * shard_w + row * shard_w + col
+
+    return slot_of
+
+
+def target_shard_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w):
+    """Shard id of a page of a sharded placement; the returned function carries the shard count as .count."""
+    shard_h, shard_w, n_rows, n_cols = shard_grid(memory_config, rows_tiles, cols_tiles, tile_h, tile_w)
+
+    def shard_of(page):
+        row, col = divmod(page, cols_tiles)
+        return (row // shard_h) * n_cols + col // shard_w
+
+    shard_of.count = n_rows * n_cols
+    return shard_of
 
 
 def bank_cores_cover_grid(device):
@@ -148,6 +196,9 @@ def build_plan(input_tensor, memory_config):
     if fallback:
         regime = "bounce"
 
+    target_order = regime == "bounce" and BOUNCE_TARGET_ORDER and dst_sh and not dst_l1
+    bounce_order = "target_storage" if target_order else "page"
+
     full_grid = [(x, y) for y in range(grid.y) for x in range(grid.x)]
     roles = {}
     core_args = {}
@@ -172,20 +223,34 @@ def build_plan(input_tensor, memory_config):
     else:
         movers = full_grid
         kernel_cores = (0, 0, grid.x - 1, grid.y - 1)
+        if target_order:
+            first_of = storage_slot_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w)
+        else:
+            first_of = lambda page: page  # noqa: E731
+        shard_of_page = None
+        if dst_sh and not target_order and BOUNCE_BANK_STAGGER:
+            shard_of_page = target_shard_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w)
         _, _, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(grid, num_pages, row_wise=True)
+        cores = [core for group in (group_1, group_2) for core in grid_cores_row_wise(group)]
+        shares = [pages_1] * group_1.num_cores() + [pages_2] * group_2.num_cores()
+        if target_order:
+            # Consecutive storage ranges go to cores spread over the grid, so no one NoC row feeds a shard's bank.
+            n_shards = target_shard_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w).count
+            cores = [cores[i] for i in sorted(range(len(cores)), key=lambda i: (i % n_shards, i // n_shards))]
         start = 0
-        order = [(c, n) for group, n in ((group_1, pages_1), (group_2, pages_2)) for c in grid_cores_row_wise(group)]
-        if __import__("os").environ.get("G6_REVERSE"):
-            cores_rev = [c for c, _ in order][::-1]
-            order = [(cores_rev[i], n) for i, (_, n) in enumerate(order)]
-        for core, core_pages in order:
-                core_args[core] = [start, core_pages]
-                roles[core] = f"bounce [{start}, {start + core_pages})"
-                start += core_pages
+        for mover, (core, core_pages) in enumerate(zip(cores, shares)):
+            rotation = 0
+            if shard_of_page is not None:
+                lane = mover % shard_of_page.count
+                on_lane = (k for k in range(core_pages) if shard_of_page(start + k) % shard_of_page.count == lane)
+                rotation = next(on_lane, 0)
+            core_args[core] = [first_of(start), core_pages, rotation]
+            roles[core] = f"bounce [{start}, {start + core_pages})"
+            start += core_pages
         assert start == num_pages, f"bounce split covers {start} of {num_pages} pages"
         for core in full_grid:
             if core not in core_args:
-                core_args[core] = [0, 0]
+                core_args[core] = [0, 0, 0]
                 roles[core] = "idle"
         core_pages_max = pages_1
         bounce_block_pages = max(
@@ -211,6 +276,7 @@ def build_plan(input_tensor, memory_config):
         "bounce_depth": BOUNCE_DEPTH,
         "bounce_block_pages": bounce_block_pages,
         "bounce_write_run_pages": BOUNCE_WRITE_RUN_PAGES,
+        "bounce_order": bounce_order,
         "cb_bounce_pages": cb_pages,
         "l1_op_bytes": dst_share_pages * page_size + cb_pages * page_size,
     }
@@ -255,6 +321,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
             CB_BOUNCE_PAGES,
             plan["bounce_block_pages"],
             plan["bounce_write_run_pages"],
+            _BOUNCE_ORDER[plan["bounce_order"]],
         ] + accessor_args
         runtime_args = ttnn.RuntimeArgs()
         for (x, y), args in plan["core_args"].items():
@@ -267,7 +334,7 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
                 runtime_args=runtime_args,
                 common_runtime_args=common_args,
                 config=config,
-                defines=[(d, "1") for d in __import__('os').environ.get('G6_ABLATE', '').split(',') if d],
+                defines=[(define, "1") for define in ABLATE_DEFINES],
             )
         )
 

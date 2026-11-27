@@ -46,7 +46,7 @@ It lands the full config contract of the perf-flagged case (`LOOSE_CASES[0]`, Qw
 
 **Done when**: all 26 current `xfail_expected` cells (19 golden + 7 loose) pass bit-exact with exact placement, `verify_supported` reports `xpass_drift = xfail_wrong_mode = supported_fail = 0`, the updated acceptance test and the extended precision baseline are green, and Qwen 2183's device kernel duration is not regressed beyond noise (≤ ~318 µs).
 
-### [ ] Refinement 2 — Speed up the perf-flagged profile: coalesce writes into the DRAM width-sharded target
+### [x] Refinement 2 — Speed up the perf-flagged profile: coalesce writes into the DRAM width-sharded target
 
 **Type**: perf
 
@@ -72,6 +72,8 @@ Co-measure the other bf4b perf cases on the same path: p2 2184 (250 µs), p3 218
 - `push_shard`: Qwen 2071 (→ DRAM, ragged) and 2073 (→ L1 sharded);
 - `push_bank`: L1 interleaved → DRAM interleaved on Qwen 2064's input;
 - `bounce`: bf16 DRAM→DRAM interleaved (16, 128, 1536), plus bf4b Qwen 2178 / 2179 / 2182 / 2184.
+
+**Outcome**: coalesced bounce writes (`BOUNCE_WRITE_RUN_PAGES = 0`: one NoC write per run contiguous in the target, up to a 36 KB shard row) take Qwen 2183 from 325.5 µs (per-page writes, same session, median of 3; Refinement 1 recorded 313.7 µs) to 294.8 µs (1.44× the 204.8 µs roofline), still above the 276.48 µs goal and well below stock's 348.36 µs. Also 2184 261.6 → 233.0, 2179 178.6 → 157.7, 2182 67.0 → 58.8, 2178 26.3 → 25.2 µs, bit-exact; the guard set is within noise. Measured and parked (default off, live knobs): storage-order assignment `BOUNCE_TARGET_ORDER` (each mover writes one bank) is a loss, 555 µs with row-clustered movers and 375 µs with movers interleaved over shards, because NoC1 paths to a bank saturate and both halves slow down. `BOUNCE_BANK_STAGGER` measures as noise (306.8 vs 302.2 µs), and so do `bounce_depth` 3/4/8 and write caps of 8/28 pages. Bottleneck now (2183 ablation): reads alone 165 µs, writes alone 184 µs, sync floor about 1 µs, full 295–302 µs. The aggregate read rate is flat at about 165 GB/s for the whole call, so the op is DRAM-efficiency-bound on mixed 576 B reads plus coalesced writes (bf16 with 2 KB pages reaches about 515 GB/s on the same path). Next: the read side, which Refinement 3 owns: coalesce reads from the interleaved source (pages `p, p+8, …` are contiguous in one bank), then reorder in L1 to the target order. Not done here because it is outside this heading's write-side scope.
 
 ### [ ] Refinement 3 — Close the remaining gap on the flagged bf4b DRAM→DRAM profile
 
