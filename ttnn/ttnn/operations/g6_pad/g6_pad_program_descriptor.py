@@ -23,6 +23,11 @@ FACE = 16
 
 # Smallest per-core assignment; num_cores = ceil(work_units / MIN_PAGES_PER_CORE), capped by the grid.
 MIN_PAGES_PER_CORE = 1
+# extension_band: fraction (num, den) of each core's band units issued by NCRISC on NoC0; the rest
+# go out on BRISC / NoC1. (0, 1) keeps every write on the writer RISC. Two NoCs split the route
+# overlap of 110 cores writing to the DRAM banks; NoC0 writes are slower, so it takes less than half
+# (2/5 balances the two RISCs on p2-p4).
+BAND_NOC0_SHARE = (2, 5)
 # L1 the model leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
 
@@ -188,10 +193,13 @@ def _build_plan(input_tensor, highs, c_bits):
         last_row0 = TILE * (ht_in - 1)
         band = band_runs(shape[-2] - last_row0, out_shape[-2] - last_row0, es)
         per_core, roles = [], []
+        share_num, share_den = BAND_NOC0_SHARE
         for k in range(num_cores):
             start, count = _balanced(units, num_cores, k)
-            per_core.append([start, count])
-            roles.append({"core": k, "role": "band_writer", "units": count})
+            noc0_count = count * share_num // share_den
+            noc1_count = count - noc0_count
+            per_core.append([start, noc1_count, start + noc1_count, noc0_count])
+            roles.append({"core": k, "role": "band_writer", "units_noc1": noc1_count, "units_noc0": noc0_count})
         return G6PadPlan(
             regime="extension_band",
             num_cores=num_cores,
@@ -310,29 +318,34 @@ def _runtime_args(plan, per_core):
 
 def _band_descriptor(plan, input_tensor, output_tensor):
     fill_is_zero = int(plan.c_bits == 0)
-    ct_args = [CB_FILL_PAGE_WRITER, plan.es, plan.page_bytes, fill_is_zero]
-    ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
     runs = list(plan.band) + [(0, 0)] * (3 - len(plan.band))
     common_args = [output_tensor.buffer_address(), plan.c_bits, plan.ht_in, plan.wt_in, len(plan.band)]
     for off, length in runs:
         common_args += [off, length]
 
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_pad_band_writer.cpp"),
-        core_ranges=plan.core_ranges,
-        compile_time_args=ct_args,
-        runtime_args=_runtime_args(plan, plan.per_core_args),
-        common_runtime_args=common_args,
-        config=ttnn.WriterConfigDescriptor(),
-    )
-    descriptor = ttnn.ProgramDescriptor(
-        kernels=[writer],
-        semaphores=[],
-        cbs=[_cb(CB_FILL_PAGE_WRITER, 1, plan, input_tensor.dtype)],
-    )
+    accessor_ct = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+
+    def band_kernel(cb_fill_page, per_core, config):
+        return ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "g6_pad_band_writer.cpp"),
+            core_ranges=plan.core_ranges,
+            compile_time_args=[cb_fill_page, plan.es, plan.page_bytes, fill_is_zero] + list(accessor_ct),
+            runtime_args=_runtime_args(plan, per_core),
+            common_runtime_args=common_args,
+            config=config,
+        )
+
+    kernels = [band_kernel(CB_FILL_PAGE_WRITER, [a[0:2] for a in plan.per_core_args], ttnn.WriterConfigDescriptor())]
+    cbs = [_cb(CB_FILL_PAGE_WRITER, 1, plan, input_tensor.dtype)]
+    if any(a[3] > 0 for a in plan.per_core_args):
+        # Second issuer: its own fill page, since a CB has one owning kernel.
+        kernels.append(
+            band_kernel(CB_FILL_PAGE_READER, [a[2:4] for a in plan.per_core_args], ttnn.ReaderConfigDescriptor())
+        )
+        cbs.append(_cb(CB_FILL_PAGE_READER, 1, plan, input_tensor.dtype))
+    descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
     # (kernel index, tensor position in generic_op's list) of every buffer-address common arg.
-    return descriptor, [(0, 1)]
+    return descriptor, [(i, 1) for i in range(len(kernels))]
 
 
 def _new_storage_descriptor(plan, input_tensor, output_tensor):
