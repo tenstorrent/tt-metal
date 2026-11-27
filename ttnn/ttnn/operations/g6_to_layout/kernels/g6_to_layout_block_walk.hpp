@@ -47,8 +47,9 @@ FORCE_INLINE uint32_t live_rows_of(uint32_t g) {
     return min_u32(TILE_HW, Geometry::height - ht * TILE_HW);
 }
 
-// Output page of row 0 of tensor tile-row `g`: pages are contiguous across images.
-FORCE_INLINE uint32_t first_out_page_of(uint32_t g) {
+// ROW_MAJOR page of row 0 of tensor tile-row `g` (the output's in TILE -> RM, the input's in
+// RM -> TILE): pages are contiguous across images.
+FORCE_INLINE uint32_t first_row_page_of(uint32_t g) {
     const uint32_t image = g / Geometry::image_rows_tiles;
     const uint32_t ht = g - image * Geometry::image_rows_tiles;
     return image * Geometry::height + ht * TILE_HW;
@@ -65,6 +66,13 @@ struct Block {
     uint32_t col;
     uint32_t cols;
 };
+
+// Live bytes of one ROW_MAJOR row inside the block's columns; they start at byte col * 64 of the
+// page and end at the row's last live byte, so padding columns never cross the NoC.
+FORCE_INLINE uint32_t row_segment_bytes(const Block& block) {
+    const uint32_t segment_end = min_u32(Geometry::width, (block.col + block.cols) * TILE_HW) * DATUM_BYTES;
+    return segment_end - block.col * TILE_ROW_BYTES;
+}
 
 // Cuts the core's flattened tile range [begin, end) into blocks. With full-row blocks a block
 // is a run of up to block_rows_tiles whole tile-rows and a partial head/tail row is its own

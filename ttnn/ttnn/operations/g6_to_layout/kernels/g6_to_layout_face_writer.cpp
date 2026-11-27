@@ -40,7 +40,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < block.rows; ++i) {
                 const uint32_t g = block.tile_row + i;
                 const uint32_t live_rows = live_rows_of(g);
-                const uint32_t first_page = first_out_page_of(g);
+                const uint32_t first_page = first_row_page_of(g);
                 for (uint32_t r = 0; r < live_rows; ++r) {
                     const uint32_t src = slot + (r / FACE_HW) * FACE_BYTES + (r % FACE_HW) * FACE_ROW_BYTES;
                     noc_async_write(src, output.get_noc_addr(first_page + r), row_bytes);

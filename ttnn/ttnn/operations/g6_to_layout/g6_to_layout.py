@@ -5,7 +5,9 @@
 
 TILE -> ROW_MAJOR into an interleaved DRAM/L1 output: a bfloat16 input interleaved in DRAM/L1
 (regimes staged_reorder and face_direct), a bfloat8_b input interleaved (packer_untilize) or
-HEIGHT/BLOCK sharded in L1 (sharded_in_place). See g6_to_layout_program_descriptor.py.
+HEIGHT/BLOCK sharded in L1 (sharded_in_place).
+ROW_MAJOR -> TILE from a bfloat16 input interleaved in DRAM/L1: a bfloat16 output
+(row_major_to_tile) or a bfloat8_b output (packer_tilize). See g6_to_layout_program_descriptor.py.
 """
 
 from __future__ import annotations
@@ -71,8 +73,8 @@ INPUT_TAGGERS = {
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "layout": [ttnn.TILE_LAYOUT],
-    "output_dtype": [ttnn.bfloat16],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -215,6 +217,7 @@ def _plan(input_tensor, layout, out_dtype, out_memory_config):
     if cached is None:
         output_in_l1 = out_memory_config.buffer_type == ttnn.BufferType.L1
         in_memory = input_tensor.memory_config()
+        to_tile = layout == ttnn.TILE_LAYOUT
         cached = compute_plan(
             tuple(input_tensor.shape),
             grid,
@@ -224,6 +227,9 @@ def _plan(input_tensor, layout, out_dtype, out_memory_config):
             dtype=input_tensor.dtype,
             in_tile_bytes=ttnn.tile_size(input_tensor.dtype),
             shard=ShardPlacement.of(in_memory) if in_memory.shard_spec is not None else None,
+            to_tile=to_tile,
+            out_dtype=out_dtype,
+            out_tile_bytes=ttnn.tile_size(out_dtype),
         )
         _PLAN_CACHE[key] = cached
     return key, cached

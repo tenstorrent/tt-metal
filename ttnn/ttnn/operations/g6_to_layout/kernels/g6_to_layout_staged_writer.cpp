@@ -40,8 +40,7 @@ void kernel_main() {
     while (blocks.next(block)) {
         const uint32_t block_pages = tiled_stage ? moved_tile_rows<sharded>(block) * Geometry::block_cols_tiles : 1;
         const uint32_t segment_offset = block.col * TILE_ROW_BYTES;
-        const uint32_t segment_end = min_u32(Geometry::width, (block.col + block.cols) * TILE_HW) * DATUM_BYTES;
-        const uint32_t segment_bytes = segment_end - segment_offset;
+        const uint32_t segment_bytes = row_segment_bytes(block);
 
         {
             DeviceZoneScopedN("wait_row_block");
@@ -63,7 +62,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < block.rows; ++i) {
                 const uint32_t g = block.tile_row + i;
                 const uint32_t live_rows = live_rows_of(g);
-                const uint32_t first_page = first_out_page_of(g);
+                const uint32_t first_page = first_row_page_of(g);
                 uint32_t src = tile_row_src;
                 for (uint32_t r = 0; r < live_rows; ++r) {
                     noc_async_write(src, output.get_noc_addr(first_page + r, segment_offset), segment_bytes);
