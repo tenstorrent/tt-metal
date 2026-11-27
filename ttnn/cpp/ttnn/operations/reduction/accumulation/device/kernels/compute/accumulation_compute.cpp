@@ -141,18 +141,34 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; i++) {
         // Synchronize unpacker-packer between iterations
         // This is necessary to avoid data-races on the accumulator buffer
-        // TEN-4746: a bare wait_front/pop_front needs a real unpacker op between on Quasar (QSR_DUMMY_UNPACK).
+#ifdef ARCH_QUASAR
+        // Quasar: a Dest section takes its implied data format from what is unpacked into it, and an
+        // SFPU-only write (the fill below) leaves it unset, which the SFPU then rejects. Copy the
+        // stale acc/comp entries into the slots the fill overwrites so the section has a format. The
+        // copies are also the real unpacker ops TEN-4746 needs between wait_front and pop_front.
+        tile_regs_acquire();
+        reconfig_data_format(dfb::acc, dfb::acc);
+        copy_init(dfb::acc);
         dfb_acc_obj.wait_front(ONE_TILE);
-        QSR_DUMMY_UNPACK(dfb::acc);
+        ACC_COPY_TILE(dfb::acc, DST_ACC);
+        dfb_acc_obj.pop_front(ONE_TILE);
+#ifdef COMPENSATED_SUM
+        copy_init(dfb::comp);
+        dfb_comp_obj.wait_front(ONE_TILE);
+        ACC_COPY_TILE(dfb::comp, DST_COMP);
+        dfb_comp_obj.pop_front(ONE_TILE);
+#endif
+#else
+        dfb_acc_obj.wait_front(ONE_TILE);
         dfb_acc_obj.pop_front(ONE_TILE);
 #ifdef COMPENSATED_SUM
         dfb_comp_obj.wait_front(ONE_TILE);
-        QSR_DUMMY_UNPACK(dfb::comp);
         dfb_comp_obj.pop_front(ONE_TILE);
 #endif
 
         tile_regs_acquire();
         reconfig_data_format(dfb::acc, dfb::acc);
+#endif
 
         fill_tile_init();
         FILL_TILE(DST_ACC, default_acc_value);
