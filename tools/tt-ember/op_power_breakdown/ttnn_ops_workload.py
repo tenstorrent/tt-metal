@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Per-op power breakdown of a transformer block, as a tt-ember workload.
+
+tt-ember drives any executable passed as --app-exe and parses its stdout, so this is used
+unmodified: the script runs each op of a Llama-style decoder block as its own timed interval
+and prints the summary rows that parser.py's RE_PROGRAM_ROW expects.
+
+Two conventions are needed to fit that format, which only understands a compute grid:
+
+  * the grid field carries the op index as "<idx>x1", so every op is a distinct interval;
+  * the cores field also carries the op index, so tt-ember's own figures separate the points.
+
+The op names are printed as "# OP <idx> <name> ..." lines, which RE_PROGRAM_ROW does not match
+and parser.py therefore ignores. preview_op_breakdown.py reads them back out of summary.txt to
+label the breakdown. Nothing in tt-ember is changed.
+
+Batching. Telemetry samples about every 103 us, so an op call shorter than that is never
+resolved and its measured power is diluted by whatever host dispatch gap follows it -- measured
+at roughly 24% for a 41 us call, vanishing once a call spans ~10 samples. Each op is therefore
+run on a batch chosen so one call takes about --target-call-ms (capped by --max-batch and by
+device memory), which lengthens the call without changing the FLOPs per activation. The batch
+is chosen per op, since call durations across a block span more than an order of magnitude;
+--batch fixes it instead, so two boards can run identical batches. The projection weights are
+shared across the batch, so for the projection matmuls (four in legacy mode, five with the gate
+projection in updated mode) bytes per activation (and pJ/byte) do depend on the batch.
+
+LONG_MATMUL_MODE (see tools/tt-ember/README.md) selects the op list and the batch sizing:
+
+  * updated (default): the full SwiGLU block -- gate and up projections, silu(gate) * up, and
+    both residual adds, with distinct operands. Every op's batch is sized before the first
+    interval and refined from the timing at the chosen batch, so the idle gaps (where parser.py
+    measures the baseline) hold only one allocation and one warm-up call;
+  * legacy: the 12 ops the published Table 4 measured (no gate projection, no second residual
+    add; residual_add and gate_mul reuse one tensor as both operands), with the batch
+    extrapolated once from a batch-1 timing taken in the gap before each op.
+
+The workload always runs on device 0.
+"""
+import argparse
+import os
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+# common.py lives one directory up.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from common import legacy_mode  # noqa: E402
+
+if not os.environ.get("TT_METAL_HOME"):
+    sys.stderr.write(
+        "TT_METAL_HOME is not set. Export it to your tt-metal checkout and run this from a\n"
+        "shell with the tt-metal python venv active (see README.md).\n"
+    )
+    raise SystemExit(2)
+
+try:
+    import torch  # noqa: E402
+    import ttnn  # noqa: E402
+except ImportError as e:
+    sys.stderr.write(
+        f"Could not import ttnn ({e}).\n"
+        "This must run under the tt-metal python venv -- create it with ./create_venv.sh and pass\n"
+        "its activate script to auto.py as --tt-venv-activate (see README.md).\n"
+    )
+    raise SystemExit(2)
+
+
+def now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+# FLOPs per element for the non-matmul ops. Only the matmul counts (2*M*N*K) are exact; these
+# are the usual accounting conventions, stated here so the pJ/FLOP figures can be interpreted:
+#   add / multiply : 1  -- one arithmetic op per element
+#   silu           : 4  -- sigmoid (exp, add, reciprocal) plus the multiply
+#   rms_norm       : 4  -- square, accumulate, reciprocal-sqrt scale, multiply
+#   softmax        : 5  -- max, subtract, exp, accumulate, divide
+# They are conventions, not measurements. Comparing pJ/FLOP between a matmul and an
+# elementwise op therefore compares an exact figure against an approximate one.
+FLOPS_PER_ELEM = {"add": 1, "mul": 1, "silu": 4, "rms_norm": 4, "softmax": 5}
+
+# Bytes of tensor data each op logically touches: inputs read plus outputs written, at 2 bytes
+# per bfloat16 element. Unlike the FLOP conventions above this needs no assumption about what
+# the op does internally -- it follows from the shapes alone -- so pJ/byte is a normaliser that
+# does not depend on knowing the instruction mix. It is a lower bound on real traffic: it counts
+# each operand once and ignores tiling, reuse and any spill, so an op that re-reads an operand
+# moves more than this.
+BF16 = 2
+
+# Updated mode re-sizes each op's batch up to this many times from the timing at the batch.
+MAX_BATCH_REFINEMENTS = 2
+
+
+def make_tensor(device, *shape):
+    return ttnn.from_torch(torch.randn(*shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+
+def make_factories(device, seq, hidden, ffn, heads, legacy=False):
+    """One Llama-style decoder block, decomposed into the ops it is made of. legacy=True gives
+    the 12-op list of the published results (see the module docstring).
+
+    Each entry builds its tensors at a given batch and returns
+    (callable, FLOPs per call, bytes of tensor data touched per call).
+    """
+    head_dim = hidden // heads
+
+    def T(*shape):
+        return make_tensor(device, *shape)
+
+    def linear(k, n):
+        """A projection: activations [b, seq, k] times a weight [k, n] shared across the batch."""
+
+        def factory(b):
+            x, w = T(b, 1, seq, k), T(1, 1, k, n)
+            by = (b * seq * k + k * n + b * seq * n) * BF16
+            return (lambda: ttnn.matmul(x, w)), b * 2 * seq * k * n, by
+
+        return factory
+
+    def norm(b):
+        x = T(b, 1, seq, hidden)
+        n = b * seq * hidden
+        return (lambda: ttnn.rms_norm(x)), n * FLOPS_PER_ELEM["rms_norm"], 2 * n * BF16
+
+    def qk(b):
+        q, k_t = T(b, heads, seq, head_dim), T(b, heads, head_dim, seq)
+        by = (2 * b * heads * seq * head_dim + b * heads * seq * seq) * BF16
+        return (lambda: ttnn.matmul(q, k_t)), b * 2 * heads * seq * seq * head_dim, by
+
+    def smax(b):
+        sc = T(b, heads, seq, seq)
+        n = b * heads * seq * seq
+        return (lambda: ttnn.softmax(sc, dim=-1)), n * FLOPS_PER_ELEM["softmax"], 2 * n * BF16
+
+    def av(b):
+        sc, v = T(b, heads, seq, seq), T(b, heads, seq, head_dim)
+        by = (b * heads * seq * seq + 2 * b * heads * seq * head_dim) * BF16
+        return (lambda: ttnn.matmul(sc, v)), b * 2 * heads * seq * seq * head_dim, by
+
+    def res_add(b):
+        x = T(b, 1, seq, hidden)
+        y = x if legacy else T(b, 1, seq, hidden)
+        n = b * seq * hidden
+        return (lambda: ttnn.add(x, y)), n * FLOPS_PER_ELEM["add"], 3 * n * BF16
+
+    def act(b):
+        h = T(b, 1, seq, ffn)
+        n = b * seq * ffn
+        return (lambda: ttnn.silu(h)), n * FLOPS_PER_ELEM["silu"], 2 * n * BF16
+
+    def gate(b):
+        h = T(b, 1, seq, ffn)
+        g = h if legacy else T(b, 1, seq, ffn)
+        n = b * seq * ffn
+        return (lambda: ttnn.multiply(h, g)), n * FLOPS_PER_ELEM["mul"], 3 * n * BF16
+
+    qkv = linear(hidden, 3 * hidden)
+    out_proj = linear(hidden, hidden)
+    ffn_up = linear(hidden, ffn)
+    ffn_dn = linear(ffn, hidden)
+
+    if legacy:
+        return [
+            ("rms_norm_in", norm),
+            ("matmul_qkv", qkv),
+            ("attn_qk", qk),
+            ("softmax", smax),
+            ("attn_av", av),
+            ("matmul_out", out_proj),
+            ("residual_add", res_add),
+            ("rms_norm_post", norm),
+            ("matmul_ffn_up", ffn_up),
+            ("silu", act),
+            ("gate_mul", gate),
+            ("matmul_ffn_dn", ffn_dn),
+        ]
+    # The gate projection has the same shape as the up projection.
+    return [
+        ("rms_norm_in", norm),
+        ("matmul_qkv", qkv),
+        ("attn_qk", qk),
+        ("softmax", smax),
+        ("attn_av", av),
+        ("matmul_out", out_proj),
+        ("residual_add", res_add),
+        ("rms_norm_post", norm),
+        ("matmul_ffn_gate", ffn_up),
+        ("matmul_ffn_up", ffn_up),
+        ("silu", act),
+        ("gate_mul", gate),
+        ("matmul_ffn_dn", ffn_dn),
+        ("residual_add_ffn", res_add),
+    ]
+
+
+def time_call(fn, device, reps=3):
+    """Seconds per call of fn, after one warm-up call."""
+    fn()
+    ttnn.synchronize_device(device)
+    t0 = time.perf_counter()
+    for _ in range(reps):
+        fn()
+    ttnn.synchronize_device(device)
+    return (time.perf_counter() - t0) / reps
+
+
+def run_interval(fn, device, iters):
+    """Run fn iters times as one measured interval; returns (seconds, start, end)."""
+    ttnn.synchronize_device(device)
+    start = now_str()
+    t0 = time.perf_counter()
+    for _ in range(iters):
+        fn()
+    ttnn.synchronize_device(device)
+    return time.perf_counter() - t0, start, now_str()
+
+
+def emit_summary_rows(rows):
+    """Print the summary table parser.py's RE_PROGRAM_ROW reads: one row per interval,
+    (idx, iters, elapsed_s, tflops, start, end), with the op index as both grid and cores."""
+    print()
+    print(
+        f"{'Grid':>8} {'Cores':>7} {'Iters':>10} {'Time [s]':>12} {'TFLOPS':>10} "
+        f"{'Per iter [ms]':>16} {'Start Time':>27} {'End Time':>27}"
+    )
+    for idx, iters, elapsed, tflops, start, end in rows:
+        print(
+            f"{f'{idx}x1':>8} {idx:>7} {iters:>10} {elapsed:>12.6f} {tflops:>10.2f} "
+            f"{elapsed / iters * 1000.0:>16.6f} {start:>27} {end:>27}"
+        )
+    print()
+    print("Test Passed")
+
+
+def is_out_of_memory(e: Exception) -> bool:
+    text = str(e).lower()
+    return "memory" in text or "alloc" in text
+
+
+def refuse_profiler():
+    # The device profiler adds work to every kernel, and auto.py would hand its CSV to the parser,
+    # which expects long_matmul's markers. probe_op_core_grids.py is the profiler pass.
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") not in ("", "0"):
+        raise SystemExit("Unset TT_METAL_DEVICE_PROFILER for power runs; probe_op_core_grids.py is the profiler pass.")
+
+
+def size_batch(name, factory, device, args, legacy):
+    """Pick an op's batch. Returns (batch, seconds per call at that batch, seconds per call at
+    batch 1). --batch fixes the batch (an op it does not fit is an error, not a smaller batch)."""
+    fn1, _, _ = factory(1)
+    t1 = time_call(fn1, device)
+    del fn1
+    target_s = args.target_call_ms / 1000.0
+    batch = args.batch or max(1, min(args.max_batch, int(round(target_s / t1))))
+    refinements = 0 if (legacy or args.batch) else MAX_BATCH_REFINEMENTS
+    last_ok = None  # (batch, seconds per call) of the largest batch known to fit
+    while True:
+        fn = None
+        try:
+            fn, _, _ = factory(batch)
+            per_call = time_call(fn, device)
+        except Exception as e:
+            fn = None  # free this batch's tensors before allocating another
+            if not is_out_of_memory(e):
+                raise
+            if args.batch:
+                raise SystemExit(f"{name}: --batch {args.batch} does not fit in device memory") from e
+            if last_ok is not None:
+                # A refined batch did not fit: keep the last one that did, and stop refining.
+                batch, per_call = last_ok
+                print(f"# NOTE {name}: refined batch does not fit, keeping batch={batch}", flush=True)
+                break
+            if batch == 1:
+                raise
+            batch = max(1, batch // 2)
+            print(f"# NOTE {name}: retrying at batch={batch} ({str(e)[:60]})", flush=True)
+            continue
+        del fn
+        last_ok = (batch, per_call)
+        better = max(1, min(args.max_batch, int(round(batch * target_s / per_call))))
+        if refinements == 0 or better == batch:
+            break
+        refinements -= 1
+        batch = better
+    return batch, per_call, t1
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--seq", type=int, default=1024)
+    ap.add_argument("--hidden", type=int, default=2048)
+    ap.add_argument("--ffn", type=int, default=8192)
+    ap.add_argument("--heads", type=int, default=16)
+    ap.add_argument(
+        "--target-call-ms",
+        type=float,
+        default=1.5,
+        help="Batch each op so one call takes about this long, to clear the ~103 us "
+        "telemetry sample interval by roughly 10x. Capped by --max-batch and device memory.",
+    )
+    ap.add_argument("--max-batch", type=int, default=96)
+    ap.add_argument(
+        "--batch",
+        type=int,
+        default=None,
+        help="Run every op at this batch instead of sizing it per op, e.g. to compare two boards "
+        "at identical batches.",
+    )
+    ap.add_argument("--target-seconds", type=float, default=4.0)
+    ap.add_argument("--pause-seconds", type=float, default=5.0)
+    args = ap.parse_args()
+    legacy = legacy_mode()
+
+    print("=== Transformer block op power breakdown (batched) ===", flush=True)
+    print(f"seq={args.seq} hidden={args.hidden} ffn={args.ffn} heads={args.heads}", flush=True)
+    print(
+        f"Target call {args.target_call_ms:.2f} ms, window {args.target_seconds:.1f} s, "
+        f"idle gap {args.pause_seconds:.1f} s, mode {'legacy' if legacy else 'updated'}",
+        flush=True,
+    )
+
+    refuse_profiler()
+    device = ttnn.open_device(device_id=0)
+    rows = []
+    try:
+        factories = make_factories(device, args.seq, args.hidden, args.ffn, args.heads, legacy)
+        # Updated mode sizes every op up front, so the gaps between intervals stay idle.
+        sizes = {} if legacy else {name: size_batch(name, f, device, args, legacy) for name, f in factories}
+        for idx, (name, factory) in enumerate(factories, start=1):
+            if idx > 1:
+                time.sleep(args.pause_seconds)
+            if legacy:
+                sizes[name] = size_batch(name, factory, device, args, legacy)
+            batch, per_call, t1 = sizes[name]
+            fn, flops, nbytes = factory(batch)
+            fn()  # warm-up: program compile and cache
+            ttnn.synchronize_device(device)
+
+            iters = max(1, int(args.target_seconds / per_call))
+            print(
+                f"# OP {idx} {name} iters={iters} flops_per_iter={flops} batch={batch} "
+                f"bytes_per_iter={nbytes} call_us={per_call*1e6:.1f} t1_us={t1*1e6:.1f}",
+                flush=True,
+            )
+
+            elapsed, start, end = run_interval(fn, device, iters)
+            tflops = (flops * iters / elapsed / 1e12) if flops else 0.0
+            rows.append((idx, iters, elapsed, tflops, start, end))
+            print(f"# DONE {name}: batch={batch} {elapsed/iters*1e6:.1f} us/call " f"({tflops:.1f} TFLOPS)", flush=True)
+            del fn
+    finally:
+        ttnn.close_device(device)
+
+    emit_summary_rows(rows)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
