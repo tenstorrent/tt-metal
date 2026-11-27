@@ -18,7 +18,7 @@ Named block axes: `page` (extent knob `block_pages`) and `in_page` (extent `alig
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_page_staging` | `cb_depth_blocks · block_pages` pages of `aligned_page_bytes`, where `block_pages = min(ceil(core_pages_max / BLOCKS_PER_CORE_KNOB), floor(L1_BUDGET_BYTES / (CB_DEPTH_KNOB · aligned_page_bytes)))` and `cb_depth_blocks = min(CB_DEPTH_KNOB, ceil(core_pages_max / block_pages))` | `cb_depth_blocks · block_pages` pages. With ≥2 blocks per core, block k (being written) and block k+1 (being read) are live at once. With one block per core, `block_pages` pages are live. Capacity equals the live set in both cases. | `{page: spans → block_pages; in_page: spans → aligned_page_bytes (whole page); block walk (block_idx): streams → cb_depth_blocks slots; lead/h_tiles/w_tiles/rows: folded into page, streamed with it}` | `x.dtype` (Float32 in Phase 0). This is a dataflow-only payload that never passes through DEST, and `fp32_dest_acc_en` does not exist (no compute kernel). That is audit 2's "dataflow-only payload" reason. | reader | writer | whole program (both kernels) | none: it is the only CB in the program, so there is no other buffer to share an allocation with |
+| `cb_page_staging` | `cb_depth_blocks · block_pages` pages of `aligned_page_bytes`, where `block_pages = min(ceil(core_pages_max / BLOCKS_PER_CORE_KNOB), floor(L1_BUDGET_BYTES / (CB_DEPTH_KNOB · aligned_page_bytes)))` and `cb_depth_blocks = min(CB_DEPTH_KNOB, ceil(core_pages_max / block_pages))` | `cb_depth_blocks · block_pages` pages. With ≥2 blocks per core, block k (being written) and block k+1 (being read) are live at once. With one block per core, `block_pages` pages are live. Capacity equals the live set in both cases. | `{page: spans → block_pages; in_page: spans → aligned_page_bytes (whole page); block walk (block_idx): streams → cb_depth_blocks slots; lead/h_tiles/w_tiles/rows: folded into page, streamed with it}` | `x.dtype` (float32, bfloat16, int32 or uint32; labels the descriptor only). This is a dataflow-only payload that never passes through DEST, and `fp32_dest_acc_en` does not exist (no compute kernel). That is audit 2's "dataflow-only payload" reason. | reader | writer | whole program (both kernels) | none: it is the only CB in the program, so there is no other buffer to share an allocation with |
 
 ### Symbol table
 
@@ -81,6 +81,29 @@ L1(core) = cb_depth_blocks · block_pages · aligned_page_bytes  ≤  L1_BUDGET_
 
 **Totals per tier** (all INPUTS, stored bytes, each case independently): DRAM = 2 × stored bytes of `x`, cross-core = 0, L1 = 2 × stored bytes of `x`. There are no fan-out and no multicast terms.
 
-> Cheapest-traffic split considered: `logical_rows_partial_tile` (move only the logical rows of partial tiles) — DRAM −7697920 B on `[1,1,1,62080]` bf16 (7946240 → 248320 B, read + write), −634880 B on `[1,5120]` bf16 (655360 → 20480 B), −8064 B on `(1,1)` f32 (8192 → 128 B); cross-core unchanged at 0; transactions per page 1 → 2. Implemented: `flat_page_range`. Deferred because Phase 0 (float32) holds only `(1,1)` among partial-tile shapes, a one-page call bounded by the program's fixed cost; the two shapes it pays on are bfloat16, outside Phase 0 SUPPORTED. The structure keeps it reachable: same split, same CB page, same block loop; only the per-page transfer inside `load_block` / `store_block` changes. On every tile-aligned shape (p1, p2, `(1,12,128,128)` in Phase 0) the implemented split **is** the cheapest-traffic split.
+## Data-movement budget (regime `logical_rows_partial_tile`, Refinement 1)
 
-> **Deferral expiry.** The positive reason above holds only while bfloat16 is outside SUPPORTED. Refinement 1 (`op_requirements.md`) adds bfloat16, which makes `[1,1,1,62080]` (Q8, 148 calls per Qwen pass, 19.4 µs median measured on `flat_page_range`, the same as the full-tile p4) and `[1,5120]` (2.35 µs) reachable; from then on no built regime covers them at the cheaper traffic, so Refinement 1 carries `logical_rows_partial_tile`.
+Same CB, same capacity formula and same live set: the regime changes only which bytes of a staged page the
+reader fills and the writer drains. Bytes outside the moved ranges stay as allocated in both the CB slot and
+`out`, and are never read as data.
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| `x` | ≤ 1 per stored byte; only the logical face rows of a partial page (64 B granules, merged across gaps ≤ `PIECE_MERGE_GAP_BYTES`) | Each page is read once, by one core | 0 |
+| `out` | the same ranges, written once | The writer drains exactly the ranges the reader landed | 0 |
+
+| Case | DRAM bytes (x read + out write) | vs `flat_page_range` | Cross-core NoC bytes |
+|------|---------------------------------|----------------------|----------------------|
+| `[1,1,1,62080]` bf16 (Q8), 1940 pages × one 576 B span | 1117440 + 1117440 = 2234880 | 7946240 (−72%) | 0 |
+| `[1,5120]` bf16 (F13), 160 pages × 576 B | 92160 + 92160 = 184320 | 655360 (−72%) | 0 |
+| `(1,1)` f32 (F7), 1 page × 64 B | 64 + 64 = 128 | 8192 | 0 |
+| `(1,1)` bf16 (F8), 1 page × 64 B | 64 + 64 = 128 | 4096 | 0 |
+
+The logical minimum on Q8 is 124160 B each way. The regime moves 9× that because one-row bf16 pieces are
+read-request-bound: two 64 B ranges per page (248320 B each way) measured 9.35 µs against 7.06 µs for one
+576 B span, so the knob trades bytes for requests (`op_design.md` → Regimes).
+
+> **Deferral resolved.** Phase 0 deferred `logical_rows_partial_tile` while bfloat16 was outside SUPPORTED.
+> Refinement 1 added bfloat16 together with the regime: tile-aligned and ROW_MAJOR shapes stay on
+> `flat_page_range`, which is the cheapest-traffic split for them, and partial-tile TILE shapes run
+> `logical_rows_partial_tile`.

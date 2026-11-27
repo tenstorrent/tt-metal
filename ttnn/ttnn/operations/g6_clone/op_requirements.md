@@ -25,7 +25,7 @@
 - **Golden baseline**: 7/7 SUPPORTED cells pass, 28 xfail_expected, 3/3 regression cases pass. Every loud category is 0.
 - **Perf**: p1 runs at 63.2 µs device kernel time (stock 68.32 µs, roofline 54.61 µs).
 
-### [ ] Refinement 1 — Full TARGET surface (bfloat16, int32, uint32; ROW_MAJOR) with the logical-rows partial-tile regime
+### [x] Refinement 1 — Full TARGET surface (bfloat16, int32, uint32; ROW_MAJOR) with the logical-rows partial-tile regime
 
 **Goal**:
 - Add `ttnn.bfloat16`, `ttnn.int32` and `ttnn.uint32` to `SUPPORTED["dtype"]`, and `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`. This closes `TARGET − SUPPORTED` entirely and moves all 28 `xfail_expected` cells to passing:
@@ -58,6 +58,8 @@
 - All 28 cells listed above pass in the golden suite, and `verify_supported` shows `supported_fail = xpass_drift = xfail_wrong_mode = 0`.
 - The logical-rows regime runs on Q8 and F13. Device-ns on `[1,1,1,62080]` bf16 is measured below its 19.4 µs `flat_page_range` baseline, and on `[1,5120]` bf16 below 2.35 µs.
 - p1, p2 and p4 (full-tile paths) do not regress beyond noise.
+
+**Outcome**: Golden 38/38 bit-exact, and SUPPORTED equals TARGET. `logical_rows_partial_tile` runs Q8 `[1,1,1,62080]` bf16 at 7.06 µs (flat 19.44 µs) and F13 `[1,5120]` bf16 at 1.59 µs (flat 2.39 µs), with one-row bf16 ranges merged across the 448 B face gap. p1 63.7, p2 32.2 and p4 19.2 µs are unchanged within noise. Q8 is now bound by read requests: read issue + barrier take up to 2.3 + 4.6 µs on the slowest core, against 0.8–1.2 µs for write issue. 32 B ranges do not help, and merging wider gaps loses. What is left on Q8 is the DRAM bank and NoC route levers of Refinements 2–3, not a transfer-shape change.
 
 ### [ ] Refinement 2 — Speed up p1: DRAM bank locality
 

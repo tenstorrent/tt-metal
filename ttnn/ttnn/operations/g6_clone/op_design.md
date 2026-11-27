@@ -26,7 +26,7 @@
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes | device tensor, rank 1–4, DRAM interleaved. TARGET dtypes: float32, bfloat16, int32, uint32. TARGET layouts: TILE, ROW_MAJOR. Phase 0 SUPPORTED: float32 + TILE | — | host |
+| `input_tensor` | `ttnn.Tensor` | yes | device tensor, rank 1–4, DRAM interleaved. TARGET dtypes: float32, bfloat16, int32, uint32. TARGET layouts: TILE, ROW_MAJOR. SUPPORTED since Refinement 1: all of TARGET (Phase 0: float32 + TILE) | — | host |
 
 The op has no other parameter: no `memory_config`, no `dtype`, no compute config. Call form: `g6_clone(x)`.
 
@@ -37,8 +37,8 @@ The op has no other parameter: no `memory_config`, no `dtype`, no compute config
 | Property | Requirement |
 |----------|-------------|
 | Shape | `(d_0, ..., d_{R-1})`, R in 1..4. H and W need not be multiples of 32. |
-| Dtype | TARGET `float32, bfloat16, int32, uint32`. Phase 0 SUPPORTED `float32`. |
-| Layout | TARGET `TILE_LAYOUT, ROW_MAJOR_LAYOUT`. Phase 0 SUPPORTED `TILE_LAYOUT`. |
+| Dtype | TARGET `float32, bfloat16, int32, uint32`, all SUPPORTED since Refinement 1 (Phase 0: `float32`). |
+| Layout | TARGET `TILE_LAYOUT, ROW_MAJOR_LAYOUT`, both SUPPORTED since Refinement 1 (Phase 0: `TILE_LAYOUT`). |
 | Memory | DRAM interleaved (ValueError otherwise) |
 
 ### Output
@@ -77,7 +77,7 @@ So any run of consecutive page ids is a legal block, even when it crosses image 
 | `h_tiles` (`ceil(H/32)` per image) | independent: no result spans it | folded into `block_pages` | as above; a block may start and end mid-image | — | not assigned on its own. A tile-row split caps the core count at `lead·h_tiles`, which is 1 on p4 and `[1,1,1,62080]` (R4). | streams with `page` | knob-turn |
 | `w_tiles` (`ceil(W/32)`) | independent: no result spans it | folded into `block_pages` | as above; a block may start and end mid-tile-row | — | not assigned on its own. A tile-column split caps the core count at 4 on p1, p2 and Q13. | streams with `page` | knob-turn |
 | `rows` (ROW_MAJOR: `prod(d_0..d_{R-2})`, 1–48 on INPUTS) | independent: no result spans it | identical to `page` for ROW_MAJOR (one row = one page) | as `page` | — | through `page` | streams with `page` | knob-turn |
-| `in_page`: bytes inside one page (a tile of four 16×16 faces, or one row plus its DRAM alignment gap); extent `aligned_page_bytes` | independent: no element reads another | `aligned_page_bytes`. This is a mechanism value, not a tunable knob: the buffer fixes it. | whole page (4096 B for a float32 tile) | host: `x.buffer_aligned_page_size()`, used as the CB page size. Device: `TensorAccessorArgs` AlignedPageSize. | not split across cores. A page is the DRAM interleave unit (one bank per page). Cutting it multiplies transactions, and on aligned shapes it moves no fewer bytes (catalog `tile_reorder`). | spans the CB page | knob-turn into regime `logical_rows_partial_tile` (deferred) |
+| `in_page`: bytes inside one page (a tile of four 16×16 faces, or one row plus its DRAM alignment gap); extent `aligned_page_bytes` | independent: no element reads another | `aligned_page_bytes`. This is a mechanism value, not a tunable knob: the buffer fixes it. | whole page (4096 B for a float32 tile) | host: `x.buffer_aligned_page_size()`, used as the CB page size. Device: `TensorAccessorArgs` AlignedPageSize. | not split across cores. A page is the DRAM interleave unit (one bank per page). Cutting it multiplies transactions, and on aligned shapes it moves no fewer bytes (catalog `tile_reorder`). | spans the CB page | knob-turn into regime `logical_rows_partial_tile` (built in Refinement 1) |
 
 **The only intermediate data is the staged block in `cb_page_staging`.** Its axes are the axes of `x` (`page`, `in_page`), and its rows above apply unchanged. There is no coordinating core and no collecting core. No stage computes on one core while the others wait: every used core runs the same reader/writer pair on its own page range.
 
@@ -104,8 +104,8 @@ So any run of consecutive page ids is a legal block, even when it crosses image 
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| `flat_page_range` | **built** | Every input that passes `validate()`: TILE or ROW_MAJOR, rank 1–4, any alignment, DRAM interleaved, and `block_pages_l1_cap ≥ 1`. It is the only built regime, so there is no selection function. | `block_pages` consecutive page ids × `aligned_page_bytes` | **At the minimum** on stored bytes: x read once, out written once (p1: 12582912 B each way), no cross-core traffic. It exceeds the *logical*-byte minimum only on partial-tile shapes, where the tile padding moves too (see `logical_rows_partial_tile`). | Per block, the reader pays 1 `cb_reserve_back`, 1 `noc_async_read_barrier` and 1 `cb_push_back`. The barrier drains every outstanding read, so the reader's NoC queue is empty until the next issue. Per block, the writer pays 1 `cb_wait_front`, 1 `noc_async_writes_flushed` and 1 `cb_pop_front`. A block that spans the core's whole assignment keeps all of its reads in flight toward DRAM at once. **Intended frequency:** once per block, which is once per core per call on every INPUTS shape. TensorAccessor construction happens once per kernel. There are no LLK inits (no compute kernel), no multicast and no cross-core barrier. |
-| `logical_rows_partial_tile` | **deferred**: no Phase 0 shape gains. Phase 0 (float32) has one partial-tile shape, `[1,1]`: a one-page call whose time is the program's fixed cost (4096 B vs 64 B moved). The shapes it pays on, `[1,1,1,62080]` and `[1,5120]`, are bfloat16, which is outside Phase 0 SUPPORTED. **Reachable:** same split, same CB page and same block loop. Only the per-page transfer inside `load_block` / `store_block` changes, chosen by a CT flag that the host sets from the predicate. | TILE and the image has a partial tile row or column: `H mod 32 ≠ 0` (the last tile row holds `H mod 32` logical rows) or `W mod 32 ≠ 0` | Same `block_pages`. Per page, it moves only the logical rows: row `r` lies in faces `{0,1}` (`r < 16`) or `{2,3}`, at face row `r mod 16`, as pieces of 16 elements (32 B bf16, 64 B f32). Faces 1 and 3 are dropped when `W mod 32 ≤ 16` on the last tile column. | **Below** the stored-byte minimum; logical bytes only. `[1,1,1,62080]` bf16: 3973120 → 124160 B each way. `[1,5120]` bf16: 327680 → 10240 B. `[1,1]` f32: 4096 → 64 B. It needs 2 transactions per page instead of 1. | Same as `flat_page_range`. In addition, transactions per page are fixed by the logical rows, not by the block. |
+| `flat_page_range` | **built** | Every input that passes `validate()` (TILE or ROW_MAJOR, rank 1–4, any alignment, DRAM interleaved, `block_pages_l1_cap ≥ 1`) and is not selected by `logical_rows_partial_tile`: ROW_MAJOR, tile-aligned TILE, and TILE whose padding is not plain tile padding of the last two dims (`tile_geometry` returns None). Selection: `partial_tile_walk(tile_geometry(x), aligned_page_bytes) is None`. | `block_pages` consecutive page ids × `aligned_page_bytes` | **At the minimum** on stored bytes: x read once, out written once (p1: 12582912 B each way), no cross-core traffic. It exceeds the *logical*-byte minimum only on partial-tile shapes, where the tile padding moves too (see `logical_rows_partial_tile`). | Per block, the reader pays 1 `cb_reserve_back`, 1 `noc_async_read_barrier` and 1 `cb_push_back`. The barrier drains every outstanding read, so the reader's NoC queue is empty until the next issue. Per block, the writer pays 1 `cb_wait_front`, 1 `noc_async_writes_flushed` and 1 `cb_pop_front`. A block that spans the core's whole assignment keeps all of its reads in flight toward DRAM at once. **Intended frequency:** once per block, which is once per core per call on every INPUTS shape. TensorAccessor construction happens once per kernel. There are no LLK inits (no compute kernel), no multicast and no cross-core barrier. |
+| `logical_rows_partial_tile` | **built** (Refinement 1). Pays on `[1,1,1,62080]` bf16 (Q8): 19.44 → 7.06 µs, and `[1,5120]` bf16 (F13): 2.39 → 1.59 µs. Same split, CB page and block loop as `flat_page_range`; only the per-page transfer inside `load_block` / `store_block` changes, under the CT flag `logical_rows`. | TILE with plain tile padding of the last two dims, and the image has a partial tile row or column (`H mod 32 ≠ 0` or `W mod 32 ≠ 0`), and at least one of the four page kinds moves fewer bytes than the whole page | Same `block_pages`. Each page is one of four kinds, `(tile row is the image's last) | (tile column is the image's last) << 1`, tracked by `PartialTileWalk` (`kernels/g6_clone_page_pieces.hpp`) without dividing page ids. A kind moves at most two byte ranges: the face rows holding logical rows (row `r` in faces `{0,1}` for `r < 16`, else `{2,3}`; faces 1 and 3 dropped when the last tile column holds ≤ 16 columns), each rounded up to the 64 B DRAM alignment and landed at its own in-page offset in the CB slot. Ranges at most `PIECE_MERGE_GAP_BYTES` (448) apart move as one span through the gap. Full pages (kind 0) are one whole-page range. | **Below** the stored-byte minimum. `[1,1,1,62080]` bf16: 3973120 → 1117440 B each way (one 576 B span per page; logical 124160 B). `[1,5120]` bf16: 327680 → 92160 B. `[1,1]` f32: 4096 → 64 B. One or two NoC requests per page. | Same as `flat_page_range`. Small ranges are read-request-bound, not byte-bound: on Q8, two 64 B reads per page run 9.35 µs, one 576 B span 7.06 µs and two 32 B reads 9.74 µs. Merging loses once the gap reaches 512 B (17×16 bf16 tiles +3%; one-row f32 tiles, 960 B gap, +10%; 17×16 f32 tiles, 1024 B gap, +53%). |
 | `bank_affine_runs` | **deferred**: it changes only the transaction count, never the bytes, and the built regime is already at the DRAM-crossing minimum on every shape. Fewer transactions pay only when a data-movement RISC is issue-bound (catalog `split_reader`, `read_coalescing`). Every multi-page INPUTS tensor has pages ≥ 2048 B and ≤ 28 pages per core, so each page transfer is already a 2–5 KB burst. **Reachable:** the page walk `start_page + i` becomes `bank_start + i·num_banks`, with the same CB and the same block operations. | `aligned_page_bytes` equals the bank page stride. That holds for TILE always, and for ROW_MAJOR when the row is a multiple of 64 B. | A run of k pages of one bank (ids `b, b+NB, b+2NB, …`, contiguous in bank `b`; see `TensorAccessor` contiguous-run API, `tensor_accessor.h:181-192`), moved as one transfer of `k · aligned_page_bytes` | At the minimum; the transaction count is divided by k | One NoC command per run instead of per page, on top of the `flat_page_range` terms |
 | `tile_row_split` | **rejected**, superseded by `flat_page_range` on every shape | — | `lead·h_tiles` tile rows per core | Same bytes, but the core count is capped at the tile-row count: 1 core on p4 and on `[1,1,1,62080]` (R4, catalog `width_split`) | — |
 | `tile_col_split` | **rejected**, superseded by `flat_page_range` | — | tile columns per core | Same bytes, but the core count is capped at `w_tiles` (4 on p1, p2 and Q13) | — |
@@ -114,7 +114,7 @@ So any run of consecutive page ids is a legal block, even when it crosses image 
 | `engine_copy` (unpack → DEST → pack, `compute_kernel_lib::copy`) | **rejected**, forbidden by spec rule 1 and risk R1. A 16-bit DEST rounds float32, and a matrix-engine operand truncates it. Superseded by NoC byte moves with no compute kernel. | — | tiles | At the minimum, but not a copy | — |
 | `staged_dram_intermediate` (a second device tensor or a second pass) | **rejected**, forbidden by spec rule 4. It doubles DRAM crossings. Superseded by `flat_page_range`. | — | — | 2× the minimum | — |
 
-**Regime-pinned tests:** not required. Only one regime is built, and it is the same on every grid size.
+**Regime-pinned tests:** `test_g6_clone_layout_matrix.py::test_g6_clone_plan_regime` pins which regime each input class runs (and the merged pieces on Q8 / F13); `test_g6_clone_cache_key_partial_vs_full` pins that the two regimes never share a cached descriptor.
 
 ### Traffic ranking
 
@@ -127,7 +127,7 @@ The ranking is qualitative. Crossings are counted per tensor per tier.
 | tile-row split | 1× | 1× | 0 | none | ties on bytes; rejected on work assignment (1 core on p4) |
 | tile-column split | 1× | 1× | 0 | none | ties on bytes; rejected on work assignment (4 cores on p1) |
 | sub-page split across cores | 1× | 1× | 0 | none | ties on bytes, needs more transactions; rejected |
-| logical rows only (partial tiles) | logical bytes (1/32 of stored on `[1,1,1,62080]`) | same | 0 | none | **cheapest** on the three partial-tile shapes; deferred (bf16 shapes are outside Phase 0) |
+| logical rows only (partial tiles) | logical face rows at 64 B granularity, merged across ≤ 448 B gaps (0.28 of stored on `[1,1,1,62080]` bf16) | same | 0 | none | **chosen** on partial-tile TILE shapes (Refinement 1) |
 | split a dependent axis + combine | — | — | — | — | does not exist: no axis is dependent, so there is no combine to price |
 
 - **Operand-reuse check:** `x` is the only input, and it varies along every axis. Under the chosen split, each page is read by exactly one core. No operand is reuse-shared, so there is no broadcast regime.
@@ -247,10 +247,12 @@ This is the only CB. Push count equals wait count (`block_pages` per block on bo
 | `load_block` | raw_api | `TensorAccessorArgs<…>()` + `TensorAccessor(args, addr)` | `tt_metal/hw/inc/api/tensor/tensor_accessor_args.h:21`, `tt_metal/hw/inc/api/tensor/tensor_accessor.h:71,99` | CT `TensorAccessorArgs` (from `ttnn.TensorAccessorArgs(x)`); address from common RT | — | — | none (page size is the buffer's) |
 | `load_block` | raw_api | `cb_reserve_back(cb, block_pages)` / `get_write_ptr(cb)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:406`, `:325` | `block_pages` | — | `cb_page_staging` | `block_pages` |
 | `load_block` | raw_api | `noc_async_read_page(page_id, accessor, l1_addr)` | `dataflow_api.h:1243` | one per page, l1_addr += `aligned_page_bytes` | — | `cb_page_staging` | `block_extent` (trip count) |
+| `load_block` (logical rows) | raw_api | `noc_async_read<NOC_MAX_BURST_SIZE>(page_noc_addr + offset, l1_addr + offset, length)` | `dataflow_api.h:546` | one or two per page, from `PartialTileWalk::pieces()` (CT table of four kinds) | — | `cb_page_staging` | `block_extent`; piece table from `PIECE_MERGE_GAP_BYTES` |
 | `load_block` | raw_api | `noc_async_read_barrier()` | `dataflow_api.h:1921` | once per block | — | — | frequency set by `block_pages` |
 | `load_block` | raw_api | `cb_push_back(cb, block_pages)` | `dataflow_api.h:208` | nominal `block_pages` | — | `cb_page_staging` | `block_pages` |
 | `store_block` | raw_api | `cb_wait_front(cb, block_pages)` / `get_read_ptr(cb)` | `dataflow_api.h:479`, `:346` | `block_pages` | `cb_page_staging` | — | `block_pages` |
 | `store_block` | raw_api | `noc_async_write_page(page_id, accessor, l1_addr)` | `dataflow_api.h:1418` | one per page | `cb_page_staging` | — | `block_extent` |
+| `store_block` (logical rows) | raw_api | `noc_async_write<NOC_MAX_BURST_SIZE>(l1_addr + offset, page_noc_addr + offset, length)` | `dataflow_api.h:875` | the same pieces as the reader | `cb_page_staging` | — | `block_extent` |
 | `store_block` | raw_api | `noc_async_writes_flushed()` | `dataflow_api.h:1980` | once per block, before the pop | — | — | frequency set by `block_pages` |
 | `store_block` | raw_api | `cb_pop_front(cb, block_pages)` | `dataflow_api.h:260` | nominal `block_pages` | `cb_page_staging` | — | `block_pages` |
 | `drain_writes` | raw_api | `noc_async_write_barrier()` | `dataflow_api.h:1951` | once per kernel | — | — | — |
@@ -274,7 +276,7 @@ What would close the gap: a dataflow `copy_pages` block helper that reads a page
 | Declaration | Content |
 |-------------|---------|
 | `INPUT_TAGGERS` | `{"dtype": tag_dtype, "layout": tag_layout}`. `tag_dtype(inputs, axes)` returns `inputs[0]["dtype"]`. `tag_layout(inputs, axes)` returns `inputs[0]["layout"]`. There is no other tagger: no alignment, rank or size axis. |
-| `SUPPORTED` (Phase 0) | `{"dtype": [ttnn.float32], "layout": [ttnn.TILE_LAYOUT]}` |
+| `SUPPORTED` | `{"dtype": [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32], "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]}` (Refinement 1; Phase 0 was float32 + TILE) |
 | `EXCLUSIONS` | `[]` |
 | INVALID | Not declared or checked in the op. |
 
@@ -299,7 +301,7 @@ What would close the gap: a dataflow `copy_pages` block helper that reads a page
 | 5 | Write `x.buffer_address()` into the reader's common RT args and `out.buffer_address()` into the writer's. |
 | 6 | `return ttnn.generic_op([input_tensor, out], descriptor)`. The output is last. This is exactly one program; no other ttnn op is called. |
 
-**Cache key:** `(device id, grid.x, grid.y, dtype, layout, buffer_type, memory_layout, tensor_pages, aligned_page_bytes)`.
+**Cache key:** `(device id, grid.x, grid.y, dtype, layout, buffer_type, memory_layout, tensor_pages, aligned_page_bytes, tile_geometry(x))`. `tile_geometry` = `(h_tiles, w_tiles, rows_last, cols_last, elem_bytes)` or None; it separates `[1,1,1,62080]` from `[1,1,32,62080]`, which share page count and page size.
 
 - Everything in the descriptor is a function of this key: CB size and format, CT args, core ranges, per-core `start_page` / `num_pages_this_core`. Only the two addresses vary, and they are patched per call.
 - `dtype` is in the key even where the bytes coincide, because `[16]` int32 and uint32 differ in CB `data_format` (R6).
@@ -310,7 +312,8 @@ What would close the gap: a dataflow `copy_pages` block helper that reads a page
 
 The op module exposes `g6_clone_plan(input_tensor) -> dict` with these fields:
 
-- `regime`: `"flat_page_range"`
+- `regime`: `"flat_page_range"` or `"logical_rows_partial_tile"`
+- `partial_tile_walk`: None, or `h_tiles`, `w_tiles`, `rows_last`, `cols_last` and the `(offset, length)` pieces of the four page kinds
 - `grid`
 - `num_cores`
 - `core_ranges`
@@ -330,7 +333,7 @@ The entry point uses the same function, so the report is the plan that ran.
 |------|-------------------|---------------------------|
 | An engine path changes bits (R1) | The gate is bit-exact on random bit patterns: NaN payloads, subnormals, int32 values above 2^24. | No compute kernel. Bytes move only through the NoC. `engine_copy` is rejected. |
 | The output aliases the input (R2) | Values would be right while the storage is shared. | `allocate_tensor_on_device(input.spec, …)` on every call. `x` is never written: the writer's accessor is `out` only. |
-| Partial tiles (R3) | Poisoned-padding cases fill the input's padding with NaN. | Whole-tile copy: each logical element comes from its own byte position. Padding lands only in output padding, which is not part of the result. |
+| Partial tiles (R3) | Poisoned-padding cases fill the input's padding with NaN. | Each logical element is copied from its own byte offset to the same offset of the same page id. A logical-rows range rounded to 64 B, or merged through a gap, carries padding bytes only into the output's padding. Pinned by the golden poisoned cases and `test_g6_clone_poisoned_padding_kinds` (all four kinds, bf16 / f32 / int32). |
 | The work collapses onto few cores (R4) | p4 and `[1,1,1,62080]` are one tile row of 1940 tiles. | The split is on the flat page axis, never on tile rows or columns: 110 cores on p4. |
 | Small ROW_MAJOR pages vs the 64 B DRAM alignment (R5) | Rows are 4, 32, 64 or 128 B against a 64 B DRAM page stride. | The CB page is `buffer_aligned_page_size()`, and the TensorAccessor moves the aligned page (Mechanism caps). The bytes in the output's alignment gap are not data. |
 | An incomplete program cache key (R6, BB-07) | `[1,1]` f32 vs bf16, and `[16]` int32 vs uint32. | dtype, layout, page count and aligned page size are in the Python key, and the CB format is in generic_op's hash. Addresses are patched per call (test_regression `test_repeat`). |
