@@ -333,7 +333,7 @@ class TeacherCapture:
         ids_b = words[:, :K].to(torch.int64) & 0xFFFF
         ids = self._perm[ids_b.clamp(max=self._perm.numel() - 1)].to(torch.int16)
         w = (words[:, K:].to(torch.int32) & 0xFFFF).to(torch.int16).view(torch.bfloat16).float()
-        latent = self._owner_rows(head.dispatch_buffer, block, ffn.dims.routed_width)
+        latent = self._dispatch_rows(head.dispatch_buffer, block, ffn.dims.routed_width)
         y_own, y_dtype = self._y_own
         self._y_own = None
         n = self.valid
@@ -368,6 +368,27 @@ class TeacherCapture:
             self._y_own_raw = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(y_own)]
         self._y_own = (self._owner_rows(y_own, block, int(y_own.shape[-1])), str(y_own.dtype))
         self._t_host_chunk += time.time() - t0
+
+    def _dispatch_rows(self, t, block, width) -> torch.Tensor:
+        """The MoE head's dispatch buffer as [chunk, width] in token order. Every chip's buffer is a landing buffer of
+        the whole chunk (row = the token's position in the chunk): the rows dispatched to that chip are written, the
+        rest hold earlier data; a token's owner chip (the owner order of _owner_rows) always holds its own row."""
+        R, C = self.shape
+        k = int(block.row_blocks)
+        assert int(block.pad_rows) == 0, "K3_CAPTURE: moe_x with padded head rows is not mapped (v0)"
+        tpc = self.chunk // R
+        sub = tpc // k
+        Sk = sub // C
+        out = None
+        for n, d in enumerate(ttnn.get_device_tensors(t)):
+            rows = ttnn.to_torch(d).reshape(-1, width)
+            if out is None:
+                out = torch.zeros(self.chunk, width, dtype=rows.dtype)
+            r, p = divmod(n, C)
+            for i in range(k):
+                lo = r * tpc + i * sub + p * Sk
+                out[lo : lo + Sk] = rows[lo : lo + Sk]
+        return out
 
     def _owner_rows(self, t, block, width) -> torch.Tensor:
         """An owner-order MoE head output as [chunk, width] in token order (tests/moe_block/test_moe_block_padding.py
@@ -464,7 +485,7 @@ class TeacherCapture:
                 "notes": {
                     "latent_up_in": "routed sum (combine output) RMS-normalised in fp64, routed_expert_norm gamma NOT applied",
                     "shared_down_in": "recomputed with extra ttnn ops (bf16 checkpoint gate/up, HiFi4 fp32) from moe_in",
-                    "moe_x": "the MoE head's dispatch rows (bf16) = the routed experts' gate/up input",
+                    "moe_x": "the MoE head's dispatch rows (bf16; owner chip's landing buffer row) = the routed experts' gate/up input",
                     "moe_w": "the combine's routing weights (bf16 in the routing rows), as float32",
                     "moe_ids": "checkpoint expert ids",
                 },
