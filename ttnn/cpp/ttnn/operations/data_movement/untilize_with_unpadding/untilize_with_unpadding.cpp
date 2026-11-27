@@ -195,8 +195,8 @@ Tensor untilize_with_unpadding(
             input_tensor.tensor_topology());
     }
 
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
+    auto input_cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
+    auto output_cb_data_format = tt::tt_metal::cb_dataformat_for(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
