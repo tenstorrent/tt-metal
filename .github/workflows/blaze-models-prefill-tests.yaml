@@ -67,10 +67,10 @@ on:
         type: boolean
         default: false
         description: "Gemma4 > gemma4_prefill_kv_pcc"
-      gemma4_d_p_layer_perf:
+      moe_block:
         type: boolean
         default: false
-        description: "Gemma4 > gemma4_d_p_layer_perf (Tracy build; only runs when ticked)"
+        description: "CI test branch: the MoE block legs (GLM-5.3 + Kimi-K3 models, routed_experts_combine / flat_routed_expert op tests)"
       minimax_m3:
         type: boolean
         default: false

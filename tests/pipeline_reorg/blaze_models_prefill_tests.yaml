@@ -468,7 +468,7 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager and not test_moe_block_perf" -vvv --tb=short
     '
   test_type: kimi_k3_moe
-  test_tags: [kimi_k3, moe]
+  test_tags: [kimi_k3, moe, moe_block]
   test_group: module
   skus:
     bh_sc1:
@@ -508,7 +508,7 @@
     # mpirun exits 0 when it loses its remote daemon (a test killed on the device host): pass only on the marker.
     grep -q K3_MOE_PERF_OK /tmp/k3_moe_job.out || { echo "::error::k3_moe_perf: mpirun ended without the success marker (killed or lost daemon)"; exit 1; }
   test_type: k3_moe_perf
-  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
+  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf, moe_block]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -1030,6 +1030,73 @@
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# CI test branch (mstaletovic/ci-flat-lean-trailers: flat expert lean + trailers on by default): the GLM-5.3 MoE block
+# legs of glm_components_suite / glm_chunked_perf_suite alone, the carve's accuracy + determinism, and the op tests.
+- name: "(GLM-5.3-744B) MoE accuracy 8x4 5k + 4x4 [RING, RING] carve accuracy, determinism + MoE block perf 8x4 5k, carve 2.5k, 5k, 10k"
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=INFO
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export MESH_DEVICE=TG
+      T=models/demos/deepseek_v3_d_p/tests
+      gated() {
+        "$@" 2>&1 | tee /tmp/glm_moe_step.out
+        local status=${PIPESTATUS[0]}
+        [ "$status" -eq 0 ] || exit "$status"
+        grep -qE "[0-9]+ passed" /tmp/glm_moe_step.out || { echo "::error::glm_moe: no test passed (skipped?): $*"; exit 1; }
+      }
+      gated python3 -m pytest $T/moe_block/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
+      $T/run_subtorus_4x4_tests.sh --timeout-s 1140 $T/moe_block/test_moe_block_models.py::test_moe_block_accuracy $T/moe_block/test_moe_block_models.py::test_moe_block_determinism -k "glm53" || exit $?
+      gated python3 -m pytest $T/perf/test_moe_block_host_perf.py -k "glm53-8x4-5120" -vvv --tb=short
+      $T/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 6 $T/perf/test_moe_block_host_perf.py $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "glm53" || exit $?
+      echo GLM_MOE_BLOCK_OK
+    ' 2>&1 | tee /tmp/glm_moe_job.out
+    # mpirun exits 0 when it loses its remote daemon (a test killed on the device host): pass only on the marker.
+    grep -q GLM_MOE_BLOCK_OK /tmp/glm_moe_job.out || { echo "::error::glm_moe_block: mpirun ended without the success marker"; exit 1; }
+  test_type: glm_moe_block
+  test_tags: [glm_5_3, moe, moe_block]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 60
+      tier: 2
+      release_ready: false
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+- name: "routed_experts_combine and flat_routed_expert op accuracy, determinism, perf"
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=INFO
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      export MESH_DEVICE=TG
+      X=tests/ttnn/unit_tests/operations/experimental/moe_block
+      python3 -m pytest $X/routed_experts_combine $X/flat_routed_expert -vvv --tb=short -rA || exit $?
+      echo MOE_OPS_OK
+    ' 2>&1 | tee /tmp/moe_ops_job.out
+    grep -q MOE_OPS_OK /tmp/moe_ops_job.out || { echo "::error::moe_ops: mpirun ended without the success marker"; exit 1; }
+  test_type: moe_block_ops
+  test_tags: [moe_block]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 120
+      tier: 2
+      release_ready: false
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: demo
   sp_config: sc1

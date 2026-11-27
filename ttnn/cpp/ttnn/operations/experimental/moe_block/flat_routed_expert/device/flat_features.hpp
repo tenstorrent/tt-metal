@@ -27,7 +27,7 @@ inline bool on(const std::string& key) {
     }
     const char* f = std::getenv("FLAT_FEATURES");
     if (f == nullptr) {
-        return false;
+        f = "lean,trailers";  // CI test branch: lean + trailers on by default (FLAT_FEATURES= turns them off)
     }
     const std::string list(f);
     size_t i = 0;
