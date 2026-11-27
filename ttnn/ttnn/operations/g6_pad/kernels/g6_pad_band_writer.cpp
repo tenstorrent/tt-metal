@@ -1,74 +1,88 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_pad extension_band writer (BRISC / NoC1): writes c into tile rows [a, b) of the last tile
-// row of every slice, in place. The output is a view of the input's buffer, so nothing is read
-// from DRAM and no other tile row is touched.
+// g6_pad extension_band: write-only band writer.
+// Writes c into rows [band_row_begin, band_row_end) of the last tile row of every slice, in place,
+// for this kernel's contiguous range of band tiles (band_idx = slice * in_tiles_w + wt).
+// The input is never read; no other tile row is touched.
 //
-// write_band_block uses raw noc_async_write: no kernel_lib helper writes a constant byte run at
-// an in-page offset of an interleaved page for c != 0 (Noc::async_write_zeros covers zeros only).
+// Block operations (op_design.md, Block schedule / extension_band):
+//   E1 make_fill_page  -- fill_l1_range of fill_bits into cb_fill_tile (once per kernel)
+//   E2 write_band_block -- per band tile, one NoC write per coalesced band segment, sourced from the
+//                          same offset of the fill page (src == dst mod 16 trivially), no barrier inside
+//   E3 drain_writes    -- one noc_async_write_barrier per kernel (BB-03)
+// No helper covers E2/E3 (pure NoC writes; see design "Helpers considered and rejected").
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
-#include "g6_pad_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_fill_page_writer = get_compile_time_arg_val(0);
-    constexpr uint32_t es = get_compile_time_arg_val(1);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
-    constexpr bool fill_is_zero = get_compile_time_arg_val(3) != 0;
-    constexpr auto out_args = TensorAccessorArgs<4>();
+    constexpr uint32_t cb_fill_tile = get_compile_time_arg_val(0);
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t tile_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t in_tiles_h = get_compile_time_arg_val(3);
+    constexpr uint32_t in_tiles_w = get_compile_time_arg_val(4);
+    constexpr uint32_t band_block_tiles = get_compile_time_arg_val(5);
+    constexpr uint32_t num_segments = get_compile_time_arg_val(6);
+    constexpr uint32_t seg_off[4] = {
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(13)};
+    constexpr uint32_t seg_len[4] = {
+        get_compile_time_arg_val(8),
+        get_compile_time_arg_val(10),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(14)};
+    constexpr auto dst_args = TensorAccessorArgs<15>();
+    static_assert(num_segments >= 1 && num_segments <= 4, "band segments: 1..4");
 
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t c_bits = get_common_arg_val<uint32_t>(1);
-    const uint32_t ht_in = get_common_arg_val<uint32_t>(2);
-    const uint32_t wt_in = get_common_arg_val<uint32_t>(3);
-    const uint32_t num_runs = get_common_arg_val<uint32_t>(4);
-    uint32_t run_off[3], run_len[3];
-    for (uint32_t j = 0; j < 3; ++j) {
-        run_off[j] = get_common_arg_val<uint32_t>(5 + 2 * j);
-        run_len[j] = get_common_arg_val<uint32_t>(6 + 2 * j);
-    }
+    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    const uint32_t start_band = get_arg_val<uint32_t>(1);
+    const uint32_t num_band = get_arg_val<uint32_t>(2);
+    const uint32_t fill_bits = get_arg_val<uint32_t>(3);
 
-    const uint32_t unit_start = get_arg_val<uint32_t>(0);
-    const uint32_t units_this_core = get_arg_val<uint32_t>(1);
-    if (units_this_core == 0) {
+    if (num_band == 0) {
         return;
     }
 
-    const auto out = TensorAccessor(out_args, out_addr, page_bytes);
+    const auto dst = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
-    // Runs source the fill page at the offset they target, so only the span of the runs is built.
-    const uint32_t span_start = run_off[0];
-    const uint32_t span_end = run_off[num_runs - 1] + run_len[num_runs - 1];
+    // E1: fill page (scratch owned by this kernel only; never pushed).
+    const uint32_t fill_base = get_write_ptr(cb_fill_tile);
     {
-        DeviceZoneScopedN("G6PAD-FILL-PAGE");
-        g6_pad::build_fill_page<cb_fill_page_writer, es, fill_is_zero>(span_start, span_end - span_start, c_bits);
+        DeviceZoneScopedN("make_fill_page");
+        dataflow_kernel_lib::fill_l1_range<elem_bytes>(fill_base, tile_bytes, fill_bits);
     }
-    const uint32_t fill_page = get_write_ptr(cb_fill_page_writer);
 
-    {
-        DeviceZoneScopedN("G6PAD-BAND");
-        uint32_t slice = unit_start / wt_in;
-        uint32_t wt = unit_start - slice * wt_in;
-        uint32_t page_id = (slice * ht_in + ht_in - 1) * wt_in + wt;
-        const uint32_t slice_stride = ht_in * wt_in;
-        for (uint32_t u = 0; u < units_this_core; ++u) {
-            for (uint32_t j = 0; j < num_runs; ++j) {
-                noc_async_write(fill_page + run_off[j], out.get_noc_addr(page_id, run_off[j]), run_len[j]);
+    // Walk (slice, wt) incrementally from the flat start index.
+    uint32_t wt = start_band % in_tiles_w;
+    uint32_t slice = start_band / in_tiles_w;
+    constexpr uint32_t last_row_offset = (in_tiles_h - 1) * in_tiles_w;
+
+    const uint32_t num_blocks = (num_band + band_block_tiles - 1) / band_block_tiles;
+    uint32_t remaining = num_band;
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        DeviceZoneScopedN("write_band_block");
+        const uint32_t extent = remaining < band_block_tiles ? remaining : band_block_tiles;
+        for (uint32_t k = 0; k < extent; ++k) {
+            const uint32_t page = slice * (in_tiles_h * in_tiles_w) + last_row_offset + wt;
+            const uint64_t page_noc = dst.get_noc_addr(page);
+            for (uint32_t s = 0; s < num_segments; ++s) {
+                noc_async_write(fill_base + seg_off[s], page_noc + seg_off[s], seg_len[s]);
             }
-            ++page_id;
-            if (++wt == wt_in) {
+            if (++wt == in_tiles_w) {
                 wt = 0;
-                page_id += slice_stride - wt_in;
+                ++slice;
             }
         }
+        remaining -= extent;
     }
+
     {
-        DeviceZoneScopedN("G6PAD-FINAL-BARRIER");
+        DeviceZoneScopedN("drain_writes");
         noc_async_write_barrier();
     }
 }

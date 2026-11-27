@@ -1,66 +1,57 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
+
+// g6_pad: shared output-tile classification for the new_storage_tiles reader and writer.
+// Both kernels walk the same flat output-tile range with the same predicate (op_design.md,
+// "Tile classification"); the host never enumerates tiles.
 
 #pragma once
 
 #include <stdint.h>
 
-#include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
-
 namespace g6_pad {
 
-constexpr uint32_t TILE = 32;
-constexpr uint32_t FACE = 16;
+// Leading dims are folded to two (lead0, lead1); rank 2/3 pad with leading 1s on the host.
+template <
+    uint32_t out_tiles_h,
+    uint32_t out_tiles_w,
+    uint32_t out_lead1,
+    uint32_t in_tiles_h,
+    uint32_t in_tiles_w,
+    uint32_t in_lead0,
+    uint32_t in_lead1>
+struct OutTileWalker {
+    uint32_t wt = 0, ht = 0, j1 = 0, j0 = 0;
 
-// Fills bytes [offset, offset + n_bytes) of a one-page scratch CB with c. The CB is owned by the
-// calling kernel alone and never pushed, so its write pointer is a fixed L1 address.
-// The zero path is a self-aimed NoC read from the hardware zero region; its barrier is a read
-// barrier on Blackhole, so no other NoC write may be issued between the two calls.
-template <uint32_t cb_fill_page, uint32_t es, bool fill_is_zero>
-FORCE_INLINE void build_fill_page(uint32_t offset, uint32_t n_bytes, uint32_t c_bits) {
-    if constexpr (fill_is_zero) {
-        Noc noc;
-        CircularBuffer fill_page(cb_fill_page);
-        noc.async_write_zeros(fill_page, n_bytes, {.offset_bytes = offset});
-        noc.write_zeros_l1_barrier();
-    } else {
-        dataflow_kernel_lib::fill_l1_range<es>(get_write_ptr(cb_fill_page) + offset, n_bytes, c_bits);
-    }
-}
-
-// Position of a staged page in input page order: lead indices (i0, i1), tile row, tile col.
-struct StagedWalk {
-    uint32_t i0, i1, ht, wt;
-
-    StagedWalk(uint32_t page, uint32_t ht_in, uint32_t wt_in, uint32_t lead1) {
-        const uint32_t tiles_per_slice = ht_in * wt_in;
-        const uint32_t slice = page / tiles_per_slice;
-        const uint32_t in_slice = page - slice * tiles_per_slice;
-        i0 = slice / lead1;
-        i1 = slice - i0 * lead1;
-        ht = in_slice / wt_in;
-        wt = in_slice - ht * wt_in;
+    // Flat output tile t = ((j0 * out_lead1 + j1) * out_tiles_h + ht) * out_tiles_w + wt.
+    explicit OutTileWalker(uint32_t t) {
+        wt = t % out_tiles_w;
+        t /= out_tiles_w;
+        ht = t % out_tiles_h;
+        t /= out_tiles_h;
+        j1 = t % out_lead1;
+        j0 = t / out_lead1;
     }
 
-    FORCE_INLINE void advance(uint32_t ht_in, uint32_t wt_in, uint32_t lead1) {
-        if (++wt < wt_in) {
-            return;
+    void advance() {
+        if (++wt == out_tiles_w) {
+            wt = 0;
+            if (++ht == out_tiles_h) {
+                ht = 0;
+                if (++j1 == out_lead1) {
+                    j1 = 0;
+                    ++j0;
+                }
+            }
         }
-        wt = 0;
-        if (++ht < ht_in) {
-            return;
-        }
-        ht = 0;
-        if (++i1 < lead1) {
-            return;
-        }
-        i1 = 0;
-        ++i0;
     }
+
+    bool source_bearing() const { return j0 < in_lead0 && j1 < in_lead1 && ht < in_tiles_h && wt < in_tiles_w; }
+
+    uint32_t source_page() const { return ((j0 * in_lead1 + j1) * in_tiles_h + ht) * in_tiles_w + wt; }
+
+    bool last_input_tile_row() const { return ht == in_tiles_h - 1; }
+    bool last_input_tile_col() const { return wt == in_tiles_w - 1; }
 };
 
 }  // namespace g6_pad
