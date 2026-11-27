@@ -23,8 +23,9 @@ MAX_CORES = None
 MAX_BLOCK_PAGES = None
 # Blocks the staging CB holds on the streamed plan.
 STREAM_DEPTH_BLOCKS = 2
-# Rotate each core's bank-run walk by its linear index so cores start on different banks.
-BANK_STAGGER = False
+# Rotate each core's bank-run walk by its linear index so cores start on different banks. Without it
+# every core of a 28-page assignment opens on bank 0 or 4 (16x12x128x128 fp32: 73.9 -> 67.9 us).
+BANK_STAGGER = True
 
 CB_PAGE_STAGING = 0
 

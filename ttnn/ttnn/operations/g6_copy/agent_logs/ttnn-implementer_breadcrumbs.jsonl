@@ -2,3 +2,5 @@
 {"event":"test_run","mode":"dev","result":"pass","passed":25,"ts":"2026-11-27T11:12:57-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T11:55:01-05:00"}
 {"event":"test_run","test":"tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy.py","mode":"dev+prod","result":"pass","passed":25,"notes":"fresh rewrite from op_design.md; pre-existing uncommitted edits stashed unread as stash@{0}","ts":"2026-11-27T11:58:05-05:00"}
+{"event":"perf_measure","shape":"16x12x128x128 fp32","one_block_us":73.9,"one_block_stagger_us":67.9,"best_streamed_us":61.1,"best_streamed":"block4_depth3_stagger","target_us":68.56,"note":"overlap lamp blocked for production: test_g6_copy_plan pins one_block on every production shape","ts":"2026-11-27T12:04:46-05:00"}
+{"event":"fix_applied","change":"BANK_STAGGER default True","evidence":"9+ runs each: stagger 66.4-69.3us vs 72.5-77.2us; 8x shape 35.1->33.2us; small shapes neutral","tests":"acceptance 25/25 dev+prod, golden 13 pass 29 xfail","ts":"2026-11-27T12:04:46-05:00"}
