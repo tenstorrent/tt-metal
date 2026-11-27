@@ -165,7 +165,7 @@ inline void matmul_load_replay_no_mop(const std::uint32_t ct_dim, const std::uin
 
     // WH records the replay image explicitly at init/reinit time rather than
     // assuming it persists like the BH path does.
-    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, replay_buf_len);
+    TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 1);
     matmul_emit_replay_program_no_mop<math_fidelity>(ct_dim, rt_dim);
 }
 
@@ -174,7 +174,7 @@ inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, con
 {
     if constexpr (!is_high_fidelity(math_fidelity))
     {
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
         return;
     }
 
@@ -184,7 +184,7 @@ inline void matmul_execute_replay_no_mop(const std::uint32_t replay_buf_len, con
     constexpr std::uint32_t num_replay = to_underlying(math_fidelity);
     for (std::uint32_t replay = 0; replay < num_replay; replay++)
     {
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+        TTI_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
     }
 
     if (t_dim > 1)

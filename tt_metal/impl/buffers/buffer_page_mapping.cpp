@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/buffer_page_mapping.hpp>
+#include <tt-metalium/memory/buffer/buffer_page_mapping.hpp>
 
 namespace tt::tt_metal {
 

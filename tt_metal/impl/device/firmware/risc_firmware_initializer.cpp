@@ -19,8 +19,8 @@
 #include "context/metal_context.hpp"
 #include "debug/l1_ecc_halt.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
@@ -38,7 +38,7 @@
 #include <experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-umd/types/blackhole_eth.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>

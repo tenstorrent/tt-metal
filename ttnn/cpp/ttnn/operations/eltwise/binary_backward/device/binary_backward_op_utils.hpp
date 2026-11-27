@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "ttnn/tensor/shape/shape.hpp"

@@ -14,7 +14,7 @@
 #include <string_view>
 #include <vector>
 
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
 #include <tt-umd/types/arch.hpp>

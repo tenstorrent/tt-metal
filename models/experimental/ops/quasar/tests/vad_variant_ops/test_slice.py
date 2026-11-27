@@ -46,6 +46,6 @@ def test_slice(ttnn_mesh_device, reset_seeds, shape, begins, ends, layout, dt, m
     x_torch = U.torch_rand(shape, dtype=torch.float32 if dt == "fp32" else torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt], layout=layout)
     src = U.seen(x, x_torch, mesh)
-    out = ttnn.slice(x, begins, ends, memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("slice")(x, begins, ends, memory_config=U.resolve_memcfg(mem, mesh))
     ref = src[tuple(slice(b, e) for b, e in zip(begins, ends))]
     U.assert_lossless(ref, out, mesh_device=mesh)

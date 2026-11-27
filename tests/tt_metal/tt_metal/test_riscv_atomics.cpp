@@ -9,19 +9,19 @@
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 

@@ -11,15 +11,15 @@
 #include <thread>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 
 #include "device_fixture.hpp"

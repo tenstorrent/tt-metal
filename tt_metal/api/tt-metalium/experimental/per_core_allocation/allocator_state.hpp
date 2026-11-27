@@ -7,10 +7,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
 

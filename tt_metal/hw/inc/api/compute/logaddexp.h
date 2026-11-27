@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_logaddexp.h"
@@ -31,7 +32,7 @@ namespace ckernel {
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void logaddexp_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void logaddexp_binary_tile(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -48,13 +49,7 @@ ALWI void logaddexp_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  */
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void logaddexp_binary_tile_init() {
-    // There is no SfpuType::logaddexp, so the enumerator here only selects an addrmod
-    // configuration. `unused` is the sentinel this directory uses for that case —
-    // binary_fmod.h, binary_remainder.h, atan2.h and xlogy.h all pass it. Neither
-    // `unused` nor `add1` appears in the eltwise_binary_sfpu_configure_addrmod
-    // allow-list, so the two are equivalent at runtime; `unused` is the one that says
-    // what is meant. The op-specific work is the program-constant load in
-    // calculate_sfpu_logaddexp_init.
+    // No SfpuType::logaddexp exists; `unused` selects no per-op init state.
     MATH((SFPU_BINARY_INIT_FN(unused, sfpu::calculate_sfpu_logaddexp_init, (is_fp32_dest_acc_en))));
 }
 
