@@ -51,6 +51,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/generators/fill.hpp"
 #include "vendor/gn_perf_instrumentation.hpp"
+#include "ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b/device/kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_sqrt.h"
@@ -61,75 +62,78 @@ using namespace compute_kernel_lib;
 using namespace gn_kernel_lib;
 
 namespace {
-constexpr uint32_t cb_input_rm = 0;
-constexpr uint32_t cb_output_rm = 1;  // sharded RM: the output shard (untilized rows)
+namespace gcb = gn_sc_args::cb;
+namespace gct = gn_sc_args::compute_ct;
+constexpr uint32_t cb_input_rm = gcb::INPUT_RM;
+constexpr uint32_t cb_output_rm = gcb::OUTPUT_RM;  // sharded RM: the output shard (untilized rows)
 // The input ring: one allocation, two FIFO views pushed in lockstep (alias group A). Pass 1 consumes every
 // chunk through cb_input_tiles; cb_input_keep drops the streamed head chunks during pass 1 and holds the
 // resident tail for pass 2, followed by the re-read head - exactly the pass-2 order.
-constexpr uint32_t cb_input_tiles = 2;
-constexpr uint32_t cb_input_keep = 3;
-constexpr uint32_t cb_output_tiles = 5;
-constexpr uint32_t cb_neg_one = 6;  // constant -1 (bf16, compute-generated once): the root finalize's in0 (-k, -S)
-constexpr uint32_t cb_sum_acc = 7;
-constexpr uint32_t cb_sumsq_acc = 8;
-constexpr uint32_t cb_chan_scale = 9;
-constexpr uint32_t cb_chan_work = 10;
-constexpr uint32_t cb_group_map = 12;
-constexpr uint32_t cb_gamma_rows = 13;  // expand in1: gamma map (W tiles) + beta map (W, with beta)
-constexpr uint32_t cb_local_partials = 15;
-constexpr uint32_t cb_gathered_partials = 16;
-constexpr uint32_t cb_stats_out = 19;
-constexpr uint32_t cb_group_stats = 20;
-constexpr uint32_t cb_pilot_rows = 22;   // -k per channel (row 0), held for pass 1
-constexpr uint32_t cb_group_shift = 24;  // root: k per group lane in row 0, rows 1..31 zero (finalize_raw)
+constexpr uint32_t cb_input_tiles = gcb::INPUT_TILES;
+constexpr uint32_t cb_input_keep = gcb::INPUT_KEEP;
+constexpr uint32_t cb_output_tiles = gcb::OUTPUT_TILES;
+constexpr uint32_t cb_neg_one = gcb::NEG_ONE;  // constant -1 (bf16): the root finalize's in0 (-k, -S)
+constexpr uint32_t cb_sum_acc = gcb::SUM_ACC;
+constexpr uint32_t cb_sumsq_acc = gcb::SUMSQ_ACC;
+constexpr uint32_t cb_chan_scale = gcb::CHAN_SCALE;
+constexpr uint32_t cb_chan_work = gcb::CHAN_WORK;
+constexpr uint32_t cb_group_map = gcb::GROUP_MAP;
+constexpr uint32_t cb_gamma_rows = gcb::GAMMA_ROWS;  // expand in1: gamma map (W tiles) + beta map (W, with beta)
+constexpr uint32_t cb_local_partials = gcb::LOCAL_PARTIALS;
+constexpr uint32_t cb_gathered_partials = gcb::GATHERED_PARTIALS;
+constexpr uint32_t cb_stats_out = gcb::STATS_OUT;
+constexpr uint32_t cb_group_stats = gcb::GROUP_STATS;
+constexpr uint32_t cb_pilot_rows = gcb::PILOT_ROWS;    // -k per channel (row 0), held for pass 1
+constexpr uint32_t cb_group_shift = gcb::GROUP_SHIFT;  // root: k per group lane in row 0, rows 1..31 zero
 // Sharded RM (Refinement 3, alias group F): partial / image-mixed tile rows staged k-filled by the reader (tilized
 // in pass 1), and their normalized rows (untilized in pass 2, copied back to the output shard by the writer).
-constexpr uint32_t cb_rm_stage_in = 25;
-constexpr uint32_t cb_rm_stage_out = 26;
+constexpr uint32_t cb_rm_stage_in = gcb::RM_STAGE_IN;
+constexpr uint32_t cb_rm_stage_out = gcb::RM_STAGE_OUT;
 // DRAM interleaved output split across both DM RISCs: per pass-2 chunk the packer takes whichever output CB has a free
 // chunk slot - the writer's cb_output_tiles first, else the reader's cb_output_b - and names the chunk's pass-2 index
 // on that consumer's sequence CB (one 16 B uint32 page per chunk; OUT_SEQ_END closes the block). Each RISC writes its
 // share on its own NoC, so a core whose writer NoC is congested hands the excess to the reader's NoC.
-constexpr uint32_t cb_output_b = 27;
-constexpr uint32_t cb_out_seq_a = 28;  // -> writer
-constexpr uint32_t cb_out_seq_b = 29;  // -> reader
-constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
+constexpr uint32_t cb_output_b = gcb::OUTPUT_B;
+constexpr uint32_t cb_out_seq_a = gcb::OUT_SEQ_A;  // -> writer
+constexpr uint32_t cb_out_seq_b = gcb::OUT_SEQ_B;  // -> reader
+constexpr uint32_t OUT_SEQ_END = gn_sc_args::OUT_SEQ_END;
 
-constexpr uint32_t W = get_compile_time_arg_val(0);
-constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);
-constexpr bool IS_RM = get_compile_time_arg_val(2) != 0;
-constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
-constexpr bool HAS_BETA = get_compile_time_arg_val(4) != 0;
-constexpr uint32_t R = get_compile_time_arg_val(5);
+constexpr uint32_t W = get_compile_time_arg_val(gct::W);
+constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(gct::CHUNK_HT);
+constexpr bool IS_RM = get_compile_time_arg_val(gct::IS_RM) != 0;
+constexpr bool HAS_GAMMA = get_compile_time_arg_val(gct::HAS_GAMMA) != 0;
+constexpr bool HAS_BETA = get_compile_time_arg_val(gct::HAS_BETA) != 0;
+constexpr uint32_t R = get_compile_time_arg_val(gct::R);
 // The input / output are L1 shards backing their CBs (TILE: the input ring and cb_output_tiles; RM: cb_input_rm
 // and cb_output_rm). Sharded RM untilizes each normalized chunk into the output shard.
-constexpr bool SHARDED = get_compile_time_arg_val(6) != 0;
+constexpr bool SHARDED = get_compile_time_arg_val(gct::SHARDED) != 0;
 constexpr bool UNTILIZE_OUT = SHARDED && IS_RM;
 // One binary per role (the unit root combines and finalizes). Compile-time so the block loop is not unswitched on
 // it (two copies of the whole per-block body would not fit the kernel-config ring under the watcher build).
-constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;
+constexpr bool IS_ROOT = get_compile_time_arg_val(gct::IS_ROOT) != 0;
 // Per-chunk device zones (perf_instrumentation.hpp): the host enables them only when every core's chunk count keeps
 // the zone executions inside the per-RISC marker budget (a long DRAM block would silently exhaust it).
-constexpr bool CHUNK_ZONES = get_compile_time_arg_val(8) != 0;
+constexpr bool CHUNK_ZONES = get_compile_time_arg_val(gct::CHUNK_ZONES) != 0;
 // Images per statistic unit (sharded: an image band of the grid; interleaved: 1). cb_group_stats holds
 // [rstd, mean*rstd] per image, then e.
-constexpr uint32_t NU = get_compile_time_arg_val(9);
-constexpr uint32_t P = get_compile_time_arg_val(10);  // MAP_PERIOD: channels per slice period (sharded: shard width)
+constexpr uint32_t NU = get_compile_time_arg_val(gct::NU);
+// MAP_PERIOD: channels per slice period (sharded: shard width)
+constexpr uint32_t P = get_compile_time_arg_val(gct::MAP_PERIOD);
 // Sharded RM with a padded last core column, or an interleaved C % 32 != 0 input (Refinement 6: its last column
 // slice is partial): lanes past the slice's valid channels are zeroed after the column collapse (shard padding bytes,
 // TILE padding and never-read RM lanes are not data, possibly not finite: a lane select, not a multiply).
-constexpr bool COL_MASK = get_compile_time_arg_val(11) != 0;
-constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
+constexpr bool COL_MASK = get_compile_time_arg_val(gct::COL_MASK) != 0;
+constexpr bool HAS_STAGE = get_compile_time_arg_val(gct::HAS_STAGE) != 0;
 // Sharded, fully resident: the core's shard is walked as op words (descriptor _rm_core_ops / TILE segments), one
 // statistic set per image segment.
-constexpr bool OPS = get_compile_time_arg_val(13) != 0;
+constexpr bool OPS = get_compile_time_arg_val(gct::OPS) != 0;
 // Interleaved (Refinement 6): column slices per image; the last one holds VC_LAST valid channels (P when aligned).
-constexpr uint32_t GX = get_compile_time_arg_val(14);
-constexpr uint32_t VC_LAST = get_compile_time_arg_val(15);
-constexpr uint32_t OP_ROWS = 0xFFFF;
-constexpr uint32_t OP_STAGED = 1u << 16;
-constexpr uint32_t OP_SEG_END = 1u << 17;
-constexpr uint32_t OP_SKIP = 1u << 18;
+constexpr uint32_t GX = get_compile_time_arg_val(gct::GX);
+constexpr uint32_t VC_LAST = get_compile_time_arg_val(gct::VC_LAST);
+constexpr uint32_t OP_ROWS = gn_sc_args::OP_ROWS;
+constexpr uint32_t OP_STAGED = gn_sc_args::OP_STAGED;
+constexpr uint32_t OP_SEG_END = gn_sc_args::OP_SEG_END;
+constexpr uint32_t OP_SKIP = gn_sc_args::OP_SKIP;
 constexpr uint32_t T = CHUNK_HT * W;
 // Tiles per DEST window of the pass-2 chain a*x - b': each element runs over the whole window, so its FPU init is paid
 // once per window, not per tile. The chain clamps it to DEST.
@@ -864,22 +868,23 @@ ALWI void expand_matmul(uint32_t in0_cb, uint32_t in0_off, uint32_t in1_cb, uint
 }  // namespace
 
 void kernel_main() {
-    uint32_t arg = 0;
-    const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);
-    const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
-    const uint32_t inv_n_bits = get_arg_val<uint32_t>(arg++);
-    const uint32_t eps_bits = get_arg_val<uint32_t>(arg++);
+    namespace crt = gn_sc_args::compute_rt;
+    const uint32_t num_blocks = get_arg_val<uint32_t>(crt::NUM_BLOCKS);
+    const uint32_t rows_core = get_arg_val<uint32_t>(crt::ROWS_CORE);
+    const uint32_t resident_chunks = get_arg_val<uint32_t>(crt::RESIDENT_CHUNKS);
+    const uint32_t inv_n_bits = get_arg_val<uint32_t>(crt::INV_N_BITS);
+    const uint32_t eps_bits = get_arg_val<uint32_t>(crt::EPS_BITS);
     // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
-    const uint32_t n_img_rt = get_arg_val<uint32_t>(arg++);     // images of the unit (root: statistic sets to finalize)
-    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(arg++);  // unit image of this core's first segment
+    const uint32_t n_img_rt = get_arg_val<uint32_t>(crt::N_IMG);        // images of the unit (root: sets to finalize)
+    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(crt::SEG_IMG0);  // unit image of this core's first segment
     const uint32_t n_img = NU == 1 ? 1 : n_img_rt;
     const uint32_t seg_img0 = NU == 1 ? 0 : seg_img0_rt;
-    const uint32_t w_valid = get_arg_val<uint32_t>(arg++);   // TILE: channel tiles holding data
-    const uint32_t vc_arg = get_arg_val<uint32_t>(arg++);    // sharded: valid channels of the slice
-    const uint32_t unit_start = get_arg_val<uint32_t>(arg++);  // interleaved: block b's unit is unit_start + b
-    const uint32_t n_ops = get_arg_val<uint32_t>(arg++);
-    const uint32_t ops_arg = arg;
+    const uint32_t w_valid = get_arg_val<uint32_t>(crt::W_VALID);  // TILE: channel tiles holding data
+    const uint32_t vc_arg = get_arg_val<uint32_t>(crt::VC);        // sharded: valid channels of the slice
+    const uint32_t unit_start =
+        get_arg_val<uint32_t>(crt::UNIT_START);  // interleaved: block b's unit is unit_start + b
+    const uint32_t n_ops = get_arg_val<uint32_t>(crt::N_OPS);
+    const uint32_t ops_arg = crt::OPS_TAIL;
     const uint32_t vc = SHARDED ? vc_arg : P;
 
     CircularBuffer chan_scale_cb(cb_chan_scale);

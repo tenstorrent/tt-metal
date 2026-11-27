@@ -86,6 +86,7 @@
 #include "ttnn/operations/rand/rand_nanobind.hpp"
 #include "ttnn/operations/randn/randn_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
+#include "ttnn/operations/groupnorm_sc_N_1_HW_C_b/groupnorm_sc_N_1_HW_C_b_nanobind.hpp"
 
 namespace nb = nanobind;
 
@@ -229,6 +230,9 @@ void py_module(nb::module_& mod) {
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);
+
+    auto m_groupnorm_sc_N_1_HW_C_b = mod.def_submodule("groupnorm_sc_N_1_HW_C_b", "groupnorm_sc_N_1_HW_C_b operation");
+    groupnorm_sc_N_1_HW_C_b::bind_groupnorm_sc_N_1_HW_C_b_operation(m_groupnorm_sc_N_1_HW_C_b);
 }
 }  // namespace ttnn::operations
 

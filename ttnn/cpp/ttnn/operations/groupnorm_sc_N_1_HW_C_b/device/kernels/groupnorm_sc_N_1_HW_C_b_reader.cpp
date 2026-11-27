@@ -51,28 +51,30 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "vendor/gn_perf_instrumentation.hpp"
+#include "ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b/device/kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 
 namespace {
-constexpr uint32_t cb_input_rm = 0;
-constexpr uint32_t cb_input_tiles = 2;  // input ring, pass-1 view (alias group A)
-constexpr uint32_t cb_input_keep = 3;   // input ring, pass-2 view (same bytes, pushed in lockstep)
-constexpr uint32_t cb_group_map = 12;
-constexpr uint32_t cb_gamma_rows = 13;  // the expand matmul's in1: gamma map (+ beta map)
-constexpr uint32_t cb_affine_staging = 21;
-constexpr uint32_t cb_pilot_rows = 22;
-constexpr uint32_t cb_group_shift = 24;
-constexpr uint32_t cb_rm_stage_in = 25;  // sharded RM: staged partial / image-mixed tile rows (+ k-fill template)
-constexpr uint32_t cb_output_b = 27;   // DRAM interleaved: this RISC's share of the pass-2 output
-constexpr uint32_t cb_out_seq_b = 29;  // pass-2 index of each chunk compute packed into cb_output_b (16 B pages)
-constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
+namespace gcb = gn_sc_args::cb;
+constexpr uint32_t cb_input_rm = gcb::INPUT_RM;
+constexpr uint32_t cb_input_tiles = gcb::INPUT_TILES;  // input ring, pass-1 view (alias group A)
+constexpr uint32_t cb_input_keep = gcb::INPUT_KEEP;    // input ring, pass-2 view (same bytes, pushed in lockstep)
+constexpr uint32_t cb_group_map = gcb::GROUP_MAP;
+constexpr uint32_t cb_gamma_rows = gcb::GAMMA_ROWS;  // the expand matmul's in1: gamma map (+ beta map)
+constexpr uint32_t cb_affine_staging = gcb::AFFINE_STAGING;
+constexpr uint32_t cb_pilot_rows = gcb::PILOT_ROWS;
+constexpr uint32_t cb_group_shift = gcb::GROUP_SHIFT;
+constexpr uint32_t cb_rm_stage_in = gcb::RM_STAGE_IN;  // sharded RM: staged partial / image-mixed tile rows
+constexpr uint32_t cb_output_b = gcb::OUTPUT_B;        // DRAM interleaved: this RISC's share of the pass-2 output
+constexpr uint32_t cb_out_seq_b = gcb::OUT_SEQ_B;      // pass-2 index of each chunk packed into cb_output_b
+constexpr uint32_t OUT_SEQ_END = gn_sc_args::OUT_SEQ_END;
 
 constexpr uint32_t BF16_TILE_BYTES = 2048;  // the group map (always bf16)
 constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t BF16_ONE = 0x3F80;
-constexpr uint32_t ALIGN = 64;               // DRAM read alignment (BH)
-constexpr uint32_t ROW0_READ_BYTES = 64;     // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
-constexpr uint32_t MAX_LANES = 32;           // group lanes in one tile row
-constexpr uint32_t PILOT_SLOT_BYTES = 16;    // sharded TILE pilot: one 16 B read per group lane
+constexpr uint32_t ALIGN = 64;             // DRAM read alignment (BH)
+constexpr uint32_t ROW0_READ_BYTES = 64;   // TILE pilot / gamma: one read of a face's row 0 (bf16: rows 0-1)
+constexpr uint32_t MAX_LANES = 32;         // group lanes in one tile row
+constexpr uint32_t PILOT_SLOT_BYTES = 16;  // sharded TILE pilot: one 16 B read per group lane
 // bfloat8_b tile (Refinement 7): a 64 B exponent section - one shared exponent byte per 16-lane face row, face-major
 // (face f row r at f * 16 + r) - then one sign | 7-bit magnitude byte per element (hidden bit at bit 6), face-major.
 constexpr uint32_t BFP8_EXP_BYTES = 64;
@@ -160,41 +162,43 @@ FORCE_INLINE void copy_run(volatile tt_l1_ptr uint32_t* d, volatile tt_l1_ptr ui
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t W = get_compile_time_arg_val(0);         // Wt_core: channel tiles per block
-    constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);  // h: tile rows per chunk
-    constexpr bool IS_RM = get_compile_time_arg_val(2) != 0;
-    constexpr bool HAS_GAMMA = get_compile_time_arg_val(3) != 0;
-    constexpr bool HAS_BETA = get_compile_time_arg_val(4) != 0;
-    // CT arg 5: R, the gather tile rows (compute / writer only since the ones tiles were dropped).
-    constexpr uint32_t CG = get_compile_time_arg_val(6);
-    constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(7);
-    constexpr uint32_t HT = get_compile_time_arg_val(8);
-    constexpr uint32_t GX = get_compile_time_arg_val(9);
-    constexpr uint32_t IN_PAGE_BYTES = get_compile_time_arg_val(10);
-    constexpr uint32_t P = get_compile_time_arg_val(11);  // MAP_PERIOD: channels per slice (sharded: the shard width)
-    constexpr bool SHARDED = get_compile_time_arg_val(12) != 0;
+    namespace rct = gn_sc_args::reader_ct;
+    constexpr uint32_t W = get_compile_time_arg_val(rct::W);                // Wt_core: channel tiles per block
+    constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(rct::CHUNK_HT);  // h: tile rows per chunk
+    constexpr bool IS_RM = get_compile_time_arg_val(rct::IS_RM) != 0;
+    constexpr bool HAS_GAMMA = get_compile_time_arg_val(rct::HAS_GAMMA) != 0;
+    constexpr bool HAS_BETA = get_compile_time_arg_val(rct::HAS_BETA) != 0;
+    // CT arg R: the gather tile rows (compute / writer only since the ones tiles were dropped).
+    constexpr uint32_t CG = get_compile_time_arg_val(rct::CG);
+    constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(rct::WT_TOTAL);
+    constexpr uint32_t HT = get_compile_time_arg_val(rct::HT);
+    constexpr uint32_t GX = get_compile_time_arg_val(rct::GX);
+    constexpr uint32_t IN_PAGE_BYTES = get_compile_time_arg_val(rct::IN_PAGE_BYTES);
+    // MAP_PERIOD: channels per slice (sharded: the shard width)
+    constexpr uint32_t P = get_compile_time_arg_val(rct::MAP_PERIOD);
+    constexpr bool SHARDED = get_compile_time_arg_val(rct::SHARDED) != 0;
     // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
-    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(13) != 0;
+    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(rct::CHUNK_ZONES) != 0;
     // Sharded RM (Refinement 3): partial / image-mixed tile rows are staged here (k-filled) for compute to tilize.
-    constexpr bool HAS_STAGE = get_compile_time_arg_val(14) != 0;
+    constexpr bool HAS_STAGE = get_compile_time_arg_val(rct::HAS_STAGE) != 0;
     // Sharded, fully resident: the shard's pieces are walked once (no pass-2 re-read credits).
-    constexpr bool OPS = get_compile_time_arg_val(15) != 0;
+    constexpr bool OPS = get_compile_time_arg_val(rct::OPS) != 0;
     // Formats (Refinement 4): the input's tile bytes, gamma / beta's element bytes, layout and page bytes.
-    constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(16);
-    constexpr uint32_t AFF_ELEM = get_compile_time_arg_val(17);
-    constexpr bool AFF_TILE = get_compile_time_arg_val(18) != 0;
-    constexpr uint32_t AFF_PAGE_BYTES = get_compile_time_arg_val(19);
+    constexpr uint32_t IN_TILE_BYTES = get_compile_time_arg_val(rct::IN_TILE_BYTES);
+    constexpr uint32_t AFF_ELEM = get_compile_time_arg_val(rct::AFF_ELEM);
+    constexpr bool AFF_TILE = get_compile_time_arg_val(rct::AFF_TILE) != 0;
+    constexpr uint32_t AFF_PAGE_BYTES = get_compile_time_arg_val(rct::AFF_PAGE_BYTES);
     // Refinement 5: an image's true row count (RM stick paging). HT = ceil(HW / 32) tile rows per image.
-    constexpr uint32_t HW = get_compile_time_arg_val(20);
+    constexpr uint32_t HW = get_compile_time_arg_val(rct::HW);
     // Refinement 6 (c_non_aligned, interleaved): valid channels of the last column slice (P when C % 32 == 0). That
     // slice is partial: VC_LAST channels (whole groups) in ceil(VC_LAST / 32) tiles. Only those are read and written;
     // its pad lanes (RM: never read; TILE: unspecified padding) are lane-masked by compute after the column collapse.
-    constexpr uint32_t VC_LAST = get_compile_time_arg_val(21);
+    constexpr uint32_t VC_LAST = get_compile_time_arg_val(rct::VC_LAST);
     // Refinement 7: bfloat8_b input (TILE, interleaved) / gamma / beta (TILE). Their staged row-0 values (the pilot k,
     // the affine maps' source) are decoded to bf16; the k-fill writes the pad rows in the input's shared-exponent form.
-    constexpr bool IN_BFP8 = get_compile_time_arg_val(22) != 0;
-    constexpr bool AFF_BFP8 = get_compile_time_arg_val(23) != 0;
-    constexpr auto in_args = TensorAccessorArgs<24>();
+    constexpr bool IN_BFP8 = get_compile_time_arg_val(rct::IN_BFP8) != 0;
+    constexpr bool AFF_BFP8 = get_compile_time_arg_val(rct::AFF_BFP8) != 0;
+    constexpr auto in_args = TensorAccessorArgs<rct::COUNT>();
     constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
     // The output (written for this RISC's pass-2 share; DRAM interleaved only).
@@ -233,29 +237,29 @@ void kernel_main() {
     constexpr uint32_t AFFINE_STAGE_BYTES =
         AFF_TILE ? W * AFF_TILE_STAGE : ((P * AFF_ELEM + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
 
-    uint32_t arg = 0;
-    const uint32_t in_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t unit_start = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);
-    const uint32_t row_start = get_arg_val<uint32_t>(arg++);
-    const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
-    const uint32_t is_root = get_arg_val<uint32_t>(arg++);
-    const uint32_t root_x = get_arg_val<uint32_t>(arg++);  // SHARDED: unit root (virtual), first core row of the band
-    const uint32_t root_y = get_arg_val<uint32_t>(arg++);
-    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
+    namespace rrt = gn_sc_args::reader_rt;
+    const uint32_t in_addr = get_arg_val<uint32_t>(rrt::IN_ADDR);
+    const uint32_t gamma_addr = get_arg_val<uint32_t>(rrt::GAMMA_ADDR);
+    const uint32_t beta_addr = get_arg_val<uint32_t>(rrt::BETA_ADDR);
+    const uint32_t unit_start = get_arg_val<uint32_t>(rrt::UNIT_START);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(rrt::NUM_BLOCKS);
+    const uint32_t row_start = get_arg_val<uint32_t>(rrt::ROW_START);
+    const uint32_t rows_core = get_arg_val<uint32_t>(rrt::ROWS_CORE);
+    const uint32_t resident_chunks = get_arg_val<uint32_t>(rrt::RESIDENT_CHUNKS);
+    const uint32_t is_root = get_arg_val<uint32_t>(rrt::IS_ROOT);
+    const uint32_t root_x = get_arg_val<uint32_t>(rrt::ROOT_X);  // SHARDED: unit root (virtual), first band row
+    const uint32_t root_y = get_arg_val<uint32_t>(rrt::ROOT_Y);
+    const uint32_t out_addr = get_arg_val<uint32_t>(rrt::OUT_ADDR);
     // Sharded slice geometry (interleaved: derived per block below). Lanes count the statistic unit's groups.
-    const uint32_t sh_xs = get_arg_val<uint32_t>(arg++);    // first channel of the slice
-    const uint32_t sh_vc = get_arg_val<uint32_t>(arg++);    // its valid channels (padded last column: < P)
-    const uint32_t sh_l0 = get_arg_val<uint32_t>(arg++);    // group lane of the first channel
-    const uint32_t sh_off0 = get_arg_val<uint32_t>(arg++);  // its offset inside that group
-    const uint32_t g_unit = get_arg_val<uint32_t>(arg++);   // group lanes of the unit
-    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_cols = get_arg_val<uint32_t>(arg++);  // the unit's core columns (pilot sources), virtual x
-    const uint32_t cols_arg = arg;
-    arg += n_cols;
+    const uint32_t sh_xs = get_arg_val<uint32_t>(rrt::XS);       // first channel of the slice
+    const uint32_t sh_vc = get_arg_val<uint32_t>(rrt::VC);       // its valid channels (padded last column: < P)
+    const uint32_t sh_l0 = get_arg_val<uint32_t>(rrt::L0);       // group lane of the first channel
+    const uint32_t sh_off0 = get_arg_val<uint32_t>(rrt::OFF0);   // its offset inside that group
+    const uint32_t g_unit = get_arg_val<uint32_t>(rrt::G_UNIT);  // group lanes of the unit
+    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(rrt::RM_CREDIT_PAGES);
+    const uint32_t n_cols = get_arg_val<uint32_t>(rrt::N_COLS);  // the unit's core columns (pilot sources), virtual x
+    const uint32_t cols_arg = rrt::COLS_TAIL;
+    uint32_t arg = cols_arg + n_cols;
     const uint32_t n_staged = get_arg_val<uint32_t>(arg++);  // RM staged rows: (shard stick, position, sticks)
     const uint32_t staged_arg = arg;
 

@@ -4,7 +4,9 @@
 """
 groupnorm_sc_N_1_HW_C_b — GroupNorm over an (N, 1, HW, C) channels-last activation.
 
-One `ttnn.generic_op` dispatch per call. Two-pass statistics (shifted moments Σ(x−k), Σx(x−k) per
+The operation is the native C++ ttnn.groupnorm_sc_N_1_HW_C_b (ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b),
+which plans, checks this support contract and refuses inputs outside it with the same exceptions; this module
+keeps the contract tables, validate() and TUNING_OVERRIDES (read by the binding on every call). Two-pass statistics (shifted moments Σ(x−k), Σx(x−k) per
 channel, k one sample per group) on a row-split, multi-core grid; per-core partials are collapsed to
 group lanes, gathered to a per-unit root, finalized to [rstd, mean], multicast back, expanded to
 per-channel a = rstd·γ and b' = mean·a − β, and applied as y = x·a − b'. Design: op_design.md.
@@ -220,44 +222,12 @@ def validate(input_tensor, num_groups, *, gamma=None, beta=None, eps=1e-5, in_pl
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"groupnorm_sc_N_1_HW_C_b: unsupported combination (refinement candidate): {exc}")
 
-    # Shape-class gate: a feasible column-slice count must exist (cross_column_group_combine regime).
-    from .groupnorm_sc_N_1_HW_C_b_program_descriptor import formats_of, plan_or_raise
-
-    return plan_or_raise(
-        input_tensor,
-        num_groups,
-        has_gamma=gamma is not None,
-        has_beta=beta is not None,
-        in_place=bool(in_place),
-        fmt=formats_of(input_tensor, gamma, beta),
-    )
+    # The shape-class gate (a feasible column-slice count, the L1 fit) is the C++ planner's: it raises
+    # NotImplementedError when the op is called.
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point: the registered C++ operation
 # ---------------------------------------------------------------------------
 
-
-def groupnorm_sc_N_1_HW_C_b(input_tensor, num_groups, *, gamma=None, beta=None, eps=1e-5, in_place=False):
-    plan = validate(input_tensor, num_groups, gamma=gamma, beta=beta, eps=eps, in_place=in_place)
-
-    from .groupnorm_sc_N_1_HW_C_b_program_descriptor import create_program_descriptor
-
-    if in_place:
-        # The result overwrites the input's own shard (validate() admits in_place only for BLOCK_SHARDED).
-        output_tensor = input_tensor
-    else:
-        sharded = input_tensor.is_sharded()
-        output_tensor = ttnn.allocate_tensor_on_device(
-            ttnn.Shape(list(input_tensor.shape)),
-            input_tensor.dtype,
-            input_tensor.layout if sharded else ttnn.TILE_LAYOUT,
-            input_tensor.device(),
-            input_tensor.memory_config() if sharded else ttnn.DRAM_MEMORY_CONFIG,
-        )
-    program_descriptor = create_program_descriptor(plan, input_tensor, output_tensor, gamma=gamma, beta=beta, eps=eps)
-    # The output is the last io tensor. In place, the input *is* the output: list it once, as the output.
-    io_tensors = [] if in_place else [input_tensor]
-    io_tensors.extend(t for t in (gamma, beta) if t is not None)
-    io_tensors.append(output_tensor)
-    return ttnn.generic_op(io_tensors, program_descriptor)
+groupnorm_sc_N_1_HW_C_b = ttnn.groupnorm_sc_N_1_HW_C_b

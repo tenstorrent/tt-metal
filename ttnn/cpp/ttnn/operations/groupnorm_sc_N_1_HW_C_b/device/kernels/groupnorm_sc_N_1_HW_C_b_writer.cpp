@@ -31,22 +31,24 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 #include "vendor/gn_perf_instrumentation.hpp"
+#include "ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b/device/kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 
 namespace {
-constexpr uint32_t cb_output_rm = 1;
-constexpr uint32_t cb_output_tiles = 5;
-constexpr uint32_t cb_local_partials = 15;
-constexpr uint32_t cb_gathered_partials = 16;
-constexpr uint32_t cb_stats_out = 19;
-constexpr uint32_t cb_group_stats = 20;
-constexpr uint32_t cb_rm_stage_out = 26;  // sharded RM: normalized staged tile rows (untilized)
-constexpr uint32_t cb_out_seq_a = 28;  // DRAM interleaved: pass-2 index of each chunk packed into cb_output_tiles
-constexpr uint32_t OUT_SEQ_END = 0xFFFFFFFFu;
+namespace gcb = gn_sc_args::cb;
+constexpr uint32_t cb_output_rm = gcb::OUTPUT_RM;
+constexpr uint32_t cb_output_tiles = gcb::OUTPUT_TILES;
+constexpr uint32_t cb_local_partials = gcb::LOCAL_PARTIALS;
+constexpr uint32_t cb_gathered_partials = gcb::GATHERED_PARTIALS;
+constexpr uint32_t cb_stats_out = gcb::STATS_OUT;
+constexpr uint32_t cb_group_stats = gcb::GROUP_STATS;
+constexpr uint32_t cb_rm_stage_out = gcb::RM_STAGE_OUT;  // sharded RM: normalized staged tile rows (untilized)
+constexpr uint32_t cb_out_seq_a = gcb::OUT_SEQ_A;  // DRAM interleaved: pass-2 index of each chunk in cb_output_tiles
+constexpr uint32_t OUT_SEQ_END = gn_sc_args::OUT_SEQ_END;
 
 constexpr uint32_t F32_TILE_BYTES = 4096;
 constexpr uint32_t F32_FACE_BYTES = 1024;
 constexpr uint32_t F32_FACE_ROW_BYTES = 64;  // 16 fp32 lanes
-constexpr uint32_t GATHER_SEMAPHORE_ID = 0;
+constexpr uint32_t GATHER_SEMAPHORE_ID = gn_sc_args::GATHER_SEMAPHORE_ID;
 
 // Byte offset of tile row `row`'s first half (lanes 0..15) in a 32x32 fp32 tile; the second half
 // (lanes 16..31) is one face further.
@@ -56,26 +58,27 @@ FORCE_INLINE uint32_t face_row_lo(uint32_t row) {
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t W = get_compile_time_arg_val(0);
-    constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(1);
-    constexpr uint32_t R = get_compile_time_arg_val(2);
-    constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(3);
-    constexpr uint32_t HT = get_compile_time_arg_val(4);
-    constexpr uint32_t GX = get_compile_time_arg_val(5);
-    constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(6);
-    constexpr bool IS_ROOT = get_compile_time_arg_val(7) != 0;  // one binary per role (unit root / member)
-    constexpr bool IS_RM = get_compile_time_arg_val(8) != 0;
-    constexpr bool SHARDED = get_compile_time_arg_val(9) != 0;
+    namespace wct = gn_sc_args::writer_ct;
+    constexpr uint32_t W = get_compile_time_arg_val(wct::W);
+    constexpr uint32_t CHUNK_HT = get_compile_time_arg_val(wct::CHUNK_HT);
+    constexpr uint32_t R = get_compile_time_arg_val(wct::R);
+    constexpr uint32_t WT_TOTAL = get_compile_time_arg_val(wct::WT_TOTAL);
+    constexpr uint32_t HT = get_compile_time_arg_val(wct::HT);
+    constexpr uint32_t GX = get_compile_time_arg_val(wct::GX);
+    constexpr uint32_t OUT_PAGE_BYTES = get_compile_time_arg_val(wct::OUT_PAGE_BYTES);
+    constexpr bool IS_ROOT = get_compile_time_arg_val(wct::IS_ROOT) != 0;  // one binary per role (root / member)
+    constexpr bool IS_RM = get_compile_time_arg_val(wct::IS_RM) != 0;
+    constexpr bool SHARDED = get_compile_time_arg_val(wct::SHARDED) != 0;
     // Per-chunk zones only when the host found every chunk's zone executions inside the marker budget.
-    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(10) != 0;
-    constexpr uint32_t NU = get_compile_time_arg_val(11);  // images per statistic unit (cb_group_stats: 2 per image)
-    constexpr bool HAS_STAGE = get_compile_time_arg_val(12) != 0;
-    constexpr bool OPS = get_compile_time_arg_val(13) != 0;  // sharded, fully resident pieces
-    constexpr uint32_t P = get_compile_time_arg_val(14);     // MAP_PERIOD (sharded RM: the stick's channels)
+    constexpr bool CHUNK_ZONES = get_compile_time_arg_val(wct::CHUNK_ZONES) != 0;
+    constexpr uint32_t NU = get_compile_time_arg_val(wct::NU);  // images per statistic unit (2 stats pages each)
+    constexpr bool HAS_STAGE = get_compile_time_arg_val(wct::HAS_STAGE) != 0;
+    constexpr bool OPS = get_compile_time_arg_val(wct::OPS) != 0;      // sharded, fully resident pieces
+    constexpr uint32_t P = get_compile_time_arg_val(wct::MAP_PERIOD);  // sharded RM: the stick's channels
     // Refinement 6 (interleaved, C % 32 != 0): the last column slice's valid channels -> its W_LAST output tiles.
-    constexpr uint32_t VC_LAST = get_compile_time_arg_val(15);
+    constexpr uint32_t VC_LAST = get_compile_time_arg_val(wct::VC_LAST);
     constexpr uint32_t W_LAST = (VC_LAST + 31) / 32;
-    constexpr auto out_args = TensorAccessorArgs<16>();
+    constexpr auto out_args = TensorAccessorArgs<wct::COUNT>();
     constexpr auto mc = dataflow_kernel_lib::McastArgs<
         get_named_compile_time_arg_val("mcast_ct_offset"),
         get_named_compile_time_arg_val("mcast_rt_offset")>();
@@ -86,27 +89,27 @@ void kernel_main() {
     // cb_group_stats pages: [rstd, mean*rstd] per image, then e; only the image pairs are multicast.
     constexpr uint32_t N_STATS = 2 * NU + 1;
 
-    uint32_t arg = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t unit_start = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(arg++);
-    const uint32_t row_start = get_arg_val<uint32_t>(arg++);
-    const uint32_t rows_core = get_arg_val<uint32_t>(arg++);
-    const uint32_t resident_chunks = get_arg_val<uint32_t>(arg++);
-    const uint32_t slot = get_arg_val<uint32_t>(arg++);
-    const uint32_t root_x = get_arg_val<uint32_t>(arg++);
-    const uint32_t root_y = get_arg_val<uint32_t>(arg++);
-    const uint32_t cpi = get_arg_val<uint32_t>(arg++);
+    namespace wrt = gn_sc_args::writer_rt;
+    const uint32_t out_addr = get_arg_val<uint32_t>(wrt::OUT_ADDR);
+    const uint32_t unit_start = get_arg_val<uint32_t>(wrt::UNIT_START);
+    const uint32_t num_blocks = get_arg_val<uint32_t>(wrt::NUM_BLOCKS);
+    const uint32_t row_start = get_arg_val<uint32_t>(wrt::ROW_START);
+    const uint32_t rows_core = get_arg_val<uint32_t>(wrt::ROWS_CORE);
+    const uint32_t resident_chunks = get_arg_val<uint32_t>(wrt::RESIDENT_CHUNKS);
+    const uint32_t slot = get_arg_val<uint32_t>(wrt::SLOT);
+    const uint32_t root_x = get_arg_val<uint32_t>(wrt::ROOT_X);
+    const uint32_t root_y = get_arg_val<uint32_t>(wrt::ROOT_Y);
+    const uint32_t cpi = get_arg_val<uint32_t>(wrt::CPI);
     // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
-    const uint32_t n_img_rt = get_arg_val<uint32_t>(arg++);     // images of this core's unit (<= NU)
-    const uint32_t n_seg_rt = get_arg_val<uint32_t>(arg++);     // this core's image segments (local partial pairs)
-    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(arg++);  // unit image of its first segment
+    const uint32_t n_img_rt = get_arg_val<uint32_t>(wrt::N_IMG);        // images of this core's unit (<= NU)
+    const uint32_t n_seg_rt = get_arg_val<uint32_t>(wrt::N_SEG);        // this core's image segments
+    const uint32_t seg_img0_rt = get_arg_val<uint32_t>(wrt::SEG_IMG0);  // unit image of its first segment
     const uint32_t n_img = NU == 1 ? 1 : n_img_rt;
     const uint32_t n_seg = NU == 1 ? 1 : n_seg_rt;
     const uint32_t seg_img0 = NU == 1 ? 0 : seg_img0_rt;
-    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(arg++);
-    const uint32_t n_staged = get_arg_val<uint32_t>(arg++);  // RM staged rows: (shard stick, position, sticks)
-    const uint32_t staged_arg = arg;
+    const uint32_t rm_credit_pages = get_arg_val<uint32_t>(wrt::RM_CREDIT_PAGES);
+    const uint32_t n_staged = get_arg_val<uint32_t>(wrt::N_STAGED);  // RM staged rows: (shard stick, position, sticks)
+    const uint32_t staged_arg = wrt::STAGED_TAIL;
 
     const auto out_acc = TensorAccessor(out_args, out_addr, OUT_PAGE_BYTES);
     Noc noc;
