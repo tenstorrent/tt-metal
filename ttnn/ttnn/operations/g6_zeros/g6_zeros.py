@@ -3,9 +3,10 @@
 
 """g6_zeros: a new DRAM-interleaved TILE tensor whose every element is +0.0.
 
-One device program per call: each writer core makes its zero bytes in its own
-L1 and writes its DRAM bank runs from them. Nothing is read, nothing is made
-on the host.
+One device program per call (regime `bank_run_write`): the output's pages are
+split bank-major over the whole grid; each core makes its zero bytes once in
+its own L1 and writes its <= 2 DRAM bank runs from them. Nothing is read,
+nothing is made on the host.
 """
 
 from __future__ import annotations
@@ -131,7 +132,10 @@ def _cache_key(shape, dtype, layout, memory_config, grid, num_dram_banks):
 
 
 def g6_zeros_plan(shape, *, dtype, device):
-    """The split a call with these arguments runs, without dispatching (writer role per core)."""
+    """The plan a call with these arguments runs, without dispatching (BB-08, BB-21).
+
+    Regime, grid, cores used, per-core role / position range / bank runs, zero source and packet size.
+    """
     grid, num_dram_banks = device_geometry(device)
     return make_plan(tuple(int(d) for d in shape), dtype, grid, num_dram_banks)
 

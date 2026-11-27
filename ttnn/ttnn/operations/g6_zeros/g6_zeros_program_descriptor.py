@@ -1,13 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_zeros program descriptor: bank-affine bank-run zero writes (regime R1).
+"""Program descriptor for g6_zeros: regime `bank_run_write`.
 
-In an interleaved DRAM tensor page p lies in bank p % num_dram_banks at slot
-p // num_dram_banks, and one bank's slots are contiguous. Each writer core owns
-a set of `BANKS_PER_CORE` banks and one balanced slot range in that set, and
-writes every bank's run of its slot range as contiguous NoC writes from a
-core-local zero source. Every page is written exactly once; nothing is read.
+The output's pages are re-indexed bank-major (bank 0's slots, then bank 1's, ...) and the position
+space is split into balanced contiguous ranges over the whole grid, row-major. Each core zero-fills
+one L1 source once, then writes every bank run inside its range as one contiguous DRAM range in
+packets that all read the same source. One writer kernel on every core of the grid rectangle.
 """
 
 from __future__ import annotations
@@ -21,184 +20,195 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 WRITER_KERNEL = str(KERNEL_DIR / "g6_zeros_writer.cpp")
 
 TILE_DIM = 32
+REGIME = "bank_run_write"
+ROLE = "zero_writer"
 
-# --- Block knobs (each defined once; every dependent quantity derives from them) ---
+# Packet-axis knob: one Blackhole NoC burst. The kernel also clamps packets to NOC_MAX_BURST_SIZE.
+ZERO_SRC_BYTES_MAX = 16384
+# Core rectangle (x, y) the positions are split over, anchored at (0, 0). None = the full compute grid.
+WRITER_GRID = None
+# Pages of cb_zero_src. The source is filled once and only read afterwards, so a deeper CB buys nothing.
+ZERO_SRC_DEPTH = 1
 
-# Upper bound on the zero source and on one NoC write: NOC_MAX_BURST_SIZE on Blackhole.
-ZERO_SOURCE_MAX_BYTES = 16384
-# Writer cores per DRAM bank (max_writer_cores = num_dram_banks * this, capped by the grid). None = the
-# whole compute grid. 1 measured fastest on all four production shapes: more writers per bank only add
-# NoC and DRAM-endpoint contention.
-WRITER_CORES_PER_BANK = 1
-# Banks one core visits. 1 = bank-affine; num_dram_banks = every core walks every bank, staggered.
-BANKS_PER_CORE = 1
-# Slots of one bank written as one block. None = the core's whole slot range.
-BLOCK_SLOTS = None
+CB_ZERO_SRC = 0
+# cb_zero_src holds raw bytes that never pass the unpacker or packer. A non-block format keeps a page
+# of zero_src_bytes legal for every output dtype (16384 B is not a whole number of bfloat8_b tiles).
+ZERO_SRC_CB_FORMAT = ttnn.float32
 
-CB_ZERO_SOURCE = 0
-# A byte scratch that never passes the packer: any non-block format holds it, whatever the output dtype.
-ZERO_SOURCE_CB_FORMAT = ttnn.float32
+# Common runtime args: [OUTPUT_ADDR_ARG] output buffer address, [TENSOR_PAGES_ARG] P.
+OUTPUT_ADDR_ARG = 0
+TENSOR_PAGES_ARG = 1
 
 
 def _ceil_div(a: int, b: int) -> int:
     return -(-a // b)
 
 
+def tensor_pages_of(shape) -> int:
+    d0, d1, d2, d3 = (int(d) for d in shape)
+    return d0 * d1 * _ceil_div(d2, TILE_DIM) * _ceil_div(d3, TILE_DIM)
+
+
+@dataclass(frozen=True)
+class Run:
+    bank: int
+    first_slot: int
+    slots: int
+
+
 @dataclass(frozen=True)
 class CoreWork:
     core: tuple  # (x, y) logical worker coordinate
-    bank_set_base: int
-    first_bank_offset: int
-    slot_begin: int
-    slots: int
-    block_slots: int
+    role: str  # ROLE, or "idle" for a core with no positions
+    q_begin: int
+    q_count: int
+    runs: tuple  # of Run; what the kernel derives from (q_begin, q_count) on its own
 
 
 @dataclass(frozen=True)
 class ZerosPlan:
+    regime: str
+    shape: tuple
+    dtype: object
+    grid: tuple  # (x, y) of the kernel's core rectangle
+    num_dram_banks: int  # reporting only: the kernel takes NUM_DRAM_BANKS
     tensor_pages: int
-    page_bytes: int
-    grid: tuple  # (x, y)
-    num_dram_banks: int
-    banks_per_core: int
-    num_writer_cores: int
-    zero_source_bytes: int
-    cores: tuple  # of CoreWork, row-major core order
-    writer_riscv: str = "BRISC (RISCV_0)"
-    writer_noc: str = "NOC_1"
-
-
-def tensor_pages_of(shape) -> int:
-    d0, d1, d2, d3 = shape
-    return d0 * d1 * (d2 // TILE_DIM) * (d3 // TILE_DIM)
-
-
-def page_bytes_of(dtype) -> int:
-    return _ceil_div(ttnn.tile_size(dtype), ttnn.get_dram_alignment()) * ttnn.get_dram_alignment()
+    aligned_page_bytes: int
+    cores_used: int
+    zero_src_bytes: int
+    zero_src_depth: int
+    packet_bytes: int  # before the kernel's NOC_MAX_BURST_SIZE clamp
+    cores: tuple  # of CoreWork, row-major over the whole grid, idle cores included
 
 
 def device_geometry(device):
-    grid = device.compute_with_storage_grid_size()
+    """(grid, num_dram_banks) of `device`; grid is the WRITER_GRID rectangle inside the compute grid."""
+    full = device.compute_with_storage_grid_size()
+    grid_x, grid_y = (int(full.x), int(full.y)) if WRITER_GRID is None else WRITER_GRID
+    if not (1 <= grid_x <= full.x and 1 <= grid_y <= full.y):
+        raise RuntimeError(f"g6_zeros: WRITER_GRID {WRITER_GRID} outside the compute grid {full}")
     dram = device.dram_grid_size()
-    return (grid.x, grid.y), dram.x * dram.y
+    return (grid_x, grid_y), int(dram.x) * int(dram.y)
+
+
+def bank_runs(q_begin: int, q_count: int, tensor_pages: int, num_dram_banks: int) -> tuple:
+    """Bank runs covering bank-major positions [q_begin, q_begin + q_count); mirrors the kernel."""
+    slots_per_bank = _ceil_div(tensor_pages, num_dram_banks)
+    full_banks = tensor_pages - num_dram_banks * (slots_per_bank - 1)
+    full_span = full_banks * slots_per_bank
+    runs = []
+    q, q_end = q_begin, q_begin + q_count
+    while q < q_end:
+        if q < full_span:
+            bank, slot, bank_slots = q // slots_per_bank, q % slots_per_bank, slots_per_bank
+        else:
+            bank_offset, slot = divmod(q - full_span, slots_per_bank - 1)
+            bank, bank_slots = full_banks + bank_offset, slots_per_bank - 1
+        run_slots = min(q_end - q, bank_slots - slot)
+        runs.append(Run(bank=bank, first_slot=slot, slots=run_slots))
+        q += run_slots
+    return tuple(runs)
 
 
 def make_plan(shape, dtype, grid, num_dram_banks) -> ZerosPlan:
-    """Derive the per-core split from the shape, dtype, device geometry and the block knobs."""
+    """The split of a call: balanced contiguous bank-major position ranges over the grid, row-major."""
+    shape = tuple(int(d) for d in shape)
     tensor_pages = tensor_pages_of(shape)
-    page_bytes = page_bytes_of(dtype)
+    aligned_page_bytes = ttnn.tile_size(dtype)
+    if aligned_page_bytes % 64:
+        raise RuntimeError(f"g6_zeros: page of {aligned_page_bytes} B is not 64 B aligned")
+
     grid_x, grid_y = grid
-    grid_cores = grid_x * grid_y
+    cores_used, _, group_1, group_2, positions_1, positions_2 = ttnn.split_work_to_cores(
+        ttnn.CoreCoord(grid_x, grid_y), tensor_pages, row_wise=True
+    )
+    group_1_cores, group_2_cores = group_1.num_cores(), group_2.num_cores()
+    assert group_1_cores + group_2_cores == cores_used
+    assert group_1_cores * positions_1 + group_2_cores * positions_2 == tensor_pages
 
-    banks_per_core = BANKS_PER_CORE
-    if num_dram_banks % banks_per_core != 0:
-        raise RuntimeError(f"g6_zeros: BANKS_PER_CORE={banks_per_core} must divide {num_dram_banks} DRAM banks")
-    num_bank_sets = num_dram_banks // banks_per_core
-    if WRITER_CORES_PER_BANK is None:
-        max_writer_cores = grid_cores
-    else:
-        max_writer_cores = min(grid_cores, num_dram_banks * WRITER_CORES_PER_BANK)
-    if max_writer_cores < num_bank_sets:
-        raise RuntimeError(
-            f"g6_zeros: {max_writer_cores} writer cores cannot cover {num_bank_sets} bank sets; "
-            "raise WRITER_CORES_PER_BANK or BANKS_PER_CORE"
-        )
+    zero_src_bytes = min(ZERO_SRC_BYTES_MAX, positions_1 * aligned_page_bytes)
 
-    # A set's first bank holds the most pages; later banks of the set end one slot earlier at most.
-    set_slots = [_ceil_div(max(tensor_pages - s * banks_per_core, 0), num_dram_banks) for s in range(num_bank_sets)]
-    # No more cores than slots, so every writer core owns at least one slot.
-    num_writer_cores = min(max_writer_cores, sum(set_slots))
-
-    cores = []
-    for c in range(num_writer_cores):
-        bank_set, rank = c % num_bank_sets, c // num_bank_sets
-        group_size = _ceil_div(num_writer_cores - bank_set, num_bank_sets)
-        base, extra = divmod(set_slots[bank_set], group_size)
-        slots = base + (1 if rank < extra else 0)
-        assert slots >= 1, "g6_zeros: a writer core was assigned no slots"
+    cores, q_begin = [], 0
+    for index in range(grid_x * grid_y):
+        if index < group_1_cores:
+            q_count = positions_1
+        elif index < cores_used:
+            q_count = positions_2
+        else:
+            q_count = 0
         cores.append(
             CoreWork(
-                core=(c % grid_x, c // grid_x),
-                bank_set_base=bank_set * banks_per_core,
-                first_bank_offset=rank % banks_per_core,
-                slot_begin=rank * base + min(rank, extra),
-                slots=slots,
-                block_slots=slots if BLOCK_SLOTS is None else min(BLOCK_SLOTS, slots),
+                core=(index % grid_x, index // grid_x),
+                role=ROLE if q_count else "idle",
+                q_begin=q_begin,
+                q_count=q_count,
+                runs=bank_runs(q_begin, q_count, tensor_pages, num_dram_banks),
             )
         )
+        q_begin += q_count
+    assert q_begin == tensor_pages
 
-    max_run_bytes = max(work.block_slots for work in cores) * page_bytes
     return ZerosPlan(
-        tensor_pages=tensor_pages,
-        page_bytes=page_bytes,
+        regime=REGIME,
+        shape=shape,
+        dtype=dtype,
         grid=(grid_x, grid_y),
         num_dram_banks=num_dram_banks,
-        banks_per_core=banks_per_core,
-        num_writer_cores=num_writer_cores,
-        zero_source_bytes=min(ZERO_SOURCE_MAX_BYTES, max_run_bytes),
+        tensor_pages=tensor_pages,
+        aligned_page_bytes=aligned_page_bytes,
+        cores_used=cores_used,
+        zero_src_bytes=zero_src_bytes,
+        zero_src_depth=ZERO_SRC_DEPTH,
+        packet_bytes=zero_src_bytes,
         cores=tuple(cores),
     )
 
 
-def _writer_core_ranges(num_writer_cores: int, grid_x: int) -> ttnn.CoreRangeSet:
-    """The first num_writer_cores cores in row-major order: full rows plus one partial row."""
-    full_rows, partial = divmod(num_writer_cores, grid_x)
-    ranges = []
-    if full_rows:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, full_rows - 1)))
-    if partial:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(partial - 1, full_rows)))
-    return ttnn.CoreRangeSet(ranges)
-
-
-# Index of the output buffer address in the writer's common runtime args.
-OUTPUT_ADDR_ARG = 0
-
-
 def create_program_descriptor(output_tensor: ttnn.Tensor, plan: ZerosPlan) -> ttnn.ProgramDescriptor:
+    if output_tensor.buffer_aligned_page_size() != plan.aligned_page_bytes:
+        raise RuntimeError(
+            f"g6_zeros: output page {output_tensor.buffer_aligned_page_size()} B, plan page {plan.aligned_page_bytes} B"
+        )
     if output_tensor.buffer_num_pages() != plan.tensor_pages:
-        raise RuntimeError(
-            f"g6_zeros: {output_tensor.buffer_num_pages()} pages allocated, plan has {plan.tensor_pages}"
-        )
-    if output_tensor.buffer_aligned_page_size() != plan.page_bytes:
-        raise RuntimeError(
-            f"g6_zeros: aligned page {output_tensor.buffer_aligned_page_size()} B, plan has {plan.page_bytes} B"
-        )
+        raise RuntimeError(f"g6_zeros: output has {output_tensor.buffer_num_pages()} pages, plan {plan.tensor_pages}")
 
-    writer_cores = _writer_core_ranges(plan.num_writer_cores, plan.grid[0])
+    grid_x, grid_y = plan.grid
+    # One rectangle over the whole grid (BB-17); cores past cores_used get an empty range.
+    all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))])
 
-    cb_zero_source = ttnn.CBDescriptor(
-        total_size=plan.zero_source_bytes,
-        core_ranges=writer_cores,
+    cb_zero_src = ttnn.CBDescriptor(
+        total_size=plan.zero_src_depth * plan.zero_src_bytes,
+        core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_ZERO_SOURCE,
-                data_format=ZERO_SOURCE_CB_FORMAT,
-                page_size=plan.zero_source_bytes,
+                buffer_index=CB_ZERO_SRC,
+                data_format=ZERO_SRC_CB_FORMAT,
+                page_size=plan.zero_src_bytes,
             )
         ],
     )
 
-    ct_args = [CB_ZERO_SOURCE, plan.page_bytes, plan.zero_source_bytes, plan.num_dram_banks, plan.banks_per_core]
+    ct_args = [CB_ZERO_SRC, plan.zero_src_bytes]
     ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     rt_args = ttnn.RuntimeArgs()
     for work in plan.cores:
         x, y = work.core
-        rt_args[x][y] = [work.bank_set_base, work.first_bank_offset, work.slot_begin, work.slots, work.block_slots]
+        rt_args[x][y] = [work.q_begin, work.q_count]
 
-    # Order: [OUTPUT_ADDR_ARG] output buffer address, [1] tensor_pages.
-    common_rt_args = [output_tensor.buffer_address(), plan.tensor_pages]
+    common_rt_args = [0] * 2
+    common_rt_args[OUTPUT_ADDR_ARG] = output_tensor.buffer_address()
+    common_rt_args[TENSOR_PAGES_ARG] = plan.tensor_pages
 
     writer = ttnn.KernelDescriptor(
         kernel_source=WRITER_KERNEL,
-        core_ranges=writer_cores,
+        core_ranges=all_cores,
         compile_time_args=ct_args,
         runtime_args=rt_args,
         common_runtime_args=common_rt_args,
         config=ttnn.WriterConfigDescriptor(),
     )
-    return ttnn.ProgramDescriptor(kernels=[writer], semaphores=[], cbs=[cb_zero_source])
+    return ttnn.ProgramDescriptor(kernels=[writer], semaphores=[], cbs=[cb_zero_src])
 
 
 def set_output_address(descriptor: ttnn.ProgramDescriptor, output_tensor: ttnn.Tensor) -> None:

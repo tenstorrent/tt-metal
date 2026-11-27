@@ -6,3 +6,6 @@
 {"event":"perf_measure","shape":"p2 (16,12,128,128) f32","device_kernel_ns":49499,"gbps":254,"note":"110 cores; per-core end times spread 45us; gradient by grid position -> NoC path/endpoint contention, not bytes","ts":"2026-11-27T04:23:16-05:00"}
 {"event":"perf_measure","shape":"p3 (8,12,128,128) f32","device_kernel_ns":23872,"gbps":263,"ts":"2026-11-27T04:23:16-05:00"}
 {"event":"perf_measure","lamp":"L1","method":"unprofiled trace replay (RB-053)","p1_us":{"grid":1118,"8":913,"32":970},"p2_us":{"grid":51.3,"8":43,"16":45.7,"32":44.9,"64":47},"p3_us":{"grid":27.1,"8":23.1},"p4_us":{"grid":5.7,"8":2.81},"L4_bpc8_p2_us":48.4,"decision":"WRITER_CORES_PER_BANK=1 default","ts":"2026-11-27T04:29:30-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:54:09-05:00"}
+{"event":"start","phase":"rebuild_from_design","design_commit":"e78af71969f","plan":"full-grid bank-major split, one writer kernel, one zero source CB","ts":"2026-11-27T05:54:09-05:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 19 passed 4 xfailed (--dev and plain); bank_run debug 7 passed (--dev): bf16 p4, bf8b p1, grid 1x1/3x1/8x1, P=13 unequal banks","ts":"2026-11-27T05:58:41-05:00"}
