@@ -86,8 +86,10 @@ def test_shipped_pin_ids():
         "[blackhole-duty-5-rep-1000x-galaxy-galaxy_chip_0]",
         "nd:run-to-run": None,
         "nd:core-sweep": None,
-        "nd:mcast-ack": None,
-        "nd:mcast-ack-duty": None,
+        "nd:mcast-ack": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan"
+        "[blackhole-1x1]",
+        "nd:mcast-ack-duty": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty"
+        "[blackhole-1x1]",
     }
 
 

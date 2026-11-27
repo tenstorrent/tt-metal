@@ -54,6 +54,7 @@ ITER_ENV = ("TT_DET_SWEEP_ITERS", "TT_SWEEP_ITERS", "MATMUL_ITERS")
 DEVICE_ID_ENV = "DIDT_DEVICE_ID"
 MIN_LOOP_ENV = "DIDT_MIN_LOOP_SECONDS"
 IDENTITY = ("dev", "bdf", "tray", "asic", "asic_id", "kmd")
+ND_DATA = {"failed_checks", "elements", "cores"}
 # Triage on a wedged chip can hang too; the bound keeps the hook's `kill -9 $PPID` reachable so the step ends.
 TRIAGE_SECS = 1200
 
@@ -96,13 +97,16 @@ def repo_commit(repo: Path = REPO) -> str:
 
 
 # Never inherited from the caller's shell: device selection would renumber `dev` away from the whole-host chip
-# snapshot every join relies on, and a leftover throttle or hang hook would change what the first attempt measures.
+# snapshot every join relies on, and a leftover throttle, hang hook or pin knob would change what the first attempt
+# measures. pin_core sets its own knobs per rerun.
 DROPPED_ENV = (
     "TT_VISIBLE_DEVICES",
     "TT_METAL_VISIBLE_DEVICES",
     "TT_MM_THROTTLE_PERF",
     "TT_METAL_OPERATION_TIMEOUT_SECONDS",
     "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE",
+    DEVICE_ID_ENV,
+    MIN_LOOP_ENV,
 )
 
 
@@ -343,18 +347,14 @@ class Runner:
         return r, core_sweep_devices(text, chips), [], {}
 
     def pin_core(self, step: StepCfg, fb: Fallback, state: StepState) -> None:
-        """Rerun the step's per-chip test on each device the first attempt named, alone, at twice the iterations.
-        A hang target gets the fallback's own reset first; a reset that fails here aborts the run."""
+        """Rerun the step's per-chip test on each failing device of the first attempt, alone, at twice the
+        iterations. A hung target gets the fallback's own reset first; a reset that fails here aborts the run."""
         first = state.first
-        trigger = "hang" if first.status == Status.HANG else "nd"
-        if trigger == "hang":
-            targets = [d for d in first.devices if d.get("hung")]
-        else:
-            # ND data on the device, not only a name: a build error or a killed child is no reason to pin
-            targets = [
-                d for d in first.devices if not d.get("hung") and ({"failed_checks", "elements", "cores"} & set(d))
-            ]
+        # A write_ack step is FAIL with hung chips in it, so hung or ND is per device, never from the step status.
+        # ND data on the device, not only a name: a build error or a killed child is no reason to pin.
+        targets = [d for d in first.devices if d.get("hung") or ND_DATA & set(d)]
         if not targets:
+            trigger = "hang" if first.status == Status.HANG else "nd"
             self._skip_pin(state, fb, "no failing device named by the first attempt", {"trigger": trigger})
             return
         unsupported = None
@@ -363,18 +363,20 @@ class Runner:
         elif step.pin_id in self.pin_missing:
             unsupported = f"pin id does not collect: {step.pin_id}"
         test = step.pin_id.split("::")[-1].split("[")[0] if step.pin_id else ""
-        # One chip iterates faster than the full mesh: the rerun loops at least as long as the original did, and at
-        # least twice its iterations.
-        original = loop_seconds(Path(first.log)) if first.log else None
-        loop_env, loop_notes = {}, []
-        if original:
-            loop_env[MIN_LOOP_ENV] = f"{math.ceil(original[0] * 10 - 1e-6) / 10:.1f}"
-        else:
-            loop_notes.append(
-                f"WARNING original loop time unknown (no iteration lines in {first.log or 'no log'}); "
-                "doubled iterations only"
-            )
         for t in targets:
+            trigger = "hang" if t.get("hung") else "nd"
+            # One chip iterates faster than the full mesh: the rerun loops at least as long as the original did, and
+            # at least twice its iterations.
+            first_log = self._loop_log(step, first.log, t["dev"])
+            original = loop_seconds(first_log) if first_log else None
+            loop_env, loop_notes = {}, []
+            if original:
+                loop_env[MIN_LOOP_ENV] = f"{math.ceil(original[0] * 10 - 1e-6) / 10:.1f}"
+            else:
+                loop_notes.append(
+                    f"WARNING original loop time unknown (no iteration lines in {first_log or 'no log'}); "
+                    "doubled iterations only"
+                )
             extra = {
                 "target": {k: t[k] for k in IDENTITY if k in t},
                 "trigger": trigger,
@@ -409,12 +411,19 @@ class Runner:
                 self.note(f"ABORT {self.aborted}")
                 self.save()
                 return
-            if original and (rerun_loop := loop_seconds(Path(a.log))):
+            if original and (rerun_loop := loop_seconds(self._loop_log(step, a.log, t["dev"]))):
                 a.extra["loop"] |= {"rerun_s": round(rerun_loop[0], 1), "rerun_iterations": rerun_loop[1]}
             self._pin_result(step, a, t, test, used)
             a.details += loop_notes
             self.note(f"{step.key} {fb.name} dev {t['dev']} result {a.status.value} {a.reason}")
             self.save()
+
+    @staticmethod
+    def _loop_log(step: StepCfg, log: str, dev: int) -> Path | None:
+        """The iteration lines of a script step are in each chip's child log, not in the script's own."""
+        if not log:
+            return None
+        return Path(log).parent / "chips" / f"chip{dev}" / "pytest.log" if step.runner == "script" else Path(log)
 
     def _pin_result(self, step: StepCfg, a: Attempt, t: dict, test: str, used: dict) -> None:
         rerun = [d for d in a.devices if d["dev"] == t["dev"]]
@@ -424,7 +433,9 @@ class Runner:
         notes = [f"WARNING failure on device {d}, outside the pinned chip" for d in others]
         if a.status == Status.HANG:
             pass
-        elif rerun:
+        elif rerun and rerun[0].get("hung"):
+            a.status, a.reason = Status.FAIL, "hang reproduced on chip alone"
+        elif rerun and ND_DATA & set(rerun[0]):
             nd = rerun[0]
             a.status = Status.FAIL
             a.reason = "ND reproduced on chip alone" + (
