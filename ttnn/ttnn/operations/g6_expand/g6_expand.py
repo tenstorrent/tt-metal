@@ -1,12 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_expand: x (d_0, d_1, 1, W) -> x.expand(*sizes).contiguous(), bit-exact, one device program.
+"""g6_expand: x.expand(*sizes).contiguous() for x of shape (d_0, d_1, 1, W), bit-exact, one device program.
 
-Regime R1 (column_mcast_2d, op_design.md): the pattern axis (input pages) rides grid columns, the
-replica axis (output tile rows) rides grid rows. The top core of each column fetches row 0 of its
-input pages, replicates it into full pattern tiles and multicasts them down the column; every core
-writes its replica rows of its pattern pages.
+Production: x (1, 1, 1, W) -> out (1, 1, W, W), out[0, 0, h, w] = x[0, 0, 0, w].
 """
 
 from __future__ import annotations
@@ -15,14 +13,9 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_expand_program_descriptor import Plan, create_program_descriptor, patch_buffer_addresses, select_plan
+from .g6_expand_program_descriptor import Plan, output_shape, program_descriptor, select_plan
 
-TILE = 32
-
-
-def output_shape(shape, sizes):
-    """sizes with every -1 replaced by the input's size along that dim."""
-    return [int(d) if int(s) == -1 else int(s) for d, s in zip(shape, sizes)]
+__all__ = ["g6_expand", "validate", "select_plan", "Plan", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
 
 
 # ---------------------------------------------------------------------------
@@ -31,12 +24,12 @@ def output_shape(shape, sizes):
 
 
 def tag_alignment(inputs, axes):
-    """Alignment of the OUTPUT shape: W_out decides first, then H_out."""
+    """Alignment of the OUTPUT shape: x has one row in every production case, so its own H is never read."""
     scenario = inputs[0]
     out = output_shape(scenario["shape"], scenario["sizes"])
-    if out[-1] % TILE:
+    if out[-1] % 32:
         return "w_non_aligned"
-    if out[-2] % TILE:
+    if out[-2] % 32:
         return "h_non_aligned"
     return "tile_aligned"
 
@@ -64,58 +57,66 @@ SUPPORTED = {
 EXCLUSIONS = []
 
 
+PROPERTIES = {
+    "multi_core": {"value": True, "source": "declared"},
+    "bounded_cb": {"value": True, "source": "declared"},
+}
+
+
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
 
 
-def _validate_structure(input_tensor, sizes):
-    """Contract checks the taggers rely on (a well-formed output shape); ValueError on violation."""
+def _check_structure(input_tensor, sizes) -> None:
+    """Contract checks that raise ValueError. They run first: the tagger needs a well-formed output shape."""
     if not isinstance(input_tensor, ttnn.Tensor):
         raise ValueError(f"g6_expand: input_tensor must be a ttnn.Tensor, got {type(input_tensor).__name__}")
     if not ttnn.is_tensor_storage_on_device(input_tensor):
-        raise ValueError("g6_expand: input_tensor must be on device")
+        raise ValueError("g6_expand: input_tensor must be on a device")
     memory_config = input_tensor.memory_config()
     if (
         memory_config.buffer_type != ttnn.BufferType.DRAM
         or memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     ):
         raise ValueError(f"g6_expand: input_tensor must be DRAM interleaved, got {memory_config}")
+
     shape = list(input_tensor.shape)
     if len(shape) != 4:
         raise ValueError(f"g6_expand: input_tensor must have rank 4, got shape {shape}")
-    if not isinstance(sizes, (list, tuple)) or len(sizes) != 4:
-        raise ValueError(f"g6_expand: sizes must be a list or tuple of 4 ints, got {sizes!r}")
-    for s in sizes:
-        if isinstance(s, bool) or not isinstance(s, int):
-            raise ValueError(f"g6_expand: sizes must hold ints, got {sizes!r}")
-        if s != -1 and s < 1:
-            raise ValueError(f"g6_expand: every size must be -1 or >= 1, got {sizes!r}")
-    for dim, (d, s) in enumerate(zip(shape, sizes)):
-        if s == -1 or s == d:
-            continue
-        if d != 1:
-            raise ValueError(f"g6_expand: size {s} of dim {dim} differs from the input's non-1 size {d}")
-        if dim != 2:
-            raise ValueError(f"g6_expand: only dim 2 may be expanded, got sizes {list(sizes)} for shape {shape}")
+    try:
+        sizes = [int(s) for s in sizes]
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"g6_expand: sizes must be a list or tuple of ints, got {sizes!r}") from error
+    if len(sizes) != len(shape):
+        raise ValueError(f"g6_expand: sizes must have the rank of input_tensor ({len(shape)}), got {sizes}")
+    for dim, size in enumerate(sizes):
+        if size != -1 and size < 1:
+            raise ValueError(f"g6_expand: sizes[{dim}] = {size}: each size must be -1 or >= 1")
+
+    out = output_shape(shape, sizes)
+    for dim, (in_size, out_size) in enumerate(zip(shape, out)):
+        if in_size != 1 and out_size != in_size:
+            raise ValueError(
+                f"g6_expand: sizes[{dim}] = {out_size} differs from input size {in_size} along a dim that is not 1"
+            )
+    for dim in (0, 1, 3):
+        if out[dim] != shape[dim]:
+            raise ValueError(f"g6_expand: only dim 2 may be expanded; sizes {sizes} expands dim {dim}")
     if shape[2] != 1:
-        raise ValueError(f"g6_expand: input dim 2 must be 1, got shape {shape}")
+        raise ValueError(f"g6_expand: input_tensor must have size 1 along dim 2, got shape {shape}")
 
 
-def _axes(input_tensor, sizes):
+def validate(input_tensor, sizes) -> None:
+    _check_structure(input_tensor, sizes)
+
     axes = {
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
     }
-    scenario = {"shape": list(input_tensor.shape), "sizes": list(sizes)}
+    scenario = {"shape": list(input_tensor.shape), "sizes": [int(s) for s in sizes]}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((scenario,), axes)
-    return axes
-
-
-def validate(input_tensor, sizes):
-    _validate_structure(input_tensor, sizes)
-    axes = _axes(input_tensor, sizes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -130,67 +131,23 @@ def validate(input_tensor, sizes):
 # Public entry point
 # ---------------------------------------------------------------------------
 
-# One cached descriptor per program shape; a hit patches only the two buffer addresses.
-_DESCRIPTOR_CACHE = {}
-
-
-def _cache_key(input_tensor, out_shape, device, grid):
-    memory_config = input_tensor.memory_config()
-    return (
-        tuple(input_tensor.shape),
-        tuple(out_shape),
-        input_tensor.dtype,
-        input_tensor.layout,
-        memory_config.buffer_type,
-        memory_config.memory_layout,
-        device.id(),
-        (grid.x, grid.y),
-    )
-
 
 def g6_expand(input_tensor: ttnn.Tensor, sizes) -> ttnn.Tensor:
-    """Materialize input_tensor.expand(*sizes) as a new tensor in the input's placement."""
+    """Materialize input_tensor.expand(*sizes) as a new tensor in input_tensor's dtype, layout and memory config."""
     validate(input_tensor, sizes)
 
-    device = input_tensor.device()
-    out_shape = output_shape(input_tensor.shape, sizes)
+    out_shape = output_shape(list(input_tensor.shape), sizes)
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape(out_shape),
         input_tensor.dtype,
         input_tensor.layout,
-        device,
+        input_tensor.device(),
         input_tensor.memory_config(),
     )
-
-    grid = device.compute_with_storage_grid_size()
-    key = _cache_key(input_tensor, out_shape, device, grid)
-    entry = _DESCRIPTOR_CACHE.get(key)
-    if entry is None:
-        plan = select_plan(
-            list(input_tensor.shape),
-            out_shape,
-            (grid.x, grid.y),
-            tile_bytes=input_tensor.buffer_aligned_page_size(),
-        )
-        entry = create_program_descriptor(input_tensor, output_tensor, plan)
-        _DESCRIPTOR_CACHE[key] = entry
-    else:
-        patch_buffer_addresses(entry, input_tensor, output_tensor)
-    g6_expand.last_plan = entry.plan
-
-    return ttnn.generic_op([input_tensor, output_tensor], entry.descriptor)
+    descriptor, plan = program_descriptor(input_tensor, output_tensor)
+    g6_expand.last_plan = plan
+    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
 
 
+# The plan of the most recent call (BB-08); None before the first call.
 g6_expand.last_plan = None
-
-__all__ = [
-    "EXCLUSIONS",
-    "INPUT_TAGGERS",
-    "Plan",
-    "SUPPORTED",
-    "g6_expand",
-    "output_shape",
-    "select_plan",
-    "tag_alignment",
-    "validate",
-]

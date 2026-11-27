@@ -1,2 +1,7 @@
 {"event":"test_run","status":"pass","tests":"test_g6_expand.py (21, plain+dev) + eval/golden_tests/g6_expand (20)","ts":"2026-11-26T19:39:11+00:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 22/22 dev+prod, R1 column mcast","ts":"2026-11-26T23:10:12+00:00"}
+{"event":"env_fix","detail":"phase launched on bare host bh-lb-10 (previous phase ran in dev container); host lacks /opt/openmpi-v5.0.7-ulfm so libtt_metal.so fails to load (MPIX_Comm_shrink). Staged container ULFM libs into gitignored generated/ulfm/lib and export LD_LIBRARY_PATH for host runs; host chip locks/resets unchanged.","ts":"2026-11-26T19:10:17-05:00"}
+{"event":"test_run","mode":"dev","target":"test_g6_expand.py","result":"pass","count":"22/22","ts":"2026-11-26T19:16:17-05:00"}
+{"event":"test_run","mode":"prod","target":"test_g6_expand.py","result":"pass","count":"22/22","ts":"2026-11-26T19:16:17-05:00"}
+{"event":"test_run","mode":"prod","target":"eval/golden_tests/g6_expand","result":"pass","count":"20/20","note":"first attempt failed collection: package did not re-export INPUT_TAGGERS/SUPPORTED/EXCLUSIONS","ts":"2026-11-26T19:16:17-05:00"}
+{"event":"test_run","mode":"probe","target":"knob paths","result":"pass","detail":"multi-image ragged, 2 blocks depth1/depth2 with mcast, ragged blocks depth2, absent mcast (replica_groups=1), H_out=1; all bit-exact with poisoned x padding","ts":"2026-11-26T19:16:17-05:00"}
