@@ -44,6 +44,11 @@ CB_DEPTH_KNOB = 2
 # within noise of 1 (63.5-64.4 us) and 28 blocks (one page each) 10% slower (70.3 us).
 BLOCKS_PER_CORE_KNOB = 1
 
+# Transfer-shape knob of logical_rows_partial_tile: two logical pieces of a page whose gap is at
+# most this many bytes move as one span through the gap, trading padding bytes for one fewer
+# NoC request per page. 0 merges only touching pieces.
+PIECE_MERGE_GAP_BYTES = 0
+
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
 
@@ -100,11 +105,11 @@ def tile_geometry(input_tensor: ttnn.Tensor):
     )
 
 
-def logical_pieces(rows: int, cols: int, elem_bytes: int, granule: int) -> list:
+def logical_pieces(rows: int, cols: int, elem_bytes: int, granule: int, merge_gap: int = 0) -> list:
     """Byte ranges (offset, length) of a 32x32 tile page that hold its first `rows` rows and
-    first `cols` columns: whole face rows, merged where adjacent, each length rounded up to
-    `granule` (the DRAM alignment) so every NoC transfer is aligned at both ends. Rounding adds at
-    most one face row of padding and never crosses into the next face."""
+    first `cols` columns: whole face rows, merged where at most `merge_gap` bytes apart, each
+    length rounded up to `granule` (the DRAM alignment) so every NoC transfer is aligned at both
+    ends. Rounding adds at most one face row of padding and never crosses into the next face."""
     face_row_bytes = FACE_HW * elem_bytes
     face_bytes = FACE_HW * face_row_bytes
     top = min(rows, FACE_HW)
@@ -121,8 +126,8 @@ def logical_pieces(rows: int, cols: int, elem_bytes: int, granule: int) -> list:
     for face, face_rows in faces:
         offset = face * face_bytes
         length = -(-face_rows * face_row_bytes // granule) * granule
-        if pieces and pieces[-1][0] + pieces[-1][1] == offset:
-            pieces[-1] = (pieces[-1][0], pieces[-1][1] + length)
+        if pieces and offset - (pieces[-1][0] + pieces[-1][1]) <= merge_gap:
+            pieces[-1] = (pieces[-1][0], offset + length - pieces[-1][0])
         else:
             pieces.append((offset, length))
     return pieces
@@ -136,7 +141,7 @@ def partial_tile_walk(geometry, aligned_page_bytes: int):
     h_tiles, w_tiles, rows_last, cols_last, elem_bytes = geometry
     granule = ttnn.get_dram_alignment()
     kind_extents = [(TILE_HW, TILE_HW), (rows_last, TILE_HW), (TILE_HW, cols_last), (rows_last, cols_last)]
-    kinds = [logical_pieces(rows, cols, elem_bytes, granule) for rows, cols in kind_extents]
+    kinds = [logical_pieces(rows, cols, elem_bytes, granule, PIECE_MERGE_GAP_BYTES) for rows, cols in kind_extents]
     for pieces in kinds:
         # Each piece must stay inside the page; the kernels issue at most two per page.
         if len(pieces) > 2 or any(offset + length > aligned_page_bytes for offset, length in pieces):

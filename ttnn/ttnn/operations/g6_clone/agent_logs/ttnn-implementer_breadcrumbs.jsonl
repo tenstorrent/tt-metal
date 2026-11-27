@@ -9,3 +9,5 @@
 {"event":"friction","surface":"reference","ref":".claude/references/ttnn-python-utility-bindings.md","what":"No documented pattern for BB-07 descriptor caching in a Python generic op: where to put buffer addresses (common_runtime_args) and whether descriptor.kernels[i].common_runtime_args[j]=addr mutates the cached descriptor in place (it does: kernels list elements are references, VectorUInt32 is opaque). Needed a probe to confirm.","cost":"low","suggest":"Add a short section: addresses in common_runtime_args slot 0, cache ProgramDescriptor by structural key, patch via descriptor.kernels[i].common_runtime_args[0] in place; generic_op hash ignores RT values.","ts":"2026-11-27T06:50:43-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T08:17:43-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T08:18:57-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T09:03:05-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T09:03:43-05:00"}
