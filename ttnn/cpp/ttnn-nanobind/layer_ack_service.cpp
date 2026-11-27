@@ -30,14 +30,21 @@ void py_module_types(nb::module_& mod) {
                uint32_t first_record,
                uint32_t record_count,
                uint32_t connect_timeout_ms,
-               const nb::sequence& layer_ids_seq) {
+               const nb::sequence& layer_ids_seq,
+               uint32_t open_chunks) {
                 std::vector<uint32_t> layer_ids;
                 layer_ids.reserve(nb::len(layer_ids_seq));
                 for (nb::handle h : layer_ids_seq) {
                     layer_ids.push_back(nb::cast<uint32_t>(h));
                 }
                 new (self) LayerAckService(
-                    d2h_service, ring_shm_name, first_record, record_count, connect_timeout_ms, std::move(layer_ids));
+                    d2h_service,
+                    ring_shm_name,
+                    first_record,
+                    record_count,
+                    connect_timeout_ms,
+                    std::move(layer_ids),
+                    open_chunks);
             },
             nb::arg("d2h_service"),
             nb::arg("ring_shm_name"),
@@ -45,6 +52,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("record_count"),
             nb::arg("connect_timeout_ms") = 30'000u,
             nb::arg("layer_ids") = nb::list(),
+            nb::arg("open_chunks") = 1u,
             // The reader thread holds a bare reference to d2h_service: tie its Python lifetime to this object.
             nb::keep_alive<1, 2>(),
             R"doc(
@@ -58,6 +66,11 @@ void py_module_types(nb::module_& mod) {
                     connect_timeout_ms (int): how long start() polls for the ring.
                     layer_ids (list[int]): global layer of each local record, in emission
                         order; empty for a dense model (record index == layer).
+                    open_chunks (int): chunks whose records may interleave: a packed forward's chunk
+                        count (it acks every chunk on a layer before the next layer), else 1.
+
+                With open_chunks > 1, a record whose actual_end equals its actual_start names no chunk (an
+                empty position of a traced packed forward) and is dropped.
             )doc")
         .def(
             "start",

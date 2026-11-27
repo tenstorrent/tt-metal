@@ -37,12 +37,14 @@ LayerAckService::LayerAckService(
     uint32_t first_record,
     uint32_t record_count,
     uint32_t connect_timeout_ms,
-    std::vector<uint32_t> layer_ids) :
+    std::vector<uint32_t> layer_ids,
+    uint32_t open_chunks) :
     d2h_service_(d2h_service),
     ring_shm_name_(ring_shm_name),
-    layout_{first_record, record_count, std::move(layer_ids)},
+    layout_{first_record, record_count, std::move(layer_ids), open_chunks},
     connect_timeout_ms_(connect_timeout_ms) {
     TT_FATAL(record_count > 0, "LayerAckService: record_count must be > 0");
+    TT_FATAL(open_chunks > 0, "LayerAckService: open_chunks must be > 0");
     TT_FATAL(
         d2h_service.metadata_size_bytes() >= kAckIdentityBytes,
         "LayerAckService: needs at least {} metadata bytes per D2H record (the chunk's "
@@ -160,14 +162,19 @@ void LayerAckService::reader_loop() {
         internal::AckIdentity identity{};
         std::memcpy(&identity, metadata.data(), kAckIdentityBytes);  // unaligned buffer
         const auto result = decoder.decode(identity);
+        if (std::holds_alternative<internal::NoChunkAck>(result)) {
+            continue;
+        }
         if (const auto* lost = std::get_if<internal::LostAckRecord>(&result)) {
             fail(std::make_exception_ptr(std::runtime_error(fmt::format(
-                "LayerAckService: ring {} saw a new chunk (slot={} pos=[{},{})) at ACK record {} of {} "
-                "(record #{}): a D2H ack record was lost, so every later label would be wrong",
+                "LayerAckService: ring {} saw a new chunk (slot={} pos=[{},{})) while {} chunk(s) were in progress, "
+                "the oldest with {} of {} ACK records (record #{}): a D2H ack record was lost, so every later "
+                "label would be wrong",
                 ring_shm_name_,
                 lost->identity.slot_id,
                 lost->identity.pos_start,
                 lost->identity.pos_end,
+                layout_.open_chunks,
                 lost->slice_idx,
                 layout_.record_count,
                 lost->record))));

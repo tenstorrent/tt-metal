@@ -163,7 +163,8 @@ class PrefillModelAdapter(ABC):
     supports_packed_forward: bool = False
     # With supports_packed_forward, whether prefill_forward also serves PREFILL_USE_TRACE=1 (it stages each chunk's
     # inputs before a trace replay) and PREFILL_LAYER_ACK_D2H=1 (it sends one 12-byte (slot, start, end) record per
-    # chunk per KV-writing layer, each chunk's records contiguous). Otherwise the runner refuses those at F > 1.
+    # chunk per KV-writing layer; the runner's LayerAckService accepts the chunks' records interleaved, layer by
+    # layer, in pack order). Otherwise the runner refuses those at F > 1.
     supports_packed_forward_trace: bool = False
     supports_packed_forward_d2h_acks: bool = False
     # With supports_packed_forward and passes_indexer_indices, whether prefill_forward takes a pipeline boundary's

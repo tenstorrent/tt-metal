@@ -305,6 +305,8 @@ class TtKimiK3Block(LightweightModule):
         packed_padding_config=None,
         attn_input_tap=None,
         zero_pad: bool = False,
+        d2h_service=None,
+        ack_records: Optional[list] = None,
     ) -> None:
         """One layer of a packed forward, folded into `residual`: ``len(ctxs)`` chunks back to back on each SP
         chip, ``rows // len(ctxs)`` rows each.
@@ -322,11 +324,16 @@ class TtKimiK3Block(LightweightModule):
             MLA layer, its KV write and pad-zero).
         empty: per chunk, whether it is empty. A traced forward runs every position (an empty one in a scratch
             slot) and passes all False.
-        zero_pad: on an MLA layer, zero each chunk's KV pad window without acking it (the caller acks later).
+        zero_pad: on an MLA layer, zero each chunk's KV pad window without acking it.
+        d2h_service / ack_records: the D2H ack transport. Each running chunk position k sends ``ack_records[k]``
+            (its persistent 12 B record) once its attention is done (on an MLA layer, after its KV write and
+            pad-zero), so every chunk acks this layer before the next layer runs.
         """
         n = len(ctxs)
         assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
         assert len(empty) == n
+        assert d2h_service is None or (ack_records is not None and len(ack_records) == n)
+        assert d2h_service is None or on_layer_complete is None, "d2h_service and on_layer_complete are exclusive"
         hidden = residual.open(self.local_idx)
         if attn_input_tap is not None:
             attn_input_tap(self.local_idx, hidden)
@@ -344,6 +351,7 @@ class TtKimiK3Block(LightweightModule):
             out_k = self.attention.forward(normed_k, ctx)
             ttnn.deallocate(normed_k)
             ack = None if on_layer_complete is None else (lambda layer, _k=k: on_layer_complete(layer, _k))
+            record = None if d2h_service is None else ack_records[k]
             if self.attention.writes_kv:
                 zero_pad_and_ack(
                     kvpe_cache=ctx.kvpe_cache,
@@ -357,19 +365,19 @@ class TtKimiK3Block(LightweightModule):
                     seq_len_local=rows,
                     actual_end=ctx.actual_end,
                     metadata=ctx.metadata,
-                    d2h_service=None,
-                    metadata_msg=None,
+                    d2h_service=d2h_service,
+                    metadata_msg=record,
                     on_layer_complete=ack,
                     trace_controller=getattr(self, "_trace_controller", None),
                     tp_axis=self.attention.mla.tp_shard_kv_axis,
-                    zero_only=zero_pad,
+                    zero_only=zero_pad and d2h_service is None,
                 )
-            elif ack is not None and not zero_pad:
+            elif d2h_service is not None or (ack is not None and not zero_pad):
                 send_layer_ack(
                     mesh_device=self.mesh_device,
                     global_layer_idx=self.layer_idx,
-                    d2h_service=None,
-                    metadata_msg=None,
+                    d2h_service=d2h_service,
+                    metadata_msg=record,
                     on_layer_complete=ack,
                     trace_controller=getattr(self, "_trace_controller", None),
                 )

@@ -250,8 +250,12 @@ The runner refuses F > 1 at startup, before the model loads, together with `PREF
 `PREFILL_DFLASH=1` or `PREFILL_USE_TRACE=1`, and `PREFILL_LAYER_ACK_D2H=1` with `prefill_forward`. An adapter
 whose `prefill_forward` handles them lifts the last two: `supports_packed_forward_trace = True` (it stages each
 chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
-`(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
-chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
+`(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service). The
+runner's LayerAckService then takes `open_chunks = F`: the chunks' records may interleave, a layer at a time in pack
+order (every chunk's record on a layer before the next layer's), which lets migration stream each chunk's KV as it is
+written. The decoder checks that order to catch a lost record: a chunk starts only while every chunk in progress has
+one record, and no chunk gets ahead of one that started before it. A record whose `actual_end == actual_start` names
+no chunk and is dropped (a traced forward's empty position).
 
 A pipeline split that passes indexer indices between ranks (`passes_indexer_indices`, GLM-5.3's cross-layer reuse) is
 refused at F > 1 too, unless `supports_packed_forward_indexer_indices = True`: the runtime's

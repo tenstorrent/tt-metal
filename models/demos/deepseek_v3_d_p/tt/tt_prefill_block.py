@@ -812,14 +812,15 @@ class TtPrefillBlock(LightweightModule):
         ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
         active_chunks: Optional[int] = None,
+        d2h_service=None,
+        ack_records: Optional[list] = None,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
         The attention half (attn_norm, MLA, KV write, residual) runs once per non-empty chunk on that chunk's
         rows, against its slot_id and actual_start; an empty chunk's rows pass through untouched. The FFN half
         (ffn_norm, MoE or dense FFN, residual) then runs ONCE over all rows, with the MoE skipping each chunk's
-        pad rows. Eager by default; ``metadata`` selects the traced form. D2H acks go out after the forward, from
-        TtPrefillRuntime.prefill_forward.
+        pad rows. Eager by default; ``metadata`` selects the traced form.
 
         on_layer_complete: host completion callback, fired as (global layer index, chunk) once per non-empty
             chunk after that chunk's KV is written, so a consumer can retire each chunk separately.
@@ -828,10 +829,13 @@ class TtPrefillBlock(LightweightModule):
         metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
             unused (None). Positions below ``active_chunks`` run their attention half; the caller points any
             empty one among them at a scratch slot. Requires ``padding_config``, the persistent MoE padding
-            config, and no ack.
+            config, and no host ack (D2H acks through ``d2h_service`` / ``ack_records``).
         padding_config: the MoE padding (PackedPadding) for the whole forward, built once by the caller for every
             layer (TtPrefillTransformer.forward_packed, packed_padding); None when every row is real.
-        zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
+        zero_pad: zero each chunk's KV pad window without acking (a traced forward with no D2H ack service).
+        d2h_service / ack_records: the D2H ack transport. Each chunk position that runs its attention half sends
+            ``ack_records[k]`` (its persistent 12 B record) after its KV write and pad-zero, so every chunk acks
+            this layer before the next layer runs.
         ack_layer_idx / ack_alias_layer_ids / force_kv_only: as in forward(), for the MTP block TtMTPPredictor
             replays once per level.
         active_chunks: traced form only. The forward's first ``active_chunks`` positions hold its real chunks and
@@ -848,6 +852,8 @@ class TtPrefillBlock(LightweightModule):
         assert active_chunks is None or (traced and 1 <= active_chunks <= n), f"active_chunks={active_chunks}"
         active = n if active_chunks is None else active_chunks
         assert not traced or (padding_config is not None and on_layer_complete is None)
+        assert d2h_service is None or (ack_records is not None and len(ack_records) == n)
+        assert d2h_service is None or on_layer_complete is None, "d2h_service and on_layer_complete are exclusive"
         assert indexer_indices is None or len(indexer_indices) == n
         rows = x.shape[2] // n
         assert rows * n == x.shape[2], f"{x.shape[2]} rows do not split into {n} chunks"
@@ -901,7 +907,9 @@ class TtPrefillBlock(LightweightModule):
                 index_kv_cache=index_kv_cache,
                 metadata=metadata[k] if traced else None,
                 kv_only=kv_only,
-                zero_pad_only=zero_pad,
+                d2h_service=d2h_service,
+                metadata_msg=None if d2h_service is None else ack_records[k],
+                zero_pad_only=zero_pad and d2h_service is None,
                 next_step=next_step,
                 # Injected indices are new to the push planner once per forward, at its first step.
                 push_new_indices=k == first_step,

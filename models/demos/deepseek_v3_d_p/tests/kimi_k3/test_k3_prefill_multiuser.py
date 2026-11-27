@@ -1069,8 +1069,8 @@ def test_k3_packed_pipeline_matches_one_rank(
     one rank holding all 16 layers, with rank 0's packed activation -- the live AttnRes stream and its sealed snapshot,
     over both chunks' rows -- handed to rank 1 the way the runner's D2D socket hands it over.
 
-    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per non-empty chunk per layer, each
-    chunk's records contiguous and in pack order (#63438's packed contract), after the forward's writes.
+    Rank 0 acks through a real D2H service: one 12 B (slot, start, end) record per chunk position per layer, layer by
+    layer, each layer's in pack order once that chunk's KV is written (a traced empty position's names no chunk).
 
     Eager, plain residual stream: every layer on both ranks bit-exact against one rank -- the handoff itself is exact.
     Eager, AttnRes: rank 0 bit-exact (packing puts every chunk at the same position on both sides), rank 1 at
@@ -1148,11 +1148,13 @@ def test_k3_packed_pipeline_matches_one_rank(
             if not traced:
                 ttnn.deallocate(out)
             assert ranks[1].prefill_forward(act, rank_caches[1], chunks) is None
+            # Layer by layer, every chunk's record before the next layer's. A traced forward runs every position:
+            # an empty one sends a record naming no chunk.
             want = [
-                (c.slot_id, c.actual_start, c.actual_end)
-                for c in chunks
-                if not c.is_empty
+                (0, 0, 0) if c.is_empty else (c.slot_id, c.actual_start, c.actual_end)
                 for _ in range(acks_per_chunk)
+                for c in chunks
+                if traced or not c.is_empty
             ]
             got = _read_d2h_records(d2h, len(want))
             assert got == want, f"forward {f}: D2H records {got} != {want}"

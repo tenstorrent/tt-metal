@@ -564,6 +564,7 @@ class TtPrefillTransformer(LightweightModule):
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
         chunks: Optional[list] = None,
         mtp_unions: Optional[list] = None,
+        ack_records: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -619,8 +620,8 @@ class TtPrefillTransformer(LightweightModule):
                         list replaces actual_isl / actual_start / actual_end / cache_user_id, and
                         on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. A
                         pipeline rank takes and leaves its indexer indices packed (indexer_indices_shape()).
-                        d2h_service then sends nothing: it only has each chunk's KV pad window zeroed, the
-                        caller sending the forward's acks once it is done.
+                        With d2h_service, ``ack_records`` holds one persistent 12 B record per chunk
+                        position, and each layer sends every non-empty chunk's record (forward_packed).
             mtp_unions: a packed forward's MTP input, one `MTPUnionEmbedding` per chunk position (see
                         forward_packed); `provided_levels` is then one count per chunk.
 
@@ -649,9 +650,8 @@ class TtPrefillTransformer(LightweightModule):
                 kvpe_cache,
                 chunks,
                 seed_indexer_indices=seed_indexer_indices,
-                # A packed forward's D2H acks go out once it is done (TtPrefillRuntime.prefill_forward); here
-                # the service only asks for each chunk's KV pad window to be zeroed as it is written.
-                zero_pad=d2h_service is not None,
+                d2h_service=d2h_service,
+                ack_records=ack_records,
                 index_kv_cache=index_kv_cache,
                 return_intermediates=return_intermediates,
                 read_profiler=read_profiler,
@@ -844,6 +844,8 @@ class TtPrefillTransformer(LightweightModule):
         provided_levels: Optional[list] = None,
         mtp_geometries: Optional[list] = None,
         active_chunks: Optional[int] = None,
+        d2h_service=None,
+        ack_records: Optional[list] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
         attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
@@ -856,8 +858,13 @@ class TtPrefillTransformer(LightweightModule):
         "shared" layer, and a rank whose successor starts on one leaves its last "full" layer's indices in
         last_indexer_indices.
 
-        ``zero_pad``: zero each chunk's KV pad window after its write without acking it, for a caller that
-        sends the D2H acks itself once the forward is done (TtPrefillRuntime.prefill_forward).
+        ``zero_pad``: zero each chunk's KV pad window after its write without acking it (a traced forward with
+        no D2H ack service).
+
+        ``d2h_service`` / ``ack_records``: the D2H ack transport, one persistent 12 B record per chunk position.
+        Each layer (and MTP level) sends the record of every position that runs its attention half once that
+        chunk's KV is written (TtPrefillBlock.forward_packed), so every chunk acks a layer before the next layer
+        runs.
 
         Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
         ``padding_config`` (the runtime's persistent PackedPadding) replace ``chunks``, which is then None.
@@ -936,6 +943,8 @@ class TtPrefillTransformer(LightweightModule):
                 padding_config=padding_config,
                 zero_pad=zero_pad,
                 active_chunks=active_chunks,
+                d2h_service=d2h_service,
+                ack_records=ack_records,
             )
             if reuse:
                 h, _, new_indices = ret
@@ -975,6 +984,8 @@ class TtPrefillTransformer(LightweightModule):
                     padding_config=padding_config,
                     zero_pad=zero_pad,
                     index_kv_cache=index_kv_cache,
+                    d2h_service=d2h_service,
+                    ack_records=ack_records,
                 )
             else:
                 self.run_mtp_packed(
@@ -988,6 +999,8 @@ class TtPrefillTransformer(LightweightModule):
                     zero_pad=zero_pad,
                     index_kv_cache=index_kv_cache,
                     on_layer_complete=on_layer_complete,
+                    d2h_service=d2h_service,
+                    ack_records=ack_records,
                 )
             ttnn.deallocate(h_normed)
         if owned_padding_config is not None:

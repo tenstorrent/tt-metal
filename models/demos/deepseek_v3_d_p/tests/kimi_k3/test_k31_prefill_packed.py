@@ -536,11 +536,13 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             if not traced:
                 ttnn.deallocate(out)
             assert rt1.prefill_forward(act, caches1, chunks) is None
+            # Layer by layer, every chunk's record before the next layer's. A traced forward runs every position:
+            # an empty one sends a record naming no chunk.
             want = [
-                (c.slot_id, c.actual_start, c.actual_end)
-                for c in chunks
-                if not c.is_empty
+                (0, 0, 0) if c.is_empty else (c.slot_id, c.actual_start, c.actual_end)
                 for _ in range(acks_per_chunk)
+                for c in chunks
+                if traced or not c.is_empty
             ]
             got = _read_d2h_records(d2h, len(want))
             assert got == want, f"forward {f}: D2H records {got} != {want}"

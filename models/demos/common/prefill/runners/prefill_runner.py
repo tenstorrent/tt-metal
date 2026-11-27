@@ -1573,6 +1573,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             first_record=layout.rank_first_record,
             record_count=layout.rank_record_count,
             layer_ids=layout.rank_layer_ids,
+            # A packed forward acks every one of its chunks on a layer before the next layer.
+            open_chunks=FORWARD_CHUNKS if ADAPTER.supports_packed_forward else 1,
         )
         if runtime.config.use_trace:
             runtime.set_d2h_ack_service(d2h_service)

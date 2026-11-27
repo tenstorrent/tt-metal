@@ -27,7 +27,8 @@ namespace tt::tt_metal {
 
 // Bridges a metadata-only D2HStreamService to the host-local layer-completion ring: a reader thread drains the
 // D2H records (one per acked layer) and pushes one message per record, decoded by LayerAckDecoder, into the ring
-// it connects to. Holds a reference to the D2H service and must not outlive it.
+// it connects to. With open_chunks > 1, a record naming no chunk (an empty position of a traced packed forward)
+// is dropped. Holds a reference to the D2H service and must not outlive it.
 // A lost record or a reader-thread failure is fatal for the run: the reader keeps draining the FIFO so the
 // device never stalls but emits nothing more; check() and stop() rethrow on the caller's thread.
 class LayerAckService {
@@ -39,7 +40,9 @@ public:
         uint32_t record_count,  // records this rank emits per chunk
         uint32_t connect_timeout_ms = 30'000,
         // Global layer of each local record, in emission order (empty: dense, record index == layer).
-        std::vector<uint32_t> layer_ids = {});
+        std::vector<uint32_t> layer_ids = {},
+        // Chunks whose records may interleave: a packed forward's chunk count, else 1.
+        uint32_t open_chunks = 1);
     ~LayerAckService();
 
     LayerAckService(const LayerAckService&) = delete;

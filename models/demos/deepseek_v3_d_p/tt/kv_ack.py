@@ -51,8 +51,7 @@ def zero_pad_and_ack(
 ) -> None:
     """Zero this chunk's pad window in the KV cache and tell migration the layer is done.
 
-    ``zero_only``: zero the pad window and send no ack, for a caller that acks the chunk itself later on
-    the same CQ (a packed forward's D2H acks go out chunk by chunk once the forward is done).
+    ``zero_only``: zero the pad window and send no ack (a traced packed forward with no D2H ack service).
 
     A no-op unless one of the two ack transports is wired, which is what makes it safe to call
     unconditionally from a block that may or may not be running under a migration engine.

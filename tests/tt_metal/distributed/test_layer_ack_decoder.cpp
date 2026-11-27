@@ -4,13 +4,15 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include <internal/disaggregation/layer_ack_decoder.hpp>
 
 namespace tt::tt_metal::internal {
 
 namespace {
 
-const DecodedAck& decoded(const std::variant<DecodedAck, LostAckRecord>& r) { return std::get<DecodedAck>(r); }
+const DecodedAck& decoded(const DecodeResult& r) { return std::get<DecodedAck>(r); }
 
 }  // namespace
 
@@ -55,6 +57,72 @@ TEST(LayerAckDecoder, AnIdentityChangeOnTheChunkBoundaryIsNormal) {
     decoder.decode(AckIdentity{0, 0, 128});
     decoder.decode(AckIdentity{0, 0, 128});
     EXPECT_TRUE(std::holds_alternative<DecodedAck>(decoder.decode(AckIdentity{5, 128, 256})));
+}
+
+// A packed forward acks every chunk on a layer before the next layer: each chunk's records count on their own.
+TEST(LayerAckDecoder, PackedChunksInterleaveLayerByLayer) {
+    LayerAckDecoder decoder(LayerAckLayout{/*first_record=*/3, /*record_count=*/3, {15, 19, 23}, /*open_chunks=*/4});
+    const std::vector<AckIdentity> chunks{{0, 0, 128}, {1, 0, 128}, {2, 128, 256}, {3, 0, 128}};
+    for (int forward = 0; forward < 2; ++forward) {
+        for (const uint32_t layer : {15u, 19u, 23u}) {
+            for (const auto& chunk : chunks) {
+                const auto l = decoded(decoder.decode(chunk));
+                EXPECT_EQ(l.layer, layer);
+                EXPECT_EQ(l.identity, chunk);
+            }
+        }
+    }
+}
+
+// A lost record of a packed chunk shows when a later-started chunk gets ahead of it.
+TEST(LayerAckDecoder, AChunkGettingAheadOfAnOlderOneIsADesync) {
+    LayerAckDecoder decoder(LayerAckLayout{0, /*record_count=*/3, {}, /*open_chunks=*/2});
+    const AckIdentity a{0, 0, 128};
+    const AckIdentity b{1, 0, 128};
+    decoder.decode(a);
+    decoder.decode(b);
+    const auto r = decoder.decode(b);  // a's second record was lost: b is ahead of a
+    ASSERT_TRUE(std::holds_alternative<LostAckRecord>(r));
+    EXPECT_EQ(std::get<LostAckRecord>(r).slice_idx, 1u);
+    EXPECT_EQ(std::get<LostAckRecord>(r).record, 2u);
+    EXPECT_EQ(std::get<LostAckRecord>(r).identity, b);
+}
+
+// A chunk that lost a record stays in progress; the next chunk to start shows it, even with open slots to spare.
+TEST(LayerAckDecoder, AChunkStartingBesideAShortOneIsADesync) {
+    LayerAckDecoder decoder(LayerAckLayout{0, /*record_count=*/3, {}, /*open_chunks=*/4});
+    const AckIdentity a{3, 0, 128};
+    decoder.decode(a);
+    decoder.decode(a);  // a's third record was lost
+    const auto r = decoder.decode(AckIdentity{3, 128, 256});
+    ASSERT_TRUE(std::holds_alternative<LostAckRecord>(r));
+    EXPECT_EQ(std::get<LostAckRecord>(r).slice_idx, 2u);
+    EXPECT_EQ(std::get<LostAckRecord>(r).record, 2u);
+}
+
+// A chunk may send several records on one layer (an MTP level and its aliases) before the next chunk's.
+TEST(LayerAckDecoder, AChunkMaySendSeveralRecordsBeforeTheNextChunk) {
+    LayerAckDecoder decoder(LayerAckLayout{0, /*record_count=*/3, {}, /*open_chunks=*/2});
+    const AckIdentity a{0, 0, 128};
+    const AckIdentity b{1, 0, 128};
+    for (const auto& id : {a, b, a, a, b, b}) {
+        EXPECT_TRUE(std::holds_alternative<DecodedAck>(decoder.decode(id)));
+    }
+}
+
+// An empty position of a traced packed forward acks a record that names no chunk: dropped, not counted. Unpacked
+// (open_chunks 1) decodes every record.
+TEST(LayerAckDecoder, ARecordNamingNoChunkIsDropped) {
+    LayerAckDecoder decoder(LayerAckLayout{0, /*record_count=*/2, {}, /*open_chunks=*/2});
+    const AckIdentity a{0, 0, 128};
+    const AckIdentity none{0, 0, 0};
+    EXPECT_EQ(decoded(decoder.decode(a)).layer, 0u);
+    EXPECT_TRUE(std::holds_alternative<NoChunkAck>(decoder.decode(none)));
+    EXPECT_EQ(decoded(decoder.decode(a)).layer, 1u);
+    EXPECT_TRUE(std::holds_alternative<NoChunkAck>(decoder.decode(none)));
+    EXPECT_EQ(decoded(decoder.decode(AckIdentity{1, 0, 128})).layer, 0u);
+    LayerAckDecoder unpacked(LayerAckLayout{0, /*record_count=*/2, {}});
+    EXPECT_EQ(decoded(unpacked.decode(none)).layer, 0u);
 }
 
 }  // namespace tt::tt_metal::internal
