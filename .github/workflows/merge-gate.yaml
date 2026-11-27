@@ -684,7 +684,7 @@ jobs:
       perf-run-types: L1_TO_L1
       pipeline: merge_baseline
       upload-to-warehouse: true
-      stage2-baseline-ref: ${{ github.event.merge_group.base_sha || github.sha }}
+      stage2-baseline-ref: 6e7f4af1536eaafa70a7b93ea9d061b2215a099f
       stage2-thresholds: >-
         ${{ format('{{"blackhole": {0}, "wormhole": {1}}}',
             toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole),

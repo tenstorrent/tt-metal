@@ -256,6 +256,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+    TTI_NOP;
+    TTI_NOP;
+    TTI_NOP;
+    TTI_NOP;
 
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {

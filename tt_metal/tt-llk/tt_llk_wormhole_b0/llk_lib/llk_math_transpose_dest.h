@@ -371,6 +371,7 @@ inline void _llk_math_transpose_dest_init_()
     transpose_dest_configure_mop<transpose_of_faces, is_32bit>();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    TTI_NOP;
 }
 
 /**
