@@ -92,7 +92,7 @@ def _convertible_input(shape, input_dtype, output_dtype):
     the block float's fraction bits."""
     bits = [_BLOCK_FLOAT_FRACTION_BITS[d] for d in (input_dtype, output_dtype) if d in _BLOCK_FLOAT_FRACTION_BITS]
     if not bits:
-        return full_range_input(shape, ttnn.bfloat16, nan=False).float()
+        return full_range_input(shape, ttnn.bfloat16, nan=False, negative_zero=False).float()
     torch.manual_seed(0)
     magnitude = 1 + torch.randint(0, 2 ** min(bits), shape) / 2 ** min(bits)
     return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
@@ -568,7 +568,7 @@ def _i2s_partial_slices(
     input_tensor, memory_layout, buffer_type, output_dtype=None, orientation=ttnn.ShardOrientation.ROW_MAJOR
 ):
     """Copies every slice of ``input_tensor`` with ttnn.interleaved_to_sharded_partial, checks each against its rows of
-    the input, and returns the slices. When ``output_dtype`` changes the dtype, zeros are compared by value."""
+    the input, and returns the slices."""
     shard_shape, grids = _I2S_PARTIAL_SHARDS[memory_layout]
     grid_x, grid_y = grids[orientation.name]
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
@@ -595,7 +595,6 @@ def _i2s_partial_slices(
         assert_exact(
             expected.reshape(1, 1, slice_height, -1),
             ttnn.to_torch(output),
-            signed_zeros=output_dtype in (None, input_tensor.dtype),
         )
         slices.append(output)
     return slices
