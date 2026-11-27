@@ -71,6 +71,10 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     constexpr uint32_t dest_capacity = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
     constexpr uint32_t max_tiles = dest_capacity < 8 ? dest_capacity : 8;
     LLK_ASSERT(num_tiles <= max_tiles, "sum_reduce_scalar_tile: num_tiles exceeds min(8, DEST capacity)");
+#ifdef ARCH_QUASAR
+    // An unpack to DEST copy skips the math datacopy init, which programs the DEST tile stride the reduce moves use.
+    static_assert(!UnpackToDestEn, "Quasar sum_reduce_scalar_tile does not support unpack to DEST inputs");
+#endif
 
     // Step 1: Copy each input tile into its own DEST slot
     for (uint32_t i = 0; i < num_tiles; i++) {
