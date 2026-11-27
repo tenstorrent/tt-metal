@@ -174,8 +174,11 @@ def build_plan(input_tensor, memory_config):
         kernel_cores = (0, 0, grid.x - 1, grid.y - 1)
         _, _, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(grid, num_pages, row_wise=True)
         start = 0
-        for group, core_pages in ((group_1, pages_1), (group_2, pages_2)):
-            for core in grid_cores_row_wise(group):
+        order = [(c, n) for group, n in ((group_1, pages_1), (group_2, pages_2)) for c in grid_cores_row_wise(group)]
+        if __import__("os").environ.get("G6_REVERSE"):
+            cores_rev = [c for c, _ in order][::-1]
+            order = [(cores_rev[i], n) for i, (_, n) in enumerate(order)]
+        for core, core_pages in order:
                 core_args[core] = [start, core_pages]
                 roles[core] = f"bounce [{start}, {start + core_pages})"
                 start += core_pages
