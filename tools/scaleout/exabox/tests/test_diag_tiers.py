@@ -73,6 +73,9 @@ class TestShellWrappersAgree(unittest.TestCase):
     def test_only_flash_prints_the_eth_summary(self):
         self.assertEqual({name for name, tier in TIERS.items() if tier.eth_summary}, {"flash"})
 
+    def test_every_tier_ends_with_the_erisc_debug_dump(self):
+        self.assertEqual({name for name, tier in TIERS.items() if not tier.erisc_debug}, set())
+
     def test_run_health_check_tier_choices(self):
         # parse_args() builds and parses in one go, so read the call instead.
         tree = ast.parse((SUITE_DIR / "test_infrastructure" / "run_health_check.py").read_text())

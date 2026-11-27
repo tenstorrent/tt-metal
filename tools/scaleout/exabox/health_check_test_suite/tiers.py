@@ -8,13 +8,15 @@ add, move or drop a step in one.
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
     snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
+        -> erisc_debug
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
-collector and sys-triage all open every chip, so they must not overlap the tests,
-and must come after a discrete reset; see the comments on each field below), so a tier does not
-reorder phases. It only picks what each one does. A phase a tier leaves empty is
-still in the report, as a SKIP that names the tier — except post_test_resets,
-whose phase is left out of the report when there is nothing to run.
+collector, sys-triage and the ERISC debug dump all open every chip, so they must
+not overlap the tests, and must come after a discrete reset; see the comments on
+each field below), so a tier does not reorder phases. It only picks what each
+one does. A phase a tier leaves empty is still in the report, as a SKIP that
+names the tier — except post_test_resets, whose phase is left out of the report
+when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
@@ -83,6 +85,12 @@ class Tier:
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
+    # Dump the ETH base firmware's state on every ETH core (diag/erisc_debug.py):
+    # FW sections against the release ELF, the ERISC0 top frame, the boot
+    # postcodes. Read-only, and last, so it records the state every earlier step
+    # left, whether or not they passed.
+    erisc_debug: bool = False
+
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
@@ -90,6 +98,7 @@ _WEEKLY = Tier(
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
+    erisc_debug=True,
 )
 
 TIERS: dict[str, Tier] = {
@@ -103,6 +112,7 @@ TIERS: dict[str, Tier] = {
         eth_status=True,
         eth_summary=True,
         sys_triage=True,
+        erisc_debug=True,
     ),
     # The scheduled run.
     "daily": Tier(
@@ -111,6 +121,7 @@ TIERS: dict[str, Tier] = {
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
+        erisc_debug=True,
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
@@ -126,6 +137,7 @@ TIERS: dict[str, Tier] = {
         triage=("host_side", "device_side"),
         qsfp_tests=True,
         sys_triage=True,
+        erisc_debug=True,
     ),
     # Data collection after a BMC reboot. The same steps as pre_bmc_reboot for
     # now, as its own entry so the two can change independently.
@@ -133,6 +145,7 @@ TIERS: dict[str, Tier] = {
         triage=("host_side", "device_side"),
         qsfp_tests=True,
         sys_triage=True,
+        erisc_debug=True,
     ),
 }
 

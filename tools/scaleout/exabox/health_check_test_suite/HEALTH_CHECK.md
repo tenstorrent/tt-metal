@@ -5,7 +5,8 @@ Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
 in the first-step triage tools, the QSFP tests and the sys-triage bundle. The
 `flash` tier reads every on-host ETH link twice with tt-triage instead, with no
-resets and no tests, then collects the sys-triage bundle. Emits a single JSON
+resets and no tests, then collects the sys-triage bundle. Every tier ends with
+the ERISC debug dump of the ETH firmware on every ETH core. Emits a single JSON
 report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
@@ -68,6 +69,10 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 - `--bmc-api-url` / `--bmc-api-token` (default `$TT_BMC_API_URL` /
   `$TT_BMC_API_TOKEN`) feed the QSFP collector on every tier; without them it
   reads the FRU with ipmitool and collects no QSFP cages.
+- `--erisc-elf-dir` (default `/opt/tenstorrent/eth-fw-elf`) is the host
+  directory of ETH FW release ELFs the [ERISC debug phase](#erisc-debug-phase)
+  decodes through, mounted read-only at the same path. Without it the phase
+  names the ELF each chip needs and reads nothing.
 - Tokens and credentials reach the container through a 0600 `--env-file`, never
   a command line.
 - `--output` is not forwardable — the wrapper owns the bind mount. Use
@@ -90,7 +95,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 
 The [sys-triage phase](#sys-triage-phase) runs last on `flash`, `full`,
 `pre_bmc_reboot` and `post_bmc_reboot` only; it collects a bundle for the ticket
-and never gates the run.
+and never gates the run. The [ERISC debug phase](#erisc-debug-phase) follows it on
+every tier, whatever the steps before it found, and never gates either.
 
 The old names still run, with a deprecation warning: `light` and
 `medium` as `daily`, `deploy` as `weekly`, `pre_reboot` as `pre_bmc_reboot`. The
@@ -107,9 +113,9 @@ the ETH status phase gates the run, since it is the whole of what `flash` checks
 
 What each tier runs is defined in one place, `TIERS` in
 [`tiers.py`](tiers.py): per tier, the pre-test resets, the tests, the post-test
-reset, the triage tools, and whether the ETH status read, the QSFP tests and
-sys-triage run. To add a
-step to a tier, or drop one, edit its entry there. The steps it can name are
+reset, the triage tools, and whether the ETH status read, the QSFP tests,
+sys-triage and the ERISC debug dump run. To add a step to a tier, or drop one,
+edit its entry there. The steps it can name are
 defined beside the phase that runs them: gtests in `TESTS` and pytests in
 `PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
 (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
@@ -611,6 +617,66 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
   `dpkg-query` sees the image's package database, not the host's. The
   `module=` version from `modinfo` is correct.
 
+## ERISC debug phase
+
+The last phase on every tier, whatever the phases before it found, dumps the ETH
+base firmware's state on every ETH core, following bh-erisc's
+`src/debug/erisc-debug.py`. For each ETH core of each chip it reads, with
+tt-exalens:
+
+- whether the `.init`, `.fw_version`, `.text` and `.rodata` sections in L1 match
+  the release ELF;
+- the ERISC0 PC and the function it is in, read over the debug bus while the core
+  keeps running;
+- the ETH, SerDes and MAC/PCS postcodes in `boot_results`, decoded to their names.
+
+It writes nothing to the chips and resets nothing, so it runs on `flash` and the
+BMC-reboot tiers too. It opens every chip, so it runs after everything else, and
+like the ETH status read it checks PCIe in sysfs first and opens no chip if one
+has dropped off. It is `diag/erisc_debug.py`; whether a tier runs it is
+`erisc_debug` in `tiers.py`. It never gates: what the cores were found doing is
+recorded, not judged.
+
+The dump runs as a child process, `python -m diag.erisc_debug`, under the same
+python as the ETH status read: tt-exalens comes with
+`tools/triage/requirements.txt`, which the `exabox-tools` image and
+`./create_venv.sh` install. A crash or hang in it costs this phase, not the
+report.
+
+### The ELF
+
+The dump decodes through the ELF that the bh-erisc release of the chip's ETH FW
+publishes, `eth_init-vX.Y.Z.elf`. Nothing downloads it: the ELFs are provisioned
+on the host, in `--erisc-elf-dir` (default `/opt/tenstorrent/eth-fw-elf`). The
+dump reads each chip's ETH FW version, looks for `eth_init-vX.Y.Z.elf` (or
+`eth_init_vX.Y.Z.elf`) there, and uses it only if the ELF's own `.fw_version`
+section says the same version. A chip whose ELF is not there is not inspected,
+and the dump and the report say which file it needs:
+
+```
+ETH FW v1.14.0 on 32 device(s): needs eth_init-v1.14.0.elf, not found in /opt/tenstorrent/eth-fw-elf; not inspected
+```
+
+To provision a host, copy the release's `eth_init-vX.Y.Z.elf` into that
+directory; `run_diag_docker.sh` mounts it read-only at the same path. The fleet
+launchers mount no ELF directory, so a scheduled run reports the phase as SKIP
+with the ELF each host needs.
+
+### Statuses
+
+| Status | Meaning |
+|---|---|
+| **PASS** | Every ETH core of every chip was read |
+| **WARN** | Some ETH cores were read, but not all: a chip's ELF is missing, or a core could not be read. `details` names what is missing. |
+| **SKIP** | Nothing read: the tier doesn't ask, tt-exalens is not importable, a chip dropped off PCIe, no chip's ELF is in the directory (`details` names each ELF needed), or the dump timed out (600 s backstop) or wrote no result |
+
+`details` also counts the cores whose FW sections in L1 differ from the ELF;
+`data` carries the ELFs used and missing, the cores that differ or could not be
+read, and a tally of the postcode names. The dump itself lands in
+`<output_dir>/logs/erisc_debug.txt`, beside `erisc_debug.json` (what was found,
+per core) and `erisc_debug.log` (command, exit code and stderr), so
+`collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
+
 ## Flags
 
 | Flag | Default | Purpose |
@@ -632,6 +698,8 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |
 | `--bmc-user USER` | `$BMC_USER` | BMC user for sys-triage |
 | `--bmc-password PASS` | `$BMC_PASSWORD` | BMC password for sys-triage. Prefer the variable: a flag value is visible in the process list. |
+| `--skip-erisc-debug` | off | Skip the ERISC debug dump entirely |
+| `--erisc-elf-dir PATH` | `/opt/tenstorrent/eth-fw-elf` | ETH FW release ELFs (`eth_init-vX.Y.Z.elf`) for the ERISC debug dump. A chip whose ELF is not there is not inspected, and the phase names the ELF it needs. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
@@ -847,7 +915,8 @@ ninja -C build_Release unit_tests_deployment
 
 The `flash` tier needs no build, only triage's Python requirements, which
 `./create_venv.sh` installs into `python_env/` (or, into another environment,
-`uv pip install -r tools/triage/requirements.txt`).
+`uv pip install -r tools/triage/requirements.txt`). The ERISC debug dump runs on
+the same requirements.
 
 ## Repo layout
 
@@ -857,7 +926,8 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag_docker.sh  # runs run_diag.sh inside the exabox-tools image; results land on the host
 ├── diag_runner.py      # CLI and the phase order. Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
-├── tiers.py            # what each tier runs: resets, tests, triage, ETH status (+ summary), QSFP, sys-triage
+├── tiers.py            # what each tier runs: resets, tests, triage, ETH status (+ summary), QSFP, sys-triage,
+│                       #   ERISC debug
 ├── diag/               # the phases and what they share
 │   ├── model.py            # Check / Phase result model
 │   ├── common.py           # subprocess, console and path helpers
@@ -874,7 +944,8 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── qsfp.py             # phase 7: QSFP tests, collection
 │   ├── qsfp_ingest.py      # phase 7: cluster-debug JSONL dump -> checks. No hardware in it: a stored
 │   │                       #   dump is all it needs, so it is tested at a desk. Runnable standalone.
-│   └── sys_triage.py       # phase 8: sys-triage bundle
+│   ├── sys_triage.py       # phase 8: sys-triage bundle
+│   └── erisc_debug.py      # phase 9: ERISC debug dump; the dump itself runs as `python -m diag.erisc_debug`
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP
@@ -895,7 +966,7 @@ tools/scaleout/exabox/health_check_test_suite/
 
 The unit tests for the parsers and the harness live outside this directory, in
 `tools/scaleout/exabox/tests/` (e.g. `test_diag_runner_parsers.py`, `test_diag_tiers.py`,
-`test_diag_eth_status.py`).
+`test_diag_eth_status.py`, `test_diag_erisc_debug.py`).
 
 The `test_infrastructure/` harness previously lived in the `exabox-infra` repo and
 spun up a nested Docker container to run the diag suite. Now that the harness ships

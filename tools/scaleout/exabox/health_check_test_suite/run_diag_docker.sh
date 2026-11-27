@@ -24,6 +24,10 @@ DEFAULT_DIAG_PKG_VERSION="0.0.4"
 # triage checkout) are mounted read-only.
 IN_DIR="/tmp/hc-inputs"
 
+# The ETH FW release ELFs for the ERISC debug dump. Same default as
+# diag/erisc_debug.py, so the directory is mounted at the path the suite reads.
+DEFAULT_ERISC_ELF_DIR="/opt/tenstorrent/eth-fw-elf"
+
 IMAGE="${DEFAULT_IMAGE}"
 TIER="daily"
 OUTPUT_DIR=""
@@ -35,6 +39,8 @@ BMC_USER_VALUE="${BMC_USER:-}"
 BMC_PASSWORD_VALUE="${BMC_PASSWORD:-}"
 BMC_API_URL_VALUE="${TT_BMC_API_URL:-}"
 BMC_API_TOKEN_VALUE="${TT_BMC_API_TOKEN:-}"
+ERISC_ELF_DIR="${DEFAULT_ERISC_ELF_DIR}"
+ERISC_ELF_DIR_GIVEN=false
 SKIP_QSFP=false
 SKIP_SYS_TRIAGE=false
 NEED_LSPCI=true
@@ -72,6 +78,12 @@ Wrapper options:
                          --docker-arg --pull=never skips that.
       --docker-arg ARG   Extra argument for \`docker run\`, repeatable. Use for
                          one-offs such as --docker-arg --shm-size=4g
+      --erisc-elf-dir PATH
+                         Host directory of ETH FW release ELFs
+                         (eth_init-vX.Y.Z.elf) for the ERISC debug dump, mounted
+                         read-only at the same path (default:
+                         ${DEFAULT_ERISC_ELF_DIR}). A chip whose ELF is not there
+                         is not inspected, and the report names the ELF it needs.
   -h, --help             This text
 
 Syseng package (tt-bh-glx-cluster-debug and sys-triage, needed by the QSFP and
@@ -126,6 +138,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
                              binary
       --skip-sys-triage      Skip the sys-triage bundle
       --sys-triage-path PATH In-container path to the sys-triage binary
+      --skip-erisc-debug     Skip the ERISC debug dump
       --input-snapshot PATH  Host tt-smi snapshot JSON; mounted read-only
       --tt-smi-path PATH     In-container tt-smi binary or repo path
       --snapshot-out PATH    In-container path for the raw tt-smi snapshot
@@ -192,6 +205,7 @@ while (( $# )); do
         -o|--output-dir)   require_value "$1" "${2:-}"; OUTPUT_DIR="$2"; shift 2 ;;
         -i|--image)        require_value "$1" "${2:-}"; IMAGE="$2"; shift 2 ;;
         --docker-arg)      require_value "$1" "${2:-}"; EXTRA_DOCKER+=("$2"); shift 2 ;;
+        --erisc-elf-dir)   require_value "$1" "${2:-}"; ERISC_ELF_DIR="$2"; ERISC_ELF_DIR_GIVEN=true; shift 2 ;;
 
         --gh-token)          require_value "$1" "${2:-}"; GH_TOKEN_VALUE="$2"; shift 2 ;;
         --diag-pkg-repo)     require_value "$1" "${2:-}"; DIAG_PKG_REPO="$2"; shift 2 ;;
@@ -214,7 +228,7 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
-        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating)
+        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating|--skip-erisc-debug)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.
@@ -435,6 +449,20 @@ fi
 if [[ -n ${HOST_TRIAGE_DIR} ]]; then
     mount_input "${HOST_TRIAGE_DIR}" triage dir
     FORWARD+=(--triage-dir "${MOUNTED_PATH}")
+fi
+
+# The ERISC debug dump's ELFs, at their host path. Without them the dump still
+# names the ELF each chip needs.
+if [[ -d ${ERISC_ELF_DIR} ]]; then
+    ERISC_ELF_DIR="$( cd "${ERISC_ELF_DIR}" && pwd )"
+    bind_mount "${ERISC_ELF_DIR}" "${ERISC_ELF_DIR}" ro
+    if ${ERISC_ELF_DIR_GIVEN}; then
+        FORWARD+=(--erisc-elf-dir "${ERISC_ELF_DIR}")
+    fi
+elif ${ERISC_ELF_DIR_GIVEN}; then
+    die "--erisc-elf-dir ${ERISC_ELF_DIR} is not a directory"
+else
+    warn "${ERISC_ELF_DIR} is not present on this host; the ERISC debug dump will name the ELFs it needs"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
