@@ -67,6 +67,9 @@ struct SparseKvDispatchInputs {
     // dispatch-only owner-major plan on every core's five RISCs) before dispatching.
     std::optional<Tensor> plan_indices;
     std::optional<Tensor> plan_chunk_start_tensor;
+    // Compact landing: sparse_push_plan's rank table (rank_table=True) for this plan. Rows then land in a compact
+    // buffer (the push's layout: the plan's compact indices address it) at compact_page(run_base[owner], rank).
+    std::optional<Tensor> rank_table;
 };
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

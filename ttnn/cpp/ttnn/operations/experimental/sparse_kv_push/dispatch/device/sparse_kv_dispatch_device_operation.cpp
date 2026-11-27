@@ -141,6 +141,9 @@ void validate_config(const SparseKvDispatchParams& p, const SparseKvDispatchInpu
     TT_FATAL(p.max_rows <= kvd::kMaxRows, "sparse_kv_dispatch supports at most {} rows", kvd::kMaxRows);
     TT_FATAL(p.num_links >= 1 && p.num_links <= 2, "sparse_kv_dispatch supports 1 or 2 links");
     TT_FATAL(p.planners >= 1 && p.planners <= 64, "sparse_kv_dispatch planners must be 1..64");
+    TT_FATAL(
+        !t.rank_table.has_value() || (!t.plan_indices.has_value() && p.active_from == 0),
+        "sparse_kv_dispatch rank_table (compact landing) does not combine with the fused plan or active_from");
     TT_FATAL(p.part <= 2, "sparse_kv_dispatch part must be 0 (ALL), 1 (PREFIX) or 2 (REST), got {}", p.part);
     TT_FATAL(p.landing_slots >= 1, "sparse_kv_dispatch needs at least one landing slot");
     TT_FATAL(
@@ -219,7 +222,8 @@ void validate_config(const SparseKvDispatchParams& p, const SparseKvDispatchInpu
         "sparse_kv_dispatch input must be sharded over its rows across every chip");
     const auto& out_shape = t.output_tensor.padded_shape();
     TT_FATAL(
-        out_shape[0] == 1 && out_shape[1] == 1 && out_shape[2] % n == 0 && out_shape[2] >= p.max_rows,
+        out_shape[0] == 1 && out_shape[1] == 1 &&
+            (t.rank_table.has_value() || (out_shape[2] % n == 0 && out_shape[2] >= p.max_rows)),
         "sparse_kv_dispatch output must be [1, 1, rows >= max_rows, width] with rows a multiple of the chips, got {}",
         out_shape);
     TT_FATAL(
@@ -289,6 +293,8 @@ ttsl::hash::hash_t SparseKvDispatchDeviceOperation::compute_program_hash(
             p.active_from,
             p.part,
             p.skip_exchange,
+            t.rank_table.has_value() ? std::optional<tt::tt_metal::TensorSpec>(t.rank_table->tensor_spec())
+                                     : std::nullopt,
             t.plan_chunk_start_tensor.has_value()
                 ? std::optional<tt::tt_metal::TensorSpec>(t.plan_chunk_start_tensor->tensor_spec())
                 : std::nullopt,
@@ -351,7 +357,8 @@ Tensor sparse_kv_dispatch(
     const std::optional<Tensor>& plan_chunk_start_tensor,
     uint32_t active_from,
     uint32_t part,
-    bool skip_exchange) {
+    bool skip_exchange,
+    const std::optional<Tensor>& rank_table) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_dispatch input must be on device");
@@ -387,7 +394,8 @@ Tensor sparse_kv_dispatch(
             .scratch = scratch,
             .batch_index_tensor = batch_index_tensor,
             .plan_indices = plan_indices,
-            .plan_chunk_start_tensor = plan_chunk_start_tensor});
+            .plan_chunk_start_tensor = plan_chunk_start_tensor,
+            .rank_table = rank_table});
 }
 
 }  // namespace ttnn::prim

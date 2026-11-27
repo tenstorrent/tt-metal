@@ -150,7 +150,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("chunk_start_tensor") = nb::none(),
         nb::arg("dense_below") = 0,
         nb::arg("dense_below_2") = 0,
-        nb::arg("owner_major") = false);
+        nb::arg("owner_major") = false,
+        nb::arg("rank_table") = false);
 
     ttnn::bind_function<"sparse_kv_push", "ttnn.experimental.">(
         mod,
@@ -285,7 +286,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("plan_chunk_start_tensor") = nb::none(),
         nb::arg("active_from") = 0,
         nb::arg("part") = 0,
-        nb::arg("skip_exchange") = false);
+        nb::arg("skip_exchange") = false,
+        nb::arg("rank_table") = nb::none());
 
     ttnn::bind_function<"sparse_kv_dispatch_scratch_spec", "ttnn.experimental.">(
         mod,

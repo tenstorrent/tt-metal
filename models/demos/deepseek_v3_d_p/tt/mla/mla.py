@@ -79,6 +79,11 @@ def _kvd_skip_exchange(plan) -> bool:
     return done
 
 
+def _kvd_spike_compact() -> bool:
+    """SPIKE: compact landing (the default): rows land in the push's compact buffers, read with the compact indices."""
+    return _kvd_spike() and os.environ.get("SPARSE_MLA_KVD_COMPACT", "1") == "1"
+
+
 def _kvd_spike() -> bool:
     """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): shared layers' rows go through sparse_kv_dispatch with
     global landing instead of sparse_kv_push."""
@@ -876,7 +881,7 @@ class ttMLA:
             # The dense buffer is idle in shared layers, so when the push buffer fits in it, it serves as one parity.
             # The push buffers are created on the first push (the warm pass, before any trace capture), so models
             # whose layers all compute their own top-k never allocate one.
-            self._push_reuses_dense = self._push_rows <= dense.shape[2] or _kvd_spike()
+            self._push_reuses_dense = self._push_rows <= dense.shape[2] or (_kvd_spike() and not _kvd_spike_compact())
             # Which buffer a layer reads depends only on the config, so pick it once for this layer and the next (whose
             # prefix this layer pushes).
             self._push_buffer_parity = {layer: self._push_parity(layer) for layer in (layer_idx, layer_idx + 1)}
@@ -2604,6 +2609,7 @@ class ttMLA:
         parity = entry[1] if prefetched else self._push_buffer_parity[self.layer_idx]
         part = SparseKvPushPart.REST if prefetched else SparseKvPushPart.ALL
         self._push.pushes[part.name] += 1
+        _h0 = __import__("time").perf_counter()
         compact = self._kv_send(
             storage,
             self._push_buffer(parity),
@@ -2611,8 +2617,12 @@ class ttMLA:
             part,
             self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
         )
+        if os.environ.get("SCRATCH_TIME_SECTIONS"):  # host enqueue only (before the sync)
+            _SCRATCH_SECTIONS.setdefault(f"host_{part.name}", []).append(
+                (__import__("time").perf_counter() - _h0) * 1e6
+            )
         _t = _scratch_mark(self.mesh_device, f"send_{part.name}", _t)
-        spike = _kvd_spike()  # SPIKE: global landing, read with the natural indices
+        spike = _kvd_spike() and not _kvd_spike_compact()  # SPIKE global landing: read with the natural indices
         _ret = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
@@ -2785,6 +2795,7 @@ class ttMLA:
             **({"core_grid": core_grid} if core_grid is not None else {}),
             part=int(part.value),
             skip_exchange=_kvd_skip_exchange(plan),
+            rank_table=plan.rank_table,
         )
 
     @contextlib.contextmanager

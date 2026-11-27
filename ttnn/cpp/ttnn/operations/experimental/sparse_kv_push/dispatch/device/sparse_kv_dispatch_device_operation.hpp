@@ -70,6 +70,7 @@ Tensor sparse_kv_dispatch(
     const std::optional<Tensor>& plan_chunk_start_tensor = std::nullopt,
     uint32_t active_from = 0,
     uint32_t part = 0,
-    bool skip_exchange = false);
+    bool skip_exchange = false,
+    const std::optional<Tensor>& rank_table = std::nullopt);
 
 }  // namespace ttnn::prim

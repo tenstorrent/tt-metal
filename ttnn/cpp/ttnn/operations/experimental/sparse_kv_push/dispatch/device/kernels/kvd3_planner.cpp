@@ -81,6 +81,11 @@ void kernel_main() {
     constexpr auto scratch_args = TensorAccessorArgs<inbox_args.next_compile_time_args_offset()>();
     constexpr auto table_args = TensorAccessorArgs<scratch_args.next_compile_time_args_offset()>();
     constexpr auto batch_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+#ifdef KVD_COMPACT
+    // compact landing (kvd3_worker.cpp): the rank table after the batch tensor's accessor
+    constexpr auto rank_args = TensorAccessorArgs<batch_args.next_compile_time_args_offset()>();
+    constexpr uint32_t rank_page_bytes = KVD_RANK_PAGE_WORDS * 4;
+#endif
     constexpr uint32_t words_per_block = stripe / 32;
     constexpr uint32_t bitmap_off = ::sparse_push::plan_table::kBitmapOff;
 
@@ -574,6 +579,13 @@ void kernel_main() {
     uint32_t copy_rows[kCopyBatch];
     uint32_t copies = 0;
     uint32_t n_words = 0, n_bits = 0, n_copies = 0, cy_copy = 0, cy_load = 0, cy_tree = 0, cy_add = 0;
+#ifdef KVD_COMPACT
+    const auto rank_table = TensorAccessor(rank_args, get_common_arg_val<uint32_t>(13), rank_page_bytes);
+    const uint32_t rank_l1 = align64(get_write_ptr(KVD_CB_RANK));  // page 0 the run bases, then one a copy
+    noc_async_read(rank_table.get_noc_addr(0), rank_l1, rank_page_bytes);
+    noc_async_read_barrier();
+    const volatile tt_l1_ptr uint32_t* run_bases = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1);
+#endif
     auto flush_copies = [&]() {
         const uint32_t tc = stats_clock();
         n_copies += copies;
@@ -583,11 +595,28 @@ void kernel_main() {
 #endif
         for (uint32_t k = 0; k < copies; ++k) {
             noc_async_read(input.get_noc_addr(slot_base + copy_rows[k]), row_l1 + k * row_bytes, row_bytes);
+#ifdef KVD_COMPACT
+            // (local row lb * stripe + r is global row (me + lb * N) * stripe + r: block me + lb * N)
+            noc_async_read(
+                rank_table.get_noc_addr(1 + me + (copy_rows[k] / stripe) * N),
+                rank_l1 + (1 + k) * rank_page_bytes,
+                rank_page_bytes);
+#endif
         }
         noc_async_read_barrier();
         for (uint32_t k = 0; k < copies; ++k) {
+#ifdef KVD_COMPACT
+            const auto* rp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + (1 + k) * rank_page_bytes);
+            const uint32_t r = copy_rows[k] % stripe, w = r / 32;
+            const uint32_t rank = rp[w] + __builtin_popcount(rp[stripe / 32 + w] & ((1u << (r % 32)) - 1u));
+            noc_async_write(
+                row_l1 + k * row_bytes,
+                output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[me], rank)),
+                row_bytes);
+#else
             noc_async_write(
                 row_l1 + k * row_bytes, output.get_noc_addr(me * owner_slot_rows + copy_rows[k]), row_bytes);
+#endif
         }
         noc_async_writes_flushed();  // the buffers are reused next
         copies = 0;

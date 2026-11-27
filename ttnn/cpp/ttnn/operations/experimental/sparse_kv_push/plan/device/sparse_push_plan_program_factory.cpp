@@ -101,7 +101,8 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     // DISPATCH_ONLY serves the owner-major plans sparse_kv_dispatch reads; every other plan (sparse_kv_push's, dense
     // thresholds) is built in full, so the switch can stay set process-wide.
     const bool dispatch_only_applies = attrs.owner_major && attrs.dense_below == 0 && attrs.dense_below_2 == 0;
-    dispatch_only = dispatch_only && dispatch_only_applies;
+    // (the rank table needs the ranks the dispatch-only plan skips)
+    dispatch_only = dispatch_only && dispatch_only_applies && !attrs.rank_table;
     const char* workers_env = std::getenv("PLAN_WORKERS");
     const uint32_t workers = dispatch_only && !(workers_env != nullptr && std::string(workers_env) == "2") ? 5u : 2u;
     const uint32_t bucket_cap = pad_words(tt::div_up(per_core, workers) + 1);
@@ -179,6 +180,10 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     if (start_buf != nullptr) {
         tt::tt_metal::TensorAccessorArgs(start_buf).append_to(ct);
     }
+    auto* rank_buf = attrs.rank_table ? outputs.back().buffer() : nullptr;  // (the last output)
+    if (rank_buf != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(rank_buf).append_to(ct);
+    }
 
     auto kernel = plan_kernel(
         "sparse_push_plan.cpp",
@@ -220,11 +225,16 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         if (compact2_buf != nullptr) {
             rt.push_back(compact2_buf);
         }
+        if (rank_buf != nullptr) {
+            rt.push_back(rank_buf);
+        }
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {common.begin(), common.end()};
     kernel.defines = {
         {"PLAN_OWNER_MAJOR", attrs.owner_major ? "1" : "0"},
+        {"PLAN_RANK_TABLE", attrs.rank_table ? "1" : "0"},
+        {"PLAN_RANK_PAGE_WORDS", std::to_string(rank_table_page_words(attrs.stripe_chunk))},
         {"PLAN_SLOT_BYTES",
          std::to_string(attrs.owner_major ? inbox_slot_bytes(attrs.max_rows, attrs.stripe_chunk, num_devices) : 0u)},
     };
@@ -303,6 +313,9 @@ void SparsePushPlanProgramFactory::override_runtime_arguments(
             }
             if (attrs.dense_below_2 > 0) {
                 rt[source != ::sparse_push_plan::kNoSplit ? kArgSplit + 1 : kArgSplit] = outputs[2].buffer()->address();
+            }
+            if (attrs.rank_table) {  // (the last runtime arg)
+                rt[rt.size() - 1] = outputs.back().buffer()->address();
             }
         }
     }

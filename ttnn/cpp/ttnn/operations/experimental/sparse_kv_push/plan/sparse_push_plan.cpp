@@ -17,7 +17,8 @@ std::vector<Tensor> sparse_push_plan(
     const std::optional<Tensor>& chunk_start_tensor,
     uint32_t dense_below,
     uint32_t dense_below_2,
-    bool owner_major) {
+    bool owner_major,
+    bool rank_table) {
     return ttnn::prim::sparse_push_plan(
         indices,
         stripe_chunk,
@@ -27,7 +28,8 @@ std::vector<Tensor> sparse_push_plan(
         chunk_start_tensor,
         dense_below,
         dense_below_2,
-        owner_major);
+        owner_major,
+        rank_table);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push

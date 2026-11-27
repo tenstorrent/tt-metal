@@ -30,6 +30,11 @@ def _spike() -> bool:
     return os.environ.get("SPARSE_MLA_KVD_SPIKE", "0") == "1"
 
 
+def _spike_compact() -> bool:
+    """SPIKE: the dispatch lands rows in the push's compact buffers (plan rank table), not at global pages."""
+    return _spike() and os.environ.get("SPARSE_MLA_KVD_COMPACT", "1") == "1"
+
+
 # Cores the push needs per fabric link, for laying out its grid beside sparse_sdpa.
 PUSH_CORES_PER_LINK = ttnn.experimental.SPARSE_KV_PUSH_CORES_PER_LINK
 
@@ -53,6 +58,8 @@ class SparseKvPushPlan:
     slot: int = 0
     # SPIKE: a dispatch on this plan build already exchanged its slices into `inbox` (later calls skip the exchange).
     exchanged: bool = False
+    # SPIKE (compact landing): the plan's rank table, for sparse_kv_dispatch to land rows at compact pages.
+    rank_table: ttnn.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -248,7 +255,7 @@ class SparseKvPushPlanner:
     ) -> ttnn.Tensor:
         """The compact buffer for `parity`, sized as buffer_spec; created by the op once and reused by every chunk."""
         key = (parity, like.shape[-1], like.dtype, distinct_rows, max_rows, stripe_chunk)
-        if key not in self._buffers and _spike():  # SPIKE: global landing needs a full-size buffer
+        if key not in self._buffers and _spike() and not _spike_compact():  # SPIKE: global landing: a full-size buffer
             self._buffers[key] = ttnn.allocate_tensor_on_device(like.spec, self.mesh_device)
         if key not in self._buffers:
             self._buffers[key] = ttnn.experimental.sparse_kv_push_create_output_buffer(
@@ -339,6 +346,7 @@ class SparseKvPushPlanner:
             dense_below=dense_below,
             dense_below_2=dense_below_2,
             owner_major=inbox_mode,
+            rank_table=inbox_mode and _spike_compact(),
         )
         self.builds += 1
         table, compact_indices = outputs[0], outputs[1]
@@ -364,6 +372,7 @@ class SparseKvPushPlanner:
                 dense_below_2=dense_below_2,
                 inbox=self._inbox[slot],
                 slot=slot,
+                rank_table=outputs[-1] if _spike_compact() else None,
             )
         gathered_rows = table.shape[2] * n
         # Inbox-mode plans hold no gathered table, so their slots leave gaps here.

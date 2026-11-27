@@ -119,6 +119,11 @@ void common_args(tt::tt_metal::KernelDescriptor& k, const SparseKvDispatchParams
     c.push_back(static_cast<uint32_t>(p.credit_semaphore->address()));   // smuggled-rta-ok: semaphore
     c.push_back(static_cast<uint32_t>(p.inbox_semaphore->address()));    // smuggled-rta-ok: semaphore
     c.push_back(t.table.buffer());
+    if (t.rank_table.has_value()) {  // 13: the rank table (compact landing)
+        c.push_back(t.rank_table->buffer());
+    } else {
+        c.push_back(0u);
+    }
     k.emplace_common_runtime_args(c);
 }
 
@@ -137,6 +142,7 @@ void patch_common(Args& c, const SparseKvDispatchParams& p, const SparseKvDispat
     c[10] = p.credit_semaphore->address();
     c[11] = p.inbox_semaphore->address();
     c[12] = t.table.buffer()->address();
+    c[13] = t.rank_table.has_value() ? t.rank_table->buffer()->address() : 0u;
 }
 
 // Ablation knobs (perf experiments only, results may not be exact): KVD_ABL=NAME[=VALUE],... defines KVD_ABL_NAME in
@@ -503,6 +509,10 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     }
     TT_FATAL(B >= 1, "sparse_kv_dispatch v3: a {} B row does not fit the {} B payload", row_bytes, max_payload);
     uint32_t sbytes = kvd::slot_bytes(B, row_bytes);  // (the L1 fit below may take fewer rows a packet)
+    // compact landing (a rank table given): rows land at compact_page(run_base[owner], rank) (sparse_push_plan)
+    const bool compact = t.rank_table.has_value();
+    const uint32_t rank_page_words = std::max(2u * p.stripe_chunk / 32u, 32u);
+    const uint32_t rank_page_bytes = rank_page_words * 4;
     const uint32_t owner_slot_rows = t.output_tensor.padded_shape()[2] / N;
     const uint32_t inbox_slot = inbox_slot_bytes(p.max_rows, p.stripe_chunk, N);
     const uint32_t num_slots = t.input_tensor.padded_shape()[0];
@@ -597,7 +607,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             }
         }
     }
-    constexpr uint32_t kCtrl = 0, kStage = 1, kPool = 2, kSend = 3, kInbox = 4, kRow = 5;
+    constexpr uint32_t kCtrl = 0, kStage = 1, kPool = 2, kSend = 3, kInbox = 4, kRow = 5, kRank = 6;
     // (on the whole grid, not just this chip's cores: a CB's base is the L1 high-water mark of the cores it is on, and
     // the placed cores differ by chip; on the grid it is the same on every chip)
     const auto& grid_range = p.core_grid;
@@ -626,8 +636,9 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             cb(static_cast<uint64_t>(std::max(row_bytes, 64u)) * 8 + 4 * kvd::kMaxLinks * 32 * 16 + row_bytes);
         auto need = [&]() {
             const uint64_t stage = cb(uint64_t{sbytes} * std::max(4 * G * kn.stage, 4 * kvd::kMaxLinks * kn.pstage));
-            const uint64_t port = ctrl + stage + cb(uint64_t{sbytes} * G * kn.pool) + send;
-            const uint64_t planner = ctrl + stage + inbox + rows + 64;
+            const uint64_t rank = compact ? cb(uint64_t{rank_page_bytes} * (3 + 2 * std::max(B, 8u))) : 0;
+            const uint64_t port = ctrl + rank + stage + cb(uint64_t{sbytes} * G * kn.pool) + send;
+            const uint64_t planner = ctrl + rank + stage + inbox + rows + 64;
             return std::max(port, planner);
         };
         const uint32_t pool_in = kn.pool, stage_in = kn.stage, b_in = B;
@@ -667,6 +678,9 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             free_l1);
     }
     add_cb(desc, grid_range, kCtrl, 4 * kvd3::kCtrlWords, 1);
+    if (compact) {  // compact landing: the run bases (page 0), then the rank pages of a slot's (or copy batch's) rows
+        add_cb(desc, grid_range, kRank, rank_page_bytes, 3 + 2 * std::max(B, 8u));  // (2 RISCs, + 64 B slack)
+    }
     add_cb(desc, grid_range, kStage, sbytes, std::max(4 * G * kn.stage, 4 * kvd::kMaxLinks * kn.pstage));
     uint32_t pool_pages = G * kn.pool;  // (KVD_ABL=POOL0=n: class 0 has n slots)
     for (const auto& [name, value] : abl_defs) {
@@ -724,6 +738,14 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     // which rows of each requester this call sends (planners: kvd3_planner.cpp route_word)
     ring_defines.emplace_back("KVD_PART", std::to_string(p.part));
     ring_defines.emplace_back("KVD_SKIP_XCHG", p.skip_exchange ? "1" : "0");
+    if (compact) {
+        const auto shape = packet_shape(mesh_device, row_bytes);  // (the plan's compact layout: its packet shape)
+        ring_defines.emplace_back("KVD_COMPACT", "1");
+        ring_defines.emplace_back("KVD_PPP", std::to_string(shape.pages_per_packet));
+        ring_defines.emplace_back("KVD_BANKS", std::to_string(shape.banks));
+        ring_defines.emplace_back("KVD_RANK_PAGE_WORDS", std::to_string(rank_page_words));
+        ring_defines.emplace_back("KVD_CB_RANK", std::to_string(kRank));
+    }
     if (p.active_from != 0) {
         // every v3 kernel: return when the chunk starts before active_from (kvd3_common.hpp skip_chunk)
         TT_FATAL(kn.lanes == 1, "sparse_kv_dispatch active_from: LANES=1 only (the helper readers have no gate)");
@@ -795,6 +817,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
         0u,  // class parity (BRISC)
         kSemWgo};
     acc(w_ct, t.output_tensor);
+    acc(w_ct, compact ? *t.rank_table : t.output_tensor);  // (the rank table; any valid accessor without one)
     std::vector<uint32_t> planner_ct = {
         N,
         R,
@@ -826,6 +849,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     acc(planner_ct, t.scratch);
     acc(planner_ct, t.table);
     acc(planner_ct, batch_or_dummy);
+    acc(planner_ct, compact ? *t.rank_table : t.output_tensor);
 
     auto tx = make_kernel(
         "kvd3_tx.cpp",
@@ -1865,7 +1889,7 @@ void SparseKvDispatchProgramFactory::override_runtime_arguments(
                 c[base + 2] = t.plan_chunk_start_tensor.has_value() ? t.plan_chunk_start_tensor->buffer()->address()
                                                                     : p.plan_chunk_start.value_or(0);
             };
-            const std::array<uint32_t, 5> base = {13, 13, 13, 0, 13};
+            const std::array<uint32_t, 5> base = {14, 14, 14, 0, 14};
             for (uint32_t k = 0; k < base.size(); ++k) {
                 patch(k, base[k]);
             }

@@ -20,6 +20,9 @@
 #include "api/debug/dprint.h"
 #include "api/debug/assert.h"
 #include "kvd3_common.hpp"
+#ifdef KVD_COMPACT
+#include "ttnn/cpp/ttnn/operations/experimental/sparse_kv_push/common/kernels/sparse_push_constants.hpp"
+#endif
 
 #include <cstdint>
 
@@ -76,6 +79,13 @@ void kernel_main() {
     constexpr uint32_t wpar = get_compile_time_arg_val(20);  // the class parity this RISC serves (wsplit 2)
     constexpr uint32_t sem_wgo = get_compile_time_arg_val(21);  // parity 0 releases parity 1 after the chip barrier
     constexpr auto output_args = TensorAccessorArgs<22>();
+#ifdef KVD_COMPACT
+    // compact landing: sparse_push_plan's rank table (page 0 the owners' run bases, page 1 + b block b's word ranks and
+    // bitmap words); a row lands at compact_page(run_base[owner], rank of the row within its owner's run)
+    constexpr auto rank_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr uint32_t rank_page_bytes = KVD_RANK_PAGE_WORDS * 4;
+    constexpr uint32_t words_per_block = stripe / 32;
+#endif
     // classes this RISC serves (lands, routes, signals done for c + 1, owes credits for): c % wsplit == wpar; the
     // staging of class c + 1 is written only by the RISC serving c (one writer a slot)
     auto own = [](uint32_t c) { return wsplit == 1 || (c % 2) == wpar; };
@@ -159,6 +169,14 @@ void kernel_main() {
     const uint32_t mv = f ^ 1;  // the packets here move in f ^ 1
     const bool mv_x = mv < 2;
     const uint32_t me_bit = 1u << me;
+#ifdef KVD_COMPACT
+    const auto rank_table = TensorAccessor(rank_args, get_common_arg_val<uint32_t>(13), rank_page_bytes);
+    // this RISC's region of the rank CB: the run bases, then one rank page a row of a landing slot
+    const uint32_t rank_l1 = align64(get_write_ptr(KVD_CB_RANK)) + wpar * (1 + (B > 8 ? B : 8)) * rank_page_bytes;
+    noc_async_read(rank_table.get_noc_addr(0), rank_l1, rank_page_bytes);
+    noc_async_read_barrier();
+    const volatile tt_l1_ptr uint32_t* run_bases = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1);
+#endif
 
     uint32_t processed[G], pub[4][G], openn[4][G];
     bool end_in[G];
@@ -362,6 +380,18 @@ void kernel_main() {
 #endif
             const uint32_t trows = stats_clock();
             cy_cap += trows - tw;
+#ifdef KVD_COMPACT
+            // the rank pages of the rows this chip needs (one read each, one barrier)
+            for (uint32_t i = 0; i < n; ++i) {
+                if (e_m[i] & me_bit) {
+                    noc_async_read(
+                        rank_table.get_noc_addr(1 + entry_row(e_w0[i]) / stripe),
+                        rank_l1 + (1 + i) * rank_page_bytes,
+                        rank_page_bytes);
+                }
+            }
+            noc_async_read_barrier();
+#endif
             // the rows
             uint32_t to_publish[4] = {0, 0, 0, 0};
             for (uint32_t i = 0; i < n; ++i) {
@@ -371,10 +401,21 @@ void kernel_main() {
 #ifndef KVD_ABL_W_NOGATHER
                 if (m & me_bit) {
                     const uint32_t owner = (g / stripe) % N;
+#ifdef KVD_COMPACT
+                    const auto* rp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + (1 + i) * rank_page_bytes);
+                    const uint32_t w = (g % stripe) / 32;
+                    const uint32_t rank = rp[w] + __builtin_popcount(rp[words_per_block + w] & ((1u << (g % 32)) - 1u));
+                    noc_async_write(
+                        src,
+                        output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[owner], rank)),
+                        row_bytes);
+#else
                     noc_async_write(
                         src,
                         output.get_noc_addr(owner * owner_slot_rows + (g / stripe / N) * stripe + g % stripe),
                         row_bytes);
+#endif
                 }
 #endif
                 Out outs[3];

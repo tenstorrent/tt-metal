@@ -37,7 +37,8 @@ Tensor sparse_kv_dispatch(
     const std::optional<Tensor>& plan_chunk_start_tensor,
     uint32_t active_from,
     uint32_t part,
-    bool skip_exchange) {
+    bool skip_exchange,
+    const std::optional<Tensor>& rank_table) {
     return ttnn::prim::sparse_kv_dispatch(
         input_tensor,
         output_tensor,
@@ -65,7 +66,8 @@ Tensor sparse_kv_dispatch(
         plan_chunk_start_tensor,
         active_from,
         part,
-        skip_exchange);
+        skip_exchange,
+        rank_table);
 }
 
 tt::tt_metal::TensorSpec sparse_kv_dispatch_scratch_spec(

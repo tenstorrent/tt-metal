@@ -17,6 +17,10 @@
 //   DISPATCH_ONLY: stop after exchange 2 and write the owner-major slots (bitmap words, summary, header words 0-10)
 //                  with zero per-owner counts; no ranks, exchange 3, bases, rewrite or compact write-back. Only for
 //                  sparse_kv_dispatch, which reads nothing else.
+#ifndef PLAN_RANK_TABLE
+#define PLAN_RANK_TABLE 0
+#define PLAN_RANK_PAGE_WORDS 32
+#endif
 #if defined(PLAN_ABL_DISPATCH_ONLY) && !PLAN_OWNER_MAJOR
 #error "PLAN_ABL=DISPATCH_ONLY needs owner_major"
 #endif
@@ -117,6 +121,12 @@ PLAN_ENTRY {
         // own first arg as accessor flags)
         TensorAccessorArgs<
             split_source == kSplitTensor ? compact2_args.next_compile_time_args_offset() : PLAN_TA_BASE + 16>();
+#if PLAN_RANK_TABLE
+    // sparse_kv_dispatch's rank table (the last output): page 0 the run bases, page 1 + b block b's word ranks + words
+    constexpr auto rank_args = TensorAccessorArgs<
+        split_source == kSplitTensor ? split_args.next_compile_time_args_offset()
+                                     : compact2_args.next_compile_time_args_offset()>();
+#endif
     constexpr uint32_t words_per_block = stripe_chunk / sparse_push::plan_table::kRowsPerWord;
     constexpr uint32_t index_bytes = sizeof(uint32_t);  // one top-k index
     constexpr uint32_t word_bytes = sizeof(uint32_t);   // one bitmap / table / scratch word
@@ -157,7 +167,11 @@ PLAN_ENTRY {
     // The chunk start: its tensor's address (kSplitTensor) or the row itself (kSplitValue).
     const uint32_t split_arg = has_split ? get_arg_val<uint32_t>(arg++) : 0;
     const uint32_t compact2_addr = has_compact2 ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t rank_addr = PLAN_RANK_TABLE ? get_arg_val<uint32_t>(arg++) : 0;
+#else
+    const uint32_t rank_addr = 0;
 #endif
+    (void)rank_addr;
     // Common runtime args: every core's (x, y), core 0 first, then the multicast rectangle of all of them.
     // NoC address of `l1` on plan core `core`.
 #ifdef PLAN_FUSED
@@ -777,6 +791,43 @@ PLAN_ENTRY {
             dense_slot_rows>(idx, index_count, bitmap, word_ranks, partials, misc, worker, sem_done);
         wait_workers(kRewritten);
         plan_mark(9);
+#if PLAN_RANK_TABLE
+        {
+            // This core's share of the active blocks, one page each: the rank of each bitmap word's first needed row
+            // within its owner's run (the rewrite's range offset + word rank), then the words. Core 0 also writes
+            // page 0, the owners' run bases. Staged in the scatter buckets (free once the indices are rewritten).
+            constexpr uint32_t page_words = PLAN_RANK_PAGE_WORDS;
+            constexpr uint32_t page_bytes = page_words * word_bytes;
+            constexpr uint32_t kBatch = 16;
+            const auto rank_table = TensorAccessor(rank_args, rank_addr, page_bytes);
+            auto* stage = reinterpret_cast<uint32_t*>(PLAN_BUF(kBuckets));
+            const uint32_t stage_l1 = PLAN_BUF(kBuckets);
+            if (core_idx == 0) {
+                const uint32_t* run_bases = misc + kMiscBase;
+                for (uint32_t i = 0; i < page_words; ++i) {
+                    stage[i] = i < num_devices ? run_bases[i] : 0u;
+                }
+                noc_async_write(stage_l1, rank_table.get_noc_addr(0), page_bytes);
+                noc_async_write_barrier();
+            }
+            const uint32_t b0 = active_blocks * core_idx / cores, b1 = active_blocks * (core_idx + 1) / cores;
+            for (uint32_t b = b0; b < b1;) {
+                const uint32_t n = b1 - b < kBatch ? b1 - b : kBatch;
+                for (uint32_t j = 0; j < n; ++j, ++b) {
+                    uint32_t* page = stage + j * page_words;
+                    const uint32_t owner = b % num_devices;
+                    const uint32_t offset = partials[(b / range_blocks) * range_words + owner];
+                    for (uint32_t w = 0; w < words_per_block; ++w) {
+                        const uint32_t word = b * words_per_block + w;
+                        page[w] = offset + word_ranks[word];
+                        page[words_per_block + w] = bitmap[word];
+                    }
+                    noc_async_write(stage_l1 + j * page_bytes, rank_table.get_noc_addr(1 + b), page_bytes);
+                }
+                noc_async_write_barrier();
+            }
+        }
+#endif
         if (owner_major ? core_idx < num_devices : core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
             const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;

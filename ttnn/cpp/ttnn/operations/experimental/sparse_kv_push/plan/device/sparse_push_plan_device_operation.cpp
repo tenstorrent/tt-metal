@@ -24,6 +24,9 @@ using ::sparse_push_plan::kChunkRows;
 // they live on.
 void validate_runtime(const SparsePushPlanParams& attrs, const SparsePushPlanInputs& args) {
     TT_FATAL(
+        !attrs.rank_table || (attrs.owner_major && attrs.dense_below == 0 && attrs.dense_below_2 == 0),
+        "sparse push plan rank_table needs owner_major and no dense threshold");
+    TT_FATAL(
         !attrs.chunk_start.has_value() || *attrs.chunk_start < attrs.max_rows,
         "sparse push plan chunk_start {} must be below max_rows {}",
         attrs.chunk_start.value_or(0),
@@ -140,6 +143,7 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
         attrs.dense_below,
         attrs.dense_below_2,
         attrs.owner_major,
+        attrs.rank_table,
         // perf-experiment kernels (sparse_push_plan_program_factory.cpp): a different program
         std::string(std::getenv("PLAN_ABL") ? std::getenv("PLAN_ABL") : ""),
         std::getenv("PLAN_STATS") != nullptr,
@@ -162,6 +166,10 @@ SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation
     if (attrs.dense_below_2 > 0) {
         specs.push_back(tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm));
     }
+    if (attrs.rank_table) {
+        specs.push_back(tt::tt_metal::TensorSpec(
+            Shape({1, 1, 1 + attrs.max_rows / attrs.stripe_chunk, rank_table_page_words(attrs.stripe_chunk)}), rm));
+    }
     return specs;
 }
 
@@ -174,6 +182,9 @@ SparsePushPlanDeviceOperation::topology_return_value_t SparsePushPlanDeviceOpera
         rows_over_every_chip(args.indices.device()->shape()), args.indices.tensor_topology()};
     if (attrs.dense_below_2 > 0) {
         topologies.push_back(args.indices.tensor_topology());
+    }
+    if (attrs.rank_table) {
+        topologies.push_back(args.indices.tensor_topology());  // (per chip, like the compact indices)
     }
     return topologies;
 }
@@ -201,7 +212,8 @@ std::vector<Tensor> sparse_push_plan(
     const std::optional<Tensor>& chunk_start_tensor,
     uint32_t dense_below,
     uint32_t dense_below_2,
-    bool owner_major) {
+    bool owner_major,
+    bool rank_table) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -211,7 +223,8 @@ std::vector<Tensor> sparse_push_plan(
             .chunk_start = chunk_start,
             .dense_below = dense_below,
             .dense_below_2 = dense_below_2,
-            .owner_major = owner_major},
+            .owner_major = owner_major,
+            .rank_table = rank_table},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

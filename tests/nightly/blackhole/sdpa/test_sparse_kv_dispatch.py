@@ -361,6 +361,116 @@ def test_dispatch_parts(mesh_device, fabric, split_slabs):
         logger.info(f"{fabric} split {split_slabs}: {'+'.join(parts)} exact")
 
 
+@run_for_blackhole()
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params, fabric",
+    [(_fabric_params(f), f) for f in _FABRICS],
+    ids=list(_FABRICS),
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("split_slabs", [3, 7], ids=["split_mid", "split_last"])
+def test_dispatch_compact(mesh_device, fabric, split_slabs):
+    """Compact landing: the plan's rank table (rank_table=True) and the dispatch landing rows in the push's compact
+    buffer. Every top-k index of every chip, rewritten by the plan (compact indices), addresses that row: ALL, and
+    PREFIX then REST, each into a poisoned buffer."""
+    n = mesh_device.get_num_devices()
+    max_rows = 8 * n * STRIPE
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=13)
+    d = Dispatch(mesh_device, max_rows, width, dtype)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    rng = np.random.default_rng(17)
+    natural = np.stack([rng.integers(0, max_rows, size=(STRIPE, TOPK)) for _ in range(n)])
+    natural[:, :, 1536:] = max_rows  # sentinel
+    idx = ttnn.from_torch(
+        torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        **common,
+    )
+    chunk_start = split_slabs * n * STRIPE
+    page_bytes = cache.buffer_aligned_page_size()
+    table, compact_idx, rank = ttnn.experimental.sparse_push_plan(
+        idx,
+        stripe_chunk=STRIPE,
+        max_rows=max_rows,
+        page_bytes=page_bytes,
+        chunk_start=chunk_start,
+        owner_major=True,
+        rank_table=True,
+    )
+    compact = ttnn.experimental.sparse_kv_push_create_output_buffer(
+        mesh_device, distinct_rows=STRIPE * TOPK, max_rows=max_rows, stripe_chunk=STRIPE, row_width=width, dtype=dtype
+    )
+    rows = compact.shape[2]
+    poison = ttnn.from_torch(
+        torch.full((1, 1, rows, width), 3.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **common,
+    )
+    poison = poison if dtype == ttnn.bfloat16 else ttnn.typecast(poison, dtype)
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_bits = _as_bits(
+        ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[0, 0].to(torch.float32)
+    )
+    pages_of = [ttnn.to_torch(t).reshape(STRIPE, TOPK).to(torch.int64) for t in ttnn.get_device_tensors(compact_idx)]
+
+    def call(part, skip):
+        return ttnn.experimental.sparse_kv_dispatch(
+            cache,
+            output_tensor=compact,
+            table=table,
+            inbox=d.inbox,
+            scratch=d.scratch,
+            stripe_chunk=STRIPE,
+            max_rows=max_rows,
+            fence_semaphore=d.sems[0],
+            arrived_semaphore=d.sems[1],
+            credit_semaphore=d.sems[2],
+            inbox_semaphore=d.sems[3],
+            num_links=d.links,
+            planners=d.planners,
+            lanes_per_link=d.lanes,
+            part=part,
+            skip_exchange=skip,
+            rank_table=rank,
+        )
+
+    exchanged = False
+    for parts in ((0,), (1, 2)):
+        ttnn.copy(poison, compact)
+        for part in parts:
+            call(part, exchanged)
+            exchanged = True
+        ttnn.synchronize_device(mesh_device)
+        outs = ttnn.get_device_tensors(as_bf16(compact))
+        for i in range(n):
+            got = _as_bits(ttnn.to_torch(outs[i])[0, 0].to(torch.float32))
+            nat = torch.from_numpy(natural[i]).to(torch.int64)
+            valid = nat < max_rows
+            pages, rws = pages_of[i][valid], nat[valid]
+            # (the concatenated cache is in shard order: row g is at its owner-major page)
+            rws = (rws // STRIPE % n) * (max_rows // n) + (rws // STRIPE // n) * STRIPE + rws % STRIPE
+            wrong = int((got[pages] != cache_bits[rws]).any(dim=1).sum())
+            if wrong and i == 0 and os.environ.get("KVD_DEBUG"):
+                rt = ttnn.to_torch(ttnn.get_device_tensors(rank)[0])[0, 0].to(torch.int64)
+                logger.error(f"rank page 0 (run bases): {rt[0, :n].tolist()}")
+                bad = (got[pages] != cache_bits[rws]).any(dim=1).nonzero().flatten()[:6]
+                poisoned = int((got == _as_bits(torch.full((1, got.shape[1]), 3.0))).all(dim=1).sum())
+                logger.error(f"compact rows {got.shape[0]}, still poison {poisoned}")
+                for j in bad.tolist():
+                    r, pg = int(rws[j]), int(pages[j])
+                    hit = (got == cache_bits[r]).all(dim=1).nonzero().flatten()[:4].tolist()
+                    blk = r // STRIPE
+                    logger.error(
+                        f"row {r} (block {blk}, owner {blk % n}): plan page {pg}, row found at pages {hit}; rank page {rt[1 + blk, :12].tolist()}"
+                    )
+            assert wrong == 0, f"{fabric} parts {parts} chip {i}: {wrong} of {len(rws)} indices read a wrong row"
+        logger.info(f"{fabric} split {split_slabs} parts {parts}: every compact index reads its row")
+
+
 _GLM_TRACE = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120/dsa"
 _GLM_START = 1039360  # the trace's chunk start (a whole number of slabs)
 # per-layer tree roofline (tools/roofline_real_topk_8x4.jsonl), us
@@ -1104,14 +1214,14 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
         plan = planner.plan(idx, stripe_chunk=STRIPE, page_bytes=page_bytes, max_rows=max_rows, chunk_start=start)
         compact = planner.push_buffer(0, cache, distinct_rows=STRIPE * TOPK, max_rows=max_rows, stripe_chunk=STRIPE)
 
-        def push(grid=None):
+        def push(grid=None, part=SparseKvPushPart.ALL):
             return ttnn.experimental.sparse_kv_push(
                 cache,
                 output_tensor=compact,
                 table=plan.table,
                 stripe_chunk=STRIPE,
                 max_rows=max_rows,
-                part=SparseKvPushPart.ALL,
+                part=part,
                 num_links=2,
                 sp_axis=0,
                 batch_index=0,
@@ -1126,6 +1236,7 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
 
         res["push"] = _traced_us(mesh_device, push)
         res["push_beside"] = _traced_us(mesh_device, lambda: push(push_grid))
+        res["push_rest"] = _traced_us(mesh_device, lambda: push(part=SparseKvPushPart.REST))
         res["push_plan"] = _traced_us(mesh_device, push_plan)
         # proposed: owner-major plan, then the dispatch (48 planners full grid; 16 planners K=2 beside attention)
         for name, planners, env, grid in (
@@ -1161,6 +1272,8 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
                         )
                     assert bad == 0, f"{tag}: dispatch wrote {bad} wrong rows"
                 res[name] = _traced_us(mesh_device, lambda: d(cache, table, **kw))
+                if name == "kvd":  # REST on the exchanged plan, as a shared layer after a pre-send
+                    res["kvd_rest"] = _traced_us(mesh_device, lambda: d(cache, table, part=2, skip_exchange=True, **kw))
                 if name == "kvd":
                     res["kvd_plan"] = _traced_us(mesh_device, lambda: d.plan(idx, chunk_start=start))
                 ttnn.deallocate(d.output)
