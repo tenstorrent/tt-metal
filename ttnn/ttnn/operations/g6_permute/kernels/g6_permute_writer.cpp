@@ -2,113 +2,103 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_permute writer (rows_tile): exchange_rows_block + store_tiles_block.
-// exchange: every live row (a, b) of the block moves from input slot a - 32*ta at tile row
-// b mod 32 to staging page b - b0 at tile row a mod 32, as two 32-B face-row segments copied by
-// self-aimed NoC reads (bit-exact; no compute engine touches the values).
-// store: each staging page leaves as one whole 2048-B output tile.
-// cb_output_staging is writer-private scratch: no handshake, base taken once.
+// g6_permute writer (rows_tile_scatter): scatter_rows_block.
+// Tile row r of input tile (n, a, bt, wt) is output tile row a mod 32 of output tile
+// (n, 32*bt + r, a div 32, wt); its two 32-B halves go straight from the input slot to that
+// output page in DRAM. No compute engine touches the values, so every bf16 bit survives.
+// Raw dataflow: kernel_lib has no block helper that scatters tile rows to remote pages.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "g6_permute_common.hpp"
 
 using namespace g6_permute;
 
-constexpr uint32_t cb_input_rows = get_compile_time_arg_val(0);
-constexpr uint32_t cb_output_staging = get_compile_time_arg_val(1);
-constexpr uint32_t A = get_compile_time_arg_val(2);
-constexpr uint32_t B = get_compile_time_arg_val(3);
-constexpr uint32_t tensor_a_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t tensor_b_tiles = get_compile_time_arg_val(5);
-constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(6);
-constexpr uint32_t a_tile_rows = get_compile_time_arg_val(7);
-constexpr uint32_t block_b_rows = get_compile_time_arg_val(8);
-constexpr uint32_t face_row_bytes = get_compile_time_arg_val(9);
-constexpr uint32_t tile_bytes = get_compile_time_arg_val(10);
-constexpr auto output_args = TensorAccessorArgs<11>();
+constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
+constexpr uint32_t tensor_a = get_compile_time_arg_val(1);
+constexpr uint32_t tensor_b = get_compile_time_arg_val(2);
+constexpr uint32_t tensor_at = get_compile_time_arg_val(3);
+constexpr uint32_t tensor_bt = get_compile_time_arg_val(4);
+constexpr uint32_t tensor_wt = get_compile_time_arg_val(5);
+constexpr uint32_t block_in_tiles = get_compile_time_arg_val(6);
+constexpr uint32_t face_row_bytes = get_compile_time_arg_val(7);
+constexpr uint32_t in_page_bytes = get_compile_time_arg_val(8);
+constexpr bool stagger_rows = get_compile_time_arg_val(9) != 0;
+constexpr auto output_args = TensorAccessorArgs<10>();
 
 using Geometry = TileGeometry<face_row_bytes>;
-static_assert(Geometry::tile_bytes == tile_bytes, "tile page must be four 16x16 faces");
+using Rows = RowsLive<tensor_b, tensor_bt>;
+using Cursor = InTileCursor<tensor_a, tensor_bt, tensor_wt>;
+static_assert(Geometry::tile_bytes == in_page_bytes, "tile page must be four 16x16 faces");
 
-using Cursor = BlockCursor<B, tensor_a_tiles, tensor_w_tiles, block_b_rows>;
+// Consecutive rows r of one input tile land in output pages this far apart, all at the same row.
+constexpr uint32_t out_row_page_stride = tensor_at * tensor_wt;
 
-FORCE_INLINE void issue_row_copies(
-    Noc noc, uint32_t slots_base, uint32_t staging_base, const Cursor& cursor, uint32_t run) {
-    const uint32_t a_live = cursor.a_live(A);
-    const uint32_t r_in0 = cursor.b % TILE_ROWS;
-    for (uint32_t j = 0; j < run; ++j) {
-        const uint32_t src_row = Geometry::off(r_in0 + j, 0);
-        const uint32_t dst_page = staging_base + j * tile_bytes;
-        for (uint32_t s = 0; s < a_live; ++s) {
-            const uint32_t src = slots_base + s * tile_bytes + src_row;
-            const uint32_t dst = dst_page + Geometry::off(s, 0);
-            dataflow_kernel_lib::read_with_state<face_row_bytes>(noc, dst, src);
-            dataflow_kernel_lib::read_with_state<face_row_bytes>(
-                noc, dst + Geometry::face_bytes, src + Geometry::face_bytes);
+template <typename Accessor>
+FORCE_INLINE void scatter_tile(const Accessor& output, uint32_t slot, const Cursor& c) {
+    const bool last_bt = c.bt == tensor_bt - 1;
+    const uint32_t rows = last_bt ? Rows::last : TILE_ROWS;
+    const uint32_t dst_offset = Geometry::face_off(c.a % TILE_ROWS, 0);
+    const uint32_t base_page = ((c.n * tensor_b + TILE_ROWS * c.bt) * tensor_at + c.a / TILE_ROWS) * tensor_wt + c.wt;
+    // Cores holding neighbouring a start on different rows, so their first writes hit different pages.
+    uint32_t r = 0;
+    if constexpr (stagger_rows) {
+        r = last_bt ? c.a % Rows::last : c.a % TILE_ROWS;
+    }
+    for (uint32_t i = 0; i < rows; ++i) {
+        const uint64_t dst = output.get_noc_addr(base_page + r * out_row_page_stride, dst_offset);
+        const uint32_t src = slot + Geometry::face_off(r, 0);
+        noc_async_write<face_row_bytes>(src, dst, face_row_bytes);
+        noc_async_write<face_row_bytes>(src + Geometry::face_bytes, dst + Geometry::face_bytes, face_row_bytes);
+        if (++r == rows) {
+            r = 0;
         }
     }
 }
 
 template <typename Accessor>
-FORCE_INLINE void issue_tile_writes(const Accessor& output, uint32_t staging_base, const Cursor& cursor, uint32_t run) {
-    for (uint32_t j = 0; j < run; ++j) {
-        const uint32_t page = ((cursor.n * B + cursor.b + j) * tensor_a_tiles + cursor.ta) * tensor_w_tiles + cursor.tw;
-        noc_async_write(staging_base + j * tile_bytes, output.get_noc_addr(page), tile_bytes);
+FORCE_INLINE void issue_block_writes(const Accessor& output, Cursor& cursor, uint32_t extent) {
+    uint32_t slot = get_read_ptr(cb_input_tiles);
+    for (uint32_t k = 0; k < extent; ++k) {
+        scatter_tile(output, slot, cursor);
+        slot += in_page_bytes;
+        cursor.advance();
     }
-}
-
-template <bool zoned>
-FORCE_INLINE void exchange_rows_block(
-    Noc noc, uint32_t staging_base, const Cursor& cursor, uint32_t run, bool staging_in_flight) {
-    G6_ZONED_STEP(zoned, "PERM-WR-WAIT", cb_wait_front(cb_input_rows, a_tile_rows));
-    if (staging_in_flight) {
-        // The previous block's tile writes must have left staging before it is refilled.
-        G6_ZONED_STEP(zoned, "PERM-WR-FLUSH", noc_async_writes_flushed());
-    }
-    const uint32_t slots_base = get_read_ptr(cb_input_rows);
-    G6_ZONED_STEP(zoned, "PERM-WR-XCHG-ISSUE", issue_row_copies(noc, slots_base, staging_base, cursor, run));
-    G6_ZONED_STEP(zoned, "PERM-WR-XCHG-BARRIER", noc_async_read_barrier());
-    cb_pop_front(cb_input_rows, a_tile_rows);
 }
 
 template <bool zoned, typename Accessor>
-FORCE_INLINE void store_tiles_block(const Accessor& output, uint32_t staging_base, const Cursor& cursor, uint32_t run) {
-    G6_ZONED_STEP(zoned, "PERM-WR-STORE-ISSUE", issue_tile_writes(output, staging_base, cursor, run));
+FORCE_INLINE void scatter_rows_block(const Accessor& output, Cursor& cursor, uint32_t extent) {
+    G6_ZONED_STEP(zoned, "PERM-WR-WAIT", cb_wait_front(cb_input_tiles, block_in_tiles));
+    G6_ZONED_STEP(zoned, "PERM-WR-ISSUE", issue_block_writes(output, cursor, extent));
+    // The slots are the writes' source: they must have left L1 before the reader may refill them.
+    G6_ZONED_STEP(zoned, "PERM-WR-FLUSH", noc_async_writes_flushed());
+    cb_pop_front(cb_input_tiles, block_in_tiles);
 }
 
 void kernel_main() {
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t core_start_unit = get_arg_val<uint32_t>(0);
-    const uint32_t core_num_units = get_arg_val<uint32_t>(1);
+    uint32_t remaining = get_arg_val<uint32_t>(1);
+    Cursor cursor{
+        get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3), get_arg_val<uint32_t>(4), get_arg_val<uint32_t>(5)};
 
-    const auto output = TensorAccessor(output_args, output_addr, tile_bytes);
-    const uint32_t staging_base = get_write_ptr(cb_output_staging);
-    Cursor cursor(core_start_unit, core_num_units);
-
-    // Copy size and source coordinates (this core) are fixed for the kernel; each copy rewrites
-    // only the two L1 addresses.
-    Noc noc;
-    dataflow_kernel_lib::set_read_state<face_row_bytes>(noc, get_read_ptr(cb_input_rows));
+    const auto output = TensorAccessor(output_args, output_addr, in_page_bytes);
 
     uint32_t block_idx = 0;
-    for (; block_idx < ZONED_BLOCKS && !cursor.done(); ++block_idx) {
-        const uint32_t run = cursor.extent();
-        exchange_rows_block<true>(noc, staging_base, cursor, run, block_idx > 0);
-        store_tiles_block<true>(output, staging_base, cursor, run);
-        cursor.advance(run);
+    for (; block_idx < ZONED_BLOCKS && remaining > 0; ++block_idx) {
+        DeviceZoneScopedN("PERM-WR-SCATTER-BLOCK");
+        const uint32_t extent = remaining < block_in_tiles ? remaining : block_in_tiles;
+        scatter_rows_block<true>(output, cursor, extent);
+        remaining -= extent;
     }
-    if (!cursor.done()) {
+    if (remaining > 0) {
         DeviceZoneScopedN("PERM-WR-TAIL");
-        while (!cursor.done()) {
-            const uint32_t run = cursor.extent();
-            exchange_rows_block<false>(noc, staging_base, cursor, run, true);
-            store_tiles_block<false>(output, staging_base, cursor, run);
-            cursor.advance(run);
+        while (remaining > 0) {
+            const uint32_t extent = remaining < block_in_tiles ? remaining : block_in_tiles;
+            scatter_rows_block<false>(output, cursor, extent);
+            remaining -= extent;
         }
     }
 
+    // The next program starts right after this one: no write may still be in flight.
     {
         DeviceZoneScopedN("PERM-WR-FINAL-BARRIER");
         noc_async_write_barrier();

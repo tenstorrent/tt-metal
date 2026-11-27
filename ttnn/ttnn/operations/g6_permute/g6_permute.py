@@ -4,7 +4,7 @@
 
 """g6_permute: torch.permute(x, dims) as one device program (registry model).
 
-Phase 0 builds regime rows_tile: TILE bfloat16 DRAM-interleaved rank 4, dims (0, 2, 1, 3).
+Phase 0 builds regime rows_tile_scatter: TILE bfloat16 DRAM-interleaved rank 4, dims (0, 2, 1, 3).
 """
 
 from __future__ import annotations
@@ -15,10 +15,12 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_permute_program_descriptor import (
     READER_KERNEL_INDEX,
+    TILE_ROWS,
     WRITER_KERNEL_INDEX,
     Plan,
     build_plan,
     create_program_descriptor,
+    worker_grid,
 )
 
 _BUFFER_NAME = {ttnn.BufferType.DRAM: "dram", ttnn.BufferType.L1: "l1"}
@@ -61,8 +63,22 @@ def tag_alignment(inputs, axes):
 
 
 def tag_dims(inputs, axes):
+    """Canonical dims (negative entries wrapped); malformed dims raise ValueError before any support check."""
     scenario = inputs[0]
-    return _canonical_dims(len(scenario["input_shape"]), scenario["dims"])
+    rank = len(scenario["input_shape"])
+    try:
+        entries = [int(d) for d in scenario["dims"]]
+    except TypeError as exc:
+        raise ValueError(f"g6_permute: dims must be a sequence of ints, got {scenario['dims']!r}") from exc
+    if len(entries) != rank:
+        raise ValueError(f"g6_permute: dims {tuple(entries)} has {len(entries)} entries, the tensor has rank {rank}")
+    for d in entries:
+        if d < -rank or d >= rank:
+            raise ValueError(f"g6_permute: dims entry {d} is outside [-{rank}, {rank - 1}]")
+    canonical = _canonical_dims(rank, entries)
+    if sorted(canonical) != list(range(rank)):
+        raise ValueError(f"g6_permute: dims {tuple(entries)} is not a permutation of range({rank})")
+    return canonical
 
 
 INPUT_TAGGERS = {
@@ -101,43 +117,33 @@ EXCLUSIONS = []
 # ---------------------------------------------------------------------------
 
 
-def _check_dims_structure(rank, dims):
-    try:
-        entries = [int(d) for d in dims]
-    except TypeError as exc:
-        raise ValueError(f"g6_permute: dims must be a sequence of ints, got {dims!r}") from exc
-    if len(entries) != rank:
-        raise ValueError(f"g6_permute: dims {tuple(entries)} has {len(entries)} entries, the tensor has rank {rank}")
-    for d in entries:
-        if d < -rank or d >= rank:
-            raise ValueError(f"g6_permute: dims entry {d} is outside [-{rank}, {rank - 1}]")
-    if sorted(_canonical_dims(rank, entries)) != list(range(rank)):
-        raise ValueError(f"g6_permute: dims {tuple(entries)} is not a permutation of range({rank})")
+def _buffer_label(input_tensor):
+    mem = input_tensor.memory_config()
+    name = _BUFFER_NAME.get(mem.buffer_type, str(mem.buffer_type))
+    if mem.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        # A sharded tensor gets its own label so SUPPORTED refuses it instead of mis-addressing it.
+        return f"{name}_{str(mem.memory_layout).split('.')[-1].lower()}"
+    return name
 
 
 def _scenario(input_tensor, dims):
-    buffer_type = input_tensor.memory_config().buffer_type
     return {
         "input_shape": tuple(int(d) for d in input_tensor.shape),
-        "dims": tuple(int(d) for d in dims),
+        "dims": tuple(dims) if not isinstance(dims, int) else dims,
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
-        "buffer": _BUFFER_NAME.get(buffer_type, str(buffer_type)),
+        "buffer": _buffer_label(input_tensor),
     }
 
 
 def validate(input_tensor, dims):
-    rank = len(input_tensor.shape)
-    _check_dims_structure(rank, dims)
-
-    memory_layout = input_tensor.memory_config().memory_layout
-    if memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise UnsupportedAxisValue(f"g6_permute: memory_layout={memory_layout!r} is not INTERLEAVED")
-
     scenario = _scenario(input_tensor, dims)
     axes = {}
     for axis, tagger in INPUT_TAGGERS.items():
         axes[axis] = tagger((scenario,), axes)
+
+    if input_tensor.layout == ttnn.TILE_LAYOUT and tuple(input_tensor.tile.tile_shape) != (TILE_ROWS, TILE_ROWS):
+        raise ValueError(f"g6_permute: tile shape {tuple(input_tensor.tile.tile_shape)} is not 32x32")
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
@@ -160,29 +166,28 @@ _PROGRAM_CACHE: dict = {}
 
 def _cache_key(input_tensor, canonical_dims):
     mem = input_tensor.memory_config()
-    grid = input_tensor.device().compute_with_storage_grid_size()
+    grid = worker_grid(input_tensor.device())
     return (
         tuple(int(d) for d in input_tensor.shape),
+        tuple(int(d) for d in input_tensor.padded_shape),
         tuple(canonical_dims),
         input_tensor.dtype,
         input_tensor.layout,
         mem.buffer_type,
         mem.memory_layout,
+        tuple(input_tensor.tile.tile_shape),
         (grid.x, grid.y),
     )
 
 
-def _plan_for(input_tensor, canonical_dims) -> Plan:
-    entry = _PROGRAM_CACHE.get(_cache_key(input_tensor, canonical_dims))
+def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan:
+    """Report the plan a call selects (regime, active cores, block_in_tiles, blocks per core group,
+    per-core roles) without dispatching."""
+    axes = validate(input_tensor, dims)
+    entry = _PROGRAM_CACHE.get(_cache_key(input_tensor, axes["dims"]))
     if entry is not None:
         return entry[0]
-    return build_plan(input_tensor, canonical_dims)
-
-
-def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan:
-    """Report the plan (regime, core split, block knobs, per-core roles) a call selects."""
-    axes = validate(input_tensor, dims)
-    return _plan_for(input_tensor, axes["dims"])
+    return build_plan(input_tensor, axes["dims"])
 
 
 # ---------------------------------------------------------------------------
