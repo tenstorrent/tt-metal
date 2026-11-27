@@ -127,7 +127,7 @@ A fabric connection is one kernel instance's use of one fabric router. The progr
 - **One spec, one link per node.** A `FabricConnectionsSpec` has `targets` and `links` (`Table<NodeCoord, uint32_t>`: each worker core and the link it uses for *every* target). Each node of a binding kernel must be in `links`, and each node in `links` must run a binding kernel. A kernel whose nodes don't all connect is split into a binding `KernelSpec` and a non-binding one.
 - **Targets by fabric mode.** `Fabric1DTargets` (routing directions) on a 1D fabric; `Fabric2DTargets` (peer `FabricNodeId`s) on a 2D fabric. The wrong kind is rejected, so the factory picks by `tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device))`.
 - **The binding token** (`fabric::<accessor_name>`) has one slot per target, in `targets` order. A kernel source bound on some devices and not others looks it up with `fabric::get_token_if_present<"<accessor_name>">()`, which is `nullptr` where it isn't bound.
-- **`FABRIC_2D` is defined for a binding kernel exactly when the fabric is 2D.** A legacy define the op sets by hand is harmless; leave it. Legacy `append_fabric_connection_rt_args` never defined it, so a kernel with `#if defined(FABRIC_2D)` code that the legacy factory compiled *without* the define on a 2D fabric would switch branches under the port: stop and report it.
+- **`FABRIC_2D` is defined for a binding kernel exactly when the fabric is 2D.** A legacy define the op sets by hand is harmless; leave it. Legacy `append_fabric_connection_rt_args` never defined it, so `#if defined(FABRIC_2D)` code that the kernel executes (in its own source, or in a helper it calls) and that the legacy factory compiled *without* the define on a 2D fabric would switch branches under the port: stop and report it. Branches the kernel never reaches don't count, and the binding's own word layout (`edm_fabric_worker_adapters.hpp`) is meant to switch. Only an op that runs on a 2D fabric is affected.
 
 ### Resolving a legacy peer to a target
 
@@ -155,7 +155,7 @@ tt::tt_metal::experimental::FabricTargets fabric_target(
 }
 ```
 
-Put it in the factory file's anonymous namespace. Headers: `<tt-metalium/experimental/fabric/fabric.hpp>` and `<tt-metalium/experimental/fabric/pipeline_builder.hpp>`.
+Put it in the factory file, inside `namespace { namespace CMAKE_UNIQUE_NAMESPACE { … } }`, and call it as `CMAKE_UNIQUE_NAMESPACE::fabric_target`. `ccl/` and `experimental/ccl/` are unity builds, which merge the anonymous namespaces of the factories they batch together, so a second port with a plain anonymous-namespace `fabric_target` is a redefinition; CMake gives each source its own `CMAKE_UNIQUE_NAMESPACE` (`eltwise/ternary`'s factory uses the same idiom). Headers: `<tt-metalium/experimental/fabric/fabric.hpp>` and `<tt-metalium/experimental/fabric/pipeline_builder.hpp>`.
 
 ### One sender, or a FabricConnectionManager
 
@@ -232,6 +232,12 @@ The program now fails at build time where legacy may have silently misrouted:
 - **No neighbour in a direction** (an edge device given that target). The fix is the per-coordinate spec listing only the sides it has, as above.
 - **Two connections of one program on the same (direction, link) of a device.** Legacy configurations reach this on a 2-device ring (forward and backward are the same chip), with a duplicated cluster axis, or with more links than a direction forwards. **Don't set `fabric_connection_options.disable_exclusive_fabric_link_check`** to make it pass. The header allows it only when the op's kernels serialize their use of the shared router; whether they do is the op owner's call, not a port decision. Report the configuration as a finding.
 - **Semaphores per node:** each target uses two program semaphores on its node. Legacy allocated the same ones; a failure here means the spec's `links` covers more nodes than legacy connected.
+
+## Verifying a CCL port
+
+- **Hardware.** A CCL op's tests need a multi-device mesh, and a `Ring` op needs a ring: three or more devices on an axis that wraps (a T3K's 1×8; an N300's two chips are a line, not a ring). On less, every test skips, which checks nothing ([a skip is not a pass](../port/metal2_port.md#run-tests)). The auditor reads the mesh shapes the op's tests ask for and names the smallest in the brief, so the invoker can book it.
+- **Watcher.** If the device fails to open with `idle_erisc.elf … overflows region`, set `TT_METAL_WATCHER_DISABLE_ETH=1` and reset the card ([Watcher](workspace_setup.md#watcher--on-for-every-test-run)).
+- **Mock devices don't stand in** (as of November 2026). Under a mocked T3K or 8×P150, the CCL tests tried so far fail in their own setup (the sub-device manager, or `tilize` in `from_torch`) before the op runs.
 
 ## Unsupported today
 

@@ -34,7 +34,7 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
    jq -r '.content' <SAVED_TOOL_RESULT_PATH> \
      | base64 -d > docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porting_readiness.csv
    ```
-   Use the exact `<SAVED_TOOL_RESULT_PATH>` the tool reported. (No `jq`? Any base64-decode of the `content` field works.)
+   Use the exact `<SAVED_TOOL_RESULT_PATH>` the tool reported. (No `jq`? Any base64-decode of the `content` field works.) Some harnesses save the export itself instead, as a `.csv` file whose first line is the header row (`Op,Device operation,…`); then copy that file to the target path, with no decoding.
 4. **Look up your op** by grepping the CSV for the op path — e.g. `grep -i 'data_movement/slice,' <csv>`. Grep the *value* (it's distinctive), not a fixed column position. Pull only the row(s) you need; then map each cell to its column by reading the **header row** (see *Reading the CSV*), never by absolute position. Don't read the whole file in.
 
 > **Do not use `read_file_content` for this sheet.** It truncates large sheets — you'll silently miss every op past roughly the "d"s — and renders ~15 phantom empty columns. `download_file_content` as CSV is complete and clean.

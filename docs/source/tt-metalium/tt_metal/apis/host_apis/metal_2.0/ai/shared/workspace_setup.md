@@ -45,6 +45,8 @@ For iterative rebuilds during a port, just re-run the same command — it rebuil
 
 **Only ever build Metal through `./build_metal.sh`.** Do not hand-target the cmake binaries (`cmake --build … --target ttnncpp unit_tests_ttnn`): it looks faster but is prone to silent staleness on this setup, and other gotchas abound.
 
+If it fails in `tracy_profiler_wasm` (`Failed to open source file …`, or then `not a CMake build directory`), the profiler sub-build predates a Tracy update. Move both `build_Release/profiler/build_wasm` and `build_Release/tt_metal/third_party/tracy_profiler_wasm-prefix/src/tracy_profiler_wasm-stamp` aside and rerun `./build_metal.sh`; moving only the first leaves the stamps claiming it is configured.
+
 ## Run tests
 
 **Metal 2.0 unit tests** (sanity-check the build):
@@ -117,6 +119,7 @@ export TT_METAL_WATCHER=10   # polling interval in seconds; append `ms` for mill
 - `TT_METAL_WATCHER=0` **enables** Watcher, with a zero-length interval — `unset` is the only way off.
 - Flipping it invalidates the JIT kernel cache, costing a full kernel recompile. Export once and leave it. No host rebuild — this is purely a runtime control.
 - Unset it before taking any timing measurement; the checks are deliberately expensive.
+- If a multi-chip Wormhole fails to open with `idle_erisc.elf … overflows region`, Watcher's ethernet-core code no longer fits the idle-ERISC firmware (seen on an N300 with fabric enabled). Add `export TT_METAL_WATCHER_DISABLE_ETH=1`: Watcher stays on the Tensix cores, where op kernels run. Reset the card (`tt-smi -r`) before the next run; the failed open can leave ethernet wedged.
 
 Per-feature disables and log format: [`tools/watcher.rst`](../../../../../../tools/watcher.rst).
 

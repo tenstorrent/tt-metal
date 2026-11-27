@@ -475,7 +475,8 @@ The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2
 |---|---|---|
 | `Semaphore` / `Semaphore&` / `const Semaphore&` | ✓ excellent | Device 2.0 native. |
 | `uint32_t sem_id` | ⚠ not workable today | `sem::name` has **no** implicit `uint32_t` conversion (only `dfb::name` does), so there is no bridge today; a constexpr `sem_id` cast could add one later. A call site outside the op that needs it is an [assumption-violation stop](../port/metal2_port.md#kernel-side-whitelist) for the porter, not a fix. |
-| `uint32_t sem_addr` (L1) or `uint64_t` NOC-encoded sem | ✗ not OK | No clean Metal-2.0 → donor bridge today. A backdoor could be added. |
+| `uint32_t sem_addr` (L1) or `uint64_t` NOC-encoded **program** semaphore | ✗ not OK | No clean Metal-2.0 → donor bridge today. A backdoor could be added. |
+| A `GlobalSemaphore`'s address, or a NoC address built from it | ✓ OK | The ported kernel reads it from `GlobalSemaphore(global_sem::<name>).address()` and passes it as legacy did ([Porting CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)). |
 | `TensorAccessor<DSpec>` / ref (Shape 1) | ✓ excellent | Porter constructs `TensorAccessor(tensor::name)` and passes. |
 | `TensorAccessorArgs<N>` (Shape 2) | ✗ not OK | Porter can pass `tensor::name.args`. Workable, but suboptimal. |
 | Tensor CTA offset as NTTP (Shape 3) | ✗ not OK | No workaround today; would require a one-line `tensor::name::cta_offset` add to `TensorBindingToken`. |
@@ -532,7 +533,7 @@ The audit emits up to **two** files, by audience. Write them to the **op's root 
 
 Findings route to these documents by role (per the [finding-roles routing table](#feasibility-audit) at the top of the audit): the **brief** carries GATE-cleared one-liners + all PORT WORK + all FYI-P; the **team doc** carries everything, including FYI-U.
 
-**Provenance line.** Both files open with a one-line record of the recipe-doc version this audit ran against, so a reviewer can pin the exact guidance. Generate it from the checkout root and paste it verbatim:
+**Provenance line.** Both files open with a one-line record of the recipe-doc version this audit ran against, so a reviewer can pin the exact guidance. Generate it from the root of the checkout the recipe docs came from (not necessarily the op's: a branch off `main` has no copy of these docs) and paste it verbatim:
 
 ```
 git log -1 --format='%h %cs %s' -- docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/
@@ -703,7 +704,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`). 
 - **CB endpoints (multi-binding):** <each multi-binding CB → hunt the hidden 2nd writer (a raw co-fill, semaphore-gated) before setting the flag; `(CB, config)` | none>
 - **Cross-op / shared kernels:** <path → caution per [pattern]; `_metal2` fork already exists at `<path>` — bind it, don't re-fork | no fork yet — this port creates it beside the original | none>; other binding ops: <list — **sunset list, not authorization to convert the kernel in place**>
 - **Indexed-collection args:** <kernel → array arg (or vararg, with the reason) | none>
-- **Anything else the porter needs** that the three above don't cover — **this bullet is open by design; the list is not closed.** One bullet each, with `file:line`. Typical shapes: a Device 2.0 → Metal 2.0 breadcrumb whose DFB equivalent needs confirming rather than swapping blind; a kernel already part-modernized, so the port is a binding-layer change and not an idiom rewrite; a `constexpr`-vs-`const` declaration that decides token-form vs member-getter. <none>
+- **Anything else the porter needs** that the three above don't cover — **this bullet is open by design; the list is not closed.** One bullet each, with `file:line`. Typical shapes: a Device 2.0 → Metal 2.0 breadcrumb whose DFB equivalent needs confirming rather than swapping blind; a kernel already part-modernized, so the port is a binding-layer change and not an idiom rewrite; a `constexpr`-vs-`const` declaration that decides token-form vs member-getter; the smallest mesh the op's tests run on, when it is more than one device (CCL ops: `ccl_port.md`, Verifying a CCL port). <none>
 ````
 
 #### Per-row feature status: N/A vs. RED

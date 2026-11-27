@@ -60,11 +60,21 @@ Optional fields, used when the entry's substance requires them:
 
 ```cpp
 // Shared-name form (most natural for self-loop):
-BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::PRODUCER);
-BindDFB(compute, ACC_DFB, "acc", DFBEndpointType::CONSUMER);
+compute.dfb_bindings = {
+    DFBBinding{
+        .dfb_spec_name = ACC_DFB,
+        .accessor_name = "acc",
+        .endpoint_type = DFBEndpointType::PRODUCER,
+    },
+    DFBBinding{
+        .dfb_spec_name = ACC_DFB,
+        .accessor_name = "acc",
+        .endpoint_type = DFBEndpointType::CONSUMER,
+    },
+};
 
 // Kernel side:
-DataflowBuffer cb_acc(dfb::acc);  // one wrapper drives both directions
+DataflowBuffer dfb_acc(dfb::acc);  // one wrapper drives both directions
 ```
 
 The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yielding `dfb::acc_w` and `dfb::acc_r` aliasing the same DFB) also works.
@@ -380,7 +390,7 @@ Each variant's helper builds its own `ProgramSpec` and `ProgramRunArgs`. Where v
 
 **Recognition signal**: Multiple program-factory `.cpp` files in the same CMake target each defining anonymous-namespace symbols (`MakeDFB`, `BindDFB`, `READER_KERNEL`, work-distribution structs, etc.) with the same name. Unity-build concatenates the `.cpp`s into one translation unit; C++ rules merge all `namespace { ... }` blocks into one scope, producing duplicate-symbol errors.
 
-**Decision**: Hoist truly-identical declarations (helper functions, shared DFB ids) into a shared header with `inline` (functions) or `inline constexpr` (constants) linkage. For per-factory constants and structs with the same role but different content, prefix with the factory name (`W_READER_KERNEL`, `H_READER_KERNEL`, `WWorkDistribution`, `HWorkDistribution`). Function overloads distinguished by first-parameter type coexist as overloads in the merged anon namespace.
+**Decision**: Hoist truly-identical declarations (helper functions, shared DFB ids) into a shared header with `inline` (functions) or `inline constexpr` (constants) linkage. For per-factory constants and structs with the same role but different content, prefix with the factory name (`W_READER_KERNEL`, `H_READER_KERNEL`, `WWorkDistribution`, `HWorkDistribution`). Function overloads distinguished by first-parameter type coexist as overloads in the merged anon namespace. When the collision is with *another op's* factory in the same family target (a header shared between ops is outside your scope), wrap your helpers in `namespace { namespace CMAKE_UNIQUE_NAMESPACE { … } }` and call them as `CMAKE_UNIQUE_NAMESPACE::name`: the unity targets set `UNITY_BUILD_UNIQUE_ID`, so CMake gives each source its own (`eltwise/ternary`'s factory does this).
 
 **Correct port**:
 
