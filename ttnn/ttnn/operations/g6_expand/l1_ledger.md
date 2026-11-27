@@ -12,6 +12,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking dec
 | Symbol | Bound | Predicate establishing it |
 |---|---|---|
 | `max_cols_per_core` | `≤ ceil(max n_t / Ht) + 1` | column-major contiguous ranges (`op_design.md` Work Distribution); production ≤ 2 |
+| `split_cores` | `min(grid cores, MAX_CORES=80, ceil(total_tiles / MIN_TILES_PER_CORE))` | `_split_core_count` (Refinement 1; W=512 → 80 cores, `max_cols_per_core` = 1 → `col_block` = 1, 2 KiB) |
 | `COL_BLOCK_CAP` | 64 | host constant (one source) |
 | `col_block` | `1 ≤ col_block ≤ 64` | `min(max_cols_per_core, COL_BLOCK_CAP)` |
 | `bcast_depth` | `∈ {1, 2}` | `1` iff `ceil(max_cols_per_core / col_block) == 1` |

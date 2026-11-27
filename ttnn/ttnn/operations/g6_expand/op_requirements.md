@@ -44,7 +44,7 @@
 - **Compute config**: none (pure data movement; no compute kernel)
 - **Golden baseline**: 20 / 20 tests passing; verifier 14 supported_pass, 0 loud (per `verifier_report.json`)
 
-### [ ] Refinement 1 — Co-tune the cheap knobs on the perf-flagged W=512 profile
+### [x] Refinement 1 — Co-tune the cheap knobs on the perf-flagged W=512 profile
 
 **Type**: perf
 
@@ -72,6 +72,7 @@ attributed.
 **Done when**: measured device kernel ns on W=512 improves over the 2.38–2.51 µs baseline, the
 golden suite (20/20) and acceptance tests stay green bit-exactly, and no regression on the guard set
 (W = 256, 196, 207, 185).
+**Outcome**: new `MAX_CORES` / `MIN_TILES_PER_CORE` grid knob (one host helper `_split_core_count`, reported in `last_plan`); co-tuned by a 9-rep-median device sweep on W=512 over cores {16…110} × `READER_WRITE_EIGHTHS` {0,2,3,4,5,6} × `CORE_ORDER_STRIDE` {1,3,7} × `REPLICATE_CPU_ROWS` {2,4,8,16,32}. Winner: `MAX_CORES=80`, eighths=4, stride=1, cpu_rows=8 → W=512 **2.49 → 2.31 µs** median (≈7 %, reproduced in 3 runs; 2.27–2.37 vs 2.37–2.59 range). Guards unchanged byte-for-byte (cap binds only when tiles > 80): W=256 1.73, 196 1.57, 207 1.57, 185 1.52 µs. Bank stagger is a no-op here: Wt=16 is a multiple of the 8 DRAM banks, so every tile of a column (and so every core's segment) is on one bank and rotating a segment start cannot change bank order; aggregate bank load is already balanced. Fewer cores (16–48) never beat ~2.45 µs: the cost is not grid sync alone but per-core fetch→replicate latency before the first write plus write drain — i.e. Refinement 2's critical path. Next: Refinement 2 (shorter fetch→replicate path), then R2 multicast.
 
 ### [ ] Refinement 2 — Shorten the fetch → replicate → write critical path on W=512
 

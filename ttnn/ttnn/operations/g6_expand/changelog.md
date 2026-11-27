@@ -19,3 +19,23 @@
   `G6E_RESERVE` (BB-21). No drift.
 - **Tests added**: test_g6_expand.py (acceptance), test_g6_expand_precision_baseline.py,
   test_g6_expand_perf_bench.py (device-ns bench for the perf refinements).
+
+## Refinement 1 — Co-tune the cheap knobs on the perf-flagged W=512 profile
+- Date: 2026-11-27
+- What was done: exposed the grid-size knob (`MAX_CORES`, `MIN_TILES_PER_CORE` → `_split_core_count`,
+  single source; the split now runs over `num_cores_to_corerangeset(split_cores, grid, row_wise=True)`;
+  `split_cores`/`max_cores`/`min_tiles_per_core` reported in `last_plan`). Co-tuned with
+  `READER_WRITE_EIGHTHS`, `CORE_ORDER_STRIDE`, `REPLICATE_CPU_ROWS` via an opt-in device sweep
+  (`test_g6_expand_knob_sweep.py`, `G6E_SWEEP=1`, 9-rep medians — run-to-run noise is ~±5 %).
+  Chosen: `MAX_CORES=80`, other knobs unchanged (4 / 1 / 8). Device kernel time W=512: 2.49 → 2.31 µs
+  median (−7 %). Guards W=256/196/207/185 run the identical program (cap binds only above 80 tiles):
+  1.73 / 1.57 / 1.57 / 1.52 µs, unchanged. Findings: bank stagger cannot help (Wt=16 ⇒ a whole column
+  sits on one of 8 banks; aggregate bank load already balanced); stride 3/7 and cpu_rows 2/4/16/32 were
+  neutral-to-worse; 16–48 cores plateau ≈ 2.45–2.5 µs → remaining cost is the per-core fetch→replicate
+  →write critical path (Refinement 2).
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0) on W ∈ {512, 256, 196, 207, 185} (every sweep
+  case asserts torch.equal).
+- Golden test progress: 20/20 passing
+- Issues encountered: None
+- Tests added: tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand_knob_sweep.py (opt-in perf
+  sweep tooling; skipped unless G6E_SWEEP=1)

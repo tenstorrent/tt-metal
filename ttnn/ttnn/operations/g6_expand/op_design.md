@@ -160,7 +160,7 @@ Segments and blocks per core are derived on device from `start_t`, `n_t` (RT) an
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| grid synchronization | at W=512 the full grid gives ~2 tiles per core; launch + one DRAM read round trip per core may dominate 2 × 2 KiB of writes | `grid` restricted so each core owns ≥ 4 / 8 tiles (e.g. 64 / 32 cores) |
+| grid synchronization | at W=512 the full grid gives ~2 tiles per core; launch + one DRAM read round trip per core may dominate 2 × 2 KiB of writes | `grid` restricted so each core owns ≥ 4 / 8 tiles (e.g. 64 / 32 cores). **Refinement 1 measured**: `MAX_CORES=80` best on W=512 (2.49 → 2.31 µs); 16–64 cores no better (≈ 2.45–2.7 µs) |
 | write issue on one RISC | all 2 KiB writes are issued by BRISC; the reader RISC is idle after its fetches | split each segment's writes between writer (NoC1) and reader (NoC0) — `split_reader` pattern mirrored for writes |
 | core placement / NoC | `row_wise=True` per `noc_placement`; Blackhole may prefer diagonal | `row_wise=False`, diagonal core order |
 | bank stagger | consecutive cores write column-major pages `ht*Wt + wt` with stride `Wt` → with `Wt % 8 == 0` (W=256, 512) every core's segment starts on the same bank subset | rotate each core's segment start (`bank_stagger` `stagger_rows`) |

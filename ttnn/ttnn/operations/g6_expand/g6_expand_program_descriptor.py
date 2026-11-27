@@ -38,6 +38,11 @@ CORE_ORDER_STRIDE = 1
 # (seg_len * READER_WRITE_EIGHTHS) // 8 tiles of every column segment; the writer the rest.
 # 0 = all writes on the writer (BRISC, NoC1).
 READER_WRITE_EIGHTHS = 4
+# Grid size (perf lamp "grid synchronization"): the split uses
+#   target = min(grid cores, MAX_CORES, ceil(total_tiles / MIN_TILES_PER_CORE))
+# cores, taken row-wise (full NoC rows first) from the device grid. None / 1 = whole grid.
+MAX_CORES = 80  # measured on W=512 (Refinement 1): 80 → ~2.31 µs vs 110 → ~2.49 µs
+MIN_TILES_PER_CORE = 1
 
 CB_BCAST_TILES = 0  # broadcast tiles: row 0 fetched + replicated in place; also the write source
 
@@ -46,6 +51,15 @@ _cache = {}
 
 def _div_up(a, b):
     return (a + b - 1) // b
+
+
+def _split_core_count(grid, total_tiles):
+    """Single source of the grid-size knob: cores offered to the work split."""
+    target = grid.x * grid.y
+    if MAX_CORES is not None:
+        target = min(target, MAX_CORES)
+    target = min(target, _div_up(total_tiles, MIN_TILES_PER_CORE))
+    return max(1, target)
 
 
 def _ordered_cores(core_group):
@@ -72,8 +86,10 @@ def _build(input_tensor, output_tensor, grid):
     assert row_fetch_bytes <= face_bytes
 
     # ---- Work split: column-major linear order over output tiles ----
+    split_cores = _split_core_count(grid, total_tiles)
+    split_grid = ttnn.num_cores_to_corerangeset(split_cores, grid, True)
     (num_cores, all_cores, core_group_1, core_group_2, n_g1, n_g2) = ttnn.split_work_to_cores(
-        grid, total_tiles, row_wise=True
+        split_grid, total_tiles, row_wise=True
     )
     range_sizes = []
     for group, n_t in ((core_group_1, n_g1), (core_group_2, n_g2)):
@@ -169,6 +185,9 @@ def _build(input_tensor, output_tensor, grid):
         "replicate_cpu_rows": REPLICATE_CPU_ROWS,
         "core_order_stride": stride,
         "reader_write_eighths": READER_WRITE_EIGHTHS,
+        "split_cores": split_cores,
+        "max_cores": MAX_CORES,
+        "min_tiles_per_core": MIN_TILES_PER_CORE,
     }
     return descriptor, plan
 
