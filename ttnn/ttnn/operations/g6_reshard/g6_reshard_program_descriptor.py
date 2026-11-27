@@ -73,6 +73,34 @@ SPLIT_MAX_COL_CUTS = 4
 # "issuer" faster on P.
 SPLIT_WRAP_WEIGHT = 1.0
 
+# How each out block's tiles are shared between its issuers.
+#   "rows":     contiguous row ranges, the first issuers take the ceiling share.
+#   "balanced": two issuers, one row range each; the row cut and which issuer takes the top
+#               part minimize the later issuer's modeled issue time (ISSUER_COST).
+#   "runs":     two issuers; one cut in row-major (row, piece column) order that balances
+#               runs + start lag. The cut may fall inside a row, so an issuer reads up to two
+#               rectangles (segments on one NoC). Measured slower: the cut adds a piece to both.
+ISSUER_SPLIT = "rows"
+# Start lag of each issuer slot, in runs, for the "runs" split.
+ISSUER_LAG_RUNS = (0.0, 0.0)
+# Issue-time model of the "balanced" split, in cycles, from zoned Blackhole profiles of the
+# stateful path: a piece (address + set-up), a run (one register-state read), each extra packet
+# of a run, each in block row an issuer enters, and each slot's start after RISCV_1 (RISCV_0
+# measured 86-152 cycles late on every core).
+ISSUER_COST = {"piece": 95.0, "run": 40.0, "packet": 40.0, "in_row": 50.0, "lag": (0.0, 100.0)}
+
+# Order in which an issuer walks its pieces (host-side: each rectangle is cut at most once
+# per axis and the parts are re-ordered as segments, so the per-core args stay O(1)).
+#   "natural":    top-left piece first.
+#   "stagger":    rotate the piece-column walk by (block row + block column), so cores
+#                 that share a source start on different source cores.
+#   "local_last": rotate the walks so the piece this core holds itself comes last.
+PIECE_ORDER = "natural"
+
+# Per piece, program the source core and run size once and issue each row with three
+# register writes (one-packet state API). Applies when a shard row fits one NoC packet.
+STATEFUL_READS = False
+
 # Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
 # one address serves every core).
 COMMON_ARG_IN_ADDR = 0
@@ -157,6 +185,126 @@ def iter_pieces(row_begin, row_end, col_begin, col_end, in_block_height_tiles, i
             yield ri, ci, piece_rows, piece_width
 
 
+def rect_runs(rect, in_p, out_p):
+    """NoC reads the kernel issues for one rectangle (rows merge only across full shard rows on both sides)."""
+    r0, r1, c0, c1 = rect
+    merge = in_p.block_width_tiles == out_p.block_width_tiles
+    return sum(
+        1 if merge and piece_width == in_p.block_width_tiles else piece_rows
+        for _, _, piece_rows, piece_width in iter_pieces(
+            r0, r1, c0, c1, in_p.block_height_tiles, in_p.block_width_tiles
+        )
+    )
+
+
+def _piece_col_edges(c0, c1, in_block_width_tiles):
+    """Piece-column boundaries strictly inside (c0, c1)."""
+    first = (c0 // in_block_width_tiles + 1) * in_block_width_tiles
+    return list(range(first, c1, in_block_width_tiles))
+
+
+def _piece_row_edges(r0, r1, in_block_height_tiles):
+    first = (r0 // in_block_height_tiles + 1) * in_block_height_tiles
+    return list(range(first, r1, in_block_height_tiles))
+
+
+def rect_issue_cycles(rect, in_p, out_p, page_bytes, cost):
+    """Modeled cycles one issuer spends issuing `rect` (ISSUER_COST), 0 for an empty rectangle."""
+    r0, r1, c0, c1 = rect
+    if r0 >= r1 or c0 >= c1:
+        return 0.0
+    ih, iw = in_p.block_height_tiles, in_p.block_width_tiles
+    merge = iw == out_p.block_width_tiles
+    total = cost["in_row"] * ((r1 - 1) // ih - r0 // ih + 1)
+    for _, _, piece_rows, piece_width in iter_pieces(r0, r1, c0, c1, ih, iw):
+        runs, tiles = (1, piece_rows * piece_width) if merge and piece_width == iw else (piece_rows, piece_width)
+        packets = -(-tiles * page_bytes // NOC_MAX_BURST_BYTES)
+        total += cost["piece"] + runs * (cost["run"] + (packets - 1) * cost["packet"])
+    return total
+
+
+def issuer_rects(row_begin, row_end, col_begin, col_end, in_p, out_p, issuers, split, lag_runs, page_bytes=0):
+    """Per issuer, the rectangles (row begin, row end, col begin, col end) it reads, in walk order."""
+    if split not in ("rows", "runs", "balanced"):
+        raise ValueError(f"g6_reshard: unknown ISSUER_SPLIT {split!r}")
+    default = [[(b, e, col_begin, col_end)] for b, e in issuer_row_ranges(row_begin, row_end, issuers)]
+    if split == "rows" or issuers != 2:
+        return default
+
+    if split == "balanced":
+        cost = ISSUER_COST
+
+        def finish(k, rect):
+            work = rect_issue_cycles(rect, in_p, out_p, page_bytes, cost)
+            return cost["lag"][k] + work if work else 0.0
+
+        best = None
+        for r in range(row_begin, row_end + 1):
+            top, bottom = (row_begin, r, col_begin, col_end), (r, row_end, col_begin, col_end)
+            for rects in ([[top], [bottom]], [[bottom], [top]]):
+                ends = [finish(k, x[0]) for k, x in enumerate(rects)]
+                key = (max(ends), rects != default, abs(ends[0] - ends[1]))
+                if best is None or key < best[0]:
+                    best = (key, rects)
+        return best[1]
+
+    def parts(r, c):
+        # Issuer 0 takes rows [row_begin, r) and row r up to column c; issuer 1 the rest.
+        first = [(row_begin, r, col_begin, col_end), (r, r + 1, col_begin, c)]
+        second = [(r, r + 1, c, col_end), (r + 1, row_end, col_begin, col_end)]
+        if c == col_begin:
+            first, second = [(row_begin, r, col_begin, col_end)], [(r, row_end, col_begin, col_end)]
+        keep = lambda rects: [x for x in rects if x[0] < x[1] and x[2] < x[3]]
+        return keep(first), keep(second)
+
+    even = issuer_row_ranges(row_begin, row_end, issuers)[0][1]
+    best = None
+    for r in range(row_begin, row_end + 1):
+        for c in [col_begin] + (_piece_col_edges(col_begin, col_end, in_p.block_width_tiles) if r < row_end else []):
+            first, second = parts(r, c)
+            runs = [sum(rect_runs(x, in_p, out_p) for x in part) for part in (first, second)]
+            # An issuer with nothing to read finishes at once, whatever its start lag.
+            cost = tuple(lag + n if n else 0 for lag, n in zip(lag_runs, runs))
+            key = (max(cost), abs(cost[0] - cost[1]), c != col_begin, abs(r - even))
+            if best is None or key < best[0]:
+                best = (key, [first, second])
+    return best[1]
+
+
+def _rotate(rect, row_start, col_start):
+    """`rect` walked from piece row edge `row_start` and piece column edge `col_start`, wrapping (None: no turn)."""
+    r0, r1, c0, c1 = rect
+    rows = [(row_start, r1), (r0, row_start)] if row_start is not None else [(r0, r1)]
+    cols = [(col_start, c1), (c0, col_start)] if col_start is not None else [(c0, c1)]
+    return [(a, b, c, d) for a, b in rows for c, d in cols]
+
+
+def order_rects(rects, order, role, in_p):
+    """Re-order one issuer's walk (see PIECE_ORDER); each rectangle becomes at most four."""
+    if order == "natural":
+        return list(rects)
+    ih, iw = in_p.block_height_tiles, in_p.block_width_tiles
+    out = []
+    for rect in rects:
+        r0, r1, c0, c1 = rect
+        col_edges = _piece_col_edges(c0, c1, iw)
+        row_edges = _piece_row_edges(r0, r1, ih)
+        if order == "stagger":
+            turn = (role["block"][0] + role["block"][1]) % (len(col_edges) + 1)
+            out += _rotate(rect, None, col_edges[turn - 1] if turn else None)
+        elif order == "local_last":
+            row_start = col_start = None
+            for ri, ci, _, _ in iter_pieces(r0, r1, c0, c1, ih, iw):
+                if in_p.core_of(ri, ci) == role["core"]:
+                    row_end, col_end = min(r1, (ri + 1) * ih), min(c1, (ci + 1) * iw)
+                    row_start = row_end if row_end < r1 else None
+                    col_start = col_end if col_end < c1 else None
+            out += _rotate(rect, row_start, col_start)
+        else:
+            raise ValueError(f"g6_reshard: unknown PIECE_ORDER {order!r}")
+    return out
+
+
 def _wrap_free(noc, src, dst):
     dx, dy = dst[0] - src[0], dst[1] - src[1]
     if noc == 0:
@@ -183,6 +331,9 @@ def choose_nocs(roles, in_p, policy):
     shared = 0 if all_free[0] else 1
     return [[shared] * len(role["issuers"]) for role in roles]
 
+
+# Bytes in one NoC packet (NOC_MAX_BURST_SIZE on Blackhole and Wormhole).
+NOC_MAX_BURST_BYTES = 16384
 
 # NoC torus extent (columns, rows) in NoC coordinates, per architecture.
 NOC_GRID = {"BLACKHOLE": (17, 12), "WORMHOLE_B0": (10, 12)}
@@ -333,11 +484,13 @@ def _issuer_options(main_default, rows, cols, piece_rows0, piece_rows, piece_col
     return options, np.asarray(noc0, dtype=np.float64), tiles
 
 
-def issuer_segments(rows, cols, noc, cut):
-    """Rectangles (row begin, row end, col begin, col end, NoC) one issuer reads; the first starts at cols[0]."""
-    (r0, r1), (c0, c1) = rows, cols
+def issuer_segments(rects, noc, cut):
+    """Rectangles (row begin, row end, col begin, col end, NoC) one issuer reads, in walk order."""
     if cut is None:
-        return [(r0, r1, c0, c1, noc)]
+        return [rect + (noc,) for rect in rects]
+    if len(rects) != 1:
+        raise ValueError("g6_reshard: a cross-NoC cut needs the issuer to read one rectangle")
+    r0, r1, c0, c1 = rects[0]
     if cut[0] == "row":
         return [(r0, cut[1], c0, c1, noc), (cut[1], r1, c0, c1, 1 - noc)]
     return [(r0, r1, c0, cut[1], noc), (r0, r1, cut[1], c1, 1 - noc)]
@@ -452,15 +605,36 @@ def describe_plan(input_tensor, memory_config):
             col_end = min(out_p.tensor_width_tiles, col_begin + out_p.block_width_tiles)
             core = out_p.core_of(r, c)
             issuers = []
-            for begin, end in issuer_row_ranges(row_begin, row_end, issuers_per_core):
-                pieces = list(
-                    iter_pieces(begin, end, col_begin, col_end, in_p.block_height_tiles, in_p.block_width_tiles)
+            for rects in issuer_rects(
+                row_begin,
+                row_end,
+                col_begin,
+                col_end,
+                in_p,
+                out_p,
+                issuers_per_core,
+                ISSUER_SPLIT,
+                ISSUER_LAG_RUNS,
+                input_tensor.buffer_aligned_page_size(),
+            ):
+                pieces = [
+                    piece
+                    for r0, r1, c0, c1 in rects
+                    for piece in iter_pieces(r0, r1, c0, c1, in_p.block_height_tiles, in_p.block_width_tiles)
+                ]
+                issuers.append(
+                    {
+                        # Bounding rows; the cross-NoC cut search uses them, so it needs one rectangle.
+                        "rows": (
+                            min((x[0] for x in rects), default=row_begin),
+                            max((x[1] for x in rects), default=row_begin),
+                        ),
+                        "rects": rects,
+                        "pieces": len(pieces),
+                        "runs": sum(rect_runs(x, in_p, out_p) for x in rects),
+                        "piece_list": pieces,
+                    }
                 )
-                runs = sum(
-                    1 if piece_width == in_p.block_width_tiles == out_p.block_width_tiles else piece_rows
-                    for _, _, piece_rows, piece_width in pieces
-                )
-                issuers.append({"rows": (begin, end), "pieces": len(pieces), "runs": runs, "piece_list": pieces})
             roles.append(
                 {
                     "core": core,
@@ -481,13 +655,19 @@ def describe_plan(input_tensor, memory_config):
         for issuer, (noc, cut) in zip(role["issuers"], role_encodings):
             issuer["noc"] = noc
             issuer["cut"] = cut
-            issuer["segments"] = issuer_segments(issuer["rows"], role["block_cols"], noc, cut)
+            if cut is not None and len(issuer["rects"]) != 1:
+                raise ValueError("g6_reshard: SPLIT_SHAPE='cut' needs ISSUER_SPLIT='rows'")
+            rects = order_rects(issuer["rects"], PIECE_ORDER, role, in_p)
+            issuer["segments"] = issuer_segments(rects, noc, cut)
             del issuer["piece_list"]
     return {
         "regime": PLAN_REGIME,
         "issuers_per_core": issuers_per_core,
         "noc_policy": NOC_POLICY,
         "split_shape": SPLIT_SHAPE if NOC_POLICY == "split" else None,
+        "issuer_split": ISSUER_SPLIT,
+        "piece_order": PIECE_ORDER,
+        "stateful_reads": STATEFUL_READS,
         "kernel_range": out_p.kernel_range(),
         "roles": roles,
     }
@@ -514,6 +694,11 @@ def _cache_key(input_tensor, memory_config):
         SPLIT_MAX_ROW_CUTS,
         SPLIT_MAX_COL_CUTS,
         SPLIT_WRAP_WEIGHT,
+        ISSUER_SPLIT,
+        tuple(ISSUER_LAG_RUNS),
+        tuple(sorted((k, v if isinstance(v, float) else tuple(v)) for k, v in ISSUER_COST.items())),
+        PIECE_ORDER,
+        STATEFUL_READS,
     )
 
 
@@ -529,7 +714,7 @@ def _build(input_tensor, output_tensor, memory_config):
 
     core_ranges = ttnn.CoreRangeSet([plan["kernel_range"]])
 
-    max_segments = max(len(issuer["segments"]) for role in plan["roles"] for issuer in role["issuers"])
+    max_segments = max(1, max(len(issuer["segments"]) for role in plan["roles"] for issuer in role["issuers"]))
     compile_time_args = [
         in_p.block_height_tiles,
         in_p.block_width_tiles,
@@ -537,6 +722,7 @@ def _build(input_tensor, output_tensor, memory_config):
         out_p.tensor_width_tiles,
         aligned_page_bytes,
         max_segments,
+        int(STATEFUL_READS),
     ]
     compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -561,8 +747,10 @@ def _build(input_tensor, output_tensor, memory_config):
             x, y = role["core"]
             segments = role["issuers"][issuer]["segments"]
             # Unused segment slots carry an empty row range.
-            padding = [(0, 0, 0, 0, segments[0][4])] * (max_segments - len(segments))
-            runtime_args[x][y] = [role["block_rows"][0]] + [arg for segment in segments + padding for arg in segment]
+            padding = [(0, 0, 0, 0, segments[0][4] if segments else default_noc)] * (max_segments - len(segments))
+            runtime_args[x][y] = [role["block_rows"][0], role["block_cols"][0]] + [
+                arg for segment in segments + padding for arg in segment
+            ]
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(ISSUER_KERNEL),

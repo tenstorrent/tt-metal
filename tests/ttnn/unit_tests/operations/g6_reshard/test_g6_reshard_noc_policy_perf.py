@@ -9,6 +9,7 @@ output is checked bit-exact so a knob setting that breaks the move fails here.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 import torch
@@ -21,14 +22,17 @@ from ttnn.operations.g6_reshard import g6_reshard
 _issuer_segments = pd.issuer_segments
 
 
-def _halved_same_noc(rows, cols, noc, cut):
-    """Ablation: every uncut issuer reads its rows as two segments on one NoC (link loads unchanged)."""
-    (r0, r1), (c0, c1) = rows, cols
-    if cut is not None or r1 - r0 < 2:
-        return _issuer_segments(rows, cols, noc, cut)
+def _halved_same_noc(rects, noc, cut):
+    """Ablation: every uncut one-rectangle issuer reads its rows as two segments on one NoC (link loads unchanged)."""
+    if cut is not None or len(rects) != 1 or rects[0][1] - rects[0][0] < 2:
+        return _issuer_segments(rects, noc, cut)
+    r0, r1, c0, c1 = rects[0]
     mid = (r0 + r1) // 2
     return [(r0, mid, c0, c1, noc), (mid, r1, c0, c1, noc)]
 
+
+# Probe kernels: the shipped kernel with extra zones or one stage ablated (perf only).
+PROBE_KERNELS = Path(__file__).parent / "probes" / "kernels"
 
 PLACEMENTS = os.environ.get("G6_PERF_PLACEMENTS", "P,I0,I3,I5,O1").split(",")
 SETTINGS = {
@@ -51,6 +55,22 @@ SETTINGS = {
         "issuer_segments": _halved_same_noc,
     },
     "split_cut2_w2": {"NOC_POLICY": "split", "SPLIT_SHAPE": "cut", "ISSUERS_PER_CORE": 2, "SPLIT_WRAP_WEIGHT": 2.0},
+    "zoned": {"ISSUER_KERNEL": PROBE_KERNELS / "reader_zoned.cpp"},
+    "zoned_stateful": {"ISSUER_KERNEL": PROBE_KERNELS / "reader_zoned.cpp", "STATEFUL_READS": True},
+    # Refinement 2 levers on the shipped NoC plan; "default" is the module's own settings.
+    "default": {},
+    "stateful": {"STATEFUL_READS": True},
+    "runs_lag1": {"ISSUER_SPLIT": "runs", "ISSUER_LAG_RUNS": (0.0, 1.0)},
+    "runs_lag2": {"ISSUER_SPLIT": "runs", "ISSUER_LAG_RUNS": (0.0, 2.0)},
+    "runs_lag3": {"ISSUER_SPLIT": "runs", "ISSUER_LAG_RUNS": (0.0, 3.0)},
+    "stagger": {"PIECE_ORDER": "stagger"},
+    "local_last": {"PIECE_ORDER": "local_last"},
+    "balanced": {"ISSUER_SPLIT": "balanced"},
+    "st_balanced": {"STATEFUL_READS": True, "ISSUER_SPLIT": "balanced"},
+    "st_stagger": {"STATEFUL_READS": True, "PIECE_ORDER": "stagger"},
+    "st_local_last": {"STATEFUL_READS": True, "PIECE_ORDER": "local_last"},
+    "st_cut": {"STATEFUL_READS": True, "SPLIT_SHAPE": "cut"},
+    "st_bal_stagger": {"STATEFUL_READS": True, "ISSUER_SPLIT": "balanced", "PIECE_ORDER": "stagger"},
 }
 
 
