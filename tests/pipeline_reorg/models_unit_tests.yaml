@@ -2553,6 +2553,9 @@
     # 3. The QB2's devices open
     mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
       python3 -m pytest -rs --timeout 300 tests/ttnn/unit_tests/base_functionality/test_device.py
+    # 4. Throwaway: the existing BH links health check
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      ./build/test/tt_metal/tt_fabric/test_system_health
   model: qb2-ttop-smoke
   skus:
     bh_qb2:
