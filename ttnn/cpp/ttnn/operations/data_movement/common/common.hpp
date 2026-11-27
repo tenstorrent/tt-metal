@@ -590,4 +590,7 @@ Tensor launch_with_aligned_shard_rows(
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
 
+// Rejects a TILE tensor whose tile is not 32x32: the kernels behind op_name address 32x32 tiles only.
+void validate_default_tile(const ttnn::Tensor& tensor, std::string_view op_name);
+
 }  // namespace ttnn::operations::data_movement

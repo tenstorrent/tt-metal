@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "permute.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
@@ -220,6 +221,7 @@ ttnn::Tensor permute(
     if (operations::data_movement::detail::is_permute_nop(input_tensor, normalized_dims)) {
         return ttnn::to_memory_config(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     }
+    operations::data_movement::validate_default_tile(input_tensor, "ttnn.permute");
 
     auto adjust_order = [](const ttsl::SmallVector<uint32_t>& dims) {
         ttsl::SmallVector<uint32_t> new_order;

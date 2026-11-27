@@ -338,6 +338,9 @@ ttnn::Tensor transpose_impl(
 
     TT_FATAL(normalized_dim1 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
     TT_FATAL(normalized_dim2 <= 3, "dimension has to be 0-3 only corresponding to N,C,H,W");
+    if (normalized_dim1 != normalized_dim2) {
+        validate_default_tile(input_unsqueezed, "ttnn.transpose");
+    }
     const bool wh = 5 == (normalized_dim1 + normalized_dim2);  // 2+3=5
     const bool cn = 1 == (normalized_dim1 + normalized_dim2);  // 0+1
     const bool bfloat8_supported = wh || cn;

@@ -1318,6 +1318,21 @@ const BlockBufferSet& buffer_set_for_core(const BlockPlan& plan, const tt::tt_me
     return in_cliffrow ? plan.cliffrow : plan.full;
 }
 
+void validate_default_tile(const ttnn::Tensor& tensor, std::string_view op_name) {
+    if (tensor.layout() != tt::tt_metal::Layout::TILE) {
+        return;
+    }
+    const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+        "{} supports only {}x{} tiles, but the input has a {}x{} tile",
+        op_name,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile_shape[0],
+        tile_shape[1]);
+}
+
 bool codegen_supported_on_arch(const ttnn::Tensor& input) {
     const auto* device = input.device();
     if (device == nullptr) {

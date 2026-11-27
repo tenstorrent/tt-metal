@@ -55,6 +55,7 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
+    operations::data_movement::validate_default_tile(tensor_args.input_tensor, "Permute");
 
     // MultiCoreTiledGeneric indexes rows and tile blocks in uint32_t.
     if (std::holds_alternative<MultiCoreTiledGeneric>(select_program_factory(attributes, tensor_args))) {
