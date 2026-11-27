@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <array>
-#include <unordered_map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,7 +15,7 @@
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>  // log_info: per-program schedule/mcast summary
-#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -28,15 +27,55 @@
 
 namespace ttnn::operations::experimental::quasar::indexer_score::program {
 
+using tt::tt_metal::CBDescriptor;
+using tt::tt_metal::CBFormatDescriptor;
+using tt::tt_metal::ComputeConfigDescriptor;
+using tt::tt_metal::KernelDescriptor;
+using tt::tt_metal::ProgramDescriptor;
+using tt::tt_metal::ReaderConfigDescriptor;
+using tt::tt_metal::SemaphoreDescriptor;
+using tt::tt_metal::WriterConfigDescriptor;
+
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Kernel indices in desc.kernels, pinned to create_descriptor's push_back order (reader, writer, compute).
+// override_runtime_arguments addresses the cached program's common runtime args by these indices.
+constexpr uint32_t kReaderKernelIndex = 0;
+constexpr uint32_t kWriterKernelIndex = 1;
+constexpr uint32_t kComputeKernelIndex = 2;
+
+// This device's SP-ring index and TP-rank (along seq_shard_axes[1], the 2D SP×TP query sub-shard; 0 when not
+// sub-sharded or single-device), from its mesh coordinate. Single-sourced so create_descriptor and the cache-hit
+// override derive the same causal geometry.
+struct CoordRanks {
+    uint32_t device_index;
+    uint32_t tp_index;
+};
+CoordRanks coord_ranks(
+    const operation_attributes_t& args, const std::optional<ttnn::MeshCoordinate>& mesh_coordinate, const Tensor& q) {
+    TT_FATAL(mesh_coordinate.has_value(), "indexer_score: per-coordinate program requires a mesh coordinate");
+    const auto& coord = *mesh_coordinate;
+    const uint32_t device_index = device_index_for(args, coord, q);
+    const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                                  ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
+                                  : 0u;
+    return {device_index, tp_index};
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 // Banded-product schedule: the work space (group_count q-row-groups x band_count k-bands) tiles onto a
 // rows_used x cols_used core rectangle -- groups -> rows (q/w mcast along a row), bands -> columns (k
 // mcast down a column). One cell = one QC x up-to-KC work unit. See indexer_score_work_split.hpp.
-IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_at(
+ProgramDescriptor IndexerScoreProgramFactory::create_descriptor(
     const operation_attributes_t& args,
-    const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensors,
-    tensor_return_value_t& out) {
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    tensor_return_value_t& out,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    ProgramDescriptor desc;
 
     const auto& q = tensors.q;
     const auto& k = tensors.k;
@@ -52,10 +91,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     // This device's SP-ring index and chunk_start (tiles), from the coordinate. chunk_t is a compute RUNTIME
     // arg, so the binary is identical across coords and steps. tp_index = its rank along the TP axis
     // (seq_shard_axes[1], the 2D SP×TP query sub-shard); 0 when not sub-sharded or single-device.
-    const uint32_t device_index = device_index_for(args, coord, q);
-    const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
-                                  ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
-                                  : 0u;
+    const auto [device_index, tp_index] = coord_ranks(args, mesh_coordinate, q);
     const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
     const uint32_t chunk_t = geom.chunk_start_tiles;
 
@@ -144,13 +180,19 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     const uint32_t q_mcast_on = (cols_used > 1) ? 1u : 0u;
 
     // 3 semaphores per active direction: send (receivers ready), recv (sender relays valid in), valid
-    // (constant 1). Mirrors SDPA chain_link's handshake.
-    const uint32_t k_send_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
-    const uint32_t k_recv_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
-    const uint32_t k_valid_sem = k_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 1) : 0;
-    const uint32_t q_send_sem = q_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
-    const uint32_t q_recv_sem = q_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 0) : 0;
-    const uint32_t q_valid_sem = q_mcast_on ? tt::tt_metal::CreateSemaphore(program, core_ranges, 1) : 0;
+    // (constant 1). Mirrors SDPA chain_link's handshake. Explicit ids in creation order (0, 1, ...).
+    auto push_sem = [&](uint32_t init) -> uint32_t {
+        const uint32_t id = static_cast<uint32_t>(desc.semaphores.size());
+        // core_type defaults to CoreType::WORKER in SemaphoreDescriptor.
+        desc.semaphores.push_back(SemaphoreDescriptor{.id = id, .core_ranges = core_ranges, .initial_value = init});
+        return id;
+    };
+    const uint32_t k_send_sem = k_mcast_on ? push_sem(0) : 0;
+    const uint32_t k_recv_sem = k_mcast_on ? push_sem(0) : 0;
+    const uint32_t k_valid_sem = k_mcast_on ? push_sem(1) : 0;
+    const uint32_t q_send_sem = q_mcast_on ? push_sem(0) : 0;
+    const uint32_t q_recv_sem = q_mcast_on ? push_sem(0) : 0;
+    const uint32_t q_valid_sem = q_mcast_on ? push_sem(1) : 0;
 
     const uint32_t bf16_tile = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t fp32_tile = tt::tile_size(tt::DataFormat::Float32);
@@ -178,10 +220,11 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     auto make_cb = [&](uint32_t slot, uint32_t ntiles, tt::DataFormat fmt, uint32_t tile_bytes) {
         const uint32_t idx = next_cb_index++;
         cb_id[slot] = idx;
-        tt::tt_metal::CreateCircularBuffer(
-            program,
-            core_ranges,
-            tt::tt_metal::CircularBufferConfig(ntiles * tile_bytes, {{idx, fmt}}).set_page_size(idx, tile_bytes));
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = ntiles * tile_bytes,
+            .core_ranges = core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx), .data_format = fmt, .page_size = tile_bytes}}}});
     };
 
     const bool stream_heads = HB < Hi;
@@ -344,7 +387,30 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(0u);                        // trace-safe metadata off
     compute_ct.push_back(0u);                        // metadata CB unused
 
-    const std::unordered_map<std::string, uint32_t> schedule_args{
+    const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/quasar/indexer_score/device/kernels/";
+    KernelDescriptor reader_kernel{};
+    reader_kernel.kernel_source = kdir + "reader_indexer_score.cpp";
+    reader_kernel.core_ranges = core_ranges;
+    reader_kernel.compile_time_args = reader_ct;
+    reader_kernel.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_kernel{};
+    writer_kernel.kernel_source = kdir + "writer_indexer_score.cpp";
+    writer_kernel.core_ranges = core_ranges;
+    writer_kernel.compile_time_args = writer_ct;
+    writer_kernel.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_kernel{};
+    compute_kernel.kernel_source = kdir + "compute_indexer_score.cpp";
+    compute_kernel.core_ranges = core_ranges;
+    compute_kernel.compile_time_args = compute_ct;
+    compute_kernel.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
+
+    const KernelDescriptor::NamedCompileTimeArgs schedule_args{
         {"schedule_blocks", num_blocks},
         {"schedule_group_rows", group_rows},
         {"schedule_groups", num_groups},
@@ -353,120 +419,111 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
         {"schedule_units", band_count},
         {"schedule_cols", cols_used},
         {"schedule_rotate", 0u}};
-    const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/quasar/indexer_score/device/kernels/";
-    auto reader_id = tt::tt_metal::CreateKernel(
-        program,
-        kdir + "reader_indexer_score.cpp",
-        core_ranges,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct, {}, schedule_args));
-    auto writer_id = tt::tt_metal::CreateKernel(
-        program,
-        kdir + "writer_indexer_score.cpp",
-        core_ranges,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct, {}, schedule_args));
-    auto compute_id = tt::tt_metal::CreateKernel(
-        program,
-        kdir + "compute_indexer_score.cpp",
-        core_ranges,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_ct,
-            .named_compile_args = schedule_args});
+    reader_kernel.named_compile_time_args = schedule_args;
+    writer_kernel.named_compile_time_args = schedule_args;
+    compute_kernel.named_compile_time_args = schedule_args;
 
     // One core identity per kernel; geometry and multicast axes are shared.
     // Indexed-cache k page offset + valid kv_len, baked at miss and re-applied each dispatch (both hash-excluded).
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, k);
-    std::vector<uint32_t> reader_values(indexer_common::reader::Count, 0u);
-    const std::array<uint32_t, 6> reader_prefix = {
-        q.mesh_buffer().address(),
-        k.mesh_buffer().address(),
-        w.mesh_buffer().address(),
-        0u,
-        k_batch_page_offset,
-        kv_len_tiles};
-    std::copy(reader_prefix.begin(), reader_prefix.end(), reader_values.begin());
-    append_multicast_axes(reader_values, phys);
-    tt::tt_metal::SetCommonRuntimeArgs(program, reader_id, reader_values);
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program, compute_id, {kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program,
-        writer_id,
-        {out.mesh_buffer().address(), kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+    // Reader common block: indexer_common::reader slot order, then the multicast axes. Fused-only slots stay
+    // zero on the single-chip/unfused path; the fused-only tensor slots (k_local, chunk/slot/valid-end metadata,
+    // all rejected by validate here) are absent, so they take a null Buffer* (emits 0, no binding).
+    static_assert(
+        indexer_common::reader::Q == 0 && indexer_common::reader::K == 1 && indexer_common::reader::W == 2 &&
+            indexer_common::reader::KLocal == 3 && indexer_common::reader::BatchOffset == 4 &&
+            indexer_common::reader::KvLength == 5 && indexer_common::reader::LocalBatchOffset == 6 &&
+            indexer_common::reader::ChunkMetadata == 7 && indexer_common::reader::DeviceIndex == 8 &&
+            indexer_common::reader::TpIndex == 9 && indexer_common::reader::SlotMetadata == 10 &&
+            indexer_common::reader::NumLayers == 11 && indexer_common::reader::LayerIndex == 12 &&
+            indexer_common::reader::ValidEnd == 13 && indexer_common::reader::Count == 14,
+        "indexer_score reader common-arg layout drifted");
+    tt::tt_metal::Buffer* const absent = nullptr;
+    KernelDescriptor::RTArgList reader_common;
+    reader_common.push_back(q.buffer());
+    reader_common.push_back(k.buffer());
+    reader_common.push_back(w.buffer());  // q placeholder when synthesize_gate
+    reader_common.push_back(absent);      // KLocal
+    reader_common.push_back(k_batch_page_offset);
+    reader_common.push_back(kv_len_tiles);
+    reader_common.push_back(0u);      // LocalBatchOffset
+    reader_common.push_back(absent);  // ChunkMetadata
+    reader_common.push_back(0u);      // DeviceIndex
+    reader_common.push_back(0u);      // TpIndex
+    reader_common.push_back(absent);  // SlotMetadata
+    reader_common.push_back(0u);      // NumLayers
+    reader_common.push_back(0u);      // LayerIndex
+    reader_common.push_back(absent);  // ValidEnd
+    append_multicast_axes(reader_common, phys);
+    reader_kernel.emplace_common_runtime_args(reader_common);
+    static_assert(
+        indexer_common::compute::KvLength == 0 && indexer_common::compute::ChunkStart == 1 &&
+        indexer_common::compute::StraddleQ == 2 && indexer_common::compute::StraddleJump == 3);
+    compute_kernel.emplace_common_runtime_args({kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
+    static_assert(
+        indexer_common::writer::Output == 0 && indexer_common::writer::KvLength == 1 &&
+        indexer_common::writer::ChunkStart == 2 && indexer_common::writer::StraddleQ == 3 &&
+        indexer_common::writer::StraddleJump == 4);
+    KernelDescriptor::RTArgList writer_common;
+    writer_common.push_back(out.buffer());
+    writer_common.push_back(kv_len_tiles);
+    writer_common.push_back(chunk_t);
+    writer_common.push_back(geom.straddle_q_tile);
+    writer_common.push_back(geom.straddle_jump_tiles);
+    writer_kernel.emplace_common_runtime_args(writer_common);
     for (uint32_t row = 0; row < rows_used; ++row) {
         for (uint32_t col = 0; col < cols_used; ++col) {
             const CoreCoord core{col, row};
-            const std::vector<uint32_t> runtime{row * cols_used + col};
-            tt::tt_metal::SetRuntimeArgs(program, reader_id, core, runtime);
-            tt::tt_metal::SetRuntimeArgs(program, compute_id, core, runtime);
-            tt::tt_metal::SetRuntimeArgs(program, writer_id, core, runtime);
+            KernelDescriptor::RTArgList runtime;
+            runtime.push_back(row * cols_used + col);
+            reader_kernel.emplace_runtime_args(core, runtime);
+            compute_kernel.emplace_runtime_args(core, runtime);
+            writer_kernel.emplace_runtime_args(core, runtime);
         }
     }
 
-    return {
-        std::move(program),
-        IndexerScoreSharedVariables{
-            .reader_kernel = reader_id,
-            .compute_kernel = compute_id,
-            .writer_kernel = writer_id,
-            .device_index = device_index,
-            .tp_index = tp_index}};
-}
-
-IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::create_mesh_workload(
-    const operation_attributes_t& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensors,
-    tensor_return_value_t& out) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    // One program per coordinate (each device derives its own chunk_start); a single device loops once at index 0.
-    for (const auto& range : tensor_coords.ranges()) {
-        for (const auto& coord : range) {
-            const ttnn::MeshCoordinateRange single{coord, coord};
-            auto cached = create_at(args, coord, tensors, out);
-            shared_variables[single] = cached.shared_variables;
-            mesh_workload.add_program(single, std::move(cached.program));
-        }
-    }
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
+    // Push order pins kReaderKernelIndex / kWriterKernelIndex / kComputeKernelIndex (reader, writer, compute).
+    desc.kernels.push_back(std::move(reader_kernel));
+    desc.kernels.push_back(std::move(writer_kernel));
+    desc.kernels.push_back(std::move(compute_kernel));
+    return desc;
 }
 
 void IndexerScoreProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
-    tensor_return_value_t& out) {
+    tensor_return_value_t& out,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
     // Re-apply all hash-excluded runtime values on a hit: buffer addresses, cache_batch_idx / kv_len, and
-    // chunk_start (per-coordinate, from the stored device_index).
+    // chunk_start (per-coordinate, from this program's coordinate). Everything else (multicast axes, fused-only
+    // zero slots, per-core identities, CBs, semaphores) derives from hashed inputs, so a hit guarantees it.
     const uint32_t Sq = tensors.q.logical_shape()[2];
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
-    // Refresh the uniform reader block once per dispatch, then copy it to each program.
-    // Fused-only slots stay zero on the single-chip/unfused path.
-    const std::array<uint32_t, indexer_common::reader::Count> reader_values = {
-        tensors.q.mesh_buffer().address(),
-        tensors.k.mesh_buffer().address(),
-        tensors.weights.mesh_buffer().address(),
-        0u,
-        k_batch_page_offset,
-        kv_len_tiles};
-    const uint32_t out_address = out.mesh_buffer().address();
-    for (auto& [range, shared] : cached.shared_variables) {
-        auto& program = cached.workload.get_programs().at(range);
-        auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel);
-        auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.compute_kernel);
-        auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.writer_kernel);
-        const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, Sq);
-        const std::array<uint32_t, indexer_common::compute::Count> causal_values = {
-            kv_len_tiles, geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles};
-        std::copy(reader_values.begin(), reader_values.end(), reader_args.data());
-        std::copy(causal_values.begin(), causal_values.end(), compute_args.data());
-        writer_args[indexer_common::writer::Output] = out_address;
-        std::copy(causal_values.begin(), causal_values.end(), writer_args.data() + indexer_common::writer::KvLength);
-    }
+    const auto [device_index, tp_index] = coord_ranks(args, mesh_coordinate, tensors.q);
+    const auto geom = device_causal_geometry(args, device_index, tp_index, Sq);
+
+    auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
+    auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
+    auto& compute_args = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
+
+    reader_args[indexer_common::reader::Q] = tensors.q.mesh_buffer().address();
+    reader_args[indexer_common::reader::K] = tensors.k.mesh_buffer().address();
+    reader_args[indexer_common::reader::W] = tensors.weights.mesh_buffer().address();
+    reader_args[indexer_common::reader::BatchOffset] = k_batch_page_offset;
+    reader_args[indexer_common::reader::KvLength] = kv_len_tiles;
+
+    compute_args[indexer_common::compute::KvLength] = kv_len_tiles;
+    compute_args[indexer_common::compute::ChunkStart] = geom.chunk_start_tiles;
+    compute_args[indexer_common::compute::StraddleQ] = geom.straddle_q_tile;
+    compute_args[indexer_common::compute::StraddleJump] = geom.straddle_jump_tiles;
+
+    writer_args[indexer_common::writer::Output] = out.mesh_buffer().address();
+    writer_args[indexer_common::writer::KvLength] = kv_len_tiles;
+    writer_args[indexer_common::writer::ChunkStart] = geom.chunk_start_tiles;
+    writer_args[indexer_common::writer::StraddleQ] = geom.straddle_q_tile;
+    writer_args[indexer_common::writer::StraddleJump] = geom.straddle_jump_tiles;
 }
 
 }  // namespace ttnn::operations::experimental::quasar::indexer_score::program

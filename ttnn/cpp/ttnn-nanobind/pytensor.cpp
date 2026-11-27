@@ -1116,25 +1116,25 @@ void pytensor_module(nb::module_& mod) {
 
             This tensor must be on host and in ROW_MAJOR layout.
 
-            Returns an output tensor from output tensor start indices ``arg0`` to output tensor end indices ``arg1`` (inclusive) of the input tensor.
+            Returns an output tensor from output tensor start indices ``arg0`` (inclusive) to output tensor end indices ``arg1`` (exclusive) of the input tensor.
 
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
             | Argument            | Description                                  | Data type    | Valid range                                         | Required |
             +=====================+==============================================+==============+=====================================================+==========+
             | arg0                | Start indices of input tensor                | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
-            |                     |                                              |              | < input_tensor_shape[i] and <= output_tensor_end[i] |          |
+            |                     |                                              |              | <= output_tensor_end[i]                             |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
             | arg1                | End indices of input tensor in output tensor | List[int]    | Values along each dim must be                       | Yes      |
             |                     |                                              |              |                                                     |          |
-            |                     |                                              |              | < input_tensor_shape[i]                             |          |
+            |                     |                                              |              | <= input_tensor_shape[i]                            |          |
             +---------------------+----------------------------------------------+--------------+-----------------------------------------------------+----------+
 
             .. code-block:: python
 
                 input_tensor_shape = [1, 1, 5, 5]
                 output_tensor_start = [0, 0, 1, 1]
-                output_tensor_end = [0, 0, 3, 3]
+                output_tensor_end = [1, 1, 4, 4]
 
                 inp = torch.Tensor(
                     [ 0, 0, 0, 0, 0,

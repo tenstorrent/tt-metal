@@ -8,7 +8,7 @@ import torch
 from conftest import skip_for_wormhole
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
-from helpers.golden_generators import MatmulGolden, get_golden_generator
+from helpers.golden_generators import TILE_DIM, MatmulGolden, get_golden_generator
 from helpers.llk_params import (
     ALL_MATH_FIDELITIES,
     DEST_ACC_MODES,
@@ -24,7 +24,12 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
     matmul_pack_form,
 )
-from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
+from helpers.param_config import (
+    flat_axes,
+    input_output_formats,
+    max_dest_tiles,
+    parametrize,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -57,7 +62,7 @@ def generate_format_aware_matmul_combinations(
     3. When dest_acc=Yes: max 4 tiles (32-bit dest register)
     4. When dest_acc=No: max 8 tiles (16-bit dest register)
 
-    Returns: List of (format, dest_acc, dimensions) tuples
+    Returns: List of (formats, dest_acc, ct_dim, rt_dim, kt_dim) tuples
     """
     combinations = []
 
@@ -67,7 +72,18 @@ def generate_format_aware_matmul_combinations(
                 dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
             )
             dimensions_list = generate_matmul_dimension_combinations(max_tiles)
-            combinations.extend([(fmt, dest_acc, dims) for dims in dimensions_list])
+            combinations.extend(
+                [
+                    (
+                        fmt,
+                        dest_acc,
+                        input_B_dims[1] // TILE_DIM,
+                        input_A_dims[0] // TILE_DIM,
+                        input_A_dims[1] // TILE_DIM,
+                    )
+                    for input_A_dims, input_B_dims in dimensions_list
+                ]
+            )
 
     return combinations
 
@@ -82,24 +98,29 @@ ALL_MATMUL_COMBINATIONS = generate_format_aware_matmul_combinations(
 )
 
 
+MATMUL_AXIS_NAMES = ("formats", "dest_acc", "ct_dim", "rt_dim", "kt_dim")
+
+
 @parametrize(
     math_fidelity=ALL_MATH_FIDELITIES,
-    format_dest_acc_and_dims=ALL_MATMUL_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, ALL_MATMUL_COMBINATIONS),
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     math_fidelity,
-    format_dest_acc_and_dims,
+    formats,
+    dest_acc,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     boot_mode=BootMode.DEFAULT,
     transpose=False,
     dest_sync=DestSync.Half,
 ):
-    torch_format = format_dict[format_dest_acc_and_dims[0].output_format]
+    torch_format = format_dict[formats.output_format]
 
-    formats = format_dest_acc_and_dims[0]
-    dest_acc = format_dest_acc_and_dims[1]
-    input_A_dimensions = format_dest_acc_and_dims[2][0]
-    input_B_dimensions = format_dest_acc_and_dims[2][1]
+    input_A_dimensions = [rt_dim * TILE_DIM, kt_dim * TILE_DIM]
+    input_B_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -218,13 +239,13 @@ TRANSPOSE_DIMS_32 = [
     ([128, 64], [64, 32]),  # 4x1, k 2
 ]
 TRANSPOSE_COMBINATIONS = [
-    (fmt, acc, dims)
+    (fmt, acc, dims_B[1] // TILE_DIM, dims_A[0] // TILE_DIM, dims_A[1] // TILE_DIM)
     for fmt in input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32], same=True
     )
     for acc in DEST_ACC_MODES
     if not (fmt.input_format == DataFormat.Float32 and acc == DestAccumulation.No)
-    for dims in (
+    for dims_A, dims_B in (
         TRANSPOSE_DIMS_32 if acc == DestAccumulation.Yes else TRANSPOSE_DIMS_16
     )
 ]
@@ -234,7 +255,9 @@ TRANSPOSE_COMBINATIONS = [
 @pytest.mark.nightly
 @parametrize(
     math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi2, MathFidelity.HiFi4],
-    format_dest_acc_and_dims=TRANSPOSE_COMBINATIONS,
+    **flat_axes(MATMUL_AXIS_NAMES, TRANSPOSE_COMBINATIONS),
 )
-def test_matmul_transpose(math_fidelity, format_dest_acc_and_dims):
-    test_matmul(math_fidelity, format_dest_acc_and_dims, transpose=True)
+def test_matmul_transpose(math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim):
+    test_matmul(
+        math_fidelity, formats, dest_acc, ct_dim, rt_dim, kt_dim, transpose=True
+    )

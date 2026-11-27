@@ -42,6 +42,24 @@ ttnn::Tensor slice_write(
 
     bool rm_only_not_sharded = (input_tensor.layout() == Layout::TILE || output_tensor.layout() == Layout::TILE) &&
                                !(input_tensor.is_sharded() || (output_tensor.is_sharded() && !no_step));
+    if (tt::tt_metal::is_mx(input_tensor.dtype()) || tt::tt_metal::is_mx(output_tensor.dtype())) {
+        // Only the TILE-sharded-input factory is MX-correct: it copies whole tiles at the tile size of the
+        // (shared) dtype. Everything else untilizes to row-major (no MX layout) or moves sub-tile pieces.
+        TT_FATAL(
+            input_tensor.dtype() == output_tensor.dtype(),
+            "Quasar slice_write copies tiles verbatim, so MX input ({}) and output ({}) must share one dtype.",
+            input_tensor.dtype(),
+            output_tensor.dtype());
+        TT_FATAL(
+            !rm_only_not_sharded && input_tensor.layout() == Layout::TILE && output_tensor.layout() == Layout::TILE &&
+                input_tensor.is_sharded() && no_step,
+            "Quasar slice_write on MX tensors supports only a sharded TILE input written into a TILE output with "
+            "unit steps: other paths round-trip through row-major, which MX tiles do not have.");
+        TT_FATAL(
+            begins.size() >= 2 && begins[begins.size() - 1] % tt::constants::TILE_WIDTH == 0 &&
+                begins[begins.size() - 2] % tt::constants::TILE_HEIGHT == 0,
+            "Quasar slice_write on MX tensors needs tile-aligned begins in the last two dims (whole-tile copies).");
+    }
     ttnn::Tensor input = input_tensor;
     if (rm_only_not_sharded) {
         input = ttnn::operations::experimental::quasar::to_layout(input_tensor, Layout::ROW_MAJOR);

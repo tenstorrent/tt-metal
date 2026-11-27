@@ -10,7 +10,7 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     check_readable,
@@ -670,6 +670,26 @@ def test_transpose_wh_tiled_uint32(device, shape):
     tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device)
     out = ttnn.transpose(tt, -2, -1)
     assert_equal(t.permute(0, 1, 3, 2), ttnn.to_torch(out))
+
+
+# Output (n, n, 1, 5) tile-pads to (n, n, 32, 32): exactly 2^32 elements at n=2048.
+# The element count is dtype independent: bfloat16 (~8.6 GB output) fits Wormhole n150, fp32 (~16 GB) needs Blackhole.
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="bfloat16"),
+        pytest.param(ttnn.float32, id="float32", marks=run_for_blackhole("needs ~16 GB DRAM for 2^32 padded elements")),
+    ],
+)
+@pytest.mark.parametrize("n", [2047, 2048])
+def test_permute_tiled_padded_volume_uint32_overflow(device, n, dtype):
+    torch.manual_seed(0)
+    x = torch.randn(n, 5, n, 1)
+    if dtype == ttnn.bfloat16:
+        x = x.to(torch.bfloat16)
+    t = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y = ttnn.to_torch(ttnn.permute(t, [2, 0, 3, 1]))
+    assert torch.equal(y, x.permute(2, 0, 3, 1))
 
 
 # TODO: Fix sharded permute bugs for width and block shard strategies

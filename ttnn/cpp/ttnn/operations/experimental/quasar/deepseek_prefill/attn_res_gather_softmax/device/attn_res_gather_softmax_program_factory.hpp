@@ -4,14 +4,14 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
-#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "attn_res_gather_softmax_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operation.hpp"
 
 namespace ttnn::experimental::prim::qsr {
 
@@ -24,40 +24,25 @@ struct AttnResGatherSoftmaxSiteOffsets {
 AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
     const AttnResGatherSoftmaxParams& operation_attributes, const AttnResGatherSoftmaxInputs& tensor_args);
 
-struct AttnResGatherSoftmaxSharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::KernelHandle gather_kernel_id{};
-    tt::tt_metal::CoreCoord gather_core;
-};
-
-struct AttnResGatherSoftmaxMeshWorkloadFactory {
-    using shared_variables_t = AttnResGatherSoftmaxSharedVariables;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const AttnResGatherSoftmaxParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const AttnResGatherSoftmaxInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const AttnResGatherSoftmaxParams& operation_attributes,
-        const AttnResGatherSoftmaxInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
+struct AttnResGatherSoftmaxProgramFactory {
     // Per mesh coordinate rather than once for the mesh: a chip's rank on the
     // tensor-parallel axis decides which slot of the statistics tensor it fills and
     // which way each peer lies on the fabric.
-    static cached_program_t create_at(
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const AttnResGatherSoftmaxParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
         const AttnResGatherSoftmaxInputs& tensor_args,
-        std::vector<Tensor>& tensor_return_value);
+        std::vector<Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
+
+    // Cache-hit refresh. `site` and the caller's semaphore are left out of the program hash,
+    // so beyond every buffer address this re-applies the site page offsets and the
+    // semaphore address. Everything else is derived from hashed inputs and the coordinate.
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const AttnResGatherSoftmaxParams& operation_attributes,
+        const AttnResGatherSoftmaxInputs& tensor_args,
+        std::vector<Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate);
 };
 
 }  // namespace ttnn::experimental::prim::qsr
