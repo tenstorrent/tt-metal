@@ -1,0 +1,51 @@
+2026-11-26 12:07:11.506 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:284 - Start sync device id: 16
+2026-11-26 12:07:11.506 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:286 - End sync device id: 16
+2026-11-26 12:07:11.506 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:316 - Iteration = 999, done!
+2026-11-26 12:07:11.509 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 0: UBB1 ASIC1 /dev/tenstorrent/0 0000:01:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 1: UBB1 ASIC2 /dev/tenstorrent/1 0000:02:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 2: UBB1 ASIC3 /dev/tenstorrent/2 0000:03:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 3: UBB1 ASIC4 /dev/tenstorrent/3 0000:04:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 4: UBB1 ASIC5 /dev/tenstorrent/4 0000:05:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 5: UBB1 ASIC6 /dev/tenstorrent/5 0000:06:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 6: UBB1 ASIC7 /dev/tenstorrent/6 0000:07:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 7: UBB1 ASIC8 /dev/tenstorrent/7 0000:08:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 8: UBB2 ASIC1 /dev/tenstorrent/8 0000:41:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 9: UBB2 ASIC2 /dev/tenstorrent/9 0000:42:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 10: UBB2 ASIC3 /dev/tenstorrent/10 0000:43:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 11: UBB2 ASIC4 /dev/tenstorrent/11 0000:44:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 12: UBB2 ASIC5 /dev/tenstorrent/12 0000:45:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 13: UBB2 ASIC6 /dev/tenstorrent/13 0000:46:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 14: UBB2 ASIC7 /dev/tenstorrent/14 0000:47:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 15: UBB2 ASIC8 /dev/tenstorrent/15 0000:48:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 16: UBB4 ASIC1 /dev/tenstorrent/24 0000:81:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 17: UBB4 ASIC2 /dev/tenstorrent/25 0000:82:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 18: UBB4 ASIC3 /dev/tenstorrent/26 0000:83:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 19: UBB4 ASIC4 /dev/tenstorrent/27 0000:84:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 20: UBB4 ASIC5 /dev/tenstorrent/28 0000:85:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 21: UBB4 ASIC6 /dev/tenstorrent/29 0000:86:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 22: UBB4 ASIC7 /dev/tenstorrent/30 0000:87:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 23: UBB4 ASIC8 /dev/tenstorrent/31 0000:88:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 24: UBB3 ASIC1 /dev/tenstorrent/16 0000:c1:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 25: UBB3 ASIC2 /dev/tenstorrent/17 0000:c2:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 26: UBB3 ASIC3 /dev/tenstorrent/18 0000:c3:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 27: UBB3 ASIC4 /dev/tenstorrent/19 0000:c4:00.0 board=0x47330000000
+2026-11-26 12:07:11.510 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 28: UBB3 ASIC5 /dev/tenstorrent/20 0000:c5:00.0 board=0x47330000000
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 29: UBB3 ASIC6 /dev/tenstorrent/21 0000:c6:00.0 board=0x47330000000
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 30: UBB3 ASIC7 /dev/tenstorrent/22 0000:c7:00.0 board=0x47330000000
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:147 - Chip map device 31: UBB3 ASIC8 /dev/tenstorrent/23 0000:c8:00.0 board=0x47330000000
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:149 - ND report: 1 of 32 devices non-deterministic (20 checks)
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:160 - ND summary device 16 [UBB4 ASIC1 /dev/tenstorrent/24 0000:81:00.0 board=0x47330000000]: 2/20 checks; pattern scattered (24 cores in 2 rows, 12 columns): (0,1) (1,1) (2,1) (3,1) (4,1) (5,1) (6,1) (7,1) (8,1) (9,1) (10,1) (11,1) +12 more; failing checks per core: (0,1)x1 (1,1)x1 (2,1)x1 (3,1)x1 (4,1)x1 (5,1)x1 (6,1)x1 (7,1)x1 (8,1)x1 (9,1)x1 (10,1)x1 (11,1)x1 (0,8)x1 (1,8)x1 (2,8)x1 (3,8)x1 (4,8)x1 (5,8)x1 (6,8)x1 (7,8)x1 (8,8)x1 (9,8)x1 (10,8)x1 (11,8)x1
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (0,1) translated=(1,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 4 (1/1 checks); 7601-7601 elements per check; bits 3:16% 2:16% 4:14%
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (1,1) translated=(2,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 1 (1/1 checks); 7585-7585 elements per check; bits 2:16% 3:16% 4:14%
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (2,1) translated=(3,3): failed 1/20 checks; no structure
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (3,1) translated=(4,3): failed 1/20 checks; no structure
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (4,1) translated=(5,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 6 (1/1 checks); 7631-7631 elements per check; bits 3:16% 2:16% 4:14%
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (5,1) translated=(6,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 14 (1/1 checks); 7645-7645 elements per check; bits 3:16% 2:16% 4:14%
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (6,1) translated=(7,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 9 (1/1 checks); 7617-7617 elements per check; bits 3:16% 2:16% 4:14%
+2026-11-26 12:07:11.511 | INFO     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - ND summary device 16 core (7,1) translated=(10,3): failed 1/20 checks; whole tiles in 1/1 checks; most common face column 0 (1/1 checks); 7615-7615 elements per check; bits 3:16% 2:16% 4:14%
+2026-11-26 12:07:11.511 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:332 - Number of non-deterministic outputs on device 0 is 0
+2026-11-26 12:07:11.511 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:332 - Number of non-deterministic outputs on device 4 is 0
+2026-11-26 12:07:11.511 | DEBUG    | tt_py_test_utils_common.op_test_base:run_op_test:332 - Number of non-deterministic outputs on device 12 is 0
+=========================== short test summary info ============================
+FAILED tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy] - AssertionError
+======================== 1 failed in 276.75s (0:04:36) =========================

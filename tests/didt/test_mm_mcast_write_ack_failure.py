@@ -23,9 +23,15 @@ Run this. Reset first, always -- and note the sweep is always a cold-cache run:
     tt-smi -glx_reset_auto
     TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
 
-Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log. Chips report as
-they finish, so output is in completion order. Reset between runs too: this gate detects a hang but
-cannot clear it, so a still-wedged chip makes its neighbours fail and look faulty.
+One chip of the scan, as didt_runner's pin_core reruns it:
+
+    DIDT_DEVICE_ID=19 TT_METAL_HOME=$PWD python_env/bin/python tests/didt/test_mm_mcast_write_ack_failure.py
+
+Exits 1 if any chip hangs. Logs: /tmp/mm_mcast_write_ack_failure/chip<N>/pytest.log, or under
+$MCAST_ACK_WORK_DIR when set. Kernel caches: kmd<minor>/ per chip under the work dir, or under
+$MCAST_ACK_CACHE_DIR when set (keep it on local disk: 32 concurrent JIT builds fail on NFS). Chips report as they finish, so output is in completion order. Reset
+between runs too: this gate detects a hang but cannot clear it, so a still-wedged chip makes its
+neighbours fail and look faulty.
 
 One chip, cold:
 
@@ -46,7 +52,7 @@ Knobs:
 
     iters     MATMUL_ITERS per chip, default 20 (~25ms each, so more soak is nearly free)
     watchdog  TT_METAL_OPERATION_TIMEOUT_SECONDS per chip in seconds, default 30
-    work_dir  holds each chip's cache and pytest.log
+    work_dir  holds each chip's pytest.log, and its kernel cache unless MCAST_ACK_CACHE_DIR is set
 
 These env vars override the shape and grid: MATMUL_HEADS (default 64), MATMUL_SEQ (default 5120),
 MATMUL_GRID (default is the compute grid less its dispatch column, so 11x10 on a Blackhole galaxy).
@@ -80,6 +86,8 @@ from models.common.utility_functions import skip_for_wormhole_b0
 TRAY_OF_BUS_NIBBLE = {0x00: 1, 0x40: 2, 0xC0: 3, 0x80: 4}
 WATCHDOG_ENV = "TT_METAL_OPERATION_TIMEOUT_SECONDS"
 TRIAGE_ENV = "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE"
+# didt_runner's pin_core: the chip id (BusDeviceFunction rank) to scan alone
+DEVICE_ID_ENV = "DIDT_DEVICE_ID"
 
 
 DEVICE_PARAMS = {"l1_small_size": 1152}
@@ -228,24 +236,128 @@ def test_mm_mcast_write_ack_failure_scan(mesh_device):
     logger.success(f"no hang on chips {[to_physical(r) for r in mesh_device.get_device_ids()]}")
 
 
-def scan_all_chips(iters=None, watchdog=30, work_dir=None):
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param((1, 1), DEVICE_PARAMS, id="1x1"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@skip_for_wormhole_b0("shapes and program config are tuned for Blackhole")
+@pytest.mark.timeout(0)
+def test_mm_mcast_write_ack_failure_duty(mesh_device):
+    """The op that hangs matmul:duty-cycle-bursty-5 on the galaxy mesh, alone on one chip: tests/didt/test_duty_cycle.py
+    [blackhole-duty-5-rep-1000x-all], i.e. [1280,6912] bf16 block-sharded in L1 @ [6912,27648] bf8 in DRAM, LoFi, 2D
+    multicast over the full compute grid, run in bursts of DUTY_REPS x (matmul + DUTY_NON_MM x cos) and one more
+    matmul per iteration. It runs through the mesh test's DutyCycleTest, so iterations, device syncs and the
+    determinism check (every DUTY_DET_INTERVAL iterations, 0 disables it) are logged the same way."""
+    if float(os.environ.get(WATCHDOG_ENV, 0)) <= 0:
+        pytest.fail(f"{WATCHDOG_ENV} is non-positive, which disables hang detection entirely")
+
+    from tests.didt.op_test_base import OpParameter
+
+    # Not a module-level import: test_duty_cycle calls get_num_devices() on import, which in the scan parent would
+    # open every chip before the per-chip children start.
+    from tests.didt.test_duty_cycle import DutyCycleTest
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    gx, gy = (int(v) for v in os.environ.get("MATMUL_GRID", f"{grid.x}x{grid.y}").split("x"))
+    reps = int(os.environ.get("DUTY_REPS", 1000))
+    non_mm = int(os.environ.get("DUTY_NON_MM", 5))
+    iters = int(os.environ.get("MATMUL_ITERS", 10))
+    det_interval = int(os.environ.get("DUTY_DET_INTERVAL", 1))
+    per_core_m, per_core_n = 4, 72
+    in0_shape = [1, 1, 32 * per_core_m * gy, 576 * gx]
+    in1_shape = [1, 1, 576 * gx, 32 * per_core_n * gx]
+
+    identity = chip_identity()
+    for runtime_id in mesh_device.get_device_ids():
+        logger.info(f"participating {describe(runtime_id, identity)}")
+    logger.info(
+        f"duty matmul {in0_shape} @ {in1_shape} on {gx}x{gy} cores, {iters} iterations of {reps} x (mm + {non_mm} cos)"
+        f" + mm, determinism check every {det_interval}"
+    )
+
+    in0_mem = ttnn.create_sharded_memory_config(
+        in0_shape, ttnn.CoreGrid(y=gy, x=gx), ttnn.ShardStrategy.BLOCK, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    out_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(gx, gy),
+        in0_block_w=3,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    compute_config = ttnn.types.BlackholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True
+    )
+    duty = DutyCycleTest(
+        mesh_device,
+        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem),
+        [OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, dram)],
+        out_mem_config=out_mem,
+        out_dtype=ttnn.DataType.BFLOAT16,
+        program_config=program_config,
+        compute_config=compute_config,
+        loop_count=iters,
+        determinism_check_enabled=det_interval > 0,
+        determinism_check_interval=det_interval,
+        non_mm_loops=non_mm,
+        wl_loops=reps,
+    )
+    duty.nd_core_block = (32 * per_core_m, 32 * per_core_n)
+    duty.nd_core_grid_size = (gx, gy)
+
+    try:
+        duty.run_op_test()
+    except AssertionError:
+        for runtime_id in mesh_device.get_device_ids():
+            logger.error(f"ND {describe(runtime_id, identity)}")
+        raise
+    except Exception:
+        asics = asic_ids()
+        for runtime_id in mesh_device.get_device_ids():
+            logger.error(f"HUNG {describe(runtime_id, identity, asics)}")
+        raise
+    logger.success(f"no hang on chips {[to_physical(r) for r in mesh_device.get_device_ids()]}")
+
+
+WORKLOADS = {"wkv_b1": "test_mm_mcast_write_ack_failure_scan", "duty": "test_mm_mcast_write_ack_failure_duty"}
+
+
+def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     """Run this test once per chip of the host, one process each with its own cold cache, and report
-    which chips hang. Returns the list of hung chip ids.
+    which chips hang. Returns the list of hung chip ids. DIDT_DEVICE_ID=<chip id> scans that chip alone.
 
     Triage is disabled in the children because it halts cores and would disturb the other
     processes; re-run a failing chip on its own to triage it. This gate detects a hang but cannot
     clear one, so the failing chip stays wedged: reset the box (tt-smi -glx_reset_auto) before any
     re-run, or the wedged chip will fail its neighbours and they will look faulty too."""
+    workload = workload or os.environ.get("MATMUL_WORKLOAD", "wkv_b1")
     work_dir = Path(work_dir or Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure")
     shutil.rmtree(work_dir, ignore_errors=True)
-    chips = sorted(chip_identity())
+    # Keyed by /dev/tenstorrent minor: tt-kmd derives it from the bus number on a galaxy, so a chip keeps its cache
+    # dir when another chip drops off the bus, unlike the sorted chip id.
+    cache_root = Path(os.environ.get("MCAST_ACK_CACHE_DIR") or work_dir)
+    shutil.rmtree(cache_root, ignore_errors=True)
+    identity = chip_identity()
+    chips = sorted(identity)
+    if wanted := os.environ.get(DEVICE_ID_ENV):
+        if int(wanted) not in identity:
+            raise ValueError(f"{DEVICE_ID_ENV}={wanted} is not a chip of this host, chip ids {chips}")
+        chips = [int(wanted)]
     running = {}
     for chip in chips:
         out = work_dir / f"chip{chip}"
         out.mkdir(parents=True)
-        env = os.environ | {
+        env = {k: v for k, v in os.environ.items() if k != DEVICE_ID_ENV} | {
             "TT_VISIBLE_DEVICES": str(chip),
-            "TT_METAL_CACHE": str(out / "cache"),
+            "TT_METAL_CACHE": str(cache_root / f"kmd{identity[chip][1]}"),
             "OUT_DIR": str(out),
             WATCHDOG_ENV: str(watchdog),
             TRIAGE_ENV: "true",
@@ -253,9 +365,12 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
         if iters:
             env["MATMUL_ITERS"] = str(iters)
         log = (out / "pytest.log").open("w")
-        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--timeout=0", __file__, "-k", "1x1"]
+        test = WORKLOADS[workload]
+        cmd = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--timeout=0", f"{__file__}::{test}"]
         running[chip] = (subprocess.Popen(cmd, env=env, stdout=log, stderr=log), log)
-    logger.info(f"scanning {len(chips)} chips, dispatch watchdog={watchdog}s, logs under {work_dir}")
+    logger.info(
+        f"scanning {len(chips)} chips, workload {workload}, dispatch watchdog={watchdog}s, logs under {work_dir}"
+    )
 
     # Poll rather than wait() in spawn order: a hung chip runs several times longer than a healthy
     # one, and a sequential wait holds back every result queued behind it. Chips report as they
@@ -276,6 +391,7 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
             why = "no diagnostic line -- process killed (Bus error / OOM); check dmesg"
             for pattern in (
                 r"HUNG chip \d+.*",
+                r"ND chip \d+.*",
                 r"Device \d+: Timeout[^.]*\.",
                 r"Read 0x[0-9a-f]+ over PCIe[^\n]*",
                 r"TT_THROW: [^(]*",
@@ -300,4 +416,4 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None):
 
 
 if __name__ == "__main__":
-    sys.exit(1 if scan_all_chips() else 0)
+    sys.exit(1 if scan_all_chips(work_dir=os.environ.get("MCAST_ACK_WORK_DIR")) else 0)

@@ -6,6 +6,7 @@ from loguru import logger
 import pytest
 import torch
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
@@ -35,6 +36,15 @@ class MinimalMatmulWorstCaseTest(OpTestBase):
         )
 
 
+DTYPE_FIDELITY_PARAMS = [
+    (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+    (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
+]
+DTYPE_FIDELITY_IDS = ["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"]
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -48,13 +58,8 @@ class MinimalMatmulWorstCaseTest(OpTestBase):
 )
 @pytest.mark.parametrize(
     "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
-    [
-        (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False, 8, 16, 8, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False, 8, 16, 4, 2, 4),
-        (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
-        (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False, 8, 16, 16, 2, 4),
-    ],
-    ids=["bf16_HiFi2", "bf8b_HiFi2", "bf8b_LoFi", "bf4b_LoFi"],
+    DTYPE_FIDELITY_PARAMS,
+    ids=DTYPE_FIDELITY_IDS,
 )
 def test_minimal_matmul(
     mesh_device,
@@ -68,11 +73,23 @@ def test_minimal_matmul(
     subblock_w,
     didt_workload_iterations,
     determinism_check_interval,
+    grid_size,
 ):
     M, K, N = 16384, 16384, 16384
+    # Debug: DIDT_MINIMAL_M overrides M. M > N makes minimal_matmul transpose its core grid, so input A is
+    # multicast down columns instead of across rows.
+    if os.environ.get("DIDT_MINIMAL_M"):
+        M = int(os.environ["DIDT_MINIMAL_M"])
 
     compute_grid = get_mesh_grid_size(mesh_device)
     compute_with_storage_grid_size = (compute_grid.x, compute_grid.y)
+    if grid_size is not None:
+        # x by y, like the other didt 11x10 grids
+        if grid_size[0] > compute_grid.x or grid_size[1] > compute_grid.y:
+            pytest.fail(
+                f"--grid-size {grid_size[0]}x{grid_size[1]} exceeds the device grid {compute_grid.x}x{compute_grid.y}"
+            )
+        compute_with_storage_grid_size = grid_size
     logger.info(f"Running on {compute_with_storage_grid_size} cores")
 
     in0_shape = [M, K]
@@ -86,6 +103,10 @@ def test_minimal_matmul(
     in1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
+    # Debug: override math fidelity with DIDT_MATH_FIDELITY (ttnn.MathFidelity name: LoFi, HiFi2, HiFi3, HiFi4)
+    if os.environ.get("DIDT_MATH_FIDELITY"):
+        math_fidelity = getattr(ttnn.MathFidelity, os.environ["DIDT_MATH_FIDELITY"])
+    logger.info(f"Math fidelity: {math_fidelity}")
     # Create compute config
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
@@ -123,4 +144,53 @@ def test_minimal_matmul(
         determinism_check_interval=determinism_check_interval,
     )
 
+    # ND core attribution (minimal_matmul_program_descriptor.cpp): M is split over grid_y and N over grid_x,
+    # each core owning one contiguous output block of round_up(tiles, cores) / cores tiles; the grid is
+    # transposed (M over grid_x) when M > N
+    grid_x, grid_y = compute_with_storage_grid_size
+    transpose = M > N
+    m_cores, n_cores = (grid_x, grid_y) if transpose else (grid_y, grid_x)
+    minimalMatmulTest.nd_core_block = (32 * -(-(M // 32) // m_cores), 32 * -(-(N // 32) // n_cores))
+    minimalMatmulTest.nd_core_transpose = transpose
+    minimalMatmulTest.nd_core_grid_size = (grid_x, grid_y)
+
     minimalMatmulTest.run_op_test()
+
+
+@pytest.mark.parametrize("logical_chip_id", range(32), ids=[f"galaxy_chip_{i}" for i in range(32)])
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="galaxy")], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "dtype, math_fidelity, fp32_acc, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    DTYPE_FIDELITY_PARAMS,
+    ids=DTYPE_FIDELITY_IDS,
+)
+def test_specific_chip_minimal_matmul(
+    mesh_device,
+    logical_chip_id,
+    dtype,
+    math_fidelity,
+    fp32_acc,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    didt_workload_iterations,
+    determinism_check_interval,
+    grid_size,
+):
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
+    test_minimal_matmul(
+        pick_submesh(submesh_devices, logical_chip_id),
+        dtype,
+        math_fidelity,
+        fp32_acc,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        didt_workload_iterations,
+        determinism_check_interval,
+        grid_size,
+    )

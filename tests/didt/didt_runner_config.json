@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "hang_secs": 120,
+  "reset": {"cmd": "tt-smi -glx_reset_auto", "tries": 3, "timeout": 600},
+  "smi": {"cmd": "tt-smi -s --snapshot_no_tty", "timeout": 120},
+  "collect": {"cmd": "pytest --collect-only -q -p no:benchmark", "timeout": 600},
+  "fallbacks": {
+    "throttle": {"env": {"TT_MM_THROTTLE_PERF": "5"}, "opts": []},
+    "pin_core": {"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}}
+  },
+  "steps": [
+    {
+      "key": "nd:minimal",
+      "pin_id": "tests/didt/test_minimal_matmul.py::test_specific_chip_minimal_matmul[blackhole-bf16_HiFi2-galaxy-galaxy_chip_0]",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_minimal_matmul.py::test_minimal_matmul[blackhole-bf16_HiFi2-galaxy]"],
+      "opts": ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout=0"],
+      "env": {},
+      "timeout": null,
+      "check": "nd_report",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "minimal matmul on all 32 chips; settings of the gwdt matmul:minimal step"
+    },
+    {
+      "key": "nd:ff1",
+      "pin_id": "tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul[blackhole-galaxy_chip_0-without_gelu]",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_ff1_matmul.py::test_ff1_matmul[blackhole-galaxy-without_gelu]"],
+      "opts": ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout=0"],
+      "env": {},
+      "timeout": null,
+      "check": "nd_report",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "FF1 matmul without gelu; settings of the gwdt matmul:ff1 step"
+    },
+    {
+      "key": "nd:lm-head",
+      "pin_id": "tests/didt/test_lm_head_matmul.py::test_specific_chip_lm_head_matmul[blackhole-galaxy-logical_chip_0_]",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_lm_head_matmul.py::test_lm_head_matmul[blackhole-galaxy]"],
+      "opts": ["--didt-workload-iterations=1000", "--determinism-check-interval=50", "--timeout=0"],
+      "env": {},
+      "timeout": null,
+      "check": "nd_report",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "LM head matmul; not in gwdt, iterations and interval as ff1"
+    },
+    {
+      "key": "nd:duty-cycle-bursty-5",
+      "pin_id": "tests/didt/test_duty_cycle.py::test_specific_chip_duty_cycle[blackhole-duty-5-rep-1000x-galaxy-galaxy_chip_0]",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_duty_cycle.py::test_duty_cycle[blackhole-duty-5-rep-1000x-all]"],
+      "opts": ["--didt-workload-iterations=10", "--determinism-check-interval=1", "--timeout", "1800"],
+      "env": {
+        "TT_MESH_GRAPH_DESC_PATH": "tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+      },
+      "timeout": null,
+      "check": "nd_report",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "bursty matmul, 5 non-matmul loops per 1000 matmul reps; settings of the gwdt step"
+    },
+    {
+      "key": "nd:run-to-run",
+      "runner": "pytest",
+      "ids": ["tests/didt/test_matmul_run_to_run_determinism.py::test_matmul_run_to_run_determinism[blackhole-galaxy]"],
+      "opts": ["-p", "no:randomly", "--timeout=0"],
+      "env": {"TT_DET_SWEEP_ITERS": "10"},
+      "timeout": null,
+      "check": "run_to_run",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "same matmul twice, outputs compared per core; settings of the gwdt step"
+    },
+    {
+      "key": "nd:core-sweep",
+      "runner": "pytest",
+      "ids": ["tests/didt/scratch_core_sweep.py::test_core_sweep[blackhole-galaxy]"],
+      "opts": ["-p", "no:randomly", "--timeout=0"],
+      "env": {"TT_SWEEP_ITERS": "10", "TT_SWEEP_MODE": "grid", "TT_SWEEP_GRID": "11x10"},
+      "timeout": null,
+      "check": "core_sweep",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "11x10 core window swept over the grid; a skipped window fails the step"
+    },
+    {
+      "key": "nd:mcast-ack",
+      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]",
+      "runner": "script",
+      "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+      "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"],
+      "opts": [],
+      "env": {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "wkv_b1"},
+      "timeout": 1800,
+      "check": "write_ack",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "one process per chip, wkv_b1 matmul; the script arms its own hang watchdog"
+    },
+    {
+      "key": "nd:mcast-ack-duty",
+      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]",
+      "runner": "script",
+      "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
+      "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]"],
+      "opts": [],
+      "env": {"MATMUL_ITERS": "10", "MATMUL_WORKLOAD": "duty"},
+      "timeout": 1800,
+      "check": "write_ack",
+      "fallbacks": ["throttle", "pin_core"],
+      "note": "one process per chip, bursty matmul compared every iteration (test default)"
+    }
+  ]
+}
