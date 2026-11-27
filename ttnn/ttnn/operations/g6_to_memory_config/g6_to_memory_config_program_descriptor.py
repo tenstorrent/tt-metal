@@ -2,434 +2,293 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Plan selection and ProgramDescriptor for g6_to_memory_config.
+"""Plan and ProgramDescriptor of g6_to_memory_config (op_design.md, Blocking Model).
 
-Regimes (op_design.md, Blocking Model):
-  pull   (R1) every core holding target pages reads them from the source into its own target slots
-  push   (R2) every core holding source pages writes them to their target slots
-  bounce (R3) neither side is held by a core: grid workers stage target-order chunks in an L1 CB
-
-A plan is a pure function of the placement pair and the device; it and the descriptor built from it are
-cached, and a repeat call only patches the two buffer base addresses (common runtime args).
+Every page has one mover, chosen to own one side of it:
+  pull_shard / pull_bank  the core holding the page's target slot reads it into place (reader kernel);
+  push_shard / push_bank  the core holding the page's resident source writes it out (writer kernel);
+  bounce                  neither side is any core's L1 (DRAM -> DRAM): grid workers read a block into
+                          cb_bounce_pages and write it out (reader + writer kernels).
+A plan depends only on placements, shapes and the device, so plan_of() and the op share it.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-GATHER_KERNEL = str(KERNEL_DIR / "g6_to_memory_config_reader.cpp")
-SCATTER_KERNEL = str(KERNEL_DIR / "g6_to_memory_config_writer.cpp")
+PULL_KERNEL = KERNEL_DIR / "g6_to_memory_config_reader.cpp"
+PUSH_KERNEL = KERNEL_DIR / "g6_to_memory_config_writer.cpp"
 
-# Knobs (single source; every dependent quantity is derived from these).
-MODEL_L1_BUDGET_BYTES = 1347776  # L1 the model leaves to the op per core (BB-05)
-MAX_TRANSFER_BYTES = 1 << 20  # noc_async_read/write size limit; caps one segment
-BOUNCE_DEPTH = 2  # staging slots per bounce worker
-OWNER_BLOCK_PAGES: Optional[int] = None  # pull/push positions per block; None = the whole owned set
+# Block knobs. Every CT/RT value, loop trip count and the CB capacity derive from these.
+BOUNCE_DEPTH = 2  # bounce blocks in flight: the reader fills block k+1 while the writer drains block k
+MOVERS_PER_OWNER = 1  # data-movement RISCs sharing one owner's block (1 or 2)
+L1_OP_BUDGET_BYTES = 1347776  # per-core L1 the model leaves the op (BB-05)
 
-CB_STAGING_PAGES = 0
+CB_BOUNCE_PAGES = 0
+WALK_SHARD, WALK_BANK, WALK_BOUNCE = 0, 1, 2  # g6_to_memory_config_common.hpp
+NO_SHARD = 0xFFFFFFFF
 
-LOCAL_OWNED_SHARD = 0
-LOCAL_OWNED_BANKS = 1
-LOCAL_STAGING = 2
-
-_BUFFER_NAME = {ttnn.BufferType.DRAM: "dram", ttnn.BufferType.L1: "l1"}
-_SCHEME_NAME = {
-    ttnn.TensorMemoryLayout.INTERLEAVED: "interleaved",
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED: "block_sharded",
+_WALK = {
+    "pull_shard": WALK_SHARD,
+    "push_shard": WALK_SHARD,
+    "pull_bank": WALK_BANK,
+    "push_bank": WALK_BANK,
+    "bounce": WALK_BOUNCE,
 }
 
-
-# ---------------------------------------------------------------------------
-# Geometry
-# ---------------------------------------------------------------------------
+_bank_cover_by_device = {}
 
 
-def tile_grid(shape):
-    """(tensor_rows_tiles, tensor_cols_tiles). Each image is tile-padded on its own."""
-    shape = list(shape)
-    rows = math.prod(shape[:-2]) * math.ceil(shape[-2] / 32)
-    cols = math.ceil(shape[-1] / 32)
-    return rows, cols
+def tile_grid(tensor):
+    """(tensor_rows_tiles, tensor_cols_tiles, tile_h, tile_w) of the flattened padded tile grid."""
+    tile_h, tile_w = tensor.tile.tile_shape
+    padded = list(tensor.padded_shape)
+    rows_tiles = math.prod(padded[:-2]) * math.ceil(padded[-2] / tile_h)
+    cols_tiles = math.ceil(padded[-1] / tile_w)
+    return rows_tiles, cols_tiles, tile_h, tile_w
 
 
-def buffer_name(memory_config):
-    return _BUFFER_NAME[memory_config.buffer_type]
-
-
-def scheme_name(memory_config):
-    return _SCHEME_NAME[memory_config.memory_layout]
-
-
-def _ranges(grid):
-    return tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in grid.ranges())
-
-
-def memory_config_key(memory_config):
-    """Every field of a placement that changes the program."""
-    key = (buffer_name(memory_config), scheme_name(memory_config))
-    spec = memory_config.shard_spec
-    if spec is not None:
-        key += (_ranges(spec.grid), tuple(spec.shape), str(spec.orientation))
-    return key
-
-
-@dataclass(frozen=True)
-class Side:
-    """One placement of the tensor's tile grid."""
-
-    buffer: str
-    scheme: str
-    shard_rows: int = 0  # tiles
-    shard_cols: int = 0
-    num_shard_rows: int = 0
-    num_shard_cols: int = 0
-    shard_cores: tuple = ()  # core (x, y) of shard id k, in the buffer's own order
-    grid_cores: tuple = ()  # every core of the shard grid
-
-    @property
-    def sharded(self):
-        return self.scheme != "interleaved"
-
-    @property
-    def num_shards(self):
-        return self.num_shard_rows * self.num_shard_cols
-
-
-def describe_side(memory_config, rows, cols):
-    buffer, scheme = buffer_name(memory_config), scheme_name(memory_config)
-    if scheme == "interleaved":
-        return Side(buffer, scheme)
-    spec = memory_config.shard_spec
-    shard_rows, shard_cols = spec.shape[0] // 32, spec.shape[1] // 32
-    num_shard_rows, num_shard_cols = math.ceil(rows / shard_rows), math.ceil(cols / shard_cols)
-    grid_cores = tuple((c.x, c.y) for c in ttnn.corerange_to_cores(spec.grid, None, True))
-    if scheme == "block_sharded":
-        # GRID_2D: the first range trimmed to the shard grid, row-major.
-        start = spec.grid.ranges()[0].start
-        shard_cores = tuple((start.x + j, start.y + i) for i in range(num_shard_rows) for j in range(num_shard_cols))
-    else:
-        # ROUND_ROBIN_1D over the grid's cores, range by range, row-major.
-        shard_cores = grid_cores[: num_shard_rows * num_shard_cols]
-    return Side(buffer, scheme, shard_rows, shard_cols, num_shard_rows, num_shard_cols, shard_cores, grid_cores)
-
-
-def shard_extent(side, shard_id, rows, cols):
-    """(row0, col0, real rows, real cols) of a shard; the last shard row/column may be ragged."""
-    si, sj = divmod(shard_id, side.num_shard_cols)
-    row0, col0 = si * side.shard_rows, sj * side.shard_cols
-    return row0, col0, min(side.shard_rows, rows - row0), min(side.shard_cols, cols - col0)
-
-
-def l1_bank_owners(device):
-    grid = device.compute_with_storage_grid_size()
-    return ttnn._ttnn.reports.get_device_info(device).l1_num_banks == grid.x * grid.y
-
-
-def holders(side, tensor_pages, num_l1_banks, bank_owners):
-    if side.buffer == "dram":
-        return 0
-    if not side.sharded:
-        return min(tensor_pages, num_l1_banks) if bank_owners else 0
-    return side.num_shards
-
-
-def select_regime(h_in, h_out):
-    if h_in == 0 and h_out == 0:
-        return "bounce"
-    return "pull" if h_out >= h_in else "push"
-
-
-def merge_rectangles(cores):
-    """Few rectangular CoreRanges covering exactly `cores` (BB-17): row runs, extended downward."""
-    remaining = set(cores)
-    ranges = []
-    for y in sorted({c[1] for c in remaining}):
-        row = sorted(x for x, cy in remaining if cy == y)
-        runs, start = [], None
-        for i, x in enumerate(row):
-            if start is None:
-                start = x
-            if i + 1 == len(row) or row[i + 1] != x + 1:
-                runs.append((start, x))
-                start = None
-        for x0, x1 in runs:
-            y1 = y
-            while all((x, y1 + 1) in remaining for x in range(x0, x1 + 1)):
-                y1 += 1
-            for yy in range(y, y1 + 1):
-                for x in range(x0, x1 + 1):
-                    remaining.discard((x, yy))
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(x0, y), ttnn.CoreCoord(x1, y1)))
-    return ttnn.CoreRangeSet(ranges)
-
-
-# ---------------------------------------------------------------------------
-# Plan
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class G6Plan:
-    regime: str
-    holders_in: int
-    holders_out: int
-    l1_bank_owners: bool
-    kernel_cores: ttnn.CoreRangeSet
-    roles: dict  # (x, y) -> "pull" | "push" | "bounce_reader+writer" | "idle"
-    bounce_block_pages: Optional[int]
-    bounce_depth: Optional[int]
-    # Kernel parameters (not part of the BB-08 report, derived once with it).
-    tensor_rows: int
-    tensor_cols: int
-    tensor_pages: int
-    aligned_page_size: int
-    local_kind: int
-    walk_side: Optional[Side]
-    max_segment_pages: int
-    block_pages: int
-    core_args: dict  # (x, y) -> [walk_start, walk_offset, num_positions]
-
-    def staging_bytes_per_core(self):
-        if self.regime != "bounce":
-            return 0
-        return self.bounce_depth * self.bounce_block_pages * self.aligned_page_size
-
-
-def _owner_plan(regime, side, rows, cols, tensor_pages, grid):
-    """R1/R2 mover set: the owned side's shard grid, or every core of the compute grid for L1 banks."""
-    core_args = {}
-    roles = {}
-    if side.sharded:
-        for core in side.grid_cores:
-            core_args[core] = [0, 0, 0]
-            roles[core] = "idle"
-        max_owned = 0
-        for shard_id, core in enumerate(side.shard_cores):
-            _, _, nr, nc = shard_extent(side, shard_id, rows, cols)
-            core_args[core] = [shard_id, 0, nr * nc]
-            roles[core] = regime
-            max_owned = max(max_owned, nr * nc)
-        kernel_cores = merge_rectangles(side.grid_cores)
-        local_kind = LOCAL_OWNED_SHARD
-    else:
-        kernel_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
-        for y in range(grid.y):
-            for x in range(grid.x):
-                core_args[(x, y)] = [0, 0, 0]
-                roles[(x, y)] = regime
-        max_owned = math.ceil(tensor_pages / (grid.x * grid.y))
-        local_kind = LOCAL_OWNED_BANKS
-    block_pages = OWNER_BLOCK_PAGES if OWNER_BLOCK_PAGES is not None else max(1, max_owned)
-    return kernel_cores, roles, core_args, local_kind, block_pages
-
-
-def _target_order_starts(out_side, rows, cols, chunk_starts):
-    """(walk_start, walk_offset) of each target-order position in `chunk_starts`."""
-    if not out_side.sharded:
-        return [(start, 0) for start in chunk_starts]
-    starts, shard_id, shard_first = [], 0, 0
-    for position in chunk_starts:
-        while True:
-            _, _, nr, nc = shard_extent(out_side, shard_id, rows, cols)
-            if position < shard_first + nr * nc:
-                break
-            shard_first += nr * nc
-            shard_id += 1
-        starts.append((shard_id, position - shard_first))
-    return starts
-
-
-def _bounce_plan(out_side, rows, cols, tensor_pages, grid, page_size):
-    num_cores, all_cores, group_1, group_2, units_1, units_2 = ttnn.split_work_to_cores(grid, tensor_pages, True)
-    cores = [(c.x, c.y) for c in ttnn.corerange_to_cores(group_1, None, True)]
-    counts = [units_1] * len(cores)
-    if units_2 > 0:
-        cores_2 = [(c.x, c.y) for c in ttnn.corerange_to_cores(group_2, None, True)]
-        cores += cores_2
-        counts += [units_2] * len(cores_2)
-    chunk_starts = [sum(counts[:i]) for i in range(len(counts))]
-    starts = _target_order_starts(out_side, rows, cols, chunk_starts)
-    core_args = {core: [start, offset, count] for core, (start, offset), count in zip(cores, starts, counts)}
-    max_chunk_pages = max(counts)
-    bounce_block_pages = min(
-        math.ceil(max_chunk_pages / BOUNCE_DEPTH),
-        MODEL_L1_BUDGET_BYTES // (BOUNCE_DEPTH * page_size),
-    )
-    roles = {core: "bounce_reader+writer" for core in cores}
-    return all_cores, roles, core_args, bounce_block_pages
-
-
-_PLAN_CACHE = {}
-_DESCRIPTOR_CACHE = {}
-
-
-def plan_key(input_tensor, memory_config):
-    device = input_tensor.device()
-    grid = device.compute_with_storage_grid_size()
+def shard_grid(memory_config, rows_tiles, cols_tiles, tile_h, tile_w):
+    """(shard_h_tiles, shard_w_tiles, n_shard_rows, n_shard_cols) of a sharded placement."""
+    shard_h, shard_w = memory_config.shard_spec.shape
+    shard_h_tiles, shard_w_tiles = shard_h // tile_h, shard_w // tile_w
     return (
-        device.id(),
-        (grid.x, grid.y),
-        tuple(input_tensor.shape),
-        tuple(input_tensor.padded_shape),
-        str(input_tensor.dtype),
-        memory_config_key(input_tensor.memory_config()),
-        memory_config_key(memory_config),
+        shard_h_tiles,
+        shard_w_tiles,
+        math.ceil(rows_tiles / shard_h_tiles),
+        math.ceil(cols_tiles / shard_w_tiles),
     )
 
 
-def select_plan(input_tensor, memory_config) -> G6Plan:
-    """The plan a call with these placements runs (BB-08); deterministic per placement pair and device."""
-    key = plan_key(input_tensor, memory_config)
-    plan = _PLAN_CACHE.get(key)
-    if plan is None:
-        plan = _build_plan(input_tensor, memory_config)
-        _PLAN_CACHE[key] = plan
-    return plan
+def grid_cores_row_wise(core_range_set):
+    """Cores of a CoreRangeSet, range by range in the order written, row-wise inside each range."""
+    cores = []
+    for core_range in core_range_set.ranges():
+        for y in range(core_range.start.y, core_range.end.y + 1):
+            for x in range(core_range.start.x, core_range.end.x + 1):
+                cores.append((x, y))
+    return cores
 
 
-def _build_plan(input_tensor, memory_config):
+def owner_cores(memory_config, n_shard_rows, n_shard_cols):
+    """Core holding shard k, at index k, exactly as the buffer places the shards.
+
+    1D (height / width): the grid linearized row-wise, range by range, first num_shards cores.
+    2D (block): the grid trimmed to the shard grid from its start, row-wise
+    (BufferDistributionSpec::compute_core_list).
+    """
+    grid = memory_config.shard_spec.grid
+    if memory_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        start = grid.ranges()[0].start
+        return [(start.x + c, start.y + r) for r in range(n_shard_rows) for c in range(n_shard_cols)]
+    return grid_cores_row_wise(grid)[: n_shard_rows * n_shard_cols]
+
+
+def bank_cores_cover_grid(device):
+    """True when every L1 bank sits on a compute core of the launch grid, one bank per core."""
+    device_id = device.id()
+    if device_id not in _bank_cover_by_device:
+        grid = device.compute_with_storage_grid_size()
+        info = ttnn._ttnn.reports.get_device_info(device)
+        _bank_cover_by_device[device_id] = (info.l1_num_banks == grid.x * grid.y, info.l1_num_banks)
+    return _bank_cover_by_device[device_id]
+
+
+def _bounding_box(cores):
+    xs = [x for x, _ in cores]
+    ys = [y for _, y in cores]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def build_plan(input_tensor, memory_config):
+    """The plan of one call: regime, movers, per-core work and block sizes. No allocation."""
     device = input_tensor.device()
-    grid = device.compute_with_storage_grid_size()
-    num_l1_banks = ttnn._ttnn.reports.get_device_info(device).l1_num_banks
-    bank_owners = num_l1_banks == grid.x * grid.y
-    rows, cols = tile_grid(input_tensor.shape)
-    tensor_pages = rows * cols
-    assert tensor_pages < 2**32, "page ids are 32-bit"
+    in_config = input_tensor.memory_config()
+    rows_tiles, cols_tiles, tile_h, tile_w = tile_grid(input_tensor)
+    num_pages = rows_tiles * cols_tiles
     page_size = input_tensor.buffer_aligned_page_size()
+    grid = device.compute_with_storage_grid_size()
+    cover, l1_num_banks = bank_cores_cover_grid(device)
 
-    in_side = describe_side(input_tensor.memory_config(), rows, cols)
-    out_side = describe_side(memory_config, rows, cols)
-    for side in (in_side, out_side):
-        if side.sharded:
-            assert side.num_shards <= len(side.shard_cores), "one shard per core"
-    h_in = holders(in_side, tensor_pages, num_l1_banks, bank_owners)
-    h_out = holders(out_side, tensor_pages, num_l1_banks, bank_owners)
-    regime = select_regime(h_in, h_out)
-    max_segment_pages = max(1, MAX_TRANSFER_BYTES // page_size)
+    src_l1 = in_config.buffer_type == ttnn.BufferType.L1
+    dst_l1 = memory_config.buffer_type == ttnn.BufferType.L1
+    src_sh = in_config.is_sharded()
+    dst_sh = memory_config.is_sharded()
 
-    bounce_block_pages = bounce_depth = None
-    if regime == "bounce":
-        kernel_cores, roles, core_args, bounce_block_pages = _bounce_plan(
-            out_side, rows, cols, tensor_pages, grid, page_size
-        )
-        bounce_depth = BOUNCE_DEPTH
-        local_kind, walk_side, block_pages = LOCAL_STAGING, out_side, bounce_block_pages
+    src_owners = []
+    if src_l1 and src_sh:
+        _, _, rows, cols = shard_grid(in_config, rows_tiles, cols_tiles, tile_h, tile_w)
+        src_owners = owner_cores(in_config, rows, cols)
+    dst_owners = []
+    dst_share_pages = 0
+    if dst_l1 and dst_sh:
+        shard_h_tiles, shard_w_tiles, rows, cols = shard_grid(memory_config, rows_tiles, cols_tiles, tile_h, tile_w)
+        dst_owners = owner_cores(memory_config, rows, cols)
+        dst_share_pages = shard_h_tiles * shard_w_tiles
+    elif dst_l1:
+        dst_share_pages = math.ceil(num_pages / l1_num_banks)
+
+    # Selection function of op_design.md (Regimes): the side with more owner cores moves, ties pull.
+    if dst_l1 and dst_sh:
+        regime = "push_shard" if (src_owners and len(src_owners) > len(dst_owners)) else "pull_shard"
+    elif dst_l1:
+        regime = "push_shard" if src_owners else "pull_bank"
+    elif src_l1:
+        regime = "push_shard" if src_owners else "push_bank"
     else:
-        walk_side = out_side if regime == "pull" else in_side
-        kernel_cores, roles, core_args, local_kind, block_pages = _owner_plan(
-            regime, walk_side, rows, cols, tensor_pages, grid
+        regime = "bounce"
+    fallback = regime in ("pull_bank", "push_bank") and not cover
+    if fallback:
+        regime = "bounce"
+
+    full_grid = [(x, y) for y in range(grid.y) for x in range(grid.x)]
+    roles = {}
+    core_args = {}
+    bounce_block_pages = 0
+    owners = []
+    if regime in ("pull_shard", "push_shard"):
+        owners = dst_owners if regime == "pull_shard" else src_owners
+        movers = list(owners)
+        kernel_cores = _bounding_box(owners)
+        shard_of = {core: k for k, core in enumerate(owners)}
+        sx, sy, ex, ey = kernel_cores
+        direction = regime.split("_")[0]
+        for y in range(sy, ey + 1):
+            for x in range(sx, ex + 1):
+                k = shard_of.get((x, y))
+                core_args[(x, y)] = [NO_SHARD if k is None else k]
+                roles[(x, y)] = "idle" if k is None else f"{direction}_owner {k}"
+    elif regime in ("pull_bank", "push_bank"):
+        movers = full_grid
+        kernel_cores = (0, 0, grid.x - 1, grid.y - 1)
+        roles = {core: "bank_walker" for core in full_grid}
+    else:
+        movers = full_grid
+        kernel_cores = (0, 0, grid.x - 1, grid.y - 1)
+        _, _, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(grid, num_pages, row_wise=True)
+        start = 0
+        for group, core_pages in ((group_1, pages_1), (group_2, pages_2)):
+            for core in grid_cores_row_wise(group):
+                core_args[core] = [start, core_pages]
+                roles[core] = f"bounce [{start}, {start + core_pages})"
+                start += core_pages
+        assert start == num_pages, f"bounce split covers {start} of {num_pages} pages"
+        for core in full_grid:
+            if core not in core_args:
+                core_args[core] = [0, 0]
+                roles[core] = "idle"
+        core_pages_max = pages_1
+        bounce_block_pages = max(
+            1,
+            min(math.ceil(core_pages_max / BOUNCE_DEPTH), L1_OP_BUDGET_BYTES // (BOUNCE_DEPTH * page_size)),
         )
 
-    return G6Plan(
-        regime=regime,
-        holders_in=h_in,
-        holders_out=h_out,
-        l1_bank_owners=bank_owners,
-        kernel_cores=kernel_cores,
-        roles=roles,
-        bounce_block_pages=bounce_block_pages,
-        bounce_depth=bounce_depth,
-        tensor_rows=rows,
-        tensor_cols=cols,
-        tensor_pages=tensor_pages,
-        aligned_page_size=page_size,
-        local_kind=local_kind,
-        walk_side=walk_side,
-        max_segment_pages=max_segment_pages,
-        block_pages=block_pages,
-        core_args=core_args,
+    cb_pages = BOUNCE_DEPTH * bounce_block_pages if regime == "bounce" else 0
+    return {
+        "regime": regime,
+        "fallback_from_bank": fallback,
+        "walk": _WALK[regime],
+        "movers": movers,
+        "owner_cores": owners,
+        "kernel_cores": kernel_cores,
+        "roles": roles,
+        "core_args": core_args,
+        "num_pages": num_pages,
+        "tensor_rows_tiles": rows_tiles,
+        "tensor_cols_tiles": cols_tiles,
+        "page_size": page_size,
+        "movers_per_owner": MOVERS_PER_OWNER if regime != "bounce" else 1,
+        "bounce_depth": BOUNCE_DEPTH,
+        "bounce_block_pages": bounce_block_pages,
+        "cb_bounce_pages": cb_pages,
+        "l1_op_bytes": dst_share_pages * page_size + cb_pages * page_size,
+    }
+
+
+def _mover_configs(regime, movers_per_owner):
+    """(processor/NoC config, kernel source) per mover RISC; mover 0 takes the default placement."""
+    pull = (ttnn.ReaderConfigDescriptor(), PULL_KERNEL)
+    pull_second = (
+        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+        PULL_KERNEL,
     )
-
-
-def output_l1_bytes_per_core(input_tensor, memory_config, plan):
-    """The output's own L1 on its busiest core (BB-05 counts it). A sharded slot is the full shard."""
-    if buffer_name(memory_config) == "dram":
-        return 0
-    if scheme_name(memory_config) == "interleaved":
-        num_l1_banks = ttnn._ttnn.reports.get_device_info(input_tensor.device()).l1_num_banks
-        return math.ceil(plan.tensor_pages / num_l1_banks) * plan.aligned_page_size
-    spec = memory_config.shard_spec
-    return (spec.shape[0] // 32) * (spec.shape[1] // 32) * plan.aligned_page_size
-
-
-# ---------------------------------------------------------------------------
-# Descriptor
-# ---------------------------------------------------------------------------
-
-
-def _kernel(source, plan, config, input_tensor, output_tensor):
-    side = plan.walk_side
-    sharded_walk = side is not None and side.sharded
-    ct_args = [
-        plan.local_kind,
-        1 if sharded_walk else 0,
-        plan.tensor_pages,
-        plan.tensor_rows,
-        plan.tensor_cols,
-        side.shard_rows if sharded_walk else 0,
-        side.shard_cols if sharded_walk else 0,
-        side.num_shard_cols if sharded_walk else 0,
-        plan.max_segment_pages,
-        plan.block_pages,
-        CB_STAGING_PAGES,
-    ]
-    ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    rt_args = ttnn.RuntimeArgs()
-    for (x, y), args in plan.core_args.items():
-        rt_args[x][y] = list(args)
-    return ttnn.KernelDescriptor(
-        kernel_source=source,
-        core_ranges=plan.kernel_cores,
-        compile_time_args=ct_args,
-        runtime_args=rt_args,
-        common_runtime_args=[input_tensor.buffer_address(), output_tensor.buffer_address()],
-        config=config,
+    push = (ttnn.WriterConfigDescriptor(), PUSH_KERNEL)
+    push_second = (
+        ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+        PUSH_KERNEL,
     )
+    if regime == "bounce":
+        return [pull, push]
+    if regime.startswith("pull"):
+        return [pull, pull_second][:movers_per_owner]
+    return [push, push_second][:movers_per_owner]
 
 
-def _build_descriptor_parts(plan, input_tensor, output_tensor):
-    kernels, cbs = [], []
-    if plan.regime in ("pull", "bounce"):
-        kernels.append(_kernel(GATHER_KERNEL, plan, ttnn.ReaderConfigDescriptor(), input_tensor, output_tensor))
-    if plan.regime in ("push", "bounce"):
-        kernels.append(_kernel(SCATTER_KERNEL, plan, ttnn.WriterConfigDescriptor(), input_tensor, output_tensor))
-    if plan.regime == "bounce":
+def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
+    """One ProgramDescriptor for the plan; base addresses are common RT args patched per call."""
+    assert output_tensor.buffer_aligned_page_size() == plan["page_size"], "input and output page sizes differ"
+    assert list(output_tensor.padded_shape) == list(input_tensor.padded_shape), "input and output tile grids differ"
+
+    sx, sy, ex, ey = plan["kernel_cores"]
+    core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(ex, ey))])
+    accessor_args = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()) + list(
+        ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    )
+    common_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
+
+    configs = _mover_configs(plan["regime"], plan["movers_per_owner"])
+    kernels = []
+    for mover_index, (config, source) in enumerate(configs):
+        ct_args = [
+            plan["walk"],
+            plan["page_size"],
+            plan["num_pages"],
+            len(configs) if plan["regime"] != "bounce" else 1,
+            mover_index if plan["regime"] != "bounce" else 0,
+            CB_BOUNCE_PAGES,
+            plan["bounce_block_pages"],
+        ] + accessor_args
+        runtime_args = ttnn.RuntimeArgs()
+        for (x, y), args in plan["core_args"].items():
+            runtime_args[x][y] = args
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(source),
+                core_ranges=core_ranges,
+                compile_time_args=ct_args,
+                runtime_args=runtime_args,
+                common_runtime_args=common_args,
+                config=config,
+            )
+        )
+
+    cbs = []
+    if plan["regime"] == "bounce":
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=plan.staging_bytes_per_core(),
-                core_ranges=plan.kernel_cores,
+                total_size=plan["cb_bounce_pages"] * plan["page_size"],
+                core_ranges=core_ranges,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
-                        buffer_index=CB_STAGING_PAGES,
+                        buffer_index=CB_BOUNCE_PAGES,
                         data_format=input_tensor.dtype,
-                        page_size=plan.aligned_page_size,
+                        page_size=plan["page_size"],
                     )
                 ],
             )
         )
-    return kernels, cbs
 
-
-def create_program_descriptor(input_tensor, output_tensor, memory_config, plan) -> ttnn.ProgramDescriptor:
-    key = plan_key(input_tensor, memory_config)
-    cached = _DESCRIPTOR_CACHE.get(key)
-    if cached is None:
-        kernels, cbs = _build_descriptor_parts(plan, input_tensor, output_tensor)
-        cached = (kernels, cbs, hash(key) & 0xFFFFFFFFFFFFFFFF)
-        _DESCRIPTOR_CACHE[key] = cached
-    kernels, cbs, program_hash = cached
-    addresses = [input_tensor.buffer_address(), output_tensor.buffer_address()]
-    for kernel in kernels:
-        kernel.common_runtime_args = addresses
     descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
     descriptor.custom_program_hash = program_hash
     return descriptor
+
+
+def patch_addresses(descriptor, src_address, dst_address):
+    """Point a cached descriptor at this call's buffers (common RT args 0 and 1 of every kernel)."""
+    for kernel in descriptor.kernels:
+        kernel.common_runtime_args[0] = src_address
+        kernel.common_runtime_args[1] = dst_address

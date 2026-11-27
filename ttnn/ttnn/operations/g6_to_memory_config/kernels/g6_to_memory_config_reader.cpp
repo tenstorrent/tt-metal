@@ -2,134 +2,107 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Gather kernel (RISCV_1, NoC0): NoC reads from the source into local L1.
-//   R1 pull:        local = this core's target shard or target L1 bank(s); reads land in the output itself.
-//   R3 bounce read: local = the staging CB; one block per slot, read barrier, publish.
-// Raw NoC + TensorAccessor: no kernel_lib helper moves whole pages between placements (op_design.md, API Mapping).
-// Argument layout: g6_to_memory_config_walk.hpp.
+// g6_to_memory_config pull mover and bounce reader: every NoC read lands in this core's own L1.
+//   WALK_SHARD  pull_shard  read each page of the owned target shard straight into its final slot
+//   WALK_BANK   pull_bank   read each page of this core's target L1 bank stripe into its final slot
+//   WALK_BOUNCE bounce      read bounce_block_pages pages per block into cb_bounce_pages for the writer
+// No kernel_lib helper applies: the op moves whole pages as bytes (no compute phase), and the
+// self-aimed local-copy helpers cannot read a remote source.
+
+#include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "g6_to_memory_config_walk.hpp"
+#include "g6_to_memory_config_common.hpp"
 
 namespace {
 
-template <typename Walk, typename Accessor>
-void bounce_gather(
-    Walk& walk,
-    const Accessor& src,
-    uint32_t src_stride,
-    uint32_t page_size,
-    uint32_t max_segment_pages,
-    uint32_t block_pages,
-    uint32_t count,
-    uint32_t cb_staging_pages) {
-    for (uint32_t done = 0; done < count; done += block_pages) {
-        const uint32_t n = g6::min_u32(block_pages, count - done);
+template <typename Src, typename Dst>
+FORCE_INLINE void pull_shard(const Src& src, const Dst& dst, uint32_t owned_shard_id) {
+    if (owned_shard_id == g6::NO_SHARD) {
+        return;
+    }
+    ASSERT(dst.is_local_shard(owned_shard_id));
+    const g6::Slice slice = g6::mover_slice(dst.dspec().shard_volume());
+    if (slice.begin == slice.end) {
+        return;
+    }
+    {
+        DeviceZoneScopedN("G6_PULL_ISSUE");
+        // shard_pages skips the slots of a ragged last shard that lie past the tensor.
+        for (const auto& page : dst.shard_pages(owned_shard_id, slice.begin, slice.end)) {
+            noc_async_read(src.get_noc_addr(page.page_id()), g6::local_slot(page.noc_addr()), g6::page_size);
+        }
+    }
+    {
+        DeviceZoneScopedN("G6_PULL_DRAIN");
+        noc_async_read_barrier();
+    }
+}
+
+template <typename Src, typename Dst>
+FORCE_INLINE void pull_bank(const Src& src, const Dst& dst) {
+    uint32_t bank;
+    {
+        DeviceZoneScopedN("G6_OWN_SCAN");
+        bank = g6::find_own_bank(dst);
+    }
+    if (bank == g6::NO_BANK) {
+        return;
+    }
+    constexpr uint32_t stride = g6::movers_per_owner * NUM_L1_BANKS;
+    {
+        DeviceZoneScopedN("G6_PULL_ISSUE");
+        for (uint32_t page = bank + g6::mover_index * NUM_L1_BANKS; page < g6::num_pages; page += stride) {
+            noc_async_read(src.get_noc_addr(page), g6::local_slot(dst.get_noc_addr(page)), g6::page_size);
+        }
+    }
+    {
+        DeviceZoneScopedN("G6_PULL_DRAIN");
+        noc_async_read_barrier();
+    }
+}
+
+template <typename Src>
+FORCE_INLINE void bounce_read(const Src& src, uint32_t start_page, uint32_t core_pages) {
+    for (uint32_t done = 0; done < core_pages;) {
+        const uint32_t remaining = core_pages - done;
+        const uint32_t block_pages = remaining < g6::bounce_block_pages ? remaining : g6::bounce_block_pages;
         {
-            DeviceZoneScopedN("G6-SLOT-WAIT");
-            cb_reserve_back(cb_staging_pages, block_pages);
+            DeviceZoneScopedN("G6_BOUNCE_RD_WAIT_FREE");
+            // Nominal count even for the short last block: slots stay aligned to the CB ring.
+            cb_reserve_back(g6::cb_bounce_pages, g6::bounce_block_pages);
         }
         {
-            DeviceZoneScopedN("G6-ISSUE");
-            g6::move_positions<true, g6::STAGING, false>(
-                walk, 1, src, src_stride, get_write_ptr(cb_staging_pages), page_size, max_segment_pages, n);
+            DeviceZoneScopedN("G6_BOUNCE_RD_ISSUE");
+            uint32_t slot = get_write_ptr(g6::cb_bounce_pages);
+            const uint32_t first = start_page + done;
+            for (uint32_t i = 0; i < block_pages; ++i) {
+                noc_async_read(src.get_noc_addr(first + i), slot, g6::page_size);
+                slot += g6::page_size;
+            }
         }
         {
-            DeviceZoneScopedN("G6-BLOCK-BARRIER");
+            DeviceZoneScopedN("G6_BOUNCE_RD_DRAIN");
             noc_async_read_barrier();
         }
-        // Nominal count even for a ragged last block keeps the ring aligned to whole slots.
-        cb_push_back(cb_staging_pages, block_pages);
+        cb_push_back(g6::cb_bounce_pages, g6::bounce_block_pages);
+        done += block_pages;
     }
 }
 
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t local_kind = get_compile_time_arg_val(0);
-    constexpr bool walk_sharded = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t tensor_pages = get_compile_time_arg_val(2);
-    constexpr uint32_t tensor_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t tensor_cols = get_compile_time_arg_val(4);
-    constexpr uint32_t walk_shard_rows = get_compile_time_arg_val(5);
-    constexpr uint32_t walk_shard_cols = get_compile_time_arg_val(6);
-    constexpr uint32_t walk_num_shard_cols = get_compile_time_arg_val(7);
-    constexpr uint32_t max_segment_pages = get_compile_time_arg_val(8);
-    constexpr uint32_t block_pages = get_compile_time_arg_val(9);
-    constexpr uint32_t cb_staging_pages = get_compile_time_arg_val(10);
-    constexpr auto src_args = TensorAccessorArgs<11>();
-    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    const uint32_t src_base = get_common_arg_val<uint32_t>(0);
+    const uint32_t dst_base = get_common_arg_val<uint32_t>(1);
+    [[maybe_unused]] const auto src = TensorAccessor(g6::src_args, src_base, g6::page_size);
+    [[maybe_unused]] const auto dst = TensorAccessor(g6::dst_args, dst_base, g6::page_size);
 
-    const auto src = TensorAccessor(src_args, get_common_arg_val<uint32_t>(0));
-    const auto dst = TensorAccessor(dst_args, get_common_arg_val<uint32_t>(1));
-    const uint32_t page_size = src.get_aligned_page_size();
-    const uint32_t src_stride = src.contiguous_page_stride();
-
-    const uint32_t walk_start = get_arg_val<uint32_t>(0);
-    const uint32_t walk_offset = get_arg_val<uint32_t>(1);
-    const uint32_t num_positions = get_arg_val<uint32_t>(2);
-
-    if constexpr (local_kind == g6::OWNED_SHARD) {
-        g6::ShardWalk walk{tensor_rows, tensor_cols, walk_shard_rows, walk_shard_cols, walk_num_shard_cols};
-        uint32_t shard_base = 0;
-        {
-            DeviceZoneScopedN("G6-RESOLVE");
-            if (num_positions > 0) {
-                walk.enter(walk_start, walk_offset);
-                const uint64_t shard_noc_addr = dst.get_noc_addr(walk.row0 * tensor_cols + walk.col0);
-                ASSERT(noc_address_backend::is_local(shard_noc_addr, noc_index));
-                shard_base = noc_address_backend::extract_local_address(shard_noc_addr);
-            }
-        }
-        {
-            DeviceZoneScopedN("G6-ISSUE");
-            g6::move_owned<true, g6::OWNED_SHARD>(
-                walk, 1, src, src_stride, shard_base, page_size, max_segment_pages, block_pages, num_positions);
-        }
-        {
-            DeviceZoneScopedN("G6-DRAIN");
-            noc_async_read_barrier();
-        }
-    } else if constexpr (local_kind == g6::OWNED_BANKS) {
-        uint32_t banks[g6::MAX_OWNED_BANKS];
-        uint32_t num_owned;
-        {
-            DeviceZoneScopedN("G6-RESOLVE");
-            num_owned = g6::find_owned_l1_banks(tensor_pages, banks);
-        }
-        {
-            DeviceZoneScopedN("G6-ISSUE");
-            for (uint32_t i = 0; i < num_owned; ++i) {
-                g6::LinearWalk walk{banks[i], NUM_L1_BANKS};
-                const uint32_t bank_base = noc_address_backend::extract_local_address(dst.get_noc_addr(banks[i]));
-                g6::move_owned<true, g6::OWNED_BANKS>(
-                    walk,
-                    NUM_L1_BANKS,
-                    src,
-                    src_stride,
-                    bank_base,
-                    page_size,
-                    max_segment_pages,
-                    block_pages,
-                    g6::bank_page_count(banks[i], tensor_pages));
-            }
-        }
-        {
-            DeviceZoneScopedN("G6-DRAIN");
-            noc_async_read_barrier();
-        }
+    if constexpr (g6::walk == g6::WALK_SHARD) {
+        pull_shard(src, dst, get_arg_val<uint32_t>(0));
+    } else if constexpr (g6::walk == g6::WALK_BANK) {
+        pull_bank(src, dst);
     } else {
-        if constexpr (walk_sharded) {
-            g6::ShardWalk walk{tensor_rows, tensor_cols, walk_shard_rows, walk_shard_cols, walk_num_shard_cols};
-            if (num_positions > 0) {
-                walk.enter(walk_start, walk_offset);
-            }
-            bounce_gather(
-                walk, src, src_stride, page_size, max_segment_pages, block_pages, num_positions, cb_staging_pages);
-        } else {
-            g6::LinearWalk walk{walk_start, 1};
-            bounce_gather(
-                walk, src, src_stride, page_size, max_segment_pages, block_pages, num_positions, cb_staging_pages);
-        }
+        bounce_read(src, get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1));
     }
 }

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_to_memory_config has no compute stage and the program descriptor launches no compute kernel:
-// pages move whole over the NoC, and a pass through DEST (unpack -> pack) would re-derive the shared
-// exponents of bfloat8_b / bfloat4_b pages, breaking the bit-exact contract (op_design.md, regime R8).
+// g6_to_memory_config has no compute phase and the program descriptor never launches this kernel:
+// pages move as bytes between the NoC and L1, and a page passed through unpack/pack would no longer
+// be bit-exact for the block formats. Launching an empty TRISC kernel would only add launch cost.
 
 void kernel_main() {}
