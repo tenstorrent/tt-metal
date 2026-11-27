@@ -750,8 +750,8 @@ FLT_MAX = torch.finfo(torch.float32).max
 # |y| so large that y * log2|x| is far outside the fp32 exponent range (#55129): x = 1 gives 1 and
 # every other base saturates to 0 or inf, as IEEE 754 pow does. FLT_MAX is past 0x7F7F8000, where an
 # 8-bit rounding of y itself would reach inf.
-# The unary cases rely on pow(Tensor, float) in binary_composite_op.cpp casting floor(y) to int32, which is
-# undefined for |y| > INT_MAX (x86 gives INT_MIN, so they reach the float kernel; UBSan would stop there).
+# The unary cases reach the float kernel because pow(Tensor, float) only takes the integer path for exponents
+# int32 can hold (see test_pow_float_exponent_integer_routing).
 @pytest.mark.parametrize("binary", [True, False], ids=["binary", "unary"])
 @pytest.mark.parametrize(
     "base, exponent, expected",
@@ -781,6 +781,43 @@ def test_pow_fp32_huge_exponent(base, exponent, expected, binary, device):
     else:
         result = ttnn.to_torch(ttnn.pow(tt_base, exponent))
     assert (result == expected).all(), f"pow({base}, {exponent}) = {result.flatten()[0].item()}, expected {expected}"
+
+
+# pow(Tensor, float) takes the integer path only for an integral exponent that int32 can hold. A float-to-int32
+# conversion of anything larger is undefined, and a compiler that dropped the round trip sent 1e35, FLT_MAX and
+# inf to the integer path as -2^31 (#67291). An INT32 base shows the routing: the float path rejects it with
+# "requires an integral exponent", the integer path rejects a negative exponent by value.
+@pytest.mark.parametrize(
+    "exponent, message",
+    [
+        (1e35, "requires an integral exponent"),
+        (-1e35, "requires an integral exponent"),
+        (FLT_MAX, "requires an integral exponent"),
+        (float("inf"), "requires an integral exponent"),
+        (float("-inf"), "requires an integral exponent"),
+        (2.0**31, "requires an integral exponent"),
+        (2.5, "requires an integral exponent"),
+        (-(2.0**31), "negative integer powers are not allowed, got -2147483648"),
+    ],
+)
+def test_pow_float_exponent_integer_routing(exponent, message, device, expect_error):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("integer pow is not supported on Quasar")
+    tt_base = ttnn.from_torch(
+        torch.full((32, 32), 2, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, message):
+        ttnn.pow(tt_base, exponent)
+
+
+def test_pow_float_exponent_largest_int32_takes_integer_path(device):
+    if device.arch() == ttnn.device.Arch.QUASAR:
+        pytest.skip("integer pow is not supported on Quasar")
+    # 2147483520 is the largest float below 2^31, so it is an int32 exponent: 1 to that power stays 1.
+    tt_base = ttnn.from_torch(
+        torch.ones((32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    assert torch.equal(ttnn.to_torch(ttnn.pow(tt_base, 2147483520.0)), torch.ones((32, 32), dtype=torch.int32))
 
 
 # y = +-inf: 0 or +inf for a base other than 1, as IEEE 754 pow. Splitting y left inf - inf, and the clamps

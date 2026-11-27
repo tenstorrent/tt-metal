@@ -12,6 +12,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -365,7 +366,7 @@ std::vector<std::optional<Tensor>> pow_bw(
     using ttnn::operations::unary::UnaryOpType;
     const float power_exponent = std::fabs(exponent - 1.0f);
     std::vector<EltwiseUnaryWithParam> power_ops;
-    if (static_cast<std::int32_t>(std::floor(power_exponent)) == power_exponent) {
+    if (ttnn::operations::unary::utils::is_int32_integer(power_exponent)) {
         const auto int_exponent = static_cast<std::int32_t>(power_exponent);
         if (int_exponent <= 3) {
             power_ops.emplace_back(UnaryOpType::POWER_ITERATIVE, static_cast<std::uint32_t>(int_exponent));

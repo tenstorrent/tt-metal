@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/device/pow_int_device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/data_formats/bfloat16.hpp>
@@ -1062,9 +1063,8 @@ Tensor pow(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    float exponent_floor = std::floor(exponent);
-    if (static_cast<std::int32_t>(exponent_floor) == exponent) {
-        std::int32_t exp = exponent;
+    if (ttnn::operations::unary::utils::is_int32_integer(exponent)) {
+        const auto exp = static_cast<std::int32_t>(exponent);
         return pow(input_a, exp, output_mem_config, output_tensor);
     }
     TT_FATAL(
