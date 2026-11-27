@@ -17,8 +17,13 @@
 // of one bank sit at consecutive bank addresses, so a core's requests to a bank arrive as one run, and
 // one set_state per (bank, NoC) run serves every read of it. chunk_pages bounds the run length, which
 // a DRAM port pays for in head-of-line blocking of the other cores' requests.
-// stagger rotates the issue order of every block (pages, or banks when bank_major) so cores that start
-// on the same bank do not walk the banks in lockstep.
+// stagger rotates the issue order of every block (pages, or banks when bank_major or coalesced) so cores
+// that start on the same bank do not walk the banks in lockstep.
+// coalesced (regime blocks_rm_bank_coalesced) reads each bank's pages of a block in one transaction of
+// whole slots instead of one request per page: the pages of a bank are consecutive slots there. The
+// slots land bank by bank in a staging area (cb_bank_staging, private to this kernel), and the reader
+// copies each page's payload into cb_input_slots at page_stride, in page order. The reads of the next
+// block are in flight during that copy when staging_depth is 2.
 // Raw dataflow: no kernel_lib helper reads ROW_MAJOR pages into strided CB slots.
 
 #include "api/dataflow/dataflow_api.h"
@@ -36,9 +41,22 @@ constexpr bool bank_major = get_compile_time_arg_val(8) != 0;
 constexpr uint32_t chunk_pages = get_compile_time_arg_val(9);
 constexpr uint32_t units_per_row = get_compile_time_arg_val(10);
 constexpr uint32_t tail_pages = get_compile_time_arg_val(11);
-constexpr auto input_args = TensorAccessorArgs<12>();
+constexpr bool coalesced = get_compile_time_arg_val(12) != 0;
+constexpr uint32_t cb_bank_staging = get_compile_time_arg_val(13);
+constexpr uint32_t staging_rounds = get_compile_time_arg_val(14);
+constexpr uint32_t staging_depth = get_compile_time_arg_val(15);
+constexpr uint32_t page_stride = get_compile_time_arg_val(16);
+constexpr auto input_args = TensorAccessorArgs<17>();
+
+// One staging region per bank holds staging_rounds slots; region b of a block starting at page p0 holds
+// page g of bank b at slot g / num_banks - p0 / num_banks.
+constexpr uint32_t region_bytes = staging_rounds * slot_bytes;
+constexpr uint32_t stage_bytes = num_banks * region_bytes;
 
 static_assert(slot_bytes >= in_page_bytes);
+static_assert(coalesced || page_stride == slot_bytes, "the page-wise paths land each page in its own slot");
+static_assert(!coalesced || (page_stride >= in_page_bytes && page_stride % sizeof(uint32_t) == 0));
+static_assert(!coalesced || (staging_depth == 1 || staging_depth == 2));
 static_assert(!bank_major || chunk_pages % num_banks == 0, "a chunk is whole bank rounds");
 static_assert(alt_num < alt_den && (alt_den & (alt_den - 1)) == 0, "alt share is a power-of-two fraction below 1");
 static_assert(units_per_row >= 1 && tail_pages >= 1 && tail_pages <= pages_per_unit);
@@ -66,6 +84,19 @@ FORCE_INLINE uint8_t page_noc(uint32_t page) {
     } else {
         const uint32_t round = page / num_banks;
         return ((round * alt_num) & (alt_den - 1)) >= alt_den - alt_num ? 1 - noc_index : noc_index;
+    }
+}
+
+// The share of a run of `count` reads that goes on the second NoC; alt_carry spreads the rounding of
+// alt_num / alt_den over the runs of the core.
+FORCE_INLINE uint32_t alt_run_count(uint32_t count, uint32_t& alt_carry) {
+    if constexpr (alt_num == 0) {
+        return 0;
+    } else {
+        alt_carry += count * alt_num;
+        const uint32_t alt_count = alt_carry / alt_den;
+        alt_carry %= alt_den;
+        return alt_count;
     }
 }
 
@@ -117,12 +148,7 @@ FORCE_INLINE void issue_chunk_bank_major(
     for (uint32_t b = 0; b < runs; ++b) {
         const uint32_t k = (b + stagger) % runs;
         const uint32_t count = (num_pages - k + num_banks - 1) / num_banks;
-        uint32_t alt_count = 0;
-        if constexpr (alt_num != 0) {
-            alt_carry += count * alt_num;
-            alt_count = alt_carry / alt_den;
-            alt_carry %= alt_den;
-        }
+        const uint32_t alt_count = alt_run_count(count, alt_carry);
         const uint32_t own_count = count - alt_count;
         issue_bank_run(input, first_page, slots, k, own_count, noc_index);
         issue_bank_run(input, first_page, slots, k + own_count * num_banks, alt_count, 1 - noc_index);
@@ -170,6 +196,156 @@ FORCE_INLINE void block_read_barrier() {
     }
 }
 
+// Bank runs of the block [first_page, first_page + num_pages): run r starts at page first_page + r, in
+// bank (first_page + r) mod num_banks, and holds every num_banks-th page after it.
+struct BankRun {
+    uint32_t page, count, region_slot;
+};
+
+FORCE_INLINE uint32_t bank_runs(uint32_t num_pages) { return num_pages < num_banks ? num_pages : num_banks; }
+
+FORCE_INLINE BankRun bank_run(uint32_t first_page, uint32_t bank0, uint32_t num_pages, uint32_t r, uint32_t& bank) {
+    bank = bank0 + r;
+    // A run whose bank precedes the block's first bank starts one round later.
+    const bool next_round = bank >= num_banks;
+    if (next_round) {
+        bank -= num_banks;
+    }
+    return {first_page + r, (num_pages - r + num_banks - 1) / num_banks, next_round ? 1u : 0u};
+}
+
+// One read of whole slots per bank run (two when the run is split over the NoCs). Region and slot bases
+// are slot_bytes-aligned like the bank address, so local and remote agree mod 64.
+template <typename Accessor>
+FORCE_INLINE void issue_block_coalesced(
+    const Accessor& input,
+    uint32_t first_page,
+    uint32_t num_pages,
+    uint32_t stage,
+    uint32_t stagger,
+    uint32_t& alt_carry) {
+    const uint32_t bank0 = first_page % num_banks;
+    const uint32_t runs = bank_runs(num_pages);
+    const uint32_t r0 = stagger < runs ? stagger : stagger % runs;
+    for (uint32_t i = 0; i < runs; ++i) {
+        const uint32_t r = r0 + i < runs ? r0 + i : r0 + i - runs;
+        uint32_t bank;
+        const BankRun run = bank_run(first_page, bank0, num_pages, r, bank);
+        const uint32_t dst = stage + bank * region_bytes + run.region_slot * slot_bytes;
+        const uint32_t alt_count = alt_run_count(run.count, alt_carry);
+        const uint32_t own_count = run.count - alt_count;
+        if (own_count != 0) {
+            noc_async_read(input.get_noc_addr(run.page, 0, noc_index), dst, own_count * slot_bytes, noc_index);
+        }
+        if constexpr (alt_num != 0) {
+            if (alt_count != 0) {
+                const uint8_t alt_noc = 1 - noc_index;
+                noc_async_read(
+                    input.get_noc_addr(run.page + own_count * num_banks, 0, alt_noc),
+                    dst + own_count * slot_bytes,
+                    alt_count * slot_bytes,
+                    alt_noc);
+            }
+        }
+    }
+}
+
+// Copies the payload of every page of the block from its staging slot to page_stride-spaced pages of
+// cb_input_slots, in page order: run r's pages are num_banks pages apart there.
+FORCE_INLINE void compact_block(uint32_t first_page, uint32_t num_pages, uint32_t stage, uint32_t pages_base) {
+    constexpr uint32_t words = page_stride / sizeof(uint32_t);
+    constexpr uint32_t src_step = slot_bytes / sizeof(uint32_t);
+    constexpr uint32_t dst_step = num_banks * page_stride / sizeof(uint32_t);
+    const uint32_t bank0 = first_page % num_banks;
+    const uint32_t runs = bank_runs(num_pages);
+    // Plain loads and stores: after the read barrier that made the slots current, before the push.
+    asm volatile("" ::: "memory");
+    for (uint32_t r = 0; r < runs; ++r) {
+        uint32_t bank;
+        const BankRun run = bank_run(first_page, bank0, num_pages, r, bank);
+        const auto* src =
+            reinterpret_cast<const tt_l1_ptr uint32_t*>(stage + bank * region_bytes + run.region_slot * slot_bytes);
+        auto* dst = reinterpret_cast<tt_l1_ptr uint32_t*>(pages_base + r * page_stride);
+        for (uint32_t m = 0; m < run.count; ++m) {
+            for (uint32_t w = 0; w < words; ++w) {
+                dst[w] = src[w];
+            }
+            src += src_step;
+            dst += dst_step;
+        }
+    }
+    asm volatile("" ::: "memory");
+}
+
+// The block whose reads are in flight (or landed) in one stage.
+struct StagedBlock {
+    uint32_t page, num_pages, stage;
+};
+
+template <bool zoned, typename Accessor>
+FORCE_INLINE void issue_staged(
+    const Accessor& input, const StagedBlock& block, uint32_t stagger, uint32_t& alt_carry) {
+    G6_ZONED_STEP(
+        zoned,
+        "PERM-RD-ISSUE",
+        issue_block_coalesced(input, block.page, block.num_pages, block.stage, stagger, alt_carry));
+}
+
+// Block `cur` has been issued. Waits for it, issues `next` (when has_next) so its reads fly during the
+// copy, copies `cur` into cb_input_slots and pushes it. With one stage, `next` reuses cur's stage and is
+// issued after the copy.
+template <bool zoned, typename Accessor>
+FORCE_INLINE void load_block_coalesced(
+    const Accessor& input,
+    const StagedBlock& cur,
+    const StagedBlock& next,
+    bool has_next,
+    uint32_t stagger,
+    uint32_t& alt_carry) {
+    G6_ZONED_STEP(zoned, "PERM-RD-BARRIER", block_read_barrier());
+    if (staging_depth == 2 && has_next) {
+        issue_staged<zoned>(input, next, stagger, alt_carry);
+    }
+    G6_ZONED_STEP(zoned, "PERM-RD-RESERVE", cb_reserve_back(cb_input_slots, block_h));
+    G6_ZONED_STEP(
+        zoned, "PERM-RD-COMPACT", compact_block(cur.page, cur.num_pages, cur.stage, get_write_ptr(cb_input_slots)));
+    cb_push_back(cb_input_slots, block_h);
+    if (staging_depth == 1 && has_next) {
+        issue_staged<zoned>(input, next, stagger, alt_carry);
+    }
+}
+
+template <typename Accessor>
+FORCE_INLINE void read_coalesced(
+    const Accessor& input, uint32_t page, uint32_t remaining, uint32_t row_pos, uint32_t stagger, uint32_t& alt_carry) {
+    const uint32_t staging = get_write_ptr(cb_bank_staging);
+    uint32_t extent = remaining < block_h ? remaining : block_h;
+    StagedBlock cur{page, block_pages(extent, row_pos), staging};
+    issue_staged<false>(input, cur, stagger, alt_carry);
+    uint32_t stage_idx = 0;
+    for (uint32_t block_idx = 0;; ++block_idx) {
+        remaining -= extent;
+        const bool has_next = remaining > 0;
+        StagedBlock next{cur.page + cur.num_pages, 0, cur.stage};
+        if (has_next) {
+            extent = remaining < block_h ? remaining : block_h;
+            next.num_pages = block_pages(extent, row_pos);
+            stage_idx = staging_depth == 2 ? 1 - stage_idx : 0;
+            next.stage = staging + stage_idx * stage_bytes;
+        }
+        if (block_idx < g6_permute::ZONED_BLOCKS) {
+            DeviceZoneScopedN("PERM-RD-LOAD-BLOCK");
+            load_block_coalesced<true>(input, cur, next, has_next, stagger, alt_carry);
+        } else {
+            load_block_coalesced<false>(input, cur, next, has_next, stagger, alt_carry);
+        }
+        if (!has_next) {
+            return;
+        }
+        cur = next;
+    }
+}
+
 template <bool zoned, typename Accessor>
 FORCE_INLINE void load_block(
     const Accessor& input, uint32_t& page, uint32_t num_pages, uint32_t stagger, uint32_t& alt_carry) {
@@ -189,6 +365,13 @@ void kernel_main() {
     uint32_t alt_carry = 0;
 
     const auto input = TensorAccessor(input_args, input_addr, in_page_bytes);
+
+    if constexpr (coalesced) {
+        if (remaining > 0) {
+            read_coalesced(input, page, remaining, row_pos, stagger, alt_carry);
+        }
+        return;
+    }
 
     uint32_t block_idx = 0;
     for (; block_idx < g6_permute::ZONED_BLOCKS && remaining > 0; ++block_idx) {

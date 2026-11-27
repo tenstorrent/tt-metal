@@ -2,7 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_permute, regime blocks_rm_gather: plan (unit split, block knobs) and ProgramDescriptor.
+"""g6_permute, regimes blocks_rm_gather and blocks_rm_bank_coalesced: plan (unit split, block knobs,
+read mode) and ProgramDescriptor.
 
 ROW_MAJOR x [N, C, H, W, I, J], dims (0, 1, 4, 2, 5, 3): out[n, c, i, h, j, w] = x[n, c, h, w, i, j].
 Work unit u = (n * C + c) * H + h. Its input is the W * I consecutive pages
@@ -10,6 +11,9 @@ Work unit u = (n * C + c) * H + h. Its input is the W * I consecutive pages
 p_out = ((n * C + c) * I + i) * H * J + h * J + j of W values. A core owns a contiguous unit range
 and cuts it into blocks of block_h units; the reader lands each input page in its own slot and the
 writer gathers the [W, I * J] values of a unit into I * J output rows in L1, then writes them.
+blocks_rm_bank_coalesced differs in the read only: the pages of one bank are consecutive slots there,
+so the reader fetches each bank's pages of a block in one read of whole slots and copies the payloads
+into page order locally; the writer is the same.
 """
 
 from __future__ import annotations
@@ -31,10 +35,12 @@ from .g6_permute_program_descriptor import (
 )
 
 REGIME = "blocks_rm_gather"
+REGIME_COALESCED = "blocks_rm_bank_coalesced"
 DIMS = (0, 1, 4, 2, 5, 3)
 
 CB_INPUT_SLOTS = 0
 CB_OUTPUT_ROWS = 1
+CB_BANK_STAGING = 2
 
 # Buffer-depth knob of cb_input_slots; the allocated depth is min(INPUT_DEPTH, max_blocks_per_core).
 INPUT_DEPTH = 2
@@ -58,6 +64,21 @@ BANK_MAJOR = True
 BANK_RUN_ROUNDS = 8
 # Rotate each core's per-block issue order by (core index mod banks) pages, or banks when bank-major.
 BANK_STAGGER = False
+
+# "gather" (one read per page), "coalesced" (one read of whole slots per bank run), or "auto": the read
+# mode measured faster for the input's placement (COALESCED_BUFFERS), when a coalesced block fits L1.
+READ_MODE = "auto"
+COALESCED_BUFFERS = (ttnn.BufferType.DRAM,)
+# Coalesced mode: input pages a block aims for, block_h = ceil(COALESCED_BLOCK_PAGES / pages_per_unit)
+# under the L1 and core caps. Each bank's read is about COALESCED_BLOCK_PAGES / num_banks slots.
+COALESCED_BLOCK_PAGES = 256
+# Coalesced mode: stages of cb_bank_staging. 2 keeps the next block's reads in flight while the reader
+# copies the current one; the allocated depth is min(STAGING_DEPTH, max_blocks_per_core).
+STAGING_DEPTH = 2
+# Coalesced mode, DRAM input only: share of each bank run read on the second NoC (as READ_ALT_NOC_SHARE).
+COALESCED_ALT_NOC_SHARE = Fraction(1, 2)
+# Coalesced mode: rotate each core's bank order by (core index mod banks), as BANK_STAGGER.
+COALESCED_BANK_STAGGER = False
 
 
 @dataclass
@@ -84,13 +105,33 @@ class BlocksPlan:
     bank_stagger: bool = False
     bank_major: bool = False
     chunk_pages: int = 0
+    # Byte distance of consecutive pages in cb_input_slots: slot_bytes, or the payload rounded up to a
+    # word when the reader compacts the coalesced slots.
+    page_stride: int = 0
+    coalesced: bool = False
+    staging_rounds: int = 0
+    staging_depth: int = 0
     all_cores: object = None
     assignment: list = field(default_factory=list)  # [(CoreCoord, start_unit, num_units)]
 
 
 def knob_key():
     """Host knobs that reach this regime's CT args; part of the program cache key."""
-    return (INPUT_DEPTH, BLOCK_PAGES, BLOCK_H_LIMIT, READ_ALT_NOC_SHARE, BANK_MAJOR, BANK_RUN_ROUNDS, BANK_STAGGER)
+    return (
+        INPUT_DEPTH,
+        BLOCK_PAGES,
+        BLOCK_H_LIMIT,
+        READ_ALT_NOC_SHARE,
+        BANK_MAJOR,
+        BANK_RUN_ROUNDS,
+        BANK_STAGGER,
+        READ_MODE,
+        COALESCED_BUFFERS,
+        COALESCED_BLOCK_PAGES,
+        STAGING_DEPTH,
+        COALESCED_ALT_NOC_SHARE,
+        COALESCED_BANK_STAGGER,
+    )
 
 
 def _align_up(value, alignment):
@@ -121,34 +162,61 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     )
     out_l1 = out_l1_bytes_per_core(buffer_type, tensor_units * I * J, out_bank_page_bytes, input_tensor.device())
 
-    unit_slot_bytes = pages_per_unit * slot_bytes
     unit_row_bytes = I * J * out_row_bytes
-    block_cap = (L1_OP_BUDGET_BYTES - out_l1) // (INPUT_DEPTH * unit_slot_bytes + unit_row_bytes)
+    num_banks = ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks
+    budget = L1_OP_BUDGET_BYTES - out_l1
+
+    # Coalesced: cb_input_slots holds word-aligned payloads, and each stage of cb_bank_staging holds a
+    # block's whole slots plus up to two partial bank rounds: NB * slot * rounds(n) <= slot * (n + 2 NB).
+    page_stride = _align_up(in_page_bytes, 4)
+    coalesced_cap = (budget - STAGING_DEPTH * slot_bytes * 2 * num_banks) // (
+        INPUT_DEPTH * pages_per_unit * page_stride + unit_row_bytes + STAGING_DEPTH * pages_per_unit * slot_bytes
+    )
+    coalesced = _coalesced_reads(buffer_type, coalesced_cap)
+    if coalesced:
+        block_cap, block_pages_knob = coalesced_cap, COALESCED_BLOCK_PAGES
+    else:
+        page_stride = slot_bytes
+        block_cap = budget // (INPUT_DEPTH * pages_per_unit * slot_bytes + unit_row_bytes)
+        block_pages_knob = BLOCK_PAGES
     if block_cap < 1:
         raise RuntimeError(
             f"g6_permute: shape {[N, C, H, W, I, J]} leaves no room for one (n, c, h) block within "
             f"{L1_OP_BUDGET_BYTES} B of L1 per core (output pages take {out_l1} B, one unit "
-            f"{INPUT_DEPTH} x {unit_slot_bytes} B of input slots + {unit_row_bytes} B of output rows)"
+            f"{INPUT_DEPTH} x {pages_per_unit * slot_bytes} B of input slots + {unit_row_bytes} B of output rows)"
         )
 
     num_cores, all_cores, units_g1, units_g2, assignment = split_units(worker_grid(input_tensor.device()), tensor_units)
 
     block_h = min(units_g1, block_cap)
-    if BLOCK_PAGES is not None:
-        block_h = min(block_h, _div_up(BLOCK_PAGES, pages_per_unit))
+    if block_pages_knob is not None:
+        block_h = min(block_h, _div_up(block_pages_knob, pages_per_unit))
     if BLOCK_H_LIMIT is not None:
         block_h = min(block_h, BLOCK_H_LIMIT)
     assert block_h >= 1
 
+    block_pages = block_h * pages_per_unit
     alt_share, bank_major, num_banks, chunk_pages = read_plan(
-        input_tensor, block_h * pages_per_unit, READ_ALT_NOC_SHARE, BANK_MAJOR, BANK_RUN_ROUNDS
+        input_tensor,
+        block_pages,
+        COALESCED_ALT_NOC_SHARE if coalesced else READ_ALT_NOC_SHARE,
+        BANK_MAJOR and not coalesced,
+        BANK_RUN_ROUNDS,
     )
     max_blocks_per_core = _div_up(units_g1, block_h)
 
-    core_roles = {f"{c.x},{c.y}": f"{REGIME} reader+writer units (n, c, h) [{s}, {s + n})" for c, s, n in assignment}
+    staging_rounds = staging_depth = 0
+    if coalesced:
+        # Every block starts at a unit boundary: a whole bank round when pages_per_unit is one.
+        first_bank_max = 0 if pages_per_unit % num_banks == 0 else num_banks - 1
+        staging_rounds = (first_bank_max + block_pages - 1) // num_banks + 1
+        staging_depth = min(STAGING_DEPTH, max_blocks_per_core)
+
+    regime = REGIME_COALESCED if coalesced else REGIME
+    core_roles = {f"{c.x},{c.y}": f"{regime} reader+writer units (n, c, h) [{s}, {s + n})" for c, s, n in assignment}
 
     return BlocksPlan(
-        regime=REGIME,
+        regime=regime,
         num_cores=num_cores,
         tensor_units=tensor_units,
         units_per_core_g1=units_g1,
@@ -167,12 +235,27 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
         out_row_bytes=out_row_bytes,
         read_alt_share=alt_share,
         num_banks=num_banks,
-        bank_stagger=BANK_STAGGER,
+        bank_stagger=COALESCED_BANK_STAGGER if coalesced else BANK_STAGGER,
         bank_major=bank_major,
         chunk_pages=chunk_pages,
+        page_stride=page_stride,
+        coalesced=coalesced,
+        staging_rounds=staging_rounds,
+        staging_depth=staging_depth,
         all_cores=all_cores,
         assignment=assignment,
     )
+
+
+def _coalesced_reads(buffer_type, coalesced_cap):
+    """The read mode: READ_MODE, or under "auto" the measured choice for the placement, when one
+    coalesced unit fits the L1 budget."""
+    if READ_MODE == "gather":
+        return False
+    if READ_MODE == "coalesced":
+        return True
+    assert READ_MODE == "auto", f"READ_MODE {READ_MODE!r}"
+    return buffer_type in COALESCED_BUFFERS and coalesced_cap >= 1
 
 
 def read_plan(input_tensor, block_pages, alt_noc_share, bank_major, bank_run_rounds):
@@ -188,10 +271,17 @@ def read_plan(input_tensor, block_pages, alt_noc_share, bank_major, bank_run_rou
     return alt_share, bank_major and dram_input, num_banks, _align_up(chunk_pages, num_banks)
 
 
-def reader_descriptor(plan, input_tensor, block_units, pages_per_unit, units_per_row, tail_pages, core_starts):
+def reader_descriptor(
+    plan, input_tensor, block_units, pages_per_unit, units_per_row, tail_pages, core_starts, staging=None
+):
     """The shared ROW_MAJOR reader (g6_permute_blocks_reader.cpp) for a plan carrying the read_plan
     fields. Blocks are block_units units of pages_per_unit pages, except the last unit of each row of
-    units_per_row, which holds tail_pages. core_starts: [(core, start_page, num_units, row_pos)]."""
+    units_per_row, which holds tail_pages. core_starts: [(core, start_page, num_units, row_pos)].
+    staging: None for one read per page, or (staging_rounds, staging_depth, page_stride) for
+    bank-coalesced reads through CB_BANK_STAGING."""
+    coalesced_args = (
+        [0, CB_BANK_STAGING, 0, 0, plan.slot_bytes] if staging is None else [1, CB_BANK_STAGING, *staging]
+    )
     ct_args = [
         CB_INPUT_SLOTS,
         block_units,
@@ -205,6 +295,7 @@ def reader_descriptor(plan, input_tensor, block_units, pages_per_unit, units_per
         plan.chunk_pages,
         units_per_row,
         tail_pages,
+        *coalesced_args,
         *ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
     ]
     rt_args = ttnn.RuntimeArgs()
@@ -241,7 +332,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
     descriptor is re-dispatched by patching them; everything else is fixed per plan."""
     N, C, H, W, I, J = plan.shape
     assert output_tensor.buffer_page_size() == plan.out_page_bytes
-    unit_slot_bytes = W * I * plan.slot_bytes
+    unit_slot_bytes = W * I * plan.page_stride
     unit_row_bytes = I * J * plan.out_row_bytes
 
     cbs = [
@@ -264,6 +355,21 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
             ],
         ),
     ]
+    staging = None
+    if plan.coalesced:
+        stage_bytes = plan.num_banks * plan.staging_rounds * plan.slot_bytes
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=plan.staging_depth * stage_bytes,
+                core_ranges=plan.all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_BANK_STAGING, data_format=input_tensor.dtype, page_size=stage_bytes
+                    )
+                ],
+            )
+        )
+        staging = (plan.staging_rounds, plan.staging_depth, plan.page_stride)
 
     writer_ct_args = [
         CB_INPUT_SLOTS,
@@ -273,7 +379,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         W,
         I,
         J,
-        plan.slot_bytes,
+        plan.page_stride,
         plan.out_page_bytes,
         plan.out_row_bytes,
         *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
@@ -292,6 +398,7 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         1,
         W * I,
         [(core, start * W * I, count, 0) for core, start, count in plan.assignment],
+        staging,
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_permute_blocks_writer.cpp"),

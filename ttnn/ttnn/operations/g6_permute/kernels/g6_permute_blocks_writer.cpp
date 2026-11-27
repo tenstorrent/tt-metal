@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_permute writer (blocks_rm_gather): gather_block + write_block.
+// g6_permute writer (blocks_rm_gather, blocks_rm_bank_coalesced): gather_block + write_block.
 // out[n, c, i, h, j, w] = x[n, c, h, w, i, j]. Per unit (n, c, h) the reader's slots hold the
-// [W, I, J] values (slot (w, i) = one input page of J values); the gather moves them into I * J
+// [W, I, J] values (page (w, i) = J values, page_stride apart); the gather moves them into I * J
 // output rows of W values in cb_output_rows (g6_permute_rm_transpose.hpp), and each row goes to
 // output page p_out = ((n * C + c) * I + i) * H * J + h * J + j.
 // cb_output_rows is this kernel's private staging area: it is never pushed or popped.
@@ -20,12 +20,13 @@ constexpr uint32_t tensor_h = get_compile_time_arg_val(3);
 constexpr uint32_t tensor_w = get_compile_time_arg_val(4);
 constexpr uint32_t tensor_i = get_compile_time_arg_val(5);
 constexpr uint32_t tensor_j = get_compile_time_arg_val(6);
-constexpr uint32_t slot_bytes = get_compile_time_arg_val(7);
+// Byte distance of consecutive input pages in cb_input_slots.
+constexpr uint32_t page_stride = get_compile_time_arg_val(7);
 constexpr uint32_t out_page_bytes = get_compile_time_arg_val(8);
 constexpr uint32_t out_row_bytes = get_compile_time_arg_val(9);
 constexpr auto output_args = TensorAccessorArgs<10>();
 
-constexpr uint32_t unit_slot_bytes = tensor_w * tensor_i * slot_bytes;
+constexpr uint32_t unit_slot_bytes = tensor_w * tensor_i * page_stride;
 constexpr uint32_t unit_row_bytes = tensor_i * tensor_j * out_row_bytes;
 // Output pages of consecutive i of one unit are this far apart.
 constexpr uint32_t i_page_stride = tensor_h * tensor_j;
@@ -36,8 +37,8 @@ static_assert(out_row_bytes >= out_page_bytes);
 // Per i, the [W, J] values of slots (w, i) become rows (i, j).
 FORCE_INLINE void gather_unit(uint32_t src_unit, uint32_t dst_unit) {
     for (uint32_t i = 0; i < tensor_i; ++i) {
-        g6_permute::transpose_pages<tensor_w, tensor_j, tensor_i * slot_bytes, out_row_bytes>(
-            src_unit + i * slot_bytes, dst_unit + i * tensor_j * out_row_bytes);
+        g6_permute::transpose_pages<tensor_w, tensor_j, tensor_i * page_stride, out_row_bytes>(
+            src_unit + i * page_stride, dst_unit + i * tensor_j * out_row_bytes);
     }
 }
 
