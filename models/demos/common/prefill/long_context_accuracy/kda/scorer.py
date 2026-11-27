@@ -40,13 +40,10 @@ from models.demos.common.prefill.long_context_accuracy.acceptance_bars import Ac
 from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, MetricTiers
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
-    C_XY,
-    COUNT,
-    MEAN_X,
-    MEAN_Y,
     SUM_EE,
     SUM_YY,
     WindowedErrors,
+    cross_sums,
     errors,
     pcc,
     row_sums,
@@ -64,7 +61,8 @@ def _sqrt_ratio(num: float, den: float) -> float:
     return math.sqrt(num / den) if den > 0 else math.inf
 
 
-def _nrmse(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+def ratio_nrmse(num: np.ndarray, den: np.ndarray) -> np.ndarray:
+    """Elementwise ``sqrt(Σe² / Σyy)`` of summed squared errors ``num`` and golden squares ``den``."""
     with np.errstate(divide="ignore", invalid="ignore"):
         return np.sqrt(num / den)
 
@@ -105,8 +103,8 @@ def kda_tiers(
     token_nrmse = torch.where(error == 0, torch.zeros_like(error), error / yy.sqrt().clamp_min(floor)).numpy()
 
     s = state_sums
-    head = _nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
-    pooled = _nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
+    head = ratio_nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
+    pooled = ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
     final_gain = s[-1, :, 2] / s[-1, :, 1]
     heads = list(range(s.shape[1]))
     head_gain = _tail("state_head_gain_final", np.abs(final_gain - 1), heads)
@@ -135,11 +133,6 @@ def kda_tiers(
             }
         ],
     }
-
-
-def cross_sums(sums: torch.Tensor) -> torch.Tensor:
-    """Σxy per row of ``windowed_errors.row_sums``: Σ(x − x̄)(y − ȳ) + n·x̄·ȳ."""
-    return sums[:, C_XY] + sums[:, COUNT] * sums[:, MEAN_X] * sums[:, MEAN_Y]
 
 
 class KdaScorer:

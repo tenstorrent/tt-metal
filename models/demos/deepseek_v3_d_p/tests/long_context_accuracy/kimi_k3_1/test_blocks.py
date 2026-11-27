@@ -72,7 +72,7 @@ def test_a_moe_weight_digest_mismatch_fails_before_device_work(tmp_path, monkeyp
 # ==== end of MoE ====================================================================================================
 
 # ==== DSA (m06n.11.5) ===============================================================================================
-# isort: off
+# isort: split
 import math
 
 import torch
@@ -83,8 +83,6 @@ from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases im
     DSA_DIMS,
     dsa_context_bars,
 )
-
-# isort: on
 
 
 def test_dsa_selection_readback_marks_the_no_key_sentinel() -> None:

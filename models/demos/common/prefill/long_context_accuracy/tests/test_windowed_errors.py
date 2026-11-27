@@ -11,6 +11,7 @@ from models.demos.common.prefill.long_context_accuracy.acceptance_bars import Ac
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     WindowedErrors,
     errors,
+    gain,
     nrmse,
     pcc,
     quantile,
@@ -156,3 +157,11 @@ def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -
         series.add_events("misses", row=torch.tensor([1, 2]), rank=torch.tensor([3]))
     with expect_error(ValueError, "no rows accumulated"):
         WindowedErrors().windows(2, dict)
+
+
+def test_gain_by_hand() -> None:
+    y = torch.tensor([[1.0, 3.0], [2.0, -2.0]], dtype=torch.float64)
+    assert gain(row_sums(y, 2 * y)) == pytest.approx(2.0)
+    # x = y + 1 on row 0: Σxy = 1*2 + 3*4 + 2*2 + (-2)(-2) = 22, Σyy = 1 + 9 + 4 + 4 = 18
+    x = y + torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float64)
+    assert gain(row_sums(y, x)) == pytest.approx(22 / 18)

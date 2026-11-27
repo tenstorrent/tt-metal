@@ -35,13 +35,10 @@ from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.moe.routing_error import routing_rows
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
-    C_XY,
-    COUNT,
-    MEAN_X,
-    MEAN_Y,
     SUM_YY,
     Window,
     WindowedErrors,
+    gain,
     golden_floor,
     nrmse,
     quantile,
@@ -91,13 +88,6 @@ def measure(floor: float) -> Callable[[Window], dict]:
         }
 
     return of
-
-
-def gain(sums: torch.Tensor) -> float:
-    """The least-squares gain of the device rows on the golden's, ⟨x, y⟩ / ⟨y, y⟩, from ``row_sums`` (per row
-    Σxy = Σ(x − x̄)(y − ȳ) + n x̄ ȳ)."""
-    xy = sums[:, C_XY] + sums[:, COUNT] * sums[:, MEAN_X] * sums[:, MEAN_Y]
-    return float(xy.sum() / sums[:, SUM_YY].sum())
 
 
 class MoeScorer:

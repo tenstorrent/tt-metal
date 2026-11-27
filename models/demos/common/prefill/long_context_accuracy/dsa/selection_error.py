@@ -41,18 +41,3 @@ def selection_masses(
         "intruder_mass": got_weights[:, intruder].sum(-1),
         "missed_key_max": float(want_weights[:, missed].max()) if n else 0.0,
     }
-
-
-def error_split(want: torch.Tensor, want_on_got_sel: torch.Tensor, got: torch.Tensor) -> dict[str, float]:
-    """Split a device output's error ``got − want`` into the selection part ``want_on_got_sel − want`` (the
-    reference attention over the device's selection) and the rest ``got − want_on_got_sel``: their cosine (0 when a
-    part is zero, e.g. identical selections) and each part's share of the squared error (the shares plus the cross
-    term ``2 cos |sel| |rest| / |total|²`` sum to one)."""
-    sel, rest = want_on_got_sel - want, got - want_on_got_sel
-    total = float((got - want).square().sum())
-    norms = float(sel.norm() * rest.norm())
-    return {
-        "selection_rest_cos": float(sel @ rest) / norms if norms else 0.0,
-        "selection_share": float(sel.square().sum()) / total,
-        "rest_share": float(rest.square().sum()) / total,
-    }

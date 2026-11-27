@@ -46,7 +46,12 @@ import torch
 from safetensors import safe_open
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, token_ids_sha256
-from models.demos.common.prefill.long_context_accuracy.kda.scorer import TAIL_PERCENTILES, WINDOW, kda_tiers
+from models.demos.common.prefill.long_context_accuracy.kda.scorer import (
+    TAIL_PERCENTILES,
+    WINDOW,
+    kda_tiers,
+    ratio_nrmse,
+)
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, state_after
@@ -115,11 +120,6 @@ def golden_token_floor(golden_dir: Path) -> float:
     return golden_floor(torch.cat(norms))
 
 
-def _nrmse(num: np.ndarray, den: np.ndarray) -> np.ndarray:
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.sqrt(num / den)
-
-
 def load_run(run_dir: Path) -> dict:
     """A run's finished calls and its token floor (from ``run.json``, else from the golden it names)."""
     run_dir = Path(run_dir)
@@ -174,11 +174,11 @@ def analyze(run: dict) -> dict:
         "tiers": tiers(t, s, run["state_tokens"], run["token_floor"]),
         "series": {
             "window": WINDOW,
-            "window_nrmse": _nrmse(window_sums[:, 0], window_sums[:, 1]).tolist(),
+            "window_nrmse": ratio_nrmse(window_sums[:, 0], window_sums[:, 1]).tolist(),
             "state_tokens": run["state_tokens"],
-            "state_pooled": _nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1)).tolist(),
+            "state_pooled": ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1)).tolist(),
             "state_pooled_gain": (s[..., 2].sum(-1) / s[..., 1].sum(-1)).tolist(),
-            "state_head_nrmse": _nrmse(s[..., 0], s[..., 1]).tolist(),
+            "state_head_nrmse": ratio_nrmse(s[..., 0], s[..., 1]).tolist(),
         },
     }
 

@@ -141,7 +141,7 @@ class KimiK31MoeBlock:
 # ==== end of MoE ====================================================================================================
 
 # ==== DSA: KimiK31DsaBlock (m06n.11.5) ==============================================================================
-# isort: off
+# isort: split
 import torch
 
 import ttnn
@@ -149,8 +149,6 @@ from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
-
-# isort: on
 
 
 def device_selection(topk: torch.Tensor) -> torch.Tensor:

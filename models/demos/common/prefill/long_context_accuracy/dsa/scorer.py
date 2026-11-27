@@ -46,14 +46,11 @@ from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
-    C_XY,
-    COUNT,
-    MEAN_X,
-    MEAN_Y,
     SUM_YY,
     Window,
     WindowedErrors,
     errors,
+    gain,
     golden_floor,
     nrmse,
     quantile,
@@ -122,13 +119,6 @@ def scored_rows(rows: int, sampled: torch.Tensor, topk: int, per_window: int = R
         n = max(1, round(per_window * (hi - lo) / WINDOW))
         picked.append(torch.linspace(lo, hi - 1, min(n, hi - lo)).round().long())
     return torch.cat(picked).unique()
-
-
-def gain(sums: torch.Tensor) -> float:
-    """Least-squares gain ``Σxy / Σyy`` of the device values x on the golden y over the rows of ``sums``; Σxy per row
-    from its centred moment and means."""
-    sum_xy = sums[:, C_XY] + sums[:, COUNT] * sums[:, MEAN_X] * sums[:, MEAN_Y]
-    return float(sum_xy.sum() / sums[:, SUM_YY].sum())
 
 
 def measure(window: Window, floor: float, topk: int) -> dict:

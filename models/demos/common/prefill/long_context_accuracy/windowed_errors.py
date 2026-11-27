@@ -93,6 +93,16 @@ def pcc(sums: torch.Tensor) -> float:
     return c_xy / math.sqrt(m2_x * m2_y)
 
 
+def cross_sums(sums: torch.Tensor) -> torch.Tensor:
+    """Σxy per row of ``row_sums``: Σ(x − x̄)(y − ȳ) + n·x̄·ȳ."""
+    return sums[:, C_XY] + sums[:, COUNT] * sums[:, MEAN_X] * sums[:, MEAN_Y]
+
+
+def gain(sums: torch.Tensor) -> float:
+    """The least-squares gain ``Σxy / Σyy`` of the device values x on the golden y over the rows of ``sums``."""
+    return float(cross_sums(sums).sum() / sums[:, SUM_YY].sum())
+
+
 # A golden's per-row NRMSE floor is this fraction of its median row norm (``golden_floor``).
 NRMSE_FLOOR_FRACTION = 0.01
 

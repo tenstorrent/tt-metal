@@ -15,7 +15,6 @@ from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS
 from models.demos.common.prefill.long_context_accuracy.dsa import fp64_attention as fa
 from models.demos.common.prefill.long_context_accuracy.dsa import scorer as ds
 from models.demos.common.prefill.long_context_accuracy.tests.test_dsa_fp64_attention import attend, small_case
-from models.demos.common.prefill.long_context_accuracy.windowed_errors import row_sums
 
 F64 = torch.float64
 NAMES = ds.GoldenNames(
@@ -42,14 +41,6 @@ def test_scored_rows() -> None:
 def test_future_keys() -> None:
     # rows 2 and 3: row 2 selects key 5 (future), row 3 selects keys 0..3 (none in its future)
     assert ds.future_keys(torch.tensor([[0, 1, 5], [0, 3, -1]]), 2).tolist() == [1, 0]
-
-
-def test_gain_by_hand() -> None:
-    y = torch.tensor([[1.0, 3.0], [2.0, -2.0]], dtype=F64)
-    assert ds.gain(row_sums(y, 2 * y)) == pytest.approx(2.0)
-    # x = y + 1 on row 0: Σxy = 1*2 + 3*4 + 2*2 + (-2)(-2) = 22, Σyy = 1 + 9 + 4 + 4 = 18
-    x = y + torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=F64)
-    assert ds.gain(row_sums(y, x)) == pytest.approx(22 / 18)
 
 
 class StubGolden:
