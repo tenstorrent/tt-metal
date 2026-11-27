@@ -66,8 +66,8 @@ enum class EntryType : std::uint32_t
 
 constexpr std::uint32_t TRISC_ID = llk_barrier::THREAD_ID;
 
-constexpr std::uint32_t BUFFER_LENGTH = 0x400; // 1024 entries per core
-constexpr std::uint32_t ZONE_WORDS    = 4;     // words a zone writes on scope exit: its ZONE_START and ZONE_END
+constexpr std::uint32_t BUFFER_LENGTH  = 0x400; // 1024 entries per core
+constexpr std::uint32_t ZONE_END_WORDS = 2;     // words written per ZONE_END on scope exit
 // Quasar: 4 TRISCs (UNPACK, MATH, PACK, SFPU); Wormhole/Blackhole: 3 TRISCs
 #if defined(ARCH_QUASAR)
 constexpr std::uint32_t NUM_CORES   = 4;
@@ -116,8 +116,9 @@ __attribute__((always_inline)) inline bool is_buffer_full()
     return (BUFFER_LENGTH - (write_idx + reserved_words_count)) < 4;
 }
 
-__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16, std::uint64_t timestamp)
+__attribute__((always_inline)) inline void write_entry(EntryType type, std::uint16_t id16)
 {
+    std::uint64_t timestamp      = ckernel::read_wall_clock();
     std::uint32_t timestamp_high = static_cast<std::uint32_t>(timestamp >> 32);
 
     std::uint32_t type_numeric = static_cast<std::uint32_t>(type);
@@ -137,8 +138,7 @@ template <std::uint16_t id16>
 class zone_scoped
 {
 private:
-    bool is_opened                = false;
-    std::uint64_t start_timestamp = 0;
+    bool is_opened = false;
 
 public:
     zone_scoped(const zone_scoped&)            = delete;
@@ -152,9 +152,8 @@ public:
         if (!is_buffer_full())
         {
             is_opened = true;
-            reserved_words_count += ZONE_WORDS;
-            ckernel::fence_compiler(); // the bookkeeping stores stay before the start read
-            start_timestamp = ckernel::read_wall_clock();
+            write_entry(EntryType::ZONE_START, id16);
+            reserved_words_count += ZONE_END_WORDS;
         }
         ckernel::fence_compiler();
     }
@@ -164,12 +163,10 @@ public:
         ckernel::fence_compiler();
         if (is_opened)
         {
-            const std::uint64_t end_timestamp = ckernel::read_wall_clock();
-            ckernel::fence_compiler(); // both records are written after the end read, so no store lands in the window
-            reserved_words_count -= ZONE_WORDS;
-            write_entry(EntryType::ZONE_START, id16, start_timestamp);
-            write_entry(EntryType::ZONE_END, id16, end_timestamp);
+            write_entry(EntryType::ZONE_END, id16);
+            reserved_words_count -= ZONE_END_WORDS;
         }
+        ckernel::fence_compiler();
     }
 };
 
@@ -177,7 +174,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16)
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP, id16, ckernel::read_wall_clock());
+        write_entry(EntryType::TIMESTAMP, id16);
     }
 }
 
@@ -185,7 +182,7 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 {
     if (!is_buffer_full())
     {
-        write_entry(EntryType::TIMESTAMP_DATA, id16, ckernel::read_wall_clock());
+        write_entry(EntryType::TIMESTAMP_DATA, id16);
         write_data(data);
     }
 }

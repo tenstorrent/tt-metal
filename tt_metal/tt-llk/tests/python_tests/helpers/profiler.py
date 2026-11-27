@@ -499,8 +499,7 @@ class Profiler:
     @staticmethod
     def _parse_thread(thread, words, profiler_meta) -> list[dict]:
         rows = []
-        # A zone writes its ZONE_START and ZONE_END together at scope exit, so a start is always closed by the next entry.
-        open_zone = None
+        zone_stack = []
 
         word_stream = iter(words)
         for word in word_stream:
@@ -536,36 +535,29 @@ class Profiler:
                     )
 
                 case EntryType.ZONE_START:
-                    if open_zone is not None:
-                        raise ValueError(
-                            f"ZONE_START for marker '{marker.marker}' (id={marker_id}) "
-                            f"on thread '{thread}' follows ZONE_START '{open_zone[MARKER]}' "
-                            f"(id={open_zone['marker_id']}) with no ZONE_END between them. "
-                            f"Possible buffer corruption."
-                        )
-                    open_zone = Profiler._row(
-                        thread, "ZONE_START", marker, timestamp, pd.NA
+                    zone_stack.append(
+                        Profiler._row(thread, "ZONE_START", marker, timestamp, pd.NA)
                     )
 
                 case EntryType.ZONE_END:
-                    if open_zone is None:
+                    if not zone_stack:
                         raise ValueError(
                             f"ZONE_END for marker '{marker.marker}' (id={marker_id}) "
                             f"on thread '{thread}' at timestamp {timestamp} has no "
                             f"matching ZONE_START. Possible buffer corruption."
                         )
-                    if open_zone["marker_id"] != marker.id:
+                    start_row = zone_stack.pop()
+                    if start_row["marker_id"] != marker.id:
                         raise ValueError(
                             f"ZONE_END marker '{marker.marker}' (id={marker.id}) "
                             f"does not match ZONE_START marker "
-                            f"'{open_zone[MARKER]}' (id={open_zone['marker_id']}) "
-                            f"on thread '{thread}'. Possible buffer corruption."
+                            f"'{start_row[MARKER]}' (id={start_row['marker_id']}) "
+                            f"on thread '{thread}'. Possible nested zone mismatch."
                         )
-                    rows.append(open_zone)
+                    rows.append(start_row)
                     rows.append(
                         Profiler._row(thread, "ZONE_END", marker, timestamp, pd.NA)
                     )
-                    open_zone = None
 
         return rows
 
