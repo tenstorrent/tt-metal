@@ -25,7 +25,7 @@
 - **Compute config**: none. No compute kernel, and the spec forbids `compute_kernel_config`.
 - **Golden baseline**: 79 / 80 supported cells pass. The 1 failure is the harness NaN-oracle defect above. 86 cells are xfail_expected. Drift and wrong-mode counts are 0.
 
-### [ ] Refinement 1 — dtypes float32 + bfloat8_b, interleaved L1 / mixed placement
+### [x] Refinement 1 — dtypes float32 + bfloat8_b, interleaved L1 / mixed placement
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"l1"` and `"mixed"` to `SUPPORTED["input_buffer"]`, and `"l1"` to `SUPPORTED["output_buffer"]`. Each input is read in its own buffer and the output is written where `memory_config` names. This moves 49 xfail cells to passing:
 - 40 fp32 INPUTS cells;

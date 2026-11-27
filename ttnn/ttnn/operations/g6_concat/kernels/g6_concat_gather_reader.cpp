@@ -6,10 +6,11 @@
 // is assembled in its cb_output_pages slot from row-range reads of the inputs whose rows land in
 // it; only logical input rows are read, each exactly once.
 //
-// Per block: gather_fetch_block issues every piece's DRAM read, directly into the output slot when
-// the source and destination agree modulo the DRAM read alignment, otherwise into the same offset
-// (+shift) of a cb_gather_staging mirror slot. gather_place_block then moves the staged pieces to
-// their slots with self-aimed L1 -> L1 reads (L1 alignment, always legal).
+// Per block: gather_fetch_block issues every piece's read, directly into the output slot when the
+// source and destination agree modulo the input's NoC read alignment (DRAM 64 B on Blackhole, L1
+// 16 B), otherwise into the same offset (+shift) of a cb_gather_staging mirror slot.
+// gather_place_block then moves the staged pieces to their slots with self-aimed L1 -> L1 reads
+// (L1 alignment, always legal).
 //
 // Raw NoC reads: no kernel_lib helper copies runtime-sized row ranges; local_addr() from
 // local_copy_helpers_dataflow.hpp builds the self-aimed source (set_read_state fixes the size at
@@ -20,6 +21,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
+#include "g6_concat_input_placement.hpp"
 #include "g6_concat_tile_rows.hpp"
 
 namespace {
@@ -149,12 +151,20 @@ void kernel_main() {
     constexpr bool has_staging = get_compile_time_arg_val(2) != 0;
     constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t face_row_bytes = get_compile_time_arg_val(4);
-    constexpr auto input_args = TensorAccessorArgs<5>();
+    constexpr uint32_t input_l1_mask_lo = get_compile_time_arg_val(5);
+    constexpr uint32_t input_l1_mask_hi = get_compile_time_arg_val(6);
+    using DramInputArgs = TensorAccessorArgs<7>;
+    using L1InputArgs = TensorAccessorArgs<DramInputArgs::next_compile_time_args_offset()>;
+    using Inputs = g6_concat::InputPlacement<input_l1_mask_lo, input_l1_mask_hi, DramInputArgs, L1InputArgs>;
 
-    // Inputs are DRAM-interleaved; every piece whose shift is non-zero needs the staging mirror.
-    constexpr uint32_t input_read_alignment = NOC_DRAM_READ_ALIGNMENT_BYTES;
-    static_assert(has_staging || face_row_bytes % input_read_alignment == 0, "row shifts need cb_gather_staging");
-    static_assert(page_bytes % input_read_alignment == 0, "slot addresses must keep the CB base alignment");
+    // Face rows are 16 B-aligned, so only DRAM pieces can be misaligned and need the staging mirror.
+    static_assert(face_row_bytes % NOC_L1_READ_ALIGNMENT_BYTES == 0, "L1 pieces are always direct");
+    static_assert(
+        has_staging || !Inputs::has_dram_inputs || face_row_bytes % NOC_DRAM_READ_ALIGNMENT_BYTES == 0,
+        "row shifts of DRAM inputs need cb_gather_staging");
+    // CB bases are DRAM-aligned; slots keep that alignment for every input placement.
+    constexpr uint32_t slot_alignment = NOC_DRAM_READ_ALIGNMENT_BYTES;
+    static_assert(page_bytes % slot_alignment == 0, "slot addresses must keep the CB base alignment");
 
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t core_pages = get_arg_val<uint32_t>(1);
@@ -171,7 +181,7 @@ void kernel_main() {
         start_tile_row_global / geom.out_ht, start_tile_row_global % geom.out_ht, start_page % geom.out_wt};
 
     const uint32_t staging_base = has_staging ? get_write_ptr(cb_gather_staging) : 0;
-    ASSERT(staging_base % input_read_alignment == 0);
+    ASSERT(staging_base % slot_alignment == 0);
 
     Noc noc;
     UnicastEndpoint self_endpoint;
@@ -187,28 +197,33 @@ void kernel_main() {
             cb_reserve_back(cb_output_pages, block_pages);
         }
         const uint32_t slots_base = get_write_ptr(cb_output_pages);
-        ASSERT(slots_base % input_read_alignment == 0);
+        ASSERT(slots_base % slot_alignment == 0);
 
         {
             DeviceZoneScopedN("G6C-FETCH");
             // gather_fetch_block: piece-major, page-minor, so both offsets stay fixed across a sweep.
             cursor.for_each_segment(geom, block_extent, [&](const Segment& seg) {
                 for_each_row_piece(geom, seg, [&](const RowPiece& piece) {
-                    const auto input = TensorAccessor(input_args, input_base_address(piece.input_idx), page_bytes);
                     const uint32_t piece_bytes = piece.num_rows * face_row_bytes;
-                    for (uint32_t face_col = 0; face_col < FACE_COLS_PER_TILE; ++face_col) {
-                        const uint32_t src_off = g6_concat::face_offset<face_row_bytes>(piece.src_row, face_col);
-                        const uint32_t dst_off = g6_concat::face_offset<face_row_bytes>(piece.dst_row, face_col);
-                        const uint32_t shift = (src_off - dst_off) % input_read_alignment;
-                        uint32_t dst_addr =
-                            (shift == 0 ? slots_base : staging_base) + seg.first_slot * page_bytes + dst_off + shift;
-                        uint32_t input_page = piece.input_row_first_page + seg.first_col;
-                        for (uint32_t col = 0; col < seg.num_cols; ++col) {
-                            noc_async_read(input.get_noc_addr(input_page, src_off), dst_addr, piece_bytes);
-                            ++input_page;
-                            dst_addr += page_bytes;
-                        }
-                    }
+                    const uint32_t alignment_mask = Inputs::read_alignment(piece.input_idx) - 1;
+                    Inputs::with_accessor(
+                        piece.input_idx, input_base_address(piece.input_idx), page_bytes, [&](const auto& input) {
+                            for (uint32_t face_col = 0; face_col < FACE_COLS_PER_TILE; ++face_col) {
+                                const uint32_t src_off =
+                                    g6_concat::face_offset<face_row_bytes>(piece.src_row, face_col);
+                                const uint32_t dst_off =
+                                    g6_concat::face_offset<face_row_bytes>(piece.dst_row, face_col);
+                                const uint32_t shift = (src_off - dst_off) & alignment_mask;
+                                uint32_t dst_addr = (shift == 0 ? slots_base : staging_base) +
+                                                    seg.first_slot * page_bytes + dst_off + shift;
+                                uint32_t input_page = piece.input_row_first_page + seg.first_col;
+                                for (uint32_t col = 0; col < seg.num_cols; ++col) {
+                                    noc_async_read(input.get_noc_addr(input_page, src_off), dst_addr, piece_bytes);
+                                    ++input_page;
+                                    dst_addr += page_bytes;
+                                }
+                            }
+                        });
                 });
             });
             noc_async_read_barrier();
@@ -220,10 +235,11 @@ void kernel_main() {
             cursor.for_each_segment(geom, block_extent, [&](const Segment& seg) {
                 for_each_row_piece(geom, seg, [&](const RowPiece& piece) {
                     const uint32_t piece_bytes = piece.num_rows * face_row_bytes;
+                    const uint32_t alignment_mask = Inputs::read_alignment(piece.input_idx) - 1;
                     for (uint32_t face_col = 0; face_col < FACE_COLS_PER_TILE; ++face_col) {
                         const uint32_t src_off = g6_concat::face_offset<face_row_bytes>(piece.src_row, face_col);
                         const uint32_t dst_off = g6_concat::face_offset<face_row_bytes>(piece.dst_row, face_col);
-                        const uint32_t shift = (src_off - dst_off) % input_read_alignment;
+                        const uint32_t shift = (src_off - dst_off) & alignment_mask;
                         if (shift == 0) {
                             continue;
                         }

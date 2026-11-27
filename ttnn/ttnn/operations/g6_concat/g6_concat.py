@@ -78,12 +78,12 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "concat_dim": ["outer", "h", "w"],
     "alignment": ["tile_aligned", "h_non_aligned"],
-    "input_buffer": ["dram"],
-    "output_buffer": ["dram"],
+    "input_buffer": ["dram", "l1", "mixed"],
+    "output_buffer": ["dram", "l1"],
 }
 
 
@@ -91,7 +91,11 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # row_gather_bfp8 (deferred regime): bfloat8_b keeps one exponent byte per face row in the page
+    # header, which the NoC cannot place at an unaligned row offset.
+    {"dtype": ttnn.bfloat8_b, "concat_dim": "h", "alignment": "h_non_aligned"},
+]
 
 
 PROPERTIES = {

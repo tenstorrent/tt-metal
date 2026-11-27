@@ -41,8 +41,10 @@ def blocking_knobs():
 
 
 # --- Mechanism caps --------------------------------------------------------------------------------
-# Two common runtime words per input share the 341-word per-kernel runtime-arg space.
+# Two common runtime words per input share the 341-word per-kernel runtime-arg space; the per-input
+# L1 placement mask is two CT words (32 inputs each).
 K_MAX = 64
+PLACEMENT_MASK_WORDS = 2
 # L1 the model leaves to the op on every core (BB-05).
 L1_OP_BUDGET = 1347776
 
@@ -125,6 +127,7 @@ class G6ConcatPlan:
     has_staging: bool
     cb_output_bytes: int
     cb_staging_bytes: int
+    out_l1_per_bank: int
     l1_total: int
     pages_per_slice: list  # page_copy only: C_k
     num_slices: int  # page_copy only: O
@@ -139,6 +142,7 @@ class G6ConcatPlan:
             "depth": self.depth,
             "cb_output_pages_bytes": self.cb_output_bytes,
             "cb_gather_staging_bytes": self.cb_staging_bytes,
+            "out_l1_per_bank": self.out_l1_per_bank,
             "l1_total": self.l1_total,
             "cores": [
                 {
@@ -209,15 +213,19 @@ def build_plan(tensors, d, output_memory_config, device):
     block_pages_cap = max(1, BLOCK_BYTES_CAP // page_bytes)
     block_pages = min(pages_most_loaded_core, block_pages_cap)
 
+    # L1 pieces are always read-aligned (16 B), so only DRAM inputs can need the staging mirror.
     any_dram_input = any(t.memory_config().buffer_type == ttnn.BufferType.DRAM for t in tensors)
     has_staging = regime == "row_gather" and any_dram_input and face_row_bytes % ttnn.get_dram_alignment() != 0
 
     cb_output_bytes = OUTPUT_PAGES_DEPTH * block_pages * page_bytes
     # One mirror slot per page of the block, plus one page of slack for the shift past the last slot.
     cb_staging_bytes = (block_pages + 1) * page_bytes if has_staging else 0
-    # An L1 output adds its per-bank bytes to this total; validate() admits DRAM outputs only.
-    assert output_memory_config.buffer_type == ttnn.BufferType.DRAM
-    l1_total = cb_output_bytes + cb_staging_bytes
+    # An L1 output shares every bank's L1 with the CBs (BB-05).
+    out_l1_per_bank = 0
+    if output_memory_config.buffer_type == ttnn.BufferType.L1:
+        num_l1_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
+        out_l1_per_bank = math.ceil(num_out_pages / num_l1_banks) * page_bytes
+    l1_total = cb_output_bytes + cb_staging_bytes + out_l1_per_bank
     if l1_total > L1_OP_BUDGET:
         raise RuntimeError(f"g6_concat: {l1_total} B of L1 per core exceeds the op budget of {L1_OP_BUDGET} B")
 
@@ -243,6 +251,7 @@ def build_plan(tensors, d, output_memory_config, device):
         has_staging=has_staging,
         cb_output_bytes=cb_output_bytes,
         cb_staging_bytes=cb_staging_bytes,
+        out_l1_per_bank=out_l1_per_bank,
         l1_total=l1_total,
         pages_per_slice=pages_per_slice,
         num_slices=num_slices,
@@ -304,14 +313,31 @@ class G6ConcatProgram:
         return self.descriptor
 
 
+def input_placement_ct_args(tensors):
+    """[l1_mask_lo, l1_mask_hi, *dram_accessor_ct, *l1_accessor_ct] (g6_concat_input_placement.hpp).
+
+    Bit k of the mask is set when input k is in L1. A buffer type no input uses repeats the other
+    type's accessor args, which tells the kernel that type is absent.
+    """
+    assert len(tensors) <= 32 * PLACEMENT_MASK_WORDS
+    by_type = {}
+    mask = 0
+    for k, t in enumerate(tensors):
+        buffer_type = t.memory_config().buffer_type
+        assert buffer_type in (ttnn.BufferType.DRAM, ttnn.BufferType.L1)
+        accessor_ct = ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        assert by_type.setdefault(buffer_type, accessor_ct) == accessor_ct, "inputs share page size and layout"
+        if buffer_type == ttnn.BufferType.L1:
+            mask |= 1 << k
+    dram_ct = by_type.get(ttnn.BufferType.DRAM, by_type.get(ttnn.BufferType.L1))
+    l1_ct = by_type.get(ttnn.BufferType.L1, dram_ct)
+    mask_words = [(mask >> (32 * w)) & 0xFFFFFFFF for w in range(PLACEMENT_MASK_WORDS)]
+    return mask_words + dram_ct + l1_ct
+
+
 def build_program(plan, tensors, output, program_hash):
     assert output.buffer_num_pages() == plan.num_out_pages
     assert output.buffer_page_size() == plan.page_bytes
-    input_accessor_ct = ttnn.TensorAccessorArgs(tensors[0]).get_compile_time_args()
-    for t in tensors[1:]:
-        assert (
-            ttnn.TensorAccessorArgs(t).get_compile_time_args() == input_accessor_ct
-        ), "inputs share one accessor; a per-input placement mask is needed for mixed buffers"
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -330,7 +356,7 @@ def build_program(plan, tensors, output, program_hash):
     else:
         reader_source = GATHER_READER_SOURCE
         reader_ct = [CB_OUTPUT_PAGES, CB_GATHER_STAGING, int(plan.has_staging), plan.page_bytes, plan.face_row_bytes]
-    reader_ct += input_accessor_ct
+    reader_ct += input_placement_ct_args(tensors)
 
     writer_ct = [CB_OUTPUT_PAGES, plan.page_bytes, plan.face_row_bytes, plan.trim_rows_max]
     writer_ct += ttnn.TensorAccessorArgs(output).get_compile_time_args()

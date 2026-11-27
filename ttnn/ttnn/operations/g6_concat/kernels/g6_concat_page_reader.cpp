@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "g6_concat_input_placement.hpp"
 #include "g6_concat_tile_rows.hpp"
 
 namespace {
@@ -33,6 +34,31 @@ FORCE_INLINE uint32_t input_pages_per_slice(uint32_t input_idx) {
     return get_common_arg_val<uint32_t>(CRTA_FIRST_INPUT + input_idx * CRTA_WORDS_PER_INPUT + 1);
 }
 
+// Reads run_pages consecutive pages of one input into consecutive slots.
+template <uint32_t page_bytes, uint32_t face_row_bytes, uint32_t trim_rows_max, typename Accessor>
+FORCE_INLINE void fetch_run(
+    const Accessor& input,
+    uint32_t input_page,
+    uint32_t run_pages,
+    uint32_t& slot_addr,
+    g6_concat::OutputRowCursor& rows) {
+    for (uint32_t page = 0; page < run_pages; ++page) {
+        const uint32_t valid_rows = rows.valid_rows();
+        if (g6_concat::is_trimmed(valid_rows, trim_rows_max)) {
+            // Source and destination offsets are identical, so the read stays alignment-legal.
+            g6_concat::for_each_valid_row_piece<face_row_bytes>(
+                valid_rows, [&](uint32_t offset_bytes, uint32_t size_bytes) {
+                    noc_async_read(input.get_noc_addr(input_page, offset_bytes), slot_addr + offset_bytes, size_bytes);
+                });
+        } else {
+            noc_async_read_page(input_page, input, slot_addr);
+        }
+        slot_addr += page_bytes;
+        rows.advance();
+        ++input_page;
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -40,7 +66,11 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t face_row_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t trim_rows_max = get_compile_time_arg_val(3);
-    constexpr auto input_args = TensorAccessorArgs<4>();
+    constexpr uint32_t input_l1_mask_lo = get_compile_time_arg_val(4);
+    constexpr uint32_t input_l1_mask_hi = get_compile_time_arg_val(5);
+    using DramInputArgs = TensorAccessorArgs<6>;
+    using L1InputArgs = TensorAccessorArgs<DramInputArgs::next_compile_time_args_offset()>;
+    using Inputs = g6_concat::InputPlacement<input_l1_mask_lo, input_l1_mask_hi, DramInputArgs, L1InputArgs>;
 
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t core_pages = get_arg_val<uint32_t>(1);
@@ -72,26 +102,18 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("G6C-FETCH");
-            // page_fetch_block
+            // page_fetch_block: runs of one input, so the accessor is picked per run, not per page.
             uint32_t slot_addr = get_write_ptr(cb_output_pages);
-            for (uint32_t page = 0; page < block_extent; ++page) {
-                const auto input = TensorAccessor(input_args, base_address, page_bytes);
-                const uint32_t valid_rows = rows.valid_rows();
-                if (g6_concat::is_trimmed(valid_rows, trim_rows_max)) {
-                    // Source and destination offsets are identical, so the read stays alignment-legal.
-                    g6_concat::for_each_valid_row_piece<face_row_bytes>(
-                        valid_rows, [&](uint32_t offset_bytes, uint32_t size_bytes) {
-                            noc_async_read(
-                                input.get_noc_addr(input_page, offset_bytes), slot_addr + offset_bytes, size_bytes);
-                        });
-                } else {
-                    noc_async_read_page(input_page, input, slot_addr);
-                }
-                slot_addr += page_bytes;
-                rows.advance();
-
-                ++input_page;
-                if (++page_in_slice == pages_per_slice) {
+            for (uint32_t page = 0; page < block_extent;) {
+                const uint32_t left_in_input = pages_per_slice - page_in_slice;
+                const uint32_t run_pages = block_extent - page < left_in_input ? block_extent - page : left_in_input;
+                Inputs::with_accessor(input_idx, base_address, page_bytes, [&](const auto& input) {
+                    fetch_run<page_bytes, face_row_bytes, trim_rows_max>(input, input_page, run_pages, slot_addr, rows);
+                });
+                page += run_pages;
+                input_page += run_pages;
+                page_in_slice += run_pages;
+                if (page_in_slice == pages_per_slice) {
                     page_in_slice = 0;
                     if (++input_idx == num_inputs) {
                         input_idx = 0;

@@ -258,13 +258,13 @@ communication exists, and no deferred regime needs any.
 | TARGET axis value | Phase 0 | Regime / change | Class |
 |-------------------|---------|-----------------|-------|
 | `dtype` bfloat16 | yes | both | — |
-| `dtype` float32 | no | `page_bytes = 4096`, `rb = 64`: every `row_gather` piece is direct, so no staging CB is needed | knob-turn |
-| `dtype` bfloat8_b | no | `page_copy` with `page_bytes = 1088` and `TRIM_ROWS_MAX = 0`, bit-exact because pages move whole; `row_gather_bfp8` deferred | knob-turn (page_copy) |
+| `dtype` float32 | R1 | `page_bytes = 4096`, `rb = 64`: every `row_gather` piece is direct, so no staging CB is needed | knob-turn |
+| `dtype` bfloat8_b | R1 (`h` × `h_non_aligned` excluded) | `page_copy` with `page_bytes = 1088` and `TRIM_ROWS_MAX = 0`, bit-exact because pages move whole; `row_gather_bfp8` deferred | knob-turn (page_copy) |
 | `layout` ROW_MAJOR | no | `page_copy_row_major` (deferred row), `stick_gather_row_major` (deferred row) | knob-turn / scheme-change respectively |
 | `concat_dim` outer / h / w | all three | `page_copy`; `h` with non-aligned offsets → `row_gather` | — |
 | `alignment` tile_aligned / h_non_aligned | both | `page_copy` (trimmed last tile row) / `row_gather` for `h` joins | — |
-| `input_buffer` l1 / mixed | no | per-input buffer-type mask bit; `A_read(k) = 16` for L1 inputs, so `row_gather` pieces are always direct | knob-turn |
-| `output_buffer` l1 | no | writer accessor CT args from the output tensor; the BB-05 check adds the output's per-bank L1 bytes | knob-turn |
+| `input_buffer` l1 / mixed | R1 | per-input buffer-type mask bit; `A_read(k) = 16` for L1 inputs, so `row_gather` pieces are always direct | knob-turn |
+| `output_buffer` l1 | R1 | writer accessor CT args from the output tensor; the BB-05 check adds the output's per-bank L1 bytes | knob-turn |
 
 No placement value is sharded: the spec has every tensor interleaved, so the physical-shard path
 does not arise. A sharded input or `memory_config` is refused on the host.
