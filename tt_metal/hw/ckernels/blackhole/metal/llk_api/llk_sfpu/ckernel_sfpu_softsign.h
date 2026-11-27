@@ -101,7 +101,6 @@ void init_softsign() {
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
 #ifndef DISABLE_SFPLOADMACRO
     if constexpr (!APPROXIMATION_MODE) {
-        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
         // Templates 0 to 3: |x|, 1 * x + 1, ra * v, rb * v.
         TTI_SFPABS(0, 0, 12, 1);
         TTI_SFPADD(p_sfpu::LCONST_1, 0, p_sfpu::LCONST_1, 13, 0);
