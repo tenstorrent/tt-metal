@@ -5,8 +5,8 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_device_operation.hpp"
@@ -191,16 +191,15 @@ MassagedConcat build_non_aligned_last_dim_concat(
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
-    auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+    auto dim_aligned = [&output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+        const bool rm_width_concat =
+            tensors.front().layout() == ttnn::ROW_MAJOR_LAYOUT && dim == tensors.front().logical_shape().rank() - 1;
+        // RM width-concat uses max alignment across inputs and output; TILE uses per-input (tile pages unaffected).
+        const uint32_t common_align =
+            rm_width_concat ? rm_width_concat_common_alignment(tensors, output_memory_config) : 0;
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
-            auto storage_type = tensor.storage_type();
-            if (storage_type == ttnn::StorageType::DEVICE) {
-                return tensor.padded_shape()[dim] * tensor.element_size() % tensor.mesh_buffer().alignment() == 0;
-            }
-            TT_THROW(
-                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type"
-                " {}",
-                tensor.storage_type());
+            const uint32_t align = rm_width_concat ? common_align : tensor.mesh_buffer().alignment();
+            return (tensor.padded_shape()[dim] * tensor.element_size()) % align == 0;
         });
     };
 
@@ -287,8 +286,8 @@ ttnn::Tensor concat_native(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
+    // For interleaved outputs, if sub_core_grids is provided, use direct path. Alignment and
+    // layout-normalization checks live in `concat_impl` so all callers enforce the same rule.
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
@@ -301,14 +300,6 @@ ttnn::Tensor concat_native(
     // inputs + output + per-core CBs.
     if (ttnn::prim::can_use_tiled_unaligned_concat(
             input_tensors, static_cast<uint32_t>(dim), groups, mem_config, /*output_already_allocated=*/false)) {
-        return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
-    }
-
-    // A tile-layout row concat is handled natively by ConcatTiledRowShiftProgramFactory, whose program takes
-    // every row count at run time, whole tiles or not. Inputs whose rows are not whole tiles otherwise go
-    // through untilize -> row-major concat -> retilize, each of which builds a program per shape.
-    if (ttnn::prim::can_use_tiled_row_shift_concat(
-            input_tensors, static_cast<uint32_t>(dim), groups, mem_config, sub_core_grids)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
     }
 

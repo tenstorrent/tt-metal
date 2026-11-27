@@ -33,11 +33,6 @@ struct UntilizeWithUnpaddingDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t& operation_attributes, const Tensor& input);
 
-    // Leaves the shape out of the key, but for the last dim, when the multi-core interleaved program serves
-    // every shape (untilize_with_unpadding_interleaved_is_shape_free).
-    static ttsl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const Tensor& input);
-
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const Tensor& input);
 
@@ -55,8 +50,7 @@ Tensor untilize_with_unpadding(
     bool use_multicore,
     bool fp32_dest_acc_en,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool runtime_shapes = false);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 
 // The data format to declare on a DFB of this op that holds elements of `dtype` on a device of `arch`.
 // Quasar rejects UInt16 as a DFB format, so there a UInt16 element is declared as Int16, which has the

@@ -14,10 +14,10 @@
 #include <factory_system_descriptor/utils.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <cabling_generator/cabling_generator.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tools/scaleout/validation/utils/cluster_validation_utils.hpp"
 #include <yaml-cpp/yaml.h>

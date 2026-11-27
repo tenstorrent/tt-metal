@@ -79,9 +79,6 @@ target_sources(
             # Existing explicit kernel entries
             reshape_view/device/device/dataflow/reader_reshape_tiled.cpp
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
-            reshape_view/device/device/dataflow/reader_reshape_tiled_rows.cpp
-            reshape_view/device/device/dataflow/writer_reshape_tiled_rows.cpp
-            reshape_view/device/device/dataflow/reshape_tiled_rows.hpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
             tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_singlecore.cpp
@@ -122,7 +119,6 @@ target_sources(
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
             concat/device/concat_tiled_unaligned_program_factory.hpp
-            concat/device/concat_tiled_row_shift_program_factory.hpp
             # copy/
             copy/copy_nanobind.hpp
             # data_movement nanobind

@@ -6,15 +6,13 @@
 
 #include "ttnn/operations/data_movement/reshape_view/reshape_common.hpp"
 
+
 namespace ttnn {
 
 enum class TileReshapeMapMode {
     CACHE,
     RECREATE,
-    // Like CACHE, and an interleaved tiled reshape that keeps the last dim (the row factory, see
-    // reshape_view_tiled_keeps_last_dim) uses one program for every shape with the same last dim, at more host time
-    // per call to recompute the per-core args.
-    RUNTIME_SHAPES,
+
 };
 
 namespace operations::data_movement {

@@ -5,9 +5,9 @@
 #include "tilize_single_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
@@ -163,6 +163,11 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         ComputeHardwareConfig compute_cfg_gen2;
         compute_cfg_gen2.enable_32_bit_dest = compute_cfg.enable_32_bit_dest;
         compute_cfg_gen2.unpack_modes = compute_cfg.unpack_modes;  // TODO(#52269): copied from WH/BH
+        // Quasar unpacks Int32 only into DEST.
+        if (a.dtype() == DataType::INT32) {
+            compute_cfg_gen2.enable_32_bit_dest = true;
+            compute_cfg_gen2.unpack_modes.insert({INPUT_DFB, UnpackMode::UnpackToDest});
+        }
         compute_hw = compute_cfg_gen2;
     }
     KernelSpec compute{

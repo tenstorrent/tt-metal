@@ -39,27 +39,6 @@ class Conv2d(Module):
     # with every cached program, so a model that runs many input sizes fills L1_SMALL without it.
     config_tensors_in_dram: bool = False
 
-    # The shard scheme, or None to let conv2d pick it per input size from its L1 estimate. With a
-    # fixed scheme one prepared set serves every input size, unless the conv folds its stride or its
-    # input channels are not whole tiles (see forward).
-    shard_layout: ttnn.TensorMemoryLayout | None = None
-
-    # The largest output area, in pixels over the whole batch, that one DRAM width slice may cover, or
-    # None. When set, an input size missing from the slice table is cut into as few width slices of
-    # whole tile columns as keep each within this area, and into at least two (unless the output is
-    # one tile wide; a slice is at least one tile wide). The conv then takes the sliced path at
-    # every size, so the slicing kernels, which compile per channel count, compile at the first size.
-    # Without it, conv2d picks the slicing per call and leaves a conv that fits L1 unsliced. For a
-    # height-sharded conv the area also counts halo rows, see _width_slices.
-    dram_slice_area: int | None = None
-
-    # The output size (height, width) of fixed 2D DRAM slices, or None. When set, conv2d cuts the output into slices
-    # of this size, the last along each axis shifted back to the edge, so every slice of every input size has the same
-    # shape and the conv adds no program-cache entries at a new size (see ttnn.Conv2dSliceConfig.slice_height). The
-    # slice table and dram_slice_area then do not apply. Needs an interleaved row-major input; the width is whole
-    # tiles. Slices along an axis overlap where the output is not a whole number of them, which is computed twice.
-    fixed_slice_hw: tuple[int, int] | None = None
-
     # Mesh shape -> (input height, input width, in channels, out channels) -> number of DRAM width
     # slices; 1 runs the conv on the whole input in L1. A shape missing here gets no slice config,
     # so ttnn picks the slicing from the L1 free at call time. Models can extend the table for their
@@ -514,42 +493,14 @@ class Conv2d(Module):
         self._release_prepared()
         super().deallocate_weights()
 
-    def _width_slices(self, b: int, h: int, w: int) -> int:
-        """The number of DRAM width slices dram_slice_area gives b images of height h and width w."""
-        if len(self.padding) == 4:
-            top, bottom, left, right = self.padding
-        else:
-            (top, left), (bottom, right) = self.padding, self.padding
-        out_h = (h + top + bottom - self.kernel_size[0]) // self.stride[0] + 1
-        out_w = (w + left + right - self.kernel_size[1]) // self.stride[1] + 1
-        tiles = -(-out_w // ttnn.TILE_SIZE)
-        # A slice holds its columns of every image in the batch.
-        rows = b * out_h
-        if self.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-            # Each core of a height-sharded conv gets its share plus kernel_height - 1 input rows of
-            # halo, each as wide as the slice, and holds its input shard until the halo op is done, so
-            # its peak is about twice its share plus the halo. Per pixel of share that is half a halo
-            # row per core, and a wide, short slice needs more L1 than its area says.
-            grid = self.mesh_device.compute_with_storage_grid_size()
-            rows += (self.kernel_size[0] - 1) * grid.x * grid.y // 2
-        tiles_per_slice = max(1, self.dram_slice_area // (rows * ttnn.TILE_SIZE))
-        return min(tiles, max(2, -(-tiles // tiles_per_slice)))
-
-    def forward(
-        self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True, flat_output: bool = False
-    ) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, /, *, use_persistent_buffer: bool = True) -> ttnn.Tensor:
         """Forward pass of the Conv2d layer with support for tensor parallelism.
 
         Args:
             x: Input tensor with shape (batch, height, width, channels).
-            flat_output: Return the output flat per image, of shape (batch, 1, out_height * out_width,
-                out_channels). For one image that is conv2d's output as it comes, while making it
-                (1, out_height, out_width, out_channels) moves data in a tiled output whose width is
-                not whole tiles.
 
         Returns:
-            Output tensor with shape (batch, out_height, out_width, out_channels), or the flat shape
-            with flat_output.
+            Output tensor with shape (batch, out_height, out_width, out_channels).
 
         Tensor sharding behavior:
 
@@ -582,23 +533,13 @@ class Conv2d(Module):
                 msg = f"expected input channel dimension to be {expected_c}, but got {c}"
                 raise ValueError(msg)
 
-        fixed = self.fixed_slice_hw is not None
-        if fixed:
-            num_slices, area_sliced = None, False
-            slice_config = ttnn.Conv2dSliceConfig(
-                slice_height=self.fixed_slice_hw[0], slice_width=self.fixed_slice_hw[1]
-            )
-        else:
-            slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
-            num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
-            area_sliced = num_slices is None and self.dram_slice_area is not None
-            if area_sliced:
-                num_slices = self._width_slices(b, h, w)
-            slice_config = (
-                ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
-                if num_slices is not None
-                else None
-            )
+        slice_params = self.slice_params.get(tuple(self.mesh_device.shape), self.slice_default)
+        num_slices = slice_params.get((h, w, self.in_channels, self.out_channels))
+        slice_config = (
+            ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Conv2dDRAMSliceWidth)
+            if num_slices is not None
+            else None
+        )
 
         in_channels = self.in_channels // self.in_mesh_axis_size
         out_channels = self.weight.data.shape[0]
@@ -606,27 +547,12 @@ class Conv2d(Module):
             act_block_h_override=32,
             weights_dtype=self.weight.dtype,
             config_tensors_in_dram=self.config_tensors_in_dram,
-            shard_layout=self.shard_layout,
         )
 
-        # The prepared layout depends on the shard scheme and the slice config. The input size reaches
-        # it through conv2d's per-size pick of the scheme, through kernel-stride folding (stride equal
-        # to the kernel, decided by whether the size divides by the stride) and, for channel counts
-        # that are not whole tiles, through the channel alignment the per-size DRAM slicing sets. A
-        # sharded input sets the scheme itself, from a shard spec that follows the size. So a fixed
-        # scheme makes the key size-free only for an interleaved input and without those two. The
-        # input layout and dtype also reach prepare_conv_weights but are not in the key: this assumes
-        # each Conv2d instance always gets inputs with the same memory config, layout and dtype.
-        may_fold = self.stride == self.kernel_size and self.stride != (1, 1)
-        size_free = (
-            self.shard_layout is not None and not x.is_sharded() and not may_fold and in_channels % ttnn.TILE_SIZE == 0
-        )
-        # The slice count dram_slice_area gives follows the size, so it stays out of the key, as the
-        # count conv2d picks itself does. With a fixed scheme and an interleaved input the count only
-        # sets how many cores share the rows, which the prepared weights do not depend on.
-        # With fixed slices every slice has the same shape at every size, so the prepared layout is one too.
-        key_slices = ("fixed", *self.fixed_slice_hw) if fixed else None if area_sliced else num_slices
-        prepared_key = (key_slices,) if size_free else (b, h, w, key_slices)
+        # The prepared layout depends on the input size and the slice config. The input memory config,
+        # layout and dtype also reach prepare_conv_weights but are not in the key: this assumes each
+        # Conv2d instance always gets inputs with the same memory config, layout and dtype.
+        prepared_key = (b, h, w, num_slices)
         prepared_weight, prepared_bias = self._prepared.get(prepared_key, (None, None))
         if prepared_weight is None:
             base_kwargs = {
@@ -697,11 +623,7 @@ class Conv2d(Module):
             raise RuntimeError(msg) from e
         self._prepared[prepared_key] = (prepared_weight, prepared_bias)
 
-        if flat_output:
-            # conv2d returns (1, 1, batch * out_height * out_width, out_channels).
-            x = ttnn.reshape(x, (b, 1, out_height * out_width, -1))
-        else:
-            x = ttnn.reshape(x, (b, out_height, out_width, -1))
+        x = ttnn.reshape(x, (b, out_height, out_width, -1))
 
         if self.in_mesh_axis is not None:
             x = self.ccl_manager.reduce_scatter(
@@ -711,92 +633,29 @@ class Conv2d(Module):
         return x
 
 
-def warm_dram_slice_flatten(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType = ttnn.bfloat16) -> None:
-    """Run, on a tiny tensor, the tiled reshape that ends conv2d's DRAM-sliced path.
-
-    With two or more slices conv2d writes a tiled [N, H, W, C] output and flattens it, which is a tiled reshape
-    whenever W is not whole tiles. Its kernels do not depend on the shape, but a model warmed at a size whose
-    widths are whole tiles never runs it, so they would compile at the first new size that does. Calling this
-    during warm-up compiles them there. One call per output dtype and buffer type: the binaries take the tile and
-    element size and the accessors' memory layout as compile-time args. This one covers bfloat16 in DRAM."""
-    x = ttnn.from_torch(
-        torch.zeros(1, 2, 40, ttnn.TILE_SIZE),
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    y = ttnn.reshape(x, (1, 1, 80, ttnn.TILE_SIZE))
-    ttnn.deallocate(y)
-    ttnn.deallocate(x)
-
-
-def warm_fixed_slice_flatten(
-    mesh_device: ttnn.MeshDevice, channels: Sequence[int], dtype: ttnn.DataType = ttnn.bfloat16
-) -> None:
-    """Build, on small tensors, the program-cache entries of the flatten that ends conv2d's path with fixed 2D slices
-    (Conv2d.fixed_slice_hw), for each output channel count in ``channels``.
-
-    With fixed slices the flatten is a tiled reshape that serves every shape with the same channel count and at least
-    one output tile per core, but it runs only where the width is not whole tiles, so a model warmed at a size whose
-    widths are whole tiles would build its entries at the first new size. This one covers bfloat16 in DRAM."""
-    for c in dict.fromkeys(channels):
-        # 128 rows of 40 pixels: not whole tiles, and 160 output tile rows, at least one per core on any chip.
-        x = ttnn.from_torch(
-            torch.zeros(1, 128, 40, c),
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        y = ttnn.reshape(x, (1, 1, 128 * 40, c), reshape_tile_mode=ttnn.TileReshapeMapMode.RUNTIME_SHAPES)
-        ttnn.deallocate(y)
-        ttnn.deallocate(x)
-
-
 def configure_conv2d(
     module: Module,
     *,
     slice_params: dict[tuple[int, ...], dict[tuple[int, int, int, int], int]] | None = None,
     config_tensors_in_dram: bool | None = None,
-    shard_layout: ttnn.TensorMemoryLayout | None = None,
-    dram_slice_area: int | None = None,
-    fixed_slice_hw: tuple[int, int] | None = None,
+    replace: bool = False,
 ) -> None:
     """Configure every Conv2d in ``module``'s tree.
 
     ``slice_params`` (same layout as ``Conv2d.slice_params``) is added on top of the shared table for
-    each mesh shape it names, for these instances only. ``config_tensors_in_dram``, ``shard_layout``,
-    ``dram_slice_area`` and ``fixed_slice_hw`` override the class defaults for them; ``fixed_slice_hw``
-    of (0, 0) turns fixed slices off.
+    each mesh shape it names, for these instances only; with ``replace`` it takes the place of the
+    shared entries for those mesh shapes. ``config_tensors_in_dram`` overrides the class default for them.
     """
     if isinstance(module, Conv2d):
         if slice_params is not None:
             table = dict(Conv2d.slice_params)
             for mesh_shape, entries in slice_params.items():
-                table[mesh_shape] = {**Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default), **entries}
+                shared = {} if replace else Conv2d.slice_params.get(mesh_shape, Conv2d.slice_default)
+                table[mesh_shape] = {**shared, **entries}
             module.slice_params = table
         if config_tensors_in_dram is not None:
             module.config_tensors_in_dram = config_tensors_in_dram
-        if shard_layout is not None and shard_layout != module.shard_layout:
-            module._release_prepared()
-            module.shard_layout = shard_layout
-        if dram_slice_area is not None and dram_slice_area != module.dram_slice_area:
-            module._release_prepared()
-            module.dram_slice_area = dram_slice_area
-        if fixed_slice_hw is not None:
-            fixed = None if tuple(fixed_slice_hw) == (0, 0) else tuple(fixed_slice_hw)
-            if fixed != module.fixed_slice_hw:
-                module._release_prepared()
-                module.fixed_slice_hw = fixed
     for _, child in module.named_children():
         configure_conv2d(
-            child,
-            slice_params=slice_params,
-            config_tensors_in_dram=config_tensors_in_dram,
-            shard_layout=shard_layout,
-            dram_slice_area=dram_slice_area,
-            fixed_slice_hw=fixed_slice_hw,
+            child, slice_params=slice_params, config_tensors_in_dram=config_tensors_in_dram, replace=replace
         )

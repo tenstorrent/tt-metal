@@ -9,7 +9,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "slice_write_device_operation_types.hpp"
 #include "slice_write_rm_sharded_input_program_factory.hpp"
@@ -26,8 +26,7 @@ struct SliceWriteDeviceOperation {
     using program_factory_t = std::variant<
         SliceWriteRMShardedInputProgramFactory,
         SliceWriteTiledShardedInputProgramFactory,
-        SliceWriteRMInterleavedProgramFactory,
-        SliceWriteTiledShardedInputRuntimeShapesProgramFactory>;
+        SliceWriteRMInterleavedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -50,7 +49,6 @@ Tensor slice_write(
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
-    const ttnn::Shape& step,
-    bool runtime_shapes = false);
+    const ttnn::Shape& step);
 
 }  // namespace ttnn::prim

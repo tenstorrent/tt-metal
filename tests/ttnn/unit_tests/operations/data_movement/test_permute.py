@@ -831,6 +831,19 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.parametrize("shape", [(1, 16, 160, 400), (1, 16, 64, 96), (1, 48, 40, 72), (2, 24, 20, 33)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_permute_row_major_channels_last_exact(device, shape, dtype, memory_config):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+    assert_equal(torch.permute(torch_input, (0, 2, 3, 1)), ttnn.to_torch(output_tensor))
+
+
 def _height_sharded_l1(shard_shape):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     return ttnn.MemoryConfig(
@@ -882,6 +895,24 @@ def _docstring_pad_value_dtypes():
     return {getattr(ttnn.DataType, name) for name in re.findall(r"``(\w+)``", line)}
 
 
+@pytest.mark.parametrize("dims", [(2, 1, 0, 3), (0, 2, 3, 1)])
+def test_permute_bfloat4_round_trip(device, dims):
+    """bfloat4_b permutes that reach the primitive go through bfloat16 and come back as bfloat4_b."""
+    input_tensor = ttnn.from_torch(
+        _one_exponent_input((2, 3, 32, 64)),
+        dtype=ttnn.bfloat4_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    expected = ttnn.to_torch(input_tensor).permute(dims).contiguous()
+    output_tensor = ttnn.permute(input_tensor, dims, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    assert output_tensor.dtype == ttnn.bfloat4_b, f"Unexpected dtype: {output_tensor.dtype}"
+    output = ttnn.to_torch(output_tensor)
+    assert output.shape == expected.shape, f"Expected {expected.shape}, got {output.shape}"
+    assert_equal(expected, output)
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.permute))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.permute))
 def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -929,64 +960,124 @@ def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)
 
 
-def test_permute_rm_blocked_one_program_over_shapes(device):
-    # FLUX.2's VAE decoder permutes [1, h/8, w/2, 32, 2, 2] with the image size. With runtime_shapes a row-major
-    # permute that moves the last dim takes every dimension size at run time, so one program serves all of these
-    # once the core set is the whole grid (at least one block per core).
-    perm = (0, 1, 4, 2, 5, 3)
-    shapes = [(1, 16, 64, 32, 2, 2), (1, 6, 169, 32, 2, 2), (1, 12, 115, 32, 2, 2), (1, 21, 135, 32, 2, 2)]
-    grid = device.compute_with_storage_grid_size()
-    entries = None
-    for shape in shapes:
-        assert shape[1] * shape[2] * 2 >= grid.x * grid.y
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
-        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        output = ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True))
-        assert torch.equal(output, torch_input.permute(perm))
-        if entries is None:
-            entries = device.num_program_cache_entries()
-        assert device.num_program_cache_entries() == entries, shape
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment
+# (L1: 16 B; DRAM: 32 B on Wormhole, 64 B on Blackhole). The sharded reads and writes cannot split such rows, so
+# permute stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
 
 
-def test_permute_rm_blocked_small_shapes_get_their_own_programs(device):
-    # With fewer blocks than cores the core set follows the block count, so each count keeps its own program.
-    perm = (0, 1, 4, 2, 5, 3)
-    shapes = [(1, 2, 3, 32, 2, 2), (1, 2, 5, 32, 2, 2)]
-    entries = []
-    for shape in shapes:
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
-        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True)), torch_input.permute(perm))
-        entries.append(device.num_program_cache_entries())
-    assert entries[1] == entries[0] + 1
+def _core_grid(*ranges):
+    return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
 
 
-def test_permute_rm_blocked_without_runtime_shapes_keeps_one_program_per_shape(device):
-    perm = (0, 1, 4, 2, 5, 3)
-    entries = device.num_program_cache_entries()
-    for shape in [(1, 16, 64, 32, 2, 2), (1, 6, 169, 32, 2, 2)]:
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
-        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm)), torch_input.permute(perm))
-    assert device.num_program_cache_entries() == entries + 2
+def _width_shards(buffer_type, num_shards, shard_shape):
+    # Shards in rows of 8 cores, or on DRAM banks 0 .. num_shards - 1.
+    if buffer_type == ttnn.BufferType.L1 and num_shards > 8:
+        cores = _core_grid(((0, 0), (7, num_shards // 8 - 1)))
+    else:
+        cores = _core_grid(((0, 0), (num_shards - 1, 0)))
+    spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
 
 
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        # Several x and w blocks per row, partial ones included.
-        [(1, 8, 9, 40, 3, 70), (1, 6, 13, 40, 5, 70), (1, 3, 31, 40, 4, 70)],
-        # Fewer blocks than cores, the same block count: one program.
-        [(1, 1, 2, 40, 1, 70), (1, 2, 1, 40, 1, 70)],
-    ],
-)
-def test_permute_rm_blocked_runtime_shapes_multi_block(device, shapes):
-    perm = (0, 1, 4, 2, 5, 3)
-    entries = None
-    for shape in shapes:
-        torch_input = torch.randn(shape, dtype=torch.bfloat16)
-        x = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        assert torch.equal(ttnn.to_torch(ttnn.permute(x, perm, runtime_shapes=True)), torch_input.permute(perm)), shape
-        if entries is None:
-            entries = device.num_program_cache_entries()
-        assert device.num_program_cache_entries() == entries, shape
+def _nd_shards(shard_shape, cores):
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), cores, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
+def _assert_subaligned_nd_rows(memory_config):
+    # The case only covers the staging if the derived output's ND shard rows are not 16-byte aligned.
+    nd_spec = memory_config.nd_shard_spec
+    assert nd_spec is not None and (nd_spec.shard_shape[-1] * 2) % 16 != 0, memory_config
+
+
+def test_permute_rm_nd_sharded_subaligned_output_rows(device):
+    x = _ramp_bf16([1, 1, 24, 160])
+    config = _nd_shards([1, 1, 2, 80], _core_grid(((0, 0), (6, 5)), ((0, 6), (5, 6))))
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.permute(t, [0, 1, 3, 2])
+
+    _assert_subaligned_nd_rows(output.memory_config())
+    assert_equal(x.permute(0, 1, 3, 2), ttnn.to_torch(output))
+
+
+def test_permute_rm_nd_height_input_subaligned_output_rows(device):
+    # The ND input is HEIGHT sharding ([2, 8] shards of 8-value rows); permute reindexes its ND shard shape into
+    # [8, 2] shards of the output, whose 4-byte rows are split.
+    x = _ramp_bf16([1, 1, 4, 8])
+    t = ttnn.from_torch(
+        x,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_nd_shards([1, 1, 2, 8], _core_grid(((0, 0), (1, 0)))),
+    )
+
+    output = ttnn.permute(t, (1, 0, 3, 2), memory_config=t.memory_config())
+
+    _assert_subaligned_nd_rows(output.memory_config())
+    assert_equal(x.permute(1, 0, 3, 2), ttnn.to_torch(output))
+
+
+def test_permute_rm_width_sharded_subaligned_input(device):
+    x = _ramp_bf16([2, 2, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [128, 4])
+    )
+
+    output = ttnn.permute(t, (2, 0, 1, 3))
+
+    assert_equal(x.permute(2, 0, 1, 3), ttnn.to_torch(output))
+
+
+def test_permute_rm_subaligned_input_into_aligned_width_shards(device):
+    # The input moves to interleaved memory; the output keeps its sharded config, with aligned 32-byte shard rows.
+    x = _ramp_bf16([1, 2, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [64, 4])
+    )
+    out_config = _width_shards(ttnn.BufferType.L1, 4, [64, 16])
+
+    output = ttnn.permute(t, (1, 0, 2, 3), memory_config=out_config)
+
+    assert output.memory_config() == out_config
+    assert_equal(x.permute(1, 0, 2, 3), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+def test_permute_rm_into_width_shards_with_subaligned_rows(device, buffer_type):
+    # 8-byte L1 shard rows, or DRAM shard rows that are 16-byte multiples but not multiples of the DRAM alignment.
+    # ttnn.permute used to reject the L1 config before the device operation could stage it.
+    if buffer_type == ttnn.BufferType.L1:
+        x, dims = _ramp_bf16([1, 2, 32, 64]), (1, 0, 2, 3)
+        out_config = _width_shards(ttnn.BufferType.L1, 16, [64, 4])
+    else:
+        e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+        x, dims = _ramp_bf16([1, 1, 64, 33]).permute(3, 0, 1, 2).contiguous(), (1, 2, 3, 0)
+        out_config = _width_shards(ttnn.BufferType.DRAM, -(-33 // e), [64, e])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.permute(t, dims, memory_config=out_config)
+
+    assert output.memory_config() == out_config
+    assert_equal(x.permute(*dims), ttnn.to_torch(output))
+
+
+def test_permute_rm_into_height_shards_with_unaligned_rows(device):
+    # A HEIGHT-sharded output never splits a row, so 8-byte rows are fine; ttnn.permute used to reject them.
+    config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_core_grid(((0, 0), (3, 0))), [16, 4], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    x = _ramp_bf16([1, 2, 32, 4])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.permute(t, (1, 0, 2, 3), memory_config=config)
+
+    assert output.memory_config() == config
+    assert_equal(x.permute(1, 0, 2, 3), ttnn.to_torch(output))

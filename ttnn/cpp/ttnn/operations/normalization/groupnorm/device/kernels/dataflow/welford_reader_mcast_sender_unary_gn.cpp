@@ -14,13 +14,13 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "two_pass_read_stats.h"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/gn_runtime_size_args.h"
 
 void kernel_main() {
     constexpr std::uint32_t reduce_receiver_semaphore_id =
         get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
     constexpr std::uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
 
+    constexpr std::uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
     constexpr std::uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr std::uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
     constexpr std::uint32_t num_groups = num_batch_group / num_batches;
@@ -28,34 +28,19 @@ void kernel_main() {
     constexpr std::uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const std::uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const std::uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr std::uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
     constexpr std::uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+
+    constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
+
+    constexpr std::uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
+
+    constexpr std::uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
     constexpr std::uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
-
-#ifdef GN_RUNTIME_SIZE_ARGS
-    const std::uint32_t num_mcast_cores = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_MCAST_CORES);
-    const std::uint32_t base_rows = get_common_arg_val<std::uint32_t>(gn_size_args::BASE_ROWS);
-    const std::uint32_t num_tall_cores = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_TALL_CORES);
-    // The sender is the first core of its group, so it holds one row more when any core does.
-    const std::uint32_t block_h = base_rows + (num_tall_cores > 0 ? 1 : 0);
-    const std::uint32_t per_core_M = block_h;
-    const std::uint32_t num_tiles_per_batch = block_h * get_arg_val<std::uint32_t>(4);
-    constexpr std::uint32_t num_out_blocks = 1;
-    const std::uint32_t num_rows_per_group = block_h * tile_height;
-    const std::uint32_t pad_row_first_page = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_FIRST_PAGE);
-    const std::uint32_t pad_row_valid_rows = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_VALID_ROWS);
-    const float pad_stats_scale =
-        __builtin_bit_cast(float, get_common_arg_val<std::uint32_t>(gn_size_args::PAD_STATS_SCALE));
-#else
-    constexpr std::uint32_t num_mcast_cores = get_named_compile_time_arg_val("num_cores_per_mcast_group");
-    constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
-    constexpr std::uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
-    constexpr std::uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr std::uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
-#endif
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
 
@@ -71,14 +56,8 @@ void kernel_main() {
     constexpr uint32_t stats_local_cb_id = get_named_compile_time_arg_val("stats_local_cb_id");
     constexpr uint32_t stats_gathered_cb_id = get_named_compile_time_arg_val("stats_gathered_cb_id");
     // Per-device element count per group, the per-subgroup COUNT_PER_VALUE for the cross-device
-    // combine. num_rows_per_group is PER CORE, so scale by the mcast-group core count. With
-    // GN_RUNTIME_SIZE_ARGS the cores' rows differ, so count the column's rows instead.
-#ifdef GN_RUNTIME_SIZE_ARGS
-    const uint32_t count_per_device =
-        num_channels_per_group * tile_height * (base_rows * num_mcast_cores + num_tall_cores);
-#else
+    // combine. num_rows_per_group is PER CORE, so scale by the mcast-group core count.
     constexpr uint32_t count_per_device = num_channels_per_group * num_rows_per_group * num_mcast_cores;
-#endif
     // The gathered stats sticks are bf16 [mean, var] pairs; an fp32 stats CB would need a different
     // stick layout and stride. Fail the build rather than silently misread the gather.
     static_assert(
@@ -86,16 +65,6 @@ void kernel_main() {
         "GN_DISTRIBUTED_AG requires bf16 stats CBs (stats_is_fp32 == 0)");
     // Appended after src0's positional accessor block.
     constexpr auto stats_dram_args = TensorAccessorArgs<decltype(src0_args)::next_compile_time_args_offset()>();
-#ifdef GN_DISTRIBUTED_AG_2D
-    // Second exchange, over the other mesh axis, of the stats already merged over the first. A
-    // second forwarder lands its sticks in pages [ring_size, ring_size + second_ring_size).
-#ifndef GN_RUNTIME_SIZE_ARGS
-#error "GN_DISTRIBUTED_AG_2D requires GN_RUNTIME_SIZE_ARGS"
-#endif
-    constexpr uint32_t second_ring_size = get_named_compile_time_arg_val("second_ring_size");
-    constexpr uint32_t second_arrival_sem_id = get_named_compile_time_arg_val("second_arrival_sem_id");
-    constexpr uint32_t second_go_sem_id = get_named_compile_time_arg_val("second_go_sem_id");
-#endif
 #endif
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -239,12 +208,6 @@ void kernel_main() {
     // The packet CB is created on the whole grid, so the forwarder's copy is at this same address.
     const uint32_t fwd_packet_buf_addr = dfb_packet.get_write_ptr();
     const auto stats_dram = TensorAccessor(stats_dram_args, stats_dram_addr);
-#ifdef GN_DISTRIBUTED_AG_2D
-    const uint32_t second_fwd_x = get_arg_val<uint32_t>(fabric_base + 5);
-    const uint32_t second_fwd_y = get_arg_val<uint32_t>(fabric_base + 6);
-    Semaphore<> second_fwd_arrival_sem(second_arrival_sem_id);
-    Semaphore<> second_go_sem(second_go_sem_id);
-#endif
 #endif
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
@@ -269,11 +232,11 @@ void kernel_main() {
     }
 #endif
 
-    const std::uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr std::uint32_t out_block_h_normal = block_h / num_out_blocks;
     std::uint32_t num_out_blocks_padded = num_out_blocks;
     bool extra_out_block = false;
     std::uint32_t out_block_h_last = out_block_h_normal;
-    if (block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
@@ -307,22 +270,12 @@ void kernel_main() {
                         input_ring_end,
                         start_id + index_b_offset + mt_offset,
                         num_channels_tiles,
-                        out_block_h_actual
-#ifdef GN_RUNTIME_SIZE_ARGS
-                        ,
-                        pad_row_first_page,
-                        pad_row_valid_rows
-#endif
-                    );
+                        out_block_h_actual);
                     mt_offset += out_block_h_actual * num_channels_tiles;
                 } else
 #endif
                 {
                     for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-#ifdef GN_RUNTIME_SIZE_ARGS
-                        const bool pad_row = start_id + index_b_offset + mt_offset >= pad_row_first_page &&
-                                             pad_row_valid_rows < tile_height;
-#endif
                         for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
                             dfb_in0.reserve_back(1);
                             const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
@@ -333,14 +286,6 @@ void kernel_main() {
                                 {.page_id = start_id + index_b_offset + mt_offset + nt},
                                 {});
                             noc.async_read_barrier();
-#ifdef GN_RUNTIME_SIZE_ARGS
-                            // Only bfloat16 and float32 tiles; the fused op takes bfloat16.
-                            if constexpr (src0_tile_bytes == 32 * 32 * 2 || src0_tile_bytes == 32 * 32 * 4) {
-                                if (pad_row) {
-                                    zero_tile_rows_from<src0_tile_bytes / (32 * 32)>(l1_write_addr, pad_row_valid_rows);
-                                }
-                            }
-#endif
                             dfb_in0.push_back(1);
                             if constexpr (welford_fp32_alias) {
                                 dfb_in0_welford.reserve_back(1);
@@ -374,7 +319,7 @@ void kernel_main() {
         // deferred to a single batched broadcast after the fabric exchange, so the per-group
         // signal/wait lock-step below (which would deadlock a single exchange) is batched here and
         // in the receiver. Sync granularity only: the arithmetic and the mcast'd bytes are identical.
-        if (num_mcast_cores > 1) {
+        if constexpr (num_mcast_cores > 1) {
             reduce_receiver_sem.wait(num_mcast_cores - 1);
             reduce_receiver_sem.set(0);
         }
@@ -388,10 +333,6 @@ void kernel_main() {
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
             const auto local_result =
                 make_welford_stats(p_local_means[0], p_local_vars[0], num_channels_per_group * num_rows_per_group);
-#elif defined(GN_RUNTIME_SIZE_ARGS)
-            static_assert(!stats_is_fp32, "GN_RUNTIME_SIZE_ARGS supports bf16 stats only");
-            const auto local_result = combine_welford_stats<local_stride>(
-                p_local_means, p_local_vars, tile_width, num_channels_per_group * num_rows_per_group / tile_width);
 #else
             const auto local_result = combine_welford_stats<
                 tile_width,
@@ -405,7 +346,7 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
-            if (num_mcast_cores > 1) {
+            if constexpr (num_mcast_cores > 1) {
 #ifndef GN_DISTRIBUTED_AG
                 // Wait until all other cores have signaled that their partial data is ready.
                 // (GN_DISTRIBUTED_AG hoists this to a single batched wait before the loop.)
@@ -435,27 +376,9 @@ void kernel_main() {
             // addresses).
             auto* p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto* p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
-#ifdef GN_RUNTIME_SIZE_ARGS
-            // The group's cores are in the order of their tile rows; the first num_tall_cores hold
-            // one row more than the others.
-            auto global_result = combine_welford_stats_two_counts<global_stride>(
-                p_global_means_read,
-                p_global_vars_read,
-                num_mcast_cores,
-                num_tall_cores,
-                num_channels_per_group * (base_rows + 1) * tile_height,
-                num_channels_per_group * base_rows * tile_height);
-            // The device's statistics so far include the zeroed padding rows. Every device holds the
-            // same padded and logical extents, so the cross-device merge below can use these
-            // corrected statistics with equal weights.
-            if (pad_row_valid_rows < tile_height) {
-                global_result = unpad_welford_stats(global_result, pad_stats_scale);
-            }
-#else
             auto global_result =
                 combine_welford_stats<num_mcast_cores, num_channels_per_group * num_rows_per_group, global_stride>(
                     p_global_means_read, p_global_vars_read);
-#endif
 
             // Write this to dfb_ex_global
             p_global_means[0] = global_result.mean;
@@ -469,7 +392,7 @@ void kernel_main() {
 #endif
 
 #ifndef GN_DISTRIBUTED_AG
-            if (num_mcast_cores > 1) {
+            if constexpr (num_mcast_cores > 1) {
                 // mcast to other cores
                 const uint32_t global_means_offset = global_means_ptr - global_base_ptr;
                 if (has_mid_receivers) {
@@ -592,89 +515,21 @@ void kernel_main() {
         dfb_stats_gathered.wait_front(ring_size);
         auto gathered_u16 = reinterpret_cast<volatile uint16_t*>(gbase);
         constexpr uint32_t stick_stride_u16 = stick_bytes / 2;  // uint16 elements per device stick
-#ifdef GN_DISTRIBUTED_AG_2D
-        // The merged stats also go into a new stick for the second exchange.
-        dfb_stats_local.reserve_back(1);
-        volatile tt_l1_ptr uint16_t* second_stick_u16 =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_stats_local.get_write_ptr());
-#endif
         auto out_ptr = global_base_ptr;
         for (uint32_t m = 0; m < num_groups; ++m) {
-#ifdef GN_RUNTIME_SIZE_ARGS
-            auto merged = combine_welford_stats<stick_stride_u16>(
-                gathered_u16 + m * 2, gathered_u16 + m * 2 + 1, ring_size, count_per_device);
-#else
             auto merged = combine_welford_stats<ring_size, count_per_device, stick_stride_u16>(
                 gathered_u16 + m * 2, gathered_u16 + m * 2 + 1);
-#endif
             auto p_out_means = reinterpret_cast<volatile uint16_t*>(out_ptr);
             auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
             p_out_means[0] = merged.mean;
             p_out_vars[0] = merged.variance;
-#ifdef GN_DISTRIBUTED_AG_2D
-            second_stick_u16[m * 2 + 0] = merged.mean;
-            second_stick_u16[m * 2 + 1] = merged.variance;
-#endif
             out_ptr += 2 * single_tile_size_bytes;
         }
         dfb_stats_gathered.pop_front(ring_size);
 
-#ifdef GN_DISTRIBUTED_AG_2D
-        // 5. The same exchange over the second mesh axis, with the stats merged over the first:
-        //    publish to the second forwarder, wait for its gather, read second_ring_size sticks
-        //    from pages [ring_size, ring_size + second_ring_size) and merge them into dfb_ex_global.
-        //    Each of those sticks covers ring_size devices.
-        dfb_stats_local.push_back(1);
-        dfb_stats_local.wait_front(1);
-        noc.async_write(
-            CoreLocalMem<uint32_t>(dfb_stats_local.get_read_ptr()),
-            fwd_ep,
-            stick_bytes,
-            {},
-            // The second forwarder is another core with its own copy of the same packet CB.
-            {.noc_x = second_fwd_x, .noc_y = second_fwd_y, .addr = fwd_packet_buf_addr + my_slot * stick_bytes});
-        noc.async_write_barrier();
-        second_fwd_arrival_sem.up(noc, second_fwd_x, second_fwd_y, 1);
-        dfb_stats_local.pop_front(1);
-
-        second_go_sem.wait_min(1);
-        second_go_sem.set(0);
-
-        dfb_stats_gathered.reserve_back(second_ring_size);
-        const uint32_t second_gbase = dfb_stats_gathered.get_write_ptr();
-        for (uint32_t d = 0; d < second_ring_size; d++) {
-            const uint32_t page_idx = (ring_size + d) * num_chunks_per_device + my_forwarder_index;
-            noc.async_read(
-                stats_dram,
-                CoreLocalMem<uint32_t>(second_gbase + d * stick_bytes),
-                stick_bytes,
-                {.page_id = page_idx, .offset_bytes = my_slot * stick_bytes},
-                {});
-        }
-        noc.async_read_barrier();
-        dfb_stats_gathered.push_back(second_ring_size);
-
-        dfb_stats_gathered.wait_front(second_ring_size);
-        auto second_gathered_u16 = reinterpret_cast<volatile uint16_t*>(second_gbase);
-        out_ptr = global_base_ptr;
-        for (uint32_t m = 0; m < num_groups; ++m) {
-            auto merged = combine_welford_stats<stick_stride_u16>(
-                second_gathered_u16 + m * 2,
-                second_gathered_u16 + m * 2 + 1,
-                second_ring_size,
-                count_per_device * ring_size);
-            auto p_out_means = reinterpret_cast<volatile uint16_t*>(out_ptr);
-            auto p_out_vars = reinterpret_cast<volatile uint16_t*>(out_ptr + single_tile_size_bytes);
-            p_out_means[0] = merged.mean;
-            p_out_vars[0] = merged.variance;
-            out_ptr += 2 * single_tile_size_bytes;
-        }
-        dfb_stats_gathered.pop_front(second_ring_size);
-#endif
-
         // Batched mcast-back: broadcast the whole dfb_ex_global region (the GLOBAL stat for every
         // group) to the receiver cores in one shot, then release them with one semaphore multicast.
-        if (num_mcast_cores > 1) {
+        if constexpr (num_mcast_cores > 1) {
             constexpr uint32_t mcast_bytes = 2 * num_groups * single_tile_size_bytes;
             noc.async_write_multicast(
                 CoreLocalMem<uint32_t>(global_base_ptr),

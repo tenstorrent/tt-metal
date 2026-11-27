@@ -14,12 +14,11 @@
 #include "concat_s2i_program_factory.hpp"
 #include "concat_block_sharded_program_factory.hpp"
 #include "concat_tiled_unaligned_program_factory.hpp"
-#include "concat_tiled_row_shift_program_factory.hpp"
 
 #include "concat_device_operation_types.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -35,8 +34,7 @@ struct ConcatDeviceOperation {
         ConcatS2SMultiProgramFactory,
         ConcatS2IProgramFactory,
         ConcatBlockShardedProgramFactory,
-        ConcatTiledUnalignedProgramFactory,
-        ConcatTiledRowShiftProgramFactory>;
+        ConcatTiledUnalignedProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -76,5 +74,9 @@ Tensor concat_impl(
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+
+// Max buffer alignment across inputs and the resolved output buffer type (RM width-concat NOC rule).
+uint32_t rm_width_concat_common_alignment(
+    const std::vector<Tensor>& tensors, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement

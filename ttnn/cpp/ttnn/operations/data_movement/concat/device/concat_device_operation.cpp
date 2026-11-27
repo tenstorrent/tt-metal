@@ -10,9 +10,8 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/operations/common/hash_without_rows.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
@@ -47,11 +46,6 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     if (!uses_zero_copy_sharded_factory(input_tensors, args.output_mem_config)) {
         // The launch infra allocates the output tensor before factory selection, so the
         // allocator's free window already accounts for it.
-        if (!input_is_sharded &&
-            can_use_tiled_row_shift_concat(
-                input_tensors, args.dim, args.groups, args.output_mem_config, args.sub_core_grids)) {
-            return ConcatTiledRowShiftProgramFactory{};
-        }
         if (!input_is_sharded &&
             can_use_tiled_unaligned_concat(
                 input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
@@ -115,43 +109,8 @@ ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
     // factory -- silently pinning the slow fallback, or worse, replaying a native program whose CB
     // addresses were baked in for a free L1 window into a window a live tensor now occupies.
     auto factory = select_program_factory(operation_attributes, tensor_args);
-
-    // Aliasing signature: for each input, the position of the first input backed by the same
-    // MeshTensor. The Metal 2.0 spec-factory cache path (resolve_bindings, in mesh_device_operation
-    // _adapter.hpp) records each input's argument position by first MeshTensor-address match and
-    // freezes that table into the cache entry, so concat([x, x]) binds both inputs to position 0.
-    // Folding this partition into the hash gives aliased and distinct call patterns separate cache
-    // entries: a later concat([a, b]) of the same spec then misses and rebinds both inputs, instead
-    // of hitting the [x, x] entry and silently reading the first input twice. The legacy Buffer*
-    // patcher had an equivalent aliasing bail-out; this restores that guarantee for the ported
-    // factories. (The general fix belongs in resolve_bindings and is tracked separately.)
-    const auto& input_tensors = tensor_args.input_tensors;
-    std::vector<uint32_t> input_alias_signature(input_tensors.size());
-    for (uint32_t i = 0; i < input_tensors.size(); ++i) {
-        input_alias_signature[i] = i;
-        for (uint32_t j = 0; j < i; ++j) {
-            if (&input_tensors[j].mesh_tensor() == &input_tensors[i].mesh_tensor()) {
-                input_alias_signature[i] = j;
-                break;
-            }
-        }
-    }
-
-    if (std::holds_alternative<ttnn::prim::ConcatTiledRowShiftProgramFactory>(factory) ||
-        (std::holds_alternative<ttnn::prim::ConcatProgramFactory>(factory) &&
-         ttnn::prim::concat_program_is_row_free(operation_attributes, tensor_args))) {
-        // The program takes every row count at run time, so the inputs' rows stay out of the key.
-        std::vector<ttsl::hash::hash_t> input_hashes;
-        input_hashes.reserve(input_tensors.size());
-        for (const auto& input : input_tensors) {
-            input_hashes.push_back(ttnn::operations::common::hash_spec_without_rows(input));
-        }
-        return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-            operation_attributes, input_hashes, factory.index(), input_alias_signature);
-    }
-
     return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes, tensor_args, factory.index(), input_alias_signature);
+        operation_attributes, tensor_args, factory.index());
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -201,8 +160,6 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         }
     }
     if (warn_about_alignment &&
-        !can_use_tiled_row_shift_concat(
-            input_tensors, args.dim, args.groups, args.output_mem_config, args.sub_core_grids) &&
         !can_use_tiled_unaligned_concat(
             input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
         log_warning(
@@ -396,33 +353,34 @@ uint32_t calculate_max_tensors_per_concat(
         const auto memory_layout = input_tensors[0].memory_config().memory_layout();
 
         if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            // Block-sharded factory uses CB IDs 0..N-1 for inputs and CB 16 for output,
-            // so the hard max is 16 inputs.
+            // Block-sharded concat is capped at 16 inputs. Its kernel compiles one copy of the
+            // copy loop per input (with_input), and at 16 inputs it already takes about 10.7 KB
+            // of NCRISC's 16 KB kernel space with Watcher on, so raising the cap needs a look at
+            // binary size.
             constexpr uint32_t block_sharded_max = 16;
             log_debug(tt::LogOp, "ttnn.concat: Block-sharded concat - max_tensors = {}", block_sharded_max);
             return block_sharded_max;
         }
 
         // Other sharded layouts (height/width) go to ConcatS2SMultiProgramFactory:
-        //   Compile-time: cb_dst_id, page_size, output_stride, num_input_tensors,
-        //                 output_block_stride, block_start, block_count                = 7
-        //   Runtime per input, per RISC: pages_per_stick, num_sticks, write_offset,
-        //                 read_offset, block_stride                                    = 5N
-        // Total 7 + 5N against the 256 the concat kernels are built with.
+        //   Compile-time: page_size, output_stride, output_block_stride, block_start,
+        //                 block_count                                                  = 5
+        //   Runtime arrays per RISC, one element per input: pages_per_stick, num_sticks,
+        //                 write_offset, read_offset, block_stride                      = 5N
+        // Total 5 + 5N against the 256 the concat kernels are built with.
         constexpr uint32_t effective_args_limit = 256;
-        constexpr uint32_t base_args = 7;
+        constexpr uint32_t base_args = 5;
         constexpr uint32_t args_per_tensor = 5;
 
         uint32_t theoretical_max = (effective_args_limit - base_args) / args_per_tensor;
         uint32_t safe_max = static_cast<uint32_t>(theoretical_max * 0.9);
 
-        // Not the binding limit in practice: that factory aliases each input shard as a circular
-        // buffer, indices 0..N-1 with the output at 16, so it asserts above 16 inputs long before
-        // the arg budget runs out. Capping this at 16 to make it batch instead does not help --
-        // the batching path below hands every batch the *final* output_mem_config, whose shard
-        // height is sized for all N inputs, so a 16-input batch is asked for an N-input shard and
-        // fails in TensorSpec. That is why the block-sharded path rejects batching outright. Left
-        // as the arg model it claims to be; the 16-input ceiling reports itself clearly.
+        // Not the binding limit in practice: that factory caps itself at 16 inputs
+        // (max_input_tensors), so it asserts above 16 long before the arg budget runs out. Capping this at 16 to make
+        // it batch instead does not help -- the batching path below hands every batch the *final* output_mem_config,
+        // whose shard height is sized for all N inputs, so a 16-input batch is asked for an N-input shard and fails in
+        // TensorSpec. That is why the block-sharded path rejects batching outright. Left as the arg model it claims to
+        // be; the 16-input ceiling reports itself clearly.
         log_debug(
             tt::LogOp, "ttnn.concat: Sharded concat - theoretical_max = {}, safe_max = {}", theoretical_max, safe_max);
 
@@ -597,15 +555,6 @@ Tensor concat_impl(
         }
         return concat_impl(interleaved_inputs, dim, groups, output_mem_config, sub_core_grids);
     }
-    if (input_tensors[0].layout() == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
-        for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(
-                (input_tensor.padded_shape()[dim] * input_tensor.element_size()) %
-                        input_tensor.mesh_buffer().alignment() ==
-                    0,
-                "Current concat implementation requires aligned last dim when concatting on last dim");
-        }
-    }
     // Determine target layout by checking all inputs
     // Start with first input's layout, but may need to fall back to ROW_MAJOR
     Layout target_layout = input_tensors[0].layout();
@@ -636,6 +585,20 @@ Tensor concat_impl(
         }
     }
 
+    // Post-conversion RM width-concat NOC rule: output alignment also counts (writer lands in output pages).
+    if (target_layout == Layout::ROW_MAJOR && normalized_dim == ref_rank - 1) {
+        const uint32_t common_align = rm_width_concat_common_alignment(formatted_tensors, output_mem_config);
+        for (const auto& t : formatted_tensors) {
+            TT_FATAL(
+                (static_cast<uint64_t>(t.padded_shape()[normalized_dim]) * t.element_size()) % common_align == 0,
+                "ttnn.concat: RM width-concat requires every input's last dim to be a multiple of the max buffer "
+                "alignment across inputs and the output (got {} elements, element size {}, max alignment {}).",
+                t.padded_shape()[normalized_dim],
+                t.element_size(),
+                common_align);
+        }
+    }
+
     if (output_mem_config.is_sharded() && target_layout == Layout::ROW_MAJOR &&
         output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
         // For width/block-sharded RM output the buffer page width equals the shard width,
@@ -649,6 +612,22 @@ Tensor concat_impl(
         return ttnn::to_memory_config(interleaved_result, output_mem_config, std::nullopt);
     }
     return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
+}
+
+uint32_t rm_width_concat_common_alignment(
+    const std::vector<Tensor>& tensors, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    uint32_t align = 0;
+    for (const auto& t : tensors) {
+        TT_FATAL(
+            t.storage_type() == ttnn::StorageType::DEVICE,
+            "ttnn.concat: expected device storage, got storage type {}",
+            t.storage_type());
+        align = std::max<uint32_t>(align, t.mesh_buffer().alignment());
+    }
+    const uint32_t out_align = output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM
+                                   ? tt::tt_metal::hal::get_dram_alignment()
+                                   : tt::tt_metal::hal::get_l1_alignment();
+    return std::max(align, out_align);
 }
 
 }  // namespace ttnn::operations::data_movement

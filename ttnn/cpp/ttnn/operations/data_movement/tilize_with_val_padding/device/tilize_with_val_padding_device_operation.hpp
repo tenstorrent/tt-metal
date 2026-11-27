@@ -34,11 +34,9 @@ struct TilizeWithValPaddingDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    // Leaves the shapes out of the key, but for the last dims, when the multi-core interleaved program serves
-    // every shape (tilize_with_val_padding_interleaved_is_shape_free).
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
@@ -55,8 +53,6 @@ Tensor tilize_with_val_padding(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool runtime_shapes = false);
+    const std::optional<CoreRangeSet>& sub_core_grids);
 }  // namespace ttnn::prim

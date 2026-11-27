@@ -16,8 +16,7 @@ struct ReshapeViewDeviceOperation {
     using tensor_args_t = ReshapeViewInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t =
-        std::variant<ReshapeViewRMProgramFactory, ReshapeViewTiledProgramFactory, ReshapeViewTiledRowsProgramFactory>;
+    using program_factory_t = std::variant<ReshapeViewRMProgramFactory, ReshapeViewTiledProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
@@ -41,7 +40,6 @@ ttnn::Tensor reshape_view(
     const ttnn::Shape& padded_output_shape,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     bool recreate_mapping_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grid,
-    bool runtime_shapes = false);
+    const std::optional<CoreRangeSet>& sub_core_grid);
 
 }  // namespace ttnn::prim

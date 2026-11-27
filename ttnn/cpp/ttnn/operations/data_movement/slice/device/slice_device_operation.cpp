@@ -7,7 +7,6 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include "ttnn/operations/common/hash_without_rows.hpp"
 
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_rm_sharded.hpp"
@@ -16,9 +15,9 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 using namespace tt::tt_metal;
 
@@ -197,23 +196,6 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             out_tensor.tensor_spec().tensor_layout());
     }
     const auto output_spec = compute_output_specs(args, tensor_args);
-    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
-    if (output_nd_shard_spec.has_value() &&
-        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
-        output_spec.logical_shape().volume() != 0) {
-        // The allocator only enforces this in compute_page_mapping, which the slice kernels never call, so an
-        // invalid output spec would otherwise reach the device and hang it.
-        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
-        TT_FATAL(
-            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
-            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
-            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
-            "to derive one from the input.",
-            *output_nd_shard_spec,
-            output_spec.logical_shape(),
-            distribution.has_value() ? distribution->num_shards() : 0,
-            distribution.has_value() ? distribution->num_cores() : 0);
-    }
     // noc_async_{read,write}_sharded walks a rank-1 ND spec one aligned page at a time, so a shard whose payload is
     // not alignment-sized would have its padding read as data (or real data skipped) once a transfer goes past the
     // shard's payload. Reject sub-aligned rank-1 shards unless every transfer provably stays inside the payload:
@@ -402,9 +384,28 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
-    return tt::tt_metal::TensorSpec(
+    auto output_spec = tt::tt_metal::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
+
+    // Creating the output buffer would also reject a CONTIGUOUS_1D spec whose shard count isn't a multiple of its
+    // nodes. Checking here first gives an error that names slice and says how to fix memory_config.
+    const auto& output_nd_shard_spec = output_spec.memory_config().nd_shard_spec();
+    if (output_nd_shard_spec.has_value() &&
+        output_nd_shard_spec->shard_distribution_strategy == tt::tt_metal::ShardDistributionStrategy::CONTIGUOUS_1D &&
+        output_spec.logical_shape().volume() != 0) {
+        const auto distribution = output_spec.compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            distribution.has_value() && distribution->num_shards() % distribution->num_cores() == 0,
+            "Slice output ND shard spec {} is CONTIGUOUS_1D but splits the output shape {} into {} shard(s), which is "
+            "not a multiple of its {} core(s). Pass a memory_config that fits the sliced shape, or omit memory_config "
+            "to derive one from the input.",
+            *output_nd_shard_spec,
+            output_spec.logical_shape(),
+            distribution.has_value() ? distribution->num_shards() : 0,
+            distribution.has_value() ? distribution->num_cores() : 0);
+    }
+    return output_spec;
 }
 
 Tensor SliceDeviceOperation::create_output_tensors(
@@ -460,29 +461,6 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
     // specs and slice params so any two invocations with different core-grid sizes get distinct
     // keys. Same pattern as concat fix in PR #45144 (issue #47602).
     auto factory = select_program_factory(operation_attributes, tensor_args);
-    if (std::holds_alternative<SliceTileProgramFactory>(factory) &&
-        slice_tile_program_is_row_free(operation_attributes, tensor_args)) {
-        // The program takes every row count and row bound at run time, so they stay out of the key. With
-        // fewer output tiles than cores the core set follows the output's tile count, so the output spec,
-        // rows included, stays in.
-        const bool fills_grid = slice_tile_program_fills_grid(operation_attributes, tensor_args);
-        auto start = operation_attributes.slice_start;
-        auto end = operation_attributes.slice_end;
-        start[-2] = 0;
-        end[-2] = 0;
-        using ttnn::operations::common::hash_spec_without_rows;
-        const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-        return tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
-            start,
-            end,
-            operation_attributes.step,
-            operation_attributes.output_mem_config,
-            operation_attributes.output_mem_config_inherited,
-            factory.index(),
-            fills_grid,
-            hash_spec_without_rows(tensor_args.input),
-            fills_grid ? hash_spec_without_rows(output_spec) : ttsl::hash::hash_objects_with_default_seed(output_spec));
-    }
     auto hash = tt::tt_metal::operation::hash_operation<SliceDeviceOperation>(
         operation_attributes.slice_start,
         operation_attributes.slice_end,
@@ -598,17 +576,36 @@ SliceDeviceOperation::tensor_return_value_t slice(
     const std::optional<Tensor>& preallocated_output,
     bool output_mem_config_inherited) {
     using OperationType = ttnn::prim::SliceDeviceOperation;
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
+    const auto attributes = [&](const tt::tt_metal::MemoryConfig& mem_config, bool inherited) {
+        return OperationType::operation_attributes_t{
             slice_start,
             slice_end,
             step,
-            output_mem_config,
+            mem_config,
             use_tensor_args,
             slice_dim,
             num_devices,
             sub_core_grids,
-            output_mem_config_inherited},
-        OperationType::tensor_args_t{input, std::move(start_tensor), std::move(end_tensor), preallocated_output});
+            inherited};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input,
+        output_mem_config,
+        preallocated_output,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config, output_mem_config_inherited),
+                OperationType::tensor_args_t{input, start_tensor, end_tensor, preallocated_output});
+        },
+        [&](const Tensor& launch_input, const std::optional<tt::tt_metal::MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                explicit_mem_config.has_value() ? attributes(*explicit_mem_config, false)
+                                                : attributes(output_mem_config, output_mem_config_inherited),
+                OperationType::tensor_args_t{
+                    launch_input,
+                    start_tensor,
+                    end_tensor,
+                    explicit_mem_config.has_value() ? std::nullopt : preallocated_output});
+        });
 }
 }  // namespace ttnn::prim

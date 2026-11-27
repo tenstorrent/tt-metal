@@ -10,7 +10,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "padded_slice_device_operation_types.hpp"
 #include "padded_slice_rm_program_factory.hpp"
 #include "padded_slice_tile_program_factory.hpp"
@@ -28,18 +28,11 @@ struct PaddedSliceDeviceOperation {
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
-
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
-
-// Whether a call's program serves every start and input size: with runtime_shapes, a row-major interleaved input
-// and no preallocated output. Its per-core args are then recomputed on every hit, and the H and W ends may lie past
-// the input.
-bool padded_slice_rm_is_shape_free(const PaddedSliceParams& args, const PaddedSliceInputs& tensor_args);
 
 }  // namespace ttnn::experimental::prim
 
@@ -51,7 +44,6 @@ ttnn::experimental::prim::PaddedSliceDeviceOperation::tensor_return_value_t padd
     const ttnn::Shape& padded_slice_end,
     const ttnn::Shape& step,
     const MemoryConfig& output_mem_config,
-    const std::optional<Tensor>& preallocated_output = std::nullopt,
-    bool runtime_shapes = false);
+    const std::optional<Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

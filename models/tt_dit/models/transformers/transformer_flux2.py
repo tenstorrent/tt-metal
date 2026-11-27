@@ -10,10 +10,10 @@ import torch
 
 import ttnn
 
-from ...blocks.attention_opt import Attention, total_sequence_length_tensor
+from ...blocks.attention_opt import Attention
 from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
+from ...layers.linear import ColParallelLinear, RowParallelLinear, prepare_chunked_linear_output
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
@@ -53,12 +53,9 @@ class Flux2SingleTransformerBlock(Module):
         padding_config: PaddingConfig | None,
         is_fsdp: bool = False,
         shard_prompt: bool = False,
-        row_capacity: int | None = None,
     ) -> None:
-        """`row_capacity`: see `Flux2Transformer`."""
         super().__init__()
 
-        self._row_capacity = row_capacity
         tp_axis = parallel_config.tensor_parallel.mesh_axis
         mlp_hidden_dim = 3 * dim
         fsdp_mesh_axis = parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
@@ -80,8 +77,6 @@ class Flux2SingleTransformerBlock(Module):
             per_head_norm=True,
             is_fsdp=is_fsdp,
             shard_prompt=shard_prompt,
-            row_capacity=row_capacity,
-            row_independent_matmul_config=True,
         )
 
         self.norm = DistributedLayerNorm(
@@ -92,7 +87,6 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             mesh_device=device,
             ccl_manager=ccl_manager,
-            row_capacity=row_capacity,
         )
 
         # Shard output, since size of input dimension << size of output dimension.
@@ -105,7 +99,6 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             fsdp_mesh_axis=fsdp_mesh_axis,
             ccl_manager=ccl_manager,
-            row_independent_matmul_config=True,
         )
 
         # Shard input, since size of input dimension >> size of output dimension.
@@ -117,7 +110,6 @@ class Flux2SingleTransformerBlock(Module):
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
             fsdp_mesh_axis=fsdp_mesh_axis,
-            row_independent_matmul_config=True,
             # No explicit L1 mm_memory_config: the fused MMRS path now hands the MM output to the
             # RS through the rolling L1 window by default (see Linear.forward_fused_addcmul).
         )
@@ -162,7 +154,6 @@ class Flux2SingleTransformerBlock(Module):
         skip_time_embed_activation_fn: bool = False,
         spatial_sequence_length: int,
         compute_prompt_output: bool = True,
-        total_sequence_length: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
         """Run a single-stream block.
 
@@ -183,7 +174,6 @@ class Flux2SingleTransformerBlock(Module):
             sequence_1=x_c,
             sequence_1_rope=combined_rope,
             sequence_1_length=spatial_sequence_length,
-            total_sequence_length=total_sequence_length,
         )
 
         # slice out spatial only. Prompt not needed. The variable names are left to prevent code bloat. But this is just spatial after the slice.
@@ -197,14 +187,11 @@ class Flux2SingleTransformerBlock(Module):
             parallel_config=self._parallel_config,
             use_heuristic_mmcfg=True,
             core_grid=Attention.get_core_grid(x_c.shape[-2], self._mesh_device.compute_with_storage_grid_size()),
-            persistent_buffer_rows=self._row_capacity,
         )
 
         if self._ccl_manager.topology == ttnn.Topology.Ring:
             return self.proj_out.forward_fused_addcmul([x_c_attn, x_c_mlp], spatial_prompt_concat, gate_msa, scalar=1.0)
-        # Not addcmul, which compiles a program per row count.
-        projected = self.proj_out([x_c_attn, x_c_mlp], persistent_buffer_rows=self._row_capacity)
-        return ttnn.add(spatial_prompt_concat, ttnn.multiply(projected, gate_msa))
+        return ttnn.addcmul(spatial_prompt_concat, self.proj_out([x_c_attn, x_c_mlp]), gate_msa)
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -226,18 +213,11 @@ class Flux2Transformer(Module):
         is_fsdp: bool = False,
         shard_prompt: bool = False,
         guidance_embeds: bool = True,
-        row_capacity: int | None = None,
     ) -> None:
-        """`row_capacity` is the largest per-device row count of the single blocks' input (spatial,
-        reference and prompt tokens, a multiple of 32), which no other stream exceeds. With it, the
-        norms and the attention's head split and merge take the row count at run time, so a new image
-        size compiles none of them; None keeps one program per row count."""
         super().__init__()
 
         inner_dim = num_attention_heads * attention_head_dim
         tp_axis = parallel_config.tensor_parallel.mesh_axis
-        self._row_capacity = row_capacity
-        self._mesh_device = device
 
         self.time_guidance_embed = CombinedTimestepGuidanceTextProjEmbeddings(
             embedding_dim=inner_dim,
@@ -251,14 +231,7 @@ class Flux2Transformer(Module):
             joint_attention_dim, inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis
         )
 
-        self.x_embedder = ColParallelLinear(
-            in_channels,
-            inner_dim,
-            bias=False,
-            mesh_device=device,
-            mesh_axis=tp_axis,
-            row_independent_matmul_config=True,
-        )
+        self.x_embedder = ColParallelLinear(in_channels, inner_dim, bias=False, mesh_device=device, mesh_axis=tp_axis)
 
         self.transformer_blocks = ModuleList(
             TransformerBlock(
@@ -277,8 +250,6 @@ class Flux2Transformer(Module):
                 mesh_device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
-                row_capacity=row_capacity,
-                row_independent_matmul_config=True,
             )
             for i in range(num_layers)
         )
@@ -294,7 +265,6 @@ class Flux2Transformer(Module):
                 device=device,
                 is_fsdp=is_fsdp,
                 shard_prompt=shard_prompt,
-                row_capacity=row_capacity,
             )
             for i in range(num_single_layers)
         )
@@ -317,15 +287,17 @@ class Flux2Transformer(Module):
             mesh_device=device,
             mesh_axis=tp_axis,
             ccl_manager=ccl_manager,
-            row_capacity=row_capacity,
         )
 
-        # Replicated rather than split over TP: its input is all-gathered on the channels, which
-        # takes the token count at run time. A split layer would reduce-scatter its 128 output
-        # channels over the token rows (too few channels to scatter over TP 8), and that
-        # reduce-scatter compiles a program per token count. The weights are 0.75 MB.
-        self.proj_out = Linear(
-            inner_dim, out_channels, bias=False, mesh_device=device, row_independent_matmul_config=True
+        self.proj_out = RowParallelLinear(
+            inner_dim,
+            out_channels,
+            bias=False,
+            mesh_device=device,
+            mesh_axis=tp_axis,
+            ccl_manager=ccl_manager,
+            # No explicit L1 mm_memory_config: this layer's fused path uses the rolling-window L1
+            # handoff by default, and its plain forward never read mm_memory_config.
         )
 
         self.device = device
@@ -383,7 +355,6 @@ class Flux2Transformer(Module):
         spatial_sequence_length: int,
         prompt_sequence_length: int,
         compute_prompt_output: bool = False,
-        total_sequence_length: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Run the model forward.
 
@@ -402,15 +373,7 @@ class Flux2Transformer(Module):
             spatial_sequence_length: int.
             prompt_sequence_length: int.
             compute_prompt_output: bool. Whether to compute the prompt output. Final prompt output is typically unused.
-            total_sequence_length: spatial_sequence_length + prompt_sequence_length as a `total_sequence_length_tensor`,
-                for the attention with `row_capacity`. Without it, the transformer builds one for this
-                call, which allocates and writes during trace capture, so a traced caller must pass
-                it as a trace input.
         """
-        if total_sequence_length is None and self._row_capacity is not None:
-            total_sequence_length = total_sequence_length_tensor(
-                spatial_sequence_length + prompt_sequence_length, self._mesh_device
-            )
         time_embed = self.time_guidance_embed(timestep=timestep, guidance=guidance)
         ttnn.silu(time_embed, output_tensor=time_embed)
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
@@ -440,7 +403,6 @@ class Flux2Transformer(Module):
                 spatial_sequence_length=spatial_sequence_length,
                 prompt_sequence_length=prompt_sequence_length,
                 skip_time_embed_activation_fn=True,
-                total_sequence_length=total_sequence_length,
             )
 
             # if i % 6 == 0:
@@ -461,7 +423,6 @@ class Flux2Transformer(Module):
                 temb_mod_params=single_stream_mod,
                 spatial_sequence_length=spatial_prompt_sequence_length,
                 skip_time_embed_activation_fn=True,
-                total_sequence_length=total_sequence_length,
                 compute_prompt_output=(i < num_single_blocks)
                 or compute_prompt_output,  # prompt is unused for the last block.
             )
@@ -475,5 +436,4 @@ class Flux2Transformer(Module):
             self.norm_out(ttnn.unsqueeze(spatial, 0), dynamic_weight=norm_out_scale, dynamic_bias=norm_out_shift), 0
         )
 
-        spatial = self._ccl_manager.all_gather(spatial, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-        return self.proj_out(spatial)
+        return self.proj_out(spatial, gather_output=True)

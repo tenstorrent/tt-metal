@@ -204,7 +204,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     gather/codegen/gather_codegen_supported.cpp
     gather/tosa/gather_tosa.cpp
     concat/device/concat_tiled_unaligned_program_factory.cpp
-    concat/device/concat_tiled_row_shift_program_factory.cpp
     common/synthesize_output_shard_spec.cpp
 )
 

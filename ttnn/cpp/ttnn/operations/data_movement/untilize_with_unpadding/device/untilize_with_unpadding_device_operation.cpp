@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
@@ -116,42 +116,6 @@ UntilizeWithUnpaddingDeviceOperation::program_factory_t UntilizeWithUnpaddingDev
         }
     }
     return UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory{};
-}
-
-ttsl::hash::hash_t UntilizeWithUnpaddingDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const Tensor& input) {
-    const auto full_hash = [&] {
-        return ttsl::hash::hash_objects_with_default_seed(
-            ttsl::hash::type_hash<UntilizeWithUnpaddingDeviceOperation>, operation_attributes, input);
-    };
-    // The flag first: without it no call pays for selecting the factory a second time.
-    if (!untilize_with_unpadding_interleaved_is_shape_free(operation_attributes, input)) {
-        return full_hash();
-    }
-    const auto factory = select_program_factory(operation_attributes, input);
-    if (!std::holds_alternative<UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory>(factory)) {
-        return full_hash();
-    }
-    // The kernels take the counts at run time and the buffers follow the row width; the output end is the
-    // output shape, of which only the last dim shapes the program.
-    const auto& layout = input.tensor_spec().tensor_layout();
-    return tt::tt_metal::operation::hash_operation<UntilizeWithUnpaddingDeviceOperation>(
-        factory.index(),
-        operation_attributes.output_tensor_end.rank(),
-        operation_attributes.output_tensor_end[-1],
-        operation_attributes.output_mem_config,
-        operation_attributes.use_multicore,
-        operation_attributes.fp32_dest_acc_en,
-        operation_attributes.enough_space_height,
-        operation_attributes.sub_core_grids,
-        operation_attributes.runtime_shapes,
-        layout.get_data_type(),
-        layout.get_page_config(),
-        layout.get_memory_config(),
-        layout.get_alignment(),
-        input.logical_shape().rank(),
-        input.logical_shape()[-1],
-        input.padded_shape()[-1]);
 }
 
 void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
@@ -650,8 +614,7 @@ Tensor untilize_with_unpadding(
     bool use_multicore,
     bool fp32_dest_acc_en,
     bool enough_space_height,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool runtime_shapes) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<UntilizeWithUnpaddingDeviceOperation>(
         UntilizeWithUnpaddingParams{
             .output_tensor_end = output_tensor_end,
@@ -659,8 +622,7 @@ Tensor untilize_with_unpadding(
             .use_multicore = use_multicore,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .enough_space_height = enough_space_height,
-            .sub_core_grids = sub_core_grids,
-            .runtime_shapes = runtime_shapes},
+            .sub_core_grids = sub_core_grids},
         input_tensor);
 }
 

@@ -12,9 +12,9 @@
 #include "ttnn_test_fixtures.hpp"
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::api_test {
@@ -231,7 +231,7 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     const auto snapshot = emitted(copy);
     EXPECT_EQ(snapshot.compile_time_args.at(1), 0u);
     EXPECT_EQ(test::emitted_metadata(snapshot.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     tt::tt_metal::DataMovementConfig kernel_config;
     std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> rt{{{0, 0}, {}}, {{3, 0}, {}}};
     copy.attach(
@@ -243,38 +243,6 @@ TEST_F(McastFixture, HandshakeSubsetOwnsDataAndVariesBySender) {
     EXPECT_EQ(test::emitted_metadata(kernel_config.compile_args, 0).mcast.ack_count, UINT32_MAX);
     EXPECT_EQ(rt.at(0).second.at(2), 1u);  // Generic roles, phase, then per-sender ACK.
     EXPECT_EQ(rt.at(1).second.at(2), 2u);
-}
-
-TEST_F(McastFixture, RuntimeAckCountKeepsCompileTimeArgsAcrossHandshakeSets) {
-    const auto receivers = grid({0, 0}, {3, 0});
-    const auto make = [&](const CoreRangeSet& handshake, bool runtime_ack_count) {
-        return Mcast(
-            *device_,
-            McastConfig{.handshake_cores = handshake, .runtime_ack_count = runtime_ack_count},
-            receivers,
-            4,
-            McastFixedSenderConfig{});
-    };
-    const auto three = grid({0, 0}, {2, 0});
-    const auto four = grid({0, 0}, {3, 0});
-    const std::vector<std::vector<CoreCoord>> group{{{0, 0}, {1, 0}, {2, 0}, {3, 0}}};
-    const std::vector<std::vector<CoreCoord>> sender{{{0, 0}}};
-
-    // A uniform count is a compile-time constant by default, so the handshake set changes the CT args.
-    const auto ct_three = make(three, false);
-    const auto ct_four = make(four, false);
-    expect_pattern(ct_three, device_, group, sender, {{2}});
-    expect_pattern(ct_four, device_, group, sender, {{3}});
-    EXPECT_NE(emitted(ct_three).compile_time_args, emitted(ct_four).compile_time_args);
-
-    // With runtime_ack_count the count is a runtime word and the CT args are the same.
-    const auto rt_three = make(three, true);
-    const auto rt_four = make(four, true);
-    expect_pattern(rt_three, device_, group, sender, {{2}});
-    expect_pattern(rt_four, device_, group, sender, {{3}});
-    const auto rt_three_kernel = emitted(rt_three);
-    EXPECT_EQ(test::emitted_metadata(rt_three_kernel.compile_time_args, 0).mcast.ack_count, UINT32_MAX);
-    EXPECT_EQ(rt_three_kernel.compile_time_args, emitted(rt_four).compile_time_args);
 }
 
 TEST_F(McastFixture, DefaultEmptyAndDisabledHandshakes) {
@@ -395,7 +363,7 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     auto direct_ct = kernel.compile_time_args;
     channel.attach(descriptor, "channel", std::array{std::ref(kernel)}, 0);
     auto direct = channel;
-    tt::tt_metal::Program program;
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram(*device_);
     const auto ct_offset = static_cast<uint32_t>(direct_ct.size());
     const auto rt_offset = static_cast<uint32_t>(
         std::max_element(direct_rt.begin(), direct_rt.end(), [](const auto& lhs, const auto& rhs) {
@@ -579,7 +547,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
         .work_units = {{.name = "mixed", .kernels = {targets.front()}, .target_nodes = receivers}}};
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
-    auto workload = m2::experimental::MakeMeshWorkloadFromSpec(device, spec);
+    m2::distributed::MeshWorkload workload(device, spec);
     auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
@@ -594,7 +562,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
             tt::tt_metal::detail::WriteToDeviceL1(physical, core, report_addr, zero);
         }
         for (auto& [region, program] : workload.get_programs()) {
-            m2::experimental::SetProgramRunArgs(program, invocation);
+            program.set_program_run_args(invocation);
         }
         EnqueueMeshWorkload(device.mesh_command_queue(), workload, true);
         for (const auto& core : corerange_to_cores(receivers)) {

@@ -21,16 +21,16 @@
 #include "t3k_mesh_descriptor_chip_mappings.hpp"
 #include "utils.hpp"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
 #include <enchantum/enchantum.hpp>
@@ -391,7 +391,7 @@ TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentConfig
     });
 }
 
-// Negative: every FabricConfigDescriptor field other than fabric_config, mesh_id and host_rank must be identical on
+// Negative: every FabricSettings field other than fabric_config, mesh_id and host_rank must be identical on
 // every rank. Here all ranks agree on fabric_config (FABRIC_2D) but one rank uses a different reliability_mode, and
 // validate_fabric_config_compatibility() must reject it. reliability_mode stands in for all such uniform fields.
 TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigRejectsDivergentReliabilityMode) {

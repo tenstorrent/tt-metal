@@ -10,7 +10,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.pack.pack import pack_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource
+from fuser.operand import BfdId
 from fuser.pack_node import PackNode
 
 
@@ -34,9 +34,7 @@ class Packer(BasePacker):
         tensor_shape = pack_node.output.tile_shape.cpp_value
         return (
             "{\n"
-            + pack_node.output.bfd_alloc_and_program(
-                BfdResource.PACK0, result_name="bfd_id"
-            )
+            + pack_node.output.program_bfd(BfdId.PACK0, result_name="bfd_id")
             + f"_llk_pack_init_(bfd_id, {tensor_shape}, 1);\n"
             + "}\n"
         )

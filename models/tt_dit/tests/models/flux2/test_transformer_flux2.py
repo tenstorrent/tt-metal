@@ -73,8 +73,6 @@ class ModelLocationGenerator(Protocol):
         pytest.param(7, 47, id="single_blocks"),
     ],
 )
-# Pinned: programs built for twice the rows the input has, which take the row count at run time.
-@pytest.mark.parametrize("pinned_rows", [False, True], ids=["input_rows", "pinned_rows"])
 def test_transformer(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -89,17 +87,10 @@ def test_transformer(
     prompt_seq_len: int,
     skip_layers: int,
     skip_single_layers: int,
-    pinned_rows: bool,
     model_location_generator: ModelLocationGenerator,
 ) -> None:
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
-
-    spatial_seq_len = height * width // 16**2
-
-    # The single blocks' rows per device, the most any stream has.
-    rows = spatial_seq_len // sp_factor + (prompt_seq_len // sp_factor if shard_prompt else prompt_seq_len)
-    row_capacity = -(-2 * rows // 32) * 32 if pinned_rows else None
 
     logger.info(
         f"test_transformer: mesh={tuple(mesh_device.shape)}, sp={sp_factor}, tp={tp_factor}, "
@@ -177,7 +168,6 @@ def test_transformer(
         padding_config=padding_config,
         is_fsdp=fsdp,
         shard_prompt=shard_prompt,
-        row_capacity=row_capacity,
     )
 
     cache.load_model(
@@ -190,6 +180,8 @@ def test_transformer(
         mesh_device=mesh_device,
         is_fsdp=fsdp,
     )
+
+    spatial_seq_len = height * width // 16**2
 
     torch.manual_seed(0)
     spatial = torch.randn([batch_size, spatial_seq_len, in_channels])

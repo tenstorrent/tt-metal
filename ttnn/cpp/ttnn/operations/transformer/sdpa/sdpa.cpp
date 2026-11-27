@@ -48,8 +48,8 @@ ttnn::Tensor scaled_dot_product_attention(
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
     bool output_concat_heads,
-    const std::optional<ttnn::Tensor>& attn_mask_block_map,
-    bool runtime_seq_len) {
+    const std::optional<ttnn::Tensor>& attn_mask_block_map) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -99,8 +99,7 @@ ttnn::Tensor scaled_dot_product_attention(
         windowed_q_token_offset_tensor,
         std::nullopt,  // paged_cache_geometry
         output_concat_heads,
-        attn_mask_block_map,
-        runtime_seq_len);
+        attn_mask_block_map);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -117,6 +116,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -157,6 +157,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<ttnn::Tensor>& attention_sink) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -476,6 +477,7 @@ ttnn::Tensor flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -508,6 +510,7 @@ ttnn::Tensor chunked_flash_mla_prefill(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
@@ -543,6 +546,7 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx) {
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 

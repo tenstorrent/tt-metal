@@ -3,16 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Image pre-processing on the host: a PIL image to `(pixel_values, grid_thws)`, as Kimi-K3's HF
-processor (`reference/kimi_k3_vision_processing.py`) produces them.
+processor (`reference/kimi_k3_vision_processing.py`) produces them. Two steps: `resize_image` (resize and
+pad, uint8) and `pixels_to_patches` (normalize and patchify, float32); `image_to_patches` runs both.
 
 This is layer 1 of the padding: the image is padded with black on the bottom and right to a multiple
 of `merge_kernel_size * patch_size` (28 px), and after normalization that black is -1.0. Those pad
 patches are real tokens. Layer 2, the zero rows up to `max_patches`, is `host_prep.prepare_host_inputs`.
 
 Only RGB images are accepted; every other mode is rejected rather than converted, so transparency
-(which HF composites onto a chessboard) is never silently dropped. Images over `config.max_patches`
-are rejected before the resize, never shrunk to fit. `tests/test_image_prep.py` checks the rest bit
-for bit against the HF copy.
+(which HF composites onto a chessboard) is never silently dropped. The default `config.max_patches`
+holds the grid of every image size; with a smaller one, an image over it is rejected before the
+resize, never shrunk to fit. `tests/test_image_prep.py` checks the rest bit for bit against the HF copy.
 """
 
 from __future__ import annotations
@@ -53,8 +54,9 @@ def resize_plan(width: int, height: int, config: MoonViTConfig) -> ResizePlan:
     return ResizePlan(new_w, new_h, pad_w, pad_h, (new_h + pad_h) // p, (new_w + pad_w) // p)
 
 
-def image_to_patches(image: Image.Image, config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor]:
-    """An RGB PIL image -> `pixel_values` (h*w, 3, p, p) float32 in raster order and `grid_thws` [[1, h, w]] int64.
+def resize_image(image: Image.Image, config: MoonViTConfig) -> np.ndarray:
+    """An RGB PIL image -> uint8 [H, W, 3], resized and padded with black as HF's processor does. H and W are
+    multiples of one merge window (28 px), so the image is whole patches and whole merge windows.
 
     Other modes are rejected: convert them to RGB first, knowing that HF composites alpha onto a chessboard
     and converts after the resize, so a converted image matches HF only if it had no alpha and isn't resized.
@@ -62,23 +64,40 @@ def image_to_patches(image: Image.Image, config: MoonViTConfig) -> tuple[torch.T
     if image.mode != "RGB":
         raise ValueError(f"image mode {image.mode!r} is not supported, only 'RGB'")
     plan = resize_plan(*image.size, config)
-    grid_thws = torch.tensor([[1, plan.grid_h, plan.grid_w]], dtype=torch.int64)
     try:
-        check_grid(grid_thws, config)
+        check_grid(torch.tensor([[1, plan.grid_h, plan.grid_w]]), config)
     except ValueError as e:
         raise ValueError(f"image {image.width}x{image.height}: {e}") from e
 
     image = image.resize((plan.new_w, plan.new_h), resample=Image.Resampling.BICUBIC)
-    x = np.pad(
+    return np.pad(
         np.asarray(image),
         ((0, plan.pad_h), (0, plan.pad_w), (0, 0)),
         mode="constant",
         constant_values=0,
     )
 
-    x = (x / 255.0).astype(np.float32)
+
+def pixels_to_patches(pixels: np.ndarray, config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor]:
+    """`resize_image`'s uint8 [H, W, 3] -> `pixel_values` (h*w, 3, p, p) float32 in raster order and `grid_thws`
+    [[1, h, w]] int64: normalized and cut into patches as HF's processor does."""
+    fh, fw = (k * config.patch_size for k in config.merge_kernel_size)
+    shape = pixels.shape
+    if pixels.dtype != np.uint8 or len(shape) != 3 or shape[2] != 3 or shape[0] % fh or shape[1] % fw:
+        raise ValueError(f"expected uint8 [H, W, 3], H a multiple of {fh} and W of {fw}; got {pixels.dtype} {shape}")
+    p = config.patch_size
+    h, w = pixels.shape[0] // p, pixels.shape[1] // p
+    grid_thws = torch.tensor([[1, h, w]], dtype=torch.int64)
+    check_grid(grid_thws, config)
+
+    x = (pixels / 255.0).astype(np.float32)
     x -= IMAGE_MEAN
     x *= 1.0 / IMAGE_STD
-    p = config.patch_size
-    x = x.reshape(plan.grid_h, p, plan.grid_w, p, 3).transpose(0, 2, 4, 1, 3).reshape(-1, 3, p, p)
+    x = x.reshape(h, p, w, p, 3).transpose(0, 2, 4, 1, 3).reshape(-1, 3, p, p)
     return torch.from_numpy(x), grid_thws
+
+
+def image_to_patches(image: Image.Image, config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor]:
+    """An RGB PIL image -> `pixel_values` (h*w, 3, p, p) float32 in raster order and `grid_thws` [[1, h, w]] int64:
+    `resize_image`, then `pixels_to_patches`."""
+    return pixels_to_patches(resize_image(image, config), config)

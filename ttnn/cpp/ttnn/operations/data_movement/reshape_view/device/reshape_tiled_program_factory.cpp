@@ -8,9 +8,9 @@
 #include <numeric>
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -346,9 +346,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     // Resource names.
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
-    const DFBSpecName MAPPING{"mapping"};         // reader-produces / writer-consumes mapping-page FIFO
-    const DFBSpecName IN_TILES{"in_tiles"};       // reader-produces / writer-consumes input-tile FIFO
-                                                  // (distinct from tensor::input, the input tensor)
+    const DFBSpecName MAPPING{"mapping"};  // reader-produces / writer-consumes mapping-page FIFO
+    const DFBSpecName IN_TILES{"in_tiles"};  // reader-produces / writer-consumes input-tile FIFO
+                                             // (distinct from tensor::input, the input tensor)
     const ScratchpadSpecName WORKING{"working"};  // writer-private L1 scratch page
     const TensorParamName INPUT_T{"input"};
     const TensorParamName MAPPING_T{"map"};  // the op-owned page-mapping tensor
@@ -397,13 +397,12 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
                 TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"},
                 TensorBinding{.tensor_parameter_name = MAPPING_T, .accessor_name = "map"},
             },
-        // The mapping page size depends on the shapes, so it is a runtime arg.
         .compile_time_args =
             {
+                {"Max_Map_Size_Bytes", mapping_page_size_bytes},
                 {"Tile_size_bytes", input_tile_size_bytes},
             },
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx", "Max_Map_Size_Bytes"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page_idx", "end_output_page_idx"}},
         .hw_config = create_reader_datamovement_config(),
     };
 
@@ -428,20 +427,17 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         .compile_time_args =
             {
                 {"Tile_size_bytes", input_tile_size_bytes},
+                {"Max_Map_Entries", max_map_entries},
                 {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page", "Max_Map_Entries"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_output_page", "end_output_page"}},
         .hw_config = create_writer_datamovement_config(),
     };
 
     spec.kernels = {reader, writer};
     spec.tensor_parameters = {
         TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec()},
-        // The mapping is an interleaved row-major tensor whose page size follows the shapes; a
-        // dynamic shape makes the accessor take that page size at runtime, so the reader binary
-        // does not depend on it. The program is still built per shape (the hash covers them).
-        TensorParameter{
-            .unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec(), .relaxations = {.dynamic_tensor_shape = true}},
+        TensorParameter{.unique_id = MAPPING_T, .spec = mapping_owned.tensor_spec()},
         TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec()},
     };
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
@@ -466,15 +462,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         AddRuntimeArgsForNode(
             reader_kra.runtime_arg_values,
             c,
-            {{"start_output_page_idx", page_idx_start},
-             {"end_output_page_idx", page_idx_end},
-             {"Max_Map_Size_Bytes", mapping_page_size_bytes}});
+            {{"start_output_page_idx", page_idx_start}, {"end_output_page_idx", page_idx_end}});
         AddRuntimeArgsForNode(
             writer_kra.runtime_arg_values,
             c,
-            {{"start_output_page", page_idx_start},
-             {"end_output_page", page_idx_end},
-             {"Max_Map_Entries", max_map_entries}});
+            {{"start_output_page", page_idx_start}, {"end_output_page", page_idx_end}});
 
         page_idx_start += increment;
     }
@@ -492,234 +484,6 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
         .run_params = std::move(run_args),
         .op_owned_tensors = std::move(op_owned),
     };
-}
-
-bool reshape_view_tiled_keeps_last_dim(const ReshapeViewParams& operation_attributes, const Tensor& input) {
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
-    const auto& in = input.logical_shape();
-    const auto& out = operation_attributes.logical_output_shape;
-    if (input.layout() != Layout::TILE || in.rank() != 3 || out.rank() != 3 || in[-1] != out[-1] || in[-2] == 0 ||
-        out[-2] == 0 || static_cast<uint64_t>(in[-3]) * in[-2] != static_cast<uint64_t>(out[-3]) * out[-2]) {
-        return false;
-    }
-    const auto& tile = input.tensor_spec().tile();
-    const auto tile_shape = tile.get_tile_shape();
-    const auto face_shape = tile.get_face_shape();
-    if (tile_shape[0] != TILE_HEIGHT || tile_shape[1] != TILE_WIDTH || face_shape[0] != 16 || face_shape[1] != 16) {
-        return false;
-    }
-    // The kernels index tiles assuming each of the last two dims is padded to whole tiles only.
-    const auto& in_padded = input.padded_shape();
-    const auto& out_padded = operation_attributes.padded_output_shape;
-    return in_padded.rank() == 3 && out_padded.rank() == 3 && in_padded[-1] == tt::round_up(in[-1], TILE_WIDTH) &&
-           in_padded[-2] == tt::round_up(in[-2], TILE_HEIGHT) && out_padded[-1] == tt::round_up(out[-1], TILE_WIDTH) &&
-           out_padded[-2] == tt::round_up(out[-2], TILE_HEIGHT);
-}
-
-namespace {
-
-uint32_t reshape_view_tiled_rows_num_output_pages(const ReshapeViewParams& operation_attributes, const Tensor& input) {
-    const auto& output_shape = operation_attributes.logical_output_shape;
-    return output_shape[-3] * tt::div_up(output_shape[-2], tt::constants::TILE_HEIGHT) *
-           tt::div_up(input.logical_shape()[-1], tt::constants::TILE_WIDTH);
-}
-
-// Each core's range of output tiles and the shapes, and the tensors.
-tt::tt_metal::ProgramRunArgs reshape_view_tiled_rows_run_args(
-    const ReshapeViewParams& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
-    using namespace tt::tt_metal;
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
-
-    const auto& input_shape = input_tensor.logical_shape();
-    const auto& output_shape = output_tensor.logical_shape();
-    const uint32_t c_tiles = tt::div_up(input_shape[-1], TILE_WIDTH);
-    const uint32_t in_row_tiles = tt::div_up(input_shape[-2], TILE_HEIGHT);
-    const uint32_t out_row_tiles = tt::div_up(output_shape[-2], TILE_HEIGHT);
-    const uint32_t num_output_pages = reshape_view_tiled_rows_num_output_pages(operation_attributes, input_tensor);
-    const auto grid = input_tensor.device()->compute_with_storage_grid_size();
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            operation_attributes.sub_core_grid.has_value()
-                ? split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
-                : split_work_to_cores(grid, num_output_pages);
-
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
-    KernelRunArgs reader_kra{.kernel = READER};
-    KernelRunArgs writer_kra{.kernel = WRITER};
-    uint32_t page_start = 0;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        uint32_t increment = 0;
-        if (core_group_1.contains(c)) {
-            increment = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(c)) {
-            increment = num_tiles_per_core_group_2;
-        } else {
-            continue;
-        }
-        const std::vector<std::pair<std::string, uint32_t>> values = {
-            {"start_output_page", page_start},
-            {"end_output_page", page_start + increment},
-            {"in_rows", input_shape[-2]},
-            {"out_rows", output_shape[-2]},
-            {"c_tiles", c_tiles},
-            {"in_row_tiles", in_row_tiles},
-            {"out_row_tiles", out_row_tiles},
-        };
-        for (auto* kra : {&reader_kra, &writer_kra}) {
-            for (const auto& [name, value] : values) {
-                kra->runtime_arg_values[name][c] = value;
-            }
-        }
-        page_start += increment;
-    }
-
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_kra), std::move(writer_kra)};
-    run_args.tensor_args = {
-        {TensorParamName{"input"}, TensorArgument{input_tensor.mesh_tensor()}},
-        {TensorParamName{"output"}, TensorArgument{output_tensor.mesh_tensor()}},
-    };
-    return run_args;
-}
-
-}  // namespace
-
-// Parallelized over output tiles like the general tiled factory. Each core gets its range of output tiles and the
-// shapes as runtime args; the reader and writer compute every output tile's runs of input rows from them (see
-// device/dataflow/reshape_tiled_rows.hpp).
-ttnn::device_operation::ProgramArtifacts ReshapeViewTiledRowsProgramFactory::create_program_artifacts(
-    const ReshapeViewParams& operation_attributes, const ReshapeViewInputs& tensor_args, Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-    using tt::constants::TILE_HEIGHT;
-    using tt::constants::TILE_WIDTH;
-
-    const auto& input_tensor = tensor_args.input;
-    auto& output_tensor = tensor_return_value;
-    const auto& input_mt = input_tensor.mesh_tensor();
-    const auto& output_mt = output_tensor.mesh_tensor();
-    TT_FATAL(
-        reshape_view_tiled_keeps_last_dim(operation_attributes, input_tensor),
-        "The row reshape needs rank-3 tiled tensors with the same last dim");
-
-    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
-    const uint32_t num_output_pages = reshape_view_tiled_rows_num_output_pages(operation_attributes, input_tensor);
-
-    const auto input_dfb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto input_tile_size_bytes = tt::tile_size(input_dfb_data_format);
-    const auto output_dfb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
-    const auto output_tile_size_bytes = tt::tile_size(output_dfb_data_format);
-    TT_FATAL(input_tile_size_bytes == output_tile_size_bytes, "The row reshape keeps the dtype");
-
-    const auto grid = device->compute_with_storage_grid_size();
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            operation_attributes.sub_core_grid.has_value()
-                ? split_work_to_cores(operation_attributes.sub_core_grid.value(), num_output_pages)
-                : split_work_to_cores(grid, num_output_pages);
-
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
-    const DFBSpecName IN_TILES{"in_tiles"};
-    const ScratchpadSpecName WORKING{"working"};
-    const TensorParamName INPUT_T{"input"};
-    const TensorParamName OUTPUT_T{"output"};
-
-    ProgramSpec spec;
-    spec.name = "reshape_view_tiled_rows";
-    // Two input tiles in flight, so the reader fetches the next while the writer copies from the current one.
-    spec.dataflow_buffers = {
-        DataflowBufferSpec{
-            .unique_id = IN_TILES,
-            .entry_size = input_tile_size_bytes,
-            .num_entries = 2,
-            .data_format_metadata = input_dfb_data_format,
-        },
-    };
-    spec.scratchpads = {
-        ScratchpadSpec{.unique_id = WORKING, .size_per_node = output_tile_size_bytes},
-    };
-
-    const Group<std::string> shape_arg_names = {
-        "start_output_page", "end_output_page", "in_rows", "out_rows", "c_tiles", "in_row_tiles", "out_row_tiles"};
-    KernelSpec reader{
-        .unique_id = READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled_rows.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{
-                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::PRODUCER},
-            },
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT_T, .accessor_name = "input"}},
-        .compile_time_args = {{"Tile_size_bytes", input_tile_size_bytes}},
-        .runtime_arg_schema = {.runtime_arg_names = shape_arg_names},
-        .hw_config = create_reader_datamovement_config(),
-    };
-    KernelSpec writer{
-        .unique_id = WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/writer_reshape_tiled_rows.cpp",
-        .dfb_bindings =
-            {
-                DFBBinding{
-                    .dfb_spec_name = IN_TILES, .accessor_name = "in_tiles", .endpoint_type = DFBEndpointType::CONSUMER},
-            },
-        .scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = WORKING, .accessor_name = "working"}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_T, .accessor_name = "output"}},
-        .compile_time_args =
-            {
-                {"Tile_size_bytes", input_tile_size_bytes},
-                {"element_sz_bytes", tt::datum_size(output_dfb_data_format)},
-            },
-        .runtime_arg_schema = {.runtime_arg_names = shape_arg_names},
-        .hw_config = create_writer_datamovement_config(),
-    };
-    spec.kernels = {reader, writer};
-    // Shape-free, the program serves tensors of other shapes; tiled interleaved accessors do not depend on them.
-    const TensorSpecRelaxations relaxations{
-        .dynamic_tensor_shape = reshape_view_tiled_rows_is_shape_free(operation_attributes, input_tensor)};
-    spec.tensor_parameters = {
-        TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec(), .relaxations = relaxations},
-        TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec(), .relaxations = relaxations},
-    };
-    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
-
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = reshape_view_tiled_rows_run_args(operation_attributes, input_tensor, output_tensor),
-    };
-}
-
-bool reshape_view_tiled_rows_is_shape_free(const ReshapeViewParams& operation_attributes, const Tensor& input) {
-    return operation_attributes.runtime_shapes && !operation_attributes.sub_core_grid.has_value() &&
-           !input.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded() &&
-           reshape_view_tiled_keeps_last_dim(operation_attributes, input);
-}
-
-uint32_t reshape_view_tiled_rows_cores_key(const ReshapeViewParams& operation_attributes, const Tensor& input) {
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const uint32_t num_output_pages = reshape_view_tiled_rows_num_output_pages(operation_attributes, input);
-    return num_output_pages >= grid.x * grid.y ? 0 : num_output_pages;
-}
-
-tt::tt_metal::ProgramRunArgs ReshapeViewTiledRowsProgramFactory::override_runtime_arguments(
-    const ReshapeViewParams& operation_attributes,
-    const ReshapeViewInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    if (reshape_view_tiled_rows_is_shape_free(operation_attributes, tensor_args.input)) {
-        return reshape_view_tiled_rows_run_args(operation_attributes, tensor_args.input, tensor_return_value);
-    }
-    // The key holds the shapes, so only the tensors change.
-    tt::tt_metal::ProgramRunArgs run_args;
-    run_args.tensor_args = {
-        {tt::tt_metal::TensorParamName{"input"}, tt::tt_metal::TensorArgument{tensor_args.input.mesh_tensor()}},
-        {tt::tt_metal::TensorParamName{"output"}, tt::tt_metal::TensorArgument{tensor_return_value.mesh_tensor()}},
-    };
-    return run_args;
 }
 
 }  // namespace ttnn::prim

@@ -15,7 +15,7 @@
 #include "minimal_matmul.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::experimental::minimal_matmul::detail {
 
@@ -161,24 +161,22 @@ void bind_minimal_matmul(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("fuse_swiglu") = false);
 
-    auto py_minimal_matmul_config =
-        nb::class_<MinimalMatmulConfig>(
-            mod,
-            "MinimalMatmulConfig",
-            R"doc(
+    auto py_minimal_matmul_config = nb::class_<MinimalMatmulConfig>(
+                                        mod,
+                                        "MinimalMatmulConfig",
+                                        R"doc(
                             Configuration for the MinimalMatmul operation.
                             )doc")
-            .def(nb::init<>())
-            .def(
-                nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord, std::optional<bool>>(),
-                nb::kw_only(),
-                nb::arg("M_block_size") = 1,
-                nb::arg("K_block_size") = 1,
-                nb::arg("N_block_size") = 1,
-                nb::arg("subblock_h") = 1,
-                nb::arg("subblock_w") = 1,
-                nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}),
-                nb::arg("transpose_core_grid") = nb::none());
+                                        .def(nb::init<>())
+                                        .def(
+                                            nb::init<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, CoreCoord>(),
+                                            nb::kw_only(),
+                                            nb::arg("M_block_size") = 1,
+                                            nb::arg("K_block_size") = 1,
+                                            nb::arg("N_block_size") = 1,
+                                            nb::arg("subblock_h") = 1,
+                                            nb::arg("subblock_w") = 1,
+                                            nb::arg("compute_with_storage_grid_size") = nb::cast(CoreCoord{1, 1}));
 
     py_minimal_matmul_config.def_rw("M_block_size", &MinimalMatmulConfig::M_block_size, "");
     py_minimal_matmul_config.def_rw("K_block_size", &MinimalMatmulConfig::K_block_size, "");
@@ -187,12 +185,6 @@ void bind_minimal_matmul(nb::module_& mod) {
     py_minimal_matmul_config.def_rw("subblock_w", &MinimalMatmulConfig::subblock_w, "");
     py_minimal_matmul_config.def_rw(
         "compute_with_storage_grid_size", &MinimalMatmulConfig::compute_with_storage_grid_size, "");
-    py_minimal_matmul_config.def_rw(
-        "transpose_core_grid",
-        &MinimalMatmulConfig::transpose_core_grid,
-        "Grid orientation of minimal_matmul, minimal_matmul_split and dit_minimal_matmul_addcmul_fused. "
-        "None (default) transposes the grid when M > N, which compiles a second program once the rows cross "
-        "N. True or False pins it, so one program serves every row count. The fused CCL matmuls reject it.");
 
     py_minimal_matmul_config.def(
         "__repr__", [](const MinimalMatmulConfig& config) { return fmt::format("{}", config); });

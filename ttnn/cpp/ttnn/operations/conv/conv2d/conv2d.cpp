@@ -8,11 +8,11 @@
 #include <string>
 #include <utility>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/sliding_window/op_slicing/op_slicing.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -99,6 +99,7 @@ Result conv2d_L1(
 
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
+    ttnn::verify_numerical_configuration(device->arch(), compute_config_);
     DeviceComputeKernelConfig compute_config =
         compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
 
@@ -413,8 +414,6 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
-    // Fixed 2D slices (Op2DSliceConfig::slice_height and slice_width), see get_input_slice_and_padding.
-    bool fixed_slices = false;
 
 public:
     Conv2dSliceAttr(
@@ -458,27 +457,6 @@ public:
         auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
         auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
         auto [input_height, input_width] = input_shape;
-
-        if (fixed_slices) {
-            // Every slice reads (slice - 1) * stride + dilated kernel input pixels per axis, the part past the input
-            // being zeros from padded_slice, which also stand in for the conv's bottom and right padding. Only the
-            // top and left padding, before the input, stays the conv's.
-            const auto axis = [&](uint32_t out_start, uint32_t out_end, uint32_t axis_index, uint32_t pad_before) {
-                const int start = static_cast<int>(out_start * stride[axis_index]) - static_cast<int>(pad_before);
-                const int end = start + static_cast<int>(
-                                            ((out_end - out_start - 1) * stride[axis_index]) +
-                                            ((kernel_size[axis_index] - 1) * dilation[axis_index]) + 1);
-                return std::array<uint32_t, 3>{
-                    static_cast<uint32_t>(std::max(0, start)),
-                    static_cast<uint32_t>(end),
-                    static_cast<uint32_t>(std::max(0, -start))};
-            };
-            const auto [h_start, h_end, pad_top] =
-                axis(output_slice_height_start, output_slice_height_end, 0, padding_n4[0]);
-            const auto [w_start, w_end, pad_left] =
-                axis(output_slice_width_start, output_slice_width_end, 1, padding_n4[2]);
-            return {{{h_start, w_start}, {h_end, w_end}}, {pad_top, 0, pad_left, 0}};
-        }
 
         // Calculate required input slice range based on output slice
         // Formula: input_start = (output_start * stride) - padding
@@ -633,9 +611,8 @@ public:
         auto [output_slice_height, output_slice_width] = calculate_output_image_size(
             {input_slice_height, input_slice_width}, kernel_size, stride, slice_padding, dilation);
 
-        // Fixed slices are never the whole input: their programs serve every input size.
-        bool single_slice = !fixed_slices && (input_slice_height == std::get<0>(input_shape)) &&
-                            (input_slice_width == std::get<1>(input_shape));
+        bool single_slice =
+            (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
@@ -683,11 +660,6 @@ public:
     }
 
     std::string name() const override { return "Conv2D"; }
-
-    bool enable_fixed_slices() override {
-        fixed_slices = true;
-        return true;
-    }
 
     std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
@@ -781,18 +753,6 @@ Result conv2d_DRAM(
         !conv_config.override_output_sharding_config,
         "Conv2D DRAM slicing doesn't support override_output_sharding_config.");
 
-    // Fixed slices serve every input size with one program set per layer. Folding and the matmul path run on the
-    // whole image, so their programs follow its size; they are rejected rather than the fixed config ignored.
-    const bool fixed_slices = dram_slice_config_.has_value() && dram_slice_config_->is_fixed();
-    TT_FATAL(
-        !fixed_slices || !mm_conv,
-        "Conv2D fixed 2D DRAM slices don't support a conv that runs as a matmul (kernel {}x{}, stride {}x{})",
-        kernel_size[0],
-        kernel_size[1],
-        stride[0],
-        stride[1]);
-    const auto unfolded_stride = stride;
-
     // Fold the input tensor if required - this may update mm_conv after folding
     ttnn::Tensor input_tensor_on_device = fold_input_tensor_if_required(
         input_tensor,
@@ -807,10 +767,6 @@ Result conv2d_DRAM(
         padding_n4,
         mm_conv,
         conv_config);
-    // Folding sets the stride to 1.
-    TT_FATAL(
-        !fixed_slices || stride == unfolded_stride,
-        "Conv2D fixed 2D DRAM slices don't support kernel-stride folding; set enable_kernel_stride_folding=False");
     if (!is_device_tensor(input_tensor_on_device)) {
         input_tensor_on_device =
             ttnn::operations::core::to_device(input_tensor_on_device, device, ttnn::DRAM_MEMORY_CONFIG);
@@ -911,14 +867,7 @@ Result conv2d_DRAM(
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    // With fixed slices the whole call is to serve every input size, the flatten included.
-    dram_output_tensor = ttnn::reshape(
-        dram_output_tensor,
-        flattened_output_shape,
-        flattened_padded_output_shape,
-        std::nullopt,
-        std::nullopt,
-        fixed_slices ? TileReshapeMapMode::RUNTIME_SHAPES : TileReshapeMapMode::CACHE);
+    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }

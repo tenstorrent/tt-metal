@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "neighbor_pad_async_device_operation.hpp"
-
-#include <algorithm>
-
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -65,7 +61,10 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
 
     if (args.t_front_pad > 0) {
         TT_FATAL(args.dim >= 1, "t_front_pad requires dim >= 1 (T dim is dim-1), got dim={}", args.dim);
-        TT_FATAL(input_tensor_shape[0] == 1, "t_front_pad only supports B=1 tensors, got B={}", input_tensor_shape[0]);
+        TT_FATAL(
+            input_tensor_shape[0] == 1,
+            "t_front_pad only supports B=1 tensors, got B={}",
+            input_tensor_shape[0]);
     }
 
     // Validate secondary padding dimension (2D padding)
@@ -150,46 +149,6 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    // runtime_shapes is not among the hashed attributes, so this is the default hash.
-    if (!neighbor_pad_async_is_shape_free(args, tensor_args)) {
-        return ttsl::hash::hash_objects_with_default_seed(
-            ttsl::hash::type_hash<NeighborPadAsyncDeviceOperation>, args, tensor_args);
-    }
-    // The sizes of the padded dims and of the dims between them only reach the kernels as runtime args. The dims
-    // before the padded one set the fabric cores' split, and the row width sets the page size, so those stay in.
-    // logical_h stays in through the attributes, though the kernels take it at run time too: a caller that masks
-    // with a logical_h that follows the size gets a program per logical_h.
-    const auto& input = tensor_args.input_tensor;
-    const auto& shape = input.padded_shape();
-    uint32_t outer_dim_size = 1;
-    for (uint32_t d = 0; d < args.dim; d++) {
-        outer_dim_size *= shape[d];
-    }
-    // The 2D receive buffer holds the corner sticks of each row, at most the row's stick count.
-    uint32_t corner_sticks_per_row = 0;
-    if (args.pad_dim2.has_value()) {
-        uint32_t num_sticks_per_halo_dim = 1;
-        for (size_t d = args.dim + 1; d < shape.size() - 1; d++) {
-            num_sticks_per_halo_dim *= shape[d];
-        }
-        corner_sticks_per_row = std::min(args.pad2_left + args.pad2_right, num_sticks_per_halo_dim);
-    }
-    const auto& layout = input.tensor_spec().tensor_layout();
-    return tt::tt_metal::operation::hash_operation<NeighborPadAsyncDeviceOperation>(
-        args,
-        shape.rank(),
-        shape[-1],
-        outer_dim_size,
-        corner_sticks_per_row,
-        tensor_args.preallocated_output.has_value(),
-        layout.get_data_type(),
-        layout.get_page_config(),
-        layout.get_memory_config(),
-        layout.get_alignment());
-}
-
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
@@ -214,8 +173,7 @@ Tensor neighbor_pad_async(
     std::optional<size_t> pad2_num_links,
     const std::optional<Tensor>& persistent_output_buffer,
     uint32_t logical_h,
-    uint32_t t_front_pad,
-    bool runtime_shapes) {
+    uint32_t t_front_pad) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -246,8 +204,7 @@ Tensor neighbor_pad_async(
         pad2_num_links.value_or(0),
         persistent_output_buffer.has_value(),
         logical_h,
-        t_front_pad,
-        runtime_shapes);
+        t_front_pad);
 
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = persistent_output_buffer};

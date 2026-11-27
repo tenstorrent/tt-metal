@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
+#include <tt-metalium/data_formats/data_format.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
@@ -124,11 +124,12 @@ namespace {
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
-    const KernelRiscMaskMap& kernel_to_risc_mask) {
+    const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch) {
     // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
     // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
     // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
-    // and user-validated on Gen1 (see Step 2b in MakeProgramFromSpec). So any
+    // and user-validated on Gen1 (see Step 2b in the Program constructor). So any
     // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
@@ -194,13 +195,9 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
-    TT_FATAL(
-        dfb_spec->advanced_options.prefetcher_pipe_relays.empty() ||
-            (producer_access_pattern != experimental::dfb::AccessPattern::BLOCKED &&
-             consumer_access_pattern != experimental::dfb::AccessPattern::BLOCKED),
-        "DFB '{}': a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet; bind "
-        "the relay's producer and consumer as STRIDED or ALL.",
-        dfb_spec->unique_id);
+    const bool is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty();
+    const bool blocked_relay_producer =
+        is_relay && producer_access_pattern == experimental::dfb::AccessPattern::BLOCKED;
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
@@ -212,20 +209,24 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
         .consumer_block_size = consumer_binding->block_size,
-        .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
+        .enable_producer_implicit_sync =
+            !blocked_relay_producer && side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
+        .unpack_on_trisc3 = is_gen2_arch(arch) &&
+                            ComputeKernelUsesSfpuPipeline(*consumer, dfb_spec->unique_id, DFBEndpointType::CONSUMER),
+        .pack_on_trisc3 = is_gen2_arch(arch) &&
+                          ComputeKernelUsesSfpuPipeline(*producer, dfb_spec->unique_id, DFBEndpointType::PRODUCER),
         // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
         // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
         // PrefetcherPipe ring the relay aliases.
         .borrows_memory = dfb_spec->borrowed_from.has_value() ||
-                          dfb_spec->advanced_options.allocation_override.has_value() ||
-                          !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+                          dfb_spec->advanced_options.allocation_override.has_value() || is_relay,
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
-        .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
+        .is_relay = is_relay};
 }
 
 }  // namespace
@@ -234,6 +235,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& kernel_to_risc_mask,
+    tt::ARCH arch,
     detail::ProgramImpl& program_impl) {
     // Create DataflowBuffers and build name -> ID map.
     // NOTE: Iterate over spec.dataflow_buffers (not collected.dfb_endpoints) to ensure
@@ -245,13 +247,14 @@ DataflowBufferHandles RegisterDataflowBuffers(
         const DFBSpecName& dfb_name = dfb_spec.unique_id;
         const auto& dfb_endpoint_info = collected.dfb_endpoints.at(dfb_name);
         const experimental::dfb::DataflowBufferConfig config =
-            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask);
+            MakeDataflowBufferConfig(&dfb_spec, dfb_endpoint_info, kernel_to_risc_mask, arch);
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
-        // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
+        // Allocation nodes use the DFB's effective placement.
         // (For externally placed DFB storage, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
-        uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
+        const auto& placement = collected.dfb_placements.at(dfb_name);
+        uint32_t dfb_id = program_impl.add_dataflow_buffer(placement.configuration, config, placement.allocation);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
         const auto& created_config = program_impl.get_dataflow_buffer(dfb_id)->config;

@@ -225,10 +225,6 @@ _ROUTES = [
     ("tile_split_lcm_bf16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    # A reshape that keeps the last dim runs native's row program, whose binaries do not depend on the shapes, so a
-    # model warmed at one shape does not compile at another: conv2d's flatten after DRAM slicing.
-    ("tile_keeps_last_dim", [1, 2, 40, 32], [1, 1, 80, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
-    ("tile_keeps_last_dim_c512", [1, 96, 48, 512], [1, 1, 4608, 512], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
 ]
 
 

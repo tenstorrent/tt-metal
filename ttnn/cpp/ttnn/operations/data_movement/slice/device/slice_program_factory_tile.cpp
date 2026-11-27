@@ -9,10 +9,10 @@
 
 #include <optional>
 #include <span>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -22,16 +22,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-namespace {
-
-// The per-core work split and every runtime argument, which follow the shapes and slice bounds;
-// everything compile-time follows the rank only.
-struct SliceTileRunArgs {
-    CoreRangeSet all_cores;
-    ProgramRunArgs run_args;
-};
-
-SliceTileRunArgs slice_tile_run_args(const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program_artifacts(
+    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     using namespace ttnn::prim::slice_metal2;
 
     const auto& input = tensor_args.input;
@@ -45,9 +37,33 @@ SliceTileRunArgs slice_tile_run_args(const SliceParams& args, const SliceInputs&
             ? tt::tt_metal::split_work_to_cores(args.sub_core_grids.value(), num_unpadded_tiles)
             : tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_tiles);
 
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
+
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
+    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
+
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
+
+    // --- Dataflow buffer ---
+    uint32_t num_input_tiles = 2;
+
+    DataflowBufferSpec dfb_in{
+        .unique_id = TILE_IN,
+        .entry_size = single_tile_size,
+        .num_entries = num_input_tiles,
+        .data_format_metadata = dfb_data_format,
+    };
+
+    // The reader walks a per-dimension tile-index odometer, incrementing it in place as it advances
+    // through the source. The host seeds it with this core's starting position (the `id_per_dim`
+    // vararg block below); the kernel copies that seed into this scratchpad and mutates it there.
+    ScratchpadSpec id_per_dim_scratch{
+        .unique_id = TILE_ID_PER_DIM,
+        .size_per_node = num_dims * static_cast<uint32_t>(sizeof(uint32_t)),
+    };
 
     // Reader common runtime args: [num_unpadded_per_dim..., num_padded_per_dim...]
     uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
@@ -81,124 +97,6 @@ SliceTileRunArgs slice_tile_run_args(const SliceParams& args, const SliceInputs&
     }
 
     uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input, args.slice_start);
-
-    // Reader per-core: start_id, num_tiles, and the id_per_dim seed.
-    // Writer per-core: num_pages, start_id.
-    KernelRunArgs reader_run_args{.kernel = TILE_READER};
-    KernelRunArgs writer_run_args{.kernel = TILE_WRITER};
-    reader_run_args.advanced_options.common_runtime_varargs = reader_common_dims;
-
-    uint32_t num_tiles_written = 0;
-    for (const auto& core : corerange_to_cores(all_cores)) {
-        uint32_t num_tiles_per_core;
-        if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
-        } else {
-            // no-op core
-            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"start_id", 0u}, {"num_tiles", 0u}});
-            reader_run_args.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(num_dims, 0u);
-            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_pages", 0u}, {"start_id", 0u}});
-            continue;
-        }
-
-        // Compute per-dim indices for this core's starting position
-        std::vector<uint32_t> id_per_dim(num_dims);
-        id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
-        uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
-        uint32_t start_id = id_per_dim[0] + start_offset;
-        for (uint32_t j = 1; j < num_dims; ++j) {
-            id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
-            unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
-            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
-        }
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}});
-        reader_run_args.advanced_options.runtime_varargs[core] = std::move(id_per_dim);
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}});
-
-        num_tiles_written += num_tiles_per_core;
-    }
-
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
-    run_args.tensor_args = {
-        {INPUT, input.mesh_tensor()},
-        {OUTPUT, output.mesh_tensor()},
-    };
-    return {std::move(all_cores), std::move(run_args)};
-}
-
-}  // namespace
-
-bool slice_tile_program_is_row_free(const SliceParams& args, const SliceInputs& tensor_args) {
-    const auto& input = tensor_args.input;
-    const uint32_t rank = input.padded_shape().rank();
-    if (input.layout() != Layout::TILE || input.is_sharded() || rank < 2 || args.output_mem_config.is_sharded() ||
-        args.sub_core_grids.has_value() || args.use_tensor_args || tensor_args.start_tensor.has_value() ||
-        tensor_args.end_tensor.has_value() || tensor_args.preallocated_output.has_value()) {
-        return false;
-    }
-    for (uint32_t i = 0; i < rank; ++i) {
-        if (args.step[i] != 1) {
-            return false;
-        }
-    }
-    // Every value that follows the input's shape and the row bounds is a runtime argument; only the core
-    // set follows the output's tile count (see slice_tile_program_fills_grid).
-    return true;
-}
-
-bool slice_tile_program_fills_grid(const SliceParams& args, const SliceInputs& tensor_args) {
-    uint64_t output_tiles = 1;
-    for (uint32_t i = 0; i < args.slice_start.rank(); ++i) {
-        output_tiles *= args.slice_end[i] - args.slice_start[i];
-    }
-    output_tiles /= TILE_HW;
-    const CoreCoord grid = tensor_args.input.device()->compute_with_storage_grid_size();
-    return output_tiles >= static_cast<uint64_t>(grid.x) * grid.y;
-}
-
-ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program_artifacts(
-    const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
-    using namespace ttnn::prim::slice_metal2;
-
-    const auto& input = tensor_args.input;
-    tt::tt_metal::distributed::MeshDevice* device = input.device();
-
-    auto [all_cores, run_args] = slice_tile_run_args(args, tensor_args, output);
-
-    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
-
-    tt::DataFormat dfb_data_format =
-        ttnn::operations::data_movement::get_slice_dfb_data_format(input.dtype(), device->arch());
-    uint32_t single_tile_size = tt::tile_size(dfb_data_format);
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input.padded_shape().rank());
-
-    // --- Dataflow buffer ---
-    uint32_t num_input_tiles = 2;
-
-    DataflowBufferSpec dfb_in{
-        .unique_id = TILE_IN,
-        .entry_size = single_tile_size,
-        .num_entries = num_input_tiles,
-        .data_format_metadata = dfb_data_format,
-    };
-
-    // The reader walks a per-dimension tile-index odometer, incrementing it in place as it advances
-    // through the source. The host seeds it with this core's starting position (the `id_per_dim`
-    // vararg block below); the kernel copies that seed into this scratchpad and mutates it there.
-    ScratchpadSpec id_per_dim_scratch{
-        .unique_id = TILE_ID_PER_DIM,
-        .size_per_node = num_dims * static_cast<uint32_t>(sizeof(uint32_t)),
-    };
 
     KernelSpec reader{
         .unique_id = TILE_READER,
@@ -269,11 +167,49 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // A row-free program serves every input row count, and every output row count where
-    // slice_tile_program_fills_grid holds, so its tensors may differ from these in shape. Interleaved
-    // tiles keep their accessors at any shape.
-    TensorSpecRelaxations relaxations;
-    relaxations.dynamic_tensor_shape = slice_tile_program_is_row_free(args, tensor_args);
+    // Reader per-core: start_id, num_tiles, and the id_per_dim seed.
+    // Writer per-core: num_pages, start_id.
+    KernelRunArgs reader_run_args{.kernel = TILE_READER};
+    KernelRunArgs writer_run_args{.kernel = TILE_WRITER};
+    reader_run_args.advanced_options.common_runtime_varargs = reader_common_dims;
+
+    uint32_t num_tiles_written = 0;
+    for (const auto& core : corerange_to_cores(all_cores)) {
+        uint32_t num_tiles_per_core;
+        if (core_group_1.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_tiles_per_core = num_tiles_per_core_group_2;
+        } else {
+            // no-op core
+            AddRuntimeArgsForNode(reader_run_args.runtime_arg_values, core, {{"start_id", 0u}, {"num_tiles", 0u}});
+            reader_run_args.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(num_dims, 0u);
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_pages", 0u}, {"start_id", 0u}});
+            continue;
+        }
+
+        // Compute per-dim indices for this core's starting position
+        std::vector<uint32_t> id_per_dim(num_dims);
+        id_per_dim[0] = num_tiles_written % num_unpadded_tiles_per_dim[0];
+        uint32_t unpadded_written = num_tiles_written / num_unpadded_tiles_per_dim[0];
+        uint32_t start_id = id_per_dim[0] + start_offset;
+        for (uint32_t j = 1; j < num_dims; ++j) {
+            id_per_dim[j] = unpadded_written % num_unpadded_tiles_per_dim[j];
+            unpadded_written = unpadded_written / num_unpadded_tiles_per_dim[j];
+            start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
+        }
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}});
+        reader_run_args.advanced_options.runtime_varargs[core] = std::move(id_per_dim);
+
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}});
+
+        num_tiles_written += num_tiles_per_core;
+    }
 
     ProgramSpec spec{
         .name = "slice_tile",
@@ -282,8 +218,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
         .scratchpads = {std::move(id_per_dim_scratch)},
         .tensor_parameters =
             {
-                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec(), .relaxations = relaxations},
-                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec(), .relaxations = relaxations},
+                TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
             },
         .work_units =
             {
@@ -295,6 +231,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             },
     };
 
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, input.mesh_tensor()},
+        {OUTPUT, output.mesh_tensor()},
+    };
+
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
@@ -304,30 +247,21 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 SliceTileProgramFactory::cached_program_t SliceTileProgramFactory::create(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     auto artifacts = create_program_artifacts(args, tensor_args, output);
-    auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*tensor_args.input.device(), artifacts.spec);
-    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-    // Outside the row-free case the cache key includes the full input/output geometry, slice bounds
-    // and core grid. Reuse the resulting work assignments, but re-apply them on hits to preserve
-    // scalar restoration (#52651); a row-free hit recomputes them instead.
+    tt::tt_metal::Program program(*tensor_args.input.device(), artifacts.spec);
+    program.set_program_run_args(artifacts.run_params);
+    // The cache key includes the full input/output geometry, slice bounds and core grid. Reuse the
+    // resulting work assignments, but re-apply them on hits to preserve scalar restoration (#52651).
     // Do not retain non-owning references to the miss's tensors after this call.
     artifacts.run_params.tensor_args.clear();
     return {std::move(program), {.run_args = std::move(artifacts.run_params)}};
 }
 
 void SliceTileProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program, const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
+    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
     using namespace ttnn::prim::slice_metal2;
-    if (slice_tile_program_is_row_free(args, tensor_args)) {
-        // The hash leaves the rows out, so the counts, start tiles and dims may differ from the miss's.
-        auto [all_cores, run_args] = slice_tile_run_args(args, tensor_args, output);
-        tt::tt_metal::experimental::UpdateProgramRunArgs(
-            cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
-        return;
-    }
     auto& run_args = cached_program.shared_variables.run_args;
     run_args.tensor_args = {{INPUT, tensor_args.input.mesh_tensor()}, {OUTPUT, output.mesh_tensor()}};
-    tt::tt_metal::experimental::UpdateProgramRunArgs(
-        cached_program.program, run_args, !ttnn::CONFIG.get<"validate_program_args">());
+    cached_program.program.update_program_run_args(run_args, ttnn::device_operation::program_args_validation_mode());
     run_args.tensor_args.clear();
 }
 

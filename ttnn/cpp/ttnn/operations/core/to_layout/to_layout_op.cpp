@@ -58,8 +58,7 @@ Tensor to_layout_impl(
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const float pad_value,
-    const bool runtime_shapes) {
+    const float pad_value) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -126,42 +125,6 @@ Tensor to_layout_impl(
     if (ttnn::is_device_tensor(tensor_arg)) {
         bool use_multicore_untilize = true;
         bool use_multicore_tilize = true;
-
-        // runtime_shapes: an interleaved tensor takes the padding ops' shape-free programs whether or not its
-        // last two dims are whole tiles, so one program serves every shape with the same last dim. Whole-tile
-        // shapes thus give up tilize's and untilize's own programs. The output stays in DRAM, since for L1 the
-        // padding ops' factory choice follows the free L1, which follows the shape, and the tiles are 32x32,
-        // which the padding ops count in.
-        const bool float_dtype =
-            tensor.dtype() == ttnn::DataType::BFLOAT16 || tensor.dtype() == ttnn::DataType::FLOAT32;
-        const auto rank = tensor.logical_shape().rank();
-        if (runtime_shapes && float_dtype && !tensor.is_sharded() && !output_memory_config.is_sharded() &&
-            output_memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
-            tensor.tensor_spec().tile() == tt::tt_metal::Tile() && rank >= 2 && rank <= 4) {
-            if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-                TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
-                Shape output_tensor_end(ttsl::SmallVector<uint32_t>(rank, 0));
-                for (int index = 0; index < static_cast<int>(rank); ++index) {
-                    output_tensor_end[index] = tensor.logical_shape()[index] - 1;
-                }
-                return ttnn::untilize_with_unpadding(
-                    tensor,
-                    output_tensor_end,
-                    output_memory_config,
-                    use_multicore_untilize,
-                    sub_core_grids,
-                    /*runtime_shapes=*/true);
-            }
-            return ttnn::tilize_with_val_padding(
-                tensor,
-                Shape(padded_output_shape),
-                PadValue(pad_value),
-                output_memory_config,
-                dtype,
-                use_multicore_tilize,
-                sub_core_grids,
-                /*runtime_shapes=*/true);
-        }
 
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
@@ -316,10 +279,9 @@ Tensor to_layout(
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const float pad_value,
-    const bool runtime_shapes) {
+    const float pad_value) {
     return operations::core::CMAKE_UNIQUE_NAMESPACE::to_layout_impl(
-        tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value, runtime_shapes);
+        tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }
 
 }  // namespace ttnn

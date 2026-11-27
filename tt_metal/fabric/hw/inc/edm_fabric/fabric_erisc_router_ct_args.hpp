@@ -22,6 +22,16 @@
 // Convenience macro for named compile-time arg lookup
 #define NAMED_CT_ARG(name) get_named_compile_time_arg_val(name)
 
+constexpr bool has_named_ct_arg(std::string_view name) {
+    for (const auto& [arg_name, arg_value] : named_args_map) {
+        if (name == arg_name) {
+            return true;
+        }
+    }
+    return false;
+}
+#define NAMED_CT_ARG_OR(name, fallback) (has_named_ct_arg(name) ? NAMED_CT_ARG(name) : (fallback))
+
 // CHANNEL CONSTANTS
 // ETH TXQ SELECTION
 
@@ -65,6 +75,14 @@ constexpr uint32_t vc_1_free_slots_from_downstream_edge_3_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID");
 constexpr uint32_t vc_1_free_slots_from_downstream_edge_4_stream_id =
     NAMED_CT_ARG("VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID");
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_1_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_2_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_3_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
+constexpr uint32_t vc_2_free_slots_from_downstream_edge_4_stream_id =
+    NAMED_CT_ARG_OR("VC2_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID", tt::tt_fabric::k_unused_stream_id);
 constexpr uint32_t vc2_receiver_free_slots_stream_id = NAMED_CT_ARG("VC2_RECEIVER_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_0_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID");
 constexpr uint32_t sender_channel_1_free_slots_stream_id = NAMED_CT_ARG("SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID");
@@ -144,7 +162,7 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_free_slots_stream
 
 // This router's local copy of each downstream router's free slots, by VC that forwards to routers (VC0, VC1) and by
 // downstream entry (the host's compact order: VC<n>_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_<entry + 1>_STREAM_ID).
-constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> local_downstream_credit_streams = {{
+constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 3> local_downstream_credit_streams = {{
     {vc_0_free_slots_from_downstream_edge_1_stream_id,
      vc_0_free_slots_from_downstream_edge_2_stream_id,
      vc_0_free_slots_from_downstream_edge_3_stream_id,
@@ -153,6 +171,10 @@ constexpr std::array<std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS>, 2> lo
      vc_1_free_slots_from_downstream_edge_2_stream_id,
      vc_1_free_slots_from_downstream_edge_3_stream_id,
      vc_1_free_slots_from_downstream_edge_4_stream_id},
+    {vc_2_free_slots_from_downstream_edge_1_stream_id,
+     vc_2_free_slots_from_downstream_edge_2_stream_id,
+     vc_2_free_slots_from_downstream_edge_3_stream_id,
+     vc_2_free_slots_from_downstream_edge_4_stream_id},
 }};
 
 // Does this router service a channel at this fabric position?
@@ -179,6 +201,8 @@ constexpr size_t NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("NUM_RECEIVER_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NAMED_CT_ARG("NUM_DOWNSTREAM_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC0");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC1");
+constexpr size_t NUM_DOWNSTREAM_SENDERS_VC2 = NAMED_CT_ARG_OR("NUM_DOWNSTREAM_SENDERS_VC2", 0);
+constexpr bool vc2_forwards = has_named_ct_arg("VC2_DOWNSTREAM_EDM_SIZE");
 constexpr bool wait_for_host_signal = NAMED_CT_ARG("WAIT_FOR_HOST_SIGNAL");
 
 static_assert(
@@ -267,6 +291,7 @@ constexpr std::array<bool, MAX_NUM_VCS> is_vc_crossover_to_vc1 = {
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
+constexpr size_t VC2_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG_OR("VC2_DOWNSTREAM_EDM_SIZE", 0);
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
 
@@ -348,10 +373,19 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_7_connection_info_addr,
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
-// Each VC's worker channel's connection semaphore (0 where the VC has no worker: VC1 never does), at a compile-time
-// address: the router reads it every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
-constexpr std::array<size_t, MAX_NUM_VCS> worker_connection_semaphore_addrs = {
-    NAMED_CT_ARG("VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"), 0, NAMED_CT_ARG("VC2_WORKER_CONNECTION_SEMAPHORE_ADDR")};
+// Each worker channel's connection semaphore (0 for any other channel), at a compile-time address: the router reads it
+// every pass.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> worker_connection_semaphore_addrs = {
+    NAMED_CT_ARG("SENDER_CH_0_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_1_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_2_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_3_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_4_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_5_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_6_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_7_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_8_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_9_WORKER_CONNECTION_SEMAPHORE_ADDR")};
 
 // ============================================================================
 // Status pointers
@@ -424,6 +458,8 @@ constexpr bool any_receiver_channel_serviced = []() {
 // routers — receiver 1 is legitimately trimmed on crossover routers even when VC1 traffic flows.
 constexpr bool open_downstream_vc0_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC0_CONNECTIONS"));
 constexpr bool open_downstream_vc1_connections = static_cast<bool>(NAMED_CT_ARG("OPEN_DOWNSTREAM_VC1_CONNECTIONS"));
+constexpr bool open_downstream_vc2_connections =
+    static_cast<bool>(NAMED_CT_ARG_OR("OPEN_DOWNSTREAM_VC2_CONNECTIONS", 0));
 
 // Structural per-RISC role flags (2-erisc split), deliberately independent of trimming.
 constexpr bool risc_services_sender_channels = static_cast<bool>(NAMED_CT_ARG("RISC_SERVICES_SENDER_CHANNELS"));
@@ -909,19 +945,17 @@ static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
 static constexpr uint8_t local_chip_data_cmd_buf = receiver_channel_local_write_cmd_buf_ids[0];
-static constexpr uint8_t forward_and_local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC");
+// The router's pair of NoC VCs, chosen by the host: forwards to the next router go out on one, writes to this chip on
+// the other, so that a packet's local writes do not queue behind its forward.
+static constexpr uint8_t forward_noc_vc = NAMED_CT_ARG("EDM_NOC_VC_FORWARD");
+static constexpr uint8_t local_write_noc_vc = NAMED_CT_ARG("EDM_NOC_VC_LOCAL_WRITE");
+static_assert(forward_noc_vc != local_write_noc_vc, "Forward and local-write NoC VCs must differ");
 
 // Helpers to extract num_slots from a channel's allocation entry
 template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>
 constexpr size_t get_channel_num_slots() {
     constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
     return Allocs::template Entry<entry_idx>::num_slots;
-}
-
-template <typename Allocs, auto& ChannelToEntryIndex, size_t ChannelIdx>
-constexpr size_t get_channel_remote_num_slots() {
-    constexpr size_t entry_idx = ChannelToEntryIndex[ChannelIdx];
-    return Allocs::template Entry<entry_idx>::remote_num_slots;
 }
 
 // Build arrays by inspecting each channel's allocation entry
@@ -933,17 +967,6 @@ constexpr std::array<size_t, NumChannels> build_num_slots_array_impl(std::index_
 template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
 constexpr std::array<size_t, NumChannels> build_num_slots_array() {
     return build_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
-        std::make_index_sequence<NumChannels>{});
-}
-
-template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels, size_t... Indices>
-constexpr std::array<size_t, NumChannels> build_remote_num_slots_array_impl(std::index_sequence<Indices...>) {
-    return {get_channel_remote_num_slots<Allocs, ChannelToEntryIndex, Indices>()...};
-}
-
-template <typename Allocs, auto& ChannelToEntryIndex, size_t NumChannels>
-constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
-    return build_remote_num_slots_array_impl<Allocs, ChannelToEntryIndex, NumChannels>(
         std::make_index_sequence<NumChannels>{});
 }
 
@@ -1008,3 +1031,9 @@ static_assert(
 static_assert(
     !super_speedy_mode || RECEIVER_CREDIT_AMORTIZATION_FREQUENCY > 0,
     "super_speedy_mode requires receiver credit amortization to be enabled");
+
+//-------------------------------- Inter-domain --------------------------------//
+constexpr bool is_inter_domain_router =
+    has_named_ct_arg("INTER_DOMAIN_ROUTER") && NAMED_CT_ARG("INTER_DOMAIN_ROUTER") != 0;
+constexpr uint32_t inter_domain_ctrl_addr = is_inter_domain_router ? NAMED_CT_ARG("INTER_DOMAIN_CTRL_ADDR") : 0;
+static_assert(!is_inter_domain_router || NUM_ACTIVE_ERISCS == 2, "inter-domain routers run on two ERISCs");

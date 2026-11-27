@@ -14,7 +14,6 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "two_pass_read_stats.h"
-#include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/gn_runtime_size_args.h"
 
 void kernel_main() {
     constexpr std::uint32_t reduce_receiver_semaphore_id =
@@ -28,28 +27,19 @@ void kernel_main() {
     constexpr std::uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
     const std::uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const std::uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
+    constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr std::uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
     constexpr std::uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+
+    constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr std::uint32_t block_w = get_named_compile_time_arg_val("block_w");
+
+    constexpr std::uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
+
+    constexpr std::uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     // These are numbers in absolute terms, on a per batch, per group, per core basis without tiling
     constexpr std::uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
-
-#ifdef GN_RUNTIME_SIZE_ARGS
-    const std::uint32_t block_h =
-        get_arg_val<std::uint32_t>(gn_core_size_args::RECEIVER_BASE + gn_core_size_args::BLOCK_H);
-    const std::uint32_t per_core_M = block_h;
-    const std::uint32_t num_tiles_per_batch = block_h * get_arg_val<std::uint32_t>(4);
-    constexpr std::uint32_t num_out_blocks = 1;
-    const std::uint32_t num_rows_per_group = block_h * tile_height;
-    const std::uint32_t pad_row_first_page = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_FIRST_PAGE);
-    const std::uint32_t pad_row_valid_rows = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_VALID_ROWS);
-#else
-    constexpr std::uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr std::uint32_t block_h = get_named_compile_time_arg_val("block_h");
-    constexpr std::uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
-    constexpr std::uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
     constexpr std::uint32_t num_rows_per_group = get_named_compile_time_arg_val("num_rows_per_group");
-#endif
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
 
@@ -124,11 +114,11 @@ void kernel_main() {
     }
 #endif
 
-    const std::uint32_t out_block_h_normal = block_h / num_out_blocks;
+    constexpr std::uint32_t out_block_h_normal = block_h / num_out_blocks;
     std::uint32_t num_out_blocks_padded = num_out_blocks;
     bool extra_out_block = false;
     std::uint32_t out_block_h_last = out_block_h_normal;
-    if (block_h % num_out_blocks != 0) {
+    if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
         num_out_blocks_padded++;
         out_block_h_last = block_h % num_out_blocks;
@@ -162,22 +152,12 @@ void kernel_main() {
                         input_ring_end,
                         start_id + index_b_offset + mt_offset,
                         num_channels_tiles,
-                        out_block_h_actual
-#ifdef GN_RUNTIME_SIZE_ARGS
-                        ,
-                        pad_row_first_page,
-                        pad_row_valid_rows
-#endif
-                    );
+                        out_block_h_actual);
                     mt_offset += out_block_h_actual * num_channels_tiles;
                 } else
 #endif
                 {
                     for (std::uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-#ifdef GN_RUNTIME_SIZE_ARGS
-                        const bool pad_row = start_id + index_b_offset + mt_offset >= pad_row_first_page &&
-                                             pad_row_valid_rows < tile_height;
-#endif
                         for (std::uint32_t nt = 0; nt < per_core_N; ++nt) {
                             dfb_in0.reserve_back(1);
                             const std::uint32_t l1_write_addr = dfb_in0.get_write_ptr();
@@ -188,14 +168,6 @@ void kernel_main() {
                                 {.page_id = start_id + index_b_offset + mt_offset + nt},
                                 {});
                             noc.async_read_barrier();
-#ifdef GN_RUNTIME_SIZE_ARGS
-                            // Only bfloat16 and float32 tiles; the fused op takes bfloat16.
-                            if constexpr (src0_tile_bytes == 32 * 32 * 2 || src0_tile_bytes == 32 * 32 * 4) {
-                                if (pad_row) {
-                                    zero_tile_rows_from<src0_tile_bytes / (32 * 32)>(l1_write_addr, pad_row_valid_rows);
-                                }
-                            }
-#endif
                             dfb_in0.push_back(1);
                             if constexpr (welford_fp32_alias) {
                                 // Mirror the push on the shared-SRAM alias; the read above filled both
@@ -227,10 +199,6 @@ void kernel_main() {
 #ifdef WELFORD_SFPU_LOCAL_COMBINE
             const auto local_result =
                 make_welford_stats(p_local_means[0], p_local_vars[0], num_channels_per_group * num_rows_per_group);
-#elif defined(GN_RUNTIME_SIZE_ARGS)
-            static_assert(!stats_is_fp32, "GN_RUNTIME_SIZE_ARGS supports bf16 stats only");
-            const auto local_result = combine_welford_stats<local_stride>(
-                p_local_means, p_local_vars, tile_width, num_channels_per_group * num_rows_per_group / tile_width);
 #else
             const auto local_result = combine_welford_stats<
                 tile_width,

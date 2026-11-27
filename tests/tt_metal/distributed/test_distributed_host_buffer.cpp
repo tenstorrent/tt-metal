@@ -9,7 +9,7 @@
 #include <functional>
 #include <vector>
 
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 
 namespace tt::tt_metal {
 namespace {

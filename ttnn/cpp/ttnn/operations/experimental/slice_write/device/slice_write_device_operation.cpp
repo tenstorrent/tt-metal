@@ -5,7 +5,6 @@
 #include "slice_write_device_operation.hpp"
 
 #include <algorithm>
-#include <tt-metalium/constants.hpp>
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -29,9 +28,6 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
             return SliceWriteRMShardedInputProgramFactory{};
         }
         if (input.layout() == Layout::TILE) {
-            if (operation_attributes.runtime_shapes) {
-                return SliceWriteTiledShardedInputRuntimeShapesProgramFactory{};
-            }
             return SliceWriteTiledShardedInputProgramFactory{};
         }
         TT_THROW("Unsupported input memory layout for slice_write operation");
@@ -61,9 +57,6 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         output_padded_shape.rank(),
         args.slice_start.rank(),
         args.slice_end.rank());
-    // The runtime-shapes factory clips the slice to the output's H and W.
-    const bool clips = std::holds_alternative<SliceWriteTiledShardedInputRuntimeShapesProgramFactory>(
-        select_program_factory(args, tensor_args));
     for (uint32_t i = 0; i < output_padded_shape.rank(); i++) {
         TT_FATAL(
             args.slice_start[i] < output_padded_shape[i],
@@ -72,7 +65,7 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
             args.slice_start[i],
             output_padded_shape[i]);
         TT_FATAL(
-            args.slice_end[i] <= output_padded_shape[i] || (clips && (i == 1 || i == 2)),
+            args.slice_end[i] <= output_padded_shape[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             args.slice_end[i],
             output_padded_shape[i]);
@@ -88,21 +81,6 @@ void SliceWriteDeviceOperation::validate_on_program_cache_miss(
         !input_tensor.is_sharded() || input_tensor.padded_shape().rank() == 4,
         "Sharded input tensor should be of rank 4. Got {}",
         input_tensor.padded_shape().rank());
-    // The tiled sharded-input factories need a start on whole tiles. This runs on a cache hit too: the runtime-shapes
-    // factory's key leaves out the start, so a W start of 16 would otherwise reuse a program built for a start of 0.
-    if (input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE) {
-        TT_FATAL(
-            args.slice_start[-1] == 0,
-            "Slice write expects output start for the last dimension to be 0, got {}",
-            args.slice_start[-1]);
-        TT_FATAL(
-            args.slice_start[-2] % tt::constants::TILE_HEIGHT == 0,
-            "Slice write expects output start for the second last dimension to be a multiple of tile height, got {}",
-            args.slice_start[-2]);
-    }
-    // The runtime-shapes factory compiles the output's accessor args, which a sharded output would tie to its shape.
-    TT_FATAL(
-        !clips || !output_tensor.is_sharded(), "slice_write with runtime_shapes needs an interleaved output tensor");
 }
 
 ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
@@ -114,27 +92,6 @@ ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     if (std::holds_alternative<SliceWriteRMInterleavedProgramFactory>(factory)) {
         return ttsl::hash::hash_objects_with_default_seed(
             factory.index(), args.slice_start[-1], args.step, tensor_args);
-    }
-    // The runtime-shapes factory takes the start and the output's outer and spatial sizes as runtime args: it keys on
-    // the slice's extent, the input and the output's channels and buffer.
-    if (std::holds_alternative<SliceWriteTiledShardedInputRuntimeShapesProgramFactory>(factory)) {
-        const auto& output = tensor_args.output;
-        ttsl::SmallVector<uint32_t> extent(args.slice_end.rank());
-        for (uint32_t i = 0; i < extent.size(); i++) {
-            extent[i] = args.slice_end[i] - args.slice_start[i];
-        }
-        return ttsl::hash::hash_objects_with_default_seed(
-            factory.index(),
-            extent,
-            args.slice_start[-1],
-            args.step,
-            tensor_args.input,
-            output.dtype(),
-            output.layout(),
-            output.memory_config(),
-            output.logical_shape().rank(),
-            output.logical_shape()[-1],
-            output.padded_shape()[-1]);
     }
     return ttsl::hash::hash_objects_with_default_seed(factory.index(), args, tensor_args);
 }
@@ -158,15 +115,13 @@ Tensor slice_write(
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
-    const ttnn::Shape& step,
-    bool runtime_shapes) {
+    const ttnn::Shape& step) {
     using OperationType = ttnn::experimental::prim::SliceWriteDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .slice_start = slice_start,
         .slice_end = slice_end,
         .step = step,
-        .runtime_shapes = runtime_shapes,
     };
     auto tensor_args = OperationType::tensor_args_t{.input = input_tensor, .output = output_tensor};
 

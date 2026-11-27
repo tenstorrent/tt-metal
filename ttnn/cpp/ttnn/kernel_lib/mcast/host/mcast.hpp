@@ -16,11 +16,11 @@
 
 #include "ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -102,10 +102,6 @@ struct McastConfig {
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
-    // Pass the acknowledgment count in the runtime arguments even when every sender has the same one.
-    // A uniform count is otherwise a compile-time constant, so a count that follows the problem size,
-    // such as the number of handshake cores, compiles a new kernel binary per count.
-    bool runtime_ack_count = false;
 };
 
 // One in-group sender per receiver group, optionally staggered across groups.

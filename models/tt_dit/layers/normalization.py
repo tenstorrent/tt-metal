@@ -11,7 +11,6 @@ import torch
 
 import ttnn
 
-from ..utils.tensor import shape_tuple
 from .linear import _apply_activation_fn
 from .module import Module, Parameter
 
@@ -56,7 +55,15 @@ class RMSNorm(Module):
         *,
         compute_kernel_config=None,
         program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+        row_capacity: int | None = None,
     ) -> ttnn.Tensor:
+        """`row_capacity` (largest row count of dim -2, a multiple of 32) selects a program that serves every
+        row count up to it; its result is close to, not bit-identical with, the default one."""
+        if row_capacity is not None:
+            if program_config is not None:
+                msg = "row_capacity takes no program_config"
+                raise ValueError(msg)
+            return self._forward_row_capacity(x, compute_kernel_config, row_capacity)
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
@@ -66,6 +73,26 @@ class RMSNorm(Module):
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
+
+    def _forward_row_capacity(self, x: ttnn.Tensor, compute_kernel_config, row_capacity: int) -> ttnn.Tensor:
+        if self.bias is not None or self.fused_activation is not None:
+            msg = "row_capacity supports neither a bias nor a fused activation"
+            raise ValueError(msg)
+        shape = list(x.shape)
+        folded = [1, math.prod(shape[:-2]), *shape[-2:]]
+        # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
+        x = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x if shape == folded else ttnn.reshape(x, folded),
+            None,
+            self.mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=self.norm_eps,
+            weight=self.weight.data if self.weight is not None else None,
+            compute_kernel_config=compute_kernel_config,
+            row_capacity=row_capacity * folded[1],
+        )
+        return x if shape == folded else ttnn.reshape(x, shape)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -338,7 +365,6 @@ class DistributedLayerNorm(Module):
         mesh_axis=0,
         mesh_device=None,
         ccl_manager=None,
-        row_capacity: int | None = None,
     ):
         super().__init__()
 
@@ -351,9 +377,6 @@ class DistributedLayerNorm(Module):
         self.ccl_manager = ccl_manager
         self.mesh_width = tuple(mesh_device.shape)[mesh_axis]
         self.TILE_SIZE = 32
-        # Largest per-device row count (batch * N, multiple of 32) one cached program and stats buffer
-        # serve; None keeps one per input shape.
-        self.row_capacity = row_capacity
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -435,11 +458,6 @@ class DistributedLayerNorm(Module):
             weight = self.weight.data if self.weight is not None else None
             bias = self.bias.data if self.bias is not None else None
 
-        # A pinned capacity sizes the stats buffer, so every row count up to it shares one; the
-        # input's width is in the key because it sets the stats geometry too.
-        row_capacity = self.row_capacity
-        stats_key = ("ln", x.shape[-1], row_capacity) if row_capacity is not None else ("ln", shape_tuple(x.shape))
-
         # Fused Welford LayerNorm device op. weight/bias (static or adaLN, bf16 or fp32) are
         # consumed natively in-op — fp32 affine keeps the modulation precision adaLN needs.
         return ttnn.experimental.dit_fused_distributed_layernorm(
@@ -449,13 +467,12 @@ class DistributedLayerNorm(Module):
             self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             topology=self.ccl_manager.topology,
             persistent_output_buffer=self.ccl_manager.get_fused_norm_stats_buffer(
-                stats_key,
+                ("ln", tuple(x.shape)),
                 lambda: ttnn.experimental.dit_fused_distributed_layernorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_links=self.ccl_manager.num_links,
-                    row_capacity=row_capacity,
                 ),
             ),
             epsilon=self.norm_eps,
@@ -465,7 +482,6 @@ class DistributedLayerNorm(Module):
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             dtype=dtype,
             reciprocals=self._ensure_fused_ln_recip(x),
-            row_capacity=row_capacity,
         )
 
 
@@ -516,6 +532,25 @@ def dram_group_norm_core_grid(
     return best
 
 
+def bounded_group_norm_out_blocks(norm: GroupNorm, batch: int, spatial: int, channels: int, max_block_rows: int) -> int:
+    """num_out_blocks for ``norm`` on a [batch, spatial, channels] input: -1 (the op's auto choice) unless that leaves
+    more than ``max_block_rows`` tile rows per block, else the smallest divisor of the per-core block height that
+    does not."""
+    grid = norm._op_core_grid(batch, spatial)
+    virtual_rows = (grid.x // norm.num_virtual_cols) * grid.y
+    block_h = batch * math.ceil(spatial / ttnn.TILE_SIZE) // virtual_rows
+    target = max(
+        1, spatial * channels // (256 * 256 * (grid.x // norm.num_virtual_cols) * norm.num_virtual_cols * grid.y)
+    )
+    auto = 1
+    while auto < target and auto < 256:
+        auto <<= 1
+    if block_h <= max_block_rows * auto:
+        return -1
+    low = max(auto, ttnn.core.divup(block_h, max_block_rows))
+    return next(d for d in range(low, block_h + 1) if block_h % d == 0)
+
+
 """
 Groupnorm that supports data parallel computation.
 The number of channels and groups will be updated to match the distribution of the data across the mesh.
@@ -538,6 +573,7 @@ class GroupNorm(Module):
         mesh_axis: int | None = None,
         core_grid: ttnn.CoreGrid | None = None,
         activation_fn: str | None = None,
+        max_block_rows: int | None = None,
     ) -> None:
         """
         Args:
@@ -551,10 +587,13 @@ class GroupNorm(Module):
             num_out_blocks: The number of output blocks to use.
             activation_fn: Applied after the norm. ``ttnn.group_norm`` cannot fuse one, so it
                 always runs as a separate op here.
+            max_block_rows: When set, the automatic num_out_blocks is raised so that no output block
+                holds more tile rows than this (bounds the op's L1 circular buffers).
         """
         super().__init__()
 
         self.activation_fn = activation_fn
+        self.max_block_rows = max_block_rows
         self.eps = eps
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
@@ -681,6 +720,10 @@ class GroupNorm(Module):
 
     def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
         batch_size, height, width, channels = x.shape
+        if num_out_blocks == -1 and self.max_block_rows is not None:
+            num_out_blocks = bounded_group_norm_out_blocks(
+                self, batch_size, height * width, channels, self.max_block_rows
+            )
         x = x.reshape([batch_size, 1, width * height, channels])
         kwargs = dict(
             weight=self.weight.data,
@@ -712,9 +755,6 @@ class DistributedGroupNorm(Module):
     (whole groups per device); orthogonal to ``cluster_axis``. Per-device
     channel count must be divisible by 32.
 
-    ``second_cluster_axis``: the input is also sharded spatially on this mesh axis. The op then
-    merges the stats over both axes, so the activations need no gather.
-
     ``activation_fn`` (e.g. ``"silu"``) is applied after the norm. On the distributed path it
     is folded into the op's output stage, removing the separate activation op's full-tensor
     DRAM read/write; otherwise it runs as a separate op. Either way the caller gets
@@ -733,19 +773,11 @@ class DistributedGroupNorm(Module):
         ccl_manager=None,
         core_grid: ttnn.CoreGrid | None = None,
         activation_fn: str | None = None,
-        second_cluster_axis: int | None = None,
     ) -> None:
         super().__init__()
 
         assert num_channels % num_groups == 0, "num_channels must be divisible by num_groups"
         assert num_channels % 32 == 0, "num_channels must be divisible by tile size (fused v1)"
-        assert second_cluster_axis is None or (
-            cluster_axis is not None and second_cluster_axis != cluster_axis
-        ), "second_cluster_axis needs cluster_axis and must differ from it"
-        assert mesh_axis is None or mesh_axis not in (
-            cluster_axis,
-            second_cluster_axis,
-        ), "the channel axis (mesh_axis) cannot also be a spatial axis whose stats are exchanged"
 
         # Consume the activation into the op when the fused path can absorb it; whatever is
         # left in self.activation_fn is applied separately by forward().
@@ -766,15 +798,6 @@ class DistributedGroupNorm(Module):
 
         self.channel_devices = tuple(mesh_device.shape)[mesh_axis] if mesh_axis is not None else 1
         self.cluster_size = tuple(mesh_device.shape)[cluster_axis] if cluster_axis is not None else 1
-        # A second axis of width 1 needs no exchange.
-        if second_cluster_axis is not None and tuple(mesh_device.shape)[second_cluster_axis] == 1:
-            second_cluster_axis = None
-        # The op exchanges over cluster_axis first and needs it wider than 1.
-        if second_cluster_axis is not None and self.cluster_size == 1:
-            cluster_axis, second_cluster_axis = second_cluster_axis, None
-            self.cluster_axis = cluster_axis
-            self.cluster_size = tuple(mesh_device.shape)[cluster_axis]
-        self.second_cluster_axis = second_cluster_axis
         assert num_groups % self.channel_devices == 0, "num_groups must be divisible by channel mesh width"
 
         if cluster_axis is not None and self.cluster_size > 1:
@@ -852,7 +875,6 @@ class DistributedGroupNorm(Module):
         ccl_manager=None,
         core_grid: ttnn.CoreGrid | None = None,
         activation_fn: str | None = None,
-        second_cluster_axis: int | None = None,
     ) -> DistributedGroupNorm:
         module = cls(
             num_channels=torch_ref.num_channels,
@@ -864,7 +886,6 @@ class DistributedGroupNorm(Module):
             ccl_manager=ccl_manager,
             core_grid=core_grid,
             activation_fn=activation_fn,
-            second_cluster_axis=second_cluster_axis,
         )
         module.load_torch_state_dict(torch_ref.state_dict())
         return module
@@ -911,23 +932,17 @@ class DistributedGroupNorm(Module):
         x4 = x.reshape([batch_size, 1, width * height, channels])
 
         semaphores = self.ccl_manager.get_ag_ping_pong_semaphore(self.cluster_axis) if self.cluster_size > 1 else []
-        if self.second_cluster_axis is not None:
-            # Peers on the second axis increment semaphore [1]. Taking it from that axis's own pool
-            # keeps every semaphore in step with the ops of the only devices that touch it.
-            semaphores = [semaphores[0], self.ccl_manager.get_ag_ping_pong_semaphore(self.second_cluster_axis)[0]]
         persistent = None
         if self.cluster_size > 1:
-            # The stats geometry follows the channels, the groups and the mesh axes, not H * W, so a
-            # new image size reuses the buffer. The fused activation does not change it either (it is
-            # applied after the AG, on the output tile), so it is deliberately NOT part of the key.
+            # The fused activation does not change the stats geometry (it is applied after the
+            # AG, on the output tile), so it is deliberately NOT part of the cache key.
             persistent = self.ccl_manager.get_fused_norm_stats_buffer(
-                ("gn", channels, self.num_padded_groups, self.cluster_axis, self.second_cluster_axis),
+                ("gn", tuple(x4.shape), self.num_padded_groups, self.cluster_axis),
                 lambda: ttnn.experimental.dit_fused_distributed_groupnorm_create_stats_buffer(
                     x4,
                     self.num_padded_groups,
                     self.cluster_axis,
                     self.mesh_device,
-                    second_cluster_axis=self.second_cluster_axis,
                 ),
             )
 
@@ -947,8 +962,6 @@ class DistributedGroupNorm(Module):
             persistent_output_buffer=persistent,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
-            # The op exchanges over the second axis with the second of the two semaphores.
-            second_cluster_axis=self.second_cluster_axis,
         )
         out = out.reshape([batch_size, height, width, channels])
         # No-op when the activation was consumed into the op above.

@@ -7,16 +7,13 @@ from __future__ import annotations
 import itertools
 from typing import TYPE_CHECKING
 
-import torch
-
 import ttnn
 
-from ...layers.conv2d import configure_conv2d, warm_dram_slice_flatten, warm_fixed_slice_flatten
+from ...layers.conv2d import configure_conv2d
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils import tensor
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tracing import traced_function
 from .vae import (
@@ -26,23 +23,20 @@ from .vae import (
     VaeMidBlock,
     VaeNormDescGroup,
     VaeUpBlock,
+    _all_gather_hw,
     _norm,
     fold_quant_conv_mean,
-    warm_token_gather,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    import torch
+
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L271
 class Flux2VaeDecoder(Module):
     _PATCH_SIZE = 2
-
-    # The output size per chip (height, width) of the fixed 2D slices of the convs at each resolution, from the
-    # latent's (1/8 of the image) to the image's, or None for conv2d's own slicing, which adds program-cache entries
-    # at every new image size. See Conv2d.fixed_slice_hw.
-    fixed_slice_hw_per_level: tuple[tuple[int, int], ...] | None = ((32, 32), (32, 64), (64, 64), (128, 128))
 
     def __init__(
         self,
@@ -55,6 +49,7 @@ class Flux2VaeDecoder(Module):
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
         use_conv3d: bool = False,
+        local_query_attention: bool = False,
     ) -> None:
         super().__init__()
 
@@ -67,9 +62,7 @@ class Flux2VaeDecoder(Module):
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
             use_conv3d=use_conv3d,
-            # Layout conversions, the unpatchify permute and row-major upsamples serve every image size after
-            # warming one.
-            runtime_shapes=True,
+            local_query_attention=local_query_attention,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -114,59 +107,12 @@ class Flux2VaeDecoder(Module):
         self.bn_running_mean = Parameter(total_shape=[bn_size], device=ctx.device)
         self.bn_running_var = Parameter(total_shape=[bn_size], device=ctx.device)
         self.bn_eps = 1e-4
-        # The latent normalization's mean and standard deviation on the host, read once.
-        self._bn_host: tuple[torch.Tensor, torch.Tensor] | None = None
 
         self._ctx = ctx
 
         # The pipeline traces the decoder at every image size, and each keeps its own conv config
         # tensors, which would not fit in L1_SMALL.
         configure_conv2d(self, config_tensors_in_dram=True)
-        # Fixed shard schemes, so each conv prepares its weights once instead of per image size. On a
-        # T3K (2x4) from 256x256 to 2048x1024 these are the schemes conv2d picks on its own, except
-        # conv_out at 256x256, which it block-shards (21 ms faster there; block sharding costs 5-6% of
-        # the decode from 512x512 up).
-        configure_conv2d(self, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
-        configure_conv2d(self.conv_out, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-        # Always DRAM-slice the convs that conv2d leaves unsliced at 1024x1024 but slices at larger
-        # sizes: the two with 512 input channels at the second-largest level, and conv_out. Their
-        # slicing kernels then compile at the first size instead of at the first larger one. The
-        # other convs that get sliced share their slicing kernels with convs already sliced at
-        # 1024x1024. The areas are from a T3K (2x4) from 1024x1024 to 2048x2048. The largest slice
-        # conv2d picked for conv_out was 512 rows by 256 columns, at 90% of the free L1; with the halo
-        # counted on 64 cores (see Conv2d._width_slices) that is (512 + 64) * 256. On one chip, of
-        # conv_out slices (height x width) 512x256, 128x704, 176x576 and 160x640 fit, and 128x1024
-        # (the same 131,072 pixels as 512x256) and 176x704 did not, which this cap reproduces. It is
-        # not scaled by the core count, so on Blackhole's 110 cores it slices more than it needs. For
-        # the other two it covered 192x192 once, but 128x296 did not fit in one call, so their limit
-        # is the next largest, 128x256, at 87%.
-        configure_conv2d(self.up_blocks[1].upsampler, dram_slice_area=128 * 256)
-        configure_conv2d(self.up_blocks[2].resnets[0].conv1, dram_slice_area=128 * 256)
-        configure_conv2d(self.conv_out, dram_slice_area=(512 + 64) * 256)
-        # The sliced convs end with a tiled reshape at every width per chip that is not whole tiles, which the
-        # warm size (1024x1024) does not have at any level.
-        warm_dram_slice_flatten(ctx.device)
-        # Fixed 2D slices for every conv, which supersede the slicing above: each conv then runs as slices of one
-        # output size per level at every image size, and adds no program-cache entries at a new size. Their
-        # flatten's entries are built here, one per channel count, as the warm size never runs it.
-        if self.fixed_slice_hw_per_level is not None:
-            for level, modules in enumerate(self._conv_levels()):
-                for module in modules:
-                    configure_conv2d(module, fixed_slice_hw=self.fixed_slice_hw_per_level[level])
-            warm_fixed_slice_flatten(ctx.device, [*channel_counts, out_channels])
-        # So does the mid block's token gather where the token rows per chip are not whole tiles.
-        warm_token_gather(ctx, channel_counts[0])
-
-    def _conv_levels(self) -> list[list[Module]]:
-        """The modules holding the convs at each resolution, from the latent's to the image's: each up block's
-        resnets run at the resolution its upsampler leaves, which the next block's resnets share."""
-        levels: list[list[Module]] = [[self.conv_in, self.mid_block]]
-        for block in self.up_blocks:
-            levels[-1].append(block.resnets)
-            if block.upsampler is not None:
-                levels.append([block.upsampler])
-        levels[-1].append(self.conv_out)
-        return levels
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
@@ -181,89 +127,56 @@ class Flux2VaeDecoder(Module):
         if "bn.running_var" in state:
             state["bn_running_var"] = state.pop("bn.running_var")
         state.pop("bn.num_batches_tracked", None)
-        # New statistics replace the ones read to the host.
-        self._bn_host = None
 
         rename_substate(state, "decoder", "")
 
-    def preprocess_and_unpatchify(self, z: torch.Tensor, *, height: int, width: int) -> ttnn.Tensor:
-        """Undoes the latent normalization and the patchify of all tokens, [N, (H / P) * (W / P), C * P * P], on
-        the host, and uploads the result split over the H and W mesh axes, [N, H / h_factor, W / w_factor, C] per
-        device, row major. On the device this was a layout conversion, a permute and a mesh partition per axis, a
-        program per image size each, for about 1 MB at 1024x1024; the transfers cost a few ms instead."""
+    def _inv_normalize(self, z: ttnn.Tensor) -> ttnn.Tensor:
+        s = ttnn.sqrt(self.bn_running_var.data + self.bn_eps)
+        m = self.bn_running_mean.data
+        return z * s + m
+
+    def preprocess_and_unpatchify(self, z: ttnn.Tensor, *, height: int, width: int) -> ttnn.Tensor:
+        # N, (H / P) * (W / P), C * P * P -> N, H/h_factor, W, C
+        # Input may be H-sharded (h_factor rows per device) or fully replicated.
+        # W-sharding is applied by the caller after this call, once the spatial layout
+        # is restored (H/W are interleaved in patchified tokens so W can't be split here).
         p = self._PATCH_SIZE
-        assert height % p == 0 and width % p == 0, f"{height}x{width} is not whole patches"
-        assert height % self._ctx.h_factor == 0, f"height {height} does not split over {self._ctx.h_factor} devices"
-        assert width % self._ctx.w_factor == 0, f"width {width} does not split over {self._ctx.w_factor} devices"
-        if self._bn_host is None:
-            replicated = (None,)
-            mean = tensor.to_torch(self.bn_running_mean.data, mesh_axes=replicated).float()
-            var = tensor.to_torch(self.bn_running_var.data, mesh_axes=replicated).float()
-            self._bn_host = (mean, torch.sqrt(var + self.bn_eps))
-        mean, std = self._bn_host
-        z = z.float() * std + mean
-        z = z.reshape(z.shape[0], height // p, width // p, -1, p, p).permute(0, 1, 4, 2, 5, 3)
-        # In bfloat16 already, since from_torch converts other dtypes on the device, at a program per shape.
-        z = z.reshape(z.shape[0], height, width, -1).to(torch.bfloat16)
-        # Row major: the decoder flattens it before tilizing (see forward).
-        return tensor.from_torch(
-            z,
-            device=self._ctx.device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_axes=(None, self._ctx.h_mesh_axis, self._ctx.w_mesh_axis, None),
-        )
+        assert (
+            height % (p * self._ctx.h_factor) == 0
+        ), f"height {height} must be divisible by patch {p} * h_factor {self._ctx.h_factor}"
+        assert (
+            width % (p * self._ctx.w_factor) == 0
+        ), f"width {width} must be divisible by patch {p} * w_factor {self._ctx.w_factor}"
+        height_local = height // self._ctx.h_factor
+
+        z = self._inv_normalize(z)
+        z = ttnn.to_layout(z, ttnn.ROW_MAJOR_LAYOUT)
+        z = z.reshape([z.shape[0], height_local // p, width // p, -1, p, p])
+        z = ttnn.permute(z, [0, 1, 4, 2, 5, 3])
+        z = z.reshape([z.shape[0], height_local, width, -1])
+        z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
+        return z
 
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
     def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
-        # Input arrives from preprocess_and_unpatchify in row major, [N, H, W, C] split over the H and
-        # W axes where the VAE has them. The tiled activations stay flat, [N, 1, H * W, C], and are
-        # made 4D only in row major (see VaeConv2d.forward): a tiled reshape between the two moves data
-        # whenever the local W is not whole tiles.
-        n, h, w, c = z.shape
-        hw = (h, w)
-        # Tilizing the flat tensor pads only at its end, not per row of latents.
-        z = ttnn.to_layout(ttnn.reshape(z, (n, 1, h * w, c)), ttnn.TILE_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
-        # post_quant_conv is a per-position Linear, and the conv pyramid below exchanges halos.
+        # Input arrives H-sharded when SP is active (preprocess_and_unpatchify uses per-device
+        # H), or replicated when SP is off — both cases work for post_quant_conv (per-position
+        # Linear) and the SP-aware conv pyramid below.
         z = self.post_quant_conv.forward(z)
 
-        z = self.conv_in.forward(z, hw)
-        z = self.mid_block.forward(z, hw)
+        z = self.conv_in.forward(z)
+        z = self.mid_block.forward(z)
 
         for block in self.up_blocks:
-            z = block.forward(z, hw)
-            hw = block.output_hw(hw)
+            z = block.forward(z)
 
         z = self.conv_norm_out.forward(z)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        # The image stays split over the H and W axes: the host assembles it (see output_concat_dims),
-        # which saves gathering it on the device, at a program per image size. It stays flat too, as
-        # [N, 1, H * W, C] tiled; flat_to_row_major with output_hw makes it [N, H, W, C].
-        return self.conv_out.forward(z, hw)
-
-    @property
-    def runtime_shapes(self) -> bool:
-        """Whether the decoder's layout conversions, unpatchify permute and row-major upsamples use one program for
-        every image size; the pipeline's float_to_uint8 follows it."""
-        return self._ctx.runtime_shapes
-
-    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
-        """The local (H, W) of the image decoded from latents of local size `hw`."""
-        for block in self.up_blocks:
-            hw = block.output_hw(hw)
-        return hw
-
-    def output_concat_dims(self) -> list[int | None]:
-        """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None
-        where the output is not split; the concat_dims of fast_device_to_host."""
-        dims: list[int | None] = [None] * len(tuple(self._ctx.device.shape))
-        if self._ctx.h_factor > 1 and self._ctx.h_mesh_axis is not None:
-            dims[self._ctx.h_mesh_axis] = 1
-        if self._ctx.w_factor > 1 and self._ctx.w_mesh_axis is not None:
-            dims[self._ctx.w_mesh_axis] = 2
-        return dims
+        z = self.conv_out.forward(z)
+        return _all_gather_hw(self._ctx, z)
 
 
 # https://github.com/black-forest-labs/flux2/blob/6bb103559da75b67d75bf77cebba0027ba412ebc/src/flux2/autoencoder.py#L189
@@ -280,6 +193,7 @@ class Flux2VaeEncoder(Module):
         parallel_config: Flux2VaeParallelConfig,
         device: ttnn.MeshDevice,
         ccl_manager: CCLManager | None,
+        group_norm_max_block_rows: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -291,6 +205,7 @@ class Flux2VaeEncoder(Module):
             h_factor=parallel_config.h_parallel.factor if parallel_config.h_parallel is not None else 1,
             w_mesh_axis=parallel_config.w_parallel.mesh_axis if parallel_config.w_parallel is not None else None,
             w_factor=parallel_config.w_parallel.factor if parallel_config.w_parallel is not None else 1,
+            group_norm_max_block_rows=group_norm_max_block_rows,
         )
 
         if ctx.tp_axis is not None and ctx.ccl_manager is None:
@@ -327,12 +242,6 @@ class Flux2VaeEncoder(Module):
         self._ctx = ctx
 
         configure_conv2d(self, config_tensors_in_dram=True)
-        # A fixed shard scheme, so each conv prepares its weights once instead of per image size. On a
-        # T3K (2x4) for reference sizes from 256x256 to 1024x1024, square and not, these convs are
-        # block-sharded by conv2d on its own. conv_in is left to conv2d: its 3 input channels are not
-        # a whole tile, so it prepares its weights per size anyway.
-        for module in (self.down_blocks, self.mid_block, self.conv_out):
-            configure_conv2d(module, shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "decoder")
@@ -355,42 +264,19 @@ class Flux2VaeEncoder(Module):
                 layout.
 
         Returns:
-            The latent mean, flat and tiled as (B, 1, H / 8 * W / 8, z_channels), split over the H and
-            W axes like the input; flat_to_row_major with output_hw makes it (B, H / 8, W / 8,
-            z_channels).
+            The latent mean of shape (B, H / 8, W / 8, z_channels), replicated.
         """
-        # The tiled activations stay flat, as in Flux2VaeDecoder.forward.
-        _, h, w, _ = x.shape
-        hw = (h, w)
-        x = self.conv_in.forward(x, hw)
+        x = self.conv_in.forward(x)
 
         for block in self.down_blocks:
-            x = block.forward(x, hw)
-            hw = block.output_hw(hw)
+            x = block.forward(x)
 
-        x = self.mid_block.forward(x, hw)
+        x = self.mid_block.forward(x)
 
         x = self.conv_norm_out.forward(x)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             x = self._ctx.ccl_manager.all_gather(x, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        # The latents stay split over the H and W axes for the host to assemble (see output_concat_dims),
-        # which on a single host saves gathering them on the device, at a program per image size.
-        return self.conv_out.forward(x, hw)
-
-    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
-        """The local (H, W) of the latents of an image of local size `hw`."""
-        for block in self.down_blocks:
-            hw = block.output_hw(hw)
-        return hw
-
-    def output_concat_dims(self) -> list[int | None]:
-        """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None
-        where the output is not split; the concat_dims of fast_device_to_host."""
-        dims: list[int | None] = [None] * len(tuple(self._ctx.device.shape))
-        if self._ctx.h_factor > 1 and self._ctx.h_mesh_axis is not None:
-            dims[self._ctx.h_mesh_axis] = 1
-        if self._ctx.w_factor > 1 and self._ctx.w_mesh_axis is not None:
-            dims[self._ctx.w_mesh_axis] = 2
-        return dims
+        x = self.conv_out.forward(x)
+        return _all_gather_hw(self._ctx, x)

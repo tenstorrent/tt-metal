@@ -19,12 +19,12 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -142,7 +142,7 @@ tt::tt_metal::distributed::MeshWorkload build_d2h_worker_workload(
         const tt::tt_metal::CoreCoord service_phys = device->worker_core_from_logical_core(service_logical);
         const uint32_t write_ack_counter_addr = static_cast<uint32_t>(service.get_write_ack_counter_addr(coord));
 
-        auto program = tt::tt_metal::CreateProgram();
+        auto program = tt::tt_metal::CreateProgram(*mesh_device);
         auto cb_cfg = tt::tt_metal::CircularBufferConfig(page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
                           .set_page_size(scratch_cb_index, page_size);
         tt::tt_metal::CreateCircularBuffer(program, tt::tt_metal::CoreRangeSet(worker_cores), cb_cfg);

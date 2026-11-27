@@ -18,9 +18,9 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <nanobind/stl/vector.h>
 
@@ -444,12 +444,6 @@ void py_module(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): the optional output memory configuration.
             sub_core_grids (ttnn.CoreRangeSet, optional): the optional sub core grids. Defaults to `None`.
             pad_value (float, optional): the optional pad value. Defaults to `0.0f`.
-            runtime_shapes (bool, optional): for an interleaved bfloat16 or float32 device tensor of rank 2 to 4
-                with 32x32 tiles and a DRAM interleaved output, one program serves every shape with the same last dim
-                and rank, at more host time per call, while rows are at most 32 tiles (wider rows can take the
-                padding ops' block factory, depending on the shape); the padding ops' programs then also serve
-                whole-tile shapes. The output memory config defaults to the input's, so an L1 input needs
-                memory_config=ttnn.DRAM_MEMORY_CONFIG. Has no effect on other tensors. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
@@ -460,8 +454,7 @@ void py_module(nb::module_& mod) {
         nb::arg("dtype") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("pad_value") = 0.0f,
-        nb::arg("runtime_shapes") = false);
+        nb::arg("pad_value") = 0.0f);
 
     mod.def(
         "num_cores_to_corerangeset",

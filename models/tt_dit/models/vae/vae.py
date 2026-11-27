@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 import torch
@@ -43,11 +43,9 @@ class VaeContext:
     w_mesh_axis: int | None = None
     w_factor: int = 1
     use_conv3d: bool = False
-    # Layout conversions of interleaved bfloat16 and float32 activations, row-major upsamples and the convs' halo
-    # exchange use one program for every image size (`runtime_shapes=True` of `ttnn.to_layout`, `ttnn.upsample` and
-    # `ttnn.experimental.neighbor_pad_async`), at more host time per call. Sharded and other activations keep a
-    # program per size.
-    runtime_shapes: bool = False
+    # VaeAttention computes only each device's own query rows (its H partition, split over tp_axis where even).
+    local_query_attention: bool = False
+    group_norm_max_block_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +76,7 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
         return x
     assert ctx.ccl_manager is not None
     if x.layout != ttnn.TILE_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=ctx.runtime_shapes)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     if ctx.h_factor > 1:
         x = ctx.ccl_manager.all_gather(x, dim=1, mesh_axis=ctx.h_mesh_axis, use_hyperparams=True)
     if ctx.w_factor > 1:
@@ -86,42 +84,24 @@ def _all_gather_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
     return x
 
 
-def _all_gather_tokens(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
-    """All-gather a token sequence [N, 1, T, C] over the H and W axes: [N, 1, T * h * w, C], in mesh
-    order rather than image order. No-op when both factors are 1."""
+def _partition_hw(ctx: VaeContext, x: ttnn.Tensor) -> ttnn.Tensor:
+    """Partition full spatial back to sharded: [N, H, W, C] → [N, H/h, W/w, C].
+
+    Restores the input layout (mesh_partition requires ROW_MAJOR internally).
+    No-op when both factors are 1.
+    """
     if ctx.h_factor <= 1 and ctx.w_factor <= 1:
         return x
-    assert ctx.ccl_manager is not None
-    # T follows the image size, and CCLManager's hyperparameters, whose worker count is compiled into
-    # the gather's kernels, change at T = 512, within FLUX.2's size range on a BH Galaxy.
-    gather = dict(dim=2, use_hyperparams=True, size_independent_hyperparams=True)
+    original_layout = x.layout
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     if ctx.h_factor > 1:
-        x = ctx.ccl_manager.all_gather(x, mesh_axis=ctx.h_mesh_axis, **gather)
+        x = ttnn.mesh_partition(x, dim=1, cluster_axis=ctx.h_mesh_axis, memory_config=x.memory_config())
     if ctx.w_factor > 1:
-        x = ctx.ccl_manager.all_gather(x, mesh_axis=ctx.w_mesh_axis, **gather)
+        x = ttnn.mesh_partition(x, dim=2, cluster_axis=ctx.w_mesh_axis, memory_config=x.memory_config())
+    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, original_layout)
     return x
-
-
-def warm_token_gather(ctx: VaeContext, channels: int) -> None:
-    """Gather a token count per chip that is not whole tiles once, as _all_gather_tokens does.
-
-    ttnn gathers such rows through all_broadcast and a row-shift concat, whose programs take the row count at run
-    time, but a model warmed at a size whose token rows are whole tiles never runs them, so their kernels would
-    compile at the first size that is not. Calling this during warm-up compiles them there. The gathers over the H
-    and W axes are separate programs, so the count is odd: times a power-of-two H factor it is still not whole
-    tiles, and both take that path."""
-    if ctx.h_factor <= 1 and ctx.w_factor <= 1:
-        return
-    x = ttnn.from_torch(
-        torch.zeros(1, 1, ttnn.TILE_SIZE + 1, channels),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=ctx.device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ctx.device),
-    )
-    ttnn.deallocate(_all_gather_tokens(ctx, x))
-    ttnn.deallocate(x)
 
 
 def _get_neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -279,7 +259,7 @@ class _VaeConv2dConv3d(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
         if self._input_padding is not None:
             x = ttnn.pad(x, self._input_padding, value=0.0)
@@ -314,7 +294,7 @@ class _VaeConv2dConv3d(Module):
         else:
             x = x[:, 0, :, :, :]
 
-        return ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
+        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
 class VaeConv2d(Module):
@@ -336,7 +316,6 @@ class VaeConv2d(Module):
         out_is_greater = out_channels > in_channels
 
         top, bottom, left, right = (padding,) * 4 if isinstance(padding, int) else padding
-        self._kernel_size, self._stride, self._padding = kernel_size, stride, (top, bottom, left, right)
 
         # SP halo: on a sharded axis the conv's own padding becomes 0 and a neighbor_pad halo
         # exchange supplies the missing rows/cols from adjacent devices, and zeros at the edges of
@@ -383,28 +362,13 @@ class VaeConv2d(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
 
-    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
-        """The local height and width of the output for an input of local size `hw`."""
-        top, bottom, left, right = self._padding
-        k, s = self._kernel_size, self._stride
-        return (hw[0] + top + bottom - k) // s + 1, (hw[1] + left + right - k) // s + 1
-
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """Without `hw`, `x` and the output are [N, H, W, C]. With `hw`, the local (H, W), `x` is
-        [N, 1, H * W, C] or [N, H, W, C] and the output is [N, 1, H_out * W_out, C]: the images are
-        made 4D only in row major, where that is a view, while a tiled reshape moves data whenever W
-        is not whole tiles."""
-        if hw is not None:
-            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
-            x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
-
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self._needs_neighbor_pad:
             ccl = self._ctx.ccl_manager
             assert ccl is not None
             # neighbor_pad_async requires ROW_MAJOR; conv handles either layout.
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._ctx.runtime_shapes)
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             # Unsqueeze to matches the neighbor_pad kernel's expected rank for HW exchange. dims
             # shift up by 1.
             x = ttnn.unsqueeze(x, 0)  # [1, N, H_local, W_local, C]
@@ -432,27 +396,12 @@ class VaeConv2d(Module):
                 axes=axes,
                 neighbor_sems=sems,
                 num_links=links,
-                runtime_shapes=self._ctx.runtime_shapes,
             )
             x = ttnn.squeeze(x, 0)  # back to [N, H_local+pad, W_local+pad, C]
 
         if self._use_conv3d:
-            x = self.inner.forward(x)
-            if hw is not None:
-                # conv3d returns [N, H_out, W_out, C], tiled: flattening it moves data whenever W_out
-                # is not whole tiles.
-                n, h_out, w_out, c = x.shape
-                x = ttnn.reshape(x, (n, 1, h_out * w_out, c))
-            return x
-        return self.inner.forward(x, use_persistent_buffer=False, flat_output=hw is not None)
-
-
-def flat_to_row_major(x: ttnn.Tensor, hw: tuple[int, int]) -> ttnn.Tensor:
-    """A flat tiled [N, 1, H * W, C] tensor as row major [N, H, W, C], where `hw` is (H, W). The
-    untilize is of the flat tensor and the reshape a view, so neither depends on whether W is whole
-    tiles."""
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    return ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
+            return self.inner.forward(x)
+        return self.inner.forward(x, use_persistent_buffer=False)
 
 
 class VaeUpsampler(Module):
@@ -462,19 +411,10 @@ class VaeUpsampler(Module):
     def __init__(self, *, in_channels: int, out_channels: int, ctx: VaeContext) -> None:
         super().__init__()
         self.conv = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
-        self._runtime_shapes = ctx.runtime_shapes
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """With `hw` (see VaeConv2d.forward), `x` is flat, and the upsampled image stays in row major
-        for the conv, which wants row major anyway."""
-        if hw is None:
-            x = tensor.upsample(x, scale_factor=2, runtime_shapes=self._runtime_shapes)
-            return self.conv.forward(x)
-        if x.layout != ttnn.ROW_MAJOR_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=self._runtime_shapes)
-        x = ttnn.reshape(x, (x.shape[0], hw[0], hw[1], x.shape[-1]))
-        x = ttnn.upsample(x, scale_factor=2, runtime_shapes=self._runtime_shapes)
-        return self.conv.forward(x, (2 * hw[0], 2 * hw[1]))
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = tensor.upsample(x, scale_factor=2)
+        return self.conv.forward(x)
 
 
 class VaeResnetBlock(Module):
@@ -502,16 +442,14 @@ class VaeResnetBlock(Module):
         if "conv_shortcut.weight" in state:
             state["conv_shortcut.weight"] = state["conv_shortcut.weight"].squeeze(2, 3)
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """With `hw`, the local (H, W), `x` and the output are flat, [N, 1, H * W, C] (see
-        VaeConv2d.forward); without it, [N, H, W, C]."""
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         h = x
 
         h = self.norm1.forward(h)
-        h = self.conv1.forward(h, hw)
+        h = self.conv1.forward(h)
 
         h = self.norm2.forward(h)
-        h = self.conv2.forward(h, hw)
+        h = self.conv2.forward(h)
 
         if self.conv_shortcut is not None:
             x = self.conv_shortcut.forward(x)
@@ -546,18 +484,12 @@ class VaeAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        # The token count follows the image size, so the projections take one matmul config for
-        # every row count where _ROW_INDEPENDENT_CONFIGS has their shape.
-        linear_args = dict(
-            mesh_axis=ctx.tp_axis,
-            mesh_device=ctx.device,
-            ccl_manager=ctx.ccl_manager,
-            row_independent_matmul_config=True,
-        )
+        linear_args = dict(mesh_axis=ctx.tp_axis, mesh_device=ctx.device, ccl_manager=ctx.ccl_manager)
 
-        # The norm runs on the local spatial shard before the H+W all-gather, so a group norm takes
-        # the fused distributed path like the other VAE norms.
-        self.norm = _norm(norm, num_channels=num_channels, ctx=ctx)
+        # Norm runs on the AG'd full-spatial tensor inside forward(), so the inner norm should NOT
+        # AG/partition again. Bypass the _VaeSpatialGroupNorm wrap by handing _norm a TP-only ctx.
+        norm_ctx = replace(ctx, h_factor=1, w_factor=1, h_mesh_axis=None, w_mesh_axis=None)
+        self.norm = _norm(norm, num_channels=num_channels, ctx=norm_ctx)
         # Fused QKV: one ColParallelLinear with chunks=3 replaces three RowParallelLinear+RS+AG
         # round-trips. Each output is fractured on out_dim (channels) and gets AG'd before SDPA.
         self.to_qkv = ColParallelLinear(num_channels, 3 * num_channels, chunks=3, **linear_args)
@@ -640,14 +572,17 @@ class VaeAttention(Module):
         return qkv.squeeze(-1) if is_1d else qkv
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active
+        identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
-        x = self.norm.forward(x)
+        # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
+        x = _all_gather_hw(self._ctx, x)
 
-        n, h, w, _ = x.shape  # the local spatial extent when SP is active
+        n, h, w, _ = x.shape  # h, w are full-spatial after AG
 
         # convert to 1d sequence and insert head dimension; there is only one head
         x = x.reshape([n, 1, h * w, -1])
+
+        x = self.norm.forward(x)
 
         # ColParallelLinear expects replicated input on K. AG manually here (rather than
         # passing parallel_config and letting the linear gather) because on Ring topology
@@ -667,28 +602,52 @@ class VaeAttention(Module):
 
         del x
 
-        # Each device attends from its own tokens to all of them, so only K and V are gathered, as
-        # token rows. The attention does not depend on the order of the keys, and gathering rows keeps
-        # the gather's program independent of the image size.
-        k = _all_gather_tokens(self._ctx, k)
-        v = _all_gather_tokens(self._ctx, v)
+        program_config = self._sdpa_program_config
+        h_local = h // self._ctx.h_factor
+        tp_split = self._tp_factor > 1 and h_local % self._tp_factor == 0 and h_local // self._tp_factor * w % 32 == 0
+        local = (
+            self._ctx.local_query_attention
+            and self._ctx.w_factor == 1
+            and (tp_split or (self._ctx.h_factor > 1 and h_local * w % 32 == 0))
+        )
+        if local:
+            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+            if self._ctx.h_factor > 1:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._ctx.h_mesh_axis, memory_config=q.memory_config())
+            if tp_split:
+                q = ttnn.mesh_partition(q, dim=2, cluster_axis=self._tp_axis, memory_config=q.memory_config())
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+            rows = q.shape[2]
+            if rows % program_config.q_chunk_size:
+                program_config = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                    q_chunk_size=max(d for d in range(32, program_config.q_chunk_size + 1, 32) if rows % d == 0),
+                    k_chunk_size=program_config.k_chunk_size,
+                    exp_approx_mode=program_config.exp_approx_mode,
+                )
 
-        # The token counts change with the image size; with runtime_seq_len a new size builds its
-        # program from the compiled kernels.
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
-            program_config=self._sdpa_program_config,
+            program_config=program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
-            runtime_seq_len=True,
         )
+
+        if local:
+            if tp_split:
+                x = self._ccl_manager.all_gather(x, dim=2, mesh_axis=self._tp_axis, use_hyperparams=True)
+            x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+            return x.reshape([n, h_local, w, -1]) + identity
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 
         # convert back to 2d
         x = x.reshape([n, h, w, -1])
+
+        # Re-partition H+W back to local so the residual add aligns with identity (no-op when SP inactive).
+        x = _partition_hw(self._ctx, x)
 
         return x + identity
 
@@ -714,10 +673,9 @@ class VaeMidBlock(Module):
 
         self._num_layers = num_layers
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """`hw` as in VaeResnetBlock.forward; the attention works on H * W tokens either way."""
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i in range(self._num_layers + 1):
-            x = self.resnets[i].forward(x, hw)
+            x = self.resnets[i].forward(x)
             if i < self._num_layers:
                 x = self.attentions[i].forward(x)
 
@@ -757,17 +715,12 @@ class VaeUpBlock(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "upsamplers.0", "upsampler")
 
-    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
-        """The local height and width of the output for an input of local size `hw`."""
-        return (2 * hw[0], 2 * hw[1]) if self.upsampler is not None else hw
-
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """`hw` as in VaeResnetBlock.forward."""
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for block in self.resnets:
-            x = block.forward(x, hw)
+            x = block.forward(x)
 
         if self.upsampler is not None:
-            x = self.upsampler.forward(x, hw)
+            x = self.upsampler.forward(x)
 
         return x
 
@@ -777,8 +730,8 @@ class VaeDownsampler(Module):
         super().__init__()
         self.conv = VaeConv2d(num_channels, num_channels, kernel_size=3, stride=2, padding=(0, 1, 0, 1), ctx=ctx)
 
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        return self.conv.forward(x, hw)
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.conv.forward(x)
 
 
 class VaeDownBlock(Module):
@@ -806,17 +759,12 @@ class VaeDownBlock(Module):
 
         self.downsampler = VaeDownsampler(num_channels=out_channels, ctx=ctx) if downsample else None
 
-    def output_hw(self, hw: tuple[int, int]) -> tuple[int, int]:
-        """The local height and width of the output for an input of local size `hw`."""
-        return self.downsampler.conv.output_hw(hw) if self.downsampler is not None else hw
-
-    def forward(self, x: ttnn.Tensor, hw: tuple[int, int] | None = None) -> ttnn.Tensor:
-        """`hw` as in VaeResnetBlock.forward."""
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for block in self.resnets:
-            x = block.forward(x, hw)
+            x = block.forward(x)
 
         if self.downsampler is not None:
-            x = self.downsampler.forward(x, hw)
+            x = self.downsampler.forward(x)
 
         return x
 
@@ -824,8 +772,10 @@ class VaeDownBlock(Module):
 class _VaeSpatialGroupNorm(Module):
     """GroupNorm for spatially sharded VAE activations.
 
-    ``DistributedGroupNorm`` exchanges Welford stats over the sharded spatial mesh
-    axes (H and W if both are sharded), so activations stay sharded throughout.
+    ``DistributedGroupNorm`` all-gathers Welford stats on one mesh axis (H if H is
+    sharded, otherwise W). Activations stay sharded on that axis. If both H and W
+    are sharded, activations are all-gathered on the *other* spatial dim only so the
+    fused stats reduction still sees the full spatial extent, then re-partitioned.
 
     Channel TP is preserved via ``mesh_axis=ctx.tp_axis``. HiFi4 matches Wan/Mochi norms.
     """
@@ -840,10 +790,12 @@ class _VaeSpatialGroupNorm(Module):
         activation_fn: str | None = None,
     ) -> None:
         super().__init__()
-        self._runtime_shapes = ctx.runtime_shapes
         h_sp = ctx.h_factor > 1
         w_sp = ctx.w_factor > 1
+        # Stats AG prefers H when both are sharded (matches Flux2 H+TP).
         cluster_axis = ctx.h_mesh_axis if h_sp else ctx.w_mesh_axis
+        # 2-D SP: gather the non-cluster spatial dim of the activations, not both.
+        self._gather_w = h_sp and w_sp
         self.inner = DistributedGroupNorm(
             num_groups=num_groups,
             num_channels=num_channels,
@@ -851,10 +803,10 @@ class _VaeSpatialGroupNorm(Module):
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             cluster_axis=cluster_axis,
-            second_cluster_axis=ctx.w_mesh_axis if h_sp and w_sp else None,
             ccl_manager=ctx.ccl_manager,
             activation_fn=activation_fn,
         )
+        self._ctx = ctx
         self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
             ctx.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -868,9 +820,23 @@ class _VaeSpatialGroupNorm(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=self._runtime_shapes)
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
-        return self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
+        if self._gather_w:
+            assert self._ctx.ccl_manager is not None
+            x = self._ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=True)
+
+        x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
+
+        if self._gather_w:
+            original_layout = x.layout
+            if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.mesh_partition(x, dim=2, cluster_axis=self._ctx.w_mesh_axis, memory_config=x.memory_config())
+            if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+                x = ttnn.to_layout(x, original_layout)
+
+        return x
 
 
 def _norm(
@@ -886,7 +852,7 @@ def _norm(
     when that path is used and runs it separately otherwise. Callers just call ``forward``.
     """
     if isinstance(norm, VaeNormDescGroup):
-        # SP-active: fused DistributedGroupNorm (stats exchanged over the sharded spatial axes).
+        # SP-active: fused DistributedGroupNorm (stats AG on one spatial axis).
         if ctx.h_factor > 1 or ctx.w_factor > 1:
             return _VaeSpatialGroupNorm(
                 num_groups=norm.num_groups,
@@ -902,6 +868,7 @@ def _norm(
             mesh_axis=ctx.tp_axis,
             mesh_device=ctx.device,
             activation_fn=activation_fn,
+            max_block_rows=ctx.group_norm_max_block_rows,
         )
     if isinstance(norm, VaeNormDescRms):
         # VaeRmsNorm normalizes per spatial position over the channel dim → SP-safe as-is.

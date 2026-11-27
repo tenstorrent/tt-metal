@@ -13,8 +13,8 @@
 #include <tt-metalium/experimental/inspector_config.hpp>
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include <program_cache.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/utils/program_cache.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -178,6 +178,7 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
     for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
         auto socket = sockets[i++];
         socket.setIsSender(socket_data.is_sender);
+        socket.setPeerIsHost(socket_data.peer_is_host);
         socket.setConfigBufferAddress(socket_data.config_buffer_address);
         socket.setDataBufferAddress(socket_data.data_buffer_address);
         socket.setFifoSize(socket_data.fifo_size);

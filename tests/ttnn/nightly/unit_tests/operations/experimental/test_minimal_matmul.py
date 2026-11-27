@@ -50,6 +50,7 @@ def run_test_linear_impl(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     core_grid=None,
+    dst_full_sync=False,
 ):
     core_grid = core_grid or device.compute_with_storage_grid_size()
 
@@ -73,6 +74,7 @@ def run_test_linear_impl(
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_acc,
         packer_l1_acc=True,
+        dst_full_sync_en=dst_full_sync,
     )
 
     matmul_config = ttnn.MinimalMatmulConfig(
@@ -114,6 +116,7 @@ def run_test_linear(
     weight_dtype=None,
     bias_dtype=None,
     core_grid=None,
+    dst_full_sync=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -148,6 +151,7 @@ def run_test_linear(
         math_fidelity=math_fidelity,
         fp32_acc=fp32_acc,
         core_grid=core_grid,
+        dst_full_sync=dst_full_sync,
     )
 
 
@@ -170,6 +174,15 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
         N_block_size,
         subblock_h,
         subblock_w,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize("subblock_h, subblock_w", [(2, 4), (4, 2)])
+def test_linear_fp32_dest_full_sync(device, subblock_h, subblock_w):
+    check_result = run_test_linear(
+        device, 1024, 1024, 1024, 8, 8, 8, subblock_h, subblock_w, fp32_acc=True, dst_full_sync=True
     )
     assert check_result["pcc"] > 0.999_500
     assert check_result["relative_rmse"] < 0.02
@@ -219,47 +232,6 @@ def test_linear_flat_cache_across_rows(device, K, N):
     variants = [(tile_rows * 32, N) for tile_rows in H3_PROJ_OUT_TILE_ROWS] + [(H3_PROJ_OUT_TILE_ROWS[0] * 32, N + 32)]
     entries = assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=(len(variants) - 1,))
     logger.debug(f"program cache entries after the sweep: {entries}; PCC per (rows, N): {pcc_by_rows}")
-
-
-# A pinned grid orientation keeps one program for row counts on both sides of N; by default the op
-# transposes the grid once M > N, which needs a second program. FLUX.2 klein's addcmul shape.
-@pytest.mark.parametrize("transpose_core_grid", [None, False, True], ids=["default", "untransposed", "transposed"])
-def test_linear_pinned_orientation_across_rows(device, transpose_core_grid):
-    torch.manual_seed(0)
-    K, N = 3072, 1536
-    weight = torch.randn((K, N), dtype=torch.float32)
-    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-    matmul_config = ttnn.MinimalMatmulConfig(
-        M_block_size=8,
-        K_block_size=8,
-        N_block_size=8,
-        subblock_h=2,
-        subblock_w=2,
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        transpose_core_grid=transpose_core_grid,
-    )
-    assert matmul_config.transpose_core_grid == transpose_core_grid
-
-    def run(rows):
-        torch_input = torch.randn((rows, K), dtype=torch.float32)
-        tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        tt_output = ttnn.experimental.minimal_matmul(
-            tt_input, tt_weight, compute_kernel_config=compute_config, config=matmul_config
-        )
-        result = assert_quality(torch_input @ weight, ttnn.to_torch(tt_output))
-        assert result["pcc"] > 0.999_500, f"rows={rows}: PCC {result['pcc']}"
-
-    # Rows below N, then above it (from index 3 on), then below again.
-    variants = [128, 512, 1536, 1568, 2048, 4096, 1024]
-    miss_indices = (3,) if transpose_core_grid is None else ()
-    assert_program_cache_flat(device, run, variants, warm_index=0, miss_indices=miss_indices)
 
 
 # Correctness guard for the granular output-writer path (write_block_sync_granular): each row's

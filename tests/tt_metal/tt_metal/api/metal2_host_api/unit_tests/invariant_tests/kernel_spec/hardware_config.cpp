@@ -5,7 +5,9 @@
 // Local invariants of KernelSpec::hw_config against the kernel's bindings and the DFBs they name (kernel_spec.hpp):
 // unpack_modes keys name bound DFBs; for each DFB a compute kernel consumes, UnpackToDest needs enable_32_bit_dest
 // (32-bit formats on every generation, every format on Gen1), and Float32 with enable_32_bit_dest needs an explicit
-// unpack_modes entry. On Quasar, a consumed Int16 DFB with enable_32_bit_dest requires UnpackToDest.
+// unpack_modes entry. On Quasar, a consumed Int16 DFB with enable_32_bit_dest requires UnpackToDest. config_2xx's
+// sfpu_pipeline_consumed_dfbs / sfpu_pipeline_produced_dfbs name DFBs the kernel binds on that side, once each, and
+// on Quasar move that side to the SFPU pipeline.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -14,8 +16,10 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
+#include "impl/program/program_impl.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
@@ -23,6 +27,8 @@ namespace tt::tt_metal::experimental {
 namespace {
 
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen1ComputeKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
@@ -56,7 +62,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigUnpackToDestModeReferencesUnbound
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'consumer' unpack_modes entry references DFB 'nonexistent_dfb', "
                                  "which the kernel does not bind")));
@@ -75,7 +81,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ConsumerUnpackToDestBelow32BitWithoutEnableFails
         }
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("leads to worse performance")));
 }
 
@@ -91,13 +97,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_ConsumerUnpackToDestBelow32BitWithoutEnableSuc
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithoutUnpackToDestModeEntrySucceeds) {
     // Non-FP32 DFBs default to Default; omitting an entry is the expected idiom.
     ProgramSpec spec = MakeMinimalValidProgramSpec();  // dfb_0 is Float16_b (non-FP32)
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithExplicitDefaultUnpackToDestModeSucceeds) {
@@ -109,7 +115,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithExplicitDefaultUnpackToDestModeS
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
@@ -125,7 +131,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NonFP32DFBWithUnpackToDestFp32ModeSucceeds) {
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToDest}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithFp32DestAccEnAndNoEntryFails) {
@@ -145,7 +151,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithFp32DestAccEnAndNoEntryFails) 
     // Compute kernel intentionally has no unpack_modes entry.
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
             "Compute kernel 'compute_kernel' consumes FP32 DFB 'dfb_0' with enable_32_bit_dest=true, but "
             "provides no unpack_modes entry for this DFB")));
@@ -161,7 +167,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ConsumerWithoutFp32DestAccEnDoesNotRequire
         }
     }
     // enable_32_bit_dest stays at its default (false). No unpack_modes entry.
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_FP32ProducerOnlyBindingDoesNotRequireEntry) {
@@ -189,7 +195,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32ProducerOnlyBindingDoesNotRequireEntry) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32OnProducerBindingSucceeds) {
@@ -218,7 +224,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32OnProducerBindingSucceeds) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32WithoutFp32DestAccEnFails) {
@@ -238,7 +244,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_UnpackToDestFp32WithoutFp32DestAccEnFails) {
         }
     }
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("A 32-bit datum cannot be unpacked into a 16-bit Dest register")));
 }
@@ -258,7 +264,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_FP32DFBWithDefaultUnpackToDestModeSucceeds) {
             config.unpack_modes = {{DFBSpecName{"dfb_0"}, UnpackMode::UnpackToSrc}};
         }
     }
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
@@ -279,7 +285,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ValidUnpackToDestModeSucceeds) {
         }
     }
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndNoEntryFails) {
@@ -297,7 +303,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndNoEntryFails) {
     }
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot datacopy Int16 in a 32-bit Dest")));
 }
 
@@ -317,7 +323,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndUnpackToSrcFails) 
     }
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot datacopy Int16 in a 32-bit Dest")));
 }
 
@@ -336,7 +342,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Int16ConsumerWithFp32DestAndUnpackToDestSuccee
         }
     }
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_Int16ProducerOnlyWithFp32DestSucceeds) {
@@ -362,7 +368,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_Int16ProducerOnlyWithFp32DestSucceeds) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer_compute", "consumer_dm"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigMathFidelitySucceeds) {
@@ -378,7 +384,171 @@ TEST_F(ProgramSpecTestQuasar, CPU_ComputeConfigMathFidelitySucceeds) {
         }
     }
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
+}
+
+ProgramSpec MakeOneDFBSpec(KernelSpec producer, KernelSpec consumer) {
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    ProgramSpec spec;
+    spec.name = "test_program";
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units =
+        std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"producer", "consumer"})};
+    return spec;
+}
+
+ComputeHardwareConfig::Compute2XXConfig& SfpuConfig(KernelSpec& kernel) {
+    auto& compute_config = std::get<ComputeHardwareConfig>(kernel.hw_config);
+    compute_config.config_2xx = ComputeHardwareConfig::Compute2XXConfig{};
+    return *compute_config.config_2xx;
+}
+
+const experimental::dfb::DataflowBufferConfig& DFBConfig(const Program& program) {
+    return program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"))->config;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuConsumedDfbMovesConsumerToSfpuPipeline) {
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(*mesh_device_, MakeOneDFBSpec(MakeMinimalGen2DMKernel("producer"), consumer));
+    EXPECT_TRUE(DFBConfig(program).unpack_on_trisc3);
+    EXPECT_FALSE(DFBConfig(program).pack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuProducedDfbMovesProducerToSfpuPipeline) {
+    auto producer = MakeMinimalGen2ComputeKernel("producer");
+    SfpuConfig(producer).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(*mesh_device_, MakeOneDFBSpec(producer, MakeMinimalGen2DMKernel("consumer")));
+    EXPECT_TRUE(DFBConfig(program).pack_on_trisc3);
+    EXPECT_FALSE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuPipelineTakesBothSidesOfSelfLoop) {
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
+    compute.dfb_bindings = {ProducerOf(DFBSpecName{"dfb"}, "out"), ConsumerOf(DFBSpecName{"dfb"}, "in")};
+    auto& config_2xx = SfpuConfig(compute);
+    config_2xx.sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}};
+    config_2xx.sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    ProgramSpec spec;
+    spec.name = "test_program";
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"compute"})};
+
+    Program program(*mesh_device_, spec);
+    EXPECT_TRUE(DFBConfig(program).pack_on_trisc3);
+    EXPECT_TRUE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuConsumedDfbNotBoundFails) {
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"nonexistent_dfb"}};
+
+    auto spec = MakeOneDFBSpec(MakeMinimalGen2DMKernel("producer"), consumer);
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'consumer' sfpu_pipeline_consumed_dfbs entry references DFB "
+                                 "'nonexistent_dfb', which the kernel does not bind as a consumer")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuProducedDfbBoundOnlyAsConsumerFails) {
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    auto spec = MakeOneDFBSpec(MakeMinimalGen2DMKernel("producer"), consumer);
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'consumer' sfpu_pipeline_produced_dfbs entry references DFB 'dfb', which "
+                                 "the kernel does not bind as a producer")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuConsumedDfbListedTwiceFails) {
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}, DFBSpecName{"dfb"}};
+
+    auto spec = MakeOneDFBSpec(MakeMinimalGen2DMKernel("producer"), consumer);
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'consumer' sfpu_pipeline_consumed_dfbs lists DFB 'dfb' more than once")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuProducedDfbListedTwiceFails) {
+    auto producer = MakeMinimalGen2ComputeKernel("producer");
+    SfpuConfig(producer).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}, DFBSpecName{"dfb"}};
+
+    auto spec = MakeOneDFBSpec(producer, MakeMinimalGen2DMKernel("consumer"));
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Kernel 'producer' sfpu_pipeline_produced_dfbs lists DFB 'dfb' more than once")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SfpuPipelineTakesOneSideOfSelfLoop) {
+    auto compute = MakeMinimalGen2ComputeKernel("compute");
+    compute.dfb_bindings = {ProducerOf(DFBSpecName{"dfb"}, "out"), ConsumerOf(DFBSpecName{"dfb"}, "in")};
+    SfpuConfig(compute).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    ProgramSpec spec;
+    spec.name = "test_program";
+    spec.kernels = {compute};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"compute"})};
+
+    Program program(*mesh_device_, spec);
+    EXPECT_TRUE(DFBConfig(program).pack_on_trisc3);
+    EXPECT_FALSE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SfpuConsumedDfbIgnoredOnGen1) {
+    auto consumer = MakeMinimalGen1ComputeKernel("consumer");
+    SfpuConfig(consumer).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(
+        *mesh_device_, MakeOneDFBSpec(MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0), consumer));
+    EXPECT_FALSE(DFBConfig(program).unpack_on_trisc3);
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_SfpuProducedDfbIgnoredOnGen1) {
+    auto producer = MakeMinimalGen1ComputeKernel("producer");
+    SfpuConfig(producer).sfpu_pipeline_produced_dfbs = {DFBSpecName{"dfb"}};
+
+    Program program(
+        *mesh_device_, MakeOneDFBSpec(producer, MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1)));
+    EXPECT_FALSE(DFBConfig(program).pack_on_trisc3);
+}
+
+ProgramSpec SfpuConsumedDfb0Spec(tt::DataFormat format) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.dataflow_buffers[0].data_format_metadata = format;
+    for (auto& kernel : spec.kernels) {
+        if (kernel.is_compute_kernel()) {
+            std::get<ComputeHardwareConfig>(kernel.hw_config).enable_32_bit_dest = true;
+            SfpuConfig(kernel).sfpu_pipeline_consumed_dfbs = {DFBSpecName{"dfb_0"}};
+        }
+    }
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_FP32SfpuPipelineConsumerNeedsNoUnpackMode) {
+    EXPECT_NO_THROW(Program(*mesh_device_, SfpuConsumedDfb0Spec(tt::DataFormat::Float32)));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_Int16SfpuPipelineConsumerNeedsNoUnpackMode) {
+    EXPECT_NO_THROW(Program(*mesh_device_, SfpuConsumedDfb0Spec(tt::DataFormat::Int16)));
 }
 
 }  // namespace

@@ -20,24 +20,6 @@ if TYPE_CHECKING:
     from types import EllipsisType
 
 
-def shape_tuple(shape: ttnn.Shape | tuple[int, ...]) -> tuple[int, ...]:
-    """The dimensions of a `ttnn.Shape` as a tuple; a tuple is returned as is.
-
-    `ttnn.Shape` has no `__iter__`, so `tuple(shape)`, `list(shape)` and unpacking fall back to the
-    sequence protocol and its terminating `IndexError`, about 2.5 us per call. Indexing costs a
-    fraction of that, which matters on the eager path where this runs several times per block.
-    `ttnn.Shape` also hashes by identity, so it cannot be used in a cache key; the tuple can.
-    """
-    if isinstance(shape, tuple):
-        return shape
-    n = len(shape)
-    if n == 4:
-        return (shape[0], shape[1], shape[2], shape[3])
-    if n == 3:
-        return (shape[0], shape[1], shape[2])
-    return tuple([shape[i] for i in range(n)])
-
-
 def prepare_for_fused_swiglu(
     tensor: torch.Tensor, ndev: int, tile_width: int = 32, *, gate_is_first: bool = False
 ) -> torch.Tensor:
@@ -228,6 +210,17 @@ def from_torch_to_devices(
 ) -> list[ttnn.Tensor]:
     """Replicate a torch tensor across submesh devices, returning one ttnn.Tensor per device."""
     return [from_torch(x, device=d, mesh_axes=mesh_axes, on_host=on_host) for d in devices]
+
+
+def logical_length_tensor(value: int, *, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """`value` as the replicated `[1, 1, 1, 1]` uint32 device tensor that carries a runtime row count."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
 
 
 def to_torch(
@@ -524,15 +517,14 @@ def float_to_unit_range(t: ttnn.Tensor) -> ttnn.Tensor:
     return t
 
 
-def float_to_uint8(t: ttnn.Tensor, *, runtime_shapes: bool = False) -> ttnn.Tensor:
-    """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]. `runtime_shapes` goes to its layout conversions
-    and typecast."""
-    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, runtime_shapes=runtime_shapes)
+def float_to_uint8(t: ttnn.Tensor) -> ttnn.Tensor:
+    """On-device float-to-uint8: map from [-1.0, 1.0] to [0, 255]"""
+    t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
     t = ttnn.add(t, 1.0)  # shift to [0, 2.0]
     t = ttnn.multiply(t, 0.5 * 255.0)  # scale to [0, 1.0] then [0, 255]
     t = ttnn.clamp(t, min=0.0, max=255.0)
-    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=runtime_shapes)
-    return ttnn.typecast(t, ttnn.uint8, runtime_shapes=runtime_shapes)
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.typecast(t, ttnn.uint8)
 
 
 def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[int, ...]) -> int:
@@ -646,12 +638,11 @@ def _reassemble_2d(
             out[tuple(slices)] = shard
         return out
 
-    # A mesh axis without a concat dim holds replicas: take those at its coordinate 0.
     if d0 is not None:
-        by_pos = sorted(((c, s) for c, s in zip(mesh_coords, shards) if int(c[1]) == 0), key=lambda x: int(x[0][0]))
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
         return torch.cat([s for _, s in by_pos], dim=d0)
     if d1 is not None:
-        by_pos = sorted(((c, s) for c, s in zip(mesh_coords, shards) if int(c[0]) == 0), key=lambda x: int(x[0][1]))
+        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
         return torch.cat([s for _, s in by_pos], dim=d1)
     return shards[0]
 
@@ -846,19 +837,17 @@ def upsample(
     *,
     scale_factor: int | Sequence[int],
     memory_config: ttnn.MemoryConfig | None = None,
-    runtime_shapes: bool = False,
 ) -> ttnn.Tensor:
-    """Wrapper around ttnn.upsample that allows for padded tensors. `runtime_shapes` goes to its layout conversions
-    and upsample."""
+    """Wrapper around ttnn.upsample that allows for padded tensors."""
     change_layout = x.layout == ttnn.TILE_LAYOUT and x.shape != x.padded_shape
 
     if change_layout:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, runtime_shapes=runtime_shapes)
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
-    x = ttnn.upsample(x, scale_factor=scale_factor, memory_config=memory_config, runtime_shapes=runtime_shapes)
+    x = ttnn.upsample(x, scale_factor=scale_factor, memory_config=memory_config)
 
     if change_layout:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, runtime_shapes=runtime_shapes)
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     return x
 

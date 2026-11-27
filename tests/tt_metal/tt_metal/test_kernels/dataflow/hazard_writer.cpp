@@ -15,7 +15,6 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "c_tensix_core.h"
 
 void kernel_main() {
     const uint32_t pattern = get_arg(args::pattern);
@@ -26,16 +25,17 @@ void kernel_main() {
 
     // Stage the known `pattern` into the framework-allocated scratchpad.
     const uint32_t n = pad.size();
-    for (uint32_t i = 0; i < n; i++) {
-        pad[i] = pattern;
+    {
+        auto lock = pad.scoped_lock(0, n);
+        for (uint32_t i = 0; i < n; i++) {
+            pad[i] = pattern;
+        }
     }
     asm("fence");
 
     // Deliberate stall BEFORE the write so the target lands late (widens the race window for a relaxed reader).
     if (stall_cycles) {
-        const uint64_t end = c_tensix_core::read_wall_clock() + stall_cycles;
-        while (c_tensix_core::read_wall_clock() < end) {
-        }
+        riscv_wait(stall_cycles);
     }
 
     Noc noc;

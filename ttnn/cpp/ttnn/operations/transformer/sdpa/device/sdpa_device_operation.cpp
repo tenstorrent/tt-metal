@@ -9,8 +9,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
-#include <tt-metalium/constants.hpp>
-#include "ttnn/operations/common/hash_without_rows.hpp"
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -32,23 +31,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
                 !tensors.chunk_start_idx_tensor.has_value(),
             "output_concat_heads is supported for the plain (non-chunked, non-paged) SDPA only");
-    }
-    if (attrs.runtime_seq_len) {
-        TT_FATAL(
-            !attrs.is_causal && !use_mla && !attrs.sliding_window_size.has_value() &&
-                attrs.windowed_mode == WindowedMode::None && !attrs.output_concat_heads,
-            "runtime_seq_len supports non-causal, non-MLA SDPA without a sliding window, windows or "
-            "output_concat_heads only");
-        TT_FATAL(
-            !tensors.attn_mask.has_value() && !tensors.attn_mask_block_map.has_value() &&
-                !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
-                !tensors.chunk_start_idx_tensor.has_value() && !tensors.attention_sink.has_value() &&
-                !tensors.cu_window_seqlens.has_value() && !tensors.windowed_q_token_offset_tensor.has_value(),
-            "runtime_seq_len supports SDPA without a mask, a mask block map, paging, chunks, an attention sink or "
-            "window tensors only");
-        TT_FATAL(
-            ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
-            "runtime_seq_len supports the standard compute path only, which fp32_dest_acc_en=True selects");
     }
 
     const Tensor& q = tensors.q;
@@ -106,6 +88,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
                 q_shape[3]);
+            if (tensors.v.has_value()) {
+                // The K/V chain grouping divides Q heads by V heads.
+                const uint32_t nvh = tensors.v->logical_shape()[1];
+                TT_FATAL(
+                    nvh > 0 && nqh >= nvh && nqh % nvh == 0,
+                    "Q num_heads must be >= V num_heads and divisible by V num_heads, and V num_heads must be greater "
+                    "than 0. Got Q: {}, V: {}",
+                    nqh,
+                    nvh);
+            }
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -216,6 +208,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             const auto& map_shape = map.logical_shape();
             const uint32_t qc = attrs.program_config->q_chunk_size;
             const uint32_t kc = attrs.program_config->k_chunk_size;
+            TT_FATAL(qc > 0 && kc > 0, "q_chunk_size ({}) and k_chunk_size ({}) must be greater than 0", qc, kc);
             const uint32_t nq = (q.logical_shape()[2] + qc - 1) / qc;
             const uint32_t nk = (k.logical_shape()[2] + kc - 1) / kc;
             TT_FATAL(
@@ -456,6 +449,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                     attention_sink.dtype() == DataType::BFLOAT4_B,
                 "Attention sink must be in BF16, BFP8, or BFP4 dataformat");
             TT_FATAL(
+                attention_sink.dtype() == DataType::BFLOAT16 || !get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "Attention sink must be BF16 when fp32_dest_acc_en=true (non-streaming compute), got {}",
+                attention_sink.dtype());
+            TT_FATAL(
                 attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
                 "Attention sink must be in DRAM");
 
@@ -528,7 +525,11 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
+        TT_FATAL(
+            q_rows <= k_rows,
+            "windowed Q shard has {} rows, more than the K sequence length {}.",
+            q_rows,
+            k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and
@@ -589,32 +590,6 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
     for (const auto* tensor : {&q, &k, &v}) {
         validate_padding(*tensor);
     }
-}
-
-SDPAOperation::program_factory_t SDPAOperation::select_program_factory(
-    const SDPAParams& attrs, const SDPAInputs& /*tensors*/) {
-    if (attrs.runtime_seq_len) {
-        return SDPARuntimeSeqLenFactory{};
-    }
-    return SDPAProgramFactory{};
-}
-
-ttsl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attrs, const SDPAInputs& tensors) {
-    const auto factory = select_program_factory(attrs, tensors);
-    if (attrs.runtime_seq_len) {
-        // The kernels and runtime args take the sequence lengths (dim 2 of q, k and v) at run time; only the Q
-        // buffer factor, which sizes a circular buffer, follows them into the program. validate_on_program_cache_miss
-        // allows no other tensor under the flag.
-        using ttnn::operations::common::hash_spec_without_rows;
-        return tt::tt_metal::operation::hash_operation<SDPAOperation>(
-            attrs,
-            factory.index(),
-            sdpa_q_buffer_factor(attrs, tensors),
-            hash_spec_without_rows(tensors.q),
-            hash_spec_without_rows(tensors.k),
-            hash_spec_without_rows(tensors.v));
-    }
-    return tt::tt_metal::operation::hash_operation<SDPAOperation>(attrs, tensors, factory.index());
 }
 
 SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
@@ -739,8 +714,7 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map,
-    bool runtime_seq_len) {
+    const std::optional<Tensor>& attn_mask_block_map) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -761,7 +735,6 @@ Tensor sdpa(
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
             .output_concat_heads = output_concat_heads,
-            .runtime_seq_len = runtime_seq_len,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

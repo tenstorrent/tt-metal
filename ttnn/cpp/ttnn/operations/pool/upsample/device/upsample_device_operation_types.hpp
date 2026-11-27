@@ -17,9 +17,6 @@ struct UpsampleParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<ttnn::operations::sliding_window::SlidingWindowConfig> sliding_window_config = std::nullopt;
-    // A row-major interleaved program serves every image size of the same channel count, at more host time per
-    // call (see upsample_interleaved_is_shape_free).
-    bool runtime_shapes = false;
 };
 
 }  // namespace ttnn::prim

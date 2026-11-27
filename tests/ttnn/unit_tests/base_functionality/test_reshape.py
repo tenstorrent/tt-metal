@@ -383,6 +383,36 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
     assert device.cache_entries_counter.total == 1
 
 
+def test_reshape_on_device_tile_same_padded_shape_different_alignment(device):
+    """Two tiled inputs that share a padded shape but differ in logical shape and Alignment share one cached program:
+    the factories work only from the padded shape, so the key frees Alignment via relax_tensor_layout_alignment
+    (#59915). The cache-hit output must match a freshly built program's output."""
+    torch.manual_seed(0)
+    # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
+    tt_default = ttnn.from_torch(
+        torch.rand((1, 1, 48, 40), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # Padded to the same [1, 1, 64, 64] explicitly, which gives it a different Alignment.
+    tt_explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch.rand((1, 1, 30, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        [1, 1, 64, 64],
+        0.0,
+    )
+    assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
+
+    # References from freshly built programs. The tile path reshapes the padded data, so a logical torch
+    # reshape is not a valid reference.
+    device.disable_and_clear_program_cache()
+    expected = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    device.enable_program_cache()
+
+    with device.cache_entries_counter.measure():
+        outputs = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    assert device.cache_entries_counter.total == 1
+    for output, reference in zip(outputs, expected):
+        assert torch.equal(output, reference)
+
+
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [2 * 32])
 def test_reshape(h, w):
@@ -1069,6 +1099,76 @@ def test_reshape_rm_nonclean_large_odd_dest_page_l1_cb(device, input_shape, outp
     assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
 
 
+@pytest.mark.parametrize("padded_widths", [(32, 64), (64, 32)], ids=["narrow_first", "wide_first"])
+def test_reshape_rm_padded_shape_is_new_program(device, padded_widths):
+    """The padded shape sets the RM output page size, so it must key the program cache (#55237)."""
+    torch.manual_seed(5)
+    torch_input = torch.randn((1, 1, 16, 60), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    logical_shape = ttnn.Shape([1, 1, 32, 30])
+    expected = torch_input.reshape(1, 1, 32, 30)
+    entries = device.num_program_cache_entries()
+    for i, padded_width in enumerate(padded_widths):
+        tt_out = ttnn.reshape(tt_input, logical_shape, ttnn.Shape([1, 1, 32, padded_width]))
+        assert list(tt_out.padded_shape) == [1, 1, 32, padded_width]
+        assert device.num_program_cache_entries() == entries + i + 1
+        assert_equal(expected, ttnn.to_torch(tt_out))
+
+
+def test_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    """The non-clean staging ring is budgeted against live L1, so a cache hit must not replay a ring
+    sized for an emptier L1 (#55237)."""
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(6)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    reshape_native = ttnn._ttnn.operations.data_movement.reshape_force_native
+
+    def run():
+        tt_out = reshape_native(tt_input, list(output_shape), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_quasar_reshape_rm_unit_last_dim(device):
     """Quasar RM factory/kernel: misaligned [N, 1] reshape must stay bit-exact (#50191)."""
     rows, cols = 32, 17
@@ -1085,6 +1185,52 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def test_quasar_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("This regression covers the WH/BH legacy RM staging ring, not the Quasar Metal-2 factory")
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(7)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run():
+        tt_out = ttnn.experimental.quasar.reshape(tt_input, output_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
 
 
 def test_reshape_rejects_overflowing_volume(device, expect_error):
@@ -1123,53 +1269,105 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        # conv2d's flatten of a DRAM-sliced output, the width not whole tiles.
-        ((1, 2, 40, 32), (1, 1, 80, 32)),
-        ((1, 64, 74, 512), (1, 1, 64 * 74, 512)),
-        ((2, 5, 19, 96), (1, 1, 190, 96)),
-        # Odd widths, single rows, padded channels and the reverse direction.
-        ((1, 3, 37, 64), (1, 1, 111, 64)),
-        ((1, 7, 1, 32), (1, 1, 7, 32)),
-        ((1, 2, 17, 20), (1, 1, 34, 20)),
-        ((1, 1, 80, 32), (1, 2, 40, 32)),
-        ((3, 1, 45, 48), (1, 5, 27, 48)),
-        # Rank 3 in the API.
-        ((4, 33, 48), (2, 66, 48)),
+        ((4,), (1, 1, 2, 2)),
+        ((1, 1, 2, 2), (4,)),
+        ((1, 3, 5, 7), (7, 5, 3)),
+        ((2, 32, 17), (2, 17, 32)),
+        ((1, 256, 1024), (1, 256, 16, 64)),
+        ((16, 33, 1), (176, 3, 1)),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
-@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
-def test_reshape_tiled_keeps_last_dim(input_shape, output_shape, dtype, buffer_type, device):
-    """A tiled reshape that keeps the last dim moves whole rows; its kernels compute the rows each output tile takes
-    instead of reading a page map."""
-    torch.manual_seed(0)
-    if dtype == ttnn.uint32:
-        torch_input = torch.randint(0, 2000, input_shape, dtype=torch.int32)
-    elif dtype == ttnn.int32:
-        torch_input = torch.randint(-1000, 1000, input_shape, dtype=torch.int32)
-    else:
-        torch_input = torch.randn(input_shape, dtype=torch.float32 if dtype == ttnn.float32 else torch.bfloat16)
-    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
-    x = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    y = ttnn.reshape(x, output_shape)
-    assert tuple(y.shape) == output_shape
-    # uint32 comes back as torch.uint32, which torch does not compare with int32.
-    assert torch.equal(ttnn.to_torch(y).to(torch_input.dtype), torch_input.reshape(output_shape))
-
-
-@pytest.mark.parametrize("output_sharded", [True, False], ids=["to_sharded", "to_interleaved"])
-def test_reshape_tiled_keeps_last_dim_height_sharded(output_sharded, device):
-    """The row reshape reads and writes through tensor accessors, so height-sharded L1 tensors take it as well."""
-    torch.manual_seed(0)
-    input_shape, output_shape = (1, 4, 40, 64), (1, 1, 160, 64)
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-    sharded = ttnn.create_sharded_memory_config(
-        (64, 64),
-        core_grid=ttnn.CoreGrid(y=1, x=4),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
+# Row-major reshape ignores pad_value, so it runs once; tile padding runs with each value (a fractional value
+# truncates, an out-of-range one saturates).
+@pytest.mark.parametrize(
+    "layout, pad_value",
+    [(ttnn.ROW_MAJOR_LAYOUT, None)] + [(ttnn.TILE_LAYOUT, value) for value in (None, 0, 255, 1.999, 300.0)],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_reshape_uint8(device, input_shape, output_shape, layout, memory_config, pad_value):
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=layout, device=device, memory_config=memory_config
     )
-    x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded)
-    y = ttnn.reshape(x, output_shape, memory_config=None if output_sharded else ttnn.DRAM_MEMORY_CONFIG)
-    assert y.is_sharded() == output_sharded
-    assert torch.equal(ttnn.to_torch(y), torch_input.reshape(output_shape))
+    output = ttnn.reshape(input_tensor, output_shape, pad_value=pad_value)
+
+    assert output.dtype == ttnn.uint8
+    assert output.layout == layout
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    # to_torch drops tile padding, so read the physical tile and check the lanes outside the logical h x w.
+    if layout == ttnn.TILE_LAYOUT and pad_value is not None:
+        h, w = ((1,) + tuple(output_shape))[-2:]
+        padded = output.cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        expected = min(int(pad_value), 255)
+        assert (padded[:, in_padding] == expected).all(), f"expected tile padding to equal {expected}"
+
+
+@pytest.mark.parametrize(
+    "strategy, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=4, x=1)),
+        (ttnn.ShardStrategy.WIDTH, ttnn.CoreGrid(y=1, x=3)),
+        (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=2, x=3)),
+    ],
+)
+@pytest.mark.parametrize("pad_value", [None, 5, 1.999])
+def test_reshape_uint8_sharded(device, strategy, core_grid, pad_value):
+    # The output height 48 is not a tile multiple, so an explicit pad_value takes the sharded fill branch.
+    input_shape, output_shape = (1, 1, 128, 96), (1, 1, 48, 256)
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    sharded_config = ttnn.create_sharded_memory_config(
+        shape=input_shape,
+        core_grid=core_grid,
+        strategy=strategy,
+        use_height_and_width_as_shard_shape=False,
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_config
+    )
+    output = ttnn.reshape(input_tensor, output_shape, pad_value=pad_value)
+
+    assert output.dtype == ttnn.uint8
+    assert output.memory_config().is_sharded()
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    if pad_value is not None:
+        h, w = output_shape[-2:]
+        interleaved = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG)
+        padded = interleaved.cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        expected = min(int(pad_value), 255)
+        assert (padded[:, in_padding] == expected).all(), f"expected tile padding to equal {expected}"
+
+
+@pytest.mark.parametrize("pad_value", [None, 5])
+def test_reshape_uint8_interleaved_to_sharded(device, pad_value):
+    # Interleaved input, sharded output: the padded output height 48 takes the sharded fill branch.
+    input_shape, output_shape = (1, 1, 128, 96), (1, 1, 48, 256)
+    torch_input = full_range_input(input_shape, ttnn.uint8)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    output_config = ttnn.create_sharded_memory_config(
+        shape=output_shape,
+        core_grid=ttnn.CoreGrid(y=2, x=1),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        use_height_and_width_as_shard_shape=False,
+    )
+    output = ttnn.reshape(input_tensor, output_shape, memory_config=output_config, pad_value=pad_value)
+
+    assert output.memory_config().is_sharded()
+    assert_exact(torch_input.reshape(output_shape), ttnn.to_torch(output))
+
+    if pad_value is not None:
+        h, w = output_shape[-2:]
+        padded = ttnn.sharded_to_interleaved(output, ttnn.DRAM_MEMORY_CONFIG).cpu().to_torch_with_padded_shape()
+        padded = padded.reshape(-1, padded.shape[-2], padded.shape[-1])
+        in_padding = torch.ones(padded.shape[-2:], dtype=torch.bool)
+        in_padding[:h, :w] = False
+        assert (padded[:, in_padding] == pad_value).all(), f"expected tile padding to equal {pad_value}"

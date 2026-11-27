@@ -9,7 +9,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"  // for is_cpu_tensor
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::operations::copy::detail {
 
@@ -40,8 +40,7 @@ inline Tensor typecast_impl(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
-    bool runtime_shapes = false) {
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     // Handle host tensors by delegating to to_dtype
     if (is_cpu_tensor(input_tensor)) {
         TT_FATAL(
@@ -62,8 +61,8 @@ inline Tensor typecast_impl(
     // the caller's tensor untouched. Block-aligned widths take the direct path unchanged.
     Tensor typecast_input = input_tensor;
     if (needs_zeroed_tile_padding(input_tensor, output_dtype)) {
-        typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt);
-        typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f);
+        typecast_input = ttnn::clone(input_tensor, std::nullopt, std::nullopt, std::nullopt, sub_core_grids);
+        typecast_input = ttnn::fill_implicit_tile_padding(typecast_input, 0.0f, std::nullopt, sub_core_grids);
     }
     bool preserve_fp32_precision =
         (input_dtype == DataType::FLOAT32) or
@@ -86,8 +85,7 @@ inline Tensor typecast_impl(
         preserve_fp32_precision,
         bfp8_pack_precise,
         optional_output_tensor,
-        sub_core_grids,
-        runtime_shapes);
+        sub_core_grids);
 }
 
 }  // namespace ttnn::operations::copy::detail
@@ -99,8 +97,7 @@ Tensor typecast(
     const DataType& output_dtype,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool runtime_shapes) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
             output_dtype == optional_output_tensor.value().dtype(),
@@ -108,7 +105,7 @@ Tensor typecast(
     }
 
     return operations::copy::detail::typecast_impl(
-        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids, runtime_shapes);
+        input, output_dtype, memory_config_arg, optional_output_tensor, sub_core_grids);
 }
 
 Tensor typecast(
@@ -117,8 +114,7 @@ Tensor typecast(
     const DataType& tt_output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    bool runtime_shapes) {
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(tt_input_dtype == input_tensor.dtype(), "input dtype and input tensor's dtype provided should match");
     if (optional_output_tensor.has_value()) {
         TT_FATAL(
@@ -126,7 +122,7 @@ Tensor typecast(
             "If both output dtype and output tensor provided dtype should match");
     }
     return operations::copy::detail::typecast_impl(
-        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids, runtime_shapes);
+        input_tensor, tt_output_dtype, memory_config, optional_output_tensor, sub_core_grids);
 }
 
 }  // namespace ttnn

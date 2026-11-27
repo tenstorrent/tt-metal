@@ -36,11 +36,8 @@ struct NeighborPadAsyncParams {
     std::optional<uint32_t> pad2_cluster_axis;
     uint32_t pad2_num_links = 0;
     bool using_persistent_buffers = false;
-    uint32_t logical_h = 0;    // 0 = no masking; >0 zeros interior rows at global index >= logical_h
+    uint32_t logical_h = 0;  // 0 = no masking; >0 zeros interior rows at global index >= logical_h
     uint32_t t_front_pad = 0;  // 0 = no T-front padding; >0 prepends zero T-frames to output (B=1 only)
-    // One program for every size of the padded dims (see neighbor_pad_async_is_shape_free); a cache hit then
-    // rebuilds every runtime arg. Not an attribute: where it has no effect, the program is the same either way.
-    bool runtime_shapes = false;
 
     // Constructor required because GlobalSemaphore is not default constructible
     NeighborPadAsyncParams(
@@ -63,8 +60,7 @@ struct NeighborPadAsyncParams {
         uint32_t pad2_num_links = 0,
         bool using_persistent_buffers = false,
         uint32_t logical_h = 0,
-        uint32_t t_front_pad = 0,
-        bool runtime_shapes = false) :
+        uint32_t t_front_pad = 0) :
         dim(dim),
         padding_left(padding_left),
         padding_right(padding_right),
@@ -84,8 +80,7 @@ struct NeighborPadAsyncParams {
         pad2_num_links(pad2_num_links),
         using_persistent_buffers(using_persistent_buffers),
         logical_h(logical_h),
-        t_front_pad(t_front_pad),
-        runtime_shapes(runtime_shapes) {}
+        t_front_pad(t_front_pad) {}
 
     // Program-cache hash / canonical-key fields
     static constexpr auto attribute_names = std::make_tuple(

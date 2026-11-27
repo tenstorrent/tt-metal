@@ -10,15 +10,15 @@
 #include <tt_stl/assert.hpp>
 #include <cstdint>
 #include <tt-logger/tt-logger.hpp>
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/constants.hpp"
-#include "tt-metalium/host_buffer.hpp"
-#include "tt-metalium/math.hpp"
-#include "tt-metalium/shape.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/data_formats/tile_constants.hpp"
+#include "tt-metalium/memory/buffer/host_buffer.hpp"
+#include "tt-metalium/utils/math.hpp"
+#include "tt-metalium/vocabulary/shape.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <optional>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -29,8 +29,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/bfloat4.hpp>
-#include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/data_formats/bfloat4.hpp>
+#include <tt-metalium/data_formats/bfloat8.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 
 namespace ttnn::operations::conv {
@@ -1359,90 +1359,57 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
             compute_config,
             device);
 
-        TT_FATAL(
-            !dram_slice_config_.has_value() ||
-                (dram_slice_config_->slice_height > 0) == (dram_slice_config_->slice_width > 0),
-            "Fixed 2D DRAM slices need both slice_height and slice_width, got {} and {}",
-            dram_slice_config_.has_value() ? dram_slice_config_->slice_height : 0,
-            dram_slice_config_.has_value() ? dram_slice_config_->slice_width : 0);
-        if (dram_slice_config_.has_value() && dram_slice_config_->is_fixed()) {
-            // Fixed 2D slices: every slice has this output size, whatever the input size, and the conv of each
-            // pads only before the input (see Conv2dSliceAttr::get_input_slice_and_padding). The first slice's
-            // layout stands for all.
-            TT_FATAL(conv2d_slice_attr->enable_fixed_slices(), "Conv2D does not support fixed 2D DRAM slices");
-            TT_FATAL(
-                dram_slice_config_->slice_width % tt::constants::TILE_HEIGHT == 0,
-                "The width of fixed 2D DRAM slices ({}) must be whole tiles",
-                dram_slice_config_->slice_width);
-            TT_FATAL(
-                conv_config.output_layout == tt_metal::Layout::TILE,
-                "Fixed 2D DRAM slices need a tiled conv output, got {}",
-                conv_config.output_layout);
-            output_height = dram_slice_config_->slice_height;
-            output_width = dram_slice_config_->slice_width;
-            auto [input_slice, input_slice_end] =
-                conv2d_slice_attr->get_input_slice({0, 0}, {output_height, output_width});
-            input_height = std::get<0>(input_slice_end) - std::get<0>(input_slice);
-            input_width = std::get<1>(input_slice_end) - std::get<1>(input_slice);
-            padding_n4[1] = 0;
-            padding_n4[3] = 0;
-            input_memory_config = conv2d_slice_attr->get_input_memory_config({0, 0}, {output_height, output_width});
-        } else {
-            auto dram_slice_config = op_slicing::determine_slice_config(
-                conv2d_slice_attr.get(),
-                ttnn::Shape{batch_size, input_height, input_width, in_channels},
-                ttnn::Shape{batch_size, output_height, output_width, out_channels},
-                dram_slice_config_,
-                conv_config.output_layout,
-                device);
-            log_debug(
-                tt::LogOp,
-                "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
-                dram_slice_config,
-                conv2d_slice_attr->name());
-            if (dram_slice_config.num_slices == 1) {
-                log_debug(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
-                is_dram_conv = false;
-            }
-            uint32_t slice_rounding_value = 1;
-            if (conv_config.output_layout == tt_metal::Layout::TILE &&
-                dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
-                // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of
-                // TILE_HEIGHT.
-                slice_rounding_value = tt::constants::TILE_HEIGHT;
-            }
-
-            const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
-                                                   ? output_height
-                                                   : output_width;
-
-            TT_FATAL(
-                dram_slice_config.num_slices <= output_sliced_dim,
-                " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM "
-                "Slicing",
-                dram_slice_config.num_slices,
-                output_sliced_dim);
-
-            const uint32_t min_output_slice_size =
-                tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
-                slice_rounding_value;
-
-            if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
-                output_height = min_output_slice_size;
-                input_height = ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) +
-                               kernel_size[0] - padding_n4[0];
-                padding_n4[1] = 0;  // No padding on bottom for sliced height
-            } else {
-                output_width = min_output_slice_size;
-                input_width = ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) +
-                              kernel_size[1] - padding_n4[2];
-                padding_n4[3] = 0;  // No padding on right for sliced width
-            }
-            input_memory_config = conv2d_slice_attr->get_input_memory_config(
-                {0, 0},                        // Slice Start
-                {output_height, output_width}  // Slice End
-            );
+        auto dram_slice_config = op_slicing::determine_slice_config(
+            conv2d_slice_attr.get(),
+            ttnn::Shape{batch_size, input_height, input_width, in_channels},
+            ttnn::Shape{batch_size, output_height, output_width, out_channels},
+            dram_slice_config_,
+            conv_config.output_layout,
+            device);
+        log_debug(
+            tt::LogOp,
+            "Auto determined DRAM Slice Config in Prepare Conv2d Weights as {} for {}",
+            dram_slice_config,
+            conv2d_slice_attr->name());
+        if (dram_slice_config.num_slices == 1) {
+            log_debug(tt::LogOp, "DRAM Slicing is not needed as only one slice is required.");
+            is_dram_conv = false;
         }
+        uint32_t slice_rounding_value = 1;
+        if (conv_config.output_layout == tt_metal::Layout::TILE &&
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
+            // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
+            slice_rounding_value = tt::constants::TILE_HEIGHT;
+        }
+
+        const uint32_t output_sliced_dim =
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
+
+        TT_FATAL(
+            dram_slice_config.num_slices <= output_sliced_dim,
+            " Number of slices {} should be less or equal than the dimension being sliced {} in Conv2D DRAM Slicing",
+            dram_slice_config.num_slices,
+            output_sliced_dim);
+
+        const uint32_t min_output_slice_size =
+            tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
+            slice_rounding_value;
+
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
+            output_height = min_output_slice_size;
+            input_height = ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) +
+                           kernel_size[0] - padding_n4[0];
+            padding_n4[1] = 0;  // No padding on bottom for sliced height
+        } else {
+            output_width = min_output_slice_size;
+            input_width = ((output_width - 1) * stride[1]) + ((kernel_size[1] - 1) * (dilation[1] - 1)) +
+                          kernel_size[1] - padding_n4[2];
+            padding_n4[3] = 0;  // No padding on right for sliced width
+        }
+        input_memory_config = conv2d_slice_attr->get_input_memory_config(
+            {0, 0},                        // Slice Start
+            {output_height, output_width}  // Slice End
+        );
     }
 
     auto opt_conv_op_block_config = get_opt_block_config(
@@ -1652,8 +1619,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
         auto output_parallel_config = params.output_parallel_config.value();
         uint32_t input_num_cores_channels = get_num_cores_channels_from_parallel_config(input_parallel_config);
         uint32_t output_num_cores_channels = get_num_cores_channels_from_parallel_config(output_parallel_config);
-        uint32_t in_channels_padded =
-            tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
+        uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * params.input_channels_alignment);
         out_channels_padded = calculate_out_channels_padded(out_channels, output_parallel_config);
         out_channel_padding = out_channels_padded - out_channels;
         ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
@@ -1728,7 +1694,8 @@ std::optional<ttnn::Tensor> prepare_conv_bias_internal(
         validate_host_conv_bias(bias_tensor_);
         ttnn::Shape bias_channels_padded_shape(
             {1, 1, 32, round_up(out_channels_padded, params.weight_block_w_ntiles * 32)});
-        bias_tensor_ = ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), ttnn::Array4D{0, 0, 0, 0}, 0);
+        // Physical padding only: the bias must keep logical height 1 so matmul broadcasts it across rows.
+        bias_tensor_ = bias_tensor_.pad(bias_channels_padded_shape, ttnn::Shape{0, 0, 0, 0}, 0);
         bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE);
         if (bias_tensor_.dtype() != weight_dtype) {
             bias_tensor_ = ttnn::to_dtype(bias_tensor_, weight_dtype);

@@ -43,10 +43,7 @@ ttnn::Tensor scaled_dot_product_attention(
     bool output_concat_heads = false,
     /// Non causal with attn_mask only. [Bm, Hm, ceil(Sq / q_chunk), ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR, nonzero
     /// where a (q chunk, k chunk) block of the mask has a visible entry; the other blocks are skipped.
-    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt,
-    /// The kernels take the Q and K sequence lengths at run time, so a new length reuses the compiled kernels.
-    /// Non causal, without a mask, window, sink or output_concat_heads, with fp32_dest_acc_en=True.
-    bool runtime_seq_len = false);
+    const std::optional<ttnn::Tensor>& attn_mask_block_map = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -143,7 +140,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     // Metadata path only: global real-token count, so attention stops at the tile holding the last real token.
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     // The per-chip padded length is a runtime quantity: one cached program serves every length up to the
-    // gathered buffers' capacity. Needs logical_n as a tensor; non-causal MHA without joint tensors.
+    // gathered buffers' capacity. Supported feature set: validate_dynamic_local_n.
     bool dynamic_local_n = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(

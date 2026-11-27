@@ -39,7 +39,7 @@ def check_vision_attention(mesh_device, sp_axis, num_links, config, reference, l
     )
 
 
-# ATTENTION_GRIDS fit in chip 0's 16,384 rows, so chips 1-3 hold only padding there;
+# ATTENTION_GRIDS fit in chip 0's 16,896 rows, so chips 1-3 hold only padding there;
 # `test_vision_attention_real_rows_from_each_chip` puts real rows on every chip.
 @RING
 @SYNTHETIC

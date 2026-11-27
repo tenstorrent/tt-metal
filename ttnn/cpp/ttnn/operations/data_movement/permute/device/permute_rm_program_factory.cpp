@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -162,137 +162,6 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreRowInv
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-namespace {
-
-// Everything in a blocked-generic program that follows the dimension sizes: each core's block range, the
-// row and block counts, and the shape and strides the kernels walk. A cache hit at another shape recomputes
-// it (see permute_blocked_generic_is_shape_free).
-tt::tt_metal::ProgramRunArgs blocked_generic_run_args(
-    const PermuteDeviceOperation::operation_attributes_t& operation_attributes,
-    const PermuteDeviceOperation::tensor_args_t& tensor_args,
-    const Tensor& output_tensor) {
-    using namespace tt;
-    using namespace tt::tt_metal;
-    const auto& input_tensor = tensor_args.input_tensor;
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE{"compute"};
-    const TensorParamName INPUT{"input"};
-    const TensorParamName OUTPUT{"output"};
-
-    const uint32_t w_block_size = constants::TILE_WIDTH;
-    const uint32_t x_block_size = constants::TILE_HEIGHT;
-    const uint32_t x_dim = operation_attributes.dims.back();
-    const uint32_t X = input_tensor.logical_shape()[x_dim];
-    const uint32_t W = input_tensor.logical_shape()[-1];
-    const uint32_t num_rows = detail::num_pages(input_tensor);
-    const uint32_t x_blocks = tt::div_up(X, x_block_size);
-    const uint32_t w_blocks = tt::div_up(W, w_block_size);
-    const uint32_t num_blocks_total = (num_rows / X) * x_blocks * w_blocks;
-    const auto input_strides = detail::get_row_strides(input_tensor.logical_shape());
-    const auto output_strides = detail::get_row_strides(output_tensor.logical_shape());
-
-    const auto grid = input_tensor.device()->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_blocks_total);
-
-    auto input_shape_view = input_tensor.logical_shape().view();
-    std::vector<uint32_t> reader_varargs;  // input_shape ++ input_strides
-    reader_varargs.reserve(input_shape_view.size() + input_strides.size());
-    reader_varargs.insert(reader_varargs.end(), input_shape_view.begin(), input_shape_view.end());
-    reader_varargs.insert(reader_varargs.end(), input_strides.begin(), input_strides.end());
-
-    std::vector<uint32_t> writer_varargs;  // input_shape ++ perm ++ output_strides
-    writer_varargs.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
-    writer_varargs.insert(writer_varargs.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_varargs.insert(writer_varargs.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
-    writer_varargs.insert(writer_varargs.end(), output_strides.begin(), output_strides.end());
-
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-    KernelRunArgs compute_run_args{.kernel = COMPUTE};
-
-    uint32_t start_block = 0;
-    for (const auto& core : corerange_to_cores(all_cores, std::nullopt)) {
-        uint32_t num_blocks_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_blocks_per_core = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_blocks_per_core = num_tiles_per_core_group_2;
-        }
-        const uint32_t end_block = start_block + num_blocks_per_core;
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {{"start_block", start_block},
-             {"end_block", end_block},
-             {"num_rows", num_rows},
-             {"x_blocks", x_blocks},
-             {"w_blocks", w_blocks}});
-        reader_run_args.advanced_options.runtime_varargs.emplace(core, reader_varargs);
-
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {{"start_block", start_block},
-             {"end_block", end_block},
-             {"num_rows", num_rows},
-             {"X", X},
-             {"W", W},
-             {"x_blocks", x_blocks},
-             {"w_blocks", w_blocks}});
-        writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
-
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_blocks", num_blocks_per_core}});
-        start_block = end_block;
-    }
-
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
-    run_args.tensor_args.insert({INPUT, input_tensor.mesh_tensor()});
-    run_args.tensor_args.insert({OUTPUT, output_tensor.mesh_tensor()});
-    return run_args;
-}
-
-}  // namespace
-
-uint32_t permute_blocked_generic_num_blocks(
-    const PermuteDeviceOperation::operation_attributes_t& operation_attributes,
-    const PermuteDeviceOperation::tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input_tensor;
-    const uint32_t X = input_tensor.logical_shape()[operation_attributes.dims.back()];
-    const uint32_t W = input_tensor.logical_shape()[-1];
-    return (detail::num_pages(input_tensor) / X) * tt::div_up(X, tt::constants::TILE_HEIGHT) *
-           tt::div_up(W, tt::constants::TILE_WIDTH);
-}
-
-bool permute_blocked_generic_is_shape_free(
-    const PermuteDeviceOperation::operation_attributes_t& operation_attributes,
-    const PermuteDeviceOperation::tensor_args_t& tensor_args) {
-    // A sharded output's shard spec follows the output shape, and an empty tensor has no blocks to split, so
-    // both keep the full shapes in the key.
-    const auto& input_tensor = tensor_args.input_tensor;
-    return operation_attributes.runtime_shapes && input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-           !input_tensor.is_sharded() && !operation_attributes.output_mem_config.is_sharded() &&
-           !tensor_args.optional_output_tensor.has_value() && input_tensor.logical_volume() != 0;
-}
-
-tt::tt_metal::ProgramRunArgs PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    if (!permute_blocked_generic_is_shape_free(operation_attributes, tensor_args)) {
-        // The hash holds the full shapes, so only the tensors change.
-        tt::tt_metal::ProgramRunArgs run_args;
-        run_args.tensor_args.insert({tt::tt_metal::TensorParamName{"input"}, tensor_args.input_tensor.mesh_tensor()});
-        run_args.tensor_args.insert({tt::tt_metal::TensorParamName{"output"}, tensor_return_value.mesh_tensor()});
-        return run_args;
-    }
-    return blocked_generic_run_args(operation_attributes, tensor_args, tensor_return_value);
-}
-
 ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlockedGeneric::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -314,6 +183,10 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     uint32_t output_cb_page_size = x_block_size * input_tensor.element_size();
 
     uint32_t num_input_pages_to_read = 2;
+    const uint32_t fast_path = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0 && !input_tensor.is_sharded() &&
+                                       !output_tensor.is_sharded()
+                                   ? 1u
+                                   : 0u;
 
     // we are focused on reading one row at a time, in a pattern that allows us to write an entire output row at a time
     // if W is being swapped with another dim X (e.g. H), then we need to read X rows at a time (X is the new row
@@ -321,14 +194,27 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     // output rows of size X find the new row dimension (X)
 
     uint32_t x_dim = operation_attributes.dims.back();
-    uint32_t N = operation_attributes.dims.size();
+    uint32_t X = input_tensor.logical_shape()[x_dim];
+    // stride from one row to the next for each dim in the input tensor
+    auto input_strides = detail::get_row_strides(input_tensor.logical_shape());
+    uint32_t X_stride = input_strides[x_dim];
 
-    // The input is treated as 3D, rows * x_blocks * w_blocks. The per-core block ranges, counts and strides are
-    // runtime args (blocked_generic_run_args); only the core set comes from the block count here.
-    const uint32_t num_blocks_total = permute_blocked_generic_num_blocks(operation_attributes, tensor_args);
+    auto output_strides = detail::get_row_strides(output_tensor.logical_shape());
+    // after we transpose X and W, we need to stride from one row to the next for each dim in the output tensor
+    uint32_t W = input_tensor.logical_shape()[-1];
+    uint32_t W_stride = output_strides[x_dim];
+
+    uint32_t N = operation_attributes.dims.size();
+    uint32_t num_rows = detail::num_pages(input_tensor);
+
+    // treat the input tensor as 3D with rows * x_blocks * w_blocks
+    uint32_t x_blocks = tt::div_up(X, x_block_size);
+    uint32_t w_blocks = tt::div_up(W, w_block_size);
+    uint32_t num_blocks_total = (num_rows / X) * x_blocks * w_blocks;
+
     auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    const auto all_cores =
-        std::get<1>(tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_total));
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_total);
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
@@ -361,16 +247,8 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     };
 
     // ---- Tensor parameters ----
-    // A shape-free program serves every shape of this rank, row widths and permutation (see
-    // permute_blocked_generic_is_shape_free), so its tensors may differ from these in shape.
-    // The row widths, and so the page sizes, stay in the key.
-    TensorSpecRelaxations relaxations;
-    relaxations.dynamic_tensor_shape = permute_blocked_generic_is_shape_free(operation_attributes, tensor_args);
-    relaxations.match_page_size = relaxations.dynamic_tensor_shape;
-    TensorParameter input_param{
-        .unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec(), .relaxations = relaxations};
-    TensorParameter output_param{
-        .unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec(), .relaxations = relaxations};
+    TensorParameter input_param{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()};
+    TensorParameter output_param{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()};
 
     // ---- Kernels ----
     KernelSpec reader{
@@ -381,15 +259,19 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
-        // The shape-dependent counts are runtime args, so the binary does not depend on the dimension sizes.
         .compile_time_args =
             {{"N", N},
              {"page_size", input_cb_page_size},
+             {"num_rows", num_rows},
              {"x_dim", x_dim},
+             {"num_blocks_total", num_blocks_total},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
              {"w_block_size", w_block_size},
-             {"element_size", input_tensor.element_size()}},
-        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block", "num_rows", "x_blocks", "w_blocks"}},
+             {"element_size", input_tensor.element_size()},
+             {"fast_path", fast_path}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 2 * N},
     };
@@ -405,12 +287,21 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .compile_time_args =
             {{"N", N},
              {"output_page_size", output_cb_page_size},
+             {"num_rows", num_rows},
+             {"X", X},
+             {"X_stride", X_stride},
              {"x_dim", x_dim},
+             {"W_stride", W_stride},
+             {"input_page_size", input_cb_page_size},
              {"element_size", input_tensor.element_size()},
+             {"num_blocks_total", num_blocks_total},
+             {"x_blocks", x_blocks},
+             {"w_blocks", w_blocks},
              {"x_block_size", x_block_size},
-             {"w_block_size", w_block_size}},
-        .runtime_arg_schema =
-            {.runtime_arg_names = {"start_block", "end_block", "num_rows", "X", "W", "x_blocks", "w_blocks"}},
+             {"w_block_size", w_block_size},
+             {"W", W},
+             {"fast_path", fast_path}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
         .advanced_options = {.num_runtime_varargs = 3 * N},
     };
@@ -444,6 +335,50 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
         .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
     };
 
+    // ---- Varargs (core-invariant) ----
+    auto input_shape_view = input_tensor.logical_shape().view();
+    std::vector<uint32_t> reader_varargs;  // input_shape ++ input_strides
+    reader_varargs.reserve(input_shape_view.size() + input_strides.size());
+    reader_varargs.insert(reader_varargs.end(), input_shape_view.begin(), input_shape_view.end());
+    reader_varargs.insert(reader_varargs.end(), input_strides.begin(), input_strides.end());
+
+    std::vector<uint32_t> writer_varargs;  // input_shape ++ perm ++ output_strides
+    writer_varargs.reserve(input_shape_view.size() + operation_attributes.dims.size() + output_strides.size());
+    writer_varargs.insert(writer_varargs.end(), input_shape_view.begin(), input_shape_view.end());
+    writer_varargs.insert(writer_varargs.end(), operation_attributes.dims.begin(), operation_attributes.dims.end());
+    writer_varargs.insert(writer_varargs.end(), output_strides.begin(), output_strides.end());
+
+    // ---- Per-node runtime args ----
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
+
+    auto cores = corerange_to_cores(all_cores, std::nullopt);
+    uint32_t start_block = 0;
+    uint32_t num_blocks_per_core = 0;
+    for (const auto& core : cores) {
+        if (core_group_1.contains(core)) {
+            num_blocks_per_core = num_tiles_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_blocks_per_core = num_tiles_per_core_group_2;
+        } else {
+            // no-op
+            num_blocks_per_core = 0;
+        }
+        uint32_t end_block = start_block + num_blocks_per_core;
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+        reader_run_args.advanced_options.runtime_varargs.emplace(core, reader_varargs);
+
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values, core, {{"start_block", start_block}, {"end_block", end_block}});
+        writer_run_args.advanced_options.runtime_varargs.emplace(core, writer_varargs);
+
+        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"num_blocks", num_blocks_per_core}});
+        start_block = end_block;
+    }
+
     // ---- Assemble ----
     ProgramSpec spec;
     spec.name = "permute_rm_blocked_generic";
@@ -452,9 +387,12 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
     spec.tensor_parameters = {std::move(input_param), std::move(output_param)};
     spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}};
 
-    return ttnn::device_operation::ProgramArtifacts{
-        .spec = std::move(spec),
-        .run_params = blocked_generic_run_args(operation_attributes, tensor_args, output_tensor)};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args.insert({INPUT, input_mesh_tensor});
+    run_args.tensor_args.insert({OUTPUT, output_mesh_tensor});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::data_movement

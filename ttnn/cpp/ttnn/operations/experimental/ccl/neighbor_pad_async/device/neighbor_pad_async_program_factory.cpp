@@ -13,18 +13,16 @@
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <algorithm>
-#include <array>
-#include <utility>
 #include <optional>
 #include <ranges>
 #include <sstream>
@@ -46,212 +44,62 @@ void emplace_u32_runtime_args(KernelDescriptor& kernel, const CoreCoord& core, c
     kernel.emplace_runtime_args(core, list);
 }
 
-// The cores of a call and the split of its work over the fabric cores. For a padded dim other than 0 they follow
-// the attributes and the dims before the padded one only, so a shape-free program keeps them (see
-// neighbor_pad_async_is_shape_free).
-struct NeighborPadLayout {
-    uint32_t num_links = 0;       // H fabric links, capped so the fabric cores fit the grid width
-    uint32_t pad2_num_links = 0;  // W fabric links, capped the same way
-    uint32_t num_h_fabric_cores = 0;
-    uint32_t num_w_fabric_cores = 0;
-    uint32_t outer_dim_size = 1;           // product of the dims before the padded one
-    uint32_t num_sticks_per_halo_dim = 1;  // sticks per row of the padded dim; splits the work only for dim 0
-    CoreRangeSet worker_core_ranges;       // H fabric cores
-    CoreRangeSet core_group_1;
-    uint32_t dims_per_core_group_1 = 0;
-    uint32_t dims_per_core_group_2 = 0;
-    CoreRangeSet w_fabric_core_range;
-    CoreRangeSet local_copy_cores;  // the rest of the grid
-};
-
-NeighborPadLayout neighbor_pad_layout(const NeighborPadAsyncParams& operation_attributes, const Tensor& input_tensor) {
-    NeighborPadLayout layout;
-    const auto& input_tensor_shape = input_tensor.padded_shape();
-    for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
-        layout.num_sticks_per_halo_dim *= input_tensor_shape[d];
-    }
-    for (size_t d = 0; d < operation_attributes.dim; d++) {
-        layout.outer_dim_size *= input_tensor_shape[d];
-    }
-
-    // Cap num_links and pad2_num_links so total fabric cores fit within the device compute grid width.
-    // WH has 8x8 logical grid vs BH's 14x10, so large link counts can exceed the grid.
-    const bool is_2d = operation_attributes.pad_dim2.has_value();
-    const auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t num_links = operation_attributes.num_links;
-    uint32_t pad2_num_links = operation_attributes.pad2_num_links;
-    const uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
-    if (total_fabric_cores > compute_grid_size.x) {
-        // Reduce pad2_num_links first (W-fabric), then num_links (H-fabric) if still too many
-        const uint32_t max_total = compute_grid_size.x;
-        const uint32_t h_cores = num_links * 2;
-        if (is_2d) {
-            const uint32_t available_for_w = (max_total > h_cores) ? (max_total - h_cores) : 0;
-            pad2_num_links = available_for_w / 2;
-            if (pad2_num_links == 0) {
-                // H-fabric alone exceeds grid, reduce num_links too
-                pad2_num_links = 1;
-                num_links = (max_total - 2) / 2;  // reserve 2 cores for 1 W link
-            }
-        } else {
-            num_links = max_total / 2;
-        }
-    }
-    layout.num_links = num_links;
-    layout.pad2_num_links = pad2_num_links;
-    layout.num_h_fabric_cores = num_links * 2;
-    layout.num_w_fabric_cores = is_2d ? (pad2_num_links * 2) : 0;
-
-    const CoreCoord core_grid(layout.num_h_fabric_cores, 1);
-    auto [num_cores, worker_core_ranges, core_group_1, core_group_2, dims_per_core_group_1, dims_per_core_group_2] =
-        (operation_attributes.dim > 0) ? split_work_to_cores(core_grid, layout.outer_dim_size * 2)
-                                       : split_work_to_cores(core_grid, layout.num_sticks_per_halo_dim * 2);
-    layout.worker_core_ranges = worker_core_ranges;
-    layout.core_group_1 = core_group_1;
-    layout.dims_per_core_group_1 = dims_per_core_group_1;
-    layout.dims_per_core_group_2 = dims_per_core_group_2;
-
-    CoreRangeSet fabric_cores = layout.worker_core_ranges;
-    if (is_2d) {
-        layout.w_fabric_core_range = CoreRangeSet(
-            CoreRange({layout.num_h_fabric_cores, 0}, {layout.num_h_fabric_cores + layout.num_w_fabric_cores - 1, 0}));
-        fabric_cores = fabric_cores.merge(layout.w_fabric_core_range);
-    }
-    const CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    layout.local_copy_cores = all_cores.subtract(fabric_cores);
-    return layout;
-}
-
-// Dims of the padded dim's outer split that the H fabric core on (core_x, 0) handles.
-uint32_t h_core_dims(const NeighborPadLayout& layout, uint32_t core_x) {
-    return layout.core_group_1.contains(CoreCoord(core_x, 0)) ? layout.dims_per_core_group_1
-                                                              : layout.dims_per_core_group_2;
-}
-
-// The T batches the W fabric link handles: the outer dims plus the T front padding, split evenly over the links.
-std::pair<uint32_t, uint32_t> w_link_t_range(
-    const NeighborPadAsyncParams& operation_attributes, const NeighborPadLayout& layout, uint32_t w_link) {
-    const uint32_t w_t_total = layout.outer_dim_size + operation_attributes.t_front_pad;
-    const uint32_t t_per_link = w_t_total / layout.pad2_num_links;
-    const uint32_t t_extra = w_t_total % layout.pad2_num_links;
-    return {(w_link * t_per_link) + std::min(w_link, t_extra), t_per_link + (w_link < t_extra ? 1 : 0)};
-}
-
-// The sizes of one call that reach the kernels only as runtime args. The builder writes them with the set_*
-// functions below, and a shape-free cache hit rewrites just them with the same functions.
-struct NeighborPadShapeValues {
-    uint32_t input_halo_dim_size = 0;             // padded dim, input
-    uint32_t output_halo_dim_size = 0;            // padded dim, output
-    uint32_t num_sticks_per_halo_dim = 0;         // sticks per row of the padded dim, input
-    uint32_t output_num_sticks_per_halo_dim = 0;  // the same, output (wider by the W padding for 2D)
-    uint32_t t_front_pad_stick_offset = 0;        // output sticks before the first input T batch
-    uint32_t mask_device_h_offset = 0;            // global index of this device's first row, for logical_h masking
-    uint32_t local_copy_units = 0;                // rows the local-copy cores split
-};
-
-NeighborPadShapeValues neighbor_pad_shape_values(
-    const NeighborPadAsyncParams& operation_attributes,
-    const NeighborPadLayout& layout,
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    uint32_t device_index) {
-    NeighborPadShapeValues values;
-    values.input_halo_dim_size = input_tensor.padded_shape()[operation_attributes.dim];
-    values.output_halo_dim_size = output_tensor.padded_shape()[operation_attributes.dim];
-    values.num_sticks_per_halo_dim = layout.num_sticks_per_halo_dim;
-    values.output_num_sticks_per_halo_dim =
-        layout.num_sticks_per_halo_dim + (operation_attributes.pad_dim2.has_value()
-                                              ? operation_attributes.pad2_left + operation_attributes.pad2_right
-                                              : 0);
-    values.t_front_pad_stick_offset =
-        operation_attributes.t_front_pad * values.output_halo_dim_size * values.output_num_sticks_per_halo_dim;
-    values.mask_device_h_offset =
-        (operation_attributes.logical_h > 0) ? (device_index * values.input_halo_dim_size) : 0u;
-    values.local_copy_units = (operation_attributes.dim > 0) ? (layout.outer_dim_size * values.input_halo_dim_size)
-                                                             : values.input_halo_dim_size;
-    return values;
-}
-
-// The positions of the shape values in each kernel's runtime args, for a padded dim other than 0 (the args
-// containers are std::vector<uint32_t> in the builder and RuntimeArgsData on a cache hit). first_dim is the
-// first outer dim of the H fabric core's link.
-template <typename Args>
-void set_h_reader_shape_args(Args& args, const NeighborPadShapeValues& v, uint32_t first_dim) {
-    args[0] = first_dim * v.num_sticks_per_halo_dim * v.input_halo_dim_size;  // outer_dim_offset_start_id
-    args[2] = v.input_halo_dim_size;
-    args[5] = v.num_sticks_per_halo_dim;  // num_sticks_to_read
-    args[6] = v.num_sticks_per_halo_dim;
-}
-
-template <typename Args>
-void set_h_writer_shape_args(Args& args, const NeighborPadShapeValues& v, uint32_t first_dim) {
-    args[0] = (first_dim * v.output_num_sticks_per_halo_dim * v.output_halo_dim_size) +
-              v.t_front_pad_stick_offset;  // outer_dim_offset_start_id
-    args[2] = v.input_halo_dim_size;
-    args[3] = v.output_halo_dim_size;
-    args[7] = v.num_sticks_per_halo_dim;         // num_sticks_to_read
-    args[8] = v.output_num_sticks_per_halo_dim;  // num_sticks_per_halo_dim
-}
-
-template <typename Args>
-void set_local_reader_shape_crta(Args& args, const NeighborPadShapeValues& v) {
-    args[3] = v.input_halo_dim_size;
-    args[4] = v.num_sticks_per_halo_dim;  // num_sticks_to_read
-    args[5] = v.num_sticks_per_halo_dim;
-}
-
-template <typename Args>
-void set_local_writer_shape_crta(Args& args, const NeighborPadShapeValues& v) {
-    args[3] = v.input_halo_dim_size;
-    args[4] = v.output_halo_dim_size;
-    args[6] = v.num_sticks_per_halo_dim;  // num_sticks_to_read
-    args[7] = v.output_num_sticks_per_halo_dim;
-    args[9] = v.mask_device_h_offset;
-    args[10] = v.t_front_pad_stick_offset;
-}
-
-// Local-copy core i of num_cores: {unit_offset, units, fill_offset, fill_count}. The units are the rows to copy and
-// the fill the T front padding's zero sticks, each split evenly over the cores. The reader takes the first two.
-std::array<uint32_t, 4> local_copy_work(const NeighborPadShapeValues& v, uint32_t num_cores, uint32_t i) {
-    const uint32_t base = v.local_copy_units / num_cores;
-    const uint32_t rem = v.local_copy_units % num_cores;
-    const uint32_t fill_base = v.t_front_pad_stick_offset / num_cores;
-    const uint32_t fill_rem = v.t_front_pad_stick_offset % num_cores;
-    return {
-        (i * base) + std::min(i, rem),
-        base + (i < rem ? 1u : 0u),
-        (i * fill_base) + std::min(i, fill_rem),
-        fill_base + (i < fill_rem ? 1u : 0u)};
-}
-
-template <typename Args>
-void set_w_reader_shape_args(Args& args, const NeighborPadShapeValues& v) {
-    args[4] = v.output_num_sticks_per_halo_dim;  // output_row_width
-    args[6] = v.num_sticks_per_halo_dim;         // num_interior_sticks
-    args[11] = v.input_halo_dim_size;            // h_in
-    args[15] = v.mask_device_h_offset;           // device_h_offset
-}
-
-// The W writer's fabric args sit between its leading and its trailing shape values.
-template <typename Args>
-void set_w_writer_shape_args(Args& args, const NeighborPadShapeValues& v, uint32_t w_t_count) {
-    args[2] = v.input_halo_dim_size;
-    args[3] = v.output_num_sticks_per_halo_dim;      // output_halo_dim_size = W'
-    args[4] = w_t_count * v.output_halo_dim_size;    // outer_dim_size
-    args[args.size() - 3] = v.input_halo_dim_size;   // w2_h_in
-    args[args.size() - 1] = v.output_halo_dim_size;  // w2_h_out
-}
-
 struct NeighborPadKernelPresence {
     bool has_local_copy = false;
     bool has_w_fabric = false;
 };
 
+// Same link-cap and residual-core predicate as build_program_descriptor_at; independent of mesh coordinate.
 NeighborPadKernelPresence neighbor_pad_kernel_presence(
     const NeighborPadAsyncParams& operation_attributes, const Tensor& input_tensor) {
-    const NeighborPadLayout layout = neighbor_pad_layout(operation_attributes, input_tensor);
-    return NeighborPadKernelPresence{
-        .has_local_copy = !layout.local_copy_cores.empty(), .has_w_fabric = operation_attributes.pad_dim2.has_value()};
+    auto* mesh_device = input_tensor.device();
+    const auto& input_tensor_shape = input_tensor.padded_shape();
+
+    uint32_t num_sticks_per_halo_dim = 1;
+    for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
+        num_sticks_per_halo_dim *= input_tensor_shape[d];
+    }
+    uint32_t outer_dim_size = 1;
+    for (size_t d = 0; d < operation_attributes.dim; d++) {
+        outer_dim_size *= input_tensor_shape[d];
+    }
+
+    const bool is_2d = operation_attributes.pad_dim2.has_value();
+    auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
+    uint32_t num_links = operation_attributes.num_links;
+    uint32_t pad2_num_links = operation_attributes.pad2_num_links;
+    uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
+    if (total_fabric_cores > compute_grid_size.x) {
+        uint32_t max_total = compute_grid_size.x;
+        uint32_t h_cores = num_links * 2;
+        if (is_2d) {
+            uint32_t available_for_w = (max_total > h_cores) ? (max_total - h_cores) : 0;
+            pad2_num_links = available_for_w / 2;
+            if (pad2_num_links == 0) {
+                pad2_num_links = 1;
+                num_links = (max_total - 2) / 2;
+            }
+        } else {
+            num_links = max_total / 2;
+        }
+    }
+
+    const uint32_t num_h_fabric_cores = num_links * 2;
+    const uint32_t num_w_fabric_cores = is_2d ? (pad2_num_links * 2) : 0;
+    CoreCoord core_grid(num_h_fabric_cores, 1);
+    const CoreRangeSet worker_core_ranges = std::get<1>(
+        (operation_attributes.dim > 0) ? split_work_to_cores(core_grid, outer_dim_size * 2)
+                                       : split_work_to_cores(core_grid, num_sticks_per_halo_dim * 2));
+
+    CoreRangeSet fabric_cores = worker_core_ranges;
+    if (is_2d) {
+        CoreRangeSet w_fabric_core_range(
+            CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
+        fabric_cores = fabric_cores.merge(w_fabric_core_range);
+    }
+    CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
+    const bool has_local_copy = !all_cores.subtract(fabric_cores).empty();
+    return NeighborPadKernelPresence{.has_local_copy = has_local_copy, .has_w_fabric = is_2d};
 }
 
 ProgramDescriptor build_program_descriptor_at(
@@ -261,12 +109,6 @@ ProgramDescriptor build_program_descriptor_at(
     Tensor& tensor_return_value);
 
 }  // namespace
-
-bool neighbor_pad_async_is_shape_free(
-    const NeighborPadAsyncParams& args, const NeighborPadAsyncInputs& /*tensor_args*/) {
-    // The input is never sharded (validated); a sharded output's accessor args would carry its shard shape.
-    return args.runtime_shapes && args.dim > 0 && !args.output_mem_config.is_sharded();
-}
 
 tt::tt_metal::WorkloadDescriptor NeighborPadAsyncMeshWorkloadFactory::create_workload_descriptor(
     const NeighborPadAsyncParams& operation_attributes,
@@ -296,67 +138,8 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const NeighborPadAsyncParams& operation_attributes,
     const NeighborPadAsyncInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<ttnn::MeshCoordinate>& coord) {
-    // Built once for a shape-free hit and reused for the semaphore refresh below.
-    std::optional<NeighborPadLayout> layout;
-    if (neighbor_pad_async_is_shape_free(operation_attributes, tensor_args)) {
-        // The program serves every size of the padded dims: rewrite the args that follow them, through the same
-        // functions the builder writes them with. The cores and the rest of the args are the same for every size.
-        TT_FATAL(coord.has_value(), "neighbor_pad_async: a shape-free cache hit needs the mesh coordinate");
-        const Tensor& input_tensor = tensor_args.input_tensor;
-        const NeighborPadLayout& cores = layout.emplace(neighbor_pad_layout(operation_attributes, input_tensor));
-        const uint32_t device_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
-            input_tensor, *coord, operation_attributes.cluster_axis);
-        const NeighborPadShapeValues values =
-            neighbor_pad_shape_values(operation_attributes, cores, input_tensor, tensor_return_value, device_index);
-
-        uint32_t link_first_dim = 0;
-        for (uint32_t link = 0; link < cores.num_links; link++) {
-            for (uint32_t direction = 0; direction < 2; direction++) {
-                const CoreCoord core = {(link * 2) + direction, 0};
-                set_h_reader_shape_args(GetRuntimeArgs(program, k_h_reader_kernel_id, core), values, link_first_dim);
-                set_h_writer_shape_args(GetRuntimeArgs(program, k_h_writer_kernel_id, core), values, link_first_dim);
-            }
-            link_first_dim += h_core_dims(cores, (link * 2) + 1);
-        }
-
-        uint32_t kernel_id = k_h_writer_kernel_id + 1;
-        if (!cores.local_copy_cores.empty()) {
-            const uint32_t reader_id = kernel_id++;
-            const uint32_t writer_id = kernel_id++;
-            auto& reader_crta = GetCommonRuntimeArgs(program, reader_id);
-            auto& writer_crta = GetCommonRuntimeArgs(program, writer_id);
-            set_local_reader_shape_crta(reader_crta, values);
-            set_local_writer_shape_crta(writer_crta, values);
-            const std::vector<CoreCoord> local_cores =
-                corerange_to_cores(cores.local_copy_cores, std::nullopt, /*row_wise=*/true);
-            const uint32_t num_local_cores = local_cores.size();
-            for (uint32_t i = 0; i < num_local_cores; ++i) {
-                const auto work = local_copy_work(values, num_local_cores, i);
-                auto& reader_args = GetRuntimeArgs(program, reader_id, local_cores[i]);
-                reader_args[0] = work[0];
-                reader_args[1] = work[1];
-                auto& writer_args = GetRuntimeArgs(program, writer_id, local_cores[i]);
-                for (uint32_t k = 0; k < work.size(); ++k) {
-                    writer_args[k] = work[k];
-                }
-            }
-        }
-
-        if (operation_attributes.pad_dim2.has_value()) {
-            const uint32_t reader_id = kernel_id++;
-            const uint32_t writer_id = kernel_id++;
-            for (uint32_t w_link = 0; w_link < cores.pad2_num_links; w_link++) {
-                const uint32_t w_t_count = w_link_t_range(operation_attributes, cores, w_link).second;
-                for (uint32_t w_direction = 0; w_direction < 2; w_direction++) {
-                    const CoreCoord core = {cores.num_h_fabric_cores + (w_link * 2) + w_direction, 0};
-                    set_w_reader_shape_args(GetRuntimeArgs(program, reader_id, core), values);
-                    set_w_writer_shape_args(GetRuntimeArgs(program, writer_id, core), values, w_t_count);
-                }
-            }
-        }
-    }
+    Tensor& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     const uint32_t h_sem_addr = static_cast<uint32_t>(operation_attributes.h_neighbor_semaphore.address());
     const uint32_t barrier_sem_addr = static_cast<uint32_t>(operation_attributes.barrier_semaphore.address());
 
@@ -376,9 +159,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 
     const uint32_t w_sem_addr = static_cast<uint32_t>(operation_attributes.w_neighbor_semaphore.address());
     const NeighborPadKernelPresence presence =
-        layout.has_value()
-            ? NeighborPadKernelPresence{.has_local_copy = !layout->local_copy_cores.empty(), .has_w_fabric = true}
-            : neighbor_pad_kernel_presence(operation_attributes, tensor_args.input_tensor);
+        neighbor_pad_kernel_presence(operation_attributes, tensor_args.input_tensor);
 
     // Local reader/writer, when present, sit at indices 2 and 3. They have no semaphore CRTAs.
     uint32_t kernel_index = k_h_writer_kernel_id + 1;
@@ -450,6 +231,8 @@ ProgramDescriptor build_program_descriptor_at(
         tensor_args.input_tensor, mesh_coordinate, -1, ttnn::ccl::Topology::Linear, operation_attributes.cluster_axis);
 
     // Tensor Info
+    const auto& input_tensor_shape = tensor_args.input_tensor.padded_shape();
+    const auto& output_tensor_shape = tensor_return_value.padded_shape();
     Buffer* input_buffer = tensor_args.input_tensor.buffer();
     Buffer* output_buffer = tensor_return_value.buffer();
 
@@ -458,13 +241,16 @@ ProgramDescriptor build_program_descriptor_at(
     // The interleaved address generator spaces pages at aligned_page_size intervals,
     // so NOC transfers must use this size to avoid sub-minimum or misaligned reads.
     const uint32_t page_size = static_cast<uint32_t>(input_buffer->aligned_page_size());
-    const NeighborPadLayout layout = neighbor_pad_layout(operation_attributes, tensor_args.input_tensor);
-    const NeighborPadShapeValues shape_values = neighbor_pad_shape_values(
-        operation_attributes, layout, tensor_args.input_tensor, tensor_return_value, device_index);
-    const uint32_t num_sticks_per_halo_dim = shape_values.num_sticks_per_halo_dim;
-    const uint32_t input_halo_dim_size = shape_values.input_halo_dim_size;
-    const uint32_t output_halo_dim_size = shape_values.output_halo_dim_size;
-    const uint32_t outer_dim_size = layout.outer_dim_size;
+    uint32_t num_sticks_per_halo_dim = 1;
+    for (size_t d = operation_attributes.dim + 1; d < input_tensor_shape.size() - 1; d++) {
+        num_sticks_per_halo_dim *= input_tensor_shape[d];
+    }
+    uint32_t input_halo_dim_size = input_tensor_shape[operation_attributes.dim];
+    uint32_t output_halo_dim_size = output_tensor_shape[operation_attributes.dim];
+    uint32_t outer_dim_size = 1;
+    for (size_t d = 0; d < operation_attributes.dim; d++) {
+        outer_dim_size *= input_tensor_shape[d];
+    }
 
     bool is_first_device = true;
     bool is_last_device = true;
@@ -532,11 +318,27 @@ ProgramDescriptor build_program_descriptor_at(
     // Get worker cores
     constexpr uint32_t MAX_PAD2_NUM_LINKS = 4;  // kernel arrays sized for pad2_num_links * 2 = 8 targets
 
+    // Cap num_links and pad2_num_links so total fabric cores fit within the device compute grid width.
+    // WH has 8x8 logical grid vs BH's 14x10, so large link counts can exceed the grid.
     auto compute_grid_size = mesh_device->compute_with_storage_grid_size();
-    const uint32_t num_links = layout.num_links;
-    const uint32_t pad2_num_links = layout.pad2_num_links;
-    if (num_links != operation_attributes.num_links ||
-        (is_2d && pad2_num_links != operation_attributes.pad2_num_links)) {
+    uint32_t num_links = operation_attributes.num_links;
+    uint32_t pad2_num_links = operation_attributes.pad2_num_links;
+    uint32_t total_fabric_cores = (num_links * 2) + (is_2d ? pad2_num_links * 2 : 0);
+    if (total_fabric_cores > compute_grid_size.x) {
+        // Reduce pad2_num_links first (W-fabric), then num_links (H-fabric) if still too many
+        uint32_t max_total = compute_grid_size.x;
+        uint32_t h_cores = num_links * 2;
+        if (is_2d) {
+            uint32_t available_for_w = (max_total > h_cores) ? (max_total - h_cores) : 0;
+            pad2_num_links = available_for_w / 2;
+            if (pad2_num_links == 0) {
+                // H-fabric alone exceeds grid, reduce num_links too
+                pad2_num_links = 1;
+                num_links = (max_total - 2) / 2;  // reserve 2 cores for 1 W link
+            }
+        } else {
+            num_links = max_total / 2;
+        }
         log_warning(
             tt::LogOp,
             "neighbor_pad_async: Capped num_links from {} to {} and pad2_num_links from {} to {} "
@@ -548,16 +350,18 @@ ProgramDescriptor build_program_descriptor_at(
             compute_grid_size.x);
     }
 
-    const uint32_t num_h_fabric_cores = layout.num_h_fabric_cores;
-    const uint32_t num_w_fabric_cores = layout.num_w_fabric_cores;
+    uint32_t num_h_fabric_cores = num_links * 2;
+    uint32_t num_w_fabric_cores = is_2d ? (pad2_num_links * 2) : 0;
     TT_FATAL(
         pad2_num_links <= MAX_PAD2_NUM_LINKS,
         "pad2_num_links ({}) exceeds maximum supported ({}). Kernel Phase 2 signal target arrays are sized for {}.",
         pad2_num_links,
         MAX_PAD2_NUM_LINKS,
         MAX_PAD2_NUM_LINKS * 2);
-    const CoreRangeSet& worker_core_ranges = layout.worker_core_ranges;
-    const uint32_t dims_per_core_group_1 = layout.dims_per_core_group_1;
+    CoreCoord core_grid(num_h_fabric_cores, 1);
+    auto [num_cores, worker_core_ranges, core_group_1, core_group_2, dims_per_core_group_1, dims_per_core_group_2] =
+        (operation_attributes.dim > 0) ? split_work_to_cores(core_grid, outer_dim_size * 2)
+                                       : split_work_to_cores(core_grid, num_sticks_per_halo_dim * 2);
 
     // L1 Scratch CB Creation
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
@@ -612,6 +416,8 @@ ProgramDescriptor build_program_descriptor_at(
     uint32_t w_backward_device_offset = 0;
     std::optional<MeshCoordinate> w_forward_coord;
     std::optional<MeshCoordinate> w_backward_coord;
+    uint32_t w_rows_per_link = 0;
+    uint32_t w_extra_rows = 0;
     uint32_t w_t_total = 0;
 
     if (is_2d) {
@@ -661,7 +467,8 @@ ProgramDescriptor build_program_descriptor_at(
             w_fabric_logical_cores.push_back(wc);
             w_fabric_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(wc));
         }
-        w_fabric_core_range = layout.w_fabric_core_range;
+        w_fabric_core_range =
+            CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
 
         // W link distribution: T-batch-aligned (each link handles complete T batches).
         // This simplifies per-row type detection in kernels (no partial-T-batch edge cases).
@@ -675,6 +482,8 @@ ProgramDescriptor build_program_descriptor_at(
         // the completion semaphore. DRAM write ordering is guaranteed by synchronize_device()
         // before the next op dispatch.
         w_t_total = outer_dim_size + t_front_pad;
+        w_rows_per_link = w_t_total / pad2_num_links;  // reused as t_per_link
+        w_extra_rows = w_t_total % pad2_num_links;     // reused as t_extra
     }
 
     // Compute H fabric unicast route configuration (for compile-time args)
@@ -750,7 +559,6 @@ ProgramDescriptor build_program_descriptor_at(
     // Set per-core runtime args for H fabric cores
     uint32_t link_offset_start_id = 0;
     uint32_t writer_link_offset_start_id = 0;  // separate offset for writer (uses output row width)
-    uint32_t link_first_dim = 0;               // the link's first outer dim, for the shape args
     for (uint32_t link = 0; link < num_links; link++) {
         uint32_t link_dims_to_read = 0;
 
@@ -760,7 +568,11 @@ ProgramDescriptor build_program_descriptor_at(
             CoreCoord opposite_core = {(link * num_directions) + (1 - direction), 0};
             CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
             CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
-            link_dims_to_read = h_core_dims(layout, core.x);
+            if (core_group_1.contains(core)) {
+                link_dims_to_read = dims_per_core_group_1;
+            } else {
+                link_dims_to_read = dims_per_core_group_2;
+            }
 
             // Reader runtime args (addresses in CRTAs, not here)
             std::vector<uint32_t> reader_rt_args = {
@@ -777,9 +589,6 @@ ProgramDescriptor build_program_descriptor_at(
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
-            if (operation_attributes.dim > 0) {
-                set_h_reader_shape_args(reader_rt_args, shape_values, link_first_dim);
-            }
             emplace_u32_runtime_args(h_reader_kernel, core, reader_rt_args);
 
             // For 2D case, H fabric writer uses output row width and W offset
@@ -853,12 +662,8 @@ ProgramDescriptor build_program_descriptor_at(
                 }
                 writer_rt_args.push_back(false);
             }
-            if (operation_attributes.dim > 0) {
-                set_h_writer_shape_args(writer_rt_args, shape_values, link_first_dim);
-            }
             emplace_u32_runtime_args(h_writer_kernel, core, writer_rt_args);
         }
-        link_first_dim += link_dims_to_read;
         if (operation_attributes.dim > 0) {
             link_offset_start_id += (link_dims_to_read * num_sticks_per_halo_dim);
             // Writer offset uses output row width (wider for 2D due to W padding)
@@ -875,9 +680,15 @@ ProgramDescriptor build_program_descriptor_at(
     uint32_t kernel_index = k_h_writer_kernel_id + 1;
 
     // Local copy workers on cores not used by fabric: AllCores - FabricCores
+    std::vector<CoreCoord> local_copy_core_coords;
     bool has_local_copy = false;
     {
-        const CoreRangeSet& local_copy_cores = layout.local_copy_cores;
+        CoreRangeSet all_cores(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
+        CoreRangeSet fabric_cores = worker_core_ranges;
+        if (is_2d) {
+            fabric_cores = fabric_cores.merge(w_fabric_core_range);
+        }
+        CoreRangeSet local_copy_cores = all_cores.subtract(fabric_cores);
 
         if (!local_copy_cores.empty()) {
             has_local_copy = true;
@@ -934,21 +745,42 @@ ProgramDescriptor build_program_descriptor_at(
                 local_writer_kernel.emplace_common_runtime_args(local_writer_crta);
             }
 
-            set_local_reader_shape_crta(local_reader_kernel.common_runtime_args, shape_values);
-            set_local_writer_shape_crta(local_writer_kernel.common_runtime_args, shape_values);
-
             // Distribute work evenly across local-copy cores and set per-core runtime args
-            const std::vector<CoreCoord> local_cores =
-                corerange_to_cores(local_copy_cores, std::nullopt, /*row_wise=*/true);
+            std::vector<CoreCoord> local_cores = corerange_to_cores(local_copy_cores, std::nullopt, /*row_wise=*/true);
             const uint32_t num_local_cores = local_cores.size();
+            const uint32_t total_units =
+                (operation_attributes.dim > 0) ? (outer_dim_size * input_halo_dim_size) : input_halo_dim_size;
+            const uint32_t base = (num_local_cores == 0) ? 0 : (total_units / num_local_cores);
+            const uint32_t rem = (num_local_cores == 0) ? 0 : (total_units % num_local_cores);
+
+            // Phase A: distribute T-front zero-fill sticks across local cores
+            const uint32_t a_base = (num_local_cores > 0) ? (t_front_pad_stick_offset / num_local_cores) : 0;
+            const uint32_t a_rem = (num_local_cores > 0) ? (t_front_pad_stick_offset % num_local_cores) : 0;
+            uint32_t a_offset = 0;
+
+            uint32_t unit_offset = 0;
+            local_copy_core_coords.reserve(num_local_cores);
             for (uint32_t i = 0; i < num_local_cores; ++i) {
+                const uint32_t units_for_core = base + (i < rem ? 1u : 0u);
+                const uint32_t a_count = a_base + (i < a_rem ? 1u : 0u);
+
+                const CoreCoord& logical_core = local_cores[i];
+
                 // Per-core unique args: work distribution for Phase B (copy) and Phase A (zero-fill).
                 // These MUST be set for every core the kernels are placed on -- including cores with no
                 // work -- otherwise a no-work core reuses stale runtime args from a prior program and
-                // reads/writes garbage.
-                const auto work = local_copy_work(shape_values, num_local_cores, i);
-                local_reader_kernel.emplace_runtime_args(local_cores[i], {work[0], work[1]});
-                local_writer_kernel.emplace_runtime_args(local_cores[i], {work[0], work[1], work[2], work[3]});
+                // reads/writes garbage. Set args first, then skip bookkeeping for no-work cores.
+                local_reader_kernel.emplace_runtime_args(logical_core, {unit_offset, units_for_core});
+                local_writer_kernel.emplace_runtime_args(
+                    logical_core, {unit_offset, units_for_core, a_offset, a_count});
+
+                if (units_for_core == 0 && a_count == 0) {
+                    continue;
+                }
+                local_copy_core_coords.push_back(logical_core);
+
+                unit_offset += units_for_core;
+                a_offset += a_count;
             }
             desc.kernels.push_back(std::move(local_reader_kernel));
             desc.kernels.push_back(std::move(local_writer_kernel));
@@ -1050,9 +882,10 @@ ProgramDescriptor build_program_descriptor_at(
         }
 
         // Set per-core runtime args for W fabric cores
-        // Each link handles whole T batches (T-batch-aligned distribution).
+        // w_rows_per_link/w_extra_rows now hold T batches per link (T-batch-aligned distribution).
         for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
-            const auto [w_t_start, w_t_count] = w_link_t_range(operation_attributes, layout, w_link);
+            uint32_t w_t_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
+            uint32_t w_t_count = w_rows_per_link + (w_link < w_extra_rows ? 1 : 0);
             log_trace(
                 tt::LogOp,
                 "NeighborPad3Phase W-link {}: t_start={}, t_count={} (of {} T batches)",
@@ -1089,7 +922,6 @@ ProgramDescriptor build_program_descriptor_at(
                     t_front_pad,                                         // t_front_pad
                     operation_attributes.logical_h,                      // logical_h (0 = no masking)
                     w_reader_device_h_offset};                           // device_h_offset = device_index * h_in
-                set_w_reader_shape_args(w_reader_rt_args, shape_values);
                 emplace_u32_runtime_args(w_reader_kernel, w_core, w_reader_rt_args);
 
                 // W writer runtime args (addresses in CRTAs, not here)
@@ -1166,7 +998,6 @@ ProgramDescriptor build_program_descriptor_at(
                 w_writer_rt_args.push_back(input_halo_dim_size);                 // w2_h_in
                 w_writer_rt_args.push_back(operation_attributes.padding_right);  // w2_h_pad_bot
                 w_writer_rt_args.push_back(output_halo_dim_size);                // w2_h_out
-                set_w_writer_shape_args(w_writer_rt_args, shape_values, w_t_count);
                 emplace_u32_runtime_args(w_writer_kernel, w_core, w_writer_rt_args);
             }
         }

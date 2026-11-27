@@ -12,25 +12,15 @@
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
-#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_runtime_seq_len_args.hpp"
 
 void kernel_main() {
-#ifdef SDPA_RUNTIME_SEQ_LEN
-    // The sequence lengths come at run time (compile-time slots 0, 4, 6 and 25 are 0), so one binary
-    // serves every length. Only the standard path supports this; valid_Skt is a compile-time value of
-    // the streaming path alone.
-    const uint32_t Skt = get_common_arg_val<uint32_t>(sdpa_seq_len_args::SKT);
-    const uint32_t q_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::Q_NUM_CHUNKS);
-    const uint32_t k_num_chunks = get_common_arg_val<uint32_t>(sdpa_seq_len_args::K_NUM_CHUNKS);
-#else
     constexpr uint32_t Skt = get_compile_time_arg_val(0);
-    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(4);
-    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
-#endif
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
+    constexpr uint32_t q_num_chunks = get_compile_time_arg_val(4);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(6);
 
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(7);
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(8);
