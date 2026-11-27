@@ -489,7 +489,9 @@ class AdapterContracts(unittest.TestCase):
     def test_trace_keys_delegate_for_default_and_enabled_modes(self):
         tree = ast.parse((ROOT / "models/tt_dit/models/audio_vae/vocoder_ltx.py").read_text())
         vocoder = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Vocoder")
-        method = next(node for node in vocoder.body if isinstance(node, ast.FunctionDef) and node.name == "c12_trace_key")
+        method = next(
+            node for node in vocoder.body if isinstance(node, ast.FunctionDef) and node.name == "c12_trace_key"
+        )
         ns = {"__package__": "models.tt_dit.models.audio_vae"}
         exec(compile(ast.Module(body=[method], type_ignores=[]), "vocoder", "exec"), ns)
         shape = [1, 128, 24]
