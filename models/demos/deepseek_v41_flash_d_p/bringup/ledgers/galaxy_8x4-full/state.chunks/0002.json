@@ -1396,6 +1396,64 @@
   },
   "waiting": null
  },
+ "WA.0": {
+  "attempts": 0,
+  "duration_s": 35.5,
+  "history": [
+   {
+    "s": 35.5,
+    "status": "PASS",
+    "t": "2026-11-27T15:02:40"
+   },
+   {
+    "status": "COMMIT_PENDING",
+    "t": "2026-11-27T15:02:42"
+   },
+   {
+    "status": "COMMITTED",
+    "t": "2026-11-27T15:03:25"
+   },
+   {
+    "status": "COMMIT_PENDING",
+    "t": "2026-11-27T15:03:28"
+   },
+   {
+    "status": "COMMITTED",
+    "t": "2026-11-27T15:03:41"
+   },
+   {
+    "status": "COMMIT_PENDING",
+    "t": "2026-11-27T15:03:46"
+   },
+   {
+    "status": "COMMITTED",
+    "t": "2026-11-27T15:03:57"
+   },
+   {
+    "status": "COMMIT_PENDING",
+    "t": "2026-11-27T15:04:00"
+   },
+   {
+    "status": "COMMITTED",
+    "t": "2026-11-27T15:04:42"
+   }
+  ],
+  "last_run": "2026-11-27T15:02:37",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/WA.0.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "WA.0": "d7a53fe11db16dd9"
+   }
+  },
+  "started": "2026-11-27T15:02:01",
+  "status": "PASS",
+  "units": {
+   "WA.0": "PASS"
+  }
+ },
  "X.9": {
   "ab_pending": [
    "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",

@@ -1402,3 +1402,24 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   case and rung -1.0..-1.5 except 3 rungs < 0.7): single 1M 109.4 -> 108.2, 4x2k 1M 121.7 -> 120.4; walls within noise
   (results/PB.MM256_ladder.md; the table sent to the owner). Not pushed.
 - 15:55 switching to dnijemcevic/model_bringup for MB.9 (owner: re-sweep both branches). Batching dashboards stashed.
+
+### 2026-11-27 (overseer, fresh session cd10a047, node bh-glx-110-c10u02 booted 01:47) wo_a bank-local experiment (WA.0-WA.5)
+- Owner plan: /home/dnijemcevic/handoff_20261127/WOA_PLAN.md (wo_a weights per DRAM bank, bank-local reads as the routed
+  experts do; batching branch; never push). Node notes: /data is at the user quota (read only; nothing written there; the
+  cluster-health store write of recover-hosts failed on it, harmless); root disk had 0 free, JIT cache `built/` deleted
+  (85 GB free now; expect kernel recompiles on the first runs).
+- Open items noted, not worked on (owner): no state in the serving path (A-D carries, engram tail); FIX.11, FIX.13, PB.8P
+  TODO; test_perf_ab.py 15 pre-existing failures.
+- 14:57 WA.0: README bundle fetched; dnijemcevic/model_bringup e9d1913ad19 -> 3cedffd3b34 and
+  dnijemcevic/model_bringup_batching e3f48ea0390 -> 7704c61363c (fast-forward); model_bringup dashboards stashed
+  ('model_bringup dashboards (2026-11-27, before WA)'), batching dashboards popped. Rebuilt for this branch (37 s, clean).
+  Chip locks: none (no device opened since boot); other users: only an idle container (pjosipovic, sleep infinity).
+- 14:59 tasks.yaml: WA.0-WA.5 added from the plan (validate: valid; 486 KB). WA.1 / WA.5 CPU (device: false, gated by
+  their CPU tests); WA.2 op probe (fork option of ttnn.bringup.grouped_matmul, KILL line in its report); WA.3 DS41_WOA_BANK in
+  the model (off == on exact, cold no-rebuild); WA.4 A/B (ab DS41_WOA_BANK off/on) + accept gate (40-layer reference at 8192,
+  off == on all layers, 8192 single / packed ladders, 5120 ladder, cold strict no-rebuild). Kill lines checked by the overseer
+  at WA.1 (upper bound < 0.5 ms a 8192 chunk) and WA.2 (gain < half the bound or not exact).
+- 15:01 recover-hosts link check (--skip-reset): all 34224 connections match, all links healthy.
+- 15:02 DEVICE OPEN: test_box (WA.0 gate; reason: box check after the reboot). RAM used 43 -> 44 GB (avail 328). PASS,
+  chips 32. Commit refused by a broken pre-commit env: virtualenv's app-data cache (~/.cache/virtualenv) held a truncated pip
+  from the disk-full event (new venvs had no pip.__main__); cleared the cache (regenerates), commit-only.

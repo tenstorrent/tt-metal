@@ -4653,5 +4653,8 @@
   "packed_fast_tier_s": 102.6,
   "program_builds_after_warmup_serving": 0,
   "program_builds_after_warmup_serving_tagentic_cc": 0
+ },
+ "WA.0": {
+  "chips": 32
  }
 }
