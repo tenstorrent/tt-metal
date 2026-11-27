@@ -111,9 +111,9 @@ Gap: `throttle` on a pytest step gives one verdict for the whole mesh; only the 
 ### Env knobs
 
 All opt-in: unset, the test runs as before. The runner passes your shell environment to every step (except
-`TT_VISIBLE_DEVICES`, `TT_METAL_VISIBLE_DEVICES`, `TT_MM_THROTTLE_PERF`, the dispatch timeout variables and the
-`pin_core` knobs `DIDT_DEVICE_ID`, `DIDT_MIN_LOOP_SECONDS`), so an
-exported knob changes every step that reads it.
+`TT_VISIBLE_DEVICES`, `TT_METAL_VISIBLE_DEVICES`, `TT_MESH_GRAPH_DESC_PATH`, `TT_MM_THROTTLE_PERF`, the dispatch
+timeout variables and the `pin_core` knobs `DIDT_DEVICE_ID`, `DIDT_MIN_LOOP_SECONDS`), so an exported knob changes
+every step that reads it. A step that needs a mesh graph descriptor sets it in its config `env`.
 
 | variable | read by | effect |
 |---|---|---|
@@ -135,7 +135,7 @@ python -m pytest -q --noconftest -p no:cacheprovider tests/didt/runner tests/did
   tests/didt/test_mcast_ack_scan_dirs.py tests/didt/test_op_test_base_min_loop.py tests/didt/test_nd_core_map.py
 ```
 
-Expected: 156 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
+Expected: 158 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
 find the `build-gwdt-sweep` skill (set `GWDT_SWEEP_DIR` to the skill's folder).
 
 ### Changing the runner

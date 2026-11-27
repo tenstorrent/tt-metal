@@ -435,6 +435,21 @@ def test_cli_bad_config_exit_2(tmp_path, capsys):
     assert "missing field" in capsys.readouterr().err
 
 
+def test_cli_empty_selection_exit_2(capsys):
+    assert main(["--skip", ",".join(KEYS)]) == 2
+    assert "no steps selected" in capsys.readouterr().err
+
+
+def test_caller_mgd_reaches_only_steps_that_set_one(tmp_path, monkeypatch):
+    monkeypatch.setenv("TT_MESH_GRAPH_DESC_PATH", "/caller/galaxy.textproto")
+    _, _, _, shell, _ = _run(tmp_path, only=["nd:minimal", "nd:duty-cycle-bursty-5", "nd:mcast-ack"])
+    assert "TT_MESH_GRAPH_DESC_PATH" not in shell.workload_calls("nd/minimal")[0]["env"]
+    duty = shell.workload_calls("nd/duty-cycle-bursty-5")[0]["env"]["TT_MESH_GRAPH_DESC_PATH"]
+    assert duty == CFG.steps[[s.key for s in CFG.steps].index("nd:duty-cycle-bursty-5")].env["TT_MESH_GRAPH_DESC_PATH"]
+    chips = shell.chip_jobs
+    assert len(chips) == len(CHIPS) and all("TT_MESH_GRAPH_DESC_PATH" not in c["env"] for c in chips)
+
+
 def test_cli_config_tier_name(capsys):
     assert main(["--config", "daily", "--list"]) == 0
     assert capsys.readouterr().out.split("\n")[0] == "nd:minimal"

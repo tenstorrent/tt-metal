@@ -136,10 +136,12 @@ def repo_commit(repo: Path = REPO) -> str:
 
 # Never inherited from the caller's shell: device selection would renumber `dev` away from the whole-host chip
 # snapshot every join relies on, and a leftover throttle, hang hook or pin knob would change what the first attempt
-# measures. pin_core sets its own knobs per rerun.
+# measures. pin_core sets its own knobs per rerun. A caller's mesh graph descriptor would also reach the one-chip
+# each_chip processes; a step that needs one sets it in its config env.
 DROPPED_ENV = (
     "TT_VISIBLE_DEVICES",
     "TT_METAL_VISIBLE_DEVICES",
+    "TT_MESH_GRAPH_DESC_PATH",
     "TT_MM_THROTTLE_PERF",
     "TT_METAL_OPERATION_TIMEOUT_SECONDS",
     "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE",
