@@ -120,7 +120,7 @@ class Qwen3ASRRealtimeGeneration(Qwen3ASRForConditionalGeneration, SupportsRealt
 
 @default_pooling_type(tok_pooling_type="ALL")
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen3ASRMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+    Qwen3ASRTTMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
 )
 class Qwen3ASRForcedAlignerForTokenClassification(Qwen3ForcedAligner, SupportsMultiModal):
     """One prefill per request, no decode and no sampling. Its KV cache is the decoder's
@@ -185,7 +185,7 @@ class Qwen3ASRForcedAlignerForTokenClassification(Qwen3ForcedAligner, SupportsMu
 DIARIZE_KWARG = "diarize_context_samples"
 
 
-class Qwen3ForcedAlignerDiarizerMultiModalProcessor(Qwen3ASRMultiModalProcessor):
+class Qwen3ForcedAlignerDiarizerMultiModalProcessor(Qwen3ASRTTMultiModalProcessor):
     """With ``mm_processor_kwargs={"diarize_context_samples": n}``, the audio item is a chunk followed
     by n samples of context (0 for the last chunk): the aligner's features come from the chunk only,
     and the whole waveform goes to the diarizer as ``diarize_waveform``."""
