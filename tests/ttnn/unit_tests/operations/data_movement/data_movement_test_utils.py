@@ -54,6 +54,31 @@ def full_range_input(shape, dtype, seed=0, nan=True):
     raise ValueError(f"no input for {dtype}")
 
 
+def block_shards(shard_shape, grid_y, grid_x):
+    """An L1 BLOCK-sharded config with ``shard_shape`` (height, width) shards on a ``grid_y`` x ``grid_x`` core grid.
+
+    A ROW_MAJOR shard one row high on two or more shard columns is the layout of #67023.
+    """
+    return ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def contiguous_1d_shards(shard_shape, num_cores):
+    """An L1 ND-sharded config with ``shard_shape`` shards placed CONTIGUOUS_1D on a column of ``num_cores`` cores.
+
+    A ROW_MAJOR ``[..., 1, w]`` shard narrower than the row folds its page grid the same way as a one-row BLOCK shard.
+    """
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))])
+    spec = ttnn.NdShardSpec(
+        ttnn.Shape(shard_shape), grid, ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    )
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, spec)
+
+
 def assert_exact(expected, actual, signed_zeros=True):
     """Same shape and the same values, compared as float64 so every dtype above compares exactly.
 

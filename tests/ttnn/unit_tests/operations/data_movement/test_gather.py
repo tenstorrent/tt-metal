@@ -17,7 +17,12 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    block_shards,
+    contiguous_1d_shards,
+    full_range_input,
+)
 
 TILE_HEIGHT = 32
 
@@ -827,3 +832,46 @@ def test_gather_rm_nd_sharded_subaligned_input_rows(device):
     output = ttnn.gather(t, -1, index=i)
 
     assert_equal(torch.gather(x, -1, index.long()), ttnn.to_torch(output))
+
+
+# ROW_MAJOR block shards one row high on two or more shard columns: gather moves them to interleaved memory (#67023).
+@pytest.mark.parametrize("shard_cols", [2, 4])
+@pytest.mark.parametrize("rows", [2, 3, 4])
+@pytest.mark.parametrize("shard_h", [1, 2], ids=["one_row_shard", "two_row_shard"])
+def test_gather_rm_from_block_shard_rows(device, shard_h, rows, shard_cols):
+    torch.manual_seed(0)
+    in_rows = rows * shard_h
+    width = 16 * shard_cols
+    x = full_range_input([1, 1, in_rows, width], ttnn.bfloat16)
+    index = torch.randint(0, width, (1, 1, in_rows, width), dtype=torch.int64)
+    t = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=block_shards((shard_h, 16), rows, shard_cols),
+    )
+    i = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.gather(t, -1, index=i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(torch.gather(x, -1, index), ttnn.to_torch(output))
+
+
+def test_gather_rm_from_folded_nd_shard_rows(device):
+    # [1, 1, 1, 16] ND shards of 64-wide rows fold the same way as a one-row BLOCK shard.
+    torch.manual_seed(0)
+    x = full_range_input([1, 1, 16, 64], ttnn.bfloat16)
+    index = torch.randint(0, 64, (1, 1, 16, 64), dtype=torch.int64)
+    t = ttnn.from_torch(
+        x,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=contiguous_1d_shards([1, 1, 1, 16], num_cores=4),
+    )
+    i = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output = ttnn.gather(t, -1, index=i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    assert_exact(torch.gather(x, -1, index), ttnn.to_torch(output))
