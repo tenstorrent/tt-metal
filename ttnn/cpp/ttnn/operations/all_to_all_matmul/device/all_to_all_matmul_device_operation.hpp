@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -19,8 +20,9 @@ namespace ttnn::operations::all_to_all_matmul {
 struct AllToAllMatmulDeviceOperation {
     using operation_attributes_t = AllToAllMatmulParams;
     using tensor_args_t = AllToAllMatmulInputs;
-    using spec_return_value_t = tt::tt_metal::TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // [prefix] or, in q-stem mode, [prefix, rope_seq]
+    using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<AllToAllMatmulProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -46,7 +48,7 @@ PlanInputs plan_inputs_of(
 
 namespace ttnn::prim {
 
-Tensor all_to_all_matmul(
+std::vector<Tensor> all_to_all_matmul(
     const Tensor& input,
     const Tensor& weight,
     const std::optional<Tensor>& scratch,

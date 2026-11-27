@@ -79,17 +79,26 @@ void check_support(const AllToAllMatmulParams& attrs, const Tensor& input, const
     refuse_unless(attrs.cluster_axis == 1, "cluster_axis", attrs.cluster_axis, "1");
     refuse_unless(attrs.topology == tt::tt_fabric::Topology::Ring, "topology", topology_name(attrs.topology), "Ring");
     refuse_unless(attrs.num_links == 2, "num_links", attrs.num_links, "2");
+    if (attrs.qk_rope_head_dim > 0) {
+        refuse_unless(
+            attrs.rope_memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "rope_memory_layout",
+            attrs.rope_memory_config.memory_layout(),
+            "INTERLEAVED");
+    }
 }
 
 PlanInputs plan_inputs_of(
     const AllToAllMatmulParams& attrs, const MeshTopology& topology, const Tensor& input, const Tensor& weight) {
     const auto& x = input.logical_shape();
     const auto& w = weight.logical_shape();
+    // q-stem mode: the input is (1, 1, S, Hl * (K + R)); its nope part is the (1, Hl, S, K) the matmul sees.
+    const bool qstem = attrs.qk_rope_head_dim > 0;
     return PlanInputs{
         .B = x[0],
-        .Hl = x[1],
+        .Hl = qstem ? w[1] / topology.G : x[1],
         .S = x[2],
-        .K = x[3],
+        .K = qstem ? w[2] : x[3],
         .H = w[1],
         .N = w[3],
         .in_tile_bytes = static_cast<uint32_t>(input.buffer()->page_size()),
@@ -97,6 +106,7 @@ PlanInputs plan_inputs_of(
         .payload_bytes = topology.payload_bytes,
         .output_in_l1 = attrs.output_memory_config.buffer_type() == BufferType::L1,
         .fp32_dest_acc_en = attrs.fp32_dest_acc_en,
+        .Rt = attrs.qk_rope_head_dim / tt::constants::TILE_WIDTH,
     };
 }
 
@@ -130,22 +140,32 @@ AllToAllMatmulDeviceOperation::spec_return_value_t AllToAllMatmulDeviceOperation
     const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& x = t.input.logical_shape();
     const auto& w = t.weight.logical_shape();
-    const uint32_t G = w[1] / x[1];
-    return TensorSpec(
+    const uint32_t G = t.input.device()->shape()[attrs.cluster_axis];
+    std::vector<TensorSpec> specs{TensorSpec(
         ttnn::Shape({x[0], w[1], x[2] / G, w[3]}),
-        TensorLayout(t.input.dtype(), PageConfig(Layout::TILE), attrs.output_memory_config));
+        TensorLayout(t.input.dtype(), PageConfig(Layout::TILE), attrs.output_memory_config))};
+    if (attrs.qk_rope_head_dim > 0) {
+        specs.emplace_back(
+            ttnn::Shape({x[0], w[1], x[2] / G, attrs.qk_rope_head_dim}),
+            TensorLayout(t.input.dtype(), PageConfig(Layout::TILE), attrs.rope_memory_config));
+    }
+    return specs;
 }
 
 AllToAllMatmulDeviceOperation::tensor_return_value_t AllToAllMatmulDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& t) {
-    return create_device_tensor(compute_output_specs(attrs, t), t.input.device());
+    std::vector<Tensor> outputs;
+    for (const TensorSpec& spec : compute_output_specs(attrs, t)) {
+        outputs.push_back(create_device_tensor(spec, t.input.device()));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::all_to_all_matmul
 
 namespace ttnn::prim {
 
-Tensor all_to_all_matmul(
+std::vector<Tensor> all_to_all_matmul(
     const Tensor& input,
     const Tensor& weight,
     const std::optional<Tensor>& scratch,

@@ -42,6 +42,8 @@ constexpr uint32_t kTailMsplitPrefetch = 2;
 constexpr uint32_t kASlotBudgetBytes = 384 * 1024;  // A_RESIDENT predicate
 constexpr uint32_t kMaxHeadsPerCore = 8;            // arrival counters per compute core
 constexpr uint32_t kMaxPacketHeaders = 12;          // packet header pool per data-movement RISC
+constexpr uint32_t kRopeStageTiles = 16;            // q-stem: compute cores' local rope copy, tiles per chunk
+constexpr uint32_t kRopeScatterChunks = 4;  // q-stem: tiles per rope packet (fabric NOC_SCATTER_WRITE_MAX_CHUNKS)
 // Collapsed knobs (one value in the source): send order "near", fence per destination, pack across entries
 // (when packet_tiles <= slot_tiles), landing estimate "share", helper pick "pool", weight pace 0, output write
 // chunk 0, BLOCK_HEADS 1.
@@ -90,6 +92,8 @@ struct PlanInputs {
     uint32_t payload_bytes = 0;  // tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()
     bool output_in_l1 = false;
     bool fp32_dest_acc_en = true;
+    // q-stem mode: rope tiles per head row (qk_rope_head_dim / 32); 0 = off. The input is then (1, 1, S, Hl*(K+R)).
+    uint32_t Rt = 0;
     auto operator<=>(const PlanInputs&) const = default;
 };
 
@@ -132,6 +136,11 @@ struct PortWork {
     std::vector<PortDest> dests;
     std::vector<PortReady> readies;
     std::vector<PortSub> subs;
+    // q-stem mode: rope entries j | t << ENTRY_DEST_SHIFT (the port's entries, grouped by destination chip) and, per
+    // rope entry, its global head and destination index (into dests).
+    std::vector<uint32_t> rope_entries;
+    std::vector<uint32_t> rope_heads;
+    std::vector<uint32_t> rope_dest_index;
     bool has_conn = false;
     uint32_t hdrs_per_dest = 1;
 };
@@ -141,6 +150,8 @@ struct ChipPlan {
     std::vector<CoreWork> cores;  // every active cell, in active_cells order
     std::vector<PortWork> ports;  // by port_index(d, l)
     tt::tt_metal::CoreRangeSet port_cores;
+    // q-stem mode: rope groups (one arrival increment each) that land on this chip; its counter sits on ports[0].
+    uint32_t rope_expected = 0;
 };
 
 struct Plan {
@@ -151,6 +162,9 @@ struct Plan {
     uint32_t block_n = 0, num_n_blocks = 0, out_subblock_h = 1, out_subblock_w = 1;
     // transport
     uint32_t packet_tiles = 0, packet_bytes = 0, batch_chunks = 0, port_window = 0;
+    // input tile addressing (all_to_all_matmul_args.hpp) and q-stem rope geometry (Rt = 0: off)
+    uint32_t in_batch_stride = 0, in_head_stride = 0, in_row_stride = 0;
+    uint32_t Rt = 0, rope_entry_tiles = 0, rope_packet_tiles = 0, rope_stage_tiles = 0;
     bool grouped = false, pack = false, tail_split = false;
     // compute cores
     uint32_t weight_depth = 0, weight_chunk_tiles = 0, w_prefetch = 0;
@@ -170,7 +184,8 @@ const Plan& solve_plan(const MeshTopology& topology, const PlanInputs& inputs);
 tt::tt_metal::TensorSpec scratch_spec(const MeshTopology& topology, const Plan& plan, tt::tt_metal::DataType dtype);
 
 // Per-mesh global semaphores (zero-initialised): arrival counters on the compute cores, one per head slot
-// (>= slots_per_core_max), and ready counters on the port cores (>= n_ready). Created on the mesh's first need,
+// (>= slots_per_core_max), ready counters on the port cores (>= n_ready), and (q-stem mode, first need) one rope
+// arrival counter on the port cores. Created on the mesh's first need,
 // before the call allocates any L1 tensor; synchronizes the mesh when it creates any. Grow-only, kept in a
 // ttsl::Indestructible map.
 struct MeshResources {
@@ -178,6 +193,8 @@ struct MeshResources {
     std::vector<tt::tt_metal::GlobalSemaphore> ready;
     std::vector<uint32_t> arrival_addrs;
     std::vector<uint32_t> ready_addrs;
+    std::vector<tt::tt_metal::GlobalSemaphore> rope;  // 0 or 1
+    uint32_t rope_addr = 0;
 };
 const MeshResources& mesh_resources(
     tt::tt_metal::distributed::MeshDevice* mesh_device, const MeshTopology& topology, const Plan& plan);

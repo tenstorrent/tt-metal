@@ -21,6 +21,10 @@
 // Regime R1' (Mq % 32 != 0): the local quarter is re-tiled per image through cb_retile_stage
 // (all_to_all_matmul_retile.hpp), exactly as the port reader does for the remote quarters.
 //
+// q-stem mode (RT > 0): input tiles are addressed with the strides of all_to_all_matmul_args.hpp (the q_b_proj
+// layout); a local head's slot also copies the head's own-quarter rope tiles (RT per tile row) from the input into
+// rope_seq through cb_rope_stage (the remote quarters' rope tiles come from the port cores).
+//
 // Slot tile order (b, mt, k) = matmul_block's in0 order (rows of Kt tiles).
 
 #include <cstdint>
@@ -53,6 +57,16 @@ void kernel_main() {
     constexpr uint32_t w_tile_bytes = get_compile_time_arg_val(reader_ct::W_TILE_BYTES);
     constexpr uint32_t Mq = get_compile_time_arg_val(reader_ct::MQ);  // rows per device
     constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(reader_ct::CB_RETILE_STAGE);
+    constexpr uint32_t in_batch_stride = get_compile_time_arg_val(reader_ct::IN_BATCH_STRIDE);
+    constexpr uint32_t in_head_stride = get_compile_time_arg_val(reader_ct::IN_HEAD_STRIDE);
+    constexpr uint32_t in_row_stride = get_compile_time_arg_val(reader_ct::IN_ROW_STRIDE);
+    constexpr uint32_t Rt = get_compile_time_arg_val(reader_ct::RT);  // q-stem: rope tiles per row; 0 = off
+    constexpr uint32_t RtD = Rt > 0 ? Rt : 1;                         // divisor (the rope code is dead when Rt = 0)
+    constexpr uint32_t H = get_compile_time_arg_val(reader_ct::H);
+    constexpr uint32_t cb_rope_stage = get_compile_time_arg_val(reader_ct::CB_ROPE_STAGE);
+    constexpr uint32_t rope_stage_tiles = get_compile_time_arg_val(reader_ct::ROPE_STAGE_TILES);
+    static_assert(Rt == 0 || (rope_stage_tiles >= 1 && (Mq % 32) == 0), "q-stem: stage tiles, tile-aligned rows");
+    static_assert(Rt > 0 || (in_row_stride == Kt && in_head_stride == St * Kt), "plain input is (B, Hl, S, K)");
     // Weight reads in flight per core (OVERLAP, Refinement 3): one barrier per weight_chunk_tiles reads. 96 cores
     // each flooding the NoC with a whole 128 KiB block stretched the fabric exchange by ~20 us (Kimi); a few tiles in
     // flight per core keep DRAM busy without starving the landing / port traffic.
@@ -64,6 +78,7 @@ void kernel_main() {
     constexpr bool retile = (Mq % 32) != 0;
     constexpr auto in_args = TensorAccessorArgs<reader_ct::COUNT>();
     constexpr auto w_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
+    constexpr auto rope_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();  // RT = 0: unused
     constexpr uint32_t quarter_tiles = Mq_t * Kt;       // one batch's rows of one head quarter
     constexpr uint32_t slot_tiles = B * quarter_tiles;  // = block_m * Kt
     constexpr uint32_t weight_block_tiles = Kt * block_n;
@@ -82,6 +97,34 @@ void kernel_main() {
 
     const auto in = TensorAccessor(in_args, in_addr, in_tile_bytes);
     const auto w = TensorAccessor(w_args, w_addr, w_tile_bytes);
+    const auto rope = TensorAccessor(rope_args, get_common_arg_val<uint32_t>(reader_common::ROPE_ADDR), in_tile_bytes);
+
+    // q-stem: head h (source-local j, this chip's quarter) rope tiles (b, mt, rt) -> rope_seq page
+    // ((b * H + h) * Mq_t + mt) * Rt + rt, staged rope_stage_tiles at a time.
+    auto copy_rope = [&](uint32_t h, uint32_t j) {
+        constexpr uint32_t total = B * Mq_t * Rt;
+        const uint32_t stage = get_write_ptr(cb_rope_stage);  // scratch (never pushed)
+        const uint32_t row0 = my_q * Mq_t;
+        for (uint32_t i0 = 0; i0 < total; i0 += rope_stage_tiles) {
+            const uint32_t n = (total - i0) < rope_stage_tiles ? (total - i0) : rope_stage_tiles;
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t e = i0 + i;
+                const uint32_t rt = e % RtD;
+                const uint32_t mt = (e / RtD) % Mq_t;
+                const uint32_t b = e / (RtD * Mq_t);
+                const uint32_t page = b * in_batch_stride + j * in_head_stride + (row0 + mt) * in_row_stride + Kt + rt;
+                noc_async_read(in.get_noc_addr(page), stage + i * in_tile_bytes, in_tile_bytes);
+            }
+            noc_async_read_barrier();
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t e = i0 + i;
+                const uint32_t b = e / (RtD * Mq_t);
+                const uint32_t page = (b * H + h) * Mq_t * Rt + (e - b * RtD * Mq_t);
+                noc_async_write(stage + i * in_tile_bytes, rope.get_noc_addr(page), in_tile_bytes);
+            }
+            noc_async_writes_flushed();  // the stage is reused by the next chunk
+        }
+    };
 
     auto load_weight_block = [&](uint32_t h, uint32_t nb) {
         cb_reserve_back(cb_weight, weight_block_tiles);
@@ -151,7 +194,7 @@ void kernel_main() {
             uint32_t ap = get_write_ptr(cb_a_landed);
             const auto qr = a2amm_retile::quarter_of<Mq>(my_q);  // aligned: t0 = my_q * Mq_t, shift 0
             for (uint32_t b = 0; b < B; ++b) {
-                const uint32_t base = ((b * Hl + j) * St + qr.t0) * Kt;
+                const uint32_t base = b * in_batch_stride + j * in_head_stride + qr.t0 * in_row_stride;
                 if constexpr (retile) {
                     const uint32_t stage = get_write_ptr(cb_retile_stage);  // scratch (never pushed)
                     a2amm_retile::stage_rows<in_tile_bytes, Kt>(in, base, qr.nsrc, stage);
@@ -160,9 +203,12 @@ void kernel_main() {
                         ap += in_tile_bytes;
                     }
                 } else {
-                    for (uint32_t r = 0; r < quarter_tiles; ++r) {
-                        noc_async_read(in.get_noc_addr(base + r), ap, in_tile_bytes);
-                        ap += in_tile_bytes;
+                    for (uint32_t mt = 0; mt < Mq_t; ++mt) {
+                        const uint32_t row = base + mt * in_row_stride;
+                        for (uint32_t k = 0; k < Kt; ++k) {
+                            noc_async_read(in.get_noc_addr(row + k), ap, in_tile_bytes);
+                            ap += in_tile_bytes;
+                        }
                     }
                 }
             }
@@ -186,6 +232,15 @@ void kernel_main() {
         for (uint32_t nb = nb_pre; nb < nb1; ++nb) {
             load_weight_block(h, nb);
         }
+        if constexpr (Rt > 0) {
+            if (!remote) {  // while compute multiplies the slot
+                A2AMM_ZONE("rd_local_rope");
+                copy_rope(h, h - my_q * Hl);
+            }
+        }
     }
     noc_async_atomic_barrier();
+    if constexpr (Rt > 0) {
+        noc_async_write_barrier();  // the local rope copy has landed before the program ends
+    }
 }

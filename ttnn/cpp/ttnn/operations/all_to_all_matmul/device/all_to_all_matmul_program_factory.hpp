@@ -37,7 +37,7 @@ struct AllToAllMatmulProgramFactory {
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const AllToAllMatmulParams& attrs,
         const AllToAllMatmulInputs& tensor_args,
-        Tensor& output,
+        std::vector<Tensor>& outputs,
         const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     // A port core that runs no port on this chip (another chip's does): no entries to read, no connection to open.

@@ -21,6 +21,12 @@
 //                 flush + pop per batch (mirrors the reader's batch rule).
 // Packet headers: one ring of hdrs_per_dest pre-routed headers per destination chip; a header is rewritten only after
 // a flush.
+//
+// q-stem mode (RT > 0), after the entries: the rope groups (the reader's rope walk). Every rope packet is a scatter
+// write of its tiles straight into their rope_seq pages on the destination chip (same address on every chip); a
+// group ends with a header-only increment (flush) of the destination's rope arrival counter, which that chip's
+// ports[0] sender awaits (ROPE_WAIT groups) and re-arms before its program ends, so rope_seq is complete when the op
+// is. The destinations' readies were awaited by their entries.
 
 #include <cstdint>
 
@@ -64,7 +70,17 @@ void kernel_main() {
     constexpr uint32_t max_headers = get_compile_time_arg_val(port_sender_ct::MAX_HEADERS);
     constexpr bool pack = get_compile_time_arg_val(port_sender_ct::PACK) != 0;
     constexpr bool fence_per_dest = get_compile_time_arg_val(port_sender_ct::FENCE_PER_DEST) != 0;
+    constexpr uint32_t Rt = get_compile_time_arg_val(port_sender_ct::RT);  // q-stem: rope tiles per row; 0 = off
+    constexpr uint32_t RtD = Rt > 0 ? Rt : 1;  // divisor (the rope code is dead when Rt = 0)
+    constexpr uint32_t rope_packet_tiles = get_compile_time_arg_val(port_sender_ct::ROPE_PACKET_TILES);
+    constexpr uint32_t RptD = rope_packet_tiles > 0 ? rope_packet_tiles : 1;
+    constexpr uint32_t B = get_compile_time_arg_val(port_sender_ct::B);
+    constexpr uint32_t H = get_compile_time_arg_val(port_sender_ct::H);
+    constexpr uint32_t Mq_t = get_compile_time_arg_val(port_sender_ct::MQ_T);
+    static_assert(Rt == 0 || (rope_packet_tiles >= 1 && rope_packet_tiles <= NOC_SCATTER_WRITE_MAX_CHUNKS));
+    constexpr auto rope_args = TensorAccessorArgs<port_sender_ct::COUNT>();  // RT = 0: a placeholder, unused
     const uint32_t landing_addr = get_common_arg_val<uint32_t>(port_sender_common::LANDING_ADDR);
+    const uint32_t rope_sem_addr = get_common_arg_val<uint32_t>(port_sender_common::ROPE_SEM_ADDR);
     static_assert(max_headers >= 1 && max_headers <= 12, "packet header pool: <= 12 headers per RISC");
     static_assert(!pack || packet_tiles <= slot_tiles, "packing needs packet_tiles <= slot_tiles");
     constexpr uint32_t packet_bytes = packet_tiles * tile_bytes;
@@ -81,8 +97,25 @@ void kernel_main() {
     const uint32_t n_entries = get_arg_val<uint32_t>(a++);
     const uint32_t entry_idx = a;
     a += ENTRY_WORDS * n_entries;
+    const uint32_t n_rope = get_arg_val<uint32_t>(a++);
+    const uint32_t rope_idx = a;
+    a += n_rope;
 
+    // q-stem: this core holds the chip's rope arrival counter; wait for every rope group bound here, then re-arm
+    auto rope_fence = [&]() {
+        if constexpr (Rt > 0) {
+            const uint32_t groups = get_arg_val<uint32_t>(port_sender_rt::ROPE_WAIT);
+            if (groups != 0) {
+                A2AMM_ZONE("psd_rope_fence");
+                volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rope_sem_addr);
+                noc_semaphore_wait_min(ctr, groups);
+                noc_semaphore_inc(get_noc_addr(rope_sem_addr), 0u - groups);
+                noc_async_atomic_barrier();
+            }
+        }
+    };
     if (!has_conn) {
+        rope_fence();
         return;
     }
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);  // appended last
@@ -291,7 +324,88 @@ void kernel_main() {
         }
         g0 = g1;
     }
+    if constexpr (Rt > 0) {
+        A2AMM_ZONE("psd_rope");
+        constexpr uint32_t rope_entry_tiles = B * Mq_t * Rt;
+        const auto rope =
+            TensorAccessor(rope_args, get_common_arg_val<uint32_t>(port_sender_common::ROPE_ADDR), tile_bytes);
+        for (uint32_t g0 = 0; g0 < n_rope;) {
+            // group: rope entries [g0, g1) to one destination chip
+            const uint32_t d = get_arg_val<uint32_t>(rope_idx + g0) >> port_sender_rope::DEST_SHIFT;
+            uint32_t g1 = g0 + 1;
+            while (g1 < n_rope && (get_arg_val<uint32_t>(rope_idx + g1) >> port_sender_rope::DEST_SHIFT) == d) {
+                ++g1;
+            }
+            wait_ready(d);  // already consumed by the entries (no-op), kept for a rope-only destination
+            uint32_t left = (g1 - g0) * rope_entry_tiles;
+            const uint32_t packets = (left + RptD - 1) / RptD;
+            uint32_t e = g0, i_e = 0;
+            uint32_t h = get_arg_val<uint32_t>(rope_idx + e) & port_sender_rope::HEAD_MASK;
+            for (uint32_t c = 0; c < packets;) {
+                const uint32_t room = batch_chunks - pos % batch_chunks;
+                const uint32_t need = (packets - c) < room ? (packets - c) : room;
+                const uint32_t rp = get_read_ptr(cb_port_chunks);
+                for (uint32_t i = 0; i < need; ++i) {
+                    if (!cb_pages_available_at_front(cb_port_chunks, i + 1)) {
+                        cb_wait_front(cb_port_chunks, i + 1);
+                    }
+                    const uint32_t n = left < rope_packet_tiles ? left : rope_packet_tiles;
+                    uint64_t addrs[NOC_SCATTER_WRITE_MAX_CHUNKS];
+                    uint16_t sizes[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];
+                    for (uint32_t tt = 0; tt < n; ++tt) {
+                        // tile (b, mt, rt) of head h -> rope_seq page ((b * H + h) * Mq_t + mt) * Rt + rt
+                        const uint32_t b = i_e / (RtD * Mq_t);
+                        addrs[tt] = rope.get_noc_addr((b * H + h) * Mq_t * Rt + (i_e - b * RtD * Mq_t));
+                        if (tt + 1 < n) {
+                            sizes[tt] = static_cast<uint16_t>(tile_bytes);
+                        }
+                        if (++i_e == rope_entry_tiles) {
+                            i_e = 0;
+                            if (++e < g1) {
+                                h = get_arg_val<uint32_t>(rope_idx + e) & port_sender_rope::HEAD_MASK;
+                            }
+                        }
+                    }
+                    left -= n;
+                    if (used[d] == hdrs_per_dest) {
+                        flushed();
+                    }
+                    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[d * hdrs_per_dest + used[d]++];
+                    if (n == 1) {
+                        hdr->to_noc_unicast_write(NocUnicastCommandHeader{addrs[0]}, tile_bytes);
+                    } else {
+                        hdr->to_noc_unicast_scatter_write(
+                            NocUnicastScatterCommandHeader(addrs, sizes, static_cast<uint8_t>(n)), n * tile_bytes);
+                    }
+                    conn.wait_for_empty_write_slot();
+                    conn.send_current_slot_non_blocking(
+                        rp + i * packet_bytes, n * tile_bytes, reinterpret_cast<uint32_t>(hdr));
+                }
+                flushed();
+                cb_pop_front(cb_port_chunks, need);
+                pos += need;
+                c += need;
+            }
+            // the group's arrival: the destination's receiving router flushes the group's writes first
+            const uint32_t drec = dest_idx + DEST_WORDS * d;
+            if (used[d] == hdrs_per_dest) {
+                flushed();
+            }
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[d * hdrs_per_dest + used[d]++];
+            hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
+                get_noc_addr(
+                    get_arg_val<uint32_t>(drec + port_sender_dest::ROPE_X),
+                    get_arg_val<uint32_t>(drec + port_sender_dest::ROPE_Y),
+                    rope_sem_addr),
+                1,
+                true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(reinterpret_cast<uint32_t>(hdr), sizeof(PACKET_HEADER_TYPE));
+            g0 = g1;
+        }
+    }
     noc_async_atomic_barrier();  // the ready re-arms
     noc_async_writes_flushed();
     conn.close();
+    rope_fence();
 }

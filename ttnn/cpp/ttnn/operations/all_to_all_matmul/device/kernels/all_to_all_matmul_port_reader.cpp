@@ -12,6 +12,11 @@
 // Regime R1' (Mq % 32 != 0, compile-time `retile`): per image the quarter's source tile rows are staged in
 // cb_retile_stage (one DRAM barrier), then each destination tile is re-tiled into the packet page by core-local copies
 // (all_to_all_matmul_retile.hpp), tagged with the packet's transaction id: its barrier before the push covers them.
+// Input tiles are addressed with the strides of all_to_all_matmul_args.hpp (plain: the pages above).
+//
+// q-stem mode (RT > 0), after the entries: the rope entries (the same (j, t), grouped by destination chip). A group
+// is one stream of its entries' rope tiles (b, mt, rt) cut into packets of rope_packet_tiles (the sender scatters
+// each tile to its own rope_seq page), batched like the entries.
 
 #include <cstdint>
 
@@ -37,8 +42,8 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(port_reader_ct::B);
     constexpr uint32_t Mq_t = get_compile_time_arg_val(port_reader_ct::MQ_T);
     constexpr uint32_t Kt = get_compile_time_arg_val(port_reader_ct::KT);
-    constexpr uint32_t St = get_compile_time_arg_val(port_reader_ct::ST);
-    constexpr uint32_t Hl = get_compile_time_arg_val(port_reader_ct::HL);
+    [[maybe_unused]] constexpr uint32_t St = get_compile_time_arg_val(port_reader_ct::ST);
+    [[maybe_unused]] constexpr uint32_t Hl = get_compile_time_arg_val(port_reader_ct::HL);
     constexpr uint32_t Mq = get_compile_time_arg_val(port_reader_ct::MQ);  // rows per device
     constexpr uint32_t cb_retile_stage = get_compile_time_arg_val(port_reader_ct::CB_RETILE_STAGE);
     constexpr bool retile = (Mq % 32) != 0;
@@ -47,6 +52,14 @@ void kernel_main() {
     // have their DRAM reads outstanding and the oldest is pushed as soon as its own reads land, so the reads stay
     // queued at DRAM back to back instead of draining at a per-batch barrier (port_prefetch, Perf 2).
     constexpr uint32_t window = get_compile_time_arg_val(port_reader_ct::WINDOW);
+    constexpr uint32_t in_batch_stride = get_compile_time_arg_val(port_reader_ct::IN_BATCH_STRIDE);
+    constexpr uint32_t in_head_stride = get_compile_time_arg_val(port_reader_ct::IN_HEAD_STRIDE);
+    constexpr uint32_t in_row_stride = get_compile_time_arg_val(port_reader_ct::IN_ROW_STRIDE);
+    constexpr uint32_t Rt = get_compile_time_arg_val(port_reader_ct::RT);  // q-stem: rope tiles per row; 0 = off
+    constexpr uint32_t RtD = Rt > 0 ? Rt : 1;  // divisor (the rope code is dead when Rt = 0)
+    constexpr uint32_t rope_packet_tiles = get_compile_time_arg_val(port_reader_ct::ROPE_PACKET_TILES);
+    constexpr uint32_t RptD = rope_packet_tiles > 0 ? rope_packet_tiles : 1;
+    static_assert(Rt == 0 || (rope_packet_tiles >= 1 && rope_packet_tiles <= packet_tiles), "rope packet tiles");
     static_assert(window >= 1 && window <= 15, "port reader: 1..15 packets in flight (trids 1..15)");
     constexpr uint32_t ring_pages = 2 * batch_chunks;  // cb_port_chunks
     constexpr auto in_args = TensorAccessorArgs<port_reader_ct::COUNT>();
@@ -64,8 +77,9 @@ void kernel_main() {
     }
 
     A2AMM_ZONE("prd_all");
-    // tile cursor over the entries: entry ce = (j, t), image b, tile r within the image's quarter
-    uint32_t ce = 0, j = 0, b = 0, r = 0, base = 0;
+    // tile cursor over the entries: entry ce = (j, t), image b, tile r within the image's quarter (tile rk of the
+    // quarter's tile row whose page offset from base is roff)
+    uint32_t ce = 0, j = 0, b = 0, r = 0, base = 0, rk = 0, roff = 0;
     a2amm_retile::Quarter qr{};
     auto open_entry = [&](uint32_t e) {
         const uint32_t word = get_arg_val<uint32_t>(port_reader_rt::ENTRIES_BASE + e);
@@ -73,7 +87,9 @@ void kernel_main() {
         qr = a2amm_retile::quarter_of<Mq>(word >> port_reader_rt::ENTRY_DEST_SHIFT);  // aligned: t0 = t * Mq_t, shift 0
         b = 0;
         r = 0;
-        base = (j * St + qr.t0) * Kt;
+        rk = 0;
+        roff = 0;
+        base = j * in_head_stride + qr.t0 * in_row_stride;
     };
     uint32_t pos = 0;                                          // packets whose reads are issued
     const uint32_t ring_base = get_write_ptr(cb_port_chunks);  // nothing pushed yet: the ring's first page
@@ -126,18 +142,24 @@ void kernel_main() {
                         }
                         a2amm_retile::retile_tile<tile_bytes, Kt, Mq>(stage, dst, qr.shift, r / Kt, r % Kt);
                     } else {
-                        noc_async_read(in.get_noc_addr(base + r), dst, tile_bytes);
+                        noc_async_read(in.get_noc_addr(base + roff + rk), dst, tile_bytes);
                     }
 #endif
                     dst += tile_bytes;
+                    if (++rk == Kt) {
+                        rk = 0;
+                        roff += in_row_stride;
+                    }
                     if (++r == quarter_tiles) {
                         r = 0;
+                        rk = 0;
+                        roff = 0;
                         if (++b == B) {
                             if (++ce < g1) {
                                 open_entry(ce);
                             }
                         } else {
-                            base = ((b * Hl + j) * St + qr.t0) * Kt;
+                            base = b * in_batch_stride + j * in_head_stride + qr.t0 * in_row_stride;
                         }
                     }
                 }
@@ -149,6 +171,61 @@ void kernel_main() {
             c += need;
         }
         g0 = g1;
+    }
+    if constexpr (Rt > 0) {
+        constexpr uint32_t rope_entry_tiles = B * Mq_t * Rt;
+        const uint32_t rope_words = port_reader_rt::ENTRIES_BASE + n_entries + 1;
+        const uint32_t n_rope = get_arg_val<uint32_t>(rope_words - 1);
+        for (uint32_t g0 = 0; g0 < n_rope;) {
+            const uint32_t t_g = get_arg_val<uint32_t>(rope_words + g0) >> port_reader_rt::ENTRY_DEST_SHIFT;
+            uint32_t g1 = g0 + 1;
+            while (g1 < n_rope && (get_arg_val<uint32_t>(rope_words + g1) >> port_reader_rt::ENTRY_DEST_SHIFT) == t_g) {
+                ++g1;
+            }
+            uint32_t left = (g1 - g0) * rope_entry_tiles;
+            const uint32_t packets = (left + RptD - 1) / RptD;
+            // tile cursor: rope entry e, tile i_e = (b, mt, rt) of it; ebase = its head's first quarter row
+            uint32_t e = g0, i_e = 0, ebase = 0;
+            auto open_rope = [&](uint32_t idx) {
+                const uint32_t word = get_arg_val<uint32_t>(rope_words + idx);
+                ebase = (word & port_reader_rt::ENTRY_HEAD_MASK) * in_head_stride +
+                        (word >> port_reader_rt::ENTRY_DEST_SHIFT) * Mq_t * in_row_stride + Kt;
+            };
+            open_rope(e);
+            for (uint32_t c = 0; c < packets;) {
+                const uint32_t room = batch_chunks - pos % batch_chunks;
+                const uint32_t need = (packets - c) < room ? (packets - c) : room;
+                uint32_t dst = ring_base + (pos % ring_pages) * packet_bytes;
+                for (uint32_t i = 0; i < need; ++i) {
+                    while (pend == window || (pend > 0 && !cb_pages_reservable_at_back(cb_port_chunks, pend + 1))) {
+                        retire_oldest();
+                    }
+                    cb_reserve_back(cb_port_chunks, pend + 1);
+                    noc_async_read_set_trid(1 + (oldest + pend) % window);
+                    const uint32_t n = left < rope_packet_tiles ? left : rope_packet_tiles;
+                    for (uint32_t tt = 0; tt < n; ++tt) {
+                        const uint32_t rt = i_e % RtD;
+                        const uint32_t mt = (i_e / RtD) % Mq_t;
+                        const uint32_t bb = i_e / (RtD * Mq_t);
+                        noc_async_read(
+                            in.get_noc_addr(bb * in_batch_stride + ebase + mt * in_row_stride + rt), dst, tile_bytes);
+                        dst += tile_bytes;
+                        if (++i_e == rope_entry_tiles) {
+                            i_e = 0;
+                            if (++e < g1) {
+                                open_rope(e);
+                            }
+                        }
+                    }
+                    left -= n;
+                    dst += (packet_tiles - n) * tile_bytes;
+                    ++pend;
+                }
+                pos += need;
+                c += need;
+            }
+            g0 = g1;
+        }
     }
     while (pend > 0) {
         retire_oldest();

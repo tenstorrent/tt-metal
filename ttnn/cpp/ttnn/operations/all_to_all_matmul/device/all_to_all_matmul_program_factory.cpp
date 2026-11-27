@@ -62,18 +62,19 @@ namespace {
 ProgramDescriptor build_chip_program(
     const AllToAllMatmulParams& attrs,
     const AllToAllMatmulInputs& tensor_args,
-    Tensor& output,
+    std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinate& coord) {
     TT_FATAL(tensor_args.scratch.has_value(), "all_to_all_matmul: the landing scratch_tensor is required");
     TT_FATAL(
-        cb::RETILE_STAGE < hal::get_num_dataflow_buffers(),
+        cb::ROPE_STAGE < hal::get_num_dataflow_buffers(),
         "all_to_all_matmul: circular-buffer id {} exceeds the {} circular buffers of this architecture",
-        cb::RETILE_STAGE,
+        cb::ROPE_STAGE,
         hal::get_num_dataflow_buffers());
 
     const Tensor& input = tensor_args.input;
     const Tensor& weight = tensor_args.weight;
     const Tensor& scratch = *tensor_args.scratch;
+    Tensor& output = outputs.at(0);
     auto* mesh_device = input.device();
 
     const MeshTopology& topology = mesh_topology(mesh_device, attrs.cluster_axis, attrs.num_links);
@@ -81,6 +82,12 @@ ProgramDescriptor build_chip_program(
     const Plan& plan = solve_plan(topology, inputs);
     const MeshResources& res = mesh_resources(mesh_device, topology, plan);
     const ChipPlan& chip = plan.chips.at(coord);
+    const bool qstem = plan.Rt > 0;
+    TT_FATAL(
+        outputs.size() == (qstem ? 2u : 1u), "all_to_all_matmul: {} outputs for q-stem mode {}", outputs.size(), qstem);
+    // rope_seq (q-stem mode); otherwise the kernels' rope accessors take a placeholder and never use it
+    Buffer* rope_buffer = qstem ? outputs[1].buffer() : nullptr;
+    TT_FATAL(!qstem || res.rope_addr != 0, "all_to_all_matmul: the rope arrival counter is missing");
 
     const uint32_t in_tile = inputs.in_tile_bytes;
     const uint32_t w_tile = inputs.w_tile_bytes;
@@ -124,6 +131,10 @@ ProgramDescriptor build_chip_program(
                 plain_cb(cb::RETILE_STAGE, plan.stage_tiles * in_tile, *crs, input.dtype(), in_tile, in_tile_shape));
         }
     }
+    if (qstem) {
+        desc.cbs.push_back(plain_cb(
+            cb::ROPE_STAGE, plan.rope_stage_tiles * in_tile, plan.active_cores, input.dtype(), in_tile, in_tile_shape));
+    }
 
     // ---- compute-core reader ----
     KernelDescriptor reader;
@@ -148,9 +159,17 @@ ProgramDescriptor build_chip_program(
         ct[reader_ct::CB_RETILE_STAGE] = cb::RETILE_STAGE;
         ct[reader_ct::WEIGHT_CHUNK_TILES] = plan.weight_chunk_tiles;
         ct[reader_ct::W_PREFETCH_BLOCKS] = plan.w_prefetch;
+        ct[reader_ct::IN_BATCH_STRIDE] = plan.in_batch_stride;
+        ct[reader_ct::IN_HEAD_STRIDE] = plan.in_head_stride;
+        ct[reader_ct::IN_ROW_STRIDE] = plan.in_row_stride;
+        ct[reader_ct::RT] = plan.Rt;
+        ct[reader_ct::H] = inputs.H;
+        ct[reader_ct::CB_ROPE_STAGE] = cb::ROPE_STAGE;
+        ct[reader_ct::ROPE_STAGE_TILES] = plan.rope_stage_tiles;
     }
     TensorAccessorArgs(*input.buffer()).append_to(reader.compile_time_args);
     TensorAccessorArgs(*weight.buffer()).append_to(reader.compile_time_args);
+    TensorAccessorArgs(qstem ? *rope_buffer : *input.buffer()).append_to(reader.compile_time_args);
     {
         KernelDescriptor::RTArgList common;
         common.reserve(reader_common::ARRIVAL_BASE + plan.slots_per_core_max);
@@ -158,6 +177,11 @@ ProgramDescriptor build_chip_program(
         common.push_back(weight.buffer());   // W_ADDR
         common.push_back(chip.q);            // MY_Q
         common.push_back(scratch.buffer());  // LANDING_ADDR
+        if (qstem) {
+            common.push_back(rope_buffer);  // ROPE_ADDR
+        } else {
+            common.push_back(0u);
+        }
         for (uint32_t s = 0; s < plan.slots_per_core_max; ++s) {
             common.push_back(res.arrival_addrs[s]);  // ARRIVAL_BASE + s
         }
@@ -273,6 +297,11 @@ ProgramDescriptor build_chip_program(
         ct[port_reader_ct::CB_RETILE_STAGE] = cb::RETILE_STAGE;
         ct[port_reader_ct::PACK] = static_cast<uint32_t>(plan.pack);
         ct[port_reader_ct::WINDOW] = plan.port_window;
+        ct[port_reader_ct::IN_BATCH_STRIDE] = plan.in_batch_stride;
+        ct[port_reader_ct::IN_HEAD_STRIDE] = plan.in_head_stride;
+        ct[port_reader_ct::IN_ROW_STRIDE] = plan.in_row_stride;
+        ct[port_reader_ct::RT] = plan.Rt;
+        ct[port_reader_ct::ROPE_PACKET_TILES] = plan.rope_packet_tiles;
     }
     TensorAccessorArgs(*input.buffer()).append_to(port_reader.compile_time_args);
     port_reader.emplace_common_runtime_args({input.buffer()});
@@ -297,8 +326,25 @@ ProgramDescriptor build_chip_program(
         ct[port_sender_ct::MAX_HEADERS] = kMaxPacketHeaders;
         ct[port_sender_ct::PACK] = static_cast<uint32_t>(plan.pack);
         ct[port_sender_ct::FENCE_PER_DEST] = static_cast<uint32_t>(kFencePerDest);
+        ct[port_sender_ct::RT] = plan.Rt;
+        ct[port_sender_ct::ROPE_PACKET_TILES] = plan.rope_packet_tiles;
+        ct[port_sender_ct::B] = inputs.B;
+        ct[port_sender_ct::H] = inputs.H;
+        ct[port_sender_ct::MQ_T] = plan.Mq_t;
     }
-    port_sender.emplace_common_runtime_args({scratch.buffer()});
+    TensorAccessorArgs(qstem ? *rope_buffer : *output.buffer()).append_to(port_sender.compile_time_args);
+    {
+        KernelDescriptor::RTArgList common;
+        common.push_back(scratch.buffer());  // LANDING_ADDR
+        if (qstem) {
+            common.push_back(rope_buffer);    // ROPE_ADDR
+            common.push_back(res.rope_addr);  // ROPE_SEM_ADDR
+        } else {
+            common.push_back(0u);
+            common.push_back(0u);
+        }
+        port_sender.emplace_common_runtime_args(common);
+    }
     port_sender.config =
         DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_0, .noc = kPortSenderNoc};
     TT_FATAL(
@@ -313,6 +359,8 @@ ProgramDescriptor build_chip_program(
         std::vector<uint32_t> rd(port_reader_rt::ENTRIES_BASE, 0u);
         rd[port_reader_rt::N_ENTRIES] = static_cast<uint32_t>(pw.entries.size());
         rd.insert(rd.end(), pw.entries.begin(), pw.entries.end());
+        rd.push_back(static_cast<uint32_t>(pw.rope_entries.size()));  // N_ROPE
+        rd.insert(rd.end(), pw.rope_entries.begin(), pw.rope_entries.end());
         port_reader.runtime_args.emplace_back(pw.core, std::move(rd));
 
         TT_FATAL(
@@ -323,6 +371,9 @@ ProgramDescriptor build_chip_program(
         args[port_sender_rt::HAS_CONN] = static_cast<uint32_t>(pw.has_conn);
         args[port_sender_rt::N_DEST] = static_cast<uint32_t>(pw.dests.size());
         args[port_sender_rt::HDRS_PER_DEST] = pw.hdrs_per_dest;
+        // the chip's rope arrival counter sits on its ports[0]
+        args[port_sender_rt::ROPE_WAIT] =
+            (qstem && pw.core == topology.chips.at(coord).ports[0]) ? chip.rope_expected : 0u;
         for (const PortDest& dest : pw.dests) {
             const auto node = mesh_device->get_fabric_node_id(dest.coord);
             std::array<uint32_t, port_sender_dest::COUNT> rec{};
@@ -330,6 +381,9 @@ ProgramDescriptor build_chip_program(
             rec[port_sender_dest::MESH_ID] = static_cast<uint32_t>(*node.mesh_id);
             rec[port_sender_dest::READY_ADDR] =
                 dest.ready_index.has_value() ? res.ready_addrs.at(*dest.ready_index) : 0u;
+            const CoreCoord rope_core = virt(topology.chips.at(dest.coord).ports[0]);
+            rec[port_sender_dest::ROPE_X] = rope_core.x;
+            rec[port_sender_dest::ROPE_Y] = rope_core.y;
             args.insert(args.end(), rec.begin(), rec.end());
         }
         args.push_back(static_cast<uint32_t>(pw.readies.size()));
@@ -353,6 +407,11 @@ ProgramDescriptor build_chip_program(
             rec[port_sender_sub::SLOT_OFFSET] = sub.slot * plan.slot_bytes;
             rec[port_sender_sub::ARRIVAL_ADDR] = res.arrival_addrs.at(sub.slot);
             args.insert(args.end(), rec.begin(), rec.end());
+        }
+        args.push_back(static_cast<uint32_t>(pw.rope_entries.size()));  // N_ROPE
+        for (size_t e = 0; e < pw.rope_entries.size(); ++e) {
+            TT_FATAL(pw.rope_heads[e] <= port_sender_rope::HEAD_MASK, "all_to_all_matmul: head index exceeds 16 bits");
+            args.push_back(pw.rope_heads[e] | (pw.rope_dest_index[e] << port_sender_rope::DEST_SHIFT));
         }
         if (pw.has_conn) {
             const auto dst_node = mesh_device->get_fabric_node_id(pw.peer);
@@ -380,13 +439,13 @@ ProgramDescriptor build_chip_program(
 WorkloadDescriptor AllToAllMatmulProgramFactory::create_workload_descriptor(
     const AllToAllMatmulParams& attrs,
     const AllToAllMatmulInputs& tensor_args,
-    Tensor& output,
+    std::vector<Tensor>& outputs,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     WorkloadDescriptor workload;
     workload.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {
         workload.programs.push_back(
-            {ttnn::MeshCoordinateRange(coord), build_chip_program(attrs, tensor_args, output, coord)});
+            {ttnn::MeshCoordinateRange(coord), build_chip_program(attrs, tensor_args, outputs, coord)});
     }
     return workload;
 }
@@ -395,12 +454,13 @@ std::optional<std::vector<uint32_t>> AllToAllMatmulProgramFactory::idle_runtime_
     size_t kernel_index, const CoreCoord& /*core*/) {
     switch (kernel_index) {
         case kernel_index::PORT_READER: {
-            std::vector<uint32_t> args(port_reader_rt::ENTRIES_BASE, 0u);  // N_ENTRIES = 0
+            std::vector<uint32_t> args(port_reader_rt::ENTRIES_BASE + 1, 0u);  // N_ENTRIES = 0, N_ROPE = 0
             return args;
         }
         case kernel_index::PORT_SENDER: {
-            // HAS_CONN = 0 returns before anything else; the zero ready and sub counts keep the layout whole.
-            std::vector<uint32_t> args(port_sender_rt::DESTS_BASE + 2, 0u);
+            // HAS_CONN = 0 returns before anything else (ROPE_WAIT = 0); the zero ready, sub and rope counts keep the
+            // layout whole.
+            std::vector<uint32_t> args(port_sender_rt::DESTS_BASE + 3, 0u);
             return args;
         }
         default: return std::nullopt;  // the compute cores are the same on every chip

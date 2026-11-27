@@ -231,6 +231,24 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
     TT_FATAL(
         packet_tiles >= 1, "all_to_all_matmul: fabric max payload {} B is smaller than one tile", in.payload_bytes);
     const uint32_t packet_bytes = packet_tiles * in_tile;
+    // input tile addressing
+    if (in.Rt == 0) {
+        plan.in_row_stride = Kt;
+        plan.in_head_stride = St * Kt;
+        plan.in_batch_stride = Hl * St * Kt;
+    } else {
+        TT_FATAL(B == 1, "all_to_all_matmul: q-stem mode takes one image, got B={}", B);
+        TT_FATAL(!plan.retile, "all_to_all_matmul: q-stem mode needs S/G to be a multiple of {}", TILE_HEIGHT);
+        const uint32_t head_tiles = Kt + in.Rt;
+        plan.in_head_stride = head_tiles;
+        plan.in_row_stride = Hl * head_tiles;
+        plan.in_batch_stride = St * Hl * head_tiles;
+        plan.Rt = in.Rt;
+        plan.rope_entry_tiles = B * Mq_t * in.Rt;
+        // a rope packet is a scatter write: one NoC address per tile (rope_seq is interleaved)
+        plan.rope_packet_tiles = std::min(packet_tiles, kRopeScatterChunks);
+        plan.rope_stage_tiles = std::min(plan.rope_entry_tiles, kRopeStageTiles);
+    }
 
     // ---- transport ----
     const uint64_t in_bytes = static_cast<uint64_t>(B) * Hl * St * Kt * in_tile;
@@ -635,6 +653,7 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
     }
 
     // ---- per chip ----
+    std::map<MeshCoordinate, uint32_t> rope_groups_to;  // q-stem: rope groups landing on each chip
     for (const auto& coord : chip_order) {
         const ChipRoute& ch = topo.chips.at(coord);
         const uint32_t q = ch.p;
@@ -726,6 +745,27 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
                     pr.ready_index = g;
                     pw.readies.push_back(pr);
                 }
+                if (plan.Rt > 0) {
+                    // rope: the same entries, grouped by destination chip (first appearance order) so each group ends
+                    // with one arrival increment at its destination
+                    std::vector<uint32_t> t_order;
+                    for (const auto& [j, t] : ents) {
+                        if (std::find(t_order.begin(), t_order.end(), t) == t_order.end()) {
+                            t_order.push_back(t);
+                        }
+                    }
+                    for (uint32_t tt : t_order) {
+                        for (const auto& [j, t] : ents) {
+                            if (t != tt) {
+                                continue;
+                            }
+                            pw.rope_entries.push_back(j | (t << ::all_to_all_matmul::port_reader_rt::ENTRY_DEST_SHIFT));
+                            pw.rope_heads.push_back((q * Hl) + j);
+                            pw.rope_dest_index.push_back(dest_index_of(ch.grp[t]));
+                        }
+                        rope_groups_to[ch.grp[tt]] += 1;
+                    }
+                }
                 for (const auto& [j, t] : ents) {
                     const uint32_t h = (q * Hl) + j;
                     const MeshCoordinate& tcoord = ch.grp[t];
@@ -744,6 +784,10 @@ Plan build_plan(const MeshTopology& topo, const PlanInputs& in) {
         }
         cp.port_cores = planner_rects(chip_port_cells);
         plan.chips.emplace(coord, std::move(cp));
+    }
+    for (auto& [coord, cp] : plan.chips) {
+        const auto it = rope_groups_to.find(coord);
+        cp.rope_expected = it != rope_groups_to.end() ? it->second : 0;
     }
     return plan;
 }
@@ -887,6 +931,11 @@ const MeshResources& mesh_resources(MeshDevice* mesh_device, const MeshTopology&
             ttnn::global_semaphore::create_global_semaphore(mesh_device, planner_rects(topology.port_cells), 0));
         changed = true;
     }
+    if (plan.Rt > 0 && res.rope.empty()) {  // q-stem: the rope arrival counter of each chip (on its ports[0])
+        res.rope.push_back(
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, planner_rects(topology.port_cells), 0));
+        changed = true;
+    }
     while (res.arrival.size() < plan.slots_per_core_max) {
         res.arrival.push_back(ttnn::global_semaphore::create_global_semaphore(mesh_device, topology.compute_cores, 0));
         changed = true;
@@ -900,6 +949,9 @@ const MeshResources& mesh_resources(MeshDevice* mesh_device, const MeshTopology&
         }
         for (const auto& sem : res.ready) {
             res.ready_addrs.push_back(static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(sem)));
+        }
+        if (!res.rope.empty()) {
+            res.rope_addr = static_cast<uint32_t>(ttnn::global_semaphore::get_global_semaphore_address(res.rope[0]));
         }
         // every chip's counters are zero before any chip's first increment can arrive
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt);

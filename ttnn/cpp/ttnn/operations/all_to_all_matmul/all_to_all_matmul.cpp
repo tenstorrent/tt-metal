@@ -118,17 +118,22 @@ const LinkCheck& link_check(
 
 // Caller errors of the Python's _check_caller_errors, in its order: ValueError (std::invalid_argument), and the
 // payload check's RuntimeError.
+// qk_rope_head_dim != 0: q-stem mode (input (1, 1, S, Hl * (K + R))).
 void check_caller_errors(
     const Tensor& input,
     const Tensor& weight,
     int32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     int32_t num_links,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    int32_t qk_rope_head_dim = 0,
+    const std::optional<MemoryConfig>& rope_memory_config = std::nullopt) {
     const auto& x = input.logical_shape();
     const auto& w = weight.logical_shape();
+    const bool qstem = qk_rope_head_dim != 0;
     if (x.rank() != 4) {
-        throw std::invalid_argument(fmt::format("all_to_all_matmul: input must be rank 4 (B, Hl, S, K), got {}", x));
+        throw std::invalid_argument(fmt::format(
+            "all_to_all_matmul: input must be rank 4 ({}), got {}", qstem ? "1, 1, S, Hl*(K+R)" : "B, Hl, S, K", x));
     }
     if (w.rank() != 4) {
         throw std::invalid_argument(fmt::format("all_to_all_matmul: weight must be rank 4 (1, H, K, N), got {}", w));
@@ -143,15 +148,47 @@ void check_caller_errors(
         throw std::invalid_argument(
             fmt::format("all_to_all_matmul: cluster_axis={} has extent {}; nothing to exchange", cluster_axis, G));
     }
-    const uint32_t Hl = x[1];
-    const uint32_t S = x[2];
-    const uint32_t K = x[3];
     const uint32_t H = w[1];
     const uint32_t Kw = w[2];
     const uint32_t N = w[3];
     if (w[0] != 1) {
         throw std::invalid_argument(fmt::format("all_to_all_matmul: weight leading dim must be 1, got {}", w));
     }
+    if (qstem) {
+        // the q-stem input's own shape here; its nope view (1, Hl, S, K) goes through the checks below as usual
+        if (qk_rope_head_dim < 0 || qk_rope_head_dim % tt::constants::TILE_WIDTH != 0) {
+            throw std::invalid_argument(fmt::format(
+                "all_to_all_matmul: qk_rope_head_dim must be a positive multiple of 32, got {}", qk_rope_head_dim));
+        }
+        if (H % G != 0) {
+            throw std::invalid_argument(
+                fmt::format("all_to_all_matmul: weight has {} heads, not a multiple of G={}", H, G));
+        }
+        const uint64_t width = static_cast<uint64_t>(H / G) * (Kw + static_cast<uint32_t>(qk_rope_head_dim));
+        if (x[0] != 1 || x[1] != 1 || x[3] != width) {
+            throw std::invalid_argument(fmt::format(
+                "all_to_all_matmul: q-stem input must be (1, 1, S, Hl*(K+R)) = (1, 1, S, {}*({}+{})), got {}",
+                H / G,
+                Kw,
+                qk_rope_head_dim,
+                x));
+        }
+        if (x[2] % (G * tt::constants::TILE_HEIGHT) != 0) {
+            throw std::invalid_argument(
+                fmt::format("all_to_all_matmul: q-stem mode needs S/G to be a multiple of 32 (S={}, G={})", x[2], G));
+        }
+        if (topology != tt::tt_fabric::Topology::Ring) {
+            throw std::invalid_argument("all_to_all_matmul: q-stem mode needs topology Ring");
+        }
+        if (rope_memory_config.has_value() && rope_memory_config->memory_layout() != TensorMemoryLayout::INTERLEAVED) {
+            throw std::invalid_argument("all_to_all_matmul: rope_memory_config must be interleaved");
+        }
+    } else if (rope_memory_config.has_value()) {
+        throw std::invalid_argument("all_to_all_matmul: rope_memory_config needs qk_rope_head_dim");
+    }
+    const uint32_t Hl = qstem ? H / G : x[1];
+    const uint32_t S = x[2];
+    const uint32_t K = qstem ? Kw : x[3];
     if (H != G * Hl) {
         throw std::invalid_argument(
             fmt::format("all_to_all_matmul: weight has {} heads, expected G*Hl = {}*{} = {}", H, G, Hl, G * Hl));
@@ -178,7 +215,11 @@ void check_caller_errors(
     if (weight.layout() != Layout::TILE || weight.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         throw std::invalid_argument("all_to_all_matmul: weight must be TILE, interleaved");
     }
-    if (input.memory_config().buffer_type() != BufferType::DRAM) {
+    if (qstem) {
+        if (input.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED) {
+            throw std::invalid_argument("all_to_all_matmul: q-stem input must be DRAM or L1 interleaved");
+        }
+    } else if (input.memory_config().buffer_type() != BufferType::DRAM) {
         throw std::invalid_argument("all_to_all_matmul: input must be DRAM interleaved");
     }
     const uint32_t payload = links.payload_bytes;
@@ -198,15 +239,22 @@ AllToAllMatmulParams resolve_params(
     tt::tt_fabric::Topology topology,
     int32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config) {
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    int32_t qk_rope_head_dim = 0,
+    const std::optional<MemoryConfig>& rope_memory_config = std::nullopt) {
     TT_FATAL(is_device_tensor(input), "all_to_all_matmul: input_tensor must be a device tensor");
-    check_caller_errors(input, weight, cluster_axis, topology, num_links, memory_config);
+    check_caller_errors(
+        input, weight, cluster_axis, topology, num_links, memory_config, qk_rope_head_dim, rope_memory_config);
     AllToAllMatmulParams params{
         .cluster_axis = static_cast<uint32_t>(cluster_axis),
         .topology = topology,
         .num_links = static_cast<uint32_t>(num_links),
         .output_memory_config = memory_config.has_value() ? *memory_config : ttnn::DRAM_MEMORY_CONFIG,
     };
+    if (qk_rope_head_dim > 0) {
+        params.qk_rope_head_dim = static_cast<uint32_t>(qk_rope_head_dim);
+        params.rope_memory_config = rope_memory_config.has_value() ? *rope_memory_config : ttnn::DRAM_MEMORY_CONFIG;
+    }
     if (compute_kernel_config.has_value()) {
         params.math_fidelity = compute_kernel_config->math_fidelity;
         params.fp32_dest_acc_en = compute_kernel_config->fp32_dest_acc_en;
@@ -216,20 +264,13 @@ AllToAllMatmulParams resolve_params(
     return params;
 }
 
-}  // namespace
-
-Tensor all_to_all_matmul(
+// Plans, makes the per-mesh semaphores, and launches: [prefix] or [prefix, rope_seq].
+std::vector<Tensor> launch(
     const Tensor& input_tensor,
     const Tensor& weight,
-    int32_t cluster_axis,
-    tt::tt_fabric::Topology topology,
-    int32_t num_links,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    const AllToAllMatmulParams& params,
     const std::optional<Tensor>& scratch_tensor) {
     namespace a2a = operations::all_to_all_matmul;
-    const AllToAllMatmulParams params =
-        resolve_params(input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config);
     MeshDevice* mesh = input_tensor.device();
     const a2a::MeshTopology& mesh_topo = a2a::mesh_topology(mesh, params.cluster_axis, params.num_links);
     const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, mesh_topo, input_tensor, weight));
@@ -243,6 +284,51 @@ Tensor all_to_all_matmul(
     return ttnn::prim::all_to_all_matmul(input_tensor, weight, scratch, params);
 }
 
+}  // namespace
+
+Tensor all_to_all_matmul(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    tt::tt_fabric::Topology topology,
+    int32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    const std::optional<Tensor>& scratch_tensor) {
+    const AllToAllMatmulParams params =
+        resolve_params(input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config);
+    return launch(input_tensor, weight, params, scratch_tensor).at(0);
+}
+
+std::tuple<Tensor, Tensor> all_to_all_matmul_qstem(
+    const Tensor& input_tensor,
+    const Tensor& weight,
+    int32_t cluster_axis,
+    int32_t qk_rope_head_dim,
+    tt::tt_fabric::Topology topology,
+    int32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    const std::optional<Tensor>& scratch_tensor,
+    const std::optional<MemoryConfig>& rope_memory_config) {
+    if (qk_rope_head_dim <= 0) {
+        throw std::invalid_argument(
+            fmt::format("all_to_all_matmul: qk_rope_head_dim must be positive, got {}", qk_rope_head_dim));
+    }
+    const AllToAllMatmulParams params = resolve_params(
+        input_tensor,
+        weight,
+        cluster_axis,
+        topology,
+        num_links,
+        memory_config,
+        compute_kernel_config,
+        qk_rope_head_dim,
+        rope_memory_config);
+    std::vector<Tensor> outs = launch(input_tensor, weight, params, scratch_tensor);
+    return {outs.at(0), outs.at(1)};
+}
+
 Tensor all_to_all_matmul_scratch_tensor(
     const Tensor& input_tensor,
     const Tensor& weight,
@@ -250,10 +336,15 @@ Tensor all_to_all_matmul_scratch_tensor(
     tt::tt_fabric::Topology topology,
     int32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config) {
+    const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
+    const std::optional<int32_t>& qk_rope_head_dim) {
     namespace a2a = operations::all_to_all_matmul;
-    const AllToAllMatmulParams params =
-        resolve_params(input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config);
+    const int32_t rope = qk_rope_head_dim.value_or(0);
+    if (qk_rope_head_dim.has_value() && rope <= 0) {
+        throw std::invalid_argument(fmt::format("all_to_all_matmul: qk_rope_head_dim must be positive, got {}", rope));
+    }
+    const AllToAllMatmulParams params = resolve_params(
+        input_tensor, weight, cluster_axis, topology, num_links, memory_config, compute_kernel_config, rope);
     MeshDevice* mesh = input_tensor.device();
     const a2a::MeshTopology& mesh_topo = a2a::mesh_topology(mesh, params.cluster_axis, params.num_links);
     const a2a::Plan& plan = a2a::solve_plan(mesh_topo, a2a::plan_inputs_of(params, mesh_topo, input_tensor, weight));

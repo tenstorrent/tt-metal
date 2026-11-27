@@ -28,10 +28,16 @@ struct AllToAllMatmulParams {
     tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = true;
     bool math_approx_mode = false;
+    // q-stem mode (MLA early-Q): 0 = off (the input is (B, Hl, S, K)). Else the input is the unsplit q_b_proj output
+    // (1, 1, S, Hl * (K + qk_rope_head_dim)) and the op also returns rope_seq (1, H, S/G, qk_rope_head_dim): the
+    // rope columns of every head moved by the same exchange, no matmul, placed by rope_memory_config.
+    uint32_t qk_rope_head_dim = 0;
+    tt::tt_metal::MemoryConfig rope_memory_config;
 };
 
 struct AllToAllMatmulInputs {
-    const Tensor& input;   // (B, Hl, S, K), bf16 TILE DRAM interleaved
+    // (B, Hl, S, K), bf16 TILE DRAM interleaved; q-stem mode: (1, 1, S, Hl * (K + R)), DRAM or L1 interleaved
+    const Tensor& input;
     const Tensor& weight;  // (1, H, K, N), replicated, TILE interleaved
     // Landing scratch (height-sharded L1 over the compute cores, scratch_spec in the planner header). Always set
     // when launched from ttnn::all_to_all_matmul: the caller's scratch_tensor, or one the entry allocated.
