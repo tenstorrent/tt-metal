@@ -82,8 +82,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | Tier | Resets | Tests | Triage | ETH status | QSFP tests | sys-triage | Duration | Use when |
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
-| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
+| `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + didt_runner_daily (~7 min) | host_side + device_side | — | yes, if installed | — | ~12 min + triage + ~7 min | The scheduled fleet run |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_runner_weekly (~25 min, up to ~70 min when screens fail); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~56 min (up to ~100 min when DIDT screens fail) + triage + ~7 min; over the 30-minute fleet wall | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with gddr_act_all (pytest, ~25.5 min) in place of gddr_act_c3, which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~30 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
@@ -110,8 +110,8 @@ What each tier runs is defined in one place, `TIERS` in
 reset, the triage tools, and whether the ETH status read, the QSFP tests and
 sys-triage run. To add a
 step to a tier, or drop one, edit its entry there. The steps it can name are
-defined beside the phase that runs them: gtests in `TESTS` and pytests in
-`PYTESTS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
+defined beside the phase that runs them: gtests in `TESTS`, pytests in
+`PYTESTS` and DIDT runner configs in `DIDT_RUNNERS` (`diag/device_tests.py`), triage tools in `TRIAGE_TOOLS`
 (`diag/triage.py`). An unknown name fails at import. The phase order is fixed in
 `diag_runner.run_diag()` and is not a per-tier choice. A new tier also has to be
 added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
@@ -147,18 +147,23 @@ check does. A filter that matches nothing (one without the index wildcard, say)
 and a run whose tests all skip both exit 0 having tested nothing, and are
 recorded as FAIL with the `passed` / `failed` / `skipped` counts.
 
-`weekly` and `full` also run `didt_matmul_galaxy`, a pytest-based dI/dt stress
-test: 1000 matmul iterations on the full (8, 4) mesh with a determinism
-re-check every 50, via the repo venv's pytest. Measured ~9 min on a BH galaxy
-(mostly cold bring-up + the 20 output readbacks); bump
-`--didt-workload-iterations` when triaging a suspect unit — a marginal chip
-that passed 1000 iterations failed under a 5000-iteration soak. `--timeout
-1200` overrides the repo-wide 300 s pytest-timeout (too short for this run)
-while still bounding a wedged run in standalone invocations, and
-zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
-filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
-on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
-or fabric mesh mapping fails.
+`daily` ends with `didt_runner_daily` and `weekly` and `full` with `didt_runner_weekly`: each runs
+[`tests/didt/didt_runner.py`](../../../../tests/didt/README.md) with that tier's config from
+`tests/didt/runner_configs/`. `daily` is the minimal matmul screen (1000 iterations on the full galaxy mesh,
+determinism checked every 50); `weekly` is every DIDT ND/hang screen. A failing screen gets its fallbacks: a rerun
+at `TT_MM_THROTTLE_PERF=5`, and a rerun of each failing chip alone (or, for the per-chip multicast screens, a
+throttled rerun after a hang). The runner resets the galaxy before each of its attempts, which is why it runs after
+the gtests. Its output is `<output dir>/didt_runner_<tier>/LOG_*/status.json`, naming each failing chip by BDF,
+tray and ASIC, and its hung or non-deterministic cores; the check's `details` and `data.status_json` point there.
+The check passes only when the runner exits 0, its `status.json` exists, at least one screen passed and none
+failed or hung; a run that wrote no `status.json` or ran nothing is a FAIL. `passed` / `failed` count screens.
+The step has its own timeout (45 min daily, 120 min weekly): the runner gets SIGTERM, which stops its workloads,
+then SIGKILL.
+
+**Time.** Measured on BH galaxies: `didt_runner_daily` ~7 min when it passes; `didt_runner_weekly` ~25 min when
+every screen passes and 30-70 min when screens fail and their fallbacks run. `weekly` therefore no longer fits
+`run_health_check.py`'s default 30-minute `--timeout-minutes`, and `daily` fits only while its DIDT screen passes:
+the fleet caller must raise its timeout, or a failing unit's report is lost with the killed run.
 
 GDDR ACT screen (pytest, `tests/dram/test_dram_act_patterns.py`):
 
@@ -179,7 +184,7 @@ Output, per hit:
 - `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
-pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
+pytest and DIDT runner invocations themselves are `TESTS` / `PYTESTS` / `DIDT_RUNNERS` in `diag/device_tests.py`.
 
 ## Triage phase
 
@@ -883,7 +888,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── snapshot.py         # phase 1: tt-smi snapshot capture, BMC FRU inventory
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
-│   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── device_tests.py     # phase 3: deployment gtests (TESTS), pytests (PYTESTS), DIDT runner (DIDT_RUNNERS)
 │   ├── retest.py           # phase 3b: test -> reset -> snapshot -> test for Tier.retest
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
