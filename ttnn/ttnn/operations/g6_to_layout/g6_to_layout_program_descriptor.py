@@ -48,6 +48,9 @@ READ_BATCH_TILES = 8  # tiles per DRAM read batch in R1
 TILE_WINDOW_DEPTH = 2  # R1 batches resident in cb_tile_window
 ROW_DEPTH = 2  # blocks resident in cb_row_block / cb_left_faces / cb_tile_block
 ROW_WINDOW_DEPTH = 2  # R5 tile-row loads resident in cb_row_stage
+# R5: the writer copies the bottom faces of each staged tile-row (its NoC, its RISC) while the reader
+# copies the top faces; off, the reader copies both and cb_row_stage stays reader-private.
+SPLIT_REORDER = True
 TILE_BLOCK_DEPTH = 2  # R3 blocks resident in cb_tile_window (reader -> compute)
 # cb_nan_marks pages: the reader can run TILE_BLOCK_DEPTH + ROW_DEPTH blocks ahead of the writer.
 NAN_MARKS_DEPTH = TILE_BLOCK_DEPTH + ROW_DEPTH
@@ -97,7 +100,9 @@ _REORDER_TRIDS = 2
 _MAX_TRID = 15
 _MAX_TRID_OUTSTANDING = 255
 assert TILE_WINDOW_DEPTH + _REORDER_TRIDS <= _MAX_TRID
-assert ROW_WINDOW_DEPTH + _REORDER_TRIDS <= _MAX_TRID  # R5 tags its tile-row loads the same way
+# R5 tags its tile-row loads the same way; a split reorder adds the writer's two copy trids.
+assert ROW_WINDOW_DEPTH + _REORDER_TRIDS * (2 if SPLIT_REORDER else 1) <= _MAX_TRID
+assert not SPLIT_REORDER or ROW_WINDOW_DEPTH >= 2  # a pushed-ahead slot needs a second page
 assert 2 * READ_BATCH_TILES <= _MAX_TRID_OUTSTANDING  # at most 2 reads per tile per batch
 
 
@@ -319,6 +324,7 @@ class Plan:
             "read_batch_tiles": READ_BATCH_TILES if self.regime == STAGED_REORDER else None,
             "tile_window_depth": TILE_WINDOW_DEPTH if self.regime == STAGED_REORDER else None,
             "row_window_depth": ROW_WINDOW_DEPTH if self.regime == ROW_MAJOR_TO_TILE else None,
+            "split_reorder": SPLIT_REORDER if self.regime == ROW_MAJOR_TO_TILE else None,
             "tile_block_depth": TILE_BLOCK_DEPTH if self.regime in (PACKER_UNTILIZE, PACKER_TILIZE) else None,
             "nan_marks_depth": (
                 self.cb_bytes[CB_NAN_MARKS] // self.nan_marks_page_bytes if self.regime in _UNTILIZE_REGIMES else None
@@ -503,8 +509,9 @@ class G6ToLayoutProgram:
                 _cb(CB_TILE_BLOCK, plan.cb_bytes[CB_TILE_BLOCK], plan.out_tile_bytes, all_cores, output_tensor.dtype),
             ]
             reader_source, writer_source = "g6_to_layout_row_reader.cpp", "g6_to_layout_tile_writer.cpp"
-            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK, int(reorder), ROW_WINDOW_DEPTH]
-            writer_ct_args = geometry_ct_args + [CB_TILE_BLOCK]
+            split = int(reorder and SPLIT_REORDER)
+            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK, int(reorder), ROW_WINDOW_DEPTH, split]
+            writer_ct_args = geometry_ct_args + [CB_TILE_BLOCK, CB_ROW_STAGE, split, ROW_WINDOW_DEPTH]
             if not reorder:
                 compute_source = "g6_to_layout_tilize_compute.cpp"
                 compute_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK]
