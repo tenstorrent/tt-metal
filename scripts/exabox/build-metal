@@ -11,8 +11,9 @@ if [ "${XRUN_BUILDER:-}" != sbatch ] && command -v tt-sbatch >/dev/null 2>&1; th
   [ -n "${1:-}" ] && { echo "build-metal: tt-sbatch builds the checked-out tree; check out $1 first"; exit 2; }
   EXTRA=()
   [ -n "$XRUN_BUILD_EXCLUDE" ] && EXTRA=(-- -x "$XRUN_BUILD_EXCLUDE")
-  # One node-local dir per tree: tt-sbatch defaults every tree to /tmp/$USER/tt-metal, so parallel builds collide.
-  LOCAL="/tmp/$USER/$(basename "$XRUN_REPO")"
+  # One node-local dir per tree: tt-sbatch defaults every tree to /tmp/$USER/tt-metal, and eval clones are all named
+  # tt-metal too, so key the dir by the tree's full path (else builds of different trees share and overfill one dir).
+  LOCAL="/tmp/$USER/$(basename "$XRUN_REPO")-$(printf %s "$XRUN_REPO" | sha1sum | cut -c1-8)"
   exec tt-sbatch build --root "$XRUN_REPO" --local "$LOCAL" --build-args "${BUILD_ARGS:---enable-ccache}" "${EXTRA[@]}"
 fi
 EXTRA=()
