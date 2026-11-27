@@ -1,101 +1,150 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
+// Byte-run geometry of g6_slice, shared by reader and writer.
+//
+// A 32x32 tile is four 16x16 faces stored face by face (0: rows 0-15 / cols 0-15, 1: rows 0-15 /
+// cols 16-31, 2: rows 16-31 / cols 0-15, 3: rows 16-31 / cols 16-31), row-major inside a face.
+// A band of whole rows is therefore at most 4 contiguous runs of whole face-rows; contiguous
+// pieces are merged, so a whole tile is one run.
+//
+// The staging page in cb_slice_pages holds every input row at its natural in-tile position
+// (DRAM reads need dst == src mod 64), so staging row s holds output row (s - off) mod 32. The
+// writer applies the rotation (DRAM writes need only src == dst mod 16; face-rows are 32 B or 64 B).
+//
+// Run lists depend only on (off, rows of the output tile), so each kernel builds them once per
+// row class (full tile row, last tile row of an image) and replays them for every page.
 
-// Byte runs inside one 32x32 tile page for g6_slice's row_runs / col_realign regimes.
-//
-// A tile page is four 16x16 faces, face-major: face 0 = rows 0-15 cols 0-15, face 1 = rows 0-15
-// cols 16-31, face 2 = rows 16-31 cols 0-15, face 3 = rows 16-31 cols 16-31. A row band inside one
-// face row (rows [r0, r1) with both ends in the same 16-row half) is one contiguous run per face, and
-// runs that touch end to end on both sides are merged, so a whole tile is a single run.
-//
-// Run lists depend only on the row offset `off`, the row count of the tile row and the column halves
-// moved, so each kernel builds them once per row class and replays them for every page.
+#pragma once
 
 #include <stdint.h>
 
 namespace g6_slice {
 
-constexpr uint32_t TILE_ROWS = 32;
-constexpr uint32_t FACE_ROWS = 16;
-constexpr uint32_t BOTH_HALVES = 0b11;
+constexpr uint32_t TILE_DIM = 32;
+constexpr uint32_t FACE_DIM = 16;
+constexpr uint32_t MAX_RUNS = 8;  // 2 row bands (or 4 rotated pieces) x 2 face halves x 2 face columns, merged
 
-struct PageRun {
-    uint16_t src;  // byte offset in the source page
-    uint16_t dst;  // byte offset in the destination page
-    uint16_t len;  // bytes
+constexpr uint32_t COL_HALF_LEFT = 1;   // faces 0 and 2
+constexpr uint32_t COL_HALF_RIGHT = 2;  // faces 1 and 3
+constexpr uint32_t COL_HALF_BOTH = COL_HALF_LEFT | COL_HALF_RIGHT;
+
+struct ByteRun {
+    uint32_t src_offset;  // byte offset in the source page
+    uint32_t dst_offset;  // byte offset in the destination page
+    uint32_t bytes;
+    uint32_t src_tile;  // reader: 0 = upper input tile, 1 = the tile below it
 };
 
-// <= 4 row pieces x 2 column halves.
-constexpr uint32_t MAX_RUNS = 8;
-
-// Trivially constructible so kernels can hold run lists in static storage; build with `RunList{}`.
 struct RunList {
-    PageRun runs[MAX_RUNS];
-    uint32_t count;
+    ByteRun runs[MAX_RUNS];
+    uint32_t count = 0;
 
-    void add(uint32_t src, uint32_t dst, uint32_t len) {
+    void append(uint32_t src_tile, uint32_t src_offset, uint32_t dst_offset, uint32_t bytes) {
         if (count > 0) {
-            PageRun& last = runs[count - 1];
-            if (last.src + last.len == src && last.dst + last.len == dst) {
-                last.len += len;
+            ByteRun& last = runs[count - 1];
+            if (last.src_tile == src_tile && last.src_offset + last.bytes == src_offset &&
+                last.dst_offset + last.bytes == dst_offset) {
+                last.bytes += bytes;
                 return;
             }
         }
-        runs[count++] = {static_cast<uint16_t>(src), static_cast<uint16_t>(dst), static_cast<uint16_t>(len)};
+        runs[count++] = ByteRun{src_offset, dst_offset, bytes, src_tile};
     }
 };
 
-// Byte offset of row `row`, column half `half` of a tile.
-template <uint32_t face_row_bytes>
-constexpr uint32_t face_row_offset(uint32_t row, uint32_t half) {
-    constexpr uint32_t face_bytes = face_row_bytes * FACE_ROWS;
-    return ((row / FACE_ROWS) * 2 + half) * face_bytes + (row % FACE_ROWS) * face_row_bytes;
-}
+template <uint32_t page_bytes>
+struct TileGeometry {
+    static_assert(page_bytes % (TILE_DIM * TILE_DIM) == 0, "row runs need 16- or 32-bit elements");
+    static constexpr uint32_t face_row_bytes = page_bytes / (4 * FACE_DIM);
+    static constexpr uint32_t face_bytes = FACE_DIM * face_row_bytes;
 
-// Rows [r0, r1) of the selected column halves, read to the same position in the staging page.
-// DRAM reads need L1 dst == src (mod 64); keeping the natural in-tile offset satisfies it.
-template <uint32_t face_row_bytes>
-RunList band_runs(uint32_t r0, uint32_t r1, uint32_t half_mask) {
-    RunList list{};
-    while (r0 < r1) {
-        const uint32_t face_end = (r0 / FACE_ROWS + 1) * FACE_ROWS;
-        const uint32_t piece_end = r1 < face_end ? r1 : face_end;
+    static constexpr uint32_t offset(uint32_t row, uint32_t col_half) {
+        return ((row / FACE_DIM) * 2 + col_half) * face_bytes + (row % FACE_DIM) * face_row_bytes;
+    }
+
+    // Rows [r0, r1) of a tile, at their natural positions in source and destination.
+    static void add_row_band(RunList& list, uint32_t src_tile, uint32_t r0, uint32_t r1, uint32_t col_halves) {
         for (uint32_t half = 0; half < 2; ++half) {
-            if (half_mask & (1u << half)) {
-                const uint32_t offset = face_row_offset<face_row_bytes>(r0, half);
-                list.add(offset, offset, (piece_end - r0) * face_row_bytes);
+            const uint32_t a = r0 > half * FACE_DIM ? r0 : half * FACE_DIM;
+            const uint32_t b = r1 < (half + 1) * FACE_DIM ? r1 : (half + 1) * FACE_DIM;
+            if (a >= b) {
+                continue;
+            }
+            for (uint32_t col_half = 0; col_half < 2; ++col_half) {
+                if (col_halves & (1u << col_half)) {
+                    const uint32_t at = offset(a, col_half);
+                    list.append(src_tile, at, at, (b - a) * face_row_bytes);
+                }
             }
         }
-        r0 = piece_end;
     }
-    return list;
-}
 
-// Output rows [0, rows) of a page from staging rows (i + off) mod 32, whole tile width. Pieces break
-// wherever the source or destination crosses a face boundary or the source wraps past row 31.
-template <uint32_t face_row_bytes>
-RunList rotate_runs(uint32_t off, uint32_t rows) {
-    RunList list{};
-    uint32_t i = 0;
-    while (i < rows) {
-        const uint32_t s = (i + off) % TILE_ROWS;
-        const uint32_t dst_end = (i / FACE_ROWS + 1) * FACE_ROWS;
-        const uint32_t src_end = i + ((s / FACE_ROWS + 1) * FACE_ROWS - s);
-        uint32_t piece_end = rows;
-        piece_end = dst_end < piece_end ? dst_end : piece_end;
-        piece_end = src_end < piece_end ? src_end : piece_end;
-        for (uint32_t half = 0; half < 2; ++half) {
-            list.add(
-                face_row_offset<face_row_bytes>(s, half),
-                face_row_offset<face_row_bytes>(i, half),
-                (piece_end - i) * face_row_bytes);
-        }
-        i = piece_end;
+    // Reader: the bands of input rows that output rows [0, rv) draw from, at natural positions.
+    static RunList fetch_runs(uint32_t off, uint32_t rv, uint32_t col_halves) {
+        RunList list;
+        const uint32_t upper_rows = (TILE_DIM - off) < rv ? (TILE_DIM - off) : rv;
+        add_row_band(list, 0, off, off + upper_rows, col_halves);
+        add_row_band(list, 1, 0, rv - upper_rows, col_halves);
+        return list;
     }
-    return list;
-}
+
+    // Writer: output rows [0, rv) from staging rows (i + off) mod 32, split where either side
+    // crosses a face boundary (16 rows) or the staging rows wrap.
+    static RunList store_runs(uint32_t off, uint32_t rv) {
+        RunList list;
+        uint32_t i = 0;
+        while (i < rv) {
+            const uint32_t s = (i + off) % TILE_DIM;
+            uint32_t rows = rv - i;
+            if (FACE_DIM - i % FACE_DIM < rows) {
+                rows = FACE_DIM - i % FACE_DIM;
+            }
+            if (FACE_DIM - s % FACE_DIM < rows) {
+                rows = FACE_DIM - s % FACE_DIM;
+            }
+            for (uint32_t col_half = 0; col_half < 2; ++col_half) {
+                list.append(0, offset(s, col_half), offset(i, col_half), rows * face_row_bytes);
+            }
+            i += rows;
+        }
+        return list;
+    }
+};
+
+// Output-page walk (o1, th, tw) with carries tw -> th -> o1; o0 needs no counter. `in_page` is the
+// upper input tile of the current output page, kept incrementally.
+template <
+    uint32_t tensor_in_ht_tiles,
+    uint32_t tensor_in_wt_tiles,
+    uint32_t in_lead1_extent,
+    uint32_t tensor_out_ht_tiles,
+    uint32_t tensor_out_wt_tiles,
+    uint32_t out_lead1_extent>
+struct OutPageWalk {
+    uint32_t o1;
+    uint32_t th;
+    uint32_t tw;
+    uint32_t in_page;
+
+    bool last_tile_row() const { return th == tensor_out_ht_tiles - 1; }
+    bool last_tile_col() const { return tw == tensor_out_wt_tiles - 1; }
+
+    void advance() {
+        ++in_page;
+        if (++tw == tensor_out_wt_tiles) {
+            tw = 0;
+            in_page += tensor_in_wt_tiles - tensor_out_wt_tiles;
+            if (++th == tensor_out_ht_tiles) {
+                th = 0;
+                in_page += (tensor_in_ht_tiles - tensor_out_ht_tiles) * tensor_in_wt_tiles;
+                if (++o1 == out_lead1_extent) {
+                    o1 = 0;
+                    in_page += (in_lead1_extent - out_lead1_extent) * tensor_in_ht_tiles * tensor_in_wt_tiles;
+                }
+            }
+        }
+    }
+};
 
 }  // namespace g6_slice
