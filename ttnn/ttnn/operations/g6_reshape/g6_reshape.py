@@ -74,6 +74,10 @@ RM_FOLD = "linear"
 # (often single, hot) DRAM bank, whose per-NoC request queue sets the read-await tail. False: each mover reads its
 # own block (Refinement 2 behaviour).
 RM_SHARED_READ = True
+# rm_row_gather bank split (Refinement 3; needs the shared read and one atom per output page): a core's movers
+# take alternate bank groups of the core's whole staged range instead of its two stream halves, so each mover
+# issues ~NB / movers writes instead of ~NB, with the same atom count.
+RM_BANK_SPLIT = True
 
 # BB-05: L1 the model leaves to the op on every core.
 L1_OP_BUDGET = 1347776
@@ -109,6 +113,7 @@ def _knobs():
         RM_READ_GAP_BYTES,
         RM_FOLD,
         RM_SHARED_READ,
+        RM_BANK_SPLIT,
         MOVER_NOCS,
         L1_OP_BUDGET,
     )
@@ -374,6 +379,7 @@ class _RmPlan(_CoreRangesMixin):
     num_cores: int
     roles: tuple
     shared_read: bool  # one covering read per core, shared by its movers (RM_SHARED_READ)
+    bank_split: bool  # movers split the core's bank groups (RM_BANK_SPLIT)
 
     regime = "rm_row_gather"
     atom_rows = 1
@@ -465,6 +471,7 @@ def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
         num_cores=num_cores,
         roles=roles,
         shared_read=shared_read,
+        bank_split=shared_read and RM_BANK_SPLIT and atoms_per_page == 1,
     )
 
 
@@ -505,7 +512,7 @@ def _plan_for(input_tensor, out_shape):
 # ---------------------------------------------------------------------------
 
 
-def _tile_compile_args(plan, cb_stage, cb_image, cb_plan):
+def _tile_compile_args(plan, cb_stage, cb_image, cb_plan, mover):  # mover: unused (same program per mover)
     src, dst = plan.src, plan.dst
     return [
         plan.elem,
@@ -533,7 +540,7 @@ def _tile_compile_args(plan, cb_stage, cb_image, cb_plan):
     ]
 
 
-def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
+def _rm_compile_args(plan, cb_stage, cb_image, cb_plan, mover):
     # Under the shared read the staging slot is the core's: every mover's slot, pooled in one CB.
     stage_slot_bytes = plan.stage_slot_bytes * (MOVERS_PER_CORE if plan.shared_read else 1)
     return [
@@ -556,6 +563,9 @@ def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
         int(RM_FOLD == "linear"),
         int(plan.shared_read),
         SHARED_READ_SEM,
+        int(plan.bank_split),
+        mover,
+        MOVERS_PER_CORE,
     ]
 
 
@@ -580,7 +590,7 @@ def _build_descriptor(plan, input_tensor, output_tensor):
         noc = MOVER_NOCS[mover]
         stage_cb = MOVERS[0][0][0] if shared_read else cb_stage
         stage_bytes = (MOVERS_PER_CORE * plan.stage_bytes if mover == 0 else 0) if shared_read else plan.stage_bytes
-        compile_args = [*compile_args_fn(plan, stage_cb, cb_image, cb_plan), *in_accessor, *out_accessor]
+        compile_args = [*compile_args_fn(plan, stage_cb, cb_image, cb_plan, mover), *in_accessor, *out_accessor]
         runtime_args = ttnn.RuntimeArgs()
         for i, ((x, y), begin, count) in enumerate(plan.roles[mover]):
             runtime_args[x][y] = plan.mover_runtime_args(mover, i) if row_major else [begin, count]
@@ -707,5 +717,6 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
         "plan_bytes": plan.plan_bytes,
         "l1_bytes_per_core": plan.l1_bytes_per_core,
         "shared_read": getattr(plan, "shared_read", False),
+        "bank_split": getattr(plan, "bank_split", False),
         "roles": roles,
     }
