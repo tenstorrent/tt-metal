@@ -4,7 +4,8 @@
 """Stored value of one media item: a Header, then n_tokens bf16 embeddings of width hidden.
 
 Written by the media module's encode and read by the prefill runtime, which knows n_tokens from the media ref and
-takes the media kind from the header.
+takes the media kind from the header. Header and embeddings take a C-contiguous view of any item format, count it in
+bytes, and keep no view of it when they raise.
 """
 
 import struct

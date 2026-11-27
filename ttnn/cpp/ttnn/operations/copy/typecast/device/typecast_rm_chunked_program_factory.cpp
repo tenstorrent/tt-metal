@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_rm_chunked_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
@@ -230,8 +231,12 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},  // rows * total_chunks_per_row
                  {"per_core_block_dim", 1u},
-                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
-                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+                 {"in_data_format",
+                  typecast_kernel_data_format(
+                      datatype_to_dataformat_converter(input.dtype()), input.device()->arch() == tt::ARCH::QUASAR)},
+                 {"out_data_format",
+                  typecast_kernel_data_format(
+                      datatype_to_dataformat_converter(output.dtype()), input.device()->arch() == tt::ARCH::QUASAR)}},
             // No bfp_pack_precision_mode on Quasar (TT-2.x.x; MXFP replaces BFP). WH/BH keep the
             // legacy config, with the BFP pack knob in config_1xx.
             .hw_config = [&]() -> ComputeHardwareConfig {

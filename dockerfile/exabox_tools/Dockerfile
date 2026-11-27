@@ -137,7 +137,7 @@ COPY --from=dev --link /usr/local/bin/tt-smi /usr/local/bin/tt-smi
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:/opt/openmpi-v5.0.7-ulfm/bin:${PATH}"
 
-# torch, pytest and loguru are the deploy tier's didt pytest; versions follow
+# torch, pytest and loguru are the weekly tier's didt and gddr_act pytests; versions follow
 # tt_metal/python_env/requirements-dev.txt. tools/triage/requirements.txt (tt-exalens,
 # tt-umd, pycapnp) is what tools/triage/triage.py needs, which the health check's ETH
 # status read runs. The wheel brings ttnn's own dependencies.
@@ -218,7 +218,7 @@ RUN for bin in \
     && python3 tools/scaleout/exabox/health_check_test_suite/diag_runner.py --help > /dev/null \
     && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --help > /dev/null \
     && TRACY_NO_INVARIANT_CHECK=1 PYTHONDONTWRITEBYTECODE=1 \
-        python3 -c 'import ttnn, pytest_timeout, conftest, tests.didt.op_test_base' \
+        python3 -c 'import ttnn, pytest_timeout, conftest, tests.didt.op_test_base, tests.dram.test_dram_act_patterns' \
     && python3 -c 'import ttexalens, capnp, docopt, rich' \
     && python3 -m venv --system-site-packages /tmp/venv-smoke \
     && /tmp/venv-smoke/bin/python3 -m pip --version \

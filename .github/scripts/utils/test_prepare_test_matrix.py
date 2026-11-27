@@ -402,9 +402,10 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
     assert cfg["bh_p150b_civ2_viommu"]["merge_queue_sku"] == "bh_p150b_civ2_viommu_prio"
     assert cfg["wh_llmbox_civ2_viommu"]["merge_queue_sku"] == "wh_llmbox_civ2_prio"
     assert cfg["cpu_medium"]["merge_queue_sku"] == "cpu_medium_prio"
+    assert cfg["sim_quasar_xl"]["merge_queue_sku"] == "sim_quasar_xl_prio"
 
     # Many-to-one is allowed; prio targets must exist as concrete entries
-    for logical in ("bh_p150b_civ2_viommu", "wh_llmbox_civ2_viommu", "cpu_medium"):
+    for logical in ("bh_p150b_civ2_viommu", "wh_llmbox_civ2_viommu", "cpu_medium", "sim_quasar_xl"):
         alias = cfg[logical]["merge_queue_sku"]
         assert alias in cfg
         assert "runs_on" in cfg[alias]
@@ -603,7 +604,7 @@ def test_llk_pr_gate_uses_viommu_not_bh_p150b_civ2():
     )
     assert concrete_skus(pr) == {"wh_n150_civ2", "bh_p150b_civ2_viommu", "sim_quasar_xl"}
     assert "bh_p150b_civ2" not in concrete_skus(pr)
-    assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio", "sim_quasar_xl"}
+    assert concrete_skus(mq) == {"wh_n150_civ2", "bh_p150b_civ2_viommu_prio", "sim_quasar_xl_prio"}
 
 
 def test_pipeline_reorg_yamls_have_no_prio_sku_keys():

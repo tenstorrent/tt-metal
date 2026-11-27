@@ -107,7 +107,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/recip.h
     inc/api/compute/eltwise_unary/relu.h
     inc/api/compute/eltwise_unary/remainder.h
-    inc/api/compute/eltwise_unary/reverseops.h
     inc/api/compute/eltwise_unary/rounding.h
     inc/api/compute/eltwise_unary/rpow.h
     inc/api/compute/eltwise_unary/rsqrt.h

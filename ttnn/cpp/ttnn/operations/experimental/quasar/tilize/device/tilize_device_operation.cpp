@@ -137,6 +137,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
         "invalid TILE output specification");
 
+    // An MX output is written by the packer from a Float16_b / Float32 DEST (the unpacker feeds the tilize datacopy
+    // with the bf16 / fp32 sticks); integer and fp8 DEST contents have no MX pack path on Quasar.
+    TT_FATAL(
+        !is_mx(operation_attributes.output_dtype) ||
+            (input_tensor_a.dtype() == DataType::BFLOAT16 || input_tensor_a.dtype() == DataType::FLOAT32),
+        "tilize to MX output dtype {} needs a bfloat16 or float32 row-major input, got {}",
+        operation_attributes.output_dtype,
+        input_tensor_a.dtype());
+
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 
     TT_FATAL((stick_size % 2) == 0, "Stick size must be divisible by 2");

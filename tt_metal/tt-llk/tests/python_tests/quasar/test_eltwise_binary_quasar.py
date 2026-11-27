@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
     ENABLE_DIRECT_INDEXING,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -317,15 +316,17 @@ def test_eltwise_binary(
                 input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_FACES(num_faces, num_faces, num_faces),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, tile_shape.num_faces_c_dim),
             NUM_BLOCKS(num_blocks),
+            # The unsuffixed value is output-based, as on WH/BH; the kernel reads the
+            # input_/output_ pair.
             NUM_TILES_IN_BLOCK(
-                input_tiles_in_block,
+                output_tiles_in_block,
+                input_num_tiles_in_block=input_tiles_in_block,
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             LOOP_FACTOR(loop_factor),
