@@ -3,8 +3,9 @@
 
 """g6_to_layout: return input_tensor's logical values in the other layout, in one device program.
 
-Phase 0: TILE -> ROW_MAJOR, bfloat16, interleaved DRAM/L1 in and out (regimes staged_reorder
-and face_direct, see g6_to_layout_program_descriptor.py).
+TILE -> ROW_MAJOR into an interleaved DRAM/L1 output: a bfloat16 input interleaved in DRAM/L1
+(regimes staged_reorder and face_direct), a bfloat8_b input interleaved (packer_untilize) or
+HEIGHT/BLOCK sharded in L1 (sharded_in_place). See g6_to_layout_program_descriptor.py.
 """
 
 from __future__ import annotations
@@ -13,8 +14,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_to_layout_program_descriptor import G6ToLayoutProgram, compute_plan
-
+from .g6_to_layout_program_descriptor import G6ToLayoutProgram, ShardPlacement, compute_plan
 
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS — every axis is projected from the scenario dict `(scenario,)`
@@ -70,10 +70,14 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "output_dtype": [ttnn.bfloat16],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
 }
@@ -83,7 +87,13 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+# A sharded input runs the packer (unpack -> SrcA -> pack-untilize), whose MOVA2D flushes bf16
+# -0.0 and subnormals to +0, so a bfloat16 shard would not come out bit-identical. No production
+# case shards a bfloat16 input.
+EXCLUSIONS = [
+    {"dtype": ttnn.bfloat16, "memory_layout": ttnn.TensorMemoryLayout.HEIGHT_SHARDED},
+    {"dtype": ttnn.bfloat16, "memory_layout": ttnn.TensorMemoryLayout.BLOCK_SHARDED},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +157,9 @@ def validate(input_tensor, layout, *, dtype=None, memory_config=None):
         raise ValueError("g6_to_layout: memory_config names a sharded placement; the output is interleaved")
     if memory_config is None and input_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
         raise ValueError("g6_to_layout: a sharded input needs an interleaved memory_config for the output")
+    in_memory = input_tensor.memory_config()
+    if in_memory.shard_spec is not None and in_memory.buffer_type != ttnn.BufferType.L1:
+        raise ValueError("g6_to_layout: a sharded input is consumed in place and must be resident in L1")
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +183,13 @@ def _grid_of(device):
     return (int(grid.x), int(grid.y))
 
 
+def _shard_key(memory_config):
+    spec = _shard_spec_of(memory_config)
+    if spec is None:
+        return None
+    return (tuple(spec["grid"]), spec["shard_shape"], str(spec["orientation"]))
+
+
 def _cache_key(input_tensor, layout, out_dtype, out_memory_config, grid):
     in_memory = input_tensor.memory_config()
     return (
@@ -178,6 +198,7 @@ def _cache_key(input_tensor, layout, out_dtype, out_memory_config, grid):
         input_tensor.layout,
         in_memory.memory_layout,
         in_memory.buffer_type,
+        _shard_key(in_memory),
         layout,
         out_dtype,
         out_memory_config.memory_layout,
@@ -193,12 +214,16 @@ def _plan(input_tensor, layout, out_dtype, out_memory_config):
     cached = _PLAN_CACHE.get(key)
     if cached is None:
         output_in_l1 = out_memory_config.buffer_type == ttnn.BufferType.L1
+        in_memory = input_tensor.memory_config()
         cached = compute_plan(
             tuple(input_tensor.shape),
             grid,
             output_in_l1=output_in_l1,
             num_l1_banks=ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks if output_in_l1 else 1,
             out_alignment=ttnn.get_l1_alignment() if output_in_l1 else ttnn.get_dram_alignment(),
+            dtype=input_tensor.dtype,
+            in_tile_bytes=ttnn.tile_size(input_tensor.dtype),
+            shard=ShardPlacement.of(in_memory) if in_memory.shard_spec is not None else None,
         )
         _PLAN_CACHE[key] = cached
     return key, cached

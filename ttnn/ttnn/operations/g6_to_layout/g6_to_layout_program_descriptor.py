@@ -1,19 +1,27 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_to_layout program descriptor: TILE bfloat16 -> ROW_MAJOR bfloat16, interleaved, dataflow only.
+"""g6_to_layout program descriptor: TILE -> ROW_MAJOR bfloat16.
 
-Two regimes, each its own program of a reader (NCRISC, NoC0) and a writer (BRISC, NoC1); no
-value ever enters the Tensix coprocessor, so every bf16 bit pattern survives:
+Four regimes, each its own program. The bf16 regimes are a reader (NCRISC, NoC0) and a writer
+(BRISC, NoC1) only; no value enters the Tensix coprocessor, so every bf16 bit pattern survives:
 
-    staged_reorder (R1): live face-row prefixes -> cb_tile_window -> 32-B self-aimed copies
-                         -> cb_row_block page -> one write per live row segment.
-    face_direct    (R2): one tile column with W <= 16: faces 0/2 prefixes -> cb_left_faces
-                         -> one write of 2*W bytes per row straight from its face row.
+    staged_reorder   (R1): live face-row prefixes -> cb_tile_window -> 32-B self-aimed copies
+                           -> cb_row_block page -> one write per live row segment.
+    face_direct      (R2): one tile column with W <= 16: faces 0/2 prefixes -> cb_left_faces
+                           -> one write of 2*W bytes per row straight from its face row.
 
-Work unit: one tile of the flattened (tile_row, tile_col) space, split over the grid in
-contiguous row-major tile ranges. Blocks are rectangles cut from a core's range by the walk in
-kernels/g6_to_layout_block_walk.hpp. Every CB size and kernel arg derives from the knobs below.
+A bfloat8_b input is a value conversion, so it adds a compute kernel between the same two CBs:
+
+    packer_untilize  (R3): whole bfp8 tiles -> cb_tile_window -> unpack + pack-untilize to bf16
+                           -> cb_row_block tile pages -> one write per live row segment.
+    sharded_in_place (R4): R3 with cb_tile_window backed on the resident shard (zero-copy); the
+                           core assignment and the block are the caller's shard.
+
+Interleaved work unit: one tile of the flattened (tile_row, tile_col) space, split over the grid
+in contiguous row-major tile ranges. Blocks are rectangles cut from a core's range (or its shard)
+by the walks in kernels/g6_to_layout_block_walk.hpp. Every CB size and kernel arg derives from the
+knobs below.
 """
 
 from __future__ import annotations
@@ -29,6 +37,7 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 READ_BATCH_TILES = 8  # tiles per DRAM read batch in R1
 TILE_WINDOW_DEPTH = 2  # R1 batches resident in cb_tile_window
 ROW_DEPTH = 2  # blocks resident in cb_row_block / cb_left_faces
+TILE_BLOCK_DEPTH = 2  # R3 blocks resident in cb_tile_window (reader -> compute)
 # Target blocks per core; sets block_rows_tiles below its L1 cap so pipeline fill/drain stays near
 # 1/17 of a core's run. Measured against {1 (the L1-cap block), 4, 64}: 5-6% faster than the L1-cap
 # block on cases 304 and 1978, 6% faster than 64 on 1978, and within run-to-run spread on 308 (whose
@@ -48,6 +57,9 @@ TILE_ROW_BYTES = TILE_HW * DATUM_BYTES  # bytes one tile column adds to an outpu
 
 STAGED_REORDER = "staged_reorder"
 FACE_DIRECT = "face_direct"
+PACKER_UNTILIZE = "packer_untilize"
+SHARDED_IN_PLACE = "sharded_in_place"
+_COMPUTE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
 
 CB_TILE_WINDOW = 0
 CB_ROW_BLOCK = 1
@@ -100,14 +112,19 @@ def tensor_geometry(shape):
     return Geometry(images, height, width, _div_up(height, TILE_HW), _div_up(width, TILE_HW))
 
 
-def select_regime(geometry):
+def select_regime(geometry, dtype=ttnn.bfloat16, sharded=False):
+    if sharded:
+        return SHARDED_IN_PLACE
+    if dtype == ttnn.bfloat8_b:
+        return PACKER_UNTILIZE
     if geometry.tensor_cols_tiles == 1 and geometry.width <= FACE_HW:
         return FACE_DIRECT
     return STAGED_REORDER
 
 
-def _tile_row_stage_rows(geometry):
-    return min(TILE_HW, geometry.height)
+def _tile_row_stage_rows(regime, geometry):
+    # The untilize packer always emits a tile-row's 32 rows.
+    return TILE_HW if regime in _COMPUTE_REGIMES else min(TILE_HW, geometry.height)
 
 
 def _window_bytes():
@@ -120,9 +137,14 @@ def _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows):
     return block_rows_tiles * stage_rows * block_cols_tiles * TILE_ROW_BYTES
 
 
-def _max_block_tiles(regime, stage_rows, out_l1_share):
+def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes):
     if regime == FACE_DIRECT:
         return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * LEFT_SLOT_BYTES)
+    if regime == PACKER_UNTILIZE:
+        return (L1_BUDGET_BYTES - out_l1_share) // (TILE_BLOCK_DEPTH * in_tile_bytes + ROW_DEPTH * TILE_BYTES)
+    if regime == SHARDED_IN_PLACE:
+        # The input tile window is the caller's resident shard, outside the op's budget.
+        return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * TILE_BYTES)
     return (L1_BUDGET_BYTES - out_l1_share - _window_bytes()) // (ROW_DEPTH * stage_rows * TILE_ROW_BYTES)
 
 
@@ -138,50 +160,157 @@ def _choose_blocking(geometry, core_tiles_max, max_block_tiles):
     return max(1, min(rows, max_block_tiles // block_cols_tiles)), block_cols_tiles
 
 
+@dataclass(frozen=True)
+class ShardPlacement:
+    """The input's shard placement, in tile units of the folded 2-D view (N * padded H, padded W)."""
+
+    memory_layout: object
+    grid: object  # ttnn.CoreRangeSet, exactly as the tensor's shard spec holds it
+    shard_rows_tiles: int
+    shard_cols_tiles: int
+    row_major: bool
+
+    @staticmethod
+    def of(memory_config):
+        spec = memory_config.shard_spec
+        rows, cols = spec.shape
+        assert rows % TILE_HW == 0 and cols % TILE_HW == 0, f"g6_to_layout: TILE shard shape {spec.shape}"
+        return ShardPlacement(
+            memory_config.memory_layout,
+            spec.grid,
+            rows // TILE_HW,
+            cols // TILE_HW,
+            spec.orientation == ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+    def core_rects(self, geometry):
+        """[((x, y), (tile_row, rows, col, cols))]: every shard core and the live tile rectangle
+        of its shard (rows or cols 0 for a shard wholly beyond the tensor). Mirrors the
+        allocator's shard-to-core order: HEIGHT walks the grid's cores in orientation order; BLOCK
+        puts shard (i, j) on core (x0 + j, y0 + i) (ROW_MAJOR) or (x0 + i, y0 + j) (COL_MAJOR)."""
+        rects = []
+
+        def live(begin, step, extent):
+            return max(0, min(step, extent - begin))
+
+        if self.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+            assert self.shard_cols_tiles == geometry.tensor_cols_tiles
+            cores = ttnn.corerange_to_cores(self.grid, None, self.row_major)
+            for k, core in enumerate(cores):
+                tile_row = k * self.shard_rows_tiles
+                rows = live(tile_row, self.shard_rows_tiles, geometry.tensor_rows_tiles)
+                rects.append(((core.x, core.y), (tile_row, rows, 0, geometry.tensor_cols_tiles)))
+            return rects
+
+        assert self.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        (box,) = self.grid.ranges()
+        for core in ttnn.corerange_to_cores(self.grid, None, True):
+            dx, dy = core.x - box.start.x, core.y - box.start.y
+            i, j = (dy, dx) if self.row_major else (dx, dy)
+            tile_row, col = i * self.shard_rows_tiles, j * self.shard_cols_tiles
+            rows = live(tile_row, self.shard_rows_tiles, geometry.tensor_rows_tiles)
+            cols = live(col, self.shard_cols_tiles, geometry.tensor_cols_tiles)
+            if cols == 0:
+                rows = 0
+            rects.append(((core.x, core.y), (tile_row, rows, col, cols)))
+        return rects
+
+
 @dataclass
 class Plan:
     regime: str
     geometry: Geometry
     grid: tuple
-    num_cores: int
+    num_cores: int  # cores with work
     all_cores: object
-    core_ranges: list  # [((x, y), tile_begin, num_tiles)] in split order
+    # [((x, y), runtime args)]: (tile_begin, num_tiles) of the tile split, or for a shard
+    # (tile_row, rows, col, cols) of its live rectangle.
+    core_args: list
     block_rows_tiles: int
     block_cols_tiles: int
     tile_row_stage_rows: int
-    cb_bytes: dict  # CB index -> total bytes
+    in_tile_bytes: int
+    cb_bytes: dict  # CB index -> total bytes the op allocates (a shard-backed CB allocates none)
     out_l1_share: int
+    shard: ShardPlacement = None
 
     @property
     def l1_bytes_per_core(self):
         return sum(self.cb_bytes.values()) + self.out_l1_share
 
     def report(self):
+        if self.shard is None:
+            cores = [
+                {"core": core, "roles": self.roles, "tile_begin": begin, "num_tiles": count}
+                for core, (begin, count) in self.core_args
+            ]
+            shard = None
+        else:
+            cores = [
+                {"core": core, "roles": self.roles, "tile_row": r0, "rows": rows, "col": c0, "cols": cols}
+                for core, (r0, rows, c0, cols) in self.core_args
+            ]
+            shard = {
+                "memory_layout": self.shard.memory_layout,
+                "grid": [((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in self.shard.grid.ranges()],
+                "shard_shape_tiles": (self.shard.shard_rows_tiles, self.shard.shard_cols_tiles),
+                "orientation": "ROW_MAJOR" if self.shard.row_major else "COL_MAJOR",
+            }
         return {
             "regime": self.regime,
             "num_cores": self.num_cores,
             "grid": self.grid,
+            "shard": shard,
             "block_rows_tiles": self.block_rows_tiles,
             "block_cols_tiles": self.block_cols_tiles,
             "tile_row_stage_rows": self.tile_row_stage_rows,
             "read_batch_tiles": READ_BATCH_TILES if self.regime == STAGED_REORDER else None,
             "tile_window_depth": TILE_WINDOW_DEPTH if self.regime == STAGED_REORDER else None,
+            "tile_block_depth": TILE_BLOCK_DEPTH if self.regime == PACKER_UNTILIZE else None,
             "row_depth": ROW_DEPTH,
             "cb_bytes": dict(self.cb_bytes),
             "out_l1_share": self.out_l1_share,
             "l1_bytes_per_core": self.l1_bytes_per_core,
-            "cores": [
-                {"core": core, "roles": ("reader", "writer"), "tile_begin": begin, "num_tiles": count}
-                for core, begin, count in self.core_ranges
-            ],
+            "cores": cores,
         }
 
+    @property
+    def roles(self):
+        return ("reader", "compute", "writer") if self.regime in _COMPUTE_REGIMES else ("reader", "writer")
 
-def compute_plan(shape, grid, *, output_in_l1, num_l1_banks, out_alignment):
-    """Regime, core split and block extents of one call. Shape-only regime selection."""
+
+def _tile_split(grid_x, grid_y, geometry):
+    num_cores, all_cores, group_1, group_2, tiles_1, tiles_2 = ttnn.split_work_to_cores(
+        ttnn.CoreCoord(grid_x, grid_y), geometry.tensor_tiles, row_wise=True
+    )
+    core_args = []
+    tile = 0
+    for group, count in ((group_1, tiles_1), (group_2, tiles_2)):
+        if count == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            core_args.append(((core.x, core.y), (tile, count)))
+            tile += count
+    assert tile == geometry.tensor_tiles, f"g6_to_layout: split covered {tile} of {geometry.tensor_tiles} tiles"
+    return num_cores, all_cores, core_args, max(tiles_1, tiles_2)
+
+
+def compute_plan(
+    shape,
+    grid,
+    *,
+    output_in_l1,
+    num_l1_banks,
+    out_alignment,
+    dtype=ttnn.bfloat16,
+    in_tile_bytes=TILE_BYTES,
+    shard=None,
+):
+    """Regime, core assignment and block extents of one call. The regime depends on the shape, the
+    input dtype and whether the input is sharded, never on the grid."""
     geometry = tensor_geometry(shape)
-    regime = select_regime(geometry)
-    stage_rows = _tile_row_stage_rows(geometry)
+    regime = select_regime(geometry, dtype, shard is not None)
+    stage_rows = _tile_row_stage_rows(regime, geometry)
     grid_x, grid_y = grid
 
     out_l1_share = 0
@@ -190,32 +319,45 @@ def compute_plan(shape, grid, *, output_in_l1, num_l1_banks, out_alignment):
         banks_per_core = max(1, _div_up(num_l1_banks, grid_x * grid_y))
         out_l1_share = _div_up(geometry.out_pages, num_l1_banks) * out_aligned_page_bytes * banks_per_core
 
-    max_block_tiles = _max_block_tiles(regime, stage_rows, out_l1_share)
+    max_block_tiles = _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes)
     if max_block_tiles < 1:
         raise RuntimeError(
             f"g6_to_layout: an L1 output of {out_l1_share} B per core leaves no room for one block "
             f"within the {L1_BUDGET_BYTES} B L1 budget"
         )
 
-    num_cores, all_cores, group_1, group_2, tiles_1, tiles_2 = ttnn.split_work_to_cores(
-        ttnn.CoreCoord(grid_x, grid_y), geometry.tensor_tiles, row_wise=True
-    )
-    core_ranges = []
-    tile = 0
-    for group, count in ((group_1, tiles_1), (group_2, tiles_2)):
-        if count == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, None, True):
-            core_ranges.append(((core.x, core.y), tile, count))
-            tile += count
-    assert tile == geometry.tensor_tiles, f"g6_to_layout: split covered {tile} of {geometry.tensor_tiles} tiles"
+    if shard is None:
+        num_cores, all_cores, core_args, core_tiles_max = _tile_split(grid_x, grid_y, geometry)
+        block_rows_tiles, block_cols_tiles = _choose_blocking(geometry, core_tiles_max, max_block_tiles)
+        blocks_per_core_max = None
+    else:
+        # The shard is the block: one pass over its live tile-rows unless L1 caps the block.
+        all_cores = shard.grid
+        core_args = shard.core_rects(geometry)
+        num_cores = sum(1 for _, (_, rows, _, _) in core_args if rows > 0)
+        block_cols_tiles = shard.shard_cols_tiles
+        block_rows_tiles = min(shard.shard_rows_tiles, max_block_tiles // block_cols_tiles)
+        if block_rows_tiles < 1:
+            raise RuntimeError(
+                f"g6_to_layout: one tile-row of a {block_cols_tiles}-tile shard does not fit the "
+                f"{L1_BUDGET_BYTES} B L1 budget beside an L1 output of {out_l1_share} B per core"
+            )
+        blocks_per_core_max = _div_up(shard.shard_rows_tiles, block_rows_tiles)
 
-    block_rows_tiles, block_cols_tiles = _choose_blocking(geometry, max(tiles_1, tiles_2), max_block_tiles)
     block_bytes = _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows)
     if regime == FACE_DIRECT:
         cb_bytes = {CB_LEFT_FACES: ROW_DEPTH * block_bytes}
-    else:
+    elif regime == STAGED_REORDER:
         cb_bytes = {CB_TILE_WINDOW: _window_bytes(), CB_ROW_BLOCK: ROW_DEPTH * block_bytes}
+    elif regime == PACKER_UNTILIZE:
+        block_tiles = block_rows_tiles * block_cols_tiles
+        cb_bytes = {
+            CB_TILE_WINDOW: TILE_BLOCK_DEPTH * block_tiles * in_tile_bytes,
+            CB_ROW_BLOCK: ROW_DEPTH * block_bytes,
+        }
+    else:
+        # A second row-block page only helps when the shard takes more than one block.
+        cb_bytes = {CB_ROW_BLOCK: min(ROW_DEPTH, blocks_per_core_max) * block_bytes}
 
     return Plan(
         regime=regime,
@@ -223,28 +365,29 @@ def compute_plan(shape, grid, *, output_in_l1, num_l1_banks, out_alignment):
         grid=(grid_x, grid_y),
         num_cores=num_cores,
         all_cores=all_cores,
-        core_ranges=core_ranges,
+        core_args=core_args,
         block_rows_tiles=block_rows_tiles,
         block_cols_tiles=block_cols_tiles,
         tile_row_stage_rows=stage_rows,
+        in_tile_bytes=in_tile_bytes,
         cb_bytes=cb_bytes,
         out_l1_share=out_l1_share,
+        shard=shard,
     )
 
 
-def _cb(index, total_bytes, page_bytes, core_ranges):
+def _cb(index, total_bytes, page_bytes, core_ranges, data_format=ttnn.bfloat16):
     return ttnn.CBDescriptor(
         total_size=total_bytes,
         core_ranges=core_ranges,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=index, data_format=ttnn.bfloat16, page_size=page_bytes)
-        ],
+        format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=data_format, page_size=page_bytes)],
     )
 
 
 class G6ToLayoutProgram:
     """Program descriptor of one plan, built once. A later call with the same cache key only
-    rebinds the two buffer addresses (common runtime arg 0 of the reader and of the writer)."""
+    rebinds the two buffer addresses (common runtime arg 0 of the reader and of the writer) and,
+    for a sharded input, the shard the tile window is backed on."""
 
     def __init__(self, plan, input_tensor, output_tensor):
         g = plan.geometry
@@ -259,26 +402,42 @@ class G6ToLayoutProgram:
             plan.tile_row_stage_rows,
         ]
         block_bytes = _block_bytes(plan.regime, plan.block_rows_tiles, plan.block_cols_tiles, plan.tile_row_stage_rows)
+        sharded = plan.regime == SHARDED_IN_PLACE
+        self._sharded = sharded
+        compute_ct_args = None
 
         if plan.regime == FACE_DIRECT:
             cbs = [_cb(CB_LEFT_FACES, plan.cb_bytes[CB_LEFT_FACES], block_bytes, all_cores)]
             reader_source, writer_source = "g6_to_layout_face_reader.cpp", "g6_to_layout_face_writer.cpp"
             reader_ct_args = geometry_ct_args + [CB_LEFT_FACES]
             writer_ct_args = geometry_ct_args + [CB_LEFT_FACES]
-        else:
+        elif plan.regime == STAGED_REORDER:
             cbs = [
                 _cb(CB_TILE_WINDOW, plan.cb_bytes[CB_TILE_WINDOW], TILE_BYTES, all_cores),
                 _cb(CB_ROW_BLOCK, plan.cb_bytes[CB_ROW_BLOCK], block_bytes, all_cores),
             ]
             reader_source, writer_source = "g6_to_layout_staged_reader.cpp", "g6_to_layout_staged_writer.cpp"
             reader_ct_args = geometry_ct_args + [CB_TILE_WINDOW, CB_ROW_BLOCK, READ_BATCH_TILES, TILE_WINDOW_DEPTH]
-            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK]
+            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 0, 0]
+        else:
+            row_block = _cb(CB_ROW_BLOCK, plan.cb_bytes[CB_ROW_BLOCK], TILE_BYTES, all_cores)
+            if sharded:
+                cbs = [self._shard_window(input_tensor), row_block]
+            else:
+                window = _cb(
+                    CB_TILE_WINDOW, plan.cb_bytes[CB_TILE_WINDOW], plan.in_tile_bytes, all_cores, input_tensor.dtype
+                )
+                cbs = [window, row_block]
+            reader_source, writer_source = "g6_to_layout_tile_reader.cpp", "g6_to_layout_staged_writer.cpp"
+            reader_ct_args = geometry_ct_args + [CB_TILE_WINDOW, int(sharded)]
+            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 1, int(sharded)]
+            compute_ct_args = geometry_ct_args + [CB_TILE_WINDOW, CB_ROW_BLOCK, int(sharded)]
         reader_ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
         writer_ct_args += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
 
         core_rt_args = ttnn.RuntimeArgs()
-        for (x, y), tile_begin, num_tiles in plan.core_ranges:
-            core_rt_args[x][y] = [tile_begin, num_tiles]
+        for (x, y), args in plan.core_args:
+            core_rt_args[x][y] = list(args)
 
         self._reader = ttnn.KernelDescriptor(
             kernel_source=str(KERNEL_DIR / reader_source),
@@ -296,10 +455,36 @@ class G6ToLayoutProgram:
             common_runtime_args=[output_tensor.buffer_address()],
             config=ttnn.WriterConfigDescriptor(),
         )
-        self._descriptor = ttnn.ProgramDescriptor(kernels=[self._reader, self._writer], semaphores=[], cbs=cbs)
+        self._kernels = [self._reader, self._writer]
+        if compute_ct_args is not None:
+            # Fixed by the op's signature (no compute_kernel_config): a 16-bit DEST holds a bf16
+            # value exactly, and the untilize does no arithmetic for fidelity to act on.
+            self._kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "g6_to_layout_untilize_compute.cpp"),
+                    core_ranges=all_cores,
+                    compile_time_args=compute_ct_args,
+                    runtime_args=core_rt_args,
+                    config=ttnn.ComputeConfigDescriptor(
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        fp32_dest_acc_en=False,
+                        dst_full_sync_en=False,
+                        math_approx_mode=False,
+                    ),
+                )
+            )
+        self._descriptor = ttnn.ProgramDescriptor(kernels=self._kernels, semaphores=[], cbs=cbs)
+
+    @staticmethod
+    def _shard_window(input_tensor):
+        return ttnn.cb_descriptor_from_sharded_tensor(CB_TILE_WINDOW, input_tensor)
 
     def descriptor_for(self, input_tensor, output_tensor):
         self._reader.common_runtime_args = [input_tensor.buffer_address()]
         self._writer.common_runtime_args = [output_tensor.buffer_address()]
-        self._descriptor.kernels = [self._reader, self._writer]
+        self._descriptor.kernels = self._kernels
+        if self._sharded:
+            cbs = list(self._descriptor.cbs)
+            cbs[0] = self._shard_window(input_tensor)
+            self._descriptor.cbs = cbs
         return self._descriptor
