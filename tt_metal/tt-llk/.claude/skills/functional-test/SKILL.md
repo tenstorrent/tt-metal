@@ -171,6 +171,9 @@ functional L1-to-L1 program. It is not paired perf coverage and is exceptional:
   benchmark. Do not copy this pattern for a new operation without explicit
   reviewer agreement.
 
+Concrete example: `test_block_max8.py` / `perf_block_max8.py` provide the
+paired functions, while `perf_block_max8_phases.py` retains custom zones.
+
 Follow `perf-test`, "Phase microbenchmarks", for schema and baseline handling.
 
 ### Intentionally functional-only

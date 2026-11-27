@@ -400,6 +400,9 @@ functional `L1_TO_L1` program:
 - Do not introduce this pattern for a new operation without explicit reviewer
   agreement.
 
+Use `perf_block_max8.py` plus `perf_block_max8_phases.py` as the concrete
+paired-plus-phases example.
+
 ### Renames
 
 - Record a renamed column in the entry's `aliases` (old -> new) and a renamed

@@ -311,14 +311,15 @@ its normal operation family remains paired through
 |---|---|---|---|
 | Shared sweep and runner | `test_pack_l1_acc.py` | `perf_pack_l1_acc.py` | Functional owns `PACK_L1_ACC_SWEEP`; regression stays separate |
 | Several named families in one module | `test_eltwise_binary.py` | `perf_eltwise_binary.py` | Shows normalized per-function peers and shared runners |
+| Same-stem modules sharing a helper | `test_pack_tiny_tile_reconfig.py` | `perf_pack_tiny_tile_reconfig.py` | Same-stem sweep ownership with common tiny-tile setup in `helpers/pack_tiny_tile.py` |
+| Functional kernel used by every perf mode | `test_transpose_dest.py` | `perf_transpose_dest.py` | Float and Int32 peers share `_run_transpose_dest` and `transpose_dest_test.cpp`; Int8 haloize regressions remain functional-only |
+| Paired coverage plus phase microbenchmark | `test_block_max8.py` | `perf_block_max8.py` | Paired perf keeps representative random/negative-zero stimuli plus the FPU denormal path; exhaustive winners/fractional stimuli stay functional, while `perf_block_max8_phases.py` retains custom zones without claiming functional coverage |
 | Quasar generated narrowing | `quasar/test_pack_quasar.py` | `quasar/perf_pack_quasar.py` | One generator creates functional and documented perf combinations |
 | Legacy dimension drift to repair | `test_unpack_tilize.py` | `perf_unpack_tilize.py` | Perf expands `rt_dim` / `ct_dim` beyond the functional `[64, 64]` default, so those values lack functional goldens; do not copy this pattern |
 
-Do not copy legacy defects such as the cross-stem tiny-tile import or
-`math_transpose_perf.cpp`. A dedicated phase source is allowed only for a
-documented `perf_<op>_phases.py` benchmark and does not replace normal paired
-coverage. The block-max8 cleanup inventory tracks the existing benchmark
-until it is renamed and paired coverage is added.
+A dedicated phase source is allowed only for a documented
+`perf_<op>_phases.py` benchmark and does not replace normal paired coverage.
+Use block-max8 as the concrete example.
 
 ## Focused validation
 

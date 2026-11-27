@@ -40,17 +40,10 @@ Quasar. Override it only when the behavior under test is the boot mode.
   then the Quasar suffix and trailing `_perf`/`_test`. A module containing
   several functional families needs several paired perf functions, not one
   lumped wrapper.
-- Legacy cleanup inventory:
-  1. **Stem mismatch:** `perf_pack_tiny_tile_reconfig.py` imports from
-     `test_pack_tiny_tile_block.py`. Split out
-     `test_pack_tiny_tile_reconfig.py`; do not add a comparer exception.
-  2. **Separate perf kernel defect:** `perf_transpose_dest.py` selects
-     `math_transpose_perf.cpp`. Merge the measured path into
-     `transpose_dest_test.cpp` and share the Python runner.
-  3. **Phase benchmark plus missing paired perf:** `perf_block_max8.py`
-     selects `block_max8_perf.cpp` for custom phase zones. Add paired coverage
-     on both functional kernels and retain the zones only under `_phases`
-     module/callable/source naming.
+- `test_block_max8.py` / `perf_block_max8.py` are the concrete paired-plus-
+  phases example: both functional families have normal paired perf functions,
+  while `perf_block_max8_phases.py` is an explicitly unmatched custom-zone
+  microbenchmark.
 - When renaming a module, function, axis, or perf column, follow the rename
   checklist in `perf-test`; pairing, schemas, baselines, split costs, and
   hard-coded IDs can all depend on it.

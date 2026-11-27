@@ -69,6 +69,7 @@ coverage.
 A phase microbenchmark is a separate published family, not a third functional
 outcome. It has no functional golden, uses explicit `_phases` naming, is
 excluded from sweep pairing, and does not replace normal paired perf coverage.
+See paired `perf_block_max8.py` beside `perf_block_max8_phases.py`.
 
 ## 4. Validate through the owning skills
 

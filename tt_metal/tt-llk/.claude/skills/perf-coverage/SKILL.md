@@ -59,6 +59,8 @@ fixed inside a `PerfConfig` call: read the code for those (`perf-test`,
 - An explicitly named `perf_<op>_phases.py` phase microbenchmark is outside
   functional/perf comparison. List it as intentionally perf-only; do not add
   a fake functional file or patch discovery to hide it.
+- `perf_block_max8.py` is the concrete paired module;
+  `perf_block_max8_phases.py` is its intentionally unmatched phase benchmark.
 
 **Axes**
 
