@@ -2977,3 +2977,10 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
 - Fix: _call_hooks keys its cache on the hooks / settings files' mtimes and reloads both modules when one changed.
   Selftest: test_resident_gate.py::test_call_hooks_follow_an_edit_of_the_hooks_file (the X_ fixture now patches
   _call_hooks).
+
+## F306 (2026-11-27, DeepSeek-V4.1 WA.4): an A/B unit's results-dir name stays short
+- Seen: WA.4's gate runs test_skip_positions twice (the 8192 packed ladder and the 5120 ladder). F288 names such units
+  by every variable they differ in; the 5120 unit lacks the 20 packed switches, so the name ran past 255 bytes and the
+  orchestrator crashed at the A/B's first unit (OSError 36, File name too long), after the agent had finished.
+- Fix: Orchestrator.ab_test_names keeps the tag when it is <= 80 characters, else the first difference (60 characters
+  at most) + an 8-hex hash of the whole tag. Selftest: test_cpu_perf_task.py::test_ab_test_names_stay_short_for_long_env_differences.

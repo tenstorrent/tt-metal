@@ -63,6 +63,7 @@ failure (including a box that fails at device open: reset it, then resume), 3 wa
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -1927,7 +1928,10 @@ class Orchestrator:
             same = [envs[j] for j, st in enumerate(stems) if st == stem]
             if len(same) > 1:  # the variables these units differ in (their order in the gate's command)
                 diff = [k for k in envs[i] if k != "BRINGUP_TASK" and len({e.get(k) for e in same}) > 1]
-                tag = "__".join(re.sub(r"[^A-Za-z0-9_.-]", "-", f"{k}-{envs[i][k]}") for k in diff) or str(i)
+                parts = [re.sub(r"[^A-Za-z0-9_.-]", "-", f"{k}-{envs[i].get(k)}") for k in diff]
+                tag = "__".join(parts) or str(i)
+                if len(tag) > 80:  # F306: a results dir name stays far below the 255-byte limit (WA.4: 20 packed vars)
+                    tag = f"{parts[0][:60]}__{hashlib.sha1(tag.encode()).hexdigest()[:8]}"
                 name = f"{stem}__{tag}"
             while name in {n for n, _ in out}:
                 name = f"{name}.{i}"
