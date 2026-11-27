@@ -12,7 +12,8 @@
 
 namespace {
 
-// Common runtime args; layout mirrors WRITER_COMMON_ARGS in g6_concat_program_descriptor.py.
+// Common runtime args; layout mirrors _writer_common_args() / WRITER_COMMON_OUTPUT_BASE in
+// g6_concat_program_descriptor.py.
 constexpr uint32_t CRTA_OUTPUT_BASE = 0;
 constexpr uint32_t CRTA_BLOCK_PAGES = 1;
 constexpr uint32_t CRTA_OUT_WT = 2;

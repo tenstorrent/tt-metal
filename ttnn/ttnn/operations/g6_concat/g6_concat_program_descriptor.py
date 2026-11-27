@@ -33,6 +33,13 @@ TRIM_ROWS_MAX = {ttnn.bfloat16: 16, ttnn.float32: 16, ttnn.bfloat8_b: 0}
 # Cores used: None = the whole compute grid; an int caps the row-major core count.
 MAX_CORES = None
 
+
+def blocking_knobs():
+    """Every knob above shapes the program, so all of them belong in the program-cache key."""
+    trim = tuple(sorted((str(dtype), rows) for dtype, rows in TRIM_ROWS_MAX.items()))
+    return (BLOCK_BYTES_CAP, OUTPUT_PAGES_DEPTH, trim, MAX_CORES)
+
+
 # --- Mechanism caps --------------------------------------------------------------------------------
 # Two common runtime words per input share the 341-word per-kernel runtime-arg space.
 K_MAX = 64

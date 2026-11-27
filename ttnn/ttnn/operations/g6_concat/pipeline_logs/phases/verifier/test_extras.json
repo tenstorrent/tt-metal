@@ -1,0 +1,41 @@
+{
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[108x4096x128+84x4096x128_d0-alignment=tile_aligned-concat_dim=outer-dtype=FLOAT32-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[16of1x6x4096x256_d0-alignment=tile_aligned-concat_dim=outer-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[16of1x4096x1536_d0-alignment=tile_aligned-concat_dim=outer-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[8of1x4096x1536_d0-alignment=tile_aligned-concat_dim=outer-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[16of1x1x1x62080_d2-alignment=h_non_aligned-concat_dim=h-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[1x6x31x64+1x6x31x192_d-1-alignment=h_non_aligned-concat_dim=w-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram0]": {
+    "gate": "exact",
+    "special_values": true
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[2of1x1x1x128_d-1-alignment=h_non_aligned-concat_dim=w-dtype=FLOAT32-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "gate": "exact",
+    "special_values": true
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[1x6x31x64+1x6x31x192_d-1-alignment=h_non_aligned-concat_dim=w-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram1]": {
+    "gate": "exact",
+    "poison_padding": 1000.0
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[2of1x1x1x62080_d2-alignment=h_non_aligned-concat_dim=h-dtype=BFLOAT16-input_buffer=dram-layout=TILE-output_buffer=dram]": {
+    "gate": "exact",
+    "poison_padding": NaN
+  },
+  "eval/golden_tests/g6_concat/test_golden.py::test_op_loose[1x1x1x64+1x1x1x192_d-1-alignment=h_non_aligned-concat_dim=w-dtype=BFLOAT16-input_buffer=l1-layout=TILE-output_buffer=dram]": {
+    "gate": "exact",
+    "poison_padding": 1000.0
+  }
+}

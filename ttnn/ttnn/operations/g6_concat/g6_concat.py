@@ -192,7 +192,7 @@ def _cache_key(tensors, d, output_memory_config, device):
         str(output_memory_config.buffer_type),
         str(output_memory_config.memory_layout),
         (grid.x, grid.y),
-        program_descriptor.MAX_CORES,
+        program_descriptor.blocking_knobs(),
     )
 
 

@@ -28,7 +28,8 @@ using g6_concat::FACE_COLS_PER_TILE;
 using g6_concat::FACE_ROWS;
 using g6_concat::TILE_ROWS;
 
-// Common runtime args; layout mirrors GATHER_READER_COMMON_ARGS in g6_concat_program_descriptor.py.
+// Common runtime args; layout mirrors _reader_common_args() / GATHER_READER_COMMON_FIRST_INPUT in
+// g6_concat_program_descriptor.py.
 constexpr uint32_t CRTA_BLOCK_PAGES = 0;
 constexpr uint32_t CRTA_OUT_WT = 1;
 constexpr uint32_t CRTA_OUT_HT = 2;
