@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -178,6 +179,20 @@ Tensor adjust_shape(
     }
     auto output_tensor = ttnn::reshape(tensor, ttnn::Shape{output_shape});
     return output_tensor;
+}
+
+template <reduction_common::ReduceType reduce_type>
+constexpr std::string_view reduce_op_name() {
+    switch (reduce_type) {
+        case reduction_common::ReduceType::Sum: return "ttnn.sum";
+        case reduction_common::ReduceType::Mean: return "ttnn.mean";
+        case reduction_common::ReduceType::Max: return "ttnn.max";
+        case reduction_common::ReduceType::Min: return "ttnn.min";
+        case reduction_common::ReduceType::Std: return "ttnn.std";
+        case reduction_common::ReduceType::Var: return "ttnn.var";
+        case reduction_common::ReduceType::Prod: return "ttnn.prod";
+    }
+    return "Reduction";
 }
 
 template <reduction_common::ReduceType reduce_type>
@@ -623,6 +638,7 @@ Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
+    ttnn::prim::validate_reduce_op_default_tile(input_tensor_arg, reduce_op_name<reduce_type>(), "the input");
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
     if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
         const auto dt = input_tensor_arg.dtype();
@@ -871,6 +887,7 @@ Tensor pool_sum(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const std::optional<Layout>& output_layout) {
+    ttnn::prim::validate_reduce_op_default_tile(input_tensor_arg, "ttnn.pool_sum", "the input");
     return convert_output_layout(
         reduce_impl<reduction_common::ReduceType::Sum>(
             input_tensor_arg,

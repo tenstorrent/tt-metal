@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/topk/topk.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "tt-metalium/utils/work_split.hpp"
 #include "tt_stl/assert.hpp"
@@ -440,6 +441,7 @@ std::vector<Tensor> topk(
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+    ttnn::prim::validate_reduce_op_default_tile(input_tensor, "ttnn.topk", "the input");
 
     // Analyze input tensor properties to determine required transformations
     std::size_t rank_st = input_tensor.logical_shape().rank();

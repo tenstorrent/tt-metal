@@ -32,6 +32,11 @@ void validate_reduce_op_tensor(
     const ReduceOpDeviceGridValidationOptions* core_grids_within_device_grid = nullptr,
     std::optional<tt::tt_metal::TensorSpec> tensor_spec_ref = std::nullopt);
 
+// The reduction kernels size every tile as a 32x32 tile, so a TILE tensor with another tile shape would be read and
+// written at the wrong strides. Rejects such a tensor; any other layout passes.
+void validate_reduce_op_default_tile(
+    const ttnn::Tensor& tensor, std::string_view op_name, std::string_view tensor_label);
+
 struct ReduceOpProgramGridShardedTensor {
     const ttnn::Tensor* tensor = nullptr;
     std::string_view label;

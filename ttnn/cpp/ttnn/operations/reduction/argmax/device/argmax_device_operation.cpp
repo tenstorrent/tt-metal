@@ -83,6 +83,7 @@ ArgMaxDeviceOperation::program_factory_t ArgMaxDeviceOperation::select_program_f
 
 void ArgMaxDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args.input, "ArgMax", "the input");
     const auto& input_tensor_a = tensor_args.input;
     const auto input_layout = input_tensor_a.layout();
 

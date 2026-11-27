@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod_all_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
 void ProdAllDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args.input, "Prod", "the input");
     const auto& input = tensor_args.input;
 
     TT_FATAL(

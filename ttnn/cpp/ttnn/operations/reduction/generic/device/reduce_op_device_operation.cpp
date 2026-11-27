@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_op_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -29,6 +30,7 @@ ReduceDeviceOperation::program_factory_t ReduceDeviceOperation::select_program_f
 
 void ReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args, "Reduce", "the input");
     using namespace tt::tt_metal;
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,

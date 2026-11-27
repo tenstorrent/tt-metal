@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -108,8 +109,12 @@ Tensor accumulation_invoke(
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
 
+    // Checked here, before the permute that moves the scan axis to dim 0.
+    const std::string_view op_name = op == ttnn::prim::AccumulationOp::CUMPROD ? "ttnn.cumprod" : "ttnn.cumsum";
+    ttnn::prim::validate_reduce_op_default_tile(input_tensor, op_name, "the input");
     if (optional_out.has_value()) {
         validate_output_tensor(input_tensor, *optional_out);
+        ttnn::prim::validate_reduce_op_default_tile(*optional_out, op_name, "the output");
     }
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
