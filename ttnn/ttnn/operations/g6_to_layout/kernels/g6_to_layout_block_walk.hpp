@@ -94,4 +94,49 @@ struct BlockWalk {
     }
 };
 
+// Cuts one resident shard's live rectangle into blocks of up to block_rows_tiles tile-rows, each
+// spanning the shard's live columns. Only the last block may be short.
+struct RectWalk {
+    uint32_t tile_row;
+    uint32_t rows_left;
+    uint32_t col;
+    uint32_t cols;
+
+    FORCE_INLINE bool next(Block& block) {
+        if (rows_left == 0) {
+            return false;
+        }
+        const uint32_t rows = min_u32(Geometry::block_rows_tiles, rows_left);
+        block = Block{tile_row, rows, col, cols};
+        tile_row += rows;
+        rows_left -= rows;
+        return true;
+    }
+};
+
+// The blocks of this core. Interleaved runtime args: (tile_begin, num_tiles) of the flattened
+// tile split. Sharded runtime args: (tile_row, rows, col, cols) of the core's live shard rectangle.
+template <bool sharded>
+struct CoreBlocks;
+
+template <>
+struct CoreBlocks<false> {
+    BlockWalk walk{get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(0) + get_arg_val<uint32_t>(1)};
+    FORCE_INLINE bool next(Block& block) { return walk.next(block); }
+};
+
+template <>
+struct CoreBlocks<true> {
+    RectWalk walk{get_arg_val<uint32_t>(0), get_arg_val<uint32_t>(1), get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3)};
+    FORCE_INLINE bool next(Block& block) { return walk.next(block); }
+};
+
+// Tile-rows a block moves through a tile-paged CB. Interleaved blocks always move the nominal
+// block_rows_tiles so every block occupies the same ring span; a shard moves only its live rows
+// (its last block is the core's last, so the ring never needs to stay aligned after it).
+template <bool sharded>
+FORCE_INLINE uint32_t moved_tile_rows(const Block& block) {
+    return sharded ? block.rows : Geometry::block_rows_tiles;
+}
+
 }  // namespace g6_to_layout
