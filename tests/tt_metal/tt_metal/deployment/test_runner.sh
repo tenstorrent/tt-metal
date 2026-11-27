@@ -14,11 +14,11 @@ usage() {
 	cat << EOF
 Usage: $0 [--output <logdir>] [--iterations <n>] [--skip-reset] [--continue-on-failure] [--no-eth-links] [--mgd <path>]
 
-Run the deployment test suite (Ethernet, DRAM, DRAM ACT, DRAM retention, PCIe read/write, NOC, DIDT).
+Run the deployment test suite (Ethernet, DRAM, DRAM ACT, PCIe read/write, NOC, DIDT).
 Must be run from the repository root with the tests already built.
 Everything printed to the console is also written to a single log file per run.
 
-An iteration is a board reset followed by one run of the Ethernet, DRAM, DRAM ACT, DRAM retention and PCIe tests.
+An iteration is a board reset followed by one run of the Ethernet, DRAM, DRAM ACT and PCIe tests.
 The DRAM ACT test takes about 10.3 minutes per iteration.
 After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
 
@@ -318,7 +318,7 @@ run_tests() {
 emit_banner "DEPLOYMENT TESTS RUN"
 emit "$(printf '%-12s %s' 'Date:' "$(date)")"
 emit "$(printf '%-12s %s' 'Host:' "$(hostname)")"
-emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, DRAM ACT, DRAM retention, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
+emit "$(printf '%-12s %s' 'Tests:' 'Ethernet, DRAM, DRAM ACT, PCIe read, PCIe write (per iteration), NOC, DIDT (once, after all iterations)')"
 emit_setup
 emit "$RULE_HEAVY"
 

@@ -112,8 +112,7 @@ TIERS: dict[str, Tier] = {
         eth_summary=True,
         sys_triage=True,
     ),
-    # The scheduled run. gddr_retention is left to weekly, full and the
-    # deployment runner.
+    # The scheduled run.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
         tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
