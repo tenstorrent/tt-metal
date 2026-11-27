@@ -33,12 +33,24 @@ OUTPUT_PAGES_DEPTH = 2
 TRIM_ROWS_MAX = {ttnn.bfloat16: 16, ttnn.float32: 16, ttnn.bfloat8_b: 0}
 # Cores used: None = the whole compute grid; an int caps the row-major core count.
 MAX_CORES = None
+# Largest NoC transfer of a whole page in the page reader and the writer. A larger page moves as
+# transfers of this size, swept piece-major over the block so consecutive transfers rotate DRAM
+# banks (kernels/g6_concat_page_sweep.hpp). On p1 (fp32, 4096 B pages, DRAM-bound mixed read/write)
+# 2048 measures 1.80 ms against 1.89 ms for whole pages; 1024 and smaller lose. bf16 and bfloat8_b
+# pages are at most 2048 B, so they keep one transfer per page.
+TRANSFER_BYTES_MAX = 2048
+# Rotate every core's in-block issue order by core_index mod (DRAM banks) (catalog bank_stagger).
+BANK_STAGGER = False
+# Page reader blocks in flight under transaction ids: 0 = one block, retired by a full read barrier;
+# T in 2..OUTPUT_PAGES_DEPTH = a ring of T blocks, the oldest retired by its own barrier
+# (catalog trid_double_issue).
+READ_TRIDS = 0
 
 
 def blocking_knobs():
     """Every knob above shapes the program, so all of them belong in the program-cache key."""
     trim = tuple(sorted((str(dtype), rows) for dtype, rows in TRIM_ROWS_MAX.items()))
-    return (BLOCK_BYTES_CAP, OUTPUT_PAGES_DEPTH, trim, MAX_CORES)
+    return (BLOCK_BYTES_CAP, OUTPUT_PAGES_DEPTH, trim, MAX_CORES, TRANSFER_BYTES_MAX, BANK_STAGGER, READ_TRIDS)
 
 
 # --- Mechanism caps --------------------------------------------------------------------------------
@@ -137,6 +149,10 @@ class G6ConcatPlan:
     core_work: list
     block_pages: int
     depth: int
+    transfer_bytes: int
+    bank_stagger: bool
+    num_dram_banks: int
+    read_trids: int
     has_staging: bool
     cb_output_bytes: int
     cb_staging_bytes: int
@@ -153,6 +169,9 @@ class G6ConcatPlan:
             "core_ranges": str(self.all_cores),
             "block_pages": self.block_pages,
             "depth": self.depth,
+            "transfer_bytes": self.transfer_bytes,
+            "bank_stagger": self.bank_stagger,
+            "read_trids": self.read_trids,
             "cb_output_pages_bytes": self.cb_output_bytes,
             "cb_gather_staging_bytes": self.cb_staging_bytes,
             "out_l1_per_bank": self.out_l1_per_bank,
@@ -241,6 +260,14 @@ def build_plan(tensors, d, output_memory_config, device):
     block_pages_cap = max(1, BLOCK_BYTES_CAP // page_bytes)
     block_pages = min(pages_most_loaded_core, block_pages_cap)
 
+    # Splitting a page only pays when a sweep spans several pages (several banks); a one-page block
+    # would issue its pieces back to back into one bank.
+    transfer_bytes = min(page_bytes, TRANSFER_BYTES_MAX) if block_pages > 1 else page_bytes
+    assert transfer_bytes % ttnn.get_dram_alignment() == 0, f"transfer of {transfer_bytes} B breaks read alignment"
+    num_dram_banks = ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
+    read_trids = READ_TRIDS if regime in PAGE_COPY_REGIMES else 0
+    assert read_trids == 0 or 2 <= read_trids <= OUTPUT_PAGES_DEPTH, "READ_TRIDS is 0 or 2..OUTPUT_PAGES_DEPTH"
+
     # L1 pieces are always read-aligned (16 B), so only DRAM inputs can need the staging mirror.
     any_dram_input = any(t.memory_config().buffer_type == ttnn.BufferType.DRAM for t in tensors)
     has_staging = regime == "row_gather" and any_dram_input and face_row_bytes % ttnn.get_dram_alignment() != 0
@@ -276,6 +303,10 @@ def build_plan(tensors, d, output_memory_config, device):
         core_work=core_work,
         block_pages=block_pages,
         depth=OUTPUT_PAGES_DEPTH,
+        transfer_bytes=transfer_bytes,
+        bank_stagger=BANK_STAGGER,
+        num_dram_banks=num_dram_banks,
+        read_trids=read_trids,
         has_staging=has_staging,
         cb_output_bytes=cb_output_bytes,
         cb_staging_bytes=cb_staging_bytes,
@@ -369,24 +400,41 @@ def build_program(plan, tensors, output, program_hash):
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
-    for work in plan.core_work:
+    for core_idx, work in enumerate(plan.core_work):
         x, y = work.core.x, work.core.y
+        stagger = core_idx % plan.num_dram_banks if plan.bank_stagger else 0
         if plan.regime in PAGE_COPY_REGIMES:
             slice_idx, input_idx, page_in_slice = _page_copy_start_cursor(plan, work.start_page)
-            reader_rt[x][y] = [work.start_page, work.num_pages, slice_idx, input_idx, page_in_slice]
+            reader_rt[x][y] = [work.start_page, work.num_pages, slice_idx, input_idx, page_in_slice, stagger]
         else:
             reader_rt[x][y] = [work.start_page, work.num_pages]
-        writer_rt[x][y] = [work.start_page, work.num_pages]
+        writer_rt[x][y] = [work.start_page, work.num_pages, stagger]
 
     if plan.regime in PAGE_COPY_REGIMES:
         reader_source = PAGE_READER_SOURCE
-        reader_ct = [CB_OUTPUT_PAGES, plan.page_bytes, plan.face_row_bytes, plan.trim_rows_max]
+        reader_ct = [
+            CB_OUTPUT_PAGES,
+            plan.page_bytes,
+            plan.face_row_bytes,
+            plan.trim_rows_max,
+            plan.transfer_bytes,
+            int(plan.bank_stagger),
+            plan.read_trids,
+            plan.depth,
+        ]
     else:
         reader_source = GATHER_READER_SOURCE
         reader_ct = [CB_OUTPUT_PAGES, CB_GATHER_STAGING, int(plan.has_staging), plan.page_bytes, plan.face_row_bytes]
     reader_ct += input_placement_ct_args(tensors)
 
-    writer_ct = [CB_OUTPUT_PAGES, plan.page_bytes, plan.face_row_bytes, plan.trim_rows_max]
+    writer_ct = [
+        CB_OUTPUT_PAGES,
+        plan.page_bytes,
+        plan.face_row_bytes,
+        plan.trim_rows_max,
+        plan.transfer_bytes,
+        int(plan.bank_stagger),
+    ]
     writer_ct += ttnn.TensorAccessorArgs(output).get_compile_time_args()
 
     reader_common_args = _reader_common_args(plan, tensors)

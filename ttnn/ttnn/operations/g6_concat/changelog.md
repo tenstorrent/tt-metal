@@ -59,3 +59,63 @@
   - the RM last-dim `ExcludedCell` refusal;
   - `test_g6_concat_layout_matrix`: TILE and ROW_MAJOR × bf16 / fp32 × 8 shapes (aligned, H non-aligned, `row_gather`-triggering offsets).
   W stays tile-aligned in the matrix, because `w_non_aligned` has no TARGET cell.
+
+## Refinement 3 — Speed up the perf-focus profile (p1, Qwen 18)
+- **Date**: 2026-11-27
+- **What was done**:
+  - **New knob `TRANSFER_BYTES_MAX = 2048`.** A whole page larger than the knob moves as transfers of at most that size, issued piece-major over the run/block in both the page reader and the shared writer: piece 0 of every page, then piece 1, and so on. Consecutive pages of an interleaved buffer sit in consecutive banks, so consecutive transfers now rotate DRAM banks, where before each bank got 4 KB at a time. `transfer_bytes = page_bytes` when a block holds a single page, since its pieces would hit one bank back to back.
+    - Pages that are not split: bf16 and bf8_b tiles (≤ 2 KB), and ROW_MAJOR sticks ≤ 2 KB.
+    - Pages that are split: fp32 tiles (2 pieces) and wider sticks, for example 5120 B → 2048 / 2048 / 1024.
+    - Trimmed pages move their valid rows once, in the piece-0 sweep.
+  - **New knob `BANK_STAGGER`** (catalog `bank_stagger`, default `False`). Rotates each core's in-run issue order by `core_idx mod num_dram_banks` (per-core runtime arg).
+  - **New knob `READ_TRIDS`** (catalog `trid_double_issue`, default `0`). A page-reader ring of T blocks tagged with transaction ids 1..T, the oldest retired by its own barrier. The landing slot is `write_ptr + in_flight` blocks, wrapped by hand. Needs `2 ≤ T ≤ OUTPUT_PAGES_DEPTH`.
+  - Shared header `kernels/g6_concat_page_sweep.hpp` (`sweep_run`, `walk_run`) holds the issue order for both kernels. All knobs are in `blocking_knobs()` (program-cache key), and the plan report prints `transfer_bytes`, `bank_stagger` and `read_trids`.
+  - Reused: page reader run walk, shared writer, placement mask, trim path, out_page split, block/depth knobs, CB. Added: one header, 3 knobs, 4 reader and 2 writer CT words, one RT word per kernel.
+- **Measurement** (p1, device kernel ns, 110 cores, bit-exact every row; `test_g6_concat_perf_sweep.py`):
+
+  | Setting | p1 ns | vs whole pages |
+  |---|---|---|
+  | whole pages (pre-R3 behaviour) | 1,894,776 | — |
+  | **default: 2 KB piece-major** (median of 3: 1,799,191) | 1,802,341 | **−4.9%** |
+  | 1 KB transfers | 1,838,310 | −3.0% |
+  | cap 64 / 256 KiB | 1,797,781 / 1,811,418 | noise |
+  | depth 3 / 4 | 1,795,242 / 1,801,394 | noise |
+  | bank stagger, 2 KB / whole pages | 1,799,057 / 1,893,410 | null |
+  | trid 2 @ d2, 2 @ d3, 3 @ d4, 4 @ d4 | 1,818,307 / 1,804,696 / 1,802,660 / 1,813,623 | null |
+  | trid 3 @ d4, cap 32 KiB (median of 3) | 1,785,207 | −0.8% vs default, below noise |
+  | whole pages + trid 3 @ d4 | 1,896,541 | null |
+
+  Before the clean kernels, I explored with throwaway ablations (whole-page transfers, same ns basis):
+  - **Pre-R3 cap × depth sweep** (16 KiB … 512 KiB × d2–d4): 1,866–1,923 µs. Larger blocks were slower.
+  - **Read-only / write-only:**
+    - before: 976 / 1,337 µs;
+    - after: 972 / 1,303 µs;
+    - sync-only: 14 µs;
+    - bf16 p2: 485 / 650 µs.
+  - **NoC swap** (reads NOC1, writes NOC0): 2,415 µs.
+  - **Core count** 64 / 80 / 96: 1,868 / 1,880 / 1,899 µs. With 1 KB reads, all three sit at ≈ 1,837 µs.
+  - **Page-major split** (pieces of one page back to back): reads 1 KB 1,824 µs; writes 1 KB 1,900 µs.
+  - **Bank-coalesced 16 KB writes** (pages p, p+8, … are contiguous in a bank): 2,109 µs, write-only 1,447 µs.
+  - **Piece-major 1 KB on bf16 p2:** 918 vs 900 µs.
+- **Guard set** (old vs new kernels, same session, µs):
+
+  | Cell | Old | New |
+  |---|---|---|
+  | p1 | 1,901 / 1,888 | 1,804 / 1,807 |
+  | p2 | 897 / 900 | 900 / 902 |
+  | p3 | 900 / 895 | 901 / 898 |
+  | p4 | 452.8 / 452.7 | 454.5 / 456.2 |
+  | Qwen 79 (`row_gather`) | 125.0 / 124.6 | 124.4 / 126.2 |
+  | Qwen 80 (trimmed w) | 10.4 / 10.1 | 10.2 / 10.6 |
+  | Qwen 25 (median of 6) | 10.42 | 10.44 |
+  | Panoptic 23 (bf8_b mixed → L1) | 8.1 / 8.1 | 8.1 / 8.0 |
+  | Panoptic 40 (bf8_b L1 → L1, median of 6) | 44.3 | 44.3 |
+
+  No RM production cell exceeds 32 tiles, so none is measured. Their blocks hold one stick, so `transfer_bytes = page_bytes` and their behaviour is unchanged.
+- **Bottleneck now**: DRAM efficiency under mixed read/write traffic, at 448 GB/s (1.03× the 460.8 GB/s roofline). This is p2's per-byte rate. Writes alone cap at 309 GB/s: every NOC1 write to a channel lands on one endpoint. Remaining headroom is in the noise band.
+- **Accuracy achieved**: bit-exact (PCC = 1.0, relative RMS = 0) on p1 under all 16 sweep settings, and on 12 knob pins: fp32 trimmed w join, bf16 outer, fp32 ROW_MAJOR 5120 B sticks × {stagger, trid 2, trid 3 @ d4 + stagger, 1 KB + stagger}, on 7 cores with ragged blocks.
+- **Golden test progress**: targeted slice of 93/93 passing: all 42 FLOAT32 cells (including p1 golden and loose, and fp32 special values), the 4 bf8_b Panoptic cells, all 37 ROW_MAJOR cells, Qwen 79 golden/loose, `test_cache_key`, `test_cache_key_placement` and `test_repeat_call`. The full run is left to the harness. Unit directory: 112/112 (acceptance, dtypes/placement, row-major, precision).
+- **Issues encountered**: under `--profile`, the precompile collection pass hit a mesh-device TT_THROW on the sweep file, and `-k` expressions with spaces are split. Profiling used `--no-precompile` and the `G6C_SWEEP` id selector.
+- **Tests added**:
+  - `test_g6_concat_perf_sweep.py`: the p1 knob sweep (16 settings, bit-exact) and `test_g6_concat_knob_pins` (12 cases).
+  - `test_g6_concat_device_perf.py` gains Panoptic 23 / 40 (bf8_b, L1 placement) for the guard set.

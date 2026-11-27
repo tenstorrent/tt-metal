@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "g6_concat_page_sweep.hpp"
 #include "g6_concat_tile_rows.hpp"
 
 namespace {
@@ -27,10 +28,13 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t face_row_bytes = get_compile_time_arg_val(2);
     constexpr uint32_t trim_rows_max = get_compile_time_arg_val(3);
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr uint32_t transfer_bytes = get_compile_time_arg_val(4);
+    constexpr bool bank_stagger = get_compile_time_arg_val(5) != 0;
+    constexpr auto output_args = TensorAccessorArgs<6>();
 
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t core_pages = get_arg_val<uint32_t>(1);
+    const uint32_t stagger = get_arg_val<uint32_t>(2);
 
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(CRTA_OUTPUT_BASE), page_bytes);
     const uint32_t block_pages = get_common_arg_val<uint32_t>(CRTA_BLOCK_PAGES);
@@ -52,23 +56,28 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("G6C-STORE");
-            // store_block
-            uint32_t slot_addr = get_read_ptr(cb_output_pages);
-            for (uint32_t page = 0; page < block_extent; ++page) {
-                const uint32_t valid_rows = rows.valid_rows();
-                if (g6_concat::is_trimmed<trim_rows_max>(valid_rows)) {
+            // store_block, in sweep_run order.
+            const uint32_t slot_addr = get_read_ptr(cb_output_pages);
+            g6_concat::sweep_run<page_bytes, transfer_bytes, trim_rows_max, bank_stagger>(
+                block_extent,
+                stagger,
+                rows,
+                [&](uint32_t j, uint32_t offset_bytes, uint32_t size_bytes) {
+                    const uint32_t src = slot_addr + j * page_bytes;
+                    if (size_bytes == page_bytes) {
+                        noc_async_write_page(output_page + j, output, src);
+                    } else {
+                        noc_async_write_page(output_page + j, output, src + offset_bytes, size_bytes, offset_bytes);
+                    }
+                },
+                [&](uint32_t j, uint32_t valid_rows) {
+                    const uint32_t src = slot_addr + j * page_bytes;
                     g6_concat::for_each_valid_row_piece<face_row_bytes>(
                         valid_rows, [&](uint32_t offset_bytes, uint32_t size_bytes) {
-                            noc_async_write_page(
-                                output_page, output, slot_addr + offset_bytes, size_bytes, offset_bytes);
+                            noc_async_write_page(output_page + j, output, src + offset_bytes, size_bytes, offset_bytes);
                         });
-                } else {
-                    noc_async_write_page(output_page, output, slot_addr);
-                }
-                slot_addr += page_bytes;
-                ++output_page;
-                rows.advance();
-            }
+                });
+            output_page += block_extent;
             noc_async_writes_flushed();
         }
         // Nominal count on the ragged last block keeps the ring cycle closed.

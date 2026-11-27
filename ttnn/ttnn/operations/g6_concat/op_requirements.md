@@ -65,7 +65,7 @@
 
 **Done when**: the 37 cells pass and the golden suite is otherwise unchanged. Acceptance pins pass for an RM outer join, an RM `h` join, fp32 RM and RM mixed placement. `g6_concat_plan` reports the RM regime.
 
-### [ ] Refinement 3 — Speed up the perf-focus profile (p1, Qwen 18)
+### [x] Refinement 3 — Speed up the perf-focus profile (p1, Qwen 18)
 
 **Type**: perf
 
@@ -80,3 +80,17 @@
   No SUPPORTED change. The knobs are in the program-cache key (`blocking_knobs()`), so a sweep in one process is safe.
 
 **Done when**: p1 device-ns improves beyond the ~3% noise band (≤ ~1830 µs). The bit-exact gate holds and the golden suite is green. Nothing regresses across the config-spanning guard set: one representative per kernel path × layout × placement, at least p2 (bf16 `page_copy`), Qwen 79 (`row_gather`), Qwen 80 (trimmed w join), one Panoptic cell (bf8_b, L1 output) and one RM cell, the last two only where they exceed 32 tiles. If the full lever sweep lands within noise, the measured sweep table in `changelog.md` is the deliverable and the entry ticks with the residual gap to the roofline stated.
+
+**Outcome**: p1 is **1,890 → 1,799 µs** (median of 3, device kernel ns, 110 cores; −4.8%, 1.03× the 1,747.6 µs roofline), bit-exact. The winning lever is not one of the four listed. It is `TRANSFER_BYTES_MAX = 2048`: a page larger than 2 KB moves as 2 KB transfers, swept piece-major over the block on both reader and writer, so consecutive transfers rotate DRAM banks. That brings fp32 to bf16 p2's per-byte rate; bf16 and bf8_b pages are ≤ 2 KB and are unchanged.
+- **Listed levers.** All are measured, and all are within noise of the new default:
+  - `BLOCK_BYTES_CAP` 64/256 KiB: −0.3 / +0.5%;
+  - `OUTPUT_PAGES_DEPTH` 3/4: −0.4 / −0.1%;
+  - `BANK_STAGGER`: −0.2%;
+  - `READ_TRIDS` 2–4: 0 to +0.9%. The best is trid 3 at depth 4 with a 32 KiB cap, −0.8% over 3 repeats, which is below the noise rule.
+
+  Stagger and trids are new knobs parked off (`False` / `0`). `noc_placement` was already in place; swapping the NoCs measured 2,415 µs.
+- **Bottleneck now.** DRAM efficiency under mixed read/write traffic, at 448 GB/s.
+  - Each direction alone is lower: writes only 1,303 µs (309 GB/s, all NOC1 writes converge on one endpoint per channel), reads only 972 µs (414 GB/s).
+  - Core count does not matter: 64 cores ≈ 110 cores.
+  - 1 KB transfers lose (1,838 µs), and so do bank-coalesced 16 KB writes (2,109 µs).
+- **What to try next, and why not here.** Spread writes over a channel's other NoC endpoints, or write through both NoCs in dynamic-NoC mode. Writes are the slow direction, but the remaining 3% gap to the roofline is within the noise band, and neither is a catalog lever.

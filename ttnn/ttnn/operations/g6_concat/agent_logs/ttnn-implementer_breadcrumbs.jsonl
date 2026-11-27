@@ -27,3 +27,10 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T16:21:57-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T16:22:00-05:00"}
 {"event":"test_run","what":"R2 RM: test_g6_concat_row_major.py 46/46, prior unit 66/66, golden slice 42/42 (37 RM cells), RM pins clean under --dev","result":"pass","ts":"2026-11-27T16:27:26-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T16:31:01-05:00"}
+{"event":"test_run","what":"p1 baseline + cap x depth sweep","result":"1890us baseline; caps 16K-512K x d2-4 span 1866-1923us, bigger blocks slower","ts":"2026-11-27T17:07:19-05:00"}
+{"event":"test_run","what":"ablation p1/p2 read-only, write-only, sync-only","result":"p1 read 976us (413GB/s), write 1337us (301GB/s), sync 14us; full 1890 < sum 2313 -> DRAM mixed-traffic bound; same per-direction rates for p2","ts":"2026-11-27T17:07:19-05:00"}
+{"event":"hypothesis","what":"fp32 4KB transfers hit one bank per transfer; p2 bf16 rotates banks every 2KB transfer and reaches 446 vs 426 GB/s mixed","ts":"2026-11-27T17:07:19-05:00"}
+{"event":"test_run","what":"transfer split experiments","result":"page-major 1KB reads 1824us; piece-major 2KB reader+writer 1797-1806us; 1KB piece-major 1830us; coalesced 16KB writes 2109us; NoC swap 2415us; core count 64-110 flat","ts":"2026-11-27T17:07:19-05:00"}
+{"event":"fix_applied","what":"TRANSFER_BYTES_MAX=2048 piece-major sweep (reader+writer, shared header); BANK_STAGGER and READ_TRIDS knobs parked off","ts":"2026-11-27T17:07:19-05:00"}
+{"event":"test_run","what":"p1 after, 3 reps; guard set; unit dir; golden slice","result":"p1 median 1799.2us (-4.8%); trid3_d4_cap32 1785us (-0.8%, noise, parked); guard set within noise; unit 112/112; pins 12/12 --dev; golden slice 93/93","ts":"2026-11-27T17:07:19-05:00"}

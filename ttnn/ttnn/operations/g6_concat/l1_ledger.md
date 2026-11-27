@@ -31,6 +31,8 @@ No L1 budget solve, safety fraction or blocking search exists. `block_pages` is
 | `BLOCK_BYTES_CAP` | 131072 (host constant) | — |
 | `block_pages` | `1 ≤ block_pages ≤ block_pages_cap = max(1, BLOCK_BYTES_CAP // page_bytes)` (bf16 64, fp32 32, bf8_b 120); also `≤ n1` (pages of the most-loaded core) | `block_pages = min(n1, block_pages_cap)` |
 | `OUTPUT_PAGES_DEPTH` | 2 (host constant) | — |
+| `READ_TRIDS` | 0 (host constant; 0 = one block in flight). `T ≥ 2` keeps up to `T` page-reader blocks in flight inside the same `OUTPUT_PAGES_DEPTH · block_pages` CB, so no L1 is added | host assert `READ_TRIDS == 0 or 2 ≤ READ_TRIDS ≤ OUTPUT_PAGES_DEPTH` |
+| `transfer_bytes` | `min(page_bytes, TRANSFER_BYTES_MAX = 2048)`, or `page_bytes` when `block_pages == 1`. Moves no L1; sets only the NoC transfer size and issue order | multiple of 64 (host assert); every piece offset is a multiple of it, so the source and destination offsets stay alignment-equal |
 | `rb`, `A_dram_read` | `rb` ∈ {32 (bf16), 64 (fp32)}; `A_dram_read` = 64 Blackhole / 32 Wormhole (`noc_parameters.h:379`) | staging allocated iff `rb mod A_dram_read ≠ 0` |
 | `out_l1_per_bank` | `ceil(P_out / num_l1_banks) · page_bytes` when the output is in L1, else 0; `num_l1_banks` from `ttnn.get_memory_view(device, L1)` | `output_buffer == "l1"`; reported by `g6_concat_plan` and added to `l1_total` |
 | `K` | `1 ≤ K ≤ K_MAX = 64` | host refusal above `K_MAX` (runtime-arg capacity) |
@@ -72,6 +74,11 @@ output is written once to `memory_config`'s buffer.
 | each input `x_k` (`row_gather`) | 1, logical rows only | Each output tile row's run table reads disjoint row ranges. No padding row moves, and a straddling input tile is read as two disjoint ranges. | none. Core-local L1→L1: the misaligned pieces cross once more inside the core (bf16 on Blackhole, odd row shift). |
 | each input `x_k` (`page_copy_row_major`) | 1 | Each input stick is read once, whole, by the one core that owns its output stick. A stick has no padding rows, so nothing is trimmed. | none |
 | output | 1 | Each output page is written once by its owner. The last tile row of an image is trimmed to `v` rows when `v ≤ TRIM_ROWS_MAX`; a ROW_MAJOR stick is always written whole. | none |
+
+Transfer granularity does not change any count above. A whole page larger than `transfer_bytes`
+(fp32 tiles, sticks > 2 KB) crosses as `ceil(page_bytes / transfer_bytes)` transfers, swept
+piece-major over the block, with the same bytes once each. That order is what moved p1 from 1.89 ms
+to 1.80 ms: the DRAM rate under mixed read/write traffic is set by bank rotation per transfer.
 
 Totals per tier for the cases that set the bar (bytes):
 
