@@ -462,23 +462,24 @@
   # that length. Nightly, and on dispatch with k3_accuracy_suite (no dispatch input is free). Its minutes are not yet
   # in .github/time_budget.yaml: sign-off by the budget owners is pending (PR #67237).
   #
-  # One pytest process per case, each under its own bound, so a stuck run fails at its bound, not at the job limit.
+  # One pytest process per Block, each under its own bound, so a stuck run fails at its bound, not at the job limit;
+  # MoE layers 1 and 2 share one process, so layer 2 reuses the per-process MoE face maps (about 40 s) and the warm
+  # weight cache.
   # Bound = 3 min before the first chunk (collection, mesh open, cold JIT, weights, the 4x4 binding; 1.0 min measured
   # in CI for KDA) + 1.5 x chunks x the slowest CI chunk interval + 4 min for a hang to be detected and triaged (the
   # 120 s operation timeout, then about 95 s of triage, measured in CI). Chunk intervals from the run_case LC_CHUNK
   # lines: KDA measured in CI (run 45943756035, chunks 2-91); MoE and DSA not yet run in CI, so the local slowest
   # interval + 6x the slowest local golden read, unoverlapped (the KDA golden read was 6x slower in CI than locally):
   #   KDA layer 0, 8x4:  204 chunks x 1.00 s -> 3 + 5.1 + 4 = 13 min
-  #   MoE layer 1, 4x4:  408 chunks x 0.96 s -> 3 + 9.8 + 4 = 17 min
-  #   MoE layer 2, 4x4:  408 chunks x 0.79 s -> 3 + 8.1 + 4 = 16 min
+  #   MoE layers 1, 2, 4x4, one process: 2 x 408 chunks x 0.96 / 0.79 s -> 3 + 9.8 + 3 + 8.1 + 4 = 29 min
   #   DSA layer 3, 4x4:  408 chunks x 2.85 s -> 3 + 29.1 + 0.4 (cache readback, run score) + 4, capped at
   #                      the test's own 30 min pytest timeout + 4 = 34 min
   # Measured locally (warm, page-cached goldens): 121 / 259 / 222 / 736 s. DSA is host-bound (about 1.2 s of its
   # 1.7 s a chunk is FP64 recompute and scoring). Each case skips without its checkpoint or TTNN weight cache, so
-  # each run must pass its one case.
+  # each run must pass all its cases.
   fabric_profile: torus_xy
   cmd: |
-    timeout -k 2m 72m mpirun --bind-to none --pernode --tag-output bash -lc '
+    timeout -k 2m 71m mpirun --bind-to none --pernode --tag-output bash -lc '
       set -eo pipefail
       export OMP_NUM_THREADS=$(nproc)
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
@@ -491,13 +492,11 @@
         summary=$(sed "s/\x1b\[[0-9;]*m//g" /tmp/lc_accuracy.out | grep -E "^=+ .* in [0-9.]+s" | tail -1)
         [[ "$summary" =~ " $want passed" && ! "$summary" =~ (skipped|failed|error) ]] || { echo "::error::expected $want passed and none skipped, got: $summary"; exit 1; }
       }
-      echo "===== [1/4] (Kimi-K3-2.8T) KDA layer 0, 1M, SP8xTP4 ====="
+      echo "===== [1/3] (Kimi-K3-2.8T) KDA layer 0, 1M, SP8xTP4 ====="
       passes 1 timeout -k 1m 13m python3 -m pytest $TEST -k "k3-l0-kda-1044480" -s -vvv --tb=short
-      echo "===== [2/4] (Kimi-K3.1) MoE layer 1, 1M, 4x4 top tray half ====="
-      passes 1 timeout -k 1m 17m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer1-1044480" -s -vvv --tb=short
-      echo "===== [3/4] (Kimi-K3.1) MoE layer 2, 1M, 4x4 top tray half ====="
-      passes 1 timeout -k 1m 16m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer2-1044480" -s -vvv --tb=short
-      echo "===== [4/4] (Kimi-K3.1) DSA layer 3, 1M, 4x4 top tray half ====="
+      echo "===== [2/3] (Kimi-K3.1) MoE layers 1 and 2, 1M, 4x4 top tray half, one process ====="
+      passes 2 timeout -k 1m 29m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer1-1044480 or k31-moe-layer2-1044480" -s -vvv --tb=short
+      echo "===== [3/3] (Kimi-K3.1) DSA layer 3, 1M, 4x4 top tray half ====="
       passes 1 timeout -k 1m 34m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-l3-dsa-1044480" -s -vvv --tb=short
       echo "===== all 4 cases passed ====="
     '
@@ -508,8 +507,8 @@
   skus:
     bh_sc1:
       # The job stops at its first failed case, so one hang allowance covers it: the cases without theirs
-      # (9 + 13 + 12 + 30) + 4 for one hang + 4 x 1 min kill grace.
-      timeout: 72
+      # (9 + 25 + 30) + 4 for one hang + 3 x 1 min kill grace.
+      timeout: 71
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
