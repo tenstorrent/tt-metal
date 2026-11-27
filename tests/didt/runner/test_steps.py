@@ -605,83 +605,58 @@ def test_pin_core_unsupported_step_warns(tmp_path):
     assert p["target"]["dev"] == 21 and p["trigger"] == "nd"
 
 
-def test_pin_core_without_named_device_records_why(tmp_path):
-    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes={"nd/mcast-ack": "timeout"})
-    (p,) = _pins(steps, "nd:mcast-ack")
-    assert p["status"] == "SKIP" and p["reason"] == "no failing device named by the first attempt"
-
-
-def test_pin_core_reruns_hung_each_chip_targets_after_tt_smi_r(tmp_path):
-    _, steps, _, shell, run_dir = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": "hung2"})
-    assert steps["nd:mcast-ack-duty"]["status"] == "HANG"
-    pins = _pins(steps, "nd:mcast-ack-duty")
-    assert [(p["target"], p["trigger"]) for p in pins] == [(CHIPS[3].as_dict(), "hang"), (CHIPS[7].as_dict(), "hang")]
-    for p in pins:
-        dev = p["target"]["dev"]
-        rel = f"nd/mcast-ack-duty_pin_core_dev{dev}"
-        assert p["status"] == "WARN" and p["reason"] == "not reproduced on chip alone"
-        assert shell.reset_cmds(rel) == ["tt-smi -r"]
-        (job,) = shell.chip_calls(rel)
-        assert job["env"]["TT_VISIBLE_DEVICES"] == str(dev) and "DIDT_DEVICE_ID" not in job["env"]
-        assert job["env"]["MATMUL_ITERS"] == "20" and job["log"] == run_dir / rel / f"chips/chip{dev}/pytest.log"
-        assert job["cmd"].startswith(f"pytest {shlex.quote(IDS['nd:mcast-ack-duty'])} ")
-        assert p["iterations"] == {"MATMUL_ITERS": 20} and p["env"] == {"MATMUL_ITERS": "20"}
-        # a chip killed by its triage logged no loop time: doubled iterations only, and say so
-        assert p["loop"] == {}
-        chip_log = run_dir / f"nd/mcast-ack-duty/chips/chip{dev}/pytest.log"
-        assert f"WARNING original loop time unknown (no iteration lines in {chip_log})" in p["details"][-1]
-
-
-def test_pin_core_hang_reproduced_on_each_chip_target(tmp_path):
-    outcomes = {"nd/mcast-ack-duty": "fail", "nd/mcast-ack-duty_pin_core_dev3": "hung"}
-    _, steps, _, _, run_dir = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes=outcomes)
-    (p,) = _pins(steps, "nd:mcast-ack-duty")
-    assert p["status"] == "HANG" and p["reason"] == "hung on 1/1 chips"
-    assert [(d["dev"], d["hung"], d["op"]) for d in p["devices"]] == [(3, True, "MatmulDeviceOperation")]
-    assert p["cores"]["rerun"][0] == {"x": 6, "y": 8, "translated": [10, 10]}
-    assert (run_dir / "nd/mcast-ack-duty_pin_core_dev3/chips/chip3/crash_triage.csv").is_file()
-
-
-def test_pin_core_mixed_hung_and_nd_each_chip_targets(tmp_path):
-    outcomes = {"nd/mcast-ack": "mixed", "nd/mcast-ack_pin_core_dev19": "nd"}
-    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes=outcomes)
-    hung, nd = _pins(steps, "nd:mcast-ack")
-    assert (hung["target"]["dev"], hung["trigger"], nd["target"]["dev"], nd["trigger"]) == (3, "hang", 19, "nd")
-    assert shell.reset_cmds("nd/mcast-ack_pin_core_dev3") == ["tt-smi -r"]
-    assert shell.reset_cmds("nd/mcast-ack_pin_core_dev19") == ["tt-smi -glx_reset_auto"]
-    assert hung["status"] == "WARN" and hung["reason"] == "not reproduced on chip alone"
-    assert nd["status"] == "FAIL" and nd["reason"] == "ND reproduced on chip alone: 3/20 checks"
-    assert nd["cores"]["first"][0]["x"] == 6 and nd["cores"]["rerun"][0]["failed_checks"] == 3
-    # the loop time comes from the target chip's own log, in the original and in the rerun
-    assert nd["env"] == {"MATMUL_ITERS": "20", "DIDT_MIN_LOOP_SECONDS": "164.4"}
-    assert nd["loop"] == {"original_s": 164.4, "rerun_s": 164.4, "rerun_iterations": 1000}
-
-
-def test_pin_core_each_chip_target_gone_after_reset(tmp_path):
-    # chip 3 (0000:04:00.0) hung, then fell off the bus at the pin's reset
-    chips31 = [c for c in CHIPS if c.bdf != "0000:04:00.0"]
-    chips31 = [Chip(i, c.bdf, c.tray, c.asic, c.asic_id, c.kmd) for i, c in enumerate(chips31)]
-    snaps = iter([CHIPS, CHIPS, chips31])  # first attempt, throttle, pin
-    _, steps, _, shell, _ = _run(
-        tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": "fail"}, snap=lambda: next(snaps)
+def test_each_chip_nd_only_fails_without_fallback(tmp_path):
+    rc, steps, _, shell, run_dir = _run(
+        tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": {19: "nd"}}
     )
-    (p,) = _pins(steps, "nd:mcast-ack-duty")
-    assert p["status"] == "FAIL" and p["reason"] == "chip 0000:04:00.0 not on the bus after reset"
-    assert not shell.chip_calls("nd/mcast-ack-duty_pin_core_dev3")
+    s = steps["nd:mcast-ack-duty"]
+    assert rc == 1 and s["status"] == "FAIL" and s["fallbacks"] == []
+    assert [d["dev"] for d in s["devices"]] == [19] and s["devices"][0]["failed_checks"] == 3
+    assert not (run_dir / "nd/mcast-ack-duty_throttle_hang").exists() and len(shell.chip_jobs) == 32
 
 
-def test_pin_core_each_chip_target_found_by_bdf_after_reset(tmp_path):
-    # chip 1 (0000:02:00.0) fell off at the pin's reset: chip 3 is dev 2 there, and is rerun as dev 2
-    chips31 = [c for c in CHIPS if c.bdf != "0000:02:00.0"]
-    chips31 = [Chip(i, c.bdf, c.tray, c.asic, c.asic_id, c.kmd) for i, c in enumerate(chips31)]
-    snaps = iter([CHIPS, CHIPS, chips31])  # first attempt, throttle, pin
-    outcomes = {"nd/mcast-ack-duty": "fail", "nd/mcast-ack-duty_pin_core_dev3": "hung"}
-    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes=outcomes, snap=lambda: next(snaps))
-    (p,) = _pins(steps, "nd:mcast-ack-duty")
-    (job,) = shell.chip_calls("nd/mcast-ack-duty_pin_core_dev3")
-    assert job["env"]["TT_VISIBLE_DEVICES"] == "2"
-    assert p["status"] == "HANG" and [d["bdf"] for d in p["devices"]] == ["0000:04:00.0"]
-    assert not any(d.startswith("WARNING failure on device") for d in p["details"])
+def test_each_chip_pass_runs_no_fallback(tmp_path):
+    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"])
+    assert steps["nd:mcast-ack"]["status"] == "PASS" and steps["nd:mcast-ack"]["fallbacks"] == []
+    assert len(shell.chip_jobs) == 32
+
+
+def test_each_chip_hang_runs_throttle_hang_on_every_chip(tmp_path):
+    rc, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": "fail"})
+    s = steps["nd:mcast-ack-duty"]
+    assert rc == 1 and s["status"] == "HANG"
+    (f,) = s["fallbacks"]
+    assert (f["name"], f["status"], f["reason"]) == ("throttle_hang", "PASS", "32/32 chips passed")
+    assert f["env"] == {"TT_MM_THROTTLE_PERF": "5", "MATMUL_ITERS": "100"} and f["devices"] == []
+    first, throttled = shell.chip_calls("nd/mcast-ack-duty"), shell.chip_calls("nd/mcast-ack-duty_throttle_hang")
+    assert len(first) == len(throttled) == 32
+    assert {(j["env"]["MATMUL_ITERS"], j["env"].get("TT_MM_THROTTLE_PERF")) for j in first} == {("10", None)}
+    assert {(j["env"]["MATMUL_ITERS"], j["env"]["TT_MM_THROTTLE_PERF"]) for j in throttled} == {("100", "5")}
+    assert shell.reset_cmds("nd/mcast-ack-duty_throttle_hang") == ["tt-smi -glx_reset_auto"]
+
+
+def test_throttle_hang_nd_is_fail_with_device_rows(tmp_path):
+    outcomes = {"nd/mcast-ack-duty": "fail", "nd/mcast-ack-duty_throttle_hang": {19: "nd"}}
+    _, steps, _, _, _ = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes=outcomes)
+    (f,) = steps["nd:mcast-ack-duty"]["fallbacks"]
+    assert (f["status"], f["reason"]) == ("FAIL", "failed on 1/32 chips")
+    (d,) = f["devices"]
+    assert (d["dev"], d["bdf"], d["failed_checks"], d["checks"]) == (19, CHIPS[19].bdf, 3, 20)
+
+
+def test_throttle_hang_hang_persists_keeps_triage(tmp_path):
+    outcomes = {"nd/mcast-ack-duty": "fail", "nd/mcast-ack-duty_throttle_hang": "hung2"}
+    _, steps, _, _, run_dir = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes=outcomes)
+    (f,) = steps["nd:mcast-ack-duty"]["fallbacks"]
+    assert (f["status"], f["reason"]) == ("HANG", "hang persists at throttle 5")
+    assert [(d["dev"], d["hung"], d["op"]) for d in f["devices"]] == [
+        (3, True, "MatmulDeviceOperation"),
+        (7, True, "MatmulDeviceOperation"),
+    ]
+    assert (run_dir / "nd/mcast-ack-duty_throttle_hang/chips/chip7/crash_triage.csv").is_file()
+    run_log = (run_dir / "run.log").read_text()
+    assert "nd:mcast-ack-duty throttle_hang HANG hung on 2/32 chips" in run_log
+    assert "nd:mcast-ack-duty throttle_hang result HANG hang persists at throttle 5" in run_log
 
 
 def test_pin_id_that_does_not_collect_skips_only_the_pin(tmp_path):

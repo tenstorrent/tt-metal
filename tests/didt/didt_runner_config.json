@@ -6,7 +6,8 @@
   "collect": {"cmd": "pytest --collect-only -q -p no:benchmark", "timeout": 600},
   "fallbacks": {
     "throttle": {"env": {"TT_MM_THROTTLE_PERF": "5"}, "opts": []},
-    "pin_core": {"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}}
+    "pin_core": {"kind": "pin_core", "hang_reset": {"cmd": "tt-smi -r", "timeout": 600}},
+    "throttle_hang": {"env": {"TT_MM_THROTTLE_PERF": "5", "MATMUL_ITERS": "100"}, "opts": [], "on": ["HANG"]}
   },
   "steps": [
     {
@@ -89,7 +90,7 @@
       "env": {"MATMUL_ITERS": "10"},
       "timeout": 1800,
       "check": "nd_report",
-      "fallbacks": ["throttle", "pin_core"],
+      "fallbacks": ["throttle_hang"],
       "note": "one pytest per chip, all chips at once, wkv_b1 matmul"
     },
     {
@@ -100,7 +101,7 @@
       "env": {"MATMUL_ITERS": "10"},
       "timeout": 1800,
       "check": "nd_report",
-      "fallbacks": ["throttle", "pin_core"],
+      "fallbacks": ["throttle_hang"],
       "note": "one pytest per chip, all chips at once, bursty matmul compared every iteration (test default)"
     }
   ]
