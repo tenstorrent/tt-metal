@@ -17,7 +17,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(1);
     constexpr uint32_t Wt = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr uint32_t reader_write_eighths = get_compile_time_arg_val(4);
+    constexpr auto output_args = TensorAccessorArgs<5>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_t = get_arg_val<uint32_t>(0);
@@ -34,6 +35,8 @@ void kernel_main() {
         const uint32_t col = t / Ht;
         const uint32_t col_end = (col + 1) * Ht;
         const uint32_t seg_end = end_t < col_end ? end_t : col_end;
+        // The reader writes the last (seg_len * reader_write_eighths) / 8 tiles of the segment.
+        const uint32_t my_end = seg_end - ((seg_end - t) * reader_write_eighths) / 8;
         const uint32_t img = col / Wt;
         const uint32_t wt = col - img * Wt;
         uint32_t page = (img * Ht + (t - col * Ht)) * Wt + wt;
@@ -45,9 +48,10 @@ void kernel_main() {
         {
             DeviceZoneScopedN("G6E_WRITE");
             const uint32_t src = get_read_ptr(cb_bcast_tiles);
-            for (; t < seg_end; ++t, page += Wt) {
+            for (; t < my_end; ++t, page += Wt) {
                 noc_async_write(src, output_accessor.get_noc_addr(page), page_size);
             }
+            t = seg_end;
             noc_async_writes_flushed();
         }
         cb_pop_front(cb_bcast_tiles, 1);

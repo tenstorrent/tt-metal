@@ -14,6 +14,7 @@ The descriptor is cached per geometry (BB-07): a repeat call only refreshes the 
 buffer addresses, which are common runtime args.
 """
 
+import math
 from pathlib import Path
 
 import ttnn
@@ -25,6 +26,18 @@ TILE_W = 32
 FACE_ROWS = 16
 COL_BLOCK_CAP = 64  # tiles (128 KiB of bf16) — L1 clamp on col_block
 REGIME = "R1-colmajor-row0fetch"
+# Replication mechanism (perf lamp): rows per face the reader RISC-V builds before local NoC
+# doubling copies take over; 2 * FACE_ROWS = all rows by RISC-V stores (no NoC copies).
+REPLICATE_CPU_ROWS = 8
+# Core placement (perf lamp): range k of the column-major order goes to core
+# ordered[(k * CORE_ORDER_STRIDE) % num_cores] (stride made coprime with num_cores). 1 = the
+# split's own row-wise order; a larger stride spreads the cores of one column (= one DRAM bank
+# when Wt % num_banks == 0) over the grid instead of clustering them on one NoC row.
+CORE_ORDER_STRIDE = 1
+# Write issue (perf lamp): the reader (NCRISC, NoC0) writes the last
+# (seg_len * READER_WRITE_EIGHTHS) // 8 tiles of every column segment; the writer the rest.
+# 0 = all writes on the writer (BRISC, NoC1).
+READER_WRITE_EIGHTHS = 4
 
 CB_BCAST_TILES = 0  # broadcast tiles: row 0 fetched + replicated in place; also the write source
 
@@ -62,14 +75,21 @@ def _build(input_tensor, output_tensor, grid):
     (num_cores, all_cores, core_group_1, core_group_2, n_g1, n_g2) = ttnn.split_work_to_cores(
         grid, total_tiles, row_wise=True
     )
-    assignments = []  # (core, start_t, n_t)
-    start_t = 0
+    range_sizes = []
     for group, n_t in ((core_group_1, n_g1), (core_group_2, n_g2)):
         if n_t == 0:
             continue
-        for core in _ordered_cores(group):
-            assignments.append((core, start_t, n_t))
-            start_t += n_t
+        range_sizes += [n_t] * len(_ordered_cores(group))
+    cores = _ordered_cores(all_cores)
+    assert len(cores) == len(range_sizes) == num_cores
+    stride = CORE_ORDER_STRIDE
+    while math.gcd(stride, num_cores) != 1:
+        stride += 1
+    assignments = []  # (core, start_t, n_t)
+    start_t = 0
+    for k, n_t in enumerate(range_sizes):
+        assignments.append((cores[(k * stride) % num_cores], start_t, n_t))
+        start_t += n_t
     assert start_t == total_tiles, (start_t, total_tiles)
 
     max_cols_per_core = max((s + n - 1) // Ht - s // Ht + 1 for _, s, n in assignments)
@@ -91,9 +111,21 @@ def _build(input_tensor, output_tensor, grid):
     )
 
     # ---- Kernels ----
-    reader_ct_args = [CB_BCAST_TILES, Ht, col_block, page_size, row_fetch_bytes, face_bytes, face_row_bytes]
+    reader_ct_args = [
+        CB_BCAST_TILES,
+        Ht,
+        col_block,
+        page_size,
+        row_fetch_bytes,
+        face_bytes,
+        face_row_bytes,
+        REPLICATE_CPU_ROWS,
+        READER_WRITE_EIGHTHS,
+        Wt,
+    ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = [CB_BCAST_TILES, Ht, Wt, page_size]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args = [CB_BCAST_TILES, Ht, Wt, page_size, READER_WRITE_EIGHTHS]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     reader_rt = ttnn.RuntimeArgs()
@@ -107,7 +139,7 @@ def _build(input_tensor, output_tensor, grid):
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt,
-        common_runtime_args=[input_tensor.buffer_address()],
+        common_runtime_args=[input_tensor.buffer_address(), output_tensor.buffer_address()],
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer_kernel = ttnn.KernelDescriptor(
@@ -134,6 +166,9 @@ def _build(input_tensor, output_tensor, grid):
         "bcast_depth": bcast_depth,
         "row_fetch_bytes": row_fetch_bytes,
         "max_cols_per_core": max_cols_per_core,
+        "replicate_cpu_rows": REPLICATE_CPU_ROWS,
+        "core_order_stride": stride,
+        "reader_write_eighths": READER_WRITE_EIGHTHS,
     }
     return descriptor, plan
 
@@ -158,7 +193,7 @@ def get_program(input_tensor, output_tensor):
         _cache[key] = entry
     descriptor, plan = entry
     kernels = descriptor.kernels
-    kernels[0].common_runtime_args = [input_tensor.buffer_address()]
+    kernels[0].common_runtime_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
     kernels[1].common_runtime_args = [output_tensor.buffer_address()]
     descriptor.kernels = kernels
     return descriptor, plan

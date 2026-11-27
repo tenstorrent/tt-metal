@@ -34,3 +34,19 @@ W=512 → `1 * 2 * 2048 = 4 KiB`; W ≤ 256 → `2 KiB`.
 Totals per tier (W = 512, 128 cores, BH): DRAM writes 524 288 B; DRAM reads ≤ (128 + 16) × 128 B ≈ 18 KiB (≈ 3.5 % of writes); NoC cross-core 0 B; core-local L1 replicate 2 KiB per (core, column).
 
 > Cheapest-traffic split considered: R2, column-group multicast — x DRAM reads drop from ≈ 18 KiB to 2 KiB (16 KiB, ≈ 3 % of the op's DRAM bytes) at the cost of ≈ 256 KiB of on-chip multicast and a semaphore handshake per column group. Implemented: R1, column-major linear split with per-core row-0 fetch. Deferred because the saved DRAM bytes are a few percent of a write-bound op and R2 puts a cross-core handshake on the critical path of a ~1.5 µs call; R1's column-major order keeps each column's cores a consecutive run, so R2 layers onto it without changing the writer.
+
+## Implementation notes (ttnn-implementer)
+
+Inventory unchanged: `cb_bcast_tiles` is still the only CB, sized `bcast_depth * col_block * 2048 B`.
+Two perf lamps of the design were turned on as live CT knobs (host constants in
+`g6_expand_program_descriptor.py`); neither changes DRAM crossings:
+
+- `REPLICATE_CPU_ROWS = 8` (replication mechanism): the reader RISC-V builds rows 0..7 of faces 0/1,
+  then local NoC L1→L1 copies double them to 16 rows and copy faces 0/1 onto faces 2/3, inside the same
+  slot. That adds 2 KiB of core-local NoC traffic per (core, column) and no DRAM bytes. `2 * FACE_ROWS`
+  restores the all-RISC-V copy.
+- `READER_WRITE_EIGHTHS = 4` (write issue on one RISC): the reader writes the second half of every column
+  segment on NoC0 from the slot it built, and the writer writes the rest on NoC1. Every output page is
+  still written once, by one core. The reader flushes before any re-reserve and barriers before return.
+- `CORE_ORDER_STRIDE = 1` (core placement): measured flat at strides 7, 13 and 37, so it stays at the
+  split's own order.
