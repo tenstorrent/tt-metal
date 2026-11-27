@@ -28,6 +28,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8, from_torch, to_torch
+from ...utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from ...utils.tracing import StateTensor, Tracer
 from ..pipeline_api import PipelineAPIMixin
 from .prompt_encoder import PromptEncoder
@@ -471,6 +472,7 @@ class Flux2Pipeline(PipelineAPIMixin):
             shard_prompt=shard_prompt,
         )
 
+    @cap_torch_threads_to_half_the_cpus()
     def __call__(
         self,
         *,
