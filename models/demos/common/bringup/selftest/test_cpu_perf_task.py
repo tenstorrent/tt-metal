@@ -12,3 +12,11 @@ def test_a_cpu_only_perf_task_is_not_a_perf_pick():
     assert pick(None, {"step": "perf", "role": "perf", "device": True})
     assert pick(None, {"step": "perf", "role": "perf"})  # unmarked perf picks stay picks
     assert not pick(None, {"step": "perf", "device": True})  # no role: the profile task, as before
+
+
+def test_ab_mode_none_is_gated_not_measured():
+    """F304: a device perf task with `ab_mode: none` (its gate measures what it needs) is not a perf pick."""
+    pick = Orchestrator.perf_pick
+    assert not pick(None, {"step": "perf", "role": "perf", "device": True, "ab_mode": "none"})
+    assert pick(None, {"step": "perf", "role": "perf", "device": True, "ab_mode": "quick"})
+    assert pick(None, {"step": "perf", "role": "perf", "device": True, "ab_mode": "full"})

@@ -2960,3 +2960,11 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
 - Fix: core/gate.REPO_WIDE_HOOKS / repo_wide_hook_env: the gate commit runs the hook's checker on its own files
   (a violation there refuses the commit, as before) and SKIPs the repo-wide run. Selftest: selftest/test_repo_wide_hooks.py.
   The two old violations are still there (not the framework's files): open item for the owner.
+
+## F304 (2026-11-27, DeepSeek-V4.1 WA.2): `ab_mode: none`: a device perf task gated, not A/B-measured
+- Seen: WA.2 (step perf, role perf, device: true, no `ab`: an op-level probe of a fork option, its gate measures the op
+  itself) passed its agent check, then the orchestrator ran an on-only quick model profile (test_profile.py, a model load,
+  ~10 min) that measured nothing the task asked, and stopped WAITING FOR A PERSON on that table. WA.3 (off == on check
+  before WA.4's A/B) would repeat it.
+- Fix: Orchestrator.perf_pick is false for `ab_mode: none` (task-level); such a task takes the normal gate. Perf picks
+  without `ab` keep the on-only measurement (test_perf_ab.py). Selftest: selftest/test_cpu_perf_task.py.
