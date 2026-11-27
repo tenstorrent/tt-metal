@@ -254,6 +254,18 @@ int main(int,char** argv) {
   preprocessed.targets[0].defines.clear();
   auto replay=[&](){return run_prewarm({preprocessed},out.string()+"/","",7,root.string()+"/",false);};
   assert(replay()==1);
+  fs::path ccache=root/"ccache";
+  std::ofstream(ccache)<<"#!/bin/sh\nshift\nexec \"$@\"\n";
+  fs::permissions(ccache,fs::perms::owner_all);
+  const std::string saved_path=getenv("PATH");
+  setenv("PATH",(root.string()+":"+saved_path).c_str(),1);
+  preprocessed.gpp="ccache sloppiness=pch_defines,time_macros "+compiler.string();
+  assert(replay()==1); setenv("PATH",saved_path.c_str(),1);
+  for(const auto& foreign : std::vector<std::string>{root.string()+"-sibling/bin/g++",
+       root.string()+"/../other/bin/g++", "/usr/bin/c++ "+compiler.string(),
+       "ccache sloppiness=pch_defines,time_macros /usr/bin/c++"}) {
+   preprocessed.gpp=foreign; assert(replay()==0 && summary[8]==1);
+  }
  }
  // Source identity follows the root includes even when the compiler is installed elsewhere.
  req.gpp="/usr/bin/c++"; req.targets[0].srcs={src}; req.targets[0].defines.clear();

@@ -865,6 +865,19 @@ std::size_t run_prewarm(
         if (!root_dir.empty() &&
             (req.targets.empty() || !std::all_of(req.targets.begin(), req.targets.end(), [&](const auto& target) {
                  const auto includes = jit_build::utils::tokenize_flags(target.includes);
+                 if (includes.empty()) {
+                     // Preprocessed captures lack includes; retain their local compiler identity.
+                     const auto compiler = jit_build::utils::tokenize_flags(req.gpp);
+                     if (!(compiler.size() == 1 ||
+                           (compiler.size() == 3 && compiler[0] == "ccache" &&
+                            compiler[1] == "sloppiness=pch_defines,time_macros")) ||
+                         !fs::path(compiler.back()).is_absolute()) {
+                         return false;
+                     }
+                     const auto relative = fs::path(compiler.back()).lexically_normal().lexically_relative(
+                         fs::path(root_dir).lexically_normal());
+                     return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
+                 }
                  return includes.size() >= 3 && includes[0] == "-I." && includes[1] == "-I.." &&
                         includes[2].starts_with("-I") &&
                         (fs::path(includes[2].substr(2)) / "").lexically_normal() ==
