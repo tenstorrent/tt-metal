@@ -33,7 +33,9 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "common/executor.hpp"
 #include "device_fixture.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/program/kernel_prewarm.hpp"
+#include "impl/program/program_impl.hpp"
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
@@ -571,7 +573,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
@@ -619,7 +621,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, runtime_program));
+    EXPECT_NO_THROW(runtime_program.impl().compile(device));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
@@ -630,7 +632,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(program.impl().compile(device));
     EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
@@ -642,7 +644,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
     try {
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
         FAIL() << "Expected PrecompiledKernelNotFoundError";
     } catch (const experimental::PrecompiledKernelNotFoundError& ex) {
         EXPECT_EQ(ex.kernel_name(), kReaderKernelName);
@@ -657,7 +659,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
 TEST_F(IsolatedKernelCacheMeshDeviceFixture, OfflinePrewarmReflectsEditedKernelBodyChild) {
     auto* device = this->devices_.at(0)->get_devices().at(0);
     const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+        MetalContext::instance(extract_context_id(device)).build_env_manager().get_device_build_env(device->build_id()).build_env;
 
     ScopedTempDir source_dir("ttprewarm_probe");
     const fs::path kernel_path = source_dir.path_ / (source_dir.path_.filename().string() + ".cpp");
@@ -666,7 +668,7 @@ TEST_F(IsolatedKernelCacheMeshDeviceFixture, OfflinePrewarmReflectsEditedKernelB
     auto compile_probe = [&]() {
         Program program = CreateProgram();
         CreateKernel(program, kernel_path.string(), CoreCoord{0, 0}, kReaderDmConfig);
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
     };
 
     write_probe_kernel(kernel_path, kProbeTagV1);
@@ -715,7 +717,7 @@ TEST(KernelPrewarmIsolationTest, OfflinePrewarmReflectsEditedKernelBody) {
 TEST_F(IsolatedKernelCacheMeshDeviceFixture, EditedKernelBodyForcesRecompileNotStaleCacheHitChild) {
     auto* device = this->devices_.at(0)->get_devices().at(0);
     const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+        MetalContext::instance(extract_context_id(device)).build_env_manager().get_device_build_env(device->build_id()).build_env;
 
     ScopedTempDir source_dir("ttdephash_probe");
     const fs::path kernel_path = source_dir.path_ / (source_dir.path_.filename().string() + ".cpp");
@@ -724,7 +726,7 @@ TEST_F(IsolatedKernelCacheMeshDeviceFixture, EditedKernelBodyForcesRecompileNotS
     auto compile_probe = [&]() {
         Program program = CreateProgram();
         CreateKernel(program, kernel_path.string(), CoreCoord{0, 0}, kReaderDmConfig);
-        detail::CompileProgram(device, program);
+        program.impl().compile(device);
     };
 
     write_probe_kernel(kernel_path, kProbeTagV1);
