@@ -174,18 +174,18 @@ def test_expand_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert ttnn.expand(input_tensor, [3, -1, -1, -1]).memory_config() == memory_config
 
     # Expanding the last two dims of a shape that is not tile-aligned. A BFLOAT16 TILE input leaves out NaN, as the
-    # docstring requires, and its zeros are compared by value. Values also move into new blocks, so block floats get
+    # docstring requires, and -0.0 as well. Values also move into new blocks, so block floats get
     # values with one exponent.
     bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
     for shape in ((2, 1, 30, 1), (2, 1, 1, 30)):
         if dtype in _BLOCK_FLOATS:
             x = one_exponent_input(shape)
         else:
-            x = full_range_input(shape, dtype, nan=not bfloat16_tile)
+            x = full_range_input(shape, dtype, nan=not bfloat16_tile, negative_zero=not bfloat16_tile)
         unaligned = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         output = ttnn.expand(unaligned, [-1, 3, 30, 30], memory_config=memory_config)
         expected = ttnn.to_torch(unaligned).expand(-1, 3, 30, 30)
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+        assert_exact(expected, ttnn.to_torch(output))
 
 
 _EXPAND_SHARD_GRIDS = {
