@@ -32,7 +32,7 @@ STATUS=0
 export LLK_CODE_SHIFTS="${LLK_CODE_SHIFTS:-0 4 20 36 52}"
 export RUNNER_TEMP="$TEMP_ROOT/placement"
 export PERF_RUN_TAG="p0"
-export LLK_WINDOW_HASH=1
+export LLK_WINDOW_HASH="${LLK_WINDOW_HASH:-1}"
 STOP_AT="${LLK_STOP_AT:-}"
 if [[ -n "$STOP_AT" ]]; then
   export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) / 3 ))

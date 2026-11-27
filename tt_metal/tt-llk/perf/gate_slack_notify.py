@@ -255,6 +255,12 @@ def regression_body(rows, ctx, annotate=None):
     run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
     findings = _findings(rows)
     worst = findings[:_TOP_N]
+    if not rows:
+        return [
+            "*No stage-1 regression: the report says what blocks.*",
+            "",
+            _report_line(ctx, run_link),
+        ]
     lines = [f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*"]
     if worst:
         lines.append("")

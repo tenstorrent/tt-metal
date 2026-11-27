@@ -144,17 +144,26 @@ jobs:
     outputs:
       pr: ${{ steps.policy.outputs.pr }}
       nightly: ${{ steps.policy.outputs.nightly }}
+      accepted: ${{ steps.accept.outputs.accepted }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/tt-llk/perf/gate_policy.json
+          sparse-checkout: |
+            tt_metal/tt-llk/perf/gate_policy.json
+            .github/scripts/llk-perf-regression-accepted.sh
           sparse-checkout-cone-mode: false
       - id: policy
         run: |
           for GATE in pr nightly; do
             echo "$GATE=$(python3 -c 'import json,sys; print(json.dumps(json.load(open("tt_metal/tt-llk/perf/gate_policy.json"))[sys.argv[1]]))' "$GATE")" >> "$GITHUB_OUTPUT"
           done
+      - id: accept
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEAM_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+        run: .github/scripts/llk-perf-regression-accepted.sh "${{ github.event.pull_request.number }}"
 
   llk-perf-gate:
     name: "LLK perf regression gate (${{ matrix.arch }})"
@@ -183,7 +192,7 @@ jobs:
       threshold: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].threshold }}
       module_thresholds: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].module_thresholds }}
       min_cycles: ${{ fromJSON(needs.gate-policy.outputs.pr)[matrix.arch].min_cycles }}
-      fail_on_regression: ${{ matrix.arch == 'blackhole' }}
+      fail_on_regression: ${{ matrix.arch == 'blackhole' && needs.gate-policy.outputs.accepted != 'true' }}
       measure_result: >-
         ${{ needs.measure.result }},${{ needs.measure-branch-point.result }}
       current_artifact_pattern: >-

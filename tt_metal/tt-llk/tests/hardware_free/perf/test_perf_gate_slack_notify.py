@@ -333,3 +333,12 @@ def test_post_pass_false_still_posts_a_regression_and_a_skip(tmp_path, monkeypat
     assert "should_post=true" in _post(
         tmp_path, monkeypatch, "0", "false", "--post-pass", "false"
     )
+
+
+def test_a_block_with_no_stage1_row_points_at_the_report():
+    text = build_text("regressed", [], dict(_CTX, report_url="https://x/run#summary"))
+
+    assert "*No stage-1 regression: the report says what blocks.*" in text
+    assert "<https://x/run#summary|full table>" in text
+    assert "point(s) regressed" not in text
+    assert "perf_compare_commits.sh" not in text
