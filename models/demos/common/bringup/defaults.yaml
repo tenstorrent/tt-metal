@@ -79,7 +79,7 @@ contract:
 perf:
   op_profile: true         # F187: per-op rows in every real-time profile (every layer, same run); on the device
                            # profiler only when a spec sets it (representative layers, a minute each)
-  ab_mode: quick           # F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
+  ab_mode: quick           # F304: a task may set ab_mode: none (gated only, no device A/B). F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
                            # prefix, every layer vs the golden, clean wall); full (frozen tests, ladder rungs,
                            # profile). Quick picks' full gates run once, merged, before the final task (X.3)
   full_prefill: false      # the full-target warm prefill in the profile

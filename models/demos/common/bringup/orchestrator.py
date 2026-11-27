@@ -1635,7 +1635,14 @@ class Orchestrator:
     def perf_pick(self, task: dict) -> bool:
         # F302: a perf-step task marked `device: false` (a CPU-only design / analysis task) changes nothing to measure
         # on the device: it is gated like any task, never an on / off device A/B (DeepSeek-V4.1 PS.1, 2026-11-23)
-        return task.get("step") == "perf" and bool(task.get("role")) and task.get("device") is not False
+        # F304: `ab_mode: none` says the same of a device task whose own gate measures what it needs (an op-level probe,
+        # an off == on check before the A/B task): gated, no on-only / on-off device measurement (DeepSeek-V4.1 WA.2)
+        return (
+            task.get("step") == "perf"
+            and bool(task.get("role"))
+            and task.get("device") is not False
+            and task.get("ab_mode") != "none"
+        )
 
     def ab_key(self, task: dict) -> str:
         """What a report and a decision are about: the pick's brief and switch. An edit of the gate (the owner dropping
