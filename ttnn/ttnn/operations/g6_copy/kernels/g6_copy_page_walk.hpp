@@ -9,39 +9,34 @@
 
 namespace g6_copy {
 
-enum class Direction : uint8_t { Read, Write };
-
-// Moves one block of `block_len` pages starting at page `block_first` between DRAM and the
-// staging slot at `l1_base`, one NoC call per bank run. Pages p, p + num_banks, ... of an
-// interleaved tensor are contiguous in one bank, so each run is a single sequential span.
-//
-// The L1 layout of the block follows walk order, not page order. The reader and the writer
-// must call this with identical (block_first, block_len, walk_rotation) so page p's bytes sit
-// at the same L1 offset on both sides. Runs are bounded by the block's own end, never the
-// tensor's: a longer run would spill into another block's slot or another core's pages.
-template <Direction dir, typename Accessor>
+// Moves the pages [block_first, block_first + block_len) between DRAM and the L1 region at l1_base,
+// one NoC transfer per bank run (pages p, p + num_banks, ... sit contiguously in one bank).
+// A page's L1 slot follows walk order, not page order, so the reader and the writer must both walk
+// through this function with the same arguments.
+template <bool IsRead, typename Accessor>
 FORCE_INLINE void transfer_block(
-    const Accessor& accessor,
-    uint32_t block_first,
-    uint32_t block_len,
-    uint32_t walk_rotation,
-    uint32_t l1_base,
-    uint32_t page_bytes) {
+    const Accessor& accessor, uint32_t block_first, uint32_t block_len, uint32_t walk_rotation, uint32_t l1_base) {
+    // The bank stride of the accessor's default page size; the CB page size matches it on the host.
+    const uint32_t page_bytes = accessor.get_aligned_page_size();
+    // A run must stop at this block's end: bank contiguity continues into other blocks and other cores.
     const uint32_t block_end = block_first + block_len;
     const uint32_t num_banks = accessor.contiguous_page_stride();
-    const uint32_t nk = block_len < num_banks ? block_len : num_banks;
-    uint32_t k = walk_rotation % nk;
-    uint32_t l1 = l1_base;
-    for (uint32_t i = 0; i < nk; ++i) {
-        const uint32_t p = block_first + k;
-        const uint32_t run_bytes = accessor.num_contiguous_pages(p, block_end) * page_bytes;
-        if constexpr (dir == Direction::Read) {
-            noc_async_read(accessor.get_noc_addr(p), l1, run_bytes);
+    const uint32_t num_runs = block_len < num_banks ? block_len : num_banks;
+
+    uint32_t k = walk_rotation % num_runs;
+    uint32_t l1_addr = l1_base;
+    for (uint32_t i = 0; i < num_runs; ++i) {
+        const uint32_t page = block_first + k;
+        const uint32_t run_bytes = accessor.num_contiguous_pages(page, block_end) * page_bytes;
+        if constexpr (IsRead) {
+            noc_async_read(accessor.get_noc_addr(page), l1_addr, run_bytes);
         } else {
-            noc_async_write(l1, accessor.get_noc_addr(p), run_bytes);
+            noc_async_write(l1_addr, accessor.get_noc_addr(page), run_bytes);
         }
-        l1 += run_bytes;
-        k = (k + 1 == nk) ? 0 : k + 1;
+        l1_addr += run_bytes;
+        if (++k == num_runs) {
+            k = 0;
+        }
     }
 }
 

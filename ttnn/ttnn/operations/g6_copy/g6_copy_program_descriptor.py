@@ -1,195 +1,191 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_copy program descriptor: plan, descriptor build and host cache.
+"""g6_copy program: flat page ranges over the grid, one reader (NCRISC, NoC0) and one writer
+(BRISC, NoC1) per core, staged through one CB in coalesced bank runs.
 
-One CB (`cb_page_staging`), one reader (NCRISC / NoC0) and one writer (BRISC / NoC1) dataflow kernel
-over every used core; no compute kernel. Each core copies the flat page range
-[core_first_page, core_first_page + core_pages) in blocks of `block_pages` pages, one NoC call per
-DRAM bank run.
-
-The module-level knobs are read at call time (never captured at import), so a perf pass or a test
-can override them with monkeypatch; every knob is part of the cache key.
+The module-level knobs are read at call time (tests override them with monkeypatch) and are part
+of the descriptor cache key.
 """
 
-from __future__ import annotations
-
-import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-# --- Knobs (single source of truth for every derived quantity) ----------------------------------
-# Per-core L1 the model leaves to the op (BB-05).
+# L1 per core the model leaves to the op (BB-05).
 L1_BUDGET_BYTES = 1347776
-# Cap on the number of cores in the pool; None = the full compute grid.
+# Cap on cores used; None spreads the pages over the whole compute grid.
 MAX_CORES = None
-# Cap on pages per block; None = no cap (one block per core when it fits L1).
+# Cap on pages per block; None lets one block hold a core's whole assignment.
 MAX_BLOCK_PAGES = None
-# Blocks resident in cb_page_staging on the streamed plan (read of block k+1 overlaps write of k).
+# Blocks the staging CB holds on the streamed plan.
 STREAM_DEPTH_BLOCKS = 2
-# Rotate each core's bank-run walk by its linear index so cores do not all start on the same bank.
+# Rotate each core's bank-run walk by its linear index so cores start on different banks.
 BANK_STAGGER = False
 
 CB_PAGE_STAGING = 0
 
-_READER_COMMON_ADDR = 0
-_WRITER_COMMON_ADDR = 0
+READER_KERNEL = "g6_copy_reader.cpp"
+WRITER_KERNEL = "g6_copy_writer.cpp"
 
-_PROGRAM_CACHE = {}
-
-
-def _grid_of(device):
-    return device.compute_with_storage_grid_size()
+# Common RT arg slots, identical in both kernels. DRAM-interleaved accessors add no common RT args.
+_CRTA_BUFFER_ADDRESS = 0
+_CRTA_BLOCK_PAGES = 1
 
 
-def _split(grid, tensor_pages):
-    """Flat contiguous page ranges over the core pool, row-major, balanced to +-1 page.
+@dataclass(frozen=True)
+class _CoreWork:
+    core: ttnn.CoreCoord
+    first_page: int
+    num_pages: int
+    walk_rotation: int
 
-    Returns (all_cores, [(core, core_first_page, core_pages), ...]) in row-major order."""
+
+@dataclass(frozen=True)
+class _Plan:
+    plan: str
+    grid: tuple
+    all_cores: ttnn.CoreRangeSet
+    work: tuple
+    tensor_pages: int
+    page_bytes: int
+    block_pages: int
+    cb_depth_blocks: int
+
+    @property
+    def cb_pages(self):
+        return self.cb_depth_blocks * self.block_pages
+
+
+def _plan(grid, tensor_pages, page_bytes):
+    """Regime selection: the single source for the dispatch and for describe_plan()."""
+    if page_bytes > L1_BUDGET_BYTES:
+        raise RuntimeError(
+            f"g6_copy: a {page_bytes} B page exceeds the {L1_BUDGET_BYTES} B of L1 per core left to the op"
+        )
+
     grid_cores = grid.x * grid.y
-    if MAX_CORES is None:
-        split = ttnn.split_work_to_cores(grid, tensor_pages, row_wise=True)
-    else:
-        pool = ttnn.num_cores_to_corerangeset(min(MAX_CORES, grid_cores), grid, row_wise=True)
-        split = ttnn.split_work_to_cores(pool, tensor_pages, row_wise=True)
-    _, all_cores, core_group_1, core_group_2, pages_g1, pages_g2 = split
+    pool_cores = grid_cores if MAX_CORES is None else min(MAX_CORES, grid_cores)
+    pool = ttnn.num_cores_to_corerangeset(pool_cores, grid, row_wise=True)
+    num_cores, all_cores, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(
+        pool, tensor_pages, row_wise=True
+    )
 
-    assignment = []
+    work = []
     first_page = 0
-    for group, per_core in ((core_group_1, pages_g1), (core_group_2, pages_g2)):
-        if per_core == 0:
+    for group, group_pages in ((group_1, pages_1), (group_2, pages_2)):
+        if group_pages == 0:
             continue
         for core in ttnn.corerange_to_cores(group, None, True):
-            assignment.append((core, first_page, per_core))
-            first_page += per_core
-    assert first_page == tensor_pages, f"g6_copy: split covers {first_page} of {tensor_pages} pages"
-    return all_cores, assignment
+            rotation = len(work) if BANK_STAGGER else 0
+            work.append(_CoreWork(core, first_page, group_pages, rotation))
+            first_page += group_pages
+    assert len(work) == num_cores and first_page == tensor_pages
 
-
-def _plan(input_tensor):
-    """Regime selection; the single source for the dispatch and for describe_plan()."""
-    grid = _grid_of(input_tensor.device())
-    tensor_pages = input_tensor.buffer_num_pages()
-    page_bytes = input_tensor.buffer_aligned_page_size()
-
-    if page_bytes > L1_BUDGET_BYTES:
-        # sub_page_rows (splitting one page into byte pieces) is not built.
-        raise RuntimeError(f"g6_copy: one page of {page_bytes} B exceeds the per-core L1 budget of {L1_BUDGET_BYTES} B")
-
-    all_cores, assignment = _split(grid, tensor_pages)
-    core_pages_max = max(pages for _, _, pages in assignment)
-
+    core_pages_max = max(w.num_pages for w in work)
     if core_pages_max * page_bytes <= L1_BUDGET_BYTES and (
         MAX_BLOCK_PAGES is None or core_pages_max <= MAX_BLOCK_PAGES
     ):
-        plan = "one_block"
-        block_pages = core_pages_max
-        cb_depth_blocks = 1
+        plan, block_pages, cb_depth_blocks = "one_block", core_pages_max, 1
     else:
-        plan = "streamed"
-        block_cap = math.inf if MAX_BLOCK_PAGES is None else MAX_BLOCK_PAGES
-        block_pages = max(1, min(block_cap, L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS * page_bytes)))
+        block_cap = L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS * page_bytes)
+        if MAX_BLOCK_PAGES is not None:
+            block_cap = min(block_cap, MAX_BLOCK_PAGES)
+        block_pages = max(1, block_cap)
         cb_depth_blocks = min(STREAM_DEPTH_BLOCKS, L1_BUDGET_BYTES // (block_pages * page_bytes))
+        plan = "streamed"
 
-    walk_rotation = [index if BANK_STAGGER else 0 for index in range(len(assignment))]
-    cb_pages = cb_depth_blocks * block_pages
+    return _Plan(
+        plan=plan,
+        grid=(grid.x, grid.y),
+        all_cores=all_cores,
+        work=tuple(work),
+        tensor_pages=tensor_pages,
+        page_bytes=page_bytes,
+        block_pages=block_pages,
+        cb_depth_blocks=cb_depth_blocks,
+    )
 
-    return {
-        "grid": (grid.x, grid.y),
-        "all_cores": all_cores,
-        "assignment": assignment,
-        "walk_rotation": walk_rotation,
-        "tensor_pages": tensor_pages,
-        "page_bytes": page_bytes,
-        "plan": plan,
-        "block_pages": block_pages,
-        "cb_depth_blocks": cb_depth_blocks,
-        "cb_pages": cb_pages,
-    }
+
+def _plan_for(tensor):
+    grid = tensor.device().compute_with_storage_grid_size()
+    return _plan(grid, tensor.buffer_num_pages(), tensor.buffer_aligned_page_size())
 
 
 def describe_plan(input_tensor):
-    """Host-only report of the plan a call on `input_tensor` selects (BB-08, BB-21)."""
-    p = _plan(input_tensor)
-    used = {}
-    for core, first_page, pages in p["assignment"]:
-        used[
-            (core.x, core.y)
-        ] = f"copy pages [{first_page},{first_page + pages}): reader NCRISC/NoC0 + writer BRISC/NoC1"
-    gx, gy = p["grid"]
-    roles = {f"({x},{y})": used.get((x, y), "idle") for y in range(gy) for x in range(gx)}
+    """Report the plan a call on input_tensor selects (BB-08) and the role of every grid core (BB-21)."""
+    p = _plan_for(input_tensor)
+    roles = {f"({x},{y})": "idle" for y in range(p.grid[1]) for x in range(p.grid[0])}
+    for w in p.work:
+        roles[
+            f"({w.core.x},{w.core.y})"
+        ] = f"copy pages [{w.first_page},{w.first_page + w.num_pages}): reader NCRISC/NoC0 + writer BRISC/NoC1"
     return {
         "regime": "page_copy",
-        "plan": p["plan"],
-        "grid": p["grid"],
-        "num_cores": len(p["assignment"]),
-        "tensor_pages": p["tensor_pages"],
-        "page_bytes": p["page_bytes"],
-        "core_pages": [pages for _, _, pages in p["assignment"]],
-        "block_pages": p["block_pages"],
-        "cb_depth_blocks": p["cb_depth_blocks"],
-        "cb_pages": p["cb_pages"],
-        "l1_bytes_per_core": p["cb_pages"] * p["page_bytes"],
+        "plan": p.plan,
+        "grid": p.grid,
+        "num_cores": len(p.work),
+        "tensor_pages": p.tensor_pages,
+        "page_bytes": p.page_bytes,
+        "core_pages": [w.num_pages for w in p.work],
+        "block_pages": p.block_pages,
+        "cb_depth_blocks": p.cb_depth_blocks,
+        "cb_pages": p.cb_pages,
+        "l1_bytes_per_core": p.cb_pages * p.page_bytes,
         "bank_stagger": BANK_STAGGER,
         "roles": roles,
     }
 
 
-def _build_program_descriptor(input_tensor, output_tensor, p):
-    all_cores = p["all_cores"]
-    page_bytes = p["page_bytes"]
+def _kernel(source, tensor, plan, config):
+    accessor_args = ttnn.TensorAccessorArgs(tensor)
+    if len(accessor_args.get_common_runtime_args()) != 0:
+        raise RuntimeError("g6_copy: the tensor accessor needs common RT args, which collide with the op's")
+    runtime_args = ttnn.RuntimeArgs()
+    for w in plan.work:
+        runtime_args[w.core.x][w.core.y] = [w.first_page, w.num_pages, w.walk_rotation]
+    common_runtime_args = [0] * 2
+    common_runtime_args[_CRTA_BUFFER_ADDRESS] = tensor.buffer_address()
+    common_runtime_args[_CRTA_BLOCK_PAGES] = plan.block_pages
+    return ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / source),
+        core_ranges=plan.all_cores,
+        compile_time_args=[CB_PAGE_STAGING, *accessor_args.get_compile_time_args()],
+        runtime_args=runtime_args,
+        common_runtime_args=common_runtime_args,
+        config=config,
+    )
 
+
+def _build(input_tensor, output_tensor, plan):
     cb_page_staging = ttnn.CBDescriptor(
-        total_size=p["cb_pages"] * page_bytes,
-        core_ranges=all_cores,
+        total_size=plan.cb_pages * plan.page_bytes,
+        core_ranges=plan.all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
                 buffer_index=CB_PAGE_STAGING,
                 data_format=input_tensor.dtype,
-                page_size=page_bytes,
+                page_size=plan.page_bytes,
             )
         ],
     )
+    reader = _kernel(READER_KERNEL, input_tensor, plan, ttnn.ReaderConfigDescriptor())
+    writer = _kernel(WRITER_KERNEL, output_tensor, plan, ttnn.WriterConfigDescriptor())
+    return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_page_staging])
 
-    reader_ct_args = [CB_PAGE_STAGING]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct_args = [CB_PAGE_STAGING]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    reader_rt_args = ttnn.RuntimeArgs()
-    writer_rt_args = ttnn.RuntimeArgs()
-    for (core, first_page, pages), rotation in zip(p["assignment"], p["walk_rotation"]):
-        reader_rt_args[core.x][core.y] = [first_page, pages, rotation]
-        writer_rt_args[core.x][core.y] = [first_page, pages, rotation]
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_copy_reader.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=reader_ct_args,
-        runtime_args=reader_rt_args,
-        common_runtime_args=[input_tensor.buffer_address(), p["block_pages"]],
-        config=ttnn.ReaderConfigDescriptor(),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_copy_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct_args,
-        runtime_args=writer_rt_args,
-        common_runtime_args=[output_tensor.buffer_address(), p["block_pages"]],
-        config=ttnn.WriterConfigDescriptor(),
-    )
-
-    descriptor = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_page_staging])
-    return descriptor, 0, 1
+_READER_INDEX = 0
+_WRITER_INDEX = 1
+_DESCRIPTOR_CACHE = {}
 
 
 def get_program_descriptor(input_tensor, output_tensor):
-    """Cached descriptor with this call's buffer addresses patched in (BB-07)."""
+    """The cached descriptor for this call, with this call's two buffer addresses patched in (BB-07)."""
     device = input_tensor.device()
-    grid = _grid_of(device)
+    grid = device.compute_with_storage_grid_size()
     key = (
         device.id(),
         (grid.x, grid.y),
@@ -204,11 +200,12 @@ def get_program_descriptor(input_tensor, output_tensor):
         STREAM_DEPTH_BLOCKS,
         BANK_STAGGER,
     )
-    entry = _PROGRAM_CACHE.get(key)
-    if entry is None:
-        entry = _build_program_descriptor(input_tensor, output_tensor, _plan(input_tensor))
-        _PROGRAM_CACHE[key] = entry
-    descriptor, reader_index, writer_index = entry
-    descriptor.kernels[reader_index].common_runtime_args[_READER_COMMON_ADDR] = input_tensor.buffer_address()
-    descriptor.kernels[writer_index].common_runtime_args[_WRITER_COMMON_ADDR] = output_tensor.buffer_address()
+    descriptor = _DESCRIPTOR_CACHE.get(key)
+    if descriptor is None:
+        plan = _plan(grid, input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size())
+        descriptor = _build(input_tensor, output_tensor, plan)
+        _DESCRIPTOR_CACHE[key] = descriptor
+    else:
+        descriptor.kernels[_READER_INDEX].common_runtime_args[_CRTA_BUFFER_ADDRESS] = input_tensor.buffer_address()
+        descriptor.kernels[_WRITER_INDEX].common_runtime_args[_CRTA_BUFFER_ADDRESS] = output_tensor.buffer_address()
     return descriptor

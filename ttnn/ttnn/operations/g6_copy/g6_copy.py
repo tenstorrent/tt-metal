@@ -1,20 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_copy(input_tensor, output_tensor) -> output_tensor.
-
-Writes every logical element of `input_tensor` into the caller's `output_tensor` (same shape, dtype,
-layout, DRAM interleaved placement) bit for bit, in one device program, and returns `output_tensor`
-itself. Realized as a byte-exact copy of every buffer page: both tensors share the page -> bank map,
-so source tile padding lands only in destination tile padding.
-"""
+"""g6_copy(input_tensor, output_tensor): copy the source's values into the caller's destination
+(same shape, dtype, layout, DRAM interleaved) in one device program and return the destination."""
 
 from __future__ import annotations
 
 import ttnn
+
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from . import g6_copy_program_descriptor as _descriptor
+from .g6_copy_program_descriptor import get_program_descriptor
 
 
 # ---------------------------------------------------------------------------
@@ -61,18 +57,34 @@ EXCLUSIONS = [
 
 
 # ---------------------------------------------------------------------------
+# 3b. PROPERTIES
+# ---------------------------------------------------------------------------
+
+PROPERTIES = {
+    "multi_core": {"value": True, "source": "declared"},
+    "bounded_cb": {"value": True, "source": "declared"},
+}
+
+
+# ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
 
 
-def _validate_request(input_tensor, output_tensor):
-    """Malformed requests (not support refusals): ValueError."""
+def _is_dram_interleaved(memory_config):
+    return (
+        memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and memory_config.buffer_type == ttnn.BufferType.DRAM
+    )
+
+
+def _check_request(input_tensor, output_tensor):
     for name, t in (("input_tensor", input_tensor), ("output_tensor", output_tensor)):
         if not ttnn.is_tensor_storage_on_device(t):
             raise ValueError(f"g6_copy: {name} must be on a device")
     rank = len(input_tensor.shape)
     if not 1 <= rank <= 4:
-        raise ValueError(f"g6_copy: rank must be 1 to 4, got {rank}")
+        raise ValueError(f"g6_copy: rank {rank} is outside 1 to 4")
     if tuple(input_tensor.shape) != tuple(output_tensor.shape):
         raise ValueError(
             f"g6_copy: shapes differ: input {tuple(input_tensor.shape)}, output {tuple(output_tensor.shape)}"
@@ -81,15 +93,15 @@ def _validate_request(input_tensor, output_tensor):
         raise ValueError(f"g6_copy: dtypes differ: input {input_tensor.dtype}, output {output_tensor.dtype}")
     if input_tensor.layout != output_tensor.layout:
         raise ValueError(f"g6_copy: layouts differ: input {input_tensor.layout}, output {output_tensor.layout}")
-    in_memory = input_tensor.memory_config()
-    if in_memory != output_tensor.memory_config():
-        raise ValueError(f"g6_copy: memory configs differ: input {in_memory}, output {output_tensor.memory_config()}")
-    if in_memory.buffer_type != ttnn.BufferType.DRAM or in_memory.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError(f"g6_copy: tensors must be DRAM interleaved, got {in_memory}")
+    input_memory, output_memory = input_tensor.memory_config(), output_tensor.memory_config()
+    if input_memory != output_memory:
+        raise ValueError(f"g6_copy: memory configs differ: input {input_memory}, output {output_memory}")
+    if not _is_dram_interleaved(input_memory):
+        raise ValueError(f"g6_copy: tensors must be DRAM interleaved, got {input_memory}")
 
 
 def validate(input_tensor, output_tensor):
-    _validate_request(input_tensor, output_tensor)
+    _check_request(input_tensor, output_tensor)
 
     axes = {
         "dtype": input_tensor.dtype,
@@ -114,6 +126,7 @@ def validate(input_tensor, output_tensor):
 
 def g6_copy(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tensor) -> ttnn.Tensor:
     validate(input_tensor, output_tensor)
-    descriptor = _descriptor.get_program_descriptor(input_tensor, output_tensor)
+    descriptor = get_program_descriptor(input_tensor, output_tensor)
     ttnn.generic_op([input_tensor, output_tensor], descriptor)
+    # The caller's object, not generic_op's wrapper: the model reads its own tensor.
     return output_tensor
