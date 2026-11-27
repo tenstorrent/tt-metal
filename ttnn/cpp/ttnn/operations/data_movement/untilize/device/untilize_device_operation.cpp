@@ -178,7 +178,8 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         // Use the effective output element size for alignment checks.
         // Untilize converts BFLOAT8_B inputs to BFLOAT16 outputs, so the element size becomes 2 bytes.
         uint32_t output_element_size_in_bytes = input_tensor_a.element_size();
-        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+            tt::tt_metal::is_mx(input_tensor_a.dtype())) {
             output_element_size_in_bytes = 2;
         }
         const uint32_t output_row_size_bytes = output_shard_width * output_element_size_in_bytes;
