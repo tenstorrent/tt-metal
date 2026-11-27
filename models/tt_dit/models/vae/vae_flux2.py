@@ -157,6 +157,8 @@ class Flux2VaeDecoder(Module):
         if "bn.running_var" in state:
             state["bn_running_var"] = state.pop("bn.running_var")
         state.pop("bn.num_batches_tracked", None)
+        # New statistics replace the ones read to the host.
+        self._bn_host = None
 
         rename_substate(state, "decoder", "")
 

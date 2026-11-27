@@ -107,11 +107,13 @@ def warm_token_gather(ctx: VaeContext, channels: int) -> None:
 
     ttnn gathers such rows through all_broadcast and a row-shift concat, whose programs take the row count at run
     time, but a model warmed at a size whose token rows are whole tiles never runs them, so their kernels would
-    compile at the first size that is not. Calling this during warm-up compiles them there."""
+    compile at the first size that is not. Calling this during warm-up compiles them there. The gathers over the H
+    and W axes are separate programs, so the count is odd: times a power-of-two H factor it is still not whole
+    tiles, and both take that path."""
     if ctx.h_factor <= 1 and ctx.w_factor <= 1:
         return
     x = ttnn.from_torch(
-        torch.zeros(1, 1, ttnn.TILE_SIZE + ttnn.TILE_SIZE // 2, channels),
+        torch.zeros(1, 1, ttnn.TILE_SIZE + 1, channels),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=ctx.device,
