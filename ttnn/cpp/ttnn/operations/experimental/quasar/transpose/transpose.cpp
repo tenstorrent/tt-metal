@@ -428,6 +428,26 @@ ttnn::Tensor transpose_impl(
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
 
+    // MX tiles (shared scale per 32-element block, face order) can only be moved whole. Only the N<->C swap
+    // (prim CN factory: reorders whole tiles, no compute) is MX-correct. H<->W swaps elements inside a tile
+    // through the unpacker transpose + datacopy, and every H/C/N<->H/W permutation moves sub-tile rows; the
+    // unpack-transpose of an MX tile into SrcA is not validated, so those are rejected rather than risked.
+    if (tt::tt_metal::is_mx(input_tensor.dtype()) && normalized_dim1 != normalized_dim2) {
+        const uint32_t rank_diff = input_shape.rank() < 4 ? 4 - input_shape.rank() : 0;
+        const uint32_t d1 = normalized_dim1 + rank_diff;
+        const uint32_t d2 = normalized_dim2 + rank_diff;
+        const bool is_cn = input_shape.rank() <= 4 && ((d1 == 0 && d2 == 1) || (d1 == 1 && d2 == 0));
+        TT_FATAL(
+            is_cn,
+            "Quasar transpose on MX tensors ({}) supports only the N<->C swap (dims 0 and 1 of a rank-4 tensor), "
+            "which moves whole tiles. Transposes that touch H or W reorder elements inside tiles, which MX tiles "
+            "(32-element blocks with a shared scale) cannot take. Got dims {} and {} of a rank-{} tensor.",
+            input_tensor.dtype(),
+            dim1,
+            dim2,
+            input_shape.rank());
+    }
+
     Tensor input_unsqueezed = input_tensor;
     uint32_t initial_rank = input_shape.rank();
     if (initial_rank < 4) {

@@ -88,6 +88,13 @@ ttnn::Tensor upsample(
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor.dtype()),
+        "Quasar upsample does not support MX tensors ({}): it replicates per-pixel channel sticks of a row-major "
+        "tensor, and an MX tile (32-element blocks with a shared scale) has no row-major layout. Typecast to "
+        "bfloat16 first.",
+        input_tensor.dtype());
+
     tt::tt_metal::MemoryConfig mem_config = output_mem_config.value_or(input_tensor.memory_config());
 
     // Parse scale factors from variant - extract as floats

@@ -5,10 +5,10 @@ import pytest
 from conftest import skip_for_wormhole
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_pack_tiny_tile_block import (
+from test_pack_tiny_tile_reconfig import (
     PACK_TINY_TILE_RECONFIG_SWEEP,
 )
-from test_pack_tiny_tile_block import (
+from test_pack_tiny_tile_reconfig import (
     test_pack_tiny_tile_reconfig as _test_pack_tiny_tile_reconfig,
 )
 

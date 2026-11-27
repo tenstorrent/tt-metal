@@ -17,7 +17,6 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    ApproximationMode,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -36,7 +35,6 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_domains import generated_nan_sign_is_asserted, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
-    APPROX_MODE,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_OP,
@@ -65,7 +63,7 @@ UINT32_BIT31 = 2**31  # 0x80000000
 
 MAX_MIN_POOLS = [ReducePool.Min, ReducePool.Max]
 
-dimension_combinations = [
+INPUT_DIMENSIONS = [
     [m, n]
     for m in range(TILE_DIM, max_tiles * TILE_DIM + 1, TILE_DIM)
     for n in range(TILE_DIM, max_tiles * TILE_DIM + 1, TILE_DIM)
@@ -172,7 +170,6 @@ def _sfpu_reduce_config_kwargs(
         "formats": formats,
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
             # The kernel only syncs Dest in halves.
             DEST_SYNC(DestSync.Half),
             MATH_OP(mathop=mathop, pool_type=pool_type),
@@ -290,7 +287,7 @@ def get_reduce_extents(
     mathop: MathOperation,
     pool_type: ReducePool,
     formats: InputOutputFormat,
-    dimension_combinations: list[int],
+    input_dimensions: list[int],
 ) -> list[int]:
     """Number of real (unpadded) rows on the column-reduce axis.
 
@@ -307,7 +304,7 @@ def get_reduce_extents(
     full = [TILE_DIM]
     if (
         mathop != MathOperation.ReduceColumn
-        or dimension_combinations != [TILE_DIM, TILE_DIM]
+        or input_dimensions != [TILE_DIM, TILE_DIM]
         or pool_type == ReducePool.Average
     ):
         return full
@@ -418,9 +415,9 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=get_format_input_bounds,
     pool_type=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
-    dimension_combinations=lambda mathop, dest_acc, formats: [
+    input_dimensions=lambda mathop, dest_acc, formats: [
         dim
-        for dim in dimension_combinations
+        for dim in INPUT_DIMENSIONS
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
     ],
     reduced_extent=get_reduce_extents,
@@ -431,7 +428,7 @@ def test_sfpu_reduce(
     mathop,
     pool_type,
     input_bounds,
-    dimension_combinations,
+    input_dimensions,
     reduced_extent,
 ):
 
@@ -460,7 +457,6 @@ def test_sfpu_reduce(
         )
 
     min_value, max_value = input_bounds
-    input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
     # STIMULI GENERATION
@@ -471,7 +467,7 @@ def test_sfpu_reduce(
         DestSync.Half,
         dest_acc,
         formats,
-        dimension_combinations,
+        input_dimensions,
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )

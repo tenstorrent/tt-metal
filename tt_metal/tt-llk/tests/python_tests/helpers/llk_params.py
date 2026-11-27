@@ -101,6 +101,8 @@ class MathOperation(Enum):
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     # log_base(x); dispatched with base_scale = fp16a(1/ln 2) -> log2(x).
     LogWithBase = OpSpec("log_with_base", MathOpType.SFPU_UNARY)
+    # log_with_base with the log10 scale; Quasar only.
+    Log10 = OpSpec("log10", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
     Neg = OpSpec("negative", MathOpType.SFPU_UNARY)
     Reciprocal = OpSpec("reciprocal", MathOpType.SFPU_UNARY)
@@ -314,6 +316,7 @@ class MathOperation(Enum):
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
+    SfpuMulSmShift23 = OpSpec("MUL_SM_SHIFT23", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
@@ -357,6 +360,7 @@ class MathOperation(Enum):
     SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
     SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
     SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuMac = OpSpec("mac", MathOpType.SFPU_TERNARY)
     SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
 
     # =============================================================================

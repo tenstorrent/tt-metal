@@ -35,7 +35,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT                  = params.TILE_CNT;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                       = params.buffer_A;
@@ -64,14 +64,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
+            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(LOOP_FACTOR * TILE_CNT);
         }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 // Accumulation cases unpack two tiles per MOP, exercising per-tile counter resets.
-                for (std::uint32_t i = 0; i < INPUT_TILE_CNT; i += num_tiles_per_accum)
+                for (std::uint32_t i = 0; i < TILE_CNT; i += num_tiles_per_accum)
                 {
                     _llk_unpack_binary_operands_(i, i, tensor_shape);
                 }
@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT                  = params.TILE_CNT;
     const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -133,7 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * INPUT_TILE_CNT);
+            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(LOOP_FACTOR * TILE_CNT);
         }
         else
         {

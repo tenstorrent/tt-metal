@@ -77,15 +77,30 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayComputeProducerFails) {
         "exactly the relayed pipe set");
 }
 
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedProducerFails) {
-    auto spec = MakeFullPipeSpec();
-    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
-    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedProducerBlockIsPipeEntryPasses) {
+    // Two credit lanes, two relay entries per pipe entry, each lane owns one pipe entry at a time,
+    // which is a block of two relay entries.
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/2)};
+    EXPECT_SPEC_VALID(spec);
 }
-TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayDFBBlockedConsumerFails) {
-    auto spec = MakeFullPipeSpec();
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedProducerBlockNotPipeEntryFails) {
+    ProgramSpec spec = MakeFullPipeSpec(/*receiver_threads=*/2);
+    spec.dataflow_buffers[0].entry_size = pipe_entry_size / 2;
+    spec.dataflow_buffers[0].num_entries = pipe_num_entries * 2;
+    KernelNamed(spec, "receiver").dfb_bindings = {BlockedProducerOf(relay_dfb_name, "relay", /*block_size=*/4)};
+    EXPECT_SPEC_REJECTED(
+        spec, "a BLOCKED relay producer's block_size (4) must equal the relay entries per pipe entry (2");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayBlockedConsumerPasses) {
+    // The compute consumer takes the relay in whole blocks; the pipe side is unchanged.
+    ProgramSpec spec = MakeFullPipeSpec();
     KernelNamed(spec, "compute").dfb_bindings = {BlockedConsumerOf(relay_dfb_name, "relay", /*block_size=*/4)};
-    EXPECT_SPEC_REJECTED(spec, "relay DFB does not support the BLOCKED access pattern");
+    EXPECT_SPEC_VALID(spec);
 }
 
 TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayProducerNotBindingPipeFails) {
@@ -143,6 +158,17 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
     KernelNamed(spec, "receiver").advanced_options.prefetcher_pipe_bindings[0].pipe_parameter_names = {pipe_param_name};
     EXPECT_SPEC_REJECTED(
         spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayConsumerOnSfpuPipelineFails) {
+    // A relay DFB stays on the Unpack / Pack stages.
+    ProgramSpec spec = MakeFullPipeSpec();
+    auto& compute = KernelNamed(spec, "compute");
+    compute.dfb_bindings = {ConsumerOf(relay_dfb_name, "relay")};
+    std::get<ComputeHardwareConfig>(compute.hw_config).config_2xx =
+        ComputeHardwareConfig::Compute2XXConfig{.sfpu_pipeline_consumed_dfbs = {relay_dfb_name}};
+    EXPECT_SPEC_REJECTED(
+        spec, "is a PrefetcherPipe relay DFB, so kernel 'compute' cannot list it in sfpu_pipeline_consumed_dfbs");
 }
 
 }  // namespace

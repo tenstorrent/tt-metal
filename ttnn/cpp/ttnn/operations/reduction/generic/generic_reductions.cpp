@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -52,15 +53,41 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
     if (!output_layout.has_value() || tensor.layout() == *output_layout) {
         return tensor;
     }
-    // Untilizing a block-float result would widen it to BFLOAT16; reject rather than silently
+    // Untilizing a block-float or MX result would widen it to BFLOAT16; reject rather than silently
     // returning a dtype the caller did not ask for.
     TT_FATAL(
-        *output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(tensor.dtype()),
+        *output_layout != Layout::ROW_MAJOR ||
+            (!tt::tt_metal::is_block_float(tensor.dtype()) && !tt::tt_metal::is_mx(tensor.dtype())),
         "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
-        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
-        "TILE and typecast explicitly if a row-major result is needed.",
+        "TILE layout (as do the MX formats), so honoring the request would silently widen the dtype to "
+        "BFLOAT16. Reduce to TILE and typecast explicitly if a row-major result is needed.",
         tensor.dtype());
     return ttnn::to_layout(tensor, *output_layout);
+}
+
+static Tensor write_to_output(
+    const Tensor& result,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const char* op_name) {
+    if (!output.has_value()) {
+        return result;
+    }
+    // The copy into output runs on the full grid.
+    TT_FATAL(!sub_core_grids.has_value(), "{} does not support output together with sub_core_grids", op_name);
+    TT_FATAL(
+        output->logical_shape() == result.logical_shape(),
+        "{} output shape {} does not match the reduced shape {}",
+        op_name,
+        output->logical_shape(),
+        result.logical_shape());
+    TT_FATAL(
+        output->layout() == result.layout(),
+        "{} output layout {} does not match the result layout {}",
+        op_name,
+        output->layout(),
+        result.layout());
+    return ttnn::assign(result, *output);
 }
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
@@ -604,6 +631,47 @@ Tensor reduce(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
 
+    // MX (Quasar) tiles run the H / W reduce kernels natively only for tile-aligned H and W, an H or W axis and
+    // keepdim=True (see the checks below); Min lowers through a bf16 scratch ring that packs zeros for MX. Anything
+    // else (a squeezing reshape, the fill kernel for implicit tile padding, transpose / permute for N / C axes) is not
+    // wired for MX tiles, so reduce those in bfloat16, where all of it exists, and pack the result back to MX.
+    if (tt::tt_metal::is_mx(input_tensor_arg.dtype()) && input_tensor_arg.layout() == TILE_LAYOUT) {
+        // MX exists in TILE layout only: a ROW_MAJOR result would come back as BFLOAT16, so reject it up front.
+        TT_FATAL(
+            !output_layout.has_value() || *output_layout != Layout::ROW_MAJOR,
+            "output_layout=ROW_MAJOR is not supported for an MX input ({}): MX formats only exist in TILE layout, so "
+            "the result would silently be BFLOAT16. Reduce to TILE and typecast explicitly if a row-major result is "
+            "needed.",
+            input_tensor_arg.dtype());
+        const auto& mx_shape = input_tensor_arg.logical_shape();
+        const int mx_rank = static_cast<int>(mx_shape.rank());
+        const auto mx_dims = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
+        const bool mx_hw_axes_only = std::all_of(mx_dims.begin(), mx_dims.end(), [&](int d) {
+            const int axis = d < 0 ? d + mx_rank : d;
+            return axis == mx_rank - 1 || axis == mx_rank - 2;
+        });
+        const bool mx_native =
+            keepdim && mx_rank >= 2 && mx_hw_axes_only && mx_shape[-2] % tt::constants::TILE_HEIGHT == 0 &&
+            mx_shape[-1] % tt::constants::TILE_WIDTH == 0 && reduce_type != reduction_common::ReduceType::Min;
+        if (!mx_native) {
+            const DataType mx_dtype = input_tensor_arg.dtype();
+            Tensor as_bf16 =
+                ttnn::typecast(input_tensor_arg, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor result = reduce<reduce_type>(
+                as_bf16,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            // The ROW_MAJOR request is rejected above, so the result is TILE and converts back to the input's MX dtype.
+            return ttnn::typecast(result, mx_dtype, std::nullopt, std::nullopt, sub_core_grids);
+        }
+    }
+
     // A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min pad written into the
     // tile padding below ends up in blocks that also hold real lanes (the last block of each input row when the width
     // is not a multiple of 16, and the Min-over-W results of a partial tile row), sets their exponent, and the real
@@ -679,23 +747,8 @@ Tensor reduce(
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
     auto input_tensor = input_tensor_arg;
-    // MX (Quasar) inputs run the tiled H / W reduce kernels like bf16 (the unpacker expands MX to Float16_b).
-    // What is not wired for MX tiles is rejected here: fill_implicit_tile_padding (the fill kernel does not know
-    // the MX layout) and the N / C axes (they go through transpose / permute, which have not been run on MX).
-    if (tt::tt_metal::is_mx(input_tensor_arg.dtype())) {
-        TT_FATAL(is_tiled, "MX reductions need TILE layout input, got {}", input_tensor_arg.layout());
-        TT_FATAL(
-            input_tensor_arg.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
-                input_tensor_arg.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
-            "MX reductions need tile-aligned H and W (no implicit tile padding), got shape {}",
-            input_tensor_arg.logical_shape());
-        for (const int d : dim) {
-            const int axis = d < 0 ? d + rank : d;
-            TT_FATAL(
-                axis == (rank - 1) || axis == (rank - 2), "MX reductions support the H and W axes only, got dim {}", d);
-        }
-        TT_FATAL(keepdim, "MX reductions need keepdim=True (the squeezing reshape is not wired for MX tiles)");
-    }
+    // MX inputs never get here: the MX block at the top of this function returns for every MX TILE input, and MX
+    // tensors cannot exist in ROW_MAJOR.
     // Tile padding only reaches valid outputs when H or W is reduced, or through a block-float shared exponent.
     const bool reduces_h_or_w =
         dim.empty() || std::any_of(dim.begin(), dim.end(), [&](int d) { return d >= rank - 2; });
@@ -753,13 +806,55 @@ Tensor reduce(
                 fast_nc_final_dtype = height_width_dims.empty() ? DataType::BFLOAT16 : DataType::FLOAT32;
                 fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
             }
-            // The scale is applied once: by fast_reduce_nc when no H/W stage follows, else by the H/W stage,
-            // which divides a mean by its own H/W volume, so it takes only the N/C share of 1/N.
+            // The scale is applied once, by the last stage. An H/W stage divides a mean by its own H/W volume, so the
+            // scale takes only the N/C share of 1/N.
             float nc_volume = 1.0f;
             for (int d : non_height_width_dims) {
                 nc_volume *= static_cast<float>(input_tensor.logical_shape()[d]);
             }
             const float nc_scalar = reduce_type == reduction_common::ReduceType::Mean ? scalar / nc_volume : scalar;
+
+            // With H and W both reduced, the second stage reads what the first leaves: the non-H/W volume in tiles
+            // after H/W, or the kept non-H/W dims times Ht * Wt after N/C. Go H/W first when it leaves fewer.
+            const auto& shape = input_tensor.logical_shape();
+            uint64_t hw_first_tiles = 1;
+            uint64_t nc_first_tiles = static_cast<uint64_t>(tt::div_up(shape[-2], tt::constants::TILE_HEIGHT)) *
+                                      tt::div_up(shape[-1], tt::constants::TILE_WIDTH);
+            for (int axis = 0; axis < rank - 2; ++axis) {
+                hw_first_tiles *= shape[axis];
+                if (std::find(non_height_width_dims.begin(), non_height_width_dims.end(), axis) ==
+                    non_height_width_dims.end()) {
+                    nc_first_tiles *= shape[axis];
+                }
+            }
+            if (height_width_dims.size() == 2 && !ttnn::prim::is_int_reduce_dtype(input_tensor.dtype()) &&
+                hw_first_tiles < nc_first_tiles) {
+                const Tensor hw_reduced = reduce_impl<reduce_type>(
+                    input_tensor,
+                    height_width_dims,
+                    /*keepdim=*/true,
+                    memory_config_arg,
+                    compute_kernel_config,
+                    /*scalar=*/1.0f,
+                    /*non_height_width_dims=*/{},
+                    sub_core_grids,
+                    chain_active,
+                    /*is_last_in_chain=*/false,
+                    fast_and_approximate_mode);
+                const Tensor output_tensor = non_height_width_reduce(
+                    hw_reduced,
+                    non_height_width_dims,
+                    memory_config_arg,
+                    compute_kernel_config,
+                    sub_core_grids,
+                    chain_active ? std::optional<DataType>(DataType::BFLOAT16) : std::nullopt,
+                    fast_nc_intermediate_fp32,
+                    fast_and_approximate_mode,
+                    nc_scalar);
+                return adjust_shape(
+                    output_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
+            }
+
             input_tensor = non_height_width_reduce(
                 input_tensor,
                 non_height_width_dims,
@@ -833,19 +928,23 @@ Tensor sum(
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
-    const std::optional<Layout>& output_layout) {
-    return operations::reduction::convert_output_layout(
+    const std::optional<Layout>& output_layout,
+    const std::optional<Tensor>& output) {
+    const auto memory_config =
+        output.has_value() ? memory_config_arg.value_or(output->memory_config()) : memory_config_arg;
+    auto result = operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Sum>(
             input_tensor_arg,
             dim_arg,
             keepdim,
-            memory_config_arg,
+            memory_config,
             compute_kernel_config,
             scalar,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
         output_layout);
+    return operations::reduction::write_to_output(result, output, sub_core_grids, "ttnn.sum");
 }
 
 Tensor mean(
@@ -857,19 +956,23 @@ Tensor mean(
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
-    const std::optional<Layout>& output_layout) {
-    return operations::reduction::convert_output_layout(
+    const std::optional<Layout>& output_layout,
+    const std::optional<Tensor>& output) {
+    const auto memory_config =
+        output.has_value() ? memory_config_arg.value_or(output->memory_config()) : memory_config_arg;
+    auto result = operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Mean>(
             input_tensor_arg,
             dim_arg,
             keepdim,
-            memory_config_arg,
+            memory_config,
             compute_kernel_config,
             scalar,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
         output_layout);
+    return operations::reduction::write_to_output(result, output, sub_core_grids, "ttnn.mean");
 }
 
 Tensor max(
