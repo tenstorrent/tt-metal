@@ -682,9 +682,12 @@ def test_all_broadcast_tile_rows_sharded_output(mesh_device):
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
+        before = mesh_device.num_program_cache_entries()
         outs = ttnn.all_broadcast(
             x, cluster_axis=cluster_axis, topology=ttnn.Topology.Linear, memory_config=output_mem_config
         )
+        added = mesh_device.num_program_cache_entries() - before
+        assert added == 1, f"rows {rows}: all_broadcast added {added} programs"
         for k, out in enumerate(outs):
             for t in ttnn.get_device_tensors(out):
                 assert torch.equal(ttnn.to_torch(t), chunks[k]), f"rows {rows}, source {k}"
