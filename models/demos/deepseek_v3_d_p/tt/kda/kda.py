@@ -236,6 +236,7 @@ class ttKDA:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
+        self.output_dtype = program_config.output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
         if weights is None:
@@ -649,6 +650,10 @@ class ttKDA:
             output = reduce_scatter_tp_partials(
                 output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology, self._tp_num_links
             )
+        if self.output_dtype is not None and output.dtype != self.output_dtype:
+            rounded = ttnn.typecast(output, self.output_dtype, memory_config=output.memory_config())
+            ttnn.deallocate(output)
+            output = rounded
         return output
 
     def forward(

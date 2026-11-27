@@ -136,6 +136,9 @@ class KDAProgramConfig:
     qkv_channel_chunk_size: int = 768
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
+    # The layer output's dtype after the output projection's TP reduction: None keeps the projection's (the norm
+    # output's); bf16 rounds an fp32 one once (the residual stream's consumers take bf16).
+    output_dtype: ttnn.DataType | None = None
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
@@ -265,6 +268,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.float32 if accuracy.fidelity() else ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16 if accuracy.fidelity() else None,
         input_projection_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi2),
         # HiFi3 for the same SrcB truncation.
         output_projection_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
