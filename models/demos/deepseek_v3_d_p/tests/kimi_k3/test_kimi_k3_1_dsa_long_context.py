@@ -7,7 +7,7 @@ The production module (``ttMLA`` for layer 3 from the 4x4 stage's TTNN weight ca
 kvpe and bf8 index-key caches, eager) prefills every 2560-row chunk of the prompt in order, reading the keys its
 earlier chunks wrote. Each chunk's input is the golden's ``input_layernorm(dsa_input_3)`` (FP64, rounded once to
 bf16), so only the layer's own error enters its caches and output. The golden is opened by id
-(``k31_chain_golden``); a missing, incomplete or other-weights golden fails the test.
+(``long_context_accuracy/kimi_k3_1/golden.py``); a missing, incomplete or other-weights golden fails the test.
 
 Scoring (``dsa_long_context.py``) runs chunk by chunk on the host. Per 16K window of rows, on 256 evenly spread rows
 past top-k plus the golden's sampled rows: the device output's absolute and relative error and the selection-only
@@ -36,9 +36,13 @@ from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_long_context as dsa
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import PRODUCER, PRODUCER_VERSION, open_k31_chain
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import (
+    PRODUCER,
+    PRODUCER_VERSION,
+    open_k31_chain,
+)
 
 PLACEMENT_4X4 = [p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1"]
 

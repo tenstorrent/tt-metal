@@ -36,11 +36,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_di
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import nrmse as slice_nrmse
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
-    K3_LAYER0_GOLDEN,
-    load_window,
-    open_k3_layer0_golden,
-)
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import K3_LAYER0_GOLDEN
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     kda_device_params,
@@ -50,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, open_k3_layer0_golden
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 # The 1M case runs ~7 min on SP2xTP4 plus setup; pytest.ini's 300 s default would cut it short.

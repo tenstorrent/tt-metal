@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Long FP64 KDA golden: the reference layer run segment by segment on CPU, queryable by window.
+"""Long FP64 KDA golden producer: the reference layer run segment by segment on CPU.
 
 A golden over a long context (up to 1M tokens) takes hours of CPU, so the sequence is processed in fixed-size
 segments. After each segment the run atomically writes that segment's output rows and the full carried state
-(recurrent and convolution histories) after it, so an interrupted run resumes from the last complete segment
-and any window can be read back with the exact state before it. The run never opens a device: device tests only
-load a prepared golden, so the CPU work never holds the device.
+(recurrent and convolution histories) after it (``segment_path``), so an interrupted run resumes from the last
+complete segment and any window can be read back with the exact state before it (the reader:
+``tests/long_context_accuracy/kimi_k3/golden.py``). The run never opens a device: device tests only load a prepared
+golden, so the CPU work never holds the device.
 
 ``manifest.json`` is the golden's only metadata, in the long-context golden registry's format
 (``common/prefill/long_context_accuracy/fp64_golden.py``; the golden's id is its directory name): what produced it
@@ -34,10 +35,8 @@ import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     MANIFEST,
-    Fp64Golden,
     make_golden_dir,
     manifest_problems,
-    open_golden,
     product_schema,
     publish,
     token_ids_sha256,
@@ -54,8 +53,10 @@ PRODUCER_VERSION = 1
 K3_LAYER0_GOLDEN = "k3-l0-kda-fp64-1m"
 
 
-def _segment_path(run_dir: Path, index: int) -> Path:
-    return run_dir / f"segment_{index:06d}.pt"
+def segment_path(run_dir: Path, index: int) -> Path:
+    """Segment ``index``'s file: ``{"start", "end", "output": [rows, hidden], "state": {name: tensor}}``, the state
+    after the segment."""
+    return Path(run_dir) / f"segment_{index:06d}.pt"
 
 
 def _provenance() -> dict:
@@ -123,7 +124,7 @@ def run_golden(
         write_manifest(run_dir, manifest)
     state = None
     if done:
-        state = KDAReferenceState(**torch.load(_segment_path(run_dir, done - 1), weights_only=True)["state"])
+        state = KDAReferenceState(**torch.load(segment_path(run_dir, done - 1), weights_only=True)["state"])
         print(f"resuming at segment {done}/{segments} (token {manifest['segments'][-1]['end']})", flush=True)
 
     for index in range(done, segments):
@@ -131,7 +132,7 @@ def run_golden(
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
         payload = {"start": start, "end": end, "output": output[0], "state": vars(state)}
-        publish(lambda path: torch.save(payload, path), _segment_path(run_dir, index))
+        publish(lambda path: torch.save(payload, path), segment_path(run_dir, index))
         if "products" not in manifest:
             manifest["products"] = {
                 "output": product_schema("row", output[0]),
@@ -146,7 +147,7 @@ def run_golden(
         manifest["token_floor"] = golden_floor(
             torch.cat(
                 [
-                    torch.load(_segment_path(run_dir, index), weights_only=True)["output"].norm(dim=-1)
+                    torch.load(segment_path(run_dir, index), weights_only=True)["output"].norm(dim=-1)
                     for index in range(segments)
                 ]
             )
@@ -156,57 +157,6 @@ def run_golden(
     if problems:
         raise ValueError(f"the golden in {run_dir} breaks the registry contract: {problems}")
     return manifest
-
-
-def open_k3_layer0_golden() -> Fp64Golden:
-    """The registered Kimi-K3 ``layers.0`` golden, checked to be this producer's, on the first-layer input."""
-    from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT
-
-    golden = open_golden(K3_LAYER0_GOLDEN)
-    golden.require(
-        producer=PRODUCER,
-        producer_version=PRODUCER_VERSION,
-        identity={"model": "Kimi-K3", "layer": "model.layers.0", "input": FIRST_LAYER_INPUT},
-        products=["output", "state.recurrent"],
-    )
-    return golden
-
-
-def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAReferenceState | None]:
-    """Golden output rows ``[start, end)`` and the state before ``start`` (``None`` at token 0).
-
-    ``start`` must fall on a segment boundary, since states are saved only there.
-    """
-    run_dir = Path(run_dir)
-    manifest = json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))
-    segment = manifest["segment"]
-    if start % segment:
-        raise ValueError(f"start {start} is not a multiple of the segment size {segment}")
-    available = manifest["segments"][-1]["end"] if manifest["segments"] else 0
-    if not start < end <= available:
-        raise ValueError(f"window [{start}, {end}) is not inside the {available} golden tokens of {run_dir}")
-    first = start // segment
-    state = None
-    if first:
-        state = KDAReferenceState(**torch.load(_segment_path(run_dir, first - 1), weights_only=True)["state"])
-    rows = []
-    for index in range(first, -(-end // segment)):
-        payload = torch.load(_segment_path(run_dir, index), weights_only=True)
-        rows.append(
-            payload["output"][
-                max(start, payload["start"]) - payload["start"] : min(end, payload["end"]) - payload["start"]
-            ]
-        )
-    return torch.cat(rows), state
-
-
-def state_after(run_dir: Path, end: int) -> KDAReferenceState:
-    """The golden state after token ``end``, which must be the end of a complete segment."""
-    run_dir = Path(run_dir)
-    ends = [segment["end"] for segment in json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))["segments"]]
-    if end not in ends:
-        raise ValueError(f"token {end} is not the end of a complete segment of the golden in {run_dir}")
-    return KDAReferenceState(**torch.load(_segment_path(run_dir, ends.index(end)), weights_only=True)["state"])
 
 
 def main() -> None:

@@ -44,14 +44,10 @@ import numpy as np
 import torch
 from safetensors import safe_open
 
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, token_ids_sha256
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
-    MANIFEST,
-    load_window,
-    state_after,
-    token_ids_sha256,
-)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, state_after
 
 WINDOW = 1024
 _FLOOR_READ_SEGMENTS = 16  # golden segments per read when computing the token floor (~1 GB at 1,024 x 7,168 FP64)

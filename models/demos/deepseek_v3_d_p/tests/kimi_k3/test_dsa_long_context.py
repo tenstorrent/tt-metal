@@ -14,7 +14,6 @@ import torch
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import WindowedErrors
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_long_context as dsa
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_chain_golden
 
 ONE = dsa.Dims(heads=1, nope=1, rope=1, v=1, lora=1, topk=4)
 F64 = torch.float64
@@ -186,7 +185,7 @@ def test_unset_bar_is_refused(expect_error):
 
 
 class StubGolden:
-    """What ``RunScorer`` reads of a chain golden, for ``read_rows`` / ``read_sampled`` patched to serve ``data``."""
+    """What ``RunScorer`` reads of a chain golden, served from ``data`` and ``sampled``."""
 
     golden_id = "stub"
 
@@ -194,8 +193,14 @@ class StubGolden:
         self.data, self.sampled, self.rows = data, sampled, data["latent"].shape[0]
         self.manifest = {"products": {"index_key": {"shape": [data["index_key"].shape[1]]}}}
 
+    def read_rows(self, names, lo, hi):
+        return {k: self.data[k][lo:hi] for k in names}
 
-def stub_run(monkeypatch, sampled_rows: list[int], scale: float = 1.0):
+    def read_sampled(self, end):
+        return self.sampled
+
+
+def stub_run(sampled_rows: list[int], scale: float = 1.0):
     """An 8-row run of the small case's layer (top-3, causal best-first selections), its golden stubbed: the golden's
     stored attention on ``sampled_rows`` is the oracle's times ``scale``. Returns the scorer, ready for chunks."""
     dims, w, _, _, _ = small_case()
@@ -216,12 +221,7 @@ def stub_run(monkeypatch, sampled_rows: list[int], scale: float = 1.0):
         "sampled_rows": rows,
         "attn_output_3": attend(q, data["latent"], data["kpe"], want[rows], w, dims) * scale,
     }
-    golden = StubGolden(data, sampled)
-    monkeypatch.setattr(
-        k31_chain_golden, "read_rows", lambda gold, names, lo, hi: {k: gold.data[k][lo:hi] for k in names}
-    )
-    monkeypatch.setattr(k31_chain_golden, "read_sampled", lambda gold, end: gold.sampled)
-    return dsa.RunScorer(golden, n, w, dims), data, w, dims
+    return dsa.RunScorer(StubGolden(data, sampled), n, w, dims), data, w, dims
 
 
 def run_exact(scorer, data, w, dims):
@@ -234,23 +234,23 @@ def run_exact(scorer, data, w, dims):
     return scorer.finish(torch.cat([data["latent"], data["kpe"]], 1), data["index_key"])
 
 
-def test_run_scorer_checks_its_recompute(monkeypatch, expect_error):
+def test_run_scorer_checks_its_recompute(expect_error):
     # Rows 5 and 7 are sampled rows past top-k, in one chunk: scored, and their recompute matches the golden's stored
     # attention row for row.
-    windows, summary = run_exact(*stub_run(monkeypatch, [5, 7]))
+    windows, summary = run_exact(*stub_run([5, 7]))
     assert summary["scored_rows"] == 3  # row 3 (the one evenly spread row of [3, 8)) and the sampled rows 5, 7
     assert summary["recompute_nrmse"] < 1e-12
     assert windows[0]["attn_nrmse"] < 1e-12 and windows[0]["sel_nrmse_median"] == 0 and windows[0]["future_keys"] == 0
     # A stored attention 1e-3 off: the reference is not trusted, nothing is gated.
     with expect_error(AssertionError, "recompute differs"):
-        run_exact(*stub_run(monkeypatch, [5, 7], scale=1.001))
+        run_exact(*stub_run([5, 7], scale=1.001))
     # The only sampled row is below top-k, so never scored: the recompute is unchecked.
     with expect_error(AssertionError, "unchecked"):
-        run_exact(*stub_run(monkeypatch, [1]))
+        run_exact(*stub_run([1]))
 
 
-def test_run_scorer_refuses_a_chunk_it_did_not_read(monkeypatch, expect_error):
-    scorer, data, w, dims = stub_run(monkeypatch, [5])
+def test_run_scorer_refuses_a_chunk_it_did_not_read(expect_error):
+    scorer, data, w, dims = stub_run([5])
     scorer.chunk_input(0, 4)
     with expect_error(ValueError, "does not match the last chunk_input"):
         scorer.add(4, torch.zeros(4, w["input_layernorm.weight"].numel()), data["topk_indices_3"][4:].long())

@@ -5,8 +5,10 @@
 A golden is a directory ``<root>/<golden_id>/`` written segment by segment by a CPU producer (for example
 ``tests/kda/long_context_golden.py``). Tests name a golden only by its id; ``open_golden`` finds it under the
 registry root and refuses one that is missing, incomplete or malformed, so a deleted or half-written golden fails
-the test instead of skipping it. The registry checks identity, completeness and the product schema; reading the
-products stays with each producer, whose file layouts differ.
+the test instead of skipping it. The registry checks identity, completeness and the product schema. Producers' file
+layouts differ, so reading the products is one small reader per golden layout: a subclass of ``Fp64Golden`` that
+names its producer and implements ``_read_rows`` (and ``_segment_end`` / ``read_sampled`` where a consumer needs
+them); ``open_golden(id, reader=...)`` returns it. Consumers read through ``Fp64Golden.read_rows`` only.
 
 ``manifest.json`` fields every golden carries (a producer may add its own):
 
@@ -36,6 +38,7 @@ import os
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import torch
 
@@ -176,7 +179,14 @@ def manifest_problems(golden_id: str, manifest: dict) -> list[str]:
 
 @dataclass(frozen=True)
 class Fp64Golden:
-    """One registered, complete golden: its directory and validated manifest."""
+    """One registered, complete golden: its directory and validated manifest.
+
+    A reader subclass for one golden layout sets ``producer`` / ``producer_version`` (what ``open_golden`` requires)
+    and implements ``_read_rows``, and ``_segment_end`` / ``read_sampled`` when its consumers need them; the base
+    class reads no products."""
+
+    producer: ClassVar[str | None] = None
+    producer_version: ClassVar[int | None] = None
 
     path: Path
     manifest: dict
@@ -196,15 +206,20 @@ class Fp64Golden:
     def require(
         self,
         *,
-        producer: str,
-        producer_version: int,
+        producer: str | None = None,
+        producer_version: int | None = None,
         identity: dict | None = None,
         weights_sha256: dict[str, str] | None = None,
         products: Iterable[str] = (),
     ) -> None:
         """Raise ``GoldenMismatch`` naming every field that differs from what the consumer was calibrated on.
         ``weights_sha256``: digests of the weights the consumer loaded itself; each must be one the golden was built
-        from (a subset check: a consumer loads only the layers it needs)."""
+        from (a subset check: a consumer loads only the layers it needs). ``producer`` / ``producer_version`` default
+        to the reader's."""
+        producer = producer if producer is not None else self.producer
+        producer_version = producer_version if producer_version is not None else self.producer_version
+        if producer is None or producer_version is None:
+            raise ValueError(f"{type(self).__name__} names no producer: pass producer and producer_version")
         mismatched = []
         for key, want in (("producer", producer), ("producer_version", producer_version)):
             if self.manifest[key] != want:
@@ -235,12 +250,52 @@ class Fp64Golden:
             raise GoldenInvalid(f"{path} does not match the manifest's token_ids_sha256")
         return ids
 
+    def read_rows(self, names: Iterable[str], start: int, end: int) -> dict[str, torch.Tensor]:
+        """The products ``names`` for rows ``[start, end)``: a ``row`` product as its ``[end - start, ...]`` rows, a
+        ``segment_end`` product as its value after row ``end`` (``end`` must end a segment), each in its stored dtype.
+        Raises ``ValueError`` for a product the golden does not hold, a ``sampled_row`` product (``read_sampled``) or
+        rows outside the golden."""
+        names = list(names)
+        products = self.manifest["products"]
+        missing = [n for n in names if n not in products]
+        if missing:
+            raise ValueError(f"golden {self.golden_id} has no products {missing}")
+        kinds = {n: products[n]["kind"] for n in names}
+        sampled = [n for n, kind in kinds.items() if kind == "sampled_row"]
+        if sampled:
+            raise ValueError(f"{sampled} of golden {self.golden_id} are sampled-row products: use read_sampled")
+        if not 0 <= start < end <= self.rows:
+            raise ValueError(f"rows [{start}, {end}) are not inside the {self.rows} rows of {self.golden_id}")
+        row_names = [n for n in names if kinds[n] == "row"]
+        state_names = [n for n in names if kinds[n] == "segment_end"]
+        out = self._read_rows(row_names, start, end) if row_names else {}
+        if state_names:
+            ends = [segment["end"] for segment in self.manifest["segments"]]
+            if end not in ends:
+                raise ValueError(f"row {end} does not end a segment of {self.golden_id} (segment-end products)")
+            out.update(self._segment_end(state_names, ends.index(end)))
+        return {n: out[n] for n in names}
 
-def open_golden(golden_id: str, root: Path | None = None) -> Fp64Golden:
-    """The complete golden ``golden_id`` under ``root`` (default ``golden_root()``).
+    def read_sampled(self, end: int | None = None) -> dict[str, torch.Tensor]:
+        """The ``sampled_row`` products on the sampled rows below ``end`` (default: all rows)."""
+        raise GoldenError(f"{type(self).__name__} reads no sampled-row products of golden {self.golden_id}")
 
-    Raises ``GoldenNotFound`` without a directory or manifest and ``GoldenInvalid`` when the manifest breaks the
-    contract (including an incomplete golden).
+    def _read_rows(self, names: list[str], start: int, end: int) -> dict[str, torch.Tensor]:
+        """Rows ``[start, end)`` of the ``row`` products ``names`` (validated by ``read_rows``)."""
+        raise GoldenError(f"{type(self).__name__} has no reader for the products of golden {self.golden_id}")
+
+    def _segment_end(self, names: list[str], index: int) -> dict[str, torch.Tensor]:
+        """The ``segment_end`` products ``names`` after segment ``index`` (validated by ``read_rows``)."""
+        raise GoldenError(f"{type(self).__name__} reads no segment-end products of golden {self.golden_id}")
+
+
+def open_golden(golden_id: str, root: Path | None = None, reader: type[Fp64Golden] = Fp64Golden) -> Fp64Golden:
+    """The complete golden ``golden_id`` under ``root`` (default ``golden_root()``), as a ``reader`` (the reader of
+    its layout; the base class reads no products).
+
+    Raises ``GoldenNotFound`` without a directory or manifest, ``GoldenInvalid`` when the manifest breaks the
+    contract (including an incomplete golden), and ``GoldenMismatch`` when a reader that names its producer gets
+    another producer's or version's golden.
     """
     path = Path(root or golden_root()) / golden_id
     manifest_path = path / MANIFEST
@@ -253,4 +308,7 @@ def open_golden(golden_id: str, root: Path | None = None) -> Fp64Golden:
     problems = manifest_problems(golden_id, manifest) if isinstance(manifest, dict) else ["not a JSON object"]
     if problems:
         raise GoldenInvalid(f"golden {golden_id!r} at {path}: " + "; ".join(problems))
-    return Fp64Golden(path, manifest)
+    golden = reader(path, manifest)
+    if reader.producer is not None:
+        golden.require()
+    return golden

@@ -16,6 +16,8 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     MANIFEST,
     ROOT_ENV,
     TOKEN_IDS,
+    Fp64Golden,
+    GoldenError,
     GoldenInvalid,
     GoldenMismatch,
     GoldenNotFound,
@@ -164,3 +166,36 @@ def test_manifest_writes_are_whole(tmp_path: Path) -> None:
     write_manifest(tmp_path, {"a": 1})
     assert json.loads((tmp_path / MANIFEST).read_text()) == {"a": 1}
     assert [p.name for p in tmp_path.iterdir()] == [MANIFEST]  # no temporary left behind
+
+
+class _TinyReader(Fp64Golden):
+    """A reader of ``make_golden``'s layout: row r's ``output`` is ``[r, r, r]`` (no files needed)."""
+
+    producer = "tests.tiny"
+    producer_version = 1
+
+    def _read_rows(self, names, start, end):
+        return {"output": torch.arange(start, end, dtype=torch.float64).unsqueeze(1).expand(-1, 3)}
+
+
+def test_read_rows_validates_then_delegates_to_the_reader(tmp_path: Path, expect_error) -> None:
+    """``read_rows`` refuses unknown products and rows outside the golden before its reader runs; the base class
+    reads no products; a reader that names its producer is checked on open, and ``require`` defaults to it."""
+    make_golden(tmp_path)
+    golden = open_golden("tiny-l0-kda-fp64-10", root=tmp_path, reader=_TinyReader)
+    assert golden.read_rows(["output"], 8, 10)["output"][:, 0].tolist() == [8.0, 9.0]
+    golden.require(identity={"model": "tiny"})
+    with expect_error(ValueError, "has no products"):
+        golden.read_rows(["state"], 0, 4)
+    with expect_error(ValueError, "not inside"):
+        golden.read_rows(["output"], 4, 11)
+    with expect_error(GoldenError, "no reader"):
+        open_golden("tiny-l0-kda-fp64-10", root=tmp_path).read_rows(["output"], 0, 4)
+    with expect_error(ValueError, "names no producer"):
+        open_golden("tiny-l0-kda-fp64-10", root=tmp_path).require()
+
+    class OtherProducer(_TinyReader):
+        producer = "tests.other"
+
+    with expect_error(GoldenMismatch, "expected 'tests.other'"):
+        open_golden("tiny-l0-kda-fp64-10", root=tmp_path, reader=OtherProducer)

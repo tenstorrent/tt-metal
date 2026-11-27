@@ -3,12 +3,12 @@
 """Kimi-K3.1 DSA layer 3 against the FP64 chain golden over long context: the FP64 attention the device is scored
 against, which rows are scored, and the per-window measures and bars of ``test_kimi_k3_1_dsa_long_context.py``.
 
-CPU only; imports no device code. The golden (``k31_chain_golden.K31_CHAIN_1M``) holds, for every row, layer 3's
-input ``dsa_input_3`` (the AttnRes read), its FP64 keys (``latent``, ``kpe``, ``index_key``) and its FP64 indexer
-top-2048 (``topk_indices_3``, best first), but the FP64 attention output ``attn_output_3`` only on 512 sampled rows
-(attention is quadratic in the chain). The test therefore recomputes the FP64 gated attention on the rows it scores,
-from the golden's keys and selection (``score_rows``), and checks that recompute against the stored output on the sampled
-rows before trusting it.
+CPU only; imports no device code. The golden (``long_context_accuracy/kimi_k3_1/golden.K31_CHAIN_1M``) holds, for every
+row, layer 3's input ``dsa_input_3`` (the AttnRes read), its FP64 keys (``latent``, ``kpe``, ``index_key``) and its FP64
+indexer top-2048 (``topk_indices_3``, best first), but the FP64 attention output ``attn_output_3`` only on 512 sampled
+rows (attention is quadratic in the chain). The test therefore recomputes the FP64 gated attention on the rows it
+scores, from the golden's keys and selection (``score_rows``), and checks that recompute against the stored output on
+the sampled rows before trusting it.
 
 Per scored row, three FP64 attentions over the golden's FP64 keys, each against the reference (FP64 attention over
 the golden's top-k):
@@ -88,7 +88,7 @@ class Dims:
 def load_weights(checkpoint: Path) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     """``WEIGHTS`` of layer 3 from a K3.1 checkpoint in FP64, and the digest of the tensor set the chain read for
     the layer (``Fp64Golden.require(weights_sha256=...)`` checks the golden was built from these weights)."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import layer_weights
+    from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import layer_weights
 
     tensors, digest = layer_weights(checkpoint, LAYER)
     return {n: tensors[n].double() for n in WEIGHTS}, digest
@@ -297,12 +297,10 @@ class RunScorer:
     the per-window metrics and the run's summary."""
 
     def __init__(self, golden, rows: int, weights: Mapping[str, torch.Tensor], dims: Dims = Dims()):
-        from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import read_sampled
-
         if rows > golden.rows:
             raise ValueError(f"golden {golden.golden_id} has {golden.rows} rows, fewer than {rows}")
         self.golden, self.rows, self.w, self.dims = golden, rows, weights, dims
-        self.sampled = read_sampled(golden, rows)
+        self.sampled = golden.read_sampled(rows)
         self.scored = scored_rows(rows, self.sampled["sampled_rows"], dims)
         index_dim = golden.manifest["products"]["index_key"]["shape"][0]
         self.latent = torch.empty(rows, dims.lora, dtype=torch.float64)
@@ -314,10 +312,8 @@ class RunScorer:
         self._chunk: dict | None = None
 
     def chunk_input(self, lo: int, hi: int) -> torch.Tensor:
-        from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import read_rows
-
         names = ["dsa_input_3", "latent", "kpe", "index_key", "topk_indices_3", "topk_scores_3"]
-        p = read_rows(self.golden, names, lo, hi)
+        p = self.golden.read_rows(names, lo, hi)
         self.latent[lo:hi], self.kpe[lo:hi], self.index_key[lo:hi] = p["latent"], p["kpe"], p["index_key"]
         normed = normed_input(p["dsa_input_3"], self.w, self.dims)
         self._chunk = {

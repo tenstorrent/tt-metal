@@ -4,13 +4,14 @@
 chain, every row scored against it.
 
 The golden is the registered FP64 CPU chain of K3.1 layers 0-3 over the vLLM K3.1-Pro 1M prompt
-(``k31_chain_golden.K31_CHAIN_1M``); a missing or incomplete golden fails the test. Each 2560-row chunk of the prompt,
-in order, feeds the chain's MoE input ``moe_input_L`` (after ``post_attention_layernorm``, rounded once to bf16) to
-``TtMoEBlockFfn`` as one 4x4 stage (SP on axis 1) builds it, with the chunk's real span as the runtime passes it, and
-its routed experts from the stage's TTNN weight cache. The device's MoE output and routing are scored against the
-chain's ``moe_output_L`` and FP64 top-16 (``moe_long_context``): absolute and relative error per window and over the
-run, routing recall, dropped FP64 weight and miss ranks, gated per window by ``moe_long_context.BARS``. The MoE has no
-state across chunks, so there is no context-growth bar; the rungs show that the bars hold at every context length.
+(``long_context_accuracy/kimi_k3_1/golden.K31_CHAIN_1M``); a missing or incomplete golden fails the test. Each 2560-row
+chunk of the prompt, in order, feeds the chain's MoE input ``moe_input_L`` (after ``post_attention_layernorm``, rounded
+once to bf16) to ``TtMoEBlockFfn`` as one 4x4 stage (SP on axis 1) builds it, with the chunk's real span as the runtime
+passes it, and its routed experts from the stage's TTNN weight cache. The device's MoE output and routing are scored
+against the chain's ``moe_output_L`` and FP64 top-16 (``moe_long_context``): absolute and relative error per window and
+over the run, routing recall, dropped FP64 weight and miss ranks, gated per window by ``moe_long_context.BARS``. The MoE
+has no state across chunks, so there is no context-growth bar; the rungs show that the bars hold at every context
+length.
 
 Run on one tray half of a Blackhole Galaxy (skips without the 4x4 binding or the weight cache):
 
@@ -34,7 +35,6 @@ from models.demos.common.prefill.long_context_accuracy.acceptance_bars import ch
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import WindowedErrors, trend
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import K31_CHAIN_1M, open_k31_chain, read_rows
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_long_context import (
     BARS,
     TOP_K,
@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_long_context import (
     row_floor,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import compose
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import K31_CHAIN_1M, open_k31_chain
 
 WINDOW = 16384  # rows per scored window, aligned to row 0 (a shorter rung is one partial window)
 # Context rungs in rows, the last the golden's whole prompt (408 chunks); 256k ends in a partial chunk.
@@ -96,13 +97,13 @@ def test_k31_moe_long_context(mesh_device, device_params, layer: int, rows: int)
 
     first_done = None  # (the first call also loads the layer's weights from the cache)
     with ThreadPoolExecutor(max_workers=1) as reader:  # (the next chunk's golden is read while the device runs)
-        pending = reader.submit(read_rows, golden, names, *span(0))
+        pending = reader.submit(golden.read_rows, names, *span(0))
         try:
             for c in range(num_chunks):
                 lo, hi = span(c)
                 want = pending.result()
                 if c + 1 < num_chunks:
-                    pending = reader.submit(read_rows, golden, names, *span(c + 1))
+                    pending = reader.submit(golden.read_rows, names, *span(c + 1))
                 x_rows = torch.zeros(chunk, KimiK31Config.EMB_SIZE, dtype=torch.bfloat16)
                 x_rows[: hi - lo] = want[names[0]]
                 x = ttnn.from_torch(

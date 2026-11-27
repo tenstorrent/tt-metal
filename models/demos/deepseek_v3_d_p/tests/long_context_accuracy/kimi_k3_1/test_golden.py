@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host contracts of the K3.1 FP64 chain-golden reader on a small registered chain: rows across segment and file
-boundaries, sampled rows below a bound, refusal of products or rows the golden does not hold and of a missing or
-other-version chain, and the per-layer weight set and digest. CPU only."""
+"""Host contracts of the K3.1 FP64 chain-golden reader (``KimiK31ChainGolden``) on a small registered chain: rows across
+segment and file boundaries, sampled rows below a bound, refusal of products or rows the golden does not hold and of a
+missing or other-version chain, and the per-layer weight set and digest. CPU only."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     write_manifest,
     write_token_ids,
 )
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_chain_golden as chain
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1 import golden as chain
 
 ROWS, SEGMENT = 10, 4  # segments [0, 4) [4, 8) [8, 10)
 
@@ -68,30 +68,30 @@ def _write_chain(root, golden_id="k31-test-chain", producer_version=chain.PRODUC
 def test_read_rows_spans_segments_and_files(tmp_path) -> None:
     _write_chain(tmp_path)
     golden = chain.open_k31_chain("k31-test-chain", tmp_path)
-    got = chain.read_rows(golden, ["moe_output_1", "latent"], 3, 9)
+    got = golden.read_rows(["moe_output_1", "latent"], 3, 9)
     assert torch.equal(got["moe_output_1"], torch.tensor([[3.0, -3], [4, -4], [5, -5], [6, -6], [7, -7], [8, -8]]))
     assert torch.equal(got["latent"], torch.tensor([[30.0], [40], [50], [60], [70], [80]], dtype=torch.float64))
-    assert torch.equal(chain.read_rows(golden, ["moe_output_1"], 9, 10)["moe_output_1"], torch.tensor([[9.0, -9]]))
+    assert torch.equal(golden.read_rows(["moe_output_1"], 9, 10)["moe_output_1"], torch.tensor([[9.0, -9]]))
 
 
 def test_read_rows_refuses_what_the_golden_does_not_hold(tmp_path, expect_error) -> None:
     _write_chain(tmp_path)
     golden = chain.open_k31_chain("k31-test-chain", tmp_path)
-    with expect_error(ValueError, "no per-row products"):
-        chain.read_rows(golden, ["attn_output_3"], 0, 4)
-    with expect_error(ValueError, "no per-row products"):
-        chain.read_rows(golden, ["moe_output_2"], 0, 4)
+    with expect_error(ValueError, "sampled-row products"):
+        golden.read_rows(["attn_output_3"], 0, 4)
+    with expect_error(ValueError, "has no products"):
+        golden.read_rows(["moe_output_2"], 0, 4)
     with expect_error(ValueError, "not inside"):
-        chain.read_rows(golden, ["moe_output_1"], 8, 11)
+        golden.read_rows(["moe_output_1"], 8, 11)
 
 
 def test_read_sampled_keeps_rows_below_end(tmp_path) -> None:
     _write_chain(tmp_path)
     golden = chain.open_k31_chain("k31-test-chain", tmp_path)
-    every = chain.read_sampled(golden)
+    every = golden.read_sampled()
     assert every["sampled_rows"].tolist() == [0, 4, 8]
     assert every["attn_output_3"].flatten().tolist() == [0.5, 4.5, 8.5]
-    assert chain.read_sampled(golden, 8)["sampled_rows"].tolist() == [0, 4]  # (row 8 is not below 8)
+    assert golden.read_sampled(8)["sampled_rows"].tolist() == [0, 4]  # (row 8 is not below 8)
 
 
 def test_open_fails_on_a_missing_or_other_version_chain(tmp_path, expect_error) -> None:

@@ -43,6 +43,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, token_ids_sha256
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -60,12 +61,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.dev.layer0_run_analysis import (
 )
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
-from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
-    MANIFEST,
-    load_window,
-    state_after,
-    token_ids_sha256,
-)
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _L1_SMALL_SIZE, _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
@@ -75,6 +70,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     reconstruct_state_at_sp_rank,
     to_sp_input,
 )
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, state_after
 from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_program_config
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
