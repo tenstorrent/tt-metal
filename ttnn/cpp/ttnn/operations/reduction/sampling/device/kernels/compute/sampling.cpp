@@ -22,6 +22,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#ifdef SAMPLING_TOP64
+#include "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
+#endif
 
 #define DEBUG_PRINT 0
 using namespace ckernel;
@@ -231,6 +234,52 @@ template <
     bool first_call,
     bool stable_sort>
 void top_k() {
+#ifdef SAMPLING_TOP64
+    // Opt-in 64-candidate top-k (TTNN_NANBEIGE_SAMPLING_TOP64): the ttnn.topk merge schedule keeps ranks
+    // 32..63 that the 32-candidate schedule below discards before the writer can sample them.
+    static_assert(K == 32 || K == 64);
+    static_assert(K <= Wt * tile_width);
+    constexpr uint32_t Kt = K / tile_width;
+    constexpr bool switch_dir = K == 64;
+    ckernel::topk_tile_init();
+
+    for (uint32_t ht = 0; ht < Ht; ++ht) {
+        bool ascending = false;
+        process_and_sort_tiles<stable_sort, false, true, ckernel::TopkTieOrder::Descending>(
+            input_dfb_index,
+            index_dfb_index,
+            input_transposed_dfb_index,
+            index_transposed_dfb_index,
+            Wt,
+            switch_dir,
+            ascending,
+            logk - 1);
+        uint32_t num_k_sequences = Wt * tile_width / K;
+        uint32_t seq_per_2tiles = 2;
+        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+            process_iteration<stable_sort, false, ckernel::TopkTieOrder::Descending>(
+                m_iter,
+                K,
+                Wt,
+                num_k_sequences,
+                Kt,
+                input_transposed_dfb_index,
+                index_transposed_dfb_index,
+                0,
+                1,
+                2,
+                3,
+                true,
+                switch_dir,
+                logk,
+                seq_per_2tiles,
+                true);
+        }
+        transpose_and_pack(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
+        transpose_and_pack(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
+    }
+    sfpu::_init_sfpu_config_reg();
+#else
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
     constexpr uint32_t input_dest_start = 0;
@@ -414,6 +463,7 @@ void top_k() {
         index_transposed_dfb.pop_front(Wt);
     }
     sfpu::_init_sfpu_config_reg();
+#endif
 }
 
 template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles>
@@ -465,8 +515,13 @@ void kernel_main() {
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
     generate_rand_tile(dfb::rand_tile, seed);
 
+#ifdef SAMPLING_TOP64
+    constexpr uint32_t nearest32_K = get_arg(args::max_k);
+    constexpr uint32_t logk = nearest32_K == 64 ? 6 : 5;
+#else
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)
+#endif
 
     // top-k
     top_k<

@@ -17,6 +17,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
+#include "ttnn/operations/nanbeige_opt_in.hpp"
 
 namespace ttnn::prim {
 
@@ -151,6 +152,11 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     uint32_t Ht = (num_users + tile_height - 1) / tile_height;  // == 1 for 1..32 users
     uint32_t Wt = input_shape[3] / tile_width;
     auto num_cores = num_users;
+    // Opt-in (TTNN_NANBEIGE_SAMPLING_TOP64=1, set by agentic-models nanbeige_4_3_33b): k lives on
+    // device and may change during trace replay, so compile enough candidates for every k up to 64
+    // and read ranks across candidate tiles. Unset, the 32-candidate program below is unchanged.
+    const bool top64 = ttnn::nanbeige::sampling_top64() && input_shape[3] >= 64;
+    const uint32_t max_k = top64 ? std::min<uint32_t>(input_shape[3], 64) : 32;
 
     auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
@@ -188,6 +194,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     // for streaming in input
     uint32_t num_dfb_unit = 2;
     uint32_t dfb_in_units = 2 * num_dfb_unit;
+    const uint32_t candidate_units = top64 ? max_k / tile_width : num_dfb_unit;
 
     // Reduce scaler format — MAX and SUM share it even though they need separate buffers
     tt::DataFormat scalar_df =
@@ -228,10 +235,10 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         // Single buffered buffer that holds the transposed index tiles
         make_dfb(SAMPLING_INDEX_TRANSPOSED, index_tile_size, Wt, index_dfb_data_format),
         // Output sampling values
-        make_dfb(SAMPLING_VALUES, input_values_tile_size, num_dfb_unit, input_values_dfb_data_format),
-        make_dfb(SAMPLING_LOCAL_VALS, input_values_tile_size, num_dfb_unit, input_values_dfb_data_format),
+        make_dfb(SAMPLING_VALUES, input_values_tile_size, candidate_units, input_values_dfb_data_format),
+        make_dfb(SAMPLING_LOCAL_VALS, input_values_tile_size, candidate_units, input_values_dfb_data_format),
         // Output local indices
-        make_dfb(SAMPLING_OUTPUT_IND, index_tile_size, num_dfb_unit, index_dfb_data_format),
+        make_dfb(SAMPLING_OUTPUT_IND, index_tile_size, candidate_units, index_dfb_data_format),
         make_dfb(SAMPLING_CUR_MAX, input_values_tile_size, num_out_tiles, input_values_dfb_data_format),
         make_dfb(SAMPLING_CUR_SUM, input_values_tile_size, num_out_tiles, input_values_dfb_data_format),
         make_dfb(SAMPLING_RAND_TILE, rand_tile_size, 1, tt::DataFormat::Float16_b),
@@ -405,13 +412,17 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
              {"stable_sort", static_cast<uint32_t>(stable_sort)}},
         .hw_config = ComputeHardwareConfig{compute_config},
     };
+    if (top64) {
+        compute.compile_time_args["max_k"] = max_k;
+        compute.compiler_options.defines["SAMPLING_TOP64"] = "1";
+    }
 
     // One writer per running core. `core_id` is the only value that differs between them, and it is a
     // compile-time argument, so each core gets its own KernelSpec rather than one shared spec.
     // `output`, `k` and `p` are writer-private scratchpads: `k` and `p` are NOC-read staging it then
     // indexes by core, and `output` is a plain SRAM window it fills and sends.
     auto make_writer = [&](uint32_t core_index) {
-        return KernelSpec{
+        auto writer = KernelSpec{
             .unique_id = sampling_writer_name(core_index),
             .source = SAMPLING_WRITER_SOURCE,
             .dfb_bindings =
@@ -496,6 +507,11 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
                  {"num_users", num_users}},
             .hw_config = ttnn::create_writer_datamovement_config(),
         };
+        if (top64) {
+            writer.compile_time_args["max_k"] = max_k;
+            writer.compiler_options.defines["SAMPLING_TOP64"] = "1";
+        }
+        return writer;
     };
 
     Group<KernelSpec> kernels;

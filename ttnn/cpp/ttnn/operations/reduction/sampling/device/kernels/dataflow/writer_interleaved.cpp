@@ -42,6 +42,11 @@ void kernel_main() {
     // The host also supplies out_stick_size; this kernel does not read it.
     constexpr auto core_id = get_arg(args::core_id);
     constexpr auto ids_per_batch = get_arg(args::ids_per_batch);
+#ifdef SAMPLING_TOP64
+    // Opt-in 64-candidate sampling (TTNN_NANBEIGE_SAMPLING_TOP64): candidate ranks span max_k / 32 tiles.
+    constexpr auto max_k = get_arg(args::max_k);
+    constexpr uint32_t candidate_tiles = max_k / 32;
+#endif
     constexpr auto num_cores = get_arg(args::num_cores);
     // Local sort-index width must match the index buffer format / fp32 dest accumulation chosen by
     // the host: 32-bit (Int32) on Quasar, 16-bit (UInt16) on WH/BH.
@@ -79,6 +84,12 @@ void kernel_main() {
         const auto k_lock = k_chunk.scoped_lock(core_id, 1);
         k = k_chunk[core_id];
     }
+#ifdef SAMPLING_TOP64
+    // Parameters are device-resident, so validate them here. Keep the access
+    // bounded even when device assertions are disabled in a production build.
+    ASSERT(k >= 1 && k <= max_k);
+    k = k < 1 ? 1 : (k > max_k ? max_k : k);
+#endif
 
     const auto addrg_p = TensorAccessor(tensor::p);
     // Read the entire aligned chunk to avoid NOC alignment issues
@@ -106,7 +117,11 @@ void kernel_main() {
     generate_bcast_unary_scalar(dfb_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
+#ifdef SAMPLING_TOP64
+    generate_mask<dfb::mask, one>(one, candidate_tiles, k - 1);
+#else
     generate_mask<dfb::mask, one>(one, ids_per_batch / 32, k - 1);
+#endif
     // get random number
     dfb_rand.wait_front(1);
     const CoreLocalMem<volatile uint16_t> rand_values(dfb_rand.get_read_ptr());
@@ -128,8 +143,13 @@ void kernel_main() {
     rand_lo = rand_lo > RAND_DIGIT_MAX ? RAND_DIGIT_MAX : rand_lo;
     // wait for compute kernel
     dfb_final_indices.wait_front(num_users);
+#ifdef SAMPLING_TOP64
+    dfb_local_values.wait_front(candidate_tiles);
+    dfb_local_indices.wait_front(candidate_tiles);
+#else
     dfb_local_values.wait_front(1);
     dfb_local_indices.wait_front(1);
+#endif
     // Read producer-written compute outputs from these buffers in SRAM.
     const CoreLocalMem<volatile uint16_t> local_values(dfb_local_values.get_read_ptr());
 
@@ -139,6 +159,44 @@ void kernel_main() {
     const CoreLocalMem<volatile uint32_t> final_indices(
         dfb_final_indices.get_read_ptr() + (core_id * final_indices_stick_size));
 
+#ifdef SAMPLING_TOP64
+    // Candidate ranks run across tiles, not across adjacent rows in a face.
+    // Each tile contains four 16x16 faces. This also handles rows 16..31 and
+    // ranks 32..63 without reading a neighboring user's probability or index.
+    const auto candidate_offset = [](uint32_t rank) {
+        constexpr uint32_t row_face = (core_id / FACE_HEIGHT) * 2 * FACE_WIDTH * FACE_HEIGHT;
+        constexpr uint32_t row_offset = (core_id % FACE_HEIGHT) * FACE_WIDTH;
+        const uint32_t col = rank % 32;
+        return (rank / 32) * 1024 + row_face + row_offset + (col / FACE_WIDTH) * FACE_WIDTH * FACE_HEIGHT +
+               col % FACE_WIDTH;
+    };
+
+    // Top-p filtering in float32. Include the first candidate crossing p.
+    const float p_f = bf16_to_f32(static_cast<uint16_t>(p & 0xFFFF));
+    float cum_prob_f = 0.0f;
+    uint32_t kept_tokens = 0;
+    for (uint32_t rank = 0; rank < k; ++rank) {
+        cum_prob_f += bf16_to_f32(local_values[candidate_offset(rank)]);
+        ++kept_tokens;
+        if (cum_prob_f > p_f) {
+            break;
+        }
+    }
+
+    // Stochastic sampling in float32. Use the final retained candidate as the
+    // rounding fallback if cumulative divisions land just below the threshold.
+    const float rand_f = (rand_hi * 256.0f + rand_lo) * RAND_LATTICE_SCALE;
+    float cum_sum_f = 0.0f;
+    uint32_t sampled_index = final_indices[local_indices[candidate_offset(kept_tokens - 1)]];
+    for (uint32_t rank = 0; rank < kept_tokens; ++rank) {
+        const uint32_t offset = candidate_offset(rank);
+        cum_sum_f += bf16_to_f32(local_values[offset]) / cum_prob_f;
+        if (cum_sum_f > rand_f) {
+            sampled_index = final_indices[local_indices[offset]];
+            break;
+        }
+    }
+#else
     uint32_t start_id_local_phase_0 = core_id * FACE_WIDTH;
     // each user is on 1 core, so core_id = user_id
     // users 0-16 have their data on first 2 faces (2 * FACE_WIDTH * FACE_HEIGHT = 2*16*16 = 512 values)
@@ -220,6 +278,7 @@ void kernel_main() {
             }
         }
     }
+#endif
     {
         const auto out_lock = index_out.scoped_lock(core_id, 1);
         index_out[core_id] = sampled_index;
@@ -227,8 +286,13 @@ void kernel_main() {
 
     // Release consumed buffers
     dfb_rand.pop_front(1);
+#ifdef SAMPLING_TOP64
+    dfb_local_values.pop_front(candidate_tiles);
+    dfb_local_indices.pop_front(candidate_tiles);
+#else
     dfb_local_values.pop_front(1);
     dfb_local_indices.pop_front(1);
+#endif
     dfb_final_indices.pop_front(num_users);
 
     const auto s_out = TensorAccessor(tensor::output);
