@@ -59,10 +59,46 @@ Each run makes a new dir `<out>/LOG_<YYYY_MM_DD_HH_MM>_<host>_<commit>/` (suffix
 | `nd/<name>/` | first attempt of step `nd:<name>`: `reset.log`, `log` (test output), `tt-smi.json`, `crash_triage.csv` on a hang, `chips/chip<N>/` (`each_chip` steps: that chip's `pytest.log`, `crash_triage.csv` on a hang) |
 | `nd/<name>_throttle/` | `throttle` fallback: same test with `TT_MM_THROTTLE_PERF=5` |
 | `nd/<name>_pin_core_dev<N>/` | `pin_core` fallback: the per-chip test on failing device `N` alone, twice the iterations |
+| `nd/<name>_throttle_hang/` | `throttle_hang` fallback (`each_chip` steps): every chip again, `TT_MM_THROTTLE_PERF=5`, `MATMUL_ITERS=100` |
 
-Fallbacks run only after a FAIL or HANG, in config order, each in its own `<dir>_<name>` folder.
+Fallbacks run only after a FAIL or HANG that their `on` list names (default both), in config order, each in its own
+`<dir>_<name>` folder.
 Status values: `PENDING RUN PASS WARN FAIL HANG SKIP`. A step's status is its first attempt; fallbacks never change it.
 The `status.json` fields are listed in [runner/CLAUDE.md](runner/CLAUDE.md).
+
+### How chips run and fallbacks
+
+| attempt | chips |
+|---|---|
+| pytest step (minimal .. core-sweep), first attempt | one pytest over the full 32-chip mesh |
+| pytest step, `throttle` | the same, full mesh |
+| pytest step, `pin_core` | the per-chip test on one failing chip; failing chips one after another |
+| `each_chip` step (mcast-ack, mcast-ack-duty), first attempt | one pytest per chip, every chip at once |
+| `each_chip` step, `throttle_hang` | the same, every chip at once |
+
+| step type | fallback | runs after | knobs | reset before it |
+|---|---|---|---|---|
+| pytest | `throttle` | FAIL or HANG | `TT_MM_THROTTLE_PERF=5` | normal galaxy reset |
+| pytest | `pin_core` | FAIL or HANG, per hung or ND device | that chip alone, twice the iterations, at least the first loop time | ND: normal; hang: `tt-smi -r` |
+| `each_chip` | `throttle_hang` | HANG only; ND alone is FAIL with no fallback | `TT_MM_THROTTLE_PERF=5`, `MATMUL_ITERS=100` (first: 10) | normal galaxy reset |
+
+`each_chip` steps have no `pin_core`: their first attempt already runs each chip in its own process.
+
+| `throttle_hang` result | status | reason |
+|---|---|---|
+| every chip passes | PASS | `32/32 chips passed`: throttle cures the hang |
+| ND on some chips, no hang | FAIL | `failed on k/32 chips`, ND device rows |
+| any chip hangs | HANG | `hang persists at throttle 5`, hung device rows from each chip's triage |
+
+| `pin_core` result (pytest steps) | status | reason |
+|---|---|---|
+| the chip hangs again | HANG | `triage <csv>`, hung device row |
+| the chip shows ND again | FAIL | `ND reproduced on chip alone: k/c checks` |
+| the chip passes | WARN | `not reproduced on chip alone` |
+| another chip fails | adds | `WARNING failure on device N, outside the pinned chip` |
+
+Gap: `throttle` on a pytest step gives one verdict for the whole mesh; only the first attempt's failing chips get a
+`pin_core`.
 
 ### Env knobs
 
@@ -91,7 +127,7 @@ python -m pytest -q --noconftest -p no:cacheprovider tests/didt/runner tests/did
   tests/didt/test_mcast_ack_scan_dirs.py tests/didt/test_op_test_base_min_loop.py tests/didt/test_nd_core_map.py
 ```
 
-Expected: 149 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
+Expected: 151 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
 find the `build-gwdt-sweep` skill (set `GWDT_SWEEP_DIR` to the skill's folder).
 
 ### Changing the runner
