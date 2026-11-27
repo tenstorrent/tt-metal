@@ -273,13 +273,18 @@ void init_unary_sfpu_operation_quasar()
     {
         init_square();
     }
+    // exp/recip/rsqrt_tile_init run the op's init callback, which re-runs the common SFPU init before its constants.
+    else if constexpr (OPERATION == SfpuType::exponential)
+    {
+        exp_init<APPROX, 0x3F800000, true /* CLAMP_NEGATIVE */, is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        _init_rsqrt_<APPROX>();
+        rsqrt_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _init_reciprocal_<APPROX>();
+        recip_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -298,9 +303,22 @@ void init_unary_sfpu_operation_quasar()
     {
         init_typecast();
     }
-    else if constexpr (is_trig_op(OPERATION))
+    // The trig *_tile_init calls take the op's own init with the kernel's APPROX.
+    else if constexpr (OPERATION == SfpuType::sine)
     {
-        init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
+        sine_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        cosine_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
+    {
+        init_inverse_hyperbolic<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::atanh)
+    {
+        init_atanh<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::tan)
     {
@@ -1023,21 +1041,9 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        if constexpr (TYPECAST_IN_FORMAT == DataFormat::Float32 && TYPECAST_OUT_FORMAT == DataFormat::UInt16)
-        {
-            // Dedicated TTI kernel: names the FP32 load and UInt16 store formats explicitly
-            // rather than letting HW imply them (implied SrcA/SrcB formats are always disabled,
-            // see _llk_math_srcAB_hw_configure_).
-            // Walks Dest through ADDR_MOD_7 + _incr_counters_ instead of ADDR_MOD_6.
-            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_typecast_fp32_to_uint16_, (ITERATIONS), dst_index, vector_mode);
-        }
-        else
-        {
-            // Same functor typecast_tile uses. UInt16 → Float32 is dispatched inside
-            // calculate_typecast to _calculate_typecast_uint16_to_fp32_.
-            SFPU_UNARY_CALL_TINY_TILE(
-                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
-        }
+        // typecast_tile's functor for every pair; it dispatches UInt16 -> Float32 inside calculate_typecast.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
