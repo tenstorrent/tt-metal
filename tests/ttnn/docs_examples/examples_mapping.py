@@ -391,6 +391,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.copy": data_movement.test_copy,
     "ttnn.repeat": data_movement.test_repeat,
     "ttnn.repeat_interleave": data_movement.test_repeat_interleave,
+    "ttnn.expand": data_movement.test_expand,
     "ttnn.slice": data_movement.test_slice,
     "ttnn.tilize": data_movement.test_tilize,
     "ttnn.fill_implicit_tile_padding": data_movement.test_fill_implicit_tile_padding,

@@ -93,3 +93,31 @@ def test_assert_exact_compares_large_ints_exactly(expect_error):
 def test_assert_exact_compares_shapes(expect_error):
     with expect_error(AssertionError, "shape"):
         assert_exact(torch.zeros(2, 3), torch.zeros(3, 2))
+
+
+@pytest.mark.parametrize("dtype", FLOATS)
+def test_floats_leave_out_negative_zero_on_request(dtype):
+    values = full_range_input((64, 64), dtype, nan=False, negative_zero=False).flatten()
+    assert_exact(torch.tensor([math.inf, -math.inf, 0.0]), values[:3])
+    zeros = values[values == 0]
+    assert len(zeros) > 0 and not zeros.signbit().any()
+
+
+@pytest.mark.parametrize("negative_zero", [True, False])
+@pytest.mark.parametrize("nan", [True, False])
+def test_fp8_e4m3_gives_every_value_but_subnormals(nan, negative_zero):
+    values = full_range_input((32, 64), ttnn.fp8_e4m3, nan=nan, negative_zero=negative_zero).flatten()
+    every = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).float()
+    normal = every[every.isfinite() & (every.abs() >= 2.0**-6)]
+    nonzero = values[values.isfinite() & (values != 0)]
+    assert set(nonzero.tolist()) == set(normal.tolist())
+    assert nonzero.abs().max() == 448
+    assert bool(values.isnan().any()) == nan
+    zeros = values[values == 0]
+    assert bool(zeros.signbit().any()) == negative_zero and bool((~zeros.signbit()).any())
+
+
+def test_fp8_e4m3_from_torch_takes_the_values_unchanged():
+    values = full_range_input((32, 64), ttnn.fp8_e4m3)
+    host_tensor = ttnn.from_torch(values, dtype=ttnn.fp8_e4m3, layout=ttnn.ROW_MAJOR_LAYOUT)
+    assert_exact(values, ttnn.to_torch(ttnn.to_dtype(host_tensor, ttnn.float32)))
