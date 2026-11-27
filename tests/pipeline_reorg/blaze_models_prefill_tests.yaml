@@ -2596,14 +2596,16 @@
   sp_config: sc1
 
 # K3.1 mirror of the leg above: the same launcher and layout -- sc4's first two [4,4] stages, one per tray
-# half, 12 layers each, depth 24 (ends on a DSA layer) -- at sc4's 101 slots. With the KDA state replicated over
+# half, 12 layers each, depth 24 (ends on a DSA layer) -- at sc4's 100 slots. With the KDA state replicated over
 # SP, 96 fit the first two stages but ran stages 4-6 (more AttnRes history) out of DRAM by ~16 MB on the first
 # chunk (run 45061518673; stages 0-3 fit), so the leg ran 88. SP-sharding that state (#66430) frees 11 MB per slot
-# per chip: 101 keeps ~20 MiB per bank on stages 4-6 (stage 0 alone fits 103). Each rank prints its DRAM after capture.
+# per chip. Users per stage: N_obs + (free - need - 25 MB) / 21.43 MB per bank, from an observed OOM (21.43 MB a user,
+# 25 MB the worst fragmentation seen); it reproduces stage 0's measured 96 and 103 and gives stages 4-6 100.
+# Each rank prints its DRAM after trace capture.
 # K3's 1M request at 2.5k chunks; its golden is an 8192-token vLLM prompt, so the golden's 8k is PCC'd and the
 # rest of the 1M timed, as K3 does at 55k of 1M. Perf is gated against its own kimi_k3_1 sc1 baseline (24 layers are no baseline for 93).
 # [2/2] runs the same request packed: four 2,560-token chunks per forward, the production shape (kimi_k3_1_packed.json,
-# five slots fewer: stage 0 ran out of DRAM at 100 in its compile and at 98 in trace capture), traced with D2H acks,
+# 95 slots: by the same rule from stage 0's packed OOMs at 100, 98 and 96), traced with D2H acks,
 # against the same golden, perf
 # gated on kimi_k3_1/sc1_packed in perf_baselines.json. The bound grew 60 -> 70, taken from the 8x4 GLM-5.3 SC1 job.
 - name: "(Kimi-K3.1) disaggregated prefill L24 2x[4,4] KV accuracy 8k@2.5k + perf 1M@2.5k, SC1"

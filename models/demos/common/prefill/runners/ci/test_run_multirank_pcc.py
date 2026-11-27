@@ -522,7 +522,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
 
     # Kimi-K3 and Kimi-K3.1 share the launcher's layout handling; they differ in the request and the slot counts.
     KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 1049600}
-    KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "101"}
+    KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "100"}
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
     KIMI_4X4_SP_AXIS = {"kimi_k3": 1, "kimi_k3_1": 0}
 
