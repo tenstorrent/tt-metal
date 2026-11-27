@@ -1063,7 +1063,13 @@ void call_unary_sfpu_operation_quasar(
             // Same functor typecast_tile uses. UInt16 → Float32 is dispatched inside
             // calculate_typecast to _calculate_typecast_uint16_to_fp32_.
             SFPU_UNARY_CALL_TINY_TILE(
-                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
+                DST_SYNC,
+                is_fp32_dest_acc_en,
+                TILE_SHAPE,
+                calculate_typecast,
+                (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, is_fp32_dest_acc_en, ITERATIONS),
+                dst_index,
+                vector_mode);
         }
     }
     else if constexpr (OPERATION == SfpuType::cumsum)

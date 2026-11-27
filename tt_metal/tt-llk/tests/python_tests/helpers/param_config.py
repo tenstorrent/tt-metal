@@ -660,7 +660,13 @@ def _resolve_quasar_typecast_variant(
     ):
         return None
 
-    if output_format.is_integer():
+    if (
+        output_format in (DataFormat.Int8, DataFormat.UInt8)
+        and dest_acc == DestAccumulation.Yes
+    ):
+        # The SFPU leaves an 8-bit result as a whole word in a 32-bit Dest, and the packer narrows it.
+        pack_src = DataFormat.Int32
+    elif output_format.is_integer():
         pack_src = _quasar_sfpu_hardware_format(output_format)
     elif dest_acc == DestAccumulation.Yes:
         pack_src = DataFormat.Float32
