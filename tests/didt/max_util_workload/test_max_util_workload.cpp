@@ -80,6 +80,7 @@ struct MaxUtilConfig {
     uint32_t l1_buffer0_addr = 0;     // input 0 bfloat16 data
     uint32_t l1_buffer1_addr = 0;     // input 1 bfloat16 data
     uint32_t l1_buffer2_addr = 0;     // output bfloat16 data
+    uint32_t l1_slow_cos_out_addr = 0;  // slow-cos output, so the MVMUL output survives for hashing
     uint32_t l1_super_sync_addr = 0;  // super sync semaphore
     uint32_t l1_fpu_timing_addr = 0;  // compute-pipeline start/end timestamps
 
@@ -458,16 +459,19 @@ static PrefillProgram build_prefill_program(IDevice* device, MaxUtilConfig& cfg)
     addr += buffer_size_bfloat16;
     cfg.l1_buffer2_addr = addr;  // output, 8 float16_b tiles, no init
     addr += buffer_size_bfloat16;
+    cfg.l1_slow_cos_out_addr = addr;  // slow-cos output, keeps the MVMUL output intact
+    addr += buffer_size_bfloat16;
     cfg.l1_super_sync_addr = addr;  // super sync semaphore
     addr += 16;
     cfg.l1_fpu_timing_addr = addr;  // four uint32 words: t0 low/high, t1 low/high
 
     log_info(
         LogTest,
-        "Pre-fill: L1 inputs=0x{:x},0x{:x}, output=0x{:x}, super_sync=0x{:x}, fpu_timing=0x{:x}",
+        "Pre-fill: L1 inputs=0x{:x},0x{:x}, output=0x{:x}, slow_cos_out=0x{:x}, super_sync=0x{:x}, fpu_timing=0x{:x}",
         cfg.l1_buffer0_addr,
         cfg.l1_buffer1_addr,
         cfg.l1_buffer2_addr,
+        cfg.l1_slow_cos_out_addr,
         cfg.l1_super_sync_addr,
         cfg.l1_fpu_timing_addr);
 
@@ -790,10 +794,10 @@ static Program build_slow_cos_program(const MaxUtilConfig& cfg) {
             .fp32_dest_acc_en = false,
             .compile_args =
                 {
-                    cfg.l1_buffer0_addr,    // 0: l1_buffer0_addr (bfloat16 input)
-                    cfg.l1_buffer2_addr,    // 1: l1_buffer2_addr (output)
-                    cfg.num_tiles,          // 2: num_tiles (8)
-                    cfg.num_slow_wl_loops,  // 3: num_loops
+                    cfg.l1_buffer0_addr,       // 0: l1_buffer0_addr (bfloat16 input)
+                    cfg.l1_slow_cos_out_addr,  // 1: slow-cos output buffer (keeps MVMUL output intact)
+                    cfg.num_tiles,            // 2: num_tiles (8)
+                    cfg.num_slow_wl_loops,    // 3: num_loops
                 },
         });
 
@@ -876,9 +880,13 @@ static void log_output_crcs(IDevice* device, const MaxUtilConfig& cfg) {
         for (uint32_t x = cfg.grid_start.x; x <= cfg.grid_end.x; ++x) {
             std::vector<uint32_t> tile;
             detail::ReadFromDeviceL1(device, CoreCoord{x, y}, last_tile_addr, tile_bytes, tile, CoreType::WORKER);
+            // Byte-wise FNV-1a: word-wise mixing is blind to changes that
+            // cancel across the two halves of a word (paired BF16 sign flips).
             uint32_t h = 0x811c9dc5u;
             for (uint32_t w : tile) {
-                h = (h ^ w) * 0x01000193u;
+                for (uint32_t byte = 0; byte < 4; ++byte) {
+                    h = (h ^ ((w >> (byte * 8)) & 0xFFu)) * 0x01000193u;
+                }
             }
             log_info(LogTest, "Device {}: output crc core {},{} 0x{:08x}", device->id(), x, y, h);
         }
