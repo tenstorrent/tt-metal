@@ -4,87 +4,100 @@
 
 // g6_slice writer (BRISC, NoC1): store_block.
 //
-// Raw NoC instead of a kernel_lib helper: no dataflow helper scatters per-page byte-run lists from a CB
-// block into interleaved DRAM pages (op_design.md, API Mapping).
+// store_block is raw NoC: no kernel_lib helper scatters per-page byte runs from a CB block to DRAM
+// pages (op_design.md, "Helpers considered and rejected").
 //
-// Output pages of this core are contiguous from core_start_page. page_copy writes each staging page
-// whole. row_runs / col_realign write only the logical rows [0, rv) of each page, un-rotating the
-// staging page (staging row (i + off) mod 32 -> output row i); padding rows of out are never written.
+// page_copy writes each staging page whole. row_runs / col_realign write only the logical rows
+// [0, rv) of each output page, taking output row i from staging row (i + off) mod 32; every run is a
+// whole number of face rows, so source and destination stay congruent mod 16 (DRAM write alignment).
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "g6_slice_runs.hpp"
 
+namespace {
+
+constexpr uint32_t cb_slice_pages = get_compile_time_arg_val(0);
+constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
+constexpr uint32_t face_row_bytes = get_compile_time_arg_val(2);
+constexpr uint32_t block_pages = get_compile_time_arg_val(3);
+constexpr bool row_runs = get_compile_time_arg_val(4) != 0;
+constexpr uint32_t out_ht = get_compile_time_arg_val(5);
+constexpr uint32_t out_wt = get_compile_time_arg_val(6);
+constexpr uint32_t rows_last_tile_row = get_compile_time_arg_val(7);
+constexpr auto out_args = TensorAccessorArgs<8>();
+
+g6_slice::RunList full_rows;
+g6_slice::RunList last_rows;
+
+// Tile-row position of the current output page; only the row class (last tile row or not) matters.
+struct RowWalk {
+    uint32_t th, tw;
+    bool last_tile_row() const { return th == out_ht - 1; }
+    void advance() {
+        if (++tw == out_wt) {
+            tw = 0;
+            if (++th == out_ht) {
+                th = 0;
+            }
+        }
+    }
+};
+
+template <typename Accessor>
+void store_block(const Accessor& out, RowWalk& walk, uint32_t first_page, uint32_t num_pages, uint32_t slot_l1) {
+    for (uint32_t i = 0; i < num_pages; ++i) {
+        const uint32_t src = slot_l1 + i * page_bytes;
+        const uint64_t dst = out.get_noc_addr(first_page + i);
+        if constexpr (!row_runs) {
+            noc_async_write<page_bytes>(src, dst, page_bytes);
+        } else {
+            const g6_slice::RunList& runs = walk.last_tile_row() ? last_rows : full_rows;
+            for (uint32_t k = 0; k < runs.count; ++k) {
+                const g6_slice::PageRun& run = runs.runs[k];
+                noc_async_write<page_bytes>(src + run.src, dst + run.dst, run.len);
+            }
+            walk.advance();
+        }
+    }
+}
+
+}  // namespace
+
 void kernel_main() {
-    constexpr uint32_t cb_slice_pages = get_compile_time_arg_val(0);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t block_pages = get_compile_time_arg_val(2);
-    constexpr bool row_runs = get_compile_time_arg_val(3) != 0;
-    constexpr uint32_t tensor_out_ht_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t tensor_out_wt_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t rows_last_tile_row = get_compile_time_arg_val(6);
-    constexpr auto out_args = TensorAccessorArgs<7>();
-
-    constexpr uint32_t face_row_bytes = page_bytes / 64;
-
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t row_offset_in_tile = get_common_arg_val<uint32_t>(1);
+    const uint32_t row_off = get_common_arg_val<uint32_t>(1);
 
-    uint32_t out_page = get_arg_val<uint32_t>(0);
+    const uint32_t core_start_page = get_arg_val<uint32_t>(0);
     const uint32_t core_pages = get_arg_val<uint32_t>(1);
-    uint32_t th = get_arg_val<uint32_t>(2);
-    uint32_t tw = get_arg_val<uint32_t>(3);
+    RowWalk walk{get_arg_val<uint32_t>(2), get_arg_val<uint32_t>(3)};
 
-    const auto out_accessor = TensorAccessor(out_args, out_addr, page_bytes);
+    const auto out = TensorAccessor(out_args, out_addr, page_bytes);
 
-    g6_slice::RunList<8> full_rows{}, last_rows{};
     if constexpr (row_runs) {
-        full_rows = g6_slice::rotated_runs<face_row_bytes>(row_offset_in_tile, g6_slice::TILE_ROWS);
-        last_rows = g6_slice::rotated_runs<face_row_bytes>(row_offset_in_tile, rows_last_tile_row);
+        full_rows = g6_slice::rotate_runs<face_row_bytes>(row_off, g6_slice::TILE_ROWS);
+        last_rows = g6_slice::rotate_runs<face_row_bytes>(row_off, rows_last_tile_row);
     }
 
-    uint32_t remaining = core_pages;
-    while (remaining > 0) {
-        const uint32_t pages_this_block = remaining < block_pages ? remaining : block_pages;
+    const uint32_t num_blocks = (core_pages + block_pages - 1) / block_pages;
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        const uint32_t done = block_idx * block_pages;
+        const uint32_t num_pages = core_pages - done < block_pages ? core_pages - done : block_pages;
         {
             DeviceZoneScopedN("G6_CB_WAIT");
             cb_wait_front(cb_slice_pages, block_pages);
         }
         {
             DeviceZoneScopedN("G6_WRITE_ISSUE");
-            uint32_t l1_page = get_read_ptr(cb_slice_pages);
-            for (uint32_t p = 0; p < pages_this_block; ++p) {
-                const uint64_t page_noc_addr = out_accessor.get_noc_addr(out_page);
-                if constexpr (!row_runs) {
-                    noc_async_write(l1_page, page_noc_addr, page_bytes);
-                } else {
-                    const auto& rows = th == tensor_out_ht_tiles - 1 ? last_rows : full_rows;
-                    for (uint32_t i = 0; i < rows.count; ++i) {
-                        noc_async_write(
-                            l1_page + rows.runs[i].src_offset,
-                            page_noc_addr + rows.runs[i].dst_offset,
-                            rows.runs[i].size);
-                    }
-                    if (++tw == tensor_out_wt_tiles) {
-                        tw = 0;
-                        if (++th == tensor_out_ht_tiles) {
-                            th = 0;
-                        }
-                    }
-                }
-                ++out_page;
-                l1_page += page_bytes;
-            }
+            store_block(out, walk, core_start_page + done, num_pages, get_read_ptr(cb_slice_pages));
         }
         {
-            // The reader refills this slot right after the pop: the writes must have left L1 first.
+            // The slot is refilled by the reader as soon as it is popped; its bytes must have left L1.
             DeviceZoneScopedN("G6_WRITE_FLUSH");
             noc_async_writes_flushed();
         }
         cb_pop_front(cb_slice_pages, block_pages);
-        remaining -= pages_this_block;
     }
     {
         DeviceZoneScopedN("G6_WRITE_BARRIER");
