@@ -413,6 +413,8 @@ class Conv2dSliceAttr : public ttnn::operations::op_slicing::OpSliceAttr {
     Conv2dConfig conv_config;
     DeviceComputeKernelConfig compute_config;
     MeshDevice* device;
+    // Fixed 2D slices (Op2DSliceConfig::slice_height and slice_width), see get_input_slice_and_padding.
+    bool fixed_slices = false;
 
 public:
     Conv2dSliceAttr(
@@ -456,6 +458,27 @@ public:
         auto [output_slice_height_start, output_slice_width_start] = output_slice_start;
         auto [output_slice_height_end, output_slice_width_end] = output_slice_end;
         auto [input_height, input_width] = input_shape;
+
+        if (fixed_slices) {
+            // Every slice reads (slice - 1) * stride + dilated kernel input pixels per axis, the part past the input
+            // being zeros from padded_slice, which also stand in for the conv's bottom and right padding. Only the
+            // top and left padding, before the input, stays the conv's.
+            const auto axis = [&](uint32_t out_start, uint32_t out_end, uint32_t axis_index, uint32_t pad_before) {
+                const int start = static_cast<int>(out_start * stride[axis_index]) - static_cast<int>(pad_before);
+                const int end = start + static_cast<int>(
+                                            ((out_end - out_start - 1) * stride[axis_index]) +
+                                            ((kernel_size[axis_index] - 1) * dilation[axis_index]) + 1);
+                return std::array<uint32_t, 3>{
+                    static_cast<uint32_t>(std::max(0, start)),
+                    static_cast<uint32_t>(end),
+                    static_cast<uint32_t>(std::max(0, -start))};
+            };
+            const auto [h_start, h_end, pad_top] =
+                axis(output_slice_height_start, output_slice_height_end, 0, padding_n4[0]);
+            const auto [w_start, w_end, pad_left] =
+                axis(output_slice_width_start, output_slice_width_end, 1, padding_n4[2]);
+            return {{{h_start, w_start}, {h_end, w_end}}, {pad_top, 0, pad_left, 0}};
+        }
 
         // Calculate required input slice range based on output slice
         // Formula: input_start = (output_start * stride) - padding
@@ -610,8 +633,9 @@ public:
         auto [output_slice_height, output_slice_width] = calculate_output_image_size(
             {input_slice_height, input_slice_width}, kernel_size, stride, slice_padding, dilation);
 
-        bool single_slice =
-            (input_slice_height == std::get<0>(input_shape)) && (input_slice_width == std::get<1>(input_shape));
+        // Fixed slices are never the whole input: their programs serve every input size.
+        bool single_slice = !fixed_slices && (input_slice_height == std::get<0>(input_shape)) &&
+                            (input_slice_width == std::get<1>(input_shape));
 
         if (!conv_config.shard_layout.has_value()) {
             if (!conv_config.weights_dtype.has_value()) {
@@ -659,6 +683,11 @@ public:
     }
 
     std::string name() const override { return "Conv2D"; }
+
+    bool enable_fixed_slices() override {
+        fixed_slices = true;
+        return true;
+    }
 
     std::vector<ttnn::Tensor> run_L1_op(
         const ttnn::Tensor& sliced_input_tensor,
@@ -866,7 +895,15 @@ Result conv2d_DRAM(
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    // With fixed slices the whole call is to serve every input size, the flatten included.
+    const bool fixed_slices = dram_slice_config_.has_value() && dram_slice_config_->is_fixed();
+    dram_output_tensor = ttnn::reshape(
+        dram_output_tensor,
+        flattened_output_shape,
+        flattened_padded_output_shape,
+        std::nullopt,
+        std::nullopt,
+        fixed_slices ? TileReshapeMapMode::RUNTIME_SHAPES : TileReshapeMapMode::CACHE);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }

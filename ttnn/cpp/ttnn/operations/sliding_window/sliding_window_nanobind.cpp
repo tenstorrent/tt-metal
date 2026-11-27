@@ -38,6 +38,14 @@ void bind_sliding_window(nb::module_& mod) {
     py_op_slice_config.def(
         nb::init<Op2DSliceConfig::SliceType, uint32_t>(), nb::kw_only(), nb::arg("slice_type"), nb::arg("num_slices"));
     py_op_slice_config.def(nb::init<Op2DSliceConfig::SliceType>(), nb::kw_only(), nb::arg("slice_type"));
+    py_op_slice_config.def(
+        "__init__",
+        [](Op2DSliceConfig* self, uint32_t slice_height, uint32_t slice_width) {
+            new (self) Op2DSliceConfig{.slice_height = slice_height, .slice_width = slice_width};
+        },
+        nb::kw_only(),
+        nb::arg("slice_height"),
+        nb::arg("slice_width"));
     py_op_slice_config.def("__repr__", [](const Op2DSliceConfig& config) { return fmt::format("{}", config); });
     py_op_slice_config.def_rw(
         "slice_type",
@@ -56,6 +64,17 @@ void bind_sliding_window(nb::module_& mod) {
         | The corresponding input tensor needed to calculate that output is determined and sliced.
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
+    py_op_slice_config.def_rw(
+        "slice_height",
+        &Op2DSliceConfig::slice_height,
+        R"doc(
+        | With slice_width, fixed 2D slices: the output is cut into slices of slice_height x slice_width pixels, the
+        | last along each axis shifted back to end at the edge, so every slice has the same shape and the per-slice
+        | programs are the same at every input size. slice_type and num_slices are then ignored. Needs a row-major
+        | interleaved DRAM input and a tiled output; slice_width is whole tiles. Supported by conv2d.
+        )doc");
+    py_op_slice_config.def_rw(
+        "slice_width", &Op2DSliceConfig::slice_width, "The width of fixed 2D slices, see slice_height.");
     nb::enum_<Op2DSliceConfig::SliceType>(py_op_slice_config, "SliceTypeEnum")
         .value("L1Full", Op2DSliceConfig::SliceType::L1_FULL)
         .value("DRAMSliceHeight", Op2DSliceConfig::SliceType::DRAM_HEIGHT)
