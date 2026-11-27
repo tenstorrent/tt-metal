@@ -134,6 +134,7 @@ jobs:
           mkdir -p .runner-failure-state
           latest_run_id="$(gh run list \
             --workflow runner-failure-scan.yaml \
+            --branch main \
             --status success \
             --limit 1 \
             --json databaseId \
