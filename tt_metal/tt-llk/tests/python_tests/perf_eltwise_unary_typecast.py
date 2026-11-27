@@ -26,7 +26,7 @@ from helpers.llk_params import (
     DestAccumulation,
     PerfRunType,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import flat_axes, parametrize
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES
 from test_eltwise_unary_typecast import _build_typecast_config
@@ -68,7 +68,15 @@ _TYPECAST_PLAIN_LOOP_PERF_CASES = [
 
 @pytest.mark.perf
 @parametrize(
-    typecast_case=_TYPECAST_PERF_CASES + _TYPECAST_PLAIN_LOOP_PERF_CASES,
+    **flat_axes(
+        ("formats", "dest_acc"),
+        [
+            (InputOutputFormat(input_format, output_format), dest_acc)
+            for input_format, output_format, dest_acc in (
+                _TYPECAST_PERF_CASES + _TYPECAST_PLAIN_LOOP_PERF_CASES
+            )
+        ],
+    ),
     approx_mode=[ApproximationMode.No],
     loop_factor=[
         16,
@@ -82,15 +90,13 @@ _TYPECAST_PLAIN_LOOP_PERF_CASES = [
 )
 def test_perf_eltwise_unary_typecast(
     perf_report,
-    typecast_case,
+    formats,
+    dest_acc,
     approx_mode,
     loop_factor,
     iterations,
     input_dimensions,
 ):
-    input_format, output_format, dest_acc = typecast_case
-    formats = InputOutputFormat(input_format, output_format)
-
     # Calculate tile count from input dimensions
     tile_count_A, tile_count_B, _ = calculate_tile_and_face_counts(
         input_dimensions,

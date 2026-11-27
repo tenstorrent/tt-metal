@@ -12,19 +12,19 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -410,11 +410,13 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     using namespace tt::tt_metal;
 
     TT_FATAL(!prefetcher_pipes.empty(), "prefetcher_pipes must hold at least one pipe");
     TT_FATAL(num_layers > 0, "num_layers must be > 0");
+    TT_FATAL(compare_word_stride > 0, "compare_word_stride must be > 0");
     Buffer* tensor_buffer = source_tensor.buffer();
     TT_FATAL(tensor_buffer != nullptr, "source_tensor must be on device");
     TT_FATAL(tensor_buffer->is_dram(), "source_tensor must be a DRAM buffer");
@@ -470,7 +472,8 @@ tt::tt_metal::distributed::MeshWorkload make_tensor_prefetcher_pipe_validator_wo
         {"print_stride", print_stride},
         {"streaming", streaming ? 1u : 0u},
         {"num_groups", selection.num_groups},
-        {"group_mask", selection.mask}};
+        {"group_mask", selection.mask},
+        {"compare_word_stride", compare_word_stride}};
     receiver.runtime_arg_schema.runtime_arg_names = {
         "bank_id",
         "recv_idx_in_bank",
@@ -525,7 +528,8 @@ void test_tensor_prefetcher_pipe_validator(
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool streaming,
     const std::vector<uint32_t>& rotation,
-    const std::vector<uint32_t>& groups) {
+    const std::vector<uint32_t>& groups,
+    uint32_t compare_word_stride) {
     tt::tt_metal::distributed::MeshWorkload workload = make_tensor_prefetcher_pipe_validator_workload(
         mesh_device,
         source_tensor,
@@ -535,7 +539,8 @@ void test_tensor_prefetcher_pipe_validator(
         bank_to_receivers,
         streaming,
         rotation,
-        groups);
+        groups,
+        compare_word_stride);
     tt::tt_metal::distributed::EnqueueMeshWorkload(
         ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
     tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));

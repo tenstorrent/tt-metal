@@ -13,7 +13,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
-#include "dprint_server.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -32,7 +32,7 @@
 #include "dispatch/topology.hpp"
 #include "dispatch/system_memory_manager.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_impl.hpp"
 
 using namespace tt::tt_metal;

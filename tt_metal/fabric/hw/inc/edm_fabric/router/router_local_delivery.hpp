@@ -24,8 +24,11 @@
 
 namespace fabric_router {
 
-constexpr uint8_t LOCAL_NOC = tt::tt_fabric::edm_to_local_chip_noc;
-constexpr uint8_t LOCAL_NOC_VC = tt::tt_fabric::forward_and_local_write_noc_vc;
+constexpr uint8_t LOCAL_DELIVERY_NOC = tt::tt_fabric::edm_to_local_chip_noc;
+// Local delivery uses the other VC of the router's pair (local_write_noc_vc), not the forwards' one. Every local write,
+// inline write and atomic increment goes out on this one VC, here and in execute_chip_unicast_to_local_chip_impl, and
+// the NoC keeps order within a VC, so a packet's data still lands before the increment that announces it.
+constexpr uint8_t LOCAL_DELIVERY_NOC_VC = tt::tt_fabric::local_write_noc_vc;
 
 // Whether local writes go into the NoC's software write counters (noc_nonposted_writes_num_issued/acked). Blackhole:
 // yes, as its write API always counts (issue 28758), and a flushed atomic then checks the counters once
@@ -36,8 +39,8 @@ constexpr bool counts_local_writes = is_blackhole_arch;
 
 FORCE_INLINE void local_write_init() {
     if constexpr (CommandBuffers::presets) {
-        while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
-        noc_write_init_state<CommandBuffers::local_writes, CQ_NOC_mkp>(LOCAL_NOC, LOCAL_NOC_VC);
+        while (!noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes));
+        noc_write_init_state<CommandBuffers::local_writes, CQ_NOC_mkp>(LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
     }
 }
 
@@ -47,10 +50,12 @@ FORCE_INLINE void local_write_init() {
 template <bool COUNTED>
 FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t trid) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, LOCAL_NOC);
-    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(LOCAL_NOC, dst_noc_addr, src_addr, size);
+    RECORD_NOC_EVENT_WITH_ADDR(
+        NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size, -1, false, LOCAL_DELIVERY_NOC);
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(LOCAL_DELIVERY_NOC, dst_noc_addr, src_addr, size);
     if constexpr (CommandBuffers::presets) {
-        ncrisc_noc_set_transaction_id(LOCAL_NOC, CommandBuffers::local_writes, trid);  // waits for the command buffer
+        // Waits for the command buffer.
+        ncrisc_noc_set_transaction_id(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes, trid);
         noc_write_with_state<
             noc_mode,
             CommandBuffers::local_writes,
@@ -58,16 +63,16 @@ FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t
             CQ_NOC_SEND,
             CQ_NOC_wait,
             /*update_counter=*/COUNTED,
-            /*posted=*/false>(LOCAL_NOC, src_addr, dst_noc_addr, size);
+            /*posted=*/false>(LOCAL_DELIVERY_NOC, src_addr, dst_noc_addr, size);
     } else {
-        while (!noc_cmd_buf_ready(LOCAL_NOC, CommandBuffers::local_writes));
+        while (!noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes));
         ncrisc_noc_fast_write<noc_mode, /*use_trid=*/true, /*update_counter=*/COUNTED>(
-            LOCAL_NOC,
+            LOCAL_DELIVERY_NOC,
             CommandBuffers::local_writes,
             src_addr,
             dst_noc_addr,
             size,
-            LOCAL_NOC_VC,
+            LOCAL_DELIVERY_NOC_VC,
             /*mcast=*/false,
             /*linked=*/false,
             /*num_dests=*/1,
@@ -83,8 +88,8 @@ FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t
 // here once. The one place the router touches the API's counters.
 FORCE_INLINE void count_local_writes(uint32_t writes) {
     if constexpr (counts_local_writes) {
-        noc_nonposted_writes_num_issued[LOCAL_NOC] += writes;
-        noc_nonposted_writes_acked[LOCAL_NOC] += writes;
+        noc_nonposted_writes_num_issued[LOCAL_DELIVERY_NOC] += writes;
+        noc_nonposted_writes_acked[LOCAL_DELIVERY_NOC] += writes;
     }
 }
 
@@ -93,7 +98,7 @@ FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, ui
     if (flush) {
         flush_write_to_noc_pipeline</*all_writes_counted=*/counts_local_writes>(channel);
     }
-    noc_semaphore_inc<true>(addr, value, LOCAL_NOC, LOCAL_NOC_VC);
+    noc_semaphore_inc<true>(addr, value, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
 }
 
 // An inline write (one word) to this chip, then the local-write buffer's preset restored: on Blackhole the library
@@ -104,7 +109,7 @@ static_assert(
     "the emulated L1 inline write reprograms the local-write command buffer, which local_write_init restores");
 FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
     noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true>(
-        dst_noc_addr, value, INLINE_WRITE_ALL_BYTES, LOCAL_NOC, LOCAL_NOC_VC);
+        dst_noc_addr, value, INLINE_WRITE_ALL_BYTES, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
     local_write_init();
 }
 
@@ -138,6 +143,15 @@ FORCE_INLINE void deliver(
         local_write<counts_local_writes>(payload, header->command_fields.unicast_write.noc_address, payload_size, trid);
         return;
     }
+
+#if defined(ARCH_WORMHOLE)
+    // Semaphore increment state. The send types that end in a semaphore increment track their respective state, and we
+    // have one call at the end to local_atomic_inc() that uses this state. We do this over each branch having its own
+    // call to local_atomic_inc() for code size savings (one inlined call vs multiple).
+    uint64_t inc_noc_addr;
+    uint32_t inc_value;
+    bool inc_flush;
+#endif
     if (type == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         using ChunkEncoding = tt::tt_fabric::NocScatterWriteChunkEncoding;
@@ -173,25 +187,51 @@ FORCE_INLINE void deliver(
         count_local_writes(writes);
         if (last != ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
             ASSERT(last != ChunkEncoding::CHUNK_ENCODING_NOP);
+#if defined(ARCH_WORMHOLE)
+            inc_noc_addr = last_noc_addr;
+            inc_value = scatter.chunk_size[chunks - 1];
+            inc_flush = last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH;
+            goto atomic_inc;
+#else
             local_atomic_inc(
                 last_noc_addr, scatter.chunk_size[chunks - 1], last == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH, CH);
+#endif
         }
         return;
     }
     if (type == NocSendType::NOC_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& inc = header->command_fields.unicast_seminc;
+#if defined(ARCH_WORMHOLE)
+        inc_noc_addr = inc.noc_address;
+        inc_value = inc.val;
+        inc_flush = inc.flush != 0;
+        goto atomic_inc;
+#else
         local_atomic_inc(inc.noc_address, inc.val, inc.flush != 0, CH);
+#endif
         return;
     }
     if (type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) {
         channel_trimming_usage_recorder.set_noc_send_type_used(CH, type);
         const auto& fused = header->command_fields.unicast_seminc_fused;
         local_write<counts_local_writes>(payload, fused.noc_address, payload_size, trid);
+#if defined(ARCH_WORMHOLE)
+        inc_noc_addr = fused.semaphore_noc_address;
+        inc_value = fused.val;
+        inc_flush = fused.flush != 0;
+        goto atomic_inc;
+#else
         local_atomic_inc(fused.semaphore_noc_address, fused.val, fused.flush != 0, CH);
+#endif
         return;
     }
     deliver_other(header, payload_size, type, trid, CH);
+#if defined(ARCH_WORMHOLE)
+    return;
+atomic_inc:
+    local_atomic_inc(inc_noc_addr, inc_value, inc_flush, CH);
+#endif
 }
 
 }  // namespace fabric_router

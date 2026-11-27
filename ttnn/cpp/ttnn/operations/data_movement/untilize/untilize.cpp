@@ -73,8 +73,8 @@ ttnn::Tensor untilize_native(
     // input's 1088 B tile under-reserves a 2048 B/tile output and can keep enough_space_height true for a row
     // whose input+output CBs no longer fit beside the freshly allocated L1 output.
     const DataType output_dtype = operations::data_movement::untilize_output_dtype(input_tensor.dtype());
-    auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_dtype);
+    auto input_cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
+    auto output_cb_data_format = tt::tt_metal::cb_dataformat_for(output_dtype);
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 

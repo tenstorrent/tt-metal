@@ -32,6 +32,7 @@ set(FABRIC_SOURCES
     builder/fabric_builder_config.cpp
     builder/fabric_builder_helpers.cpp
     builder/fabric_edge_capability.cpp
+    builder/fabric_master_router_selection.cpp
     builder/protected_domain_effect.cpp
     builder/injection_policy.cpp
     builder/fabric_stream_assignment.cpp
@@ -59,6 +60,8 @@ set(FABRIC_SOURCES
     channel_trimming_report.cpp
     fabric.cpp
     fabric_vc2_connection.cpp
+    host_rdma/host_rdma.cpp
+    inter_domain.cpp
     fabric_init.cpp
     fabric_host_utils.cpp
     fabric_switch_manager.cpp

@@ -6,14 +6,12 @@
 // Ops ported to Metal 2.0 bind this file; the original serves the consumers still on the legacy API.
 // Until the last of them migrates and the original is retired, changes here likely belong there too.
 //
-// The binding names below (dfb::in0 / dfb::in1, tensor::src0 / tensor::src1) and the named argument
-// set are this fork's interface: every later consumer inherits them, so they are taken from the
-// kernel's own vocabulary rather than any one op's locals, and are not renamed once a consumer
-// exists.
-
-// This code is temporarily copied from ttnn/operations/datamovement/binary/device/ to demonstrate
-// the ability to keep the dataflow-buffer configs contiguous during dispatching.
-// When broadcasting is properly supported we expect this code to be deleted or refactored substantially.
+// The binding names below (dfb::in0, dfb::in1, tensor::src0, tensor::src1) and the named argument set
+// are this fork's interface: every later consumer inherits them, so they are taken from the kernel's own
+// vocabulary rather than any one op's locals, and are not renamed once a consumer exists.
+//
+// TODO(#52228): retire this duplication. The issue records why it exists, the full consumer
+// list, and the sunset plan: https://github.com/tenstorrent/tt-metal/issues/52228
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -23,7 +21,8 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // same arg set as in reader_binary_diff_lengths for compat
+    // same runtime args as in reader_binary_diff_lengths for compat (the two source addresses are
+    // the tensor bindings src0 and src1)
     uint32_t num_tiles = get_arg(args::num_tiles);
     uint32_t start_id = get_arg(args::start_id);
     uint32_t block_height = get_arg(args::block_height);
@@ -33,7 +32,6 @@ void kernel_main() {
     constexpr bool block_or_width_sharded = get_arg(args::block_or_width_sharded) == 1;
 
     Noc noc;
-    // dfb0 / dfb1 hold the two input operands' tiles; the host binds this kernel as their producer.
     DataflowBuffer dfb0(dfb::in0);
     DataflowBuffer dfb1(dfb::in1);
 

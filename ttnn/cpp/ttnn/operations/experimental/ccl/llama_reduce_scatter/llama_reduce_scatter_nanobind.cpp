@@ -12,7 +12,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "llama_reduce_scatter.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {

@@ -154,9 +154,13 @@ MESH_4X8_RING_WH = pytest.param((4, 8), _ring_4k, id="4x8_WH", marks=_WH_ONLY)
 GALAXY_MESHES = [MESH_4X8_RING, MESH_4X8_LINE, MESH_4X32_RING_TRACED, MESH_4X8_RING_WH]
 
 
-def fabric_topology() -> ttnn.Topology:
+def fabric_topology(mesh_device) -> ttnn.Topology:
     """CCL topology for the open fabric: a ring collective on a `FABRIC_1D` line has no forwarding direction."""
-    return ttnn.Topology.Linear if ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_1D else ttnn.Topology.Ring
+    return (
+        ttnn.Topology.Linear
+        if ttnn.get_fabric_config(mesh_device) == ttnn.FabricConfig.FABRIC_1D
+        else ttnn.Topology.Ring
+    )
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
@@ -314,6 +318,21 @@ def upload_rope(rope_cos: torch.Tensor, rope_sin: torch.Tensor, *, mesh_device, 
         )
 
     return _upload(rope_cos), _upload(rope_sin)
+
+
+def format_host_times(host_ms: dict[str, float]) -> str:
+    """One line per step and the total."""
+    lines = [f"  {name:<26} {ms:10.3f} ms" for name, ms in host_ms.items()]
+    lines.append(f"  {'total':<26} {sum(host_ms.values()):10.3f} ms")
+    return "\n".join(lines)
+
+
+def grid_position_ids(seq_len: int) -> torch.Tensor:
+    """A (t, h, w) grid covering `seq_len` rows: 768p-like 48x84 frames, t-major, truncated."""
+    grid_h, grid_w = 48, 84
+    grid_t = -(-seq_len // (grid_h * grid_w))
+    coords = torch.meshgrid(torch.arange(grid_t), torch.arange(grid_h), torch.arange(grid_w), indexing="ij")
+    return torch.stack([c.reshape(-1) for c in coords], dim=-1)[:seq_len]
 
 
 def build_visual_encoder(config: dict, mesh_device, num_frames: int, **overrides):

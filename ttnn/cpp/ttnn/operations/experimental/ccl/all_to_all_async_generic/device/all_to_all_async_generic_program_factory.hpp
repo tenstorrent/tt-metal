@@ -6,9 +6,9 @@
 
 #include "all_to_all_async_generic_device_operation_types.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 

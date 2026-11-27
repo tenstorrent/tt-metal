@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "swiglu_elemwise_bw_device_operation.hpp"

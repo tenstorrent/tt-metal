@@ -5,8 +5,8 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/core.hpp"
