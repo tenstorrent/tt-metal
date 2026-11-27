@@ -1,13 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Host-only (no device): one deferred verify whose rows combine the device sampling features of
-Qwen36MTPContractForCausalLM (vllm-tt-plugin ``supports_spec_device_mask`` with ``supports_spec_device_logprobs``).
+Qwen36MTPContractForCausalLM (vllm-tt-plugin ``supports_spec_device_mask`` with ``supports_spec_device_logprobs`` and
+``supports_spec_device_penalties``).
 
 A token-masked verify (``decode_forward(defer_sampling=True)``) enqueues its forward at submission and the rest at
-``sample_deferred``. A verify sent ``spec_num_logprobs`` too replays the logprobs trace there, after the mask and the
-sampler, so the payload describes the logits the draws came from: an unmasked row's payload is its raw logits', and a
-masked row's draw is among its masked candidates (the payload of a masked row is not published: the plugin verifies a
-masked row that asks for logprobs on the ``logits`` path).
+``sample_deferred``: the mask, the penalties, the sampler and the logprobs trace, in that order
+(``Qwen36Model.verify_enqueue_post``).
+
+* Logprobs: the payload describes the logits the draws came from: an unmasked, unpenalized row's payload is its raw
+  logits', and a masked or penalized row's draw is among its edited candidates (the payload of such a row is not
+  published: the plugin verifies a masked or penalized row that asks for logprobs on the ``logits`` path).
+* Penalties after the mask: vLLM masks to -inf and then penalizes, which leaves a masked token at -inf; on the device
+  a masked logit stays far below every allowed one, so the order changes no draw. Penalizing after the mask makes the
+  float32 argmax that a greedy penalty row takes the masked one, so such a row does not draw (a top-k 1 draw over the
+  bfloat16 penalized logits could break a float32 near-tie the other way).
 """
 
 from types import SimpleNamespace
@@ -16,6 +23,8 @@ from unittest.mock import MagicMock
 import pytest
 import torch
 
+import ttnn
+from models.demos.blackhole.qwen36.tests.test_spec_step_host import _bare_verify_model
 from models.demos.blackhole.qwen36.tt import spec_engine
 from models.demos.blackhole.qwen36.tt.spec_mask import MASK_NEG, WORD_BITS, allowed_tokens, mask_words
 from models.demos.blackhole.qwen36.tt.spec_sample import SAMPLER_TOP_K
@@ -45,7 +54,7 @@ def _mask(constrained):
 
 
 def _params(**rows):
-    fill = dict(temperature=0.0, top_k=1, top_p=1.0, seed=None)
+    fill = dict(temperature=0.0, top_k=1, top_p=1.0, seed=None, repetition_penalty=1.0)
     return SimpleNamespace(**{k: list(rows.get(k, [fill[k]] * B)) for k in fill})
 
 
@@ -89,6 +98,11 @@ def deferred(monkeypatch):
         _vfy_mask=object(),
         _vfy_sampler=SimpleNamespace(draws="draws"),
         _vfy_logprobs=SimpleNamespace(outputs=["lp_vals", "lp_ids", "lp_sums"]),
+        _vfy_penalties=SimpleNamespace(
+            rebuild=lambda rows: device.setdefault("rebuild", []).append(rows),
+            add=lambda tokens: device.setdefault("add", []).append(tokens),
+            stage=lambda penalties, greedy, **kw: device.setdefault("staged", []).append((penalties, greedy)),
+        ),
         _vfy_ids_out="ids",
         _vfy_rows_out="rows",
         verify_enqueue=lambda *a, **kw: calls.append(("forward", kw)),
@@ -117,7 +131,7 @@ def deferred(monkeypatch):
     return eng, calls, reads, device
 
 
-def _forward(eng, logprobs=False, nv=(3, 3)):
+def _forward(eng, logprobs=False, nv=(3, 3), history=True):
     start = torch.tensor([[100 + j for j in range(T)], [200 + j for j in range(T)]])
     return eng.decode_forward(
         torch.ones(B, T, dtype=torch.int32),
@@ -129,6 +143,8 @@ def _forward(eng, logprobs=False, nv=(3, 3)):
         mamba_state=SimpleNamespace(),
         defer_sampling=True,
         logprobs=logprobs,
+        prompt_tokens=torch.tensor([[1, 2, -1], [3, 4, 5]]) if history else None,
+        output_tokens=torch.tensor([[6, -1], [7, 8]]) if history else None,
     )
 
 
@@ -174,3 +190,50 @@ def test_a_deferred_verify_without_logprobs_reads_no_payload(deferred):
     step = eng.sample_deferred(_forward(eng), sampling=_params(), mask=None)
     assert calls[-1][1]["logprobs"] is False and reads[-1] == ["ids"]
     assert step.logprobs_result() is None
+
+
+def test_a_greedy_penalty_row_takes_the_masked_penalized_argmax_and_a_sampled_one_draws(deferred):
+    """User 0: greedy, masked, repetition penalty: it does not draw, so the penalty trace's float32 argmax (over the
+    logits the mask edited first) gives its ids. User 1: sampled with a penalty: it draws from the penalized logits.
+    Both rows' histories are staged at sample_deferred from what decode_forward was given at submission."""
+    eng, calls, reads, device = deferred
+    device["logits"] = torch.zeros(B * T, V)
+    payload = _forward(eng)
+    sampling = _params(temperature=[0.0, 0.8], top_k=[1, 20], repetition_penalty=[1.3, 1.2])
+    step = eng.sample_deferred(payload, sampling=sampling, mask=_mask({(0, 1): (4, 5)}))
+    post = calls[-1][1]
+    assert post["penalties"] is True and post["mask"] is not None
+    assert post["sample_plan"].sampled == [False] * T + [True] * T, "the greedy penalty user takes the argmax"
+    penalties, greedy = device["staged"][-1]
+    assert penalties.users == [0, 1] and greedy == [1] * T + [0] * T
+    assert [sorted(r) for r in device["rebuild"]] == [[0, 1]], "both rows' counts are written from their history"
+    assert step.sample_plan is post["sample_plan"]
+
+
+def test_a_deferred_verify_with_penalties_and_no_history_raises_before_it_changes_anything(deferred, expect_error):
+    eng, calls, reads, device = deferred
+    payload = _forward(eng, history=False)
+    with expect_error(ValueError, "prompt_tokens and output_tokens at submission"):
+        eng.sample_deferred(payload, sampling=_params(repetition_penalty=[1.3, 1.0]))
+    assert eng._deferred is payload and [c[0] for c in calls] == ["forward"]
+
+
+@pytest.mark.parametrize("bucket", [None, 2])
+def test_the_post_replays_mask_then_penalties_then_sampler_then_logprobs(monkeypatch, expect_error, bucket):
+    m, _ = _bare_verify_model(4, 4, monkeypatch)
+    m._vfy_mask, m._vfy_sampler = MagicMock(name="mask"), MagicMock(name="sampler")
+    m._vfy_mask_trace_id, m._vfy_pen_trace_id = "mask", "pen"
+    m._vfy_sample_trace_id, m._vfy_logprobs_trace_id = "sample", "logprobs"
+    m._vfy_bucket_mask_traces, m._vfy_bucket_pen_traces = {2: "mask2"}, {2: "pen2"}
+    m._vfy_bucket_sample_traces, m._vfy_bucket_logprobs_traces = {2: "sample2"}, {2: "logprobs2"}
+    traces = []
+    monkeypatch.setattr(ttnn, "execute_trace", lambda dev, trace, **kw: traces.append(trace))
+    rows = torch.full((16, 2), -1, dtype=torch.int32)
+    m.verify_enqueue_post(sample_plan="plan", bucket=bucket, mask=rows, penalties=True, logprobs=True)
+    tag = "" if bucket is None else "2"
+    assert traces == [f"mask{tag}", f"pen{tag}", f"sample{tag}", f"logprobs{tag}"]
+    traces.clear()
+    m.verify_enqueue_post(bucket=bucket, mask=rows, penalties=True)
+    assert traces == [f"mask{tag}", f"pen{tag}"], "greedy penalty rows alone take the masked argmax"
+    with expect_error(ValueError, "sample_plan that draws its rows or the penalties"):
+        m.verify_enqueue_post(bucket=bucket, mask=rows)

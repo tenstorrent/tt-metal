@@ -691,8 +691,12 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # allowed_token_ids, bad_words and a pending min_tokens) from the masked distribution, a greedy row the masked
         # argmax (spec_mask).
         "supports_spec_device_mask": True,
-        # The verify sampler applies no penalties: such a step is sampled on the host. An ordinary decode applies no
+        # A verify, and so an ordinary decode, applies presence, frequency and repetition penalties to every column it
+        # draws or argmaxes, from device counts the engine keeps per state slot (spec_penalties); on a token-masked
+        # verify after the mask, so a greedy row with both takes the float32 argmax of its masked penalized logits. A
+        # prefill's first token is sampled on the host when its row has a penalty. An ordinary decode applies no
         # grammar mask: a structured row is sampled on the host there.
+        "supports_spec_device_penalties": True,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
@@ -942,6 +946,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             sampling=kwargs.get("sampling_params"),
             defer=defer,
             predecessor=predecessor,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
             logprobs=logprobs,
             defer_sampling=defer_sampling,
         )
@@ -1005,8 +1011,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
         Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
         Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
-        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
-        from the step's logits (``sampled_token_logprobs``)."""
+        sampled row and its argmax otherwise, both after the row's penalties (``prompt_tokens``, ``output_tokens``;
+        spec_penalties); with logprobs enabled, also the sampled tokens' raw logprobs and ranks from the step's logits
+        (``sampled_token_logprobs``), read before the penalties."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
@@ -1035,6 +1042,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             mamba_state=mamba_state,
             sampling=sampling,
             one_enqueue=False,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         if sampling is None:
             return res.logits[:, :1].float()
