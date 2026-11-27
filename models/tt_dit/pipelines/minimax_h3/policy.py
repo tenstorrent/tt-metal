@@ -81,20 +81,36 @@ class SolSchedule:
         return step < self.dense_steps
 
 
-def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
+#: Sol-Attn settings per model behind `H3_SOL_ATTN=1`, each as its side-by-side sheet ran it. A model with no entry
+#: runs `SolSchedule()`.
+SOL_PRESETS = {
+    # The 10Eros-Max card: "13% SLA sparsity on all blocks, start at 0.2" (2 of the 8 forwards dense).
+    "10eros-max": SolSchedule(tau=1.13, dense_layers=0),
+    # The recipe NVIDIA ships for HyperFlow: no sinks.
+    "hyperflow": SolSchedule(sinks=False),
+}
+
+
+def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
-    `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). `H3_SOL_TAU` (default 1.0),
-    `H3_SOL_DENSE_STEPS` (default 2) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule; `H3_SOL_SINKS=0`
-    drops the dense prefix. One dense step costs 4-step models their picture and sound against dense.
+    `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). The schedule starts from the
+    model's `SOL_PRESETS` entry: `preset` is the one the pipeline reads from its files, and `H3_SOL_PRESET` names
+    it for a model the files do not tell apart (10Eros-Max is one more ComfyUI-layout file). `H3_SOL_TAU`,
+    `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and `H3_SOL_SINKS` (`0` drops the dense prefix) each override
+    their field. One dense step costs 4-step models their picture and sound against dense.
     """
     if env.get("H3_SOL_ATTN", "0") != "1":
         return None
+    name = env.get("H3_SOL_PRESET", preset)
+    if name is not None and name not in SOL_PRESETS:
+        raise ValueError(f"H3_SOL_PRESET must be one of {sorted(SOL_PRESETS)}, got {name!r}")
+    base = SOL_PRESETS[name] if name else SolSchedule()
     schedule = SolSchedule(
-        tau=float(env.get("H3_SOL_TAU", "1.0")),
-        dense_steps=int(env.get("H3_SOL_DENSE_STEPS", "2")),
-        dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", "2")),
-        sinks=env.get("H3_SOL_SINKS", "1") != "0",
+        tau=float(env.get("H3_SOL_TAU", base.tau)),
+        dense_steps=int(env.get("H3_SOL_DENSE_STEPS", base.dense_steps)),
+        dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", base.dense_layers)),
+        sinks=env["H3_SOL_SINKS"] != "0" if "H3_SOL_SINKS" in env else base.sinks,
     )
     if schedule.dense_steps < 0 or schedule.dense_layers < 0:
         raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")

@@ -3424,7 +3424,11 @@ class MiniMaxH3Pipeline:
 
     def _requested_sol_schedule(self) -> SolSchedule | None:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
-        return None if self.dynamic_length else sol_schedule(os.environ)
+        return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
+
+    def _sol_preset(self) -> str | None:
+        """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
+        return None
 
     def _set_sol_attention(
         self, transformer: MiniMaxH3Transformer3DModel, rung: int, logical_n: int, sink_tokens: int

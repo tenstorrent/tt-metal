@@ -5,6 +5,7 @@
 """Sol-Attn schedule (which denoise steps and blocks stay dense) and the per-request route constants. Host only,
 no device."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -20,9 +21,10 @@ from ....models.transformers.minimax_h3.sol_prepass import (
 )
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
+from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
 
-_SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_DENSE_LAYERS", "H3_SOL_SINKS")
+_SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_PRESET", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_DENSE_LAYERS", "H3_SOL_SINKS")
 
 
 @pytest.mark.parametrize("env", [{}, {"H3_SOL_ATTN": "0"}, {"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "0"}])
@@ -47,6 +49,44 @@ def test_env_sets_the_schedule():
 def test_sinks_switch_drops_the_dense_prefix():
     assert not sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "0"}).sinks
     assert sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "1"}).sinks
+
+
+_CARD13 = SolSchedule(tau=1.13, dense_steps=2, dense_layers=0, sinks=True)  # the 10Eros-Max arm of the Sol sheet
+_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # its HyperFlow arm
+
+
+@pytest.mark.parametrize(
+    ("env", "preset", "expected"),
+    [
+        ({"H3_SOL_PRESET": "10eros-max"}, None, _CARD13),
+        ({}, "hyperflow", _HF),
+        ({"H3_SOL_PRESET": "hyperflow"}, None, _HF),
+        ({"H3_SOL_PRESET": "10eros-max"}, "hyperflow", _CARD13),
+        ({}, None, SolSchedule()),
+        (
+            {"H3_SOL_PRESET": "10eros-max", "H3_SOL_TAU": "1.97", "H3_SOL_SINKS": "0"},
+            None,
+            SolSchedule(1.97, 2, 0, False),
+        ),
+        ({"H3_SOL_DENSE_LAYERS": "0", "H3_SOL_SINKS": "1"}, "hyperflow", replace(_HF, dense_layers=0, sinks=True)),
+    ],
+)
+def test_model_preset_sets_the_schedule_behind_the_switch(env, preset, expected):
+    assert sol_schedule({"H3_SOL_ATTN": "1", **env}, preset) == expected
+    assert sol_schedule(env, preset) is None
+    assert sol_schedule({"H3_SOL_ATTN": "0", **env}, preset) is None
+
+
+def test_unknown_preset_is_refused(expect_error):
+    with expect_error(ValueError, "H3_SOL_PRESET must be one of"):
+        sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_PRESET": "10eros"})
+
+
+@pytest.mark.parametrize(("hyperflow", "expected"), [(object(), _HF), (None, SolSchedule())])
+def test_turbo_pipeline_names_the_hyperflow_preset(monkeypatch, hyperflow, expected):
+    pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"}, MiniMaxH3TurboPipeline)
+    pipeline.hyperflow = hyperflow
+    assert pipeline._requested_sol_schedule() == expected
 
 
 @pytest.mark.parametrize("name", ["H3_SOL_DENSE_STEPS", "H3_SOL_DENSE_LAYERS"])
@@ -84,13 +124,13 @@ def test_transformer_keeps_leading_layers_and_flagged_steps_dense():
         assert all(block.attn._sol["dense_step"] is dense for block in model.transformer_blocks)
 
 
-def _pipeline(monkeypatch, env):
+def _pipeline(monkeypatch, env, cls=MiniMaxH3Pipeline):
     """A pipeline without `__init__`, holding only what the Sol-Attn hookup reads, under `env`."""
     for name in _SOL_ENV:
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    pipeline = cls.__new__(cls)
     pipeline.dynamic_length = False
     pipeline.bucket_denoise = True
     pipeline.sp_factor = 8

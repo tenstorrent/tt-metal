@@ -255,5 +255,8 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             return None
         return self.hyperflow.endpoints(scheduler.sigmas), self.hyperflow.endpoints(audio_scheduler.sigmas)
 
+    def _sol_preset(self) -> str | None:
+        return "hyperflow" if self.hyperflow is not None else None
+
 
 __all__ = ["HYPERFLOW_HOST_PREFIXES", "TURBO_NUM_FORWARDS", "MiniMaxH3TurboPipeline"]
