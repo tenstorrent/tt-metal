@@ -97,7 +97,7 @@
 - **Contract rules.** Any new assignment must keep each kernel group to a few rectangular core ranges, choosing which core gets which bank rather than scattering groups (BB-17). It must be reported by `g6_clone_plan` (BB-08). A selected regime belongs in the cache key (BB-07). If bank affinity is gated to shapes with enough pages per bank, keep `flat_page_range` as the fallback and pin both with a plan assertion.
 - **Ordering.** Runs after Refinement 1 only so that the guard set exists; it has no code dependency on it.
 
-### [ ] Refinement 3 — Speed up p1: NoC route contention after bank locality
+### [x] Refinement 3 — Speed up p1: NoC route contention after bank locality
 
 **Type**: perf
 
@@ -113,6 +113,14 @@
 - p1 device-ns improves on Refinement 2's landed time beyond noise, or the lever is measured null and recorded in the `**Outcome**` line, with the bottleneck named.
 - p1 stays bit-exact, and the golden suite is green.
 - No regression on Refinement 2's guard set.
+
+**Outcome**: Measured null. Both levers are built as `bank_affine_runs` knobs and parked off, with the default path compiling to Refinement 2's code. p1 runs **51.26 µs** shipped (Refinement 2: 51.36), bit-exact.
+- **Per-core read VC** (`BANK_AFFINE_PER_CORE_VC`): 51.11 µs, noise.
+- **Per-core write VC**: noise over ≤ 3 VCs (51.21 µs on (1,2,3)). Over all four unicast VCs it runs 105.6 µs, with write-only 25.1 → 87.3 µs. Reproduced; mechanism not identified. `BANK_AFFINE_VC_CYCLE` defaults to (1,2,3).
+- **NoC split** (`BANK_AFFINE_NOC_SPLIT`, `DM_DYNAMIC_NOC`): `alternate` +11%, `half` +22%. The other NoC reaches the bank's row endpoint around the torus, and its writes share links with the row's reads.
+- **Guard set**: within noise (p2 25.5, p3 21.5, p4 16.6, Q8 7.13, Q3 ROW_MAJOR 1.66, single-page int32 0.93 µs).
+- **Bottleneck**: DRAM. Read-only 25.9 + write-only 25.1 µs ≈ full, at 95–98% of the 512 GB/s spec in each direction. Per-link demand (~61 GB/s, one bank) is below link capacity (~86 GB/s).
+- **Next**: nothing on the NoC side. The only remaining lever is fewer DRAM bytes, which a clone cannot have. I did not chase the 4-VC write collapse further because it lies off the default path.
 
 **Verifier notes**:
 - **Headroom gate.** If Refinement 2 lands p1 within about 1.05× of 54.61 µs (461 GB/s, 90% of the DRAM spec, close to the tech report's 92% practical ceiling), the residual is at the ceiling. Close this refinement as a measured null rather than forcing a lever.

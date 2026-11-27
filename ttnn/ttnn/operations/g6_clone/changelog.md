@@ -86,3 +86,36 @@
   - `test_g6_clone_multi_block_ring`: parametrized over both full-page regimes.
   - `test_g6_clone_bank_stagger`: the stagger knob forced on over logical-rows, flat TILE and ROW_MAJOR shapes, with 1 and 3 blocks per core, bit-exact.
   - Probes: `probes/bank_affinity_ab_probe.py`, `probes/ablate_kernels/` (no-op reader/writer for read-only and write-only ablations), `probes/probe_008.py` and `probe_009.py` (DRAM / worker topology).
+
+## Refinement 3 — Speed up p1: NoC route contention after bank locality
+- **Date**: 2026-11-27
+- **What was done**: Built both of the refinement's levers as `bank_affine_runs` knobs. Both are off by default, and the default path compiles to the Refinement 2 kernel code.
+  - **Per-core VC.** `BANK_AFFINE_PER_CORE_VC` names the directions (`"read"`, `"write"`) whose requests take VC `BANK_AFFINE_VC_CYCLE[rank of the core in its row mod len]`. The kernel side is CT flag `per_core_vc` (CT arg 7, per kernel) plus RT arg 3 `bank_vc`. With the flag off, the VC folds to the constant `NOC_UNICAST_WRITE_VC`.
+  - **NoC split.** `BANK_AFFINE_NOC_SPLIT`: `"none"`, `"alternate"` (every other core of a row swaps NoCs for its whole run) or `"half"` (each block's second half goes on the other NoC). The kernel side is CT flag `noc_split` (CT arg 6) plus RT arg 4 `other_noc_pages`. A split builds both kernels as `DataMovementConfigDescriptor(..., noc_mode=DM_DYNAMIC_NOC)` and barriers / flushes both NoCs.
+  - The walk table's CT base moves from 6 to 8. `g6_clone_plan` reports `bank_vc_directions`, `bank_noc_split` and the per-role `route_args`. The consecutive-page walks never take a route knob.
+  - The design's catalog, Regimes, API Mapping and plan-report sections record the knobs and the measurements below.
+- **Perf** (Blackhole p150b, p1 `(16,12,128,128)` f32, device kernel ns, one fresh-cache profiled run per variant, median of its 3 calls; `probes/noc_route_ab_probe.py`, final code):
+
+  | p1 variant | full | read-only | write-only |
+  |------------|------|-----------|------------|
+  | shipped (one VC, reads NoC0 / writes NoC1) | **51264** | 25890 | 25139 |
+  | per-core read VC, cycle (0,1,2,3) | 51114 | 25879 | — |
+  | per-core write VC, cycle (1,2,3) | 51205 | — | — |
+  | per-core write VC, cycle (0,1,2,3) | 105647 | — | 87279 |
+  | per-core VC both directions, cycle (1,2,3) | 51296 | — | — |
+  | NoC split `alternate` | 57024 | 25986 | 29967 |
+  | NoC split `half` | 62304 | 27394 | 36566 |
+
+  - **Write VCs.** Writes on one VC run at 51.1–51.3 µs on any VC (0, 2 or 3), and so do rows cycling over two or three VCs. Only cycling over all four unicast VCs collapses writes: 3.5× slower write-only, and it reproduced in 3 sessions and for both orders. `BANK_AFFINE_VC_CYCLE` therefore defaults to `(1, 2, 3)`.
+  - **NoC split.** The other NoC reaches the bank's row endpoint the long way round the torus. Its writes then share links with the row's own reads, which costs +11% (`alternate`) and +22% (`half`). Reads on the long route cost little (+0–6%).
+  - **Default path.** A first version kept an `own_bytes != 0` branch on the default path. Over 5 interleaved runs it cost Q3 ROW_MAJOR (1–2 pages per core) +41 ns (1660 → 1701 ns) with no overlap between the runs. Restructured so the default compiles to the old single call; Q3 measured 1661 ns afterwards. The two extra RT args per core were ruled out.
+  - Guard set at defaults: p2 25515 (Refinement 2 25516), p3 21543 (21516), p4 16618 (16600), Q8 7132 (7246), Q3 ROW_MAJOR 1661 (HEAD in the same session 1660), single-page int32 ROW_MAJOR 934 (932). All within noise.
+  - **Bottleneck.** DRAM. Read-only 25.9 µs plus write-only 25.1 µs ≈ full: the bank time-shares the two directions at 486–501 GB/s, 95–98% of the 512 GB/s spec. Per-link demand is one bank's rate (~61 GB/s), below a 64 B/cycle × 1.35 GHz ≈ 86 GB/s link, so route overlap is not binding. The verifier's headroom gate (≤ 1.05 × 54.61 µs) had already been met.
+- **Accuracy achieved**: bit-exact (PCC=1.0, relative RMS=0) on p1 in every knob variant; on p2 and Q3 ROW_MAJOR under five knob combinations, including the depth-2 ring with ragged blocks; on Q8 with the knobs forced on (they do not apply to it); and on the 88-cell layout matrix.
+- **Golden test progress**: 12/12 in the slice I ran (`-k "p1 or p2 or 16x12x128x128 or 8x12x128x128 or 2560 or 62080"`: the bank-affine and logical-rows paths). The kernel CT layout change is also covered by the layout matrix. Unit tests 144/144.
+- **Issues encountered**: the 4-VC write collapse above. Its mechanism is not identified, and the knob default avoids it.
+- **Tests added**:
+  - `test_g6_clone_layout_matrix.py::test_g6_clone_bank_route_knobs`: 5 knob combinations × p2 / Q3 ROW_MAJOR, bit-exact, with route args pinned.
+  - `test_g6_clone_bank_route_knobs_skip_flat`.
+  - `test_g6_clone_plan_bank_affine_rows` now pins the shipped route (one VC, no split).
+  - Probe: `probes/noc_route_ab_probe.py`.

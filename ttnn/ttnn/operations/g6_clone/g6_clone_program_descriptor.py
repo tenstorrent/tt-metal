@@ -87,6 +87,28 @@ BANK_AFFINE_ENDPOINT_NOC = 0
 # Q8 7258 -> 7248 ns, F13 1620 -> 1646 ns (noise); flat-forced p1 63528 -> 62719, p3 25843 -> 25076.
 FLAT_BANK_STAGGER = False
 
+# NoC route knobs of bank_affine_runs. A bank's cores share one row and one DRAM endpoint, so the link
+# next to the endpoint carries every one of their reads (NoC0, eastward) and writes (NoC1, westward).
+#
+# BANK_AFFINE_PER_CORE_VC: the directions ("read", "write") whose requests go on virtual channel
+# BANK_AFFINE_VC_CYCLE[rank of the core in its row mod its length], so the row's cores are arbitrated
+# round-robin instead of first-come first-served. A direction left out uses DEFAULT_UNICAST_VC, the
+# dataflow API's default (NOC_UNICAST_WRITE_VC).
+#
+# BANK_AFFINE_NOC_SPLIT: how much of each block moves on the kernel's other NoC, which reaches the
+# endpoint the long way round the torus:
+#   "none":      reads on NoC0, writes on NoC1;
+#   "alternate": every other core of a row swaps NoCs for its whole run;
+#   "half":      every core moves the second half of each block on the other NoC.
+# Any split builds both kernels in DM_DYNAMIC_NOC mode.
+# Blackhole p150b, p1 (16,12,128,128) f32 at 51.26 us with both off: per-core read VC 51.11, per-core
+# write VC over (1, 2, 3) 51.21 but over all four unicast VCs 105.6 (writes 3.5x slower); split
+# "alternate" 57.0, "half" 62.3. DRAM, not route overlap, is the bound.
+BANK_AFFINE_PER_CORE_VC = ()
+BANK_AFFINE_VC_CYCLE = (1, 2, 3)
+BANK_AFFINE_NOC_SPLIT = "none"
+DEFAULT_UNICAST_VC = 1
+
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
 
@@ -291,6 +313,35 @@ def _bank_affine_roles(device, grid, tensor_pages: int, num_banks: int):
     return roles
 
 
+def bank_route_args(roles, block_pages: int, vc_directions, noc_split: str) -> list:
+    """Per-role (read_vc, write_vc, other_noc_pages) of bank_affine_runs: a core's VC follows its rank
+    among the cores of its row, and other_noc_pages is how many pages of each block the kernel moves on
+    its other NoC."""
+    if noc_split not in ("none", "alternate", "half"):
+        raise ValueError(f"g6_clone: unknown NoC split {noc_split!r}")
+    row_xs = {}
+    for core, _, _, _ in roles:
+        row_xs.setdefault(core.y, []).append(core.x)
+    args = []
+    for core, _, _, _ in roles:
+        rank = sorted(row_xs[core.y]).index(core.x)
+        vc = BANK_AFFINE_VC_CYCLE[rank % len(BANK_AFFINE_VC_CYCLE)]
+        if noc_split == "alternate":
+            other_noc_pages = block_pages if rank % 2 else 0
+        elif noc_split == "half":
+            other_noc_pages = block_pages // 2
+        else:
+            other_noc_pages = 0
+        args.append(
+            (
+                vc if "read" in vc_directions else DEFAULT_UNICAST_VC,
+                vc if "write" in vc_directions else DEFAULT_UNICAST_VC,
+                other_noc_pages,
+            )
+        )
+    return args
+
+
 def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=None, num_banks: int = 1) -> dict:
     """Work split, block knobs and regime for one (grid, page count, page size, tile geometry, DRAM
     bank count)."""
@@ -340,12 +391,24 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
     num_blocks_max = -(-core_pages_max // block_pages)
     cb_depth_blocks = min(CB_DEPTH_KNOB, num_blocks_max)
 
+    if regime == REGIME_BANK_AFFINE:
+        bank_vc_directions = tuple(BANK_AFFINE_PER_CORE_VC)
+        bank_noc_split = BANK_AFFINE_NOC_SPLIT
+        route_args = bank_route_args(roles, block_pages, bank_vc_directions, bank_noc_split)
+    else:
+        bank_vc_directions = ()
+        bank_noc_split = "none"
+        route_args = [(DEFAULT_UNICAST_VC, DEFAULT_UNICAST_VC, 0)] * len(roles)
+
     return {
         "regime": regime,
         "partial_tile_walk": walk,
         "page_stride": page_stride,
         "bank_endpoint_noc": bank_endpoint_noc,
         "bank_stagger": FLAT_BANK_STAGGER and page_stride == 1,
+        "bank_vc_directions": bank_vc_directions,
+        "bank_noc_split": bank_noc_split,
+        "route_args": route_args,
         "num_banks": num_banks,
         "grid": (grid.x, grid.y),
         "num_cores": len(roles),
@@ -404,16 +467,43 @@ def create_program_descriptor(
         plan["page_stride"],
         plan["bank_endpoint_noc"],
         int(plan["bank_stagger"]),
-    ] + _walk_ct_args(walk)
-    reader_ct_args = shared_ct_args + list(input_accessor_args.get_compile_time_args())
-    writer_ct_args = shared_ct_args + list(output_accessor_args.get_compile_time_args())
+        int(plan["bank_noc_split"] != "none"),
+    ]
+    # CT arg 7, per_core_vc, is per direction; the walk table follows it.
+    reader_ct_args = (
+        shared_ct_args
+        + [int("read" in plan["bank_vc_directions"])]
+        + _walk_ct_args(walk)
+        + list(input_accessor_args.get_compile_time_args())
+    )
+    writer_ct_args = (
+        shared_ct_args
+        + [int("write" in plan["bank_vc_directions"])]
+        + _walk_ct_args(walk)
+        + list(output_accessor_args.get_compile_time_args())
+    )
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    for idx, (core, _, start_page, num_pages) in enumerate(plan["roles"]):
+    for idx, ((core, _, start_page, num_pages), (read_vc, write_vc, other_noc_pages)) in enumerate(
+        zip(plan["roles"], plan["route_args"])
+    ):
         rotate = stagger_rotate(idx, start_page, num_pages, plan["num_banks"]) if plan["bank_stagger"] else 0
-        reader_rt_args[core.x][core.y] = [start_page, num_pages, rotate]
-        writer_rt_args[core.x][core.y] = [start_page, num_pages, rotate]
+        reader_rt_args[core.x][core.y] = [start_page, num_pages, rotate, read_vc, other_noc_pages]
+        writer_rt_args[core.x][core.y] = [start_page, num_pages, rotate, write_vc, other_noc_pages]
+
+    if plan["bank_noc_split"] == "none":
+        reader_config = ttnn.ReaderConfigDescriptor()
+        writer_config = ttnn.WriterConfigDescriptor()
+    else:
+        # Same RISC and default NoC as the reader/writer configs; dynamic mode lets each also issue on
+        # the other NoC.
+        reader_config = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        )
+        writer_config = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        )
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_reader.cpp"),
@@ -421,7 +511,7 @@ def create_program_descriptor(
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
         common_runtime_args=[input_tensor.buffer_address()],
-        config=ttnn.ReaderConfigDescriptor(),
+        config=reader_config,
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_writer.cpp"),
@@ -429,7 +519,7 @@ def create_program_descriptor(
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
-        config=ttnn.WriterConfigDescriptor(),
+        config=writer_config,
     )
 
     # List order is READER_KERNEL_IDX, WRITER_KERNEL_IDX.

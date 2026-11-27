@@ -202,6 +202,8 @@ def test_g6_clone_plan_bank_affine_rows(device):
     num_banks = plan["num_banks"]
     assert plan["page_stride"] == num_banks
     assert plan["bank_endpoint_noc"] == descriptor_module.BANK_AFFINE_ENDPOINT_NOC
+    # Shipped route: one VC, reads on NoC0 and writes on NoC1 (Refinement 3 measured the knobs null or worse).
+    assert (plan["bank_vc_directions"], plan["bank_noc_split"]) == ((), "none")
     endpoint_noc = ttnn.NOC.NOC_0 if descriptor_module.BANK_AFFINE_ENDPOINT_NOC == 0 else ttnn.NOC.NOC_1
     anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, endpoint_noc)
     for core, _, start_page, _ in plan["roles"]:
@@ -238,6 +240,65 @@ def test_g6_clone_bank_stagger(device, monkeypatch, shape, dtype, layout, blocks
     assert plan["bank_stagger"] and plan["page_stride"] == 1, plan
     ttnn_output = g6_clone(ttnn_input)
     _assert_clone(ttnn_output, ttnn_input, torch_input, dtype, layout)
+
+
+@pytest.mark.parametrize(
+    "vc_directions,vc_cycle,noc_split,blocks_per_core",
+    [
+        (("read", "write"), (1, 2, 3), "none", 1),
+        (("read",), (0, 1, 2, 3), "none", 1),
+        ((), (1, 2, 3), "alternate", 1),
+        ((), (1, 2, 3), "half", 1),
+        (("read", "write"), (1, 2, 3), "half", 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "shape,dtype,layout",
+    [
+        ((8, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT),
+        # One or two pages per core: "half" moves 0 or 1 page on the other NoC, "alternate" the whole run.
+        ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+def test_g6_clone_bank_route_knobs(
+    device, monkeypatch, shape, dtype, layout, vc_directions, vc_cycle, noc_split, blocks_per_core
+):
+    """The NoC route knobs of bank_affine_runs (off by default) stay bit-exact: per-core VCs on either
+    direction, and a block split over both NoCs under DM_DYNAMIC_NOC, also with ragged blocks of the
+    depth-2 ring."""
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_PER_CORE_VC", vc_directions)
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_VC_CYCLE", vc_cycle)
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_NOC_SPLIT", noc_split)
+    monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", blocks_per_core)
+    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
+    torch.manual_seed(11)
+    torch_input = _random_bits(shape, _TORCH_DTYPE[dtype])
+    ttnn_input = _upload(torch_input, device, dtype, layout)
+    plan = op_module.g6_clone_plan(ttnn_input)
+    assert plan["regime"] == descriptor_module.REGIME_BANK_AFFINE, plan["regime"]
+    assert (plan["bank_vc_directions"], plan["bank_noc_split"]) == (vc_directions, noc_split)
+    vcs = {vc for read_vc, write_vc, _ in plan["route_args"] for vc in (read_vc, write_vc)}
+    assert vcs <= set(vc_cycle) | {descriptor_module.DEFAULT_UNICAST_VC}, vcs
+    if noc_split != "none":
+        assert any(other for _, _, other in plan["route_args"]) or plan["block_pages"] < 2, plan["route_args"]
+    ttnn_output = g6_clone(ttnn_input)
+    _assert_clone(ttnn_output, ttnn_input, torch_input, dtype, layout)
+
+
+def test_g6_clone_bank_route_knobs_skip_flat(device, monkeypatch):
+    """The route knobs apply only to bank runs: a consecutive-page walk keeps one VC and one NoC."""
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_PER_CORE_VC", ("read", "write"))
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_NOC_SPLIT", "half")
+    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
+    torch.manual_seed(13)
+    shape = (1, 1, 1, 62080)
+    torch_input = _random_bits(shape, torch.bfloat16)
+    ttnn_input = _upload(torch_input, device, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    plan = op_module.g6_clone_plan(ttnn_input)
+    assert plan["regime"] == descriptor_module.REGIME_LOGICAL_ROWS
+    assert (plan["bank_vc_directions"], plan["bank_noc_split"]) == ((), "none")
+    ttnn_output = g6_clone(ttnn_input)
+    _assert_clone(ttnn_output, ttnn_input, torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT)
 
 
 def test_g6_clone_cache_key_partial_vs_full(device, monkeypatch):
