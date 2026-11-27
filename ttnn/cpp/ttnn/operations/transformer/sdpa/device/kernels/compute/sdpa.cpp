@@ -95,6 +95,7 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_out);
     matmul_init(cb_q_in, cb_k_in);
 
+#ifndef BATCHED_CHUNK_START
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
             cb_chunk_start_idx_obj.wait_front(1);
@@ -107,6 +108,8 @@ void kernel_main() {
             }
         }
     }
+
+#endif
 
     if constexpr (use_streaming_compute) {
         // Streaming SDPA v2: direct cb_qkt_im writes via cb_push_back_hold_wr_ptr.
@@ -214,64 +217,79 @@ void kernel_main() {
                 chunked_q_chunk_offset = chunked_q_chunk_offset_phase_2;
             }
 
-            // Global Q scheduling: sdpa_standard walks the per-core flat range over
-            // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
-            // q_chunk from each flat index.
-            sdpa_standard<
-                cb_qk_im,
-                cb_identity_scale_in,
-                cb_attention_sink,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                vDHt,
-                use_attention_sink,
-                is_causal,
-                use_provided_mask,
-                use_padded_mask,
-                is_chunked,
-                scale_fp32,
-                sliding_window_size,
-                use_lightweight_causal_mask,
-                use_windowed_narrowing,
-                cb_windowed_k_range>(
-                Skt,
-                qk_in0_block_w,
-                qk_subblock_w,
-                qk_subblock_h,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_w,
-                out_subblock_h,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                /*iter_q_start=*/0,
-                /*iter_q_end=*/global_q_count,
-                q_num_chunks,
-                /*local_q_start=*/global_q_start,
-                chunked_q_chunk_offset,
-                k_num_chunks,
-                q_chunk_tiles,
-                k_chunk_tiles,
-                v_chunk_tiles,
-                qk_chunk_tiles,
-                out_chunk_tiles,
-                cb_q_in,
-                cb_k_in,
-                cb_v_in,
-                cb_mask_in,
-                cb_col_identity,
-                cb_out_im_A,
-                cb_out_im_B,
-                cb_max_A,
-                cb_max_B,
-                cb_sum_A,
-                cb_sum_B,
-                cb_exp_max_diff,
-                cb_out,
-                lw_mask,
-                use_zigzag_balancing);
+#ifdef BATCHED_CHUNK_START
+            for (uint32_t batch_q_iter = 0; batch_q_iter < global_q_count; ++batch_q_iter) {
+                cb_chunk_start_idx_obj.wait_front(1);
+                uint32_t absolute_start = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
+                cb_chunk_start_idx_obj.pop_front(1);
+                chunked_q_chunk_offset = absolute_start / (Sq_chunk_t * TILE_HEIGHT);
+                const uint32_t run_count = 1;
+                const uint32_t run_start = global_q_start + batch_q_iter;
+#else
+            const uint32_t run_count = global_q_count;
+            const uint32_t run_start = global_q_start;
+#endif
+                // Global Q scheduling: sdpa_standard walks the per-core flat range over
+                // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
+                // q_chunk from each flat index.
+                sdpa_standard<
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_attention_sink,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    vDHt,
+                    use_attention_sink,
+                    is_causal,
+                    use_provided_mask,
+                    use_padded_mask,
+                    is_chunked,
+                    scale_fp32,
+                    sliding_window_size,
+                    use_lightweight_causal_mask,
+                    use_windowed_narrowing,
+                    cb_windowed_k_range>(
+                    Skt,
+                    qk_in0_block_w,
+                    qk_subblock_w,
+                    qk_subblock_h,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_w,
+                    out_subblock_h,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    /*iter_q_start=*/0,
+                    /*iter_q_end=*/run_count,
+                    q_num_chunks,
+                    /*local_q_start=*/run_start,
+                    chunked_q_chunk_offset,
+                    k_num_chunks,
+                    q_chunk_tiles,
+                    k_chunk_tiles,
+                    v_chunk_tiles,
+                    qk_chunk_tiles,
+                    out_chunk_tiles,
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in,
+                    cb_col_identity,
+                    cb_out_im_A,
+                    cb_out_im_B,
+                    cb_max_A,
+                    cb_max_B,
+                    cb_sum_A,
+                    cb_sum_B,
+                    cb_exp_max_diff,
+                    cb_out,
+                    lw_mask,
+                    use_zigzag_balancing);
+#ifdef BATCHED_CHUNK_START
+            }
+#endif
         }
     }
 }

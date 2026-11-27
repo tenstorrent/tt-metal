@@ -189,6 +189,7 @@ void kernel_main() {
         cb_cu.push_back(1);
     }
 
+#ifndef BATCHED_CHUNK_START
     if constexpr (is_chunked) {
         if (use_chunk_start_idx_tensor != 0) {
             CircularBuffer cb_chunk_start(cb_chunk_start_idx);
@@ -203,6 +204,8 @@ void kernel_main() {
             }
         }
     }
+
+#endif
 
     uint32_t chunk_start_t_in_q_chunks = 0;
     uint32_t write_offset = 0;
@@ -220,6 +223,13 @@ void kernel_main() {
             const uint32_t nb = decoded.nb;
             const uint32_t nq = decoded.nq;
             const uint32_t q_chunk = decoded.q_chunk;
+#ifdef BATCHED_CHUNK_START
+            CircularBuffer cb_chunk_start(cb_chunk_start_idx);
+            cb_chunk_start.wait_front(1);
+            auto start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_chunk_start.get_read_ptr());
+            chunk_start_t_in_q_chunks = start_ptr[0] / (Sq_chunk_t * tt::constants::TILE_HEIGHT);
+            cb_chunk_start.pop_front(1);
+#endif
 
             // Generate masks only for legacy generated-mask variants. No-mask variants do not allocate cb_mask_in.
             if constexpr (

@@ -1721,6 +1721,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     };
 
     std::map<std::string, std::string> defines_map;
+    // Per-row chunk starts: a [batch] chunk_start_idx tensor (validation accepted only [1] before).
+    const bool batched_chunk_start = flexible_chunked && tensor_args.chunk_start_idx_tensor->logical_shape()[0] > 1;
+    if (batched_chunk_start) {
+        defines_map["BATCHED_CHUNK_START"] = "1";
+    }
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
@@ -1835,7 +1840,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
     const uint32_t block_map_stick_size = allocate_mask_block_map_cb(tensor_args, cb_ids, allocate_cb);
     if (flexible_chunked) {
-        constexpr uint32_t chunk_start_idx_page_size = 32;
+        // A [batch] start vector is read whole; a [1] start keeps the 32-byte page.
+        const uint32_t chunk_start_idx_page_size =
+            batched_chunk_start
+                ? std::max<uint32_t>(32, tensor_args.chunk_start_idx_tensor->buffer()->aligned_page_size())
+                : 32;
         cb_ids.chunk_start_idx_compute = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
         cb_ids.chunk_start_idx_writer = allocate_cb(chunk_start_idx_page_size, 1, tt::DataFormat::Int32);
     }

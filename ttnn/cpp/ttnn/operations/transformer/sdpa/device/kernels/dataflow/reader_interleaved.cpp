@@ -348,6 +348,7 @@ void kernel_main() {
     uint32_t v_slot_fwd_seq[kv_slots] = {};
 
     uint32_t chunked_q_chunk_offset = 0;
+#ifndef BATCHED_CHUNK_START
     if constexpr (is_chunked) {
         if (chunk_start_idx_addr != 0) {
             CircularBuffer cb_chunk_compute(cb_id_chunk_start_idx_compute);
@@ -374,6 +375,8 @@ void kernel_main() {
             }
         }
     }
+
+#endif
 
     // Windowed narrowing: load cu_window_seqlens once (the reader's own copy — the writer has its own
     // CB with its own producer contract), resolving the per-device Q-offset override first so the
@@ -432,6 +435,28 @@ void kernel_main() {
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
             const auto decoded =
                 decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
+#ifdef BATCHED_CHUNK_START
+            // One offset packet per global Q chunk, in exactly compute/writer order.
+            CircularBuffer cb_chunk_compute(cb_id_chunk_start_idx_compute);
+            cb_chunk_compute.reserve_back(1);
+            uint32_t cp = cb_chunk_compute.get_write_ptr();
+            // Read from aligned DRAM/L1 addresses; a four-byte offset read must
+            // not land at an L1 address with a different NoC alignment.
+            noc.async_read(chunk_start_idx_reader, CoreLocalMem<uint32_t>(cp), B * 4, {.page_id = 0}, {});
+            noc.async_read_barrier();
+            auto starts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cp);
+            uint32_t absolute_start = starts[decoded.nb];
+            starts[0] = absolute_start;
+            ASSERT(absolute_start % (Sq_chunk_t * tt::constants::TILE_HEIGHT) == 0);
+            cb_chunk_compute.push_back(1);
+            CircularBuffer cb_chunk_writer(cb_id_chunk_start_idx_writer);
+            cb_chunk_writer.reserve_back(1);
+            uint32_t wp = cb_chunk_writer.get_write_ptr();
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wp) = absolute_start;
+            cb_chunk_writer.push_back(1);
+            chunked_q_chunk_offset = absolute_start / (Sq_chunk_t * tt::constants::TILE_HEIGHT);
+            valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+#endif
             if (decoded.nb != prev_nb) {
                 if constexpr (!broadcast_provided_mask_batch) {
                     if constexpr (broadcast_provided_mask_heads) {

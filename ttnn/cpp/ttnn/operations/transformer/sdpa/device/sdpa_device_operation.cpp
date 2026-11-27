@@ -245,9 +245,12 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 csi_tensor.dtype());
             auto csi_shape = csi_tensor.logical_shape();
             TT_FATAL(
-                csi_shape.size() == 1 && csi_shape[0] == 1,
-                "chunk_start_idx tensor must have shape [1]. Got {}",
+                csi_shape.size() == 1 && (csi_shape[0] == 1 || csi_shape[0] == q.logical_shape()[0]),
+                "chunk_start_idx tensor must have shape [1] or [batch]. Got {}",
                 csi_shape);
+            TT_FATAL(
+                csi_shape[0] == 1 || get_fp32_dest_acc_en(attrs.compute_kernel_config),
+                "Per-row chunk starts currently require fp32_dest_acc_en");
         }
         // Validate page table tensor
         const auto& page_table = tensors.page_table.value();
