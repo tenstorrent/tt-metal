@@ -102,11 +102,31 @@ def test_open_fails_on_a_missing_or_other_version_chain(tmp_path, expect_error) 
         chain.open_k31_chain("k31-test-chain", tmp_path)
 
 
+ATTN_RES = [
+    "input_layernorm.weight",
+    "mlp_res_norm.weight",
+    "mlp_res_proj.weight",
+    "post_attention_layernorm.weight",
+    "self_attention_res_norm.weight",
+    "self_attention_res_proj.weight",
+]
+ROUTER = ["block_sparse_moe.gate.weight", "block_sparse_moe.gate.e_score_correction_bias"]
+DSA = [
+    f"self_attn.{n}"
+    for n in (
+        "q_a_proj.weight q_a_layernorm.weight q_b_proj.weight kv_a_proj_with_mqa.weight kv_a_layernorm.weight "
+        "kv_b_proj.weight g_proj.weight o_proj.weight indexer.wq_b.weight indexer.wk.weight indexer.k_norm.weight "
+        "indexer.k_norm.bias indexer.weights_proj.weight"
+    ).split()
+]
+
+
 def test_layer_weights_reads_the_chain_tensor_set(tmp_path, expect_error) -> None:
     """Layer 3 (DSA): the AttnRes, router and DSA weights, under the checkpoint's key root, digested by name; layer 0
     (dense FFN) is not supported."""
-    names = chain.ATTN_RES_WEIGHTS + chain.ROUTER_WEIGHTS + chain.DSA_WEIGHTS
+    names = ATTN_RES + ROUTER + DSA
     assert len(set(names)) == len(names) == 6 + 2 + 13
+    assert sorted(chain.layer_weight_names(tmp_path, 3)) == sorted(names)
     tensors = {f"model.layers.3.{n}": torch.full((2,), float(i), dtype=torch.bfloat16) for i, n in enumerate(names)}
     tensors["model.layers.4.input_layernorm.weight"] = torch.zeros(2)  # (another layer's: not read)
     save_file(tensors, tmp_path / "shard.safetensors")
@@ -138,7 +158,7 @@ def test_layer_weights_of_a_moe_layer_add_kda_and_the_non_routed_moe(tmp_path) -
         "shared_experts.up_proj shared_experts.down_proj"
     ).split()
     want = [
-        *chain.ATTN_RES_WEIGHTS,
+        *ATTN_RES,
         *(f"self_attn.{n}" for n in kda),
         "block_sparse_moe.gate.weight",
         "block_sparse_moe.gate.e_score_correction_bias",

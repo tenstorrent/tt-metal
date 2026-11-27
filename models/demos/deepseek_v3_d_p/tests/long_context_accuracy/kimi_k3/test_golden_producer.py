@@ -16,9 +16,9 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     MANIFEST,
     open_golden,
 )
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
-from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, open_k3_layer0_golden
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import run_golden
 

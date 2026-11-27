@@ -325,6 +325,7 @@
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3/test_golden_producer.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3/test_golden.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3_1/test_golden.py \
+          models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3_1/test_golden_producer.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/kimi_k3_1/test_blocks.py \
           models/demos/deepseek_v3_d_p/tests/long_context_accuracy/test_cases_match_goldens.py \
           models/demos/deepseek_v3_d_p/tests/test_kv_ack.py \

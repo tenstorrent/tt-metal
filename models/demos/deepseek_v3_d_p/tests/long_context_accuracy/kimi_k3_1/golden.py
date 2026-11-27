@@ -3,10 +3,10 @@
 """Reader of the Kimi-K3.1 FP64 CPU chain goldens (``KimiK31ChainGolden``): K3.1 layers 0-3 from prompt token ids,
 per-row products.
 
-The chain (producer ``fp64_chain``) runs embed -> layer 0 (KDA, dense FFN) -> layers 1 and 2 (KDA, MoE) -> layer 3 (DSA)
-in FP64 with the AttnRes reads, segment by segment, and is registered in the long-context golden registry
-(``common/prefill/long_context_accuracy/fp64_golden.py``) under its id. Tests open it by id only
-(``open_golden(id, reader=KimiK31ChainGolden)``); a missing, incomplete or other-producer golden fails. Its per-row
+The chain (``golden_producer.py`` next to this file, producer ``fp64_chain``) runs embed -> layer 0 (KDA, dense FFN) ->
+layers 1 and 2 (KDA, MoE) -> layer 3 (DSA) in FP64 with the AttnRes reads, segment by segment, and is registered in the
+long-context golden registry (``common/prefill/long_context_accuracy/fp64_golden.py``) under its id. Tests open it by id
+only (``open_golden(id, reader=KimiK31ChainGolden)``); a missing, incomplete or other-producer golden fails. Its per-row
 products (manifest ``products`` of kind ``row``) are stored fp32 (keys FP64):
 
 * MoE layers ``L`` = 1, 2: ``moe_input_L`` (the gate input, after ``post_attention_layernorm``), ``moe_output_L``
@@ -30,60 +30,30 @@ read them. ``layer_weights`` reads the set of MoE layers 1 and 2 or DSA layer 3 
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
 import torch
-from safetensors import safe_open
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden, open_golden
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (  # noqa: F401
+    DSA_LAYER,
+    MOE_LAYERS,
+    PRODUCER,
+    PRODUCER_VERSION,
+    checkpoint_tensors,
+)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (
+    layer_weight_names as chain_weight_names,
+)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (  # noqa: F401
+    tensor_digest,
+)
 
 K31_CHAIN_1M = "k31-l0-3-fp64-1m"  # layers 0-3 over the vLLM K3.1-Pro 1M prompt (1,044,480 rows)
-PRODUCER = "fp64_chain"
-PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation order of the indexer scores)
 MODEL = "Kimi-K3.1"
 STATE_ROW_PRODUCTS = ("latent", "kpe", "index_key")  # per-row products held in the state files, under "keys"
 SAMPLED_PRODUCTS = ("sampled_rows", "attn_output_3")
-MOE_LAYERS = (1, 2)  # the chain's KDA + MoE layers
-DSA_LAYER = 3  # the chain's DSA layer; its FFN is not run, but its router is read (a cross-check), so digested
-ATTN_RES_WEIGHTS = (
-    "input_layernorm.weight",
-    "mlp_res_norm.weight",
-    "mlp_res_proj.weight",
-    "post_attention_layernorm.weight",
-    "self_attention_res_norm.weight",
-    "self_attention_res_proj.weight",
-)
-ROUTER_WEIGHTS = ("block_sparse_moe.gate.weight", "block_sparse_moe.gate.e_score_correction_bias")
-MOE_NON_ROUTED_WEIGHTS = tuple(
-    f"block_sparse_moe.{n}.weight"
-    for n in (
-        "routed_expert_down_proj",
-        "routed_expert_up_proj",
-        "routed_expert_norm",
-        "shared_experts.gate_proj",
-        "shared_experts.up_proj",
-        "shared_experts.down_proj",
-    )
-)
-DSA_WEIGHTS = tuple(
-    f"self_attn.{n}.weight"
-    for n in (
-        "q_a_proj",
-        "q_a_layernorm",
-        "q_b_proj",
-        "kv_a_proj_with_mqa",
-        "kv_a_layernorm",
-        "kv_b_proj",
-        "g_proj",
-        "o_proj",
-        "indexer.wq_b",
-        "indexer.wk",
-        "indexer.k_norm",
-        "indexer.weights_proj",
-    )
-) + ("self_attn.indexer.k_norm.bias",)
 
 
 class KimiK31ChainGolden(Fp64Golden):
@@ -137,48 +107,26 @@ def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> K
     return golden
 
 
-def tensor_digest(tensors: dict[str, torch.Tensor]) -> str:
-    """Content identity of named tensors (names, dtypes, shapes, bytes), as the chain computes it."""
-    h = hashlib.sha256()
-    for name in sorted(tensors):
-        t = tensors[name].contiguous()
-        h.update(json.dumps([name, str(t.dtype), list(t.shape)]).encode())
-        h.update(memoryview(t.view(torch.uint8).numpy()))
-    return h.hexdigest()
-
-
 def layer_weight_names(checkpoint: Path, layer: int) -> list[str]:
-    """The layer-local checkpoint names of the weights the chain digests as ``layers.<layer>``: ``ATTN_RES_WEIGHTS``
-    and ``ROUTER_WEIGHTS``, plus the KDA weights (of the checkpoint's config) and ``MOE_NON_ROUTED_WEIGHTS`` on
-    ``MOE_LAYERS``, or ``DSA_WEIGHTS`` on ``DSA_LAYER``. Layer 0 (dense FFN) is not supported."""
-    if layer == DSA_LAYER:
-        return list(ATTN_RES_WEIGHTS + ROUTER_WEIGHTS + DSA_WEIGHTS)
-    if layer not in MOE_LAYERS:
+    """The layer-local checkpoint names of the weights the chain digests as ``layers.<layer>``
+    (``golden_producer.layer_weight_names``), for MoE layers ``MOE_LAYERS`` (whose KDA weights follow the checkpoint's
+    config) or DSA layer ``DSA_LAYER``. Layer 0 (dense FFN) is not supported."""
+    if layer not in (*MOE_LAYERS, DSA_LAYER):
         raise ValueError(f"layer_weights reads MoE layers {MOE_LAYERS} or DSA layer {DSA_LAYER}, not layer {layer}")
     from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-    from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names
 
-    config = KDAConfig.from_model_config(json.loads((Path(checkpoint) / "config.json").read_text()))
-    kda = [f"self_attn.{n}" for n in required_kda_weight_names(config)]
-    return [*ATTN_RES_WEIGHTS, *kda, *ROUTER_WEIGHTS, *MOE_NON_ROUTED_WEIGHTS]
+    config = (
+        None
+        if layer == DSA_LAYER
+        else KDAConfig.from_model_config(json.loads((Path(checkpoint) / "config.json").read_text()))
+    )
+    return chain_weight_names(layer, config)
 
 
 def layer_weights(checkpoint: Path, layer: int) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     """Layer ``layer``'s weights as the chain read them (``layer_weight_names``) in their checkpoint dtype, keyed by
     layer-local name, and their digest as ``{"layers.<layer>": sha256}`` (for
     ``Fp64Golden.require(weights_sha256=...)``)."""
-    checkpoint = Path(checkpoint)
     names = layer_weight_names(checkpoint, layer)
-    weight_map = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
-    roots = [r for r in ("model.", "language_model.model.") if f"{r}layers.{layer}.{names[0]}" in weight_map]
-    if not roots:
-        raise ValueError(f"{checkpoint} has no layers.{layer}.{names[0]}")
-    full = {f"{roots[0]}layers.{layer}.{n}": n for n in names}
-    by_shard: dict[str, list[str]] = {}
-    for key in full:
-        by_shard.setdefault(weight_map[key], []).append(key)
-    tensors = {}
-    for shard, keys in by_shard.items():
-        with safe_open(str(checkpoint / shard), framework="pt") as handle:
-            tensors.update({full[k]: handle.get_tensor(k) for k in keys})
+    tensors = checkpoint_tensors(checkpoint, layer, names)
     return tensors, {f"layers.{layer}": tensor_digest(tensors)}

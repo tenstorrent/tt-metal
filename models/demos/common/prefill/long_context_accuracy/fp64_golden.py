@@ -3,12 +3,12 @@
 """Long-context golden registry: where FP64 goldens live, what every golden's manifest says, how a test finds one.
 
 A golden is a directory ``<root>/<golden_id>/`` written segment by segment by a CPU producer (one per model folder,
-``deepseek_v3_d_p/tests/long_context_accuracy/<model>/golden_producer.py``). Tests name a golden only by its id; ``open_golden`` finds it under the
-registry root and refuses one that is missing, incomplete or malformed, so a deleted or half-written golden fails
-the test instead of skipping it. The registry checks identity, completeness and the product schema. Producers' file
-layouts differ, so reading the products is one small reader per golden layout: a subclass of ``Fp64Golden`` that
-names its producer and implements ``_read_rows`` (and ``_segment_end`` / ``read_sampled`` where a consumer needs
-them); ``open_golden(id, reader=...)`` returns it. Consumers read through ``Fp64Golden.read_rows`` only.
+``deepseek_v3_d_p/tests/long_context_accuracy/<model>/golden_producer.py``). Tests name a golden only by its id;
+``open_golden`` finds it under the registry root and refuses one that is missing, incomplete or malformed, so a deleted
+or half-written golden fails the test instead of skipping it. The registry checks identity, completeness and the product
+schema. Producers' file layouts differ, so reading the products is one small reader per golden layout: a subclass of
+``Fp64Golden`` that names its producer and implements ``_read_rows`` (and ``_segment_end`` / ``read_sampled`` where a
+consumer needs them); ``open_golden(id, reader=...)`` returns it. Consumers read through ``Fp64Golden.read_rows`` only.
 
 ``manifest.json`` fields every golden carries (a producer may add its own):
 
