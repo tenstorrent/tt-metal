@@ -17,7 +17,8 @@ Keys may carry any root ("language_model.model.", "model."): a tensor is matched
     K3_WEIGHT_OVERRIDE_DIR      the directory above
     K3_WEIGHT_OVERRIDE_LAYERS   comma list of layers to override (default: every layer_LL with DONE); each must have DONE
     K3_WEIGHT_OVERRIDE_VERIFY   "1": check that every bf4 / bf8 conversion made while an overridden layer is built is the
-                                identity on its input (no re-rounding), and log a per-layer tally (`verify_report`)
+                                identity on its input (no re-rounding), and log a per-layer tally at exit
+    K3_WEIGHT_OVERRIDE_VERIFY_OUT   also write that tally (json) here
 
 How a layer is overridden (so no stale tensorbin can stand in for a carrier):
 * every read of the dequantized checkpoint for that layer (`weights.load_tensors`, the KDA loader, the bf8 routed
@@ -36,6 +37,7 @@ on device after loading it exactly).
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import threading
@@ -217,6 +219,28 @@ class WeightOverride:
             layer: {"exact": t["exact"], "inexact": t["inexact"], "unchecked": t["unchecked"]}
             for layer, t in sorted(self.tally.items(), key=lambda kv: str(kv[0]))
         }
+
+
+def _report_at_exit():
+    """K3_WEIGHT_OVERRIDE_VERIFY: log the tally (the MoE weights are made at the first forward, so this runs at exit) and
+    write it to K3_WEIGHT_OVERRIDE_VERIFY_OUT when that is set."""
+    ov = OVERRIDE
+    if ov is None or not ov.verify:
+        return
+    rep = ov.verify_report()
+    for layer, t in rep.items():
+        logger.warning(
+            f"K3_WEIGHT_OVERRIDE_VERIFY layer {layer}: {t['exact']} bf4/bf8 conversions exact, "
+            f"{len(t['inexact'])} re-rounded {t['inexact']}, {len(t['unchecked'])} unchecked {t['unchecked']}"
+        )
+    out = os.environ.get("K3_WEIGHT_OVERRIDE_VERIFY_OUT")
+    if out:
+        import json
+
+        Path(out).write_text(json.dumps({str(k): v for k, v in rep.items()}, indent=1))
+
+
+atexit.register(_report_at_exit)
 
 
 class building:
