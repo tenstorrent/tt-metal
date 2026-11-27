@@ -32,3 +32,30 @@
 - **L1**: Panoptic 23 plan: block 24, `l1_total` 78,336 B (CB 52,224 B, output 26,112 B per bank). Panoptic 40 plan: block 84, `l1_total` 274,176 B. Both use 110 L1 banks.
 - **Issues encountered**: None.
 - **Tests added**: `test_g6_concat_dtypes_placement.py` (15 cases): `row_gather` × {fp32 DRAM, fp32 mixed → L1, bf16 L1, bf16 mixed × 2}; `page_copy` × {bf8_b w / outer on DRAM, bf8_b mixed → L1, bf8_b L1 → L1, fp32 trimmed w, bf16 mixed trimmed w, bf16 DRAM → L1, fp32 mixed h}; 40 mixed inputs; the plan's L1-output bytes.
+
+## Refinement 2 — ROW_MAJOR layout (native stick copy)
+- **Date**: 2026-11-27
+- **What was done**:
+  - `SUPPORTED["layout"]` gains `ROW_MAJOR_LAYOUT`. `EXCLUSIONS` gains `{layout: ROW_MAJOR, concat_dim: w}`, the deferred `stick_gather_row_major` regime: a last-dim join cuts inside every stick. No INPUTS cell is in it.
+  - New host regime `page_copy_row_major` (`select_regime`: any ROW_MAJOR call). It runs on the existing page reader and shared writer with page = stick. The address map is `(O, C_k)` in stick units: `O = Π s[0:d]`, `C_k = n_k · Π s[d+1:r−1]`. `P_out = Π out[0:r−1]`, with the same `out_page` split over `min(P_out, grid)` cores and the same `block_pages = min(n1, BLOCK_BYTES_CAP // page_bytes)` knob, depth and CB.
+  - `page_bytes` is now `buffer_aligned_page_size()` for both layouts (unchanged for tiles). The host asserts that every input and the output share it and that it is a multiple of the DRAM read alignment, so every CB slot keeps the base's 64 B alignment. A stick is `W · elem` with `W % 32 == 0`, so this holds whenever the gate passes.
+  - Trimming is off for RM: `trim_rows_max = 0`, and the row geometry is degenerate (`out_wt = out_ht = 1`, 32 valid rows). `is_trimmed` now takes `trim_rows_max` as a template parameter, and `0` folds to "whole page" at compile time. This affects RM and bf8_b, and leaves the row cursor dead code there. The bf16/fp32 TILE binaries are unchanged in behavior.
+  - Per-input placement: R1's L1 mask and dual accessor carry over unchanged. Qwen 159 (DRAM + L1 RM inputs) passes.
+  - Reused: the page reader, shared writer, `out_page` split, block and depth knobs, placement mask, CB and plan report. Added: one regime name, the stick branch of the address map and plan geometry, and the compile-time trim fold.
+- **Accuracy achieved**: bit-exact (PCC = 1.0, relative RMS = 0) on every pin, including:
+  - outer joins: `(2,3,2560)+(14,3,2560)`, 16×`(1,3,2560)`, rank-4 dim 1;
+  - `h` joins: `(16,2,2560)+(16,1,2560)`, rank-4 dim 2 with 3 inputs;
+  - fp32: outer `(3,5,96)+(2,5,96)` and `h` `(2,7,2560)+(2,33,2560)`;
+  - Qwen 159 mixed placement, mixed → L1 output and fp32 L1 → L1;
+  - a multi-block ragged case: 6600 sticks, 60 per core, block 25;
+  - a 196,608 B stick wider than `BLOCK_BYTES_CAP`.
+  The 12 RM pins are also clean under `--dev` (watcher, NoC sanitizer).
+- **Golden test progress**: targeted slice of 42 tests, all passing: all 37 RM cells (36 DRAM, plus Qwen 159 with mixed inputs), plus these prior-passing representatives on the edited code paths: Qwen 79 (`row_gather`, golden and loose), Panoptic 23 (bf8_b, mixed → L1), `test_cache_key` and `test_cache_key_placement`. The full golden run is left to the harness.
+- **Performance**: not measured. Every RM production cell has ≤ 48 sticks (≤ 32 tiles), and `perf_rules.txt` exempts that size. The plan runs one stick per core on 48 cores (2·5120 B CB). The TILE page reader and writer differ only by the compile-time trim fold.
+- **Issues encountered**: None.
+- **Tests added**: `test_g6_concat_row_major.py` (46 cases):
+  - 12 RM pins (outer, `h`, fp32, mixed / L1 placement, multi-block, wide stick);
+  - the RM plan report;
+  - the RM last-dim `ExcludedCell` refusal;
+  - `test_g6_concat_layout_matrix`: TILE and ROW_MAJOR × bf16 / fp32 × 8 shapes (aligned, H non-aligned, `row_gather`-triggering offsets).
+  W stays tile-aligned in the matrix, because `w_non_aligned` has no TARGET cell.

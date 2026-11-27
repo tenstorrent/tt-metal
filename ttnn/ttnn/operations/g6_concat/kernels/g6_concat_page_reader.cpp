@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// page_copy reader (NCRISC, NOC0). Each output page of this core's range is one input page,
-// fetched into cb_output_pages a block of block_pages at a time.
+// page_copy and page_copy_row_major reader (NCRISC, NOC0). Each output page of this core's range is
+// one input page (a tile, or a stick for ROW_MAJOR), fetched into cb_output_pages a block of
+// block_pages at a time.
 //
 // No kernel_lib helper covers this step: the helpers that copy tiles are compute-side and round-trip
 // values through DEST, which this op must not do (op_design.md, "Helpers considered and rejected").
@@ -44,7 +45,7 @@ FORCE_INLINE void fetch_run(
     g6_concat::OutputRowCursor& rows) {
     for (uint32_t page = 0; page < run_pages; ++page) {
         const uint32_t valid_rows = rows.valid_rows();
-        if (g6_concat::is_trimmed(valid_rows, trim_rows_max)) {
+        if (g6_concat::is_trimmed<trim_rows_max>(valid_rows)) {
             // Source and destination offsets are identical, so the read stays alignment-legal.
             g6_concat::for_each_valid_row_piece<face_row_bytes>(
                 valid_rows, [&](uint32_t offset_bytes, uint32_t size_bytes) {

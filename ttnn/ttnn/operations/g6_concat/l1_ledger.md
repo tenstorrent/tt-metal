@@ -27,7 +27,7 @@ No L1 budget solve, safety fraction or blocking search exists. `block_pages` is
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `page_bytes` | bf16 2048, fp32 4096, bf8_b 1088 (`output.buffer_page_size()`) | dtype ∈ TARGET; TILE layout |
+| `page_bytes` | TILE: bf16 2048, fp32 4096, bf8_b 1088. ROW_MAJOR (`page_copy_row_major`, page = stick): `W · elem` (bf16 `2W`, fp32 `4W`; production 5120). Always `buffer_aligned_page_size()`, shared by every input and the output, and a multiple of 64 | dtype ∈ TARGET; W % 32 == 0 (`w_non_aligned` unsupported), so a stick is a whole number of 64 B DRAM read granules; host asserts both |
 | `BLOCK_BYTES_CAP` | 131072 (host constant) | — |
 | `block_pages` | `1 ≤ block_pages ≤ block_pages_cap = max(1, BLOCK_BYTES_CAP // page_bytes)` (bf16 64, fp32 32, bf8_b 120); also `≤ n1` (pages of the most-loaded core) | `block_pages = min(n1, block_pages_cap)` |
 | `OUTPUT_PAGES_DEPTH` | 2 (host constant) | — |
@@ -52,6 +52,9 @@ L1_op = OUTPUT_PAGES_DEPTH · block_pages · page_bytes                       # 
 | bf16 `row_gather`, worst case (cap) | 64 | 2·64·2048 + 65·2048 = 395,264 B |
 | bf8_b `page_copy`, mixed inputs → L1 output (Panoptic 23, `P_out = 2560`, 110 L1 banks, measured plan) | 24 | 2·24·1088 + 24·1088 = 78,336 B |
 | bf8_b `page_copy`, L1 inputs → L1 output (Panoptic 40, `P_out = 9216`, measured plan) | 84 | 2·84·1088 + 84·1088 = 274,176 B |
+| bf16 `page_copy_row_major`, every production RM cell (≤ 48 sticks of 5120 B, one per core) | 1 | 2·1·5120 = 10,240 B |
+| bf16 `page_copy_row_major`, cap reached (6600 sticks of 5120 B over 110 cores, `n1 = 60`) | 25 | 2·25·5120 = 256,000 B |
+| bf16 `page_copy_row_major`, stick wider than the cap (W = 98304, 196,608 B) | 1 (floor) | 2·1·196,608 = 393,216 B |
 
 Every case stays well under `L1_OP_BUDGET = 1,347,776 B`. The cap leaves room for L1-resident
 inputs and outputs of the model, which sit in the same L1.
@@ -67,7 +70,8 @@ output is written once to `memory_config`'s buffer.
 |--------|----------------|---------------|--------------------------|
 | each input `x_k` (`page_copy`) | 1 | Each input page is read once by the one core that owns its output page. A partially valid tile row with `v ≤ TRIM_ROWS_MAX` moves only its `v` valid rows. | none |
 | each input `x_k` (`row_gather`) | 1, logical rows only | Each output tile row's run table reads disjoint row ranges. No padding row moves, and a straddling input tile is read as two disjoint ranges. | none. Core-local L1→L1: the misaligned pieces cross once more inside the core (bf16 on Blackhole, odd row shift). |
-| output | 1 | Each output page is written once by its owner. The last tile row of an image is trimmed to `v` rows when `v ≤ TRIM_ROWS_MAX`. | none |
+| each input `x_k` (`page_copy_row_major`) | 1 | Each input stick is read once, whole, by the one core that owns its output stick. A stick has no padding rows, so nothing is trimmed. | none |
+| output | 1 | Each output page is written once by its owner. The last tile row of an image is trimmed to `v` rows when `v ≤ TRIM_ROWS_MAX`; a ROW_MAJOR stick is always written whole. | none |
 
 Totals per tier for the cases that set the bar (bytes):
 

@@ -49,7 +49,7 @@
 
 **Done when**: the 49 cells above pass and the golden suite is otherwise unchanged. Acceptance pins pass for fp32 `row_gather`, L1 and mixed `row_gather`, bf8_b on DRAM, and an L1 output. `test_cache_key_placement` runs all three steps. `g6_concat_plan` reports the L1 total including the output's per-bank bytes.
 
-### [ ] Refinement 2 — ROW_MAJOR layout (native stick copy)
+### [x] Refinement 2 — ROW_MAJOR layout (native stick copy)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` for all inputs and the output, through the design's deferred `page_copy_row_major` regime, natively in the kernels. Page = stick, using the same readers, writer, `out_page` split and block knob. The `(O, C_k)` map is in stick units with H untiled, and there is no trimming. This moves the 36 RM DRAM cells plus Qwen 159 (RM, mixed inputs) to passing: 37 cells. `EXCLUSIONS` gains `{"layout": ttnn.ROW_MAJOR_LAYOUT, "concat_dim": "w"}`, the design's deferred `stick_gather_row_major` regime: no INPUTS cell joins RM tensors along the last dim, and BB-22 forbids testing it.
 

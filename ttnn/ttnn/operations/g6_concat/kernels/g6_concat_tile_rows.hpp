@@ -71,8 +71,15 @@ struct OutputRowCursor {
     }
 };
 
-FORCE_INLINE bool is_trimmed(uint32_t valid_rows, uint32_t trim_rows_max) {
-    return valid_rows < TILE_ROWS && valid_rows <= trim_rows_max;
+// trim_rows_max == 0 (bfloat8_b pages, ROW_MAJOR sticks) folds every page to a whole-page move at
+// compile time, which also leaves the row cursor dead.
+template <uint32_t trim_rows_max>
+FORCE_INLINE bool is_trimmed(uint32_t valid_rows) {
+    if constexpr (trim_rows_max == 0) {
+        return false;
+    } else {
+        return valid_rows < TILE_ROWS && valid_rows <= trim_rows_max;
+    }
 }
 
 }  // namespace g6_concat

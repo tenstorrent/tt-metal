@@ -5,8 +5,9 @@
 
 The output is split by page: core i of the row-major core order owns a contiguous output page range
 and walks it in blocks of block_pages pages. A reader fills cb_output_pages (page_copy: one input
-page per output page; row_gather: row-range reads assembled in place) and the shared writer stores
-the block. No compute kernel: values never pass through DEST.
+page per output page; page_copy_row_major: the same with page = stick; row_gather: row-range reads
+assembled in place) and the shared writer stores the block. No compute kernel: values never pass
+through DEST.
 """
 
 from __future__ import annotations
@@ -70,9 +71,17 @@ def canonical_dim(dim, rank):
     return dim + rank if dim < 0 else dim
 
 
+# Regimes served by the page reader: one input page per output page.
+PAGE_COPY_REGIMES = ("page_copy", "page_copy_row_major")
+
+
 def select_regime(shapes, d, layout):
     r = len(shapes[0])
-    if layout == ttnn.TILE_LAYOUT and d == r - 2:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        # d == r-1 cuts inside a stick (stick_gather_row_major), which validate() excludes.
+        assert d != r - 1, "ROW_MAJOR joins along the last dim need stick_gather_row_major"
+        return "page_copy_row_major"
+    if d == r - 2:
         offset = 0
         for shape in shapes[:-1]:
             offset += shape[d]
@@ -81,11 +90,15 @@ def select_regime(shapes, d, layout):
     return "page_copy"
 
 
-def page_copy_address_map(shapes, d):
+def page_copy_address_map(shapes, d, layout):
     """(O, [C_k]): output page o*C + Coff_k + c' is input k's page o*C_k + c'."""
     r = len(shapes[0])
     s0 = shapes[0]
-    if d <= r - 3:
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        # Page = stick: every dim but the last is untiled, and d <= r-2.
+        outer = math.prod(s0[:d])
+        per_slice = [s[d] * math.prod(s0[d + 1 : r - 1]) for s in shapes]
+    elif d <= r - 3:
         outer = math.prod(s0[:d])
         per_slice = [s[d] * math.prod(s0[d + 1 : r - 2]) * ct(s0[r - 2]) * ct(s0[r - 1]) for s in shapes]
     elif d == r - 2:
@@ -129,8 +142,8 @@ class G6ConcatPlan:
     cb_staging_bytes: int
     out_l1_per_bank: int
     l1_total: int
-    pages_per_slice: list  # page_copy only: C_k
-    num_slices: int  # page_copy only: O
+    pages_per_slice: list  # PAGE_COPY_REGIMES only: C_k
+    num_slices: int  # PAGE_COPY_REGIMES only: O
 
     def report(self):
         role = f"{self.regime} reader+writer"
@@ -189,20 +202,35 @@ def build_plan(tensors, d, output_memory_config, device):
     out_shape = list(shapes[0])
     out_shape[d] = sum(s[d] for s in shapes)
     out_rows = out_shape[r - 2]
-    out_ht = ct(out_rows)
-    out_wt = ct(out_shape[r - 1])
-    num_out_pages = math.prod(out_shape[: r - 2]) * out_ht * out_wt
-    last_row_valid_rows = out_rows - TILE_DIM * (out_ht - 1)
 
-    page_bytes = tensors[0].buffer_page_size()
-    face_row_bytes = FACE_DIM * (page_bytes // (TILE_DIM * TILE_DIM))
-    trim_rows_max = TRIM_ROWS_MAX[dtype]
+    # Every tensor's page (tile or stick) shares one aligned size, which is the CB slot stride and the
+    # transfer size. It is a multiple of the DRAM read alignment, so every slot keeps the alignment of
+    # the CB base: a stick is W * elem bytes with W % 32 == 0 (w_non_aligned is unsupported).
+    page_bytes = tensors[0].buffer_aligned_page_size()
+    assert all(t.buffer_aligned_page_size() == page_bytes for t in tensors), "inputs share one page size"
+    assert page_bytes % ttnn.get_dram_alignment() == 0, f"page of {page_bytes} B breaks slot alignment"
+
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        # A stick has no tile rows, so every page is whole: the row geometry degenerates to one page
+        # per row with 32 valid rows, and trim_rows_max = 0 compiles trimming out of both kernels.
+        out_ht, out_wt = 1, 1
+        num_out_pages = math.prod(out_shape[: r - 1])
+        last_row_valid_rows = TILE_DIM
+        face_row_bytes = 0
+        trim_rows_max = 0
+    else:
+        out_ht = ct(out_rows)
+        out_wt = ct(out_shape[r - 1])
+        num_out_pages = math.prod(out_shape[: r - 2]) * out_ht * out_wt
+        last_row_valid_rows = out_rows - TILE_DIM * (out_ht - 1)
+        face_row_bytes = FACE_DIM * (page_bytes // (TILE_DIM * TILE_DIM))
+        trim_rows_max = TRIM_ROWS_MAX[dtype]
 
     num_slices, pages_per_slice = 0, []
-    if regime == "page_copy":
-        num_slices, pages_per_slice = page_copy_address_map(shapes, d)
+    if regime in PAGE_COPY_REGIMES:
+        num_slices, pages_per_slice = page_copy_address_map(shapes, d, layout)
         assert num_slices * sum(pages_per_slice) == num_out_pages
-        if d == r - 2:
+        if regime == "page_copy" and d == r - 2:
             # v of every input page equals v of its output page: only the last input may be partial.
             assert all(s[d] % TILE_DIM == 0 for s in shapes[:-1])
     else:
@@ -269,7 +297,7 @@ def _page_copy_start_cursor(plan, start_page):
 
 
 def _reader_common_args(plan, tensors):
-    if plan.regime == "page_copy":
+    if plan.regime in PAGE_COPY_REGIMES:
         args = [plan.block_pages, plan.out_wt, plan.out_ht, plan.last_row_valid_rows, len(tensors)]
         assert len(args) == PAGE_READER_COMMON_FIRST_INPUT
         for t, pages in zip(tensors, plan.pages_per_slice):
@@ -289,7 +317,7 @@ def _writer_common_args(plan, output):
 
 
 def reader_address_slots(plan, num_inputs):
-    first = PAGE_READER_COMMON_FIRST_INPUT if plan.regime == "page_copy" else GATHER_READER_COMMON_FIRST_INPUT
+    first = PAGE_READER_COMMON_FIRST_INPUT if plan.regime in PAGE_COPY_REGIMES else GATHER_READER_COMMON_FIRST_INPUT
     return [first + k * COMMON_WORDS_PER_INPUT for k in range(num_inputs)]
 
 
@@ -337,20 +365,20 @@ def input_placement_ct_args(tensors):
 
 def build_program(plan, tensors, output, program_hash):
     assert output.buffer_num_pages() == plan.num_out_pages
-    assert output.buffer_page_size() == plan.page_bytes
+    assert output.buffer_aligned_page_size() == plan.page_bytes
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     for work in plan.core_work:
         x, y = work.core.x, work.core.y
-        if plan.regime == "page_copy":
+        if plan.regime in PAGE_COPY_REGIMES:
             slice_idx, input_idx, page_in_slice = _page_copy_start_cursor(plan, work.start_page)
             reader_rt[x][y] = [work.start_page, work.num_pages, slice_idx, input_idx, page_in_slice]
         else:
             reader_rt[x][y] = [work.start_page, work.num_pages]
         writer_rt[x][y] = [work.start_page, work.num_pages]
 
-    if plan.regime == "page_copy":
+    if plan.regime in PAGE_COPY_REGIMES:
         reader_source = PAGE_READER_SOURCE
         reader_ct = [CB_OUTPUT_PAGES, plan.page_bytes, plan.face_row_bytes, plan.trim_rows_max]
     else:

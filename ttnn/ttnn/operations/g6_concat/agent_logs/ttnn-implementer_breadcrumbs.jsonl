@@ -24,3 +24,6 @@
 {"event":"fix_applied","detail":"R1: per-input L1 mask + DRAM/L1 accessor chains (g6_concat_input_placement.hpp); page_copy fetch walks per-input runs; row_gather alignment per input; L1 output out_l1_per_bank in l1_total; SUPPORTED widened; EXCLUSION bf8_b x h x h_non_aligned","ts":"2026-11-27T16:19:02-05:00"}
 {"event":"test_run","result":"pass","detail":"new pins 15/15; test_g6_concat.py 47/47; golden slice 56 passed + 1 xfail (Qwen159 RM, R2); all 49 R1 target cells pass","ts":"2026-11-27T16:19:02-05:00"}
 {"event":"perf_check","detail":"no regression: p1 fp32 1890.7us (baseline 1889), p2 902us, p3 899.5us, p4 451.5us (455), qwen79 125.3us (124.5)","ts":"2026-11-27T16:19:02-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T16:21:57-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T16:22:00-05:00"}
+{"event":"test_run","what":"R2 RM: test_g6_concat_row_major.py 46/46, prior unit 66/66, golden slice 42/42 (37 RM cells), RM pins clean under --dev","result":"pass","ts":"2026-11-27T16:27:26-05:00"}

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Shared writer of both regimes (BRISC, NOC1): stores this core's contiguous output page range
-// from cb_output_pages, a block of block_pages at a time.
+// Shared writer of every regime (BRISC, NOC1): stores this core's contiguous output page range (tiles,
+// or sticks for ROW_MAJOR) from cb_output_pages, a block of block_pages at a time.
 
 #include <cstdint>
 
@@ -56,7 +56,7 @@ void kernel_main() {
             uint32_t slot_addr = get_read_ptr(cb_output_pages);
             for (uint32_t page = 0; page < block_extent; ++page) {
                 const uint32_t valid_rows = rows.valid_rows();
-                if (g6_concat::is_trimmed(valid_rows, trim_rows_max)) {
+                if (g6_concat::is_trimmed<trim_rows_max>(valid_rows)) {
                     g6_concat::for_each_valid_row_piece<face_row_bytes>(
                         valid_rows, [&](uint32_t offset_bytes, uint32_t size_bytes) {
                             noc_async_write_page(
