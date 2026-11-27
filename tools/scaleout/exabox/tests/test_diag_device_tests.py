@@ -22,7 +22,13 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-from diag.device_tests import DEPLOYMENT_BIN_CANDIDATES, TESTS, run_tests  # noqa: E402
+from diag.device_tests import (  # noqa: E402
+    DEPLOYMENT_BIN_CANDIDATES,
+    DRAM_TEST_ENV_KEYS,
+    GDDR_TESTS,
+    TESTS,
+    run_tests,
+)
 from diag.model import FAIL, PASS, Phase  # noqa: E402
 
 # gtest's output for a test that calls GTEST_SKIP(), including the summary that
@@ -44,7 +50,7 @@ fi
 
 
 class TestGtestGrading(unittest.TestCase):
-    def run_fake(self, names):
+    def run_fake(self, names, dry_run=False, env=None, **kwargs):
         with tempfile.TemporaryDirectory() as tmp:
             tt_metal = Path(tmp)
             binary = tt_metal / DEPLOYMENT_BIN_CANDIDATES[0]
@@ -54,7 +60,10 @@ class TestGtestGrading(unittest.TestCase):
             phase = Phase(name="tests")
             with mock.patch.dict(os.environ), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                 os.environ.pop("TT_METAL_SLOW_DISPATCH_MODE", None)
-                run_tests(tt_metal, names, phase, dry_run=False, logs_dir=tt_metal / "logs")
+                for key in DRAM_TEST_ENV_KEYS:
+                    os.environ.pop(key, None)
+                os.environ.update(env or {})
+                run_tests(tt_metal, names, phase, dry_run=dry_run, logs_dir=tt_metal / "logs", **kwargs)
         return {c.name: c for c in phase.checks}
 
     def test_eth_tests_run_in_slow_dispatch(self):
@@ -71,6 +80,35 @@ class TestGtestGrading(unittest.TestCase):
             check = self.run_fake(["eth_link_up"])["eth_link_up"]
         self.assertEqual(check.status, FAIL)
         self.assertIn("passed=0 failed=0 skipped=1", check.details)
+
+
+class TestGddrMbytes(unittest.TestCase):
+    run_fake = TestGtestGrading.run_fake
+
+    def test_default_leaves_test_size_unset(self):
+        check = self.run_fake(["gddr_fast"], dry_run=True)["gddr_fast"]
+        self.assertNotIn("DRAM_TEST_MBYTES", check.data["env_overrides"])
+        self.assertEqual(check.data["env_overrides"]["DRAM_TEST_FAST"], "1")
+
+    def test_gddr_mbytes_reaches_gddr_tests_only(self):
+        checks = self.run_fake(["gddr_fast", "gddr_full", "eth_link_up"], dry_run=True, gddr_mbytes=1024)
+        for name in GDDR_TESTS:
+            with self.subTest(name):
+                self.assertEqual(checks[name].data["env_overrides"]["DRAM_TEST_MBYTES"], "1024")
+                self.assertIn("DRAM_TEST_MBYTES=1024", checks[name].data["command"])
+        self.assertNotIn("DRAM_TEST_MBYTES", checks["eth_link_up"].data["env_overrides"])
+
+    def test_ambient_dram_knobs_are_recorded(self):
+        env = {"DRAM_TEST_MBYTES": "256", "DRAM_TEST_LOOPS": "3"}
+        check = self.run_fake(["gddr_full"], dry_run=True, env=env)["gddr_full"]
+        self.assertEqual(check.data["env_overrides"]["DRAM_TEST_MBYTES"], "256")
+        self.assertEqual(check.data["env_overrides"]["DRAM_TEST_LOOPS"], "3")
+
+    def test_flag_overrides_ambient(self):
+        check = self.run_fake(["gddr_full"], dry_run=True, env={"DRAM_TEST_MBYTES": "256"}, gddr_mbytes=2048)[
+            "gddr_full"
+        ]
+        self.assertEqual(check.data["env_overrides"]["DRAM_TEST_MBYTES"], "2048")
 
 
 if __name__ == "__main__":

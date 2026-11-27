@@ -113,6 +113,8 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
                              destructive steps
       --skip-reset           Skip the reset loop phase entirely
       --skip-tests           Skip the gtest phase entirely
+      --gddr-mbytes N        MB tested per GDDR controller by the GDDR tests
+                             (DRAM_TEST_MBYTES; default: the test's own 32 MB)
       --skip-triage          Skip the post-test reset and the triage phase
       --triage-gating        Let triage FAILs gate the run (default: held at WARN)
       --triage-dir PATH      Host triage scripts dir; mounted read-only
@@ -219,6 +221,10 @@ while (( $# )); do
 
         # Forwarded, in-container value.
         --tt-smi-path|--qsfp-tool-path|--sys-triage-path|--snapshot-out)
+            require_value "$1" "${2:-}"; FORWARD+=("$1" "$2"); shift 2 ;;
+
+        # Forwarded, plain value.
+        --gddr-mbytes)
             require_value "$1" "${2:-}"; FORWARD+=("$1" "$2"); shift 2 ;;
 
         # Forwarded, host value that needs mounting.

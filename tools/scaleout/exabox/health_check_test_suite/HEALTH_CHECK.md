@@ -142,6 +142,15 @@ which `tests/tt_metal/tt_metal/deployment/sources.cmake` now compiles. Both run
 with `TT_METAL_SLOW_DISPATCH_MODE=1`: fast dispatch to active ethernet cores was
 removed, and under fast dispatch each eth test skips itself and exits 0.
 
+The GDDR tests (`gddr_fast`, `gddr_full`) test 32 MB at offset 0 of each 4 GB
+GDDR controller by default, about 0.8% of it. `--gddr-mbytes N` passes
+`DRAM_TEST_MBYTES=N` to them to test more; the test clamps it to
+4 GB - 16 MB - 2 KB, and run time grows with it. The other knobs the test reads
+(`DRAM_TEST_LOOPS`, `DRAM_TEST_CHUNK_BYTES`, `DRAM_TEST_NOC_MODE`,
+`DRAM_TEST_MAX_CHIPS`) are taken from the caller's environment. Each check's
+`env_overrides` records every one of them that is set, so the report shows what
+a GDDR check actually covered.
+
 A gtest check passes only if at least one of its test cases passed, as a pytest
 check does. A filter that matches nothing (one without the index wildcard, say)
 and a run whose tests all skip both exit 0 having tested nothing, and are

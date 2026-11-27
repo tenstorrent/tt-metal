@@ -79,6 +79,8 @@ Forwarded options (see diag_runner.py --help for details):
   --input-snapshot PATH  Use pre-captured tt-smi snapshot JSON (skip live tt-smi call)
   --tt-smi-path PATH     Override tt-smi binary location
   --tt-metal-path PATH   Override tt-metal repo root (for unit_tests_deployment binary)
+  --gddr-mbytes N        MB tested per GDDR controller by the GDDR tests (DRAM_TEST_MBYTES;
+                         default: the test's own 32 MB of each 4 GB controller)
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
   --skip-triage          Skip the post-test reset and the triage phase
