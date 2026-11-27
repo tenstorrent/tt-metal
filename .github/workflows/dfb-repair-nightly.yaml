@@ -144,8 +144,77 @@ jobs:
         with:
           lib: libttsim_qsr.so
 
+  fetch-state:
+    # The loop's memory of earlier nights (state.json and the saved fixes) is an artifact, not an Actions cache entry:
+    # tt-metal's cache is full and GitHub deletes the oldest entries within hours. This job copies the newest one from
+    # an earlier run of this workflow on the same branch into this run. It is a separate job so that the token the
+    # agent gets never needs the permission to read other runs. Repair-mode test runs on the PR start fresh.
+    needs: mode
+    if: >-
+      needs.mode.outputs.mode != 'smoke'
+      && (github.event_name != 'pull_request' || needs.mode.outputs.mode == 'pr')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Waits for a run that is still writing its state.
+    concurrency:
+      group: dfb-repair-loop-${{ github.event.pull_request.number || 'main' }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+    outputs:
+      run: ${{ steps.find.outputs.run }}
+    steps:
+      - name: Find the newest earlier state
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          cd "$RUNNER_TEMP"
+          wf=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=dfb-repair-state&per_page=100" > states.json
+          # Only from this repository (not a fork's PR) and this branch, newest first.
+          candidates=$(python3 -I -c 'import json, os, sys
+          arts = json.load(open(sys.argv[1]))["artifacts"]
+          me, branch = int(os.environ["GITHUB_RUN_ID"]), os.environ["BRANCH"]
+          ok = []
+          for a in arts:
+              w = a.get("workflow_run") or {}
+              if (not a.get("expired") and w.get("id") not in (None, me) and w.get("head_branch") == branch
+                      and w.get("repository_id") and w.get("head_repository_id") == w.get("repository_id")):
+                  ok.append(a)
+          for a in sorted(ok, key=lambda a: a["created_at"], reverse=True)[:10]:
+              print(a["workflow_run"]["id"])' states.json)
+          for run in $candidates; do # and from this workflow
+            if [ "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" --jq .workflow_id)" = "$wf" ]; then
+              echo "The loop's state comes from run $run"
+              echo "run=$run" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No earlier state: the loop starts fresh"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.find.outputs.run != ''
+        with:
+          name: dfb-repair-state
+          run-id: ${{ steps.find.outputs.run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/dfb-state
+
+      - name: Hand the state on to this run
+        if: steps.find.outputs.run != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: dfb-repair-state-earlier
+          path: ${{ runner.temp }}/dfb-state
+          retention-days: 1
+          overwrite: true
+
   dfb-repair:
-    needs: [mode, fetch-ttsim]
+    needs: [mode, fetch-ttsim, fetch-state]
+    # Runs without the earlier state when fetch-state was skipped or failed.
+    if: "!cancelled() && needs.fetch-ttsim.result == 'success' && needs.fetch-state.result != 'cancelled'"
     # ttsim needs no tt-card; the build and the test runs are CPU-bound, so use a large CPU runner. No job
     # container: the loop runs in its own throwaway containers (below).
     runs-on: tt-ubuntu-2204-large-stable
@@ -222,18 +291,14 @@ jobs:
           EOF
           docker pull --quiet "$IMAGE" # the current dev image, not whatever this runner pulled before
 
-      # Earlier nights' state and saved fixes, so a failure is not given to the model again every night. Repair-mode
-      # test runs on the PR start fresh, so each one tries the failures again; pr-mode test runs keep it, like nightly
-      # runs.
+      # Earlier nights' state and saved fixes (from fetch-state), so a failure is not given to the model again every
+      # night.
       - name: Restore the loop's state
-        if: github.event_name != 'pull_request' || env.MODE == 'pr'
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        if: needs.fetch-state.outputs.run != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: |
-            ${{ runner.temp }}/dfb-loop/state.json
-            ${{ runner.temp }}/dfb-loop/runs/*/fixes
-          key: dfb-repair-state-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: dfb-repair-state-
+          name: dfb-repair-state-earlier
+          path: ${{ runner.temp }}/dfb-loop
 
       - name: Restore the build cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -274,9 +339,6 @@ jobs:
           DFB_HANDLED: ${{ vars.DFB_REPAIR_HANDLED }} # group ids people have taken over
           DFB_RETRY: ${{ inputs.retry }}
         run: |
-          # Old saved fixes. A restored runs/<id> gets the restore time, so go by its fixes directory.
-          find "$LOOP_ROOT/runs" -mindepth 2 -maxdepth 2 -name fixes -type d -mtime +30 -printf '%h\0' \
-            | xargs -0 -r rm -rf
           # What is left of the job, less an hour for the loop to finish and for the steps after it.
           budget=$(( JOB_MINUTES - ($(date +%s) - JOB_START) / 60 - 60 ))
           [ "$budget" -ge 60 ] || budget=60
@@ -322,14 +384,33 @@ jobs:
                       p.write_bytes(data.replace(key, b"[redacted]"))
           EOF
 
-      - name: Save the loop's state
+      # The state and only the saved fixes it still points to, for the next run's fetch-state.
+      - name: Collect the loop's state
+        id: state
         if: always() && steps.redact.outcome == 'success' && (github.event_name != 'pull_request' || env.MODE == 'pr')
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        run: |
+          cd "$RUNNER_TEMP"
+          python3 -I - "$LOOP_ROOT" "$RUNNER_TEMP/dfb-state" <<'EOF'
+          import json, pathlib, shutil, sys
+          root, out = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+          if (root / "state.json").is_file():
+              out.mkdir(parents=True)
+              shutil.copy2(root / "state.json", out / "state.json")
+              for st in json.loads((root / "state.json").read_text()).get("groups", {}).values():
+                  d = pathlib.Path(st.get("fix_dir") or "/nonexistent")
+                  if d.is_dir() and root / "runs" in d.parents:
+                      shutil.copytree(d, out / d.relative_to(root), dirs_exist_ok=True)
+          EOF
+
+      - name: Save the loop's state
+        if: always() && steps.state.outcome == 'success'
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          path: |
-            ${{ runner.temp }}/dfb-loop/state.json
-            ${{ runner.temp }}/dfb-loop/runs/*/fixes
-          key: dfb-repair-state-${{ github.run_id }}-${{ github.run_attempt }}
+          name: dfb-repair-state
+          path: ${{ runner.temp }}/dfb-state
+          if-no-files-found: ignore
+          retention-days: 30
+          overwrite: true
 
       - name: Save the build cache in report mode, where no agent ran
         if: always() && env.MODE == 'report'
