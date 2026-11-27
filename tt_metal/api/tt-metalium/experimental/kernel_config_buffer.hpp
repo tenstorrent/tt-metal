@@ -69,8 +69,7 @@ private:
 // outgrow the KERNEL_CONFIG window: launching them from it fails.
 //
 // Each core of each device gets a shard sized for its kernel group's binaries in that device's program, at its own
-// address. `bottom_up` allocates the shards from the bottom of L1 instead of the top, where static CBs would go: a
-// program run from them must back its CBs with L1 buffers.
+// address. `bottom_up` allocates the shards from the bottom of L1 instead of the top.
 //
 // Requires slow dispatch and the device opened with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
 KernelConfigBuffer CreateKernelConfigBuffer(
