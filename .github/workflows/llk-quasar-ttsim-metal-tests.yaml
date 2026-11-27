@@ -1,0 +1,165 @@
+name: "LLK Quasar ttsim metal tests"
+
+# Runs the tt-metal LLK gtests (build/test/tt_metal/unit_tests_llk) on the Quasar ttsim
+# functional simulator. The test list is the unit_tests_llk group of
+# tests/scripts/quasar/quasar_regression_tests.yaml, the same list the ZeBu emulator
+# regression runs. run_quasar_regression.sh --ttsim batches its back2back entries, so the
+# whole group runs in one unit_tests_llk process with a combined --gtest_filter.
+#
+# ttsim has no fast dispatch, so the runner exports TT_METAL_SLOW_DISPATCH_MODE=1.
+# The simulator release is the one pinned in tt_metal/ttsim-version.
+#
+# Triggers:
+#   - on demand from the Actions tab (workflow_dispatch)
+#   - nightly at 03:00 UTC
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: "Build type"
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+      enable-llk-asserts:
+        description: "Enable LLK asserts in the JIT-built kernels"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 3 * * *"
+
+permissions:
+  contents: read
+  # build-artifact.yaml pushes Docker image tags that do not exist yet.
+  packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+env:
+  # .github/sku_config.yaml maps this SKU to libttsim_qsr.so; setup-ttsim reads it from there.
+  TTSIM_SKU: sim_quasar
+  TTSIM_LIB: libttsim_qsr.so
+
+jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  build-artifact:
+    needs: check-harbor
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: "Ubuntu 22.04"
+
+  fetch-ttsim:
+    runs-on: ubuntu-slim
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout fetch-ttsim action and pinned ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
+        with:
+          lib: ${{ env.TTSIM_LIB }}
+
+  unit-tests-llk:
+    name: "unit_tests_llk (Quasar ttsim, back2back)"
+    needs: [build-artifact, fetch-ttsim]
+    # Same runner as the sim_quasar SKU in .github/sku_config.yaml. GitHub-hosted, so the
+    # image must be the canonical (non-Harbor) ci-test tag.
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    container:
+      image: ${{ needs.build-artifact.outputs.ci-test-docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        ARCH_NAME: quasar
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+      options: --label runner-mode=sim
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
+        timeout-minutes: 20
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      # Installs /work/sim/libttsim.so with soc_descriptor.yaml beside it and exports
+      # TT_METAL_SIMULATOR and TT_METAL_SLOW_DISPATCH_MODE=1.
+      - name: ⬇️  Setup TTSim
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ env.TTSIM_SKU }}
+      - name: Run unit_tests_llk on ttsim
+        timeout-minutes: 150
+        run: |
+          set -euo pipefail
+          mkdir -p generated/test_logs
+          tests/scripts/quasar/run_quasar_regression.sh \
+            --ttsim \
+            --group unit_tests_llk \
+            --build-dir /work/build \
+            --log-dir /work/generated/test_logs/quasar_ttsim \
+            2>&1 | tee generated/test_logs/run_quasar_regression.log
+      - name: Summarize results
+        if: ${{ !cancelled() }}
+        run: |
+          log=generated/test_logs/run_quasar_regression.log
+          {
+            echo "## unit_tests_llk on Quasar ttsim ($(tr -d '[:space:]' < tt_metal/ttsim-version))"
+            echo ""
+            echo '```'
+            if [[ -f "$log" ]] && grep -q 'REGRESSION SUMMARY' "$log"; then
+              # The runner ends with a per-test PASS/FAIL/SKIP list and the totals.
+              sed -n '/REGRESSION SUMMARY/,$p' "$log"
+            else
+              echo "No summary: the runner did not finish. See the job log."
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: quasar-ttsim-unit-tests-llk-logs
+          # Host-side path of the container's /work/generated/test_logs.
+          path: ${{ github.workspace }}/docker-job/generated/test_logs/
+          if-no-files-found: warn
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+        if: always()

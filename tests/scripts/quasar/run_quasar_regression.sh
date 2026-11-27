@@ -16,6 +16,9 @@ BUILD_DIR="$TT_METAL_HOME/build"
 LOG_DIR="$SCRIPT_DIR/logs"
 DRY_RUN=false
 BACK2BACK=true
+# emu: ZeBu emulator, one emu-quasar-<config>/ directory per grid config.
+# ttsim: functional simulator; TT_METAL_SIMULATOR is one libttsim .so used for every config.
+SIM_KIND=emu
 # Retry when ZeBu reports a hostname reservation conflict in a local
 # emu_<date>_<time>_.log file (the test hangs waiting for the device).
 # One pytest process may close and reopen the device, which starts another
@@ -28,6 +31,12 @@ if [[ ! "$EMU_HOSTNAME_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 EMU_HOSTNAME_RETRY_DELAY="${QUASAR_EMU_HOSTNAME_RETRY_DELAY:-30}"
+# --ttsim only: seconds without gtest output before the running test counts as hung.
+TTSIM_TEST_TIMEOUT="${QUASAR_TTSIM_TEST_TIMEOUT:-600}"
+if [[ ! "$TTSIM_TEST_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: QUASAR_TTSIM_TEST_TIMEOUT must be a positive integer"
+    exit 1
+fi
 EMU_MONITOR_POLL_INTERVAL="${QUASAR_EMU_HOSTNAME_POLL_INTERVAL:-2}"
 EMU_LOG_GLOB='emu_*_.log'
 EMU_HOSTNAME_CONFLICT_REGEX='zServer : ERROR.* is used by'
@@ -64,7 +73,20 @@ Required environment variables:
   NNG_SOCKET_ADDR          NNG socket address
   NNG_SOCKET_LOCAL_PORT    NNG local port
 
+With --ttsim, the only required variable is TT_METAL_SIMULATOR: the path to the
+Quasar ttsim library (libttsim_qsr.so, possibly renamed libttsim.so), with
+soc_descriptor.yaml (a copy of tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml)
+in the same directory. The NNG variables are not used. ttsim has one grid, so
+every config entry runs on the same library; --config still filters entries.
+TT_METAL_SLOW_DISPATCH_MODE=1 is exported because ttsim has no fast dispatch.
+ttsim exits the process on functionality it does not model, and slow dispatch
+waits forever for a kernel that hangs on it. For gtest, a test that ends the
+process, or prints nothing for QUASAR_TTSIM_TEST_TIMEOUT seconds (default 600),
+is recorded as failed and a new process runs the tests of the batch that have
+not run yet.
+
 Options:
+  --ttsim                          Run against ttsim instead of the ZeBu emulator
   --build                          Run build_metal.sh --build-tests before testing
   --config <1x3|2x3|2x3_DISPATCH>  Only run tests for the specified configuration
   --group <name>                   Only run tests from the specified test group
@@ -87,6 +109,7 @@ need_arg() { if [[ $# -lt 2 || "$2" == --* ]]; then echo "ERROR: $1 requires an 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --build)       BUILD=true; shift ;;
+        --ttsim)       SIM_KIND=ttsim; shift ;;
         --config)      need_arg "$1" "${2:-}"; FILTER_CONFIG="$2"; shift 2 ;;
         --group)       need_arg "$1" "${2:-}"; FILTER_GROUP="$2"; shift 2 ;;
         --tests)       need_arg "$1" "${2:-}"; TESTS_FILE="$2"; shift 2 ;;
@@ -104,17 +127,44 @@ if [[ -n "$FILTER_CONFIG" && "$FILTER_CONFIG" != "1x3" && "$FILTER_CONFIG" != "2
     exit 1
 fi
 
+if [[ "$SIM_KIND" == ttsim ]]; then
+    if [[ -z "${TT_METAL_SIMULATOR:-}" ]]; then
+        echo "ERROR: --ttsim requires TT_METAL_SIMULATOR (path to the Quasar libttsim .so)"
+        exit 1
+    fi
+    if [[ ! -f "$TT_METAL_SIMULATOR" ]]; then
+        echo "ERROR: TT_METAL_SIMULATOR is not a file: $TT_METAL_SIMULATOR"
+        exit 1
+    fi
+    # ttsim derives the SoC descriptor path from the library path.
+    if [[ ! -f "$(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml" ]]; then
+        echo "ERROR: soc_descriptor.yaml is missing next to $TT_METAL_SIMULATOR"
+        echo "       Copy tt_metal/soc_descriptors/quasar_32_arch_ttsim.yaml there as soc_descriptor.yaml."
+        exit 1
+    fi
+    TT_METAL_SIMULATOR="$(cd "$(dirname "$TT_METAL_SIMULATOR")" && pwd)/$(basename "$TT_METAL_SIMULATOR")"
+    export TT_METAL_SIMULATOR
+    export TT_METAL_SLOW_DISPATCH_MODE=1
+    # ttsim does not implement SFPLOADMACRO or NOC API v2; keep a caller's override.
+    export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
+    export TT_METAL_QUASAR_NOC_API_VERSION="${TT_METAL_QUASAR_NOC_API_VERSION:-1}"
+    # ttsim runs in-process and writes no emu logs, so there is no hostname conflict to retry.
+    EMU_HOSTNAME_MAX_RETRIES=0
+fi
+
 # Derive SIMULATOR_BASE from TT_METAL_SIMULATOR if available
-if [[ -z "${TT_METAL_SIMULATOR_BASE:-}" && -n "${TT_METAL_SIMULATOR:-}" ]]; then
+if [[ "$SIM_KIND" == emu && -z "${TT_METAL_SIMULATOR_BASE:-}" && -n "${TT_METAL_SIMULATOR:-}" ]]; then
     TT_METAL_SIMULATOR_BASE="$(cd "$(dirname "${TT_METAL_SIMULATOR%/}")" && pwd)"
     echo "Derived TT_METAL_SIMULATOR_BASE=$TT_METAL_SIMULATOR_BASE from TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR"
 fi
 
 # Validate required environment variables
 missing_vars=()
+if [[ "$SIM_KIND" == emu ]]; then
 [[ -z "${TT_METAL_SIMULATOR_BASE:-}" ]] && missing_vars+=("TT_METAL_SIMULATOR_BASE (or TT_METAL_SIMULATOR)")
 [[ -z "${NNG_SOCKET_ADDR:-}" ]]       && missing_vars+=("NNG_SOCKET_ADDR")
 [[ -z "${NNG_SOCKET_LOCAL_PORT:-}" ]] && missing_vars+=("NNG_SOCKET_LOCAL_PORT")
+fi
 
 if [[ ${#missing_vars[@]} -gt 0 ]]; then
     echo "ERROR: Required environment variables not set:"
@@ -129,7 +179,7 @@ if [[ ${#missing_vars[@]} -gt 0 ]]; then
     exit 1
 fi
 
-SIMULATOR_BASE="$TT_METAL_SIMULATOR_BASE"
+SIMULATOR_BASE="${TT_METAL_SIMULATOR_BASE:-}"
 
 if [[ ! -f "$TESTS_FILE" ]]; then
     echo "ERROR: Tests file not found: $TESTS_FILE"
@@ -149,7 +199,11 @@ fi
 
 simulator_path_for_config() {
     local config="$1"
-    echo "$SIMULATOR_BASE/emu-quasar-${config}"
+    if [[ "$SIM_KIND" == ttsim ]]; then
+        echo "$TT_METAL_SIMULATOR"
+    else
+        echo "$SIMULATOR_BASE/emu-quasar-${config}"
+    fi
 }
 
 # Build if requested
@@ -261,7 +315,9 @@ else
 fi
 [[ -n "$FILTER_CONFIG" ]] && echo "Filter: config=$FILTER_CONFIG"
 [[ -n "$FILTER_GROUP" ]]  && echo "Filter: group=$FILTER_GROUP"
-if [[ "$EMU_HOSTNAME_MAX_RETRIES" -gt 0 ]]; then
+if [[ "$SIM_KIND" == ttsim ]]; then
+    echo "Sim:    ttsim $TT_METAL_SIMULATOR (TT_METAL_SLOW_DISPATCH_MODE=1)"
+elif [[ "$EMU_HOSTNAME_MAX_RETRIES" -gt 0 ]]; then
     echo "Emu:    monitor emu_<date>_<time>_.log, retry on hostname conflict (max ${EMU_HOSTNAME_MAX_RETRIES} retries, ${EMU_HOSTNAME_RETRY_DELAY}s delay)"
 else
     echo "Emu:    monitor emu_<date>_<time>_.log, fail fast on hostname conflict"
@@ -842,8 +898,10 @@ build_gtest_cmd_env() {
 
 print_run_env() {
     echo "  TT_METAL_SIMULATOR=$TT_METAL_SIMULATOR"
-    echo "  NNG_SOCKET_ADDR=$NNG_SOCKET_ADDR"
-    echo "  NNG_SOCKET_LOCAL_PORT=$NNG_SOCKET_LOCAL_PORT"
+    if [[ "$SIM_KIND" == emu ]]; then
+        echo "  NNG_SOCKET_ADDR=$NNG_SOCKET_ADDR"
+        echo "  NNG_SOCKET_LOCAL_PORT=$NNG_SOCKET_LOCAL_PORT"
+    fi
     for pair in "${extra_env_pairs[@]}"; do
         echo "  ENV: $pair"
     done
@@ -890,6 +948,145 @@ format_test_label() {
         fi
     fi
     echo "$label"
+}
+
+record_ttsim_result() {
+    local status="$1" test_label="$2" detail="$3"
+    case "$status" in
+        PASS) passed=$((passed + 1)) ;;
+        FAIL) failed=$((failed + 1)) ;;
+        SKIP) skipped=$((skipped + 1)) ;;
+    esac
+    results+=("$status  $test_label  ($detail)")
+}
+
+# Add exact test names to the negative part of a gtest filter. gtest splits the
+# filter at its first '-'; parameterized test names cannot contain one.
+gtest_filter_exclude() {
+    local filter="$1" names="$2"
+    if [[ "$filter" == *-* ]]; then
+        printf '%s:%s' "$filter" "$names"
+    else
+        printf '%s-%s' "${filter:-*}" "$names"
+    fi
+}
+
+# ttsim calls _Exit(1) on functionality it does not model, which ends a
+# back2back process at that test and loses every later test in the batch.
+# Run the batch in one process, and after such an exit record what finished,
+# mark the test that was running as failed, and start a new process on the
+# tests that have not run yet. Results come from gtest's console output, since
+# a process that exits this way writes no --gtest_output file.
+run_gtest_ttsim_resumable() {
+    local config="$1" group="$2" label="$3" combined_filter="$4" log_base="$5"
+    shift 5
+    local -a extra_args=("$@")
+    local binary="$BUILD_DIR/test/tt_metal/$group"
+    local -a started=()
+    local part=0 rc filter out line current crash_msg
+    local inv_passed=0 inv_failed=0 inv_skipped=0
+    local tmp_out=""
+
+    while true; do
+        part=$((part + 1))
+        filter="$combined_filter"
+        if [[ ${#started[@]} -gt 0 ]]; then
+            filter="$(gtest_filter_exclude "$combined_filter" "$(IFS=:; echo "${started[*]}")")"
+            echo "  RESUME: process $part, excluding ${#started[@]} test(s) that already ran"
+        fi
+
+        local -a cmd=("$binary")
+        [[ -n "$filter" ]] && cmd+=(--gtest_filter="$filter")
+        cmd+=("${extra_args[@]}")
+        if [[ -n "$log_base" ]]; then
+            out="${log_base}_part${part}.out"
+            cmd+=("--gtest_output=json:${log_base}_part${part}.json")
+            build_gtest_cmd_env "${log_base}_part${part}.log"
+        else
+            [[ -z "$tmp_out" ]] && tmp_out="$(mktemp)"
+            out="$tmp_out"
+            build_gtest_cmd_env ""
+        fi
+
+        # Slow dispatch waits on a simulator with no timeout, so a kernel that hangs on
+        # ttsim would stall the batch for good. gtest prints a line when each test starts
+        # and ends; no output for TTSIM_TEST_TIMEOUT seconds means the current test hung.
+        local pid tail_pid idle hung=0
+        : > "$out"
+        # Own process group, so a timeout stops the whole test at once.
+        if command -v setsid &>/dev/null; then
+            setsid "${gtest_cmd_env[@]}" "${cmd[@]}" > "$out" 2>&1 &
+        else
+            "${gtest_cmd_env[@]}" "${cmd[@]}" > "$out" 2>&1 &
+        fi
+        pid=$!
+        active_gtest_pid=$pid
+        tail -n +1 -f --pid="$pid" "$out" &
+        tail_pid=$!
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep 5
+            idle=$(( $(date +%s) - $(stat -c %Y "$out") ))
+            if [[ $idle -ge $TTSIM_TEST_TIMEOUT ]]; then
+                hung=1
+                echo "  TIMEOUT: no test output for ${idle}s; terminating the process"
+                terminate_gtest_process "$pid"
+                break
+            fi
+        done
+        set +e
+        wait "$pid"
+        rc=$?
+        wait "$tail_pid" 2>/dev/null
+        set -e
+        active_gtest_pid=""
+        [[ $hung -eq 1 && $rc -eq 0 ]] && rc=124
+
+        # Only a result line for the test that is currently running counts; this
+        # skips gtest's closing list of failed tests.
+        current=""
+        while IFS= read -r line; do
+            if [[ "$line" =~ ^\[\ RUN\ +\]\ ([^ ]+) ]]; then
+                if [[ -n "$current" ]]; then
+                    record_ttsim_result FAIL "[$config] $group $current" "no result before the next test started"
+                    inv_failed=$((inv_failed + 1))
+                fi
+                current="${BASH_REMATCH[1]}"
+                started+=("$current")
+            elif [[ -n "$current" && "$line" =~ ^\[\ +(OK|FAILED|SKIPPED)\ +\]\ ([^ ,]+)(.*\(([0-9]+\ ms)\))? ]] \
+                    && [[ "${BASH_REMATCH[2]}" == "$current" ]]; then
+                case "${BASH_REMATCH[1]}" in
+                    OK)      record_ttsim_result PASS "[$config] $group $current" "${BASH_REMATCH[4]:-?}"; inv_passed=$((inv_passed + 1)) ;;
+                    FAILED)  record_ttsim_result FAIL "[$config] $group $current" "${BASH_REMATCH[4]:-?}"; inv_failed=$((inv_failed + 1)) ;;
+                    SKIPPED) record_ttsim_result SKIP "[$config] $group $current" "${BASH_REMATCH[4]:-?}"; inv_skipped=$((inv_skipped + 1)) ;;
+                esac
+                current=""
+            fi
+        done < "$out"
+
+        [[ $rc -eq 0 ]] && break
+        if [[ -z "$current" ]]; then
+            # gtest exits non-zero when a test failed normally; those are already
+            # recorded. Exiting before any test ran is a setup failure.
+            if [[ $((inv_passed + inv_failed + inv_skipped)) -eq 0 ]]; then
+                record_ttsim_result FAIL "$label" "process exited with status $rc before any test ran"
+                inv_failed=$((inv_failed + 1))
+            fi
+            break
+        fi
+        if [[ $hung -eq 1 ]]; then
+            record_ttsim_result FAIL "[$config] $group $current" "hung: no output for ${TTSIM_TEST_TIMEOUT}s"
+        else
+            crash_msg="$(grep -E 'ERROR' "$out" | tail -n 1 | cut -c1-200)"
+            record_ttsim_result FAIL "[$config] $group $current" "process exited with status $rc${crash_msg:+: $crash_msg}"
+        fi
+        inv_failed=$((inv_failed + 1))
+    done
+
+    [[ -n "$tmp_out" ]] && rm -f "$tmp_out"
+    echo "  RESULT: ${inv_passed} passed, ${inv_failed} failed, ${inv_skipped} skipped, ${part} process(es)"
+    if [[ $inv_failed -gt 0 && -n "$log_base" ]]; then
+        echo "  LOG: ${log_base}_part*.out"
+    fi
 }
 
 # Args after label are group/filter pairs. Gtest pairs share one group; pytest
@@ -969,14 +1166,17 @@ run_test_invocation() {
         fi
     fi
 
-    if [[ ! -d "$sim_path" ]]; then
+    if [[ "$SIM_KIND" == ttsim ]]; then
+        # Validated at startup; the same library serves every config.
+        export TT_METAL_SIMULATOR="$sim_path"
+    elif [[ ! -d "$sim_path" ]]; then
         echo "  SKIP: simulator path not found: $sim_path"
         skipped=$((skipped + 1))
         results+=("SKIP  $label  (simulator not found)")
         return
+    else
+        export TT_METAL_SIMULATOR="$sim_path/"
     fi
-
-    export TT_METAL_SIMULATOR="$sim_path/"
     apply_env_vars "$envvars"
     print_run_env
 
@@ -1031,6 +1231,15 @@ run_test_invocation() {
             log_stem="back2back_${run_num}"
         fi
     fi
+    if [[ "$SIM_KIND" == ttsim && "$runner" == "gtest" ]]; then
+        local ttsim_log_base=""
+        [[ -n "$LOG_DIR" ]] && ttsim_log_base="$LOG_DIR/${config}_${group_stem}_${log_stem}"
+        run_gtest_ttsim_resumable "$config" "$group" "$label" "$combined_filter" "$ttsim_log_base" \
+            "${gtest_repeat_args[@]}"
+        echo ""
+        return
+    fi
+
     local max_attempts=$((1 + EMU_HOSTNAME_MAX_RETRIES))
     local attempt=1
     local rc=0

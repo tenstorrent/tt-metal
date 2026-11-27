@@ -9,6 +9,8 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -62,6 +64,43 @@ inline bool detect_slow_dispatch() { return getenv("TT_METAL_SLOW_DISPATCH_MODE"
 
 // Host architecture from UMD (works before SetUp() fills arch_ on the fixture).
 inline tt::ARCH detect_arch() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()); }
+
+// Tests that ttsim cannot run. ttsim exits the whole process on functionality it does not
+// model, which would also end every test after this one in the same binary run, so these are
+// skipped up front. `test` is "<suite>.<name>" as gtest prints it (including any
+// instantiation prefix and parameter suffix); a trailing '*' matches by prefix.
+struct TtsimUnsupportedTest {
+    std::string_view test;
+    std::string_view reason;
+};
+
+inline constexpr TtsimUnsupportedTest kTtsimUnsupportedTests[] = {
+    {"LLKMeshDeviceFixture.TensixComputeDropout", "tensix_cfg_wr32 reg=82: the PRNG is out of scope"},
+    {"LLKMeshDeviceFixture.TensixComputeDropoutAfterFpuAdd", "tensix_cfg_wr32 reg=82: the PRNG is out of scope"},
+    // Never completes on ttsim v1.17.0; slow dispatch then waits for it forever.
+    {"LLKQuasarMeshDeviceSingleCardFixture.TensixComputeUnaryBroadcastQuasarDfb", "kernel hangs"},
+};
+
+// Reason the current test cannot run on ttsim, or empty when it can (or the target is not ttsim).
+inline std::string_view ttsim_unsupported_reason() {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().is_ttsim_simulator()) {
+        return {};
+    }
+    const auto* info = ::testing::UnitTest::GetInstance()->current_test_info();
+    if (info == nullptr) {
+        return {};
+    }
+    const std::string full_name = std::string(info->test_suite_name()) + "." + info->name();
+    for (const auto& entry : kTtsimUnsupportedTests) {
+        const bool matches = entry.test.ends_with('*')
+                                 ? std::string_view(full_name).starts_with(entry.test.substr(0, entry.test.size() - 1))
+                                 : full_name == entry.test;
+        if (matches) {
+            return entry.reason;
+        }
+    }
+    return {};
+}
 
 inline void log_dispatch_mode(bool slow_dispatch) {
     if (slow_dispatch) {
@@ -127,6 +166,9 @@ protected:
     static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
+        if (const auto reason = detail::ttsim_unsupported_reason(); !reason.empty()) {
+            GTEST_SKIP() << "Not supported on ttsim: " << reason;
+        }
         auto& s = shared_state();
         if (!s.initialized) {
             // Defensive — should never happen because SetUpTestSuite runs first.
@@ -180,6 +222,9 @@ protected:
     static void TearDownTestSuite() { shared_state().reset(); }
 
     void SetUp() override {
+        if (const auto reason = detail::ttsim_unsupported_reason(); !reason.empty()) {
+            GTEST_SKIP() << "Not supported on ttsim: " << reason;
+        }
         auto& s = shared_state();
         if (!s.initialized) {
             // Defensive — should never happen because SetUpTestSuite runs first.
