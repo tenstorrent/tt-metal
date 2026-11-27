@@ -9,8 +9,9 @@ The ablation arms need temporary guards in the kernels; the shipped kernels do n
 stubbed arms are skipped unless G6_ABLATION_GUARDS=1:
 - `#ifndef G6_ABLATE_READS` around the reader's noc_async_read calls (the barrier stays);
 - `#ifndef G6_ABLATE_COMPACT` around the coalesced reader's staging-to-slots copy loop;
-- `#ifndef G6_ABLATE_GATHER` around the writer's gather loop;
-- `#ifndef G6_ABLATE_WRITES` around the writer's noc_async_write.
+- `#ifndef G6_ABLATE_GATHER` around the writer's gather loop (and the transpose calls of the grouped path);
+- `#ifndef G6_ABLATE_WRITES` around the writer's noc_async_write (and noc_async_write_one_packet_with_trid
+  of the grouped path).
 Stubbed arms keep every CB handshake and barrier, and their output is not checked. Run under
 `scripts/run_safe_pytest.sh --profile --no-py-zones`. DO NOT DELETE.
 """

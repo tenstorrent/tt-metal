@@ -13,7 +13,8 @@ and cuts it into blocks of block_h units; the reader lands each input page in it
 writer gathers the [W, I * J] values of a unit into I * J output rows in L1, then writes them.
 blocks_rm_bank_coalesced differs in the read only: the pages of one bank are consecutive slots there,
 so the reader fetches each bank's pages of a block in one read of whole slots and copies the payloads
-into page order locally; the writer is the same.
+into page order locally. In both regimes the writer groups its writes on DRAM output the same way: the
+output pages of one bank for consecutive h are consecutive slots, written in one transaction.
 """
 
 from __future__ import annotations
@@ -41,6 +42,9 @@ DIMS = (0, 1, 4, 2, 5, 3)
 CB_INPUT_SLOTS = 0
 CB_OUTPUT_ROWS = 1
 CB_BANK_STAGING = 2
+
+# Largest single NoC packet (NOC_MAX_BURST_SIZE on Blackhole).
+NOC_MAX_BURST_BYTES = 16384
 
 # Buffer-depth knob of cb_input_slots; the allocated depth is min(INPUT_DEPTH, max_blocks_per_core).
 INPUT_DEPTH = 2
@@ -92,6 +96,15 @@ COMPACT_BATCH_WORDS = 8
 # Page pairs whose loads the writer's gather issues before storing them (1 walks pair by pair).
 # FLUX_74: 3558 -> 2144 cycles per block.
 GATHER_PAIR_BATCH = 8
+# Output placements in WRITE_GROUP_BUFFERS, and J must divide the bank count: up to this many
+# consecutive units of one (n, c) form a write group, whose output rows the writer stages bank by bank
+# and writes with one transaction per (i, bank) instead of one per row. None writes every row on its own.
+# FLUX_74 DRAM: 90.5 us ungrouped, 84.7 at 32 units, 83.4 at 64, 82.2 at 128. Into L1 output it loses
+# (FLUX_74 78.1 against 67.7 us): L1 banks take small writes cheaply.
+WRITE_GROUP_UNITS = 64
+WRITE_GROUP_BUFFERS = (ttnn.BufferType.DRAM,)
+# Write-group buffers: with 2 the gather fills one while the other's writes drain.
+WRITE_GROUP_DEPTH = 2
 
 
 @dataclass
@@ -124,6 +137,12 @@ class BlocksPlan:
     coalesced: bool = False
     staging_rounds: int = 0
     staging_depth: int = 0
+    # Grouped writes: units per group (0 writes each row on its own), buffers, slots per bank region,
+    # and the output's bank stride.
+    write_group_units: int = 0
+    write_group_depth: int = 0
+    group_slots: int = 0
+    out_slot_bytes: int = 0
     all_cores: object = None
     assignment: list = field(default_factory=list)  # [(CoreCoord, start_unit, num_units)]
 
@@ -146,6 +165,9 @@ def knob_key():
         COALESCED_BANK_STAGGER,
         COMPACT_BATCH_WORDS,
         GATHER_PAIR_BATCH,
+        WRITE_GROUP_UNITS,
+        WRITE_GROUP_BUFFERS,
+        WRITE_GROUP_DEPTH,
     )
 
 
@@ -189,6 +211,16 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     num_banks = ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks
     budget = L1_OP_BUDGET_BYTES - out_l1
 
+    num_cores, all_cores, units_g1, units_g2, assignment = split_units(worker_grid(input_tensor.device()), tensor_units)
+
+    # Grouped writes stage the output rows per group instead of per block.
+    write_group_units, write_group_depth, group_slots = _write_groups(
+        buffer_type, num_banks, H, J, out_bank_page_bytes, units_g1
+    )
+    if write_group_units:
+        budget -= write_group_depth * I * num_banks * group_slots * out_bank_page_bytes
+        unit_row_bytes = 0
+
     # Coalesced: cb_input_slots holds word-aligned payloads, and each stage of cb_bank_staging holds a
     # block's whole slots plus up to two partial bank rounds: NB * slot * rounds(n) <= slot * (n + 2 NB).
     page_stride = _align_up(in_page_bytes, 4)
@@ -208,8 +240,6 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
             f"{L1_OP_BUDGET_BYTES} B of L1 per core (output pages take {out_l1} B, one unit "
             f"{INPUT_DEPTH} x {pages_per_unit * slot_bytes} B of input slots + {unit_row_bytes} B of output rows)"
         )
-
-    num_cores, all_cores, units_g1, units_g2, assignment = split_units(worker_grid(input_tensor.device()), tensor_units)
 
     block_h = min(units_g1, block_cap)
     if block_pages_knob is not None:
@@ -265,9 +295,32 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
         coalesced=coalesced,
         staging_rounds=staging_rounds,
         staging_depth=staging_depth,
+        write_group_units=write_group_units,
+        write_group_depth=write_group_depth,
+        group_slots=group_slots,
+        out_slot_bytes=out_bank_page_bytes,
         all_cores=all_cores,
         assignment=assignment,
     )
+
+
+def _write_groups(buffer_type, num_banks, H, J, out_slot_bytes, units_per_core):
+    """(units per group, buffers, slots per bank region) of grouped writes, or (0, 0, 0). A group stays
+    inside one (n, c), and one (run, bank) write is one NoC packet."""
+    if WRITE_GROUP_UNITS is None or buffer_type not in WRITE_GROUP_BUFFERS or num_banks % J != 0:
+        return 0, 0, 0
+    units = min(WRITE_GROUP_UNITS, H, units_per_core)
+
+    def slots(units):
+        # A run starts at a bank that is a multiple of J, so at most at num_banks - J.
+        return (num_banks - J + units * J - 1) // num_banks + 1
+
+    while units > 1 and slots(units) * out_slot_bytes > NOC_MAX_BURST_BYTES:
+        units -= 1
+    if slots(units) * out_slot_bytes > NOC_MAX_BURST_BYTES:
+        return 0, 0, 0
+    depth = WRITE_GROUP_DEPTH if units < units_per_core else 1
+    return units, depth, slots(units)
 
 
 def _coalesced_reads(buffer_type, coalesced_cap):
@@ -358,7 +411,13 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
     N, C, H, W, I, J = plan.shape
     assert output_tensor.buffer_page_size() == plan.out_page_bytes
     unit_slot_bytes = W * I * plan.page_stride
-    unit_row_bytes = I * J * plan.out_row_bytes
+    if plan.write_group_units:
+        assert output_tensor.buffer_aligned_page_size() == plan.out_slot_bytes
+        rows_page_bytes = I * plan.num_banks * plan.group_slots * plan.out_slot_bytes
+        rows_bytes = plan.write_group_depth * rows_page_bytes
+    else:
+        rows_page_bytes = I * J * plan.out_row_bytes
+        rows_bytes = plan.block_h * rows_page_bytes
 
     cbs = [
         ttnn.CBDescriptor(
@@ -371,11 +430,11 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
             ],
         ),
         ttnn.CBDescriptor(
-            total_size=plan.block_h * unit_row_bytes,
+            total_size=rows_bytes,
             core_ranges=plan.all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
-                    buffer_index=CB_OUTPUT_ROWS, data_format=input_tensor.dtype, page_size=unit_row_bytes
+                    buffer_index=CB_OUTPUT_ROWS, data_format=input_tensor.dtype, page_size=rows_page_bytes
                 )
             ],
         ),
@@ -408,6 +467,11 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         plan.out_page_bytes,
         plan.out_row_bytes,
         GATHER_PAIR_BATCH,
+        plan.write_group_units,
+        plan.write_group_depth,
+        plan.num_banks,
+        plan.out_slot_bytes,
+        plan.group_slots,
         *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
     ]
 

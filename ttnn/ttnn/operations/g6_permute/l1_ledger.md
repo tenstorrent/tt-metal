@@ -1,6 +1,6 @@
 # L1 Ledger: g6_permute
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model. Built regimes: `rows_tile_scatter` (Phase 0), `blocks_rm_gather` (Refinement 1), `nhwc_tile_bfp8_transpose` (Refinement 2), `nhwc_rm_transpose` (Refinement 4). Every regime runs with buffer `"dram"` or `"l1"`; with `"l1"` the output's own pages on a core (`out_l1_bytes_per_core`) are subtracted from `L1_OP_BUDGET_BYTES` before the block or depth is sized.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model. Built regimes: `rows_tile_scatter` (Phase 0), `blocks_rm_gather` (Refinement 1), `nhwc_tile_bfp8_transpose` (Refinement 2), `nhwc_rm_transpose` (Refinement 4), `blocks_rm_bank_coalesced` (Refinement 5). Every regime runs with buffer `"dram"` or `"l1"`; with `"l1"` the output's own pages on a core (`out_l1_bytes_per_core`) are subtracted from `L1_OP_BUDGET_BYTES` before the block or depth is sized.
 
 ## CB ledger (`rows_tile_scatter`)
 
@@ -90,6 +90,51 @@ FLUX_74 and FLUX_73 (blocks of 4 units, depth 2): 32768 + 1024 = 33792 B per cor
 
 Core-local: every value moves once by RISC-V loads and stores (the gather). The read side is bound by the count of DRAM requests, not their bytes: each DRAM port retires one 4 B read per ~17 ns (`changelog.md`, Refinements 1 and 3). On DRAM input the reader sends half of each bank's reads through the NoC1 port of that bank, so 16 ports serve the 524288 FLUX_74 requests instead of 8. The crossings per tensor are unchanged.
 
+
+## CB ledger (`blocks_rm_bank_coalesced`)
+
+Same cell, unit, split and writer as `blocks_rm_gather`; the host selects it for DRAM and L1 input (`READ_MODE = "auto"`, `COALESCED_BUFFERS`). The reader reads each bank's pages of a block in one transaction of whole slots into `cb_bank_staging`, then copies the payloads into `cb_input_slots` in page order. On DRAM output the writer stages a write group's rows bank by bank in `cb_output_rows` and writes each (run `i`, bank) at once.
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_bank_staging` | `staging_depth` pages of `num_banks · staging_rounds · slot_bytes`, never pushed or popped (FLUX_74 DRAM: 1 × 8 × 32 × 64 B = 16384 B; L1: 1 × 110 × 20 × 16 B = 35200 B) | one block's whole slots, bank by bank, from the read until the copy | `{bank: spans → num_banks regions; round: spans → staging_rounds slots per region (a block that starts mid round needs one more); j: one page payload in a slot of slot_bytes, so local ≡ remote mod 64}` | Float16_b, dataflow-only | reader (NoC read) | reader (copy) | whole program | The reader's private landing area. Cannot be `cb_input_slots`: a slot is 16× a payload (DRAM), and the writer's gather wants page order at a word stride. Depth 1 is measured, not forced: with 2 stages the reads never pause and the NoC links into the far columns congest (FLUX_74: 116 µs against 89 µs) |
+| `cb_input_slots` | `min(input_depth, max_blocks_per_core) · block_h` pages of `W·I·page_stride`, `page_stride = align_up(J·2, 4)` (FLUX_74 DRAM: 2 × 4 × 256 B) | as `blocks_rm_gather`, at the payload stride instead of the slot stride | as `blocks_rm_gather`, `j: one payload per page_stride` | Float16_b | reader (copy) | writer (gather) | whole program | As `blocks_rm_gather` |
+| `cb_output_rows` (grouped writes) | `write_group_depth` pages of `I · num_banks · group_slots · out_slot_bytes`, never pushed or popped (FLUX_74 DRAM: 2 × 2 × 8 × 17 × 64 B = 34816 B) | the group being gathered plus, with depth 2, the group whose writes are draining | `{i: spans → I runs; bank: spans → num_banks regions; slot: group_slots per region, out_slot_bytes apart like the bank's pages; h, j: folded into the run (t = (h − h0)·J + j)}` | Float16_b | writer (gather) | writer (NoC write source) | whole program | The writer's private staging area. Cannot take the per-row layout: a (run, bank) write needs that bank's rows contiguous. Without grouped writes (L1 output, or `J ∤ num_banks`) it keeps the `blocks_rm_gather` layout |
+
+### Symbol table (`blocks_rm_bank_coalesced`)
+
+| Symbol | Bound | Established by |
+|--------|-------|----------------|
+| `block_h` | `min(units_per_core_g1, block_cap, ceil(COALESCED_BLOCK_PAGES[placement] / (W·I)))`, 256 pages on DRAM, 2048 in L1; FLUX_74: 4 (DRAM), 32 (L1) | host plan, single source |
+| `staging_rounds` | `(first_bank_max + block_h·W·I − 1) // num_banks + 1`, `first_bank_max = 0` when `W·I` is a multiple of `num_banks`, else `num_banks − 1` | every block starts at a unit boundary |
+| `staging_depth` | `min(STAGING_DEPTH = 1, max_blocks_per_core)` | host constant, measured |
+| `write_group_units` | `min(WRITE_GROUP_UNITS = 64, H, units_per_core_g1)` on DRAM output with `J | num_banks`, else 0; lowered until `group_slots · out_slot_bytes ≤ 16384` (one NoC packet per write) | host plan |
+| `group_slots` | `(num_banks − J + write_group_units·J − 1) // num_banks + 1` | a run starts at a multiple of `J`, so at most at bank `num_banks − J` |
+| `write_group_depth` | `WRITE_GROUP_DEPTH = 2` when a core has more units than one group, else 1 | host constant |
+| `block_cap` | `floor((budget − STAGING_DEPTH·2·num_banks·slot_bytes − write staging) / (input_depth·W·I·page_stride + unit_row_bytes + STAGING_DEPTH·W·I·slot_bytes))`, `unit_row_bytes = 0` with grouped writes; FLUX_74: 284 (DRAM), 739 (L1) | mechanism cap (BB-05) |
+
+### Total per-core footprint (`blocks_rm_bank_coalesced`)
+
+| Case | `cb_input_slots` | `cb_bank_staging` | `cb_output_rows` | Total |
+|------|------------------|-------------------|------------------|-------|
+| FLUX_74 DRAM | 2048 | 16384 | 34816 | 53248 B |
+| FLUX_74 L1 | 16384 | 35200 | 8192 | 59776 B + the output's own L1 pages |
+| FLUX_73 DRAM | 2048 | 16384 | 6144 | 24576 B |
+| FLUX_73 L1 | 4864 | 22880 | 4864 | 32608 B + the output's own L1 pages |
+
+## Data-movement budget (`blocks_rm_bank_coalesced`)
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| `x` | 1, whole 64 B slots: each bank's pages of a block in one read | each unit belongs to exactly one core; its slots are read once. The payload is 4 B of every 64 B slot, so the bytes are 16× the logical bytes, in `num_banks`–`2·num_banks` reads per block instead of one per page | 0 |
+| `out` | 1, whole 64 B slots: each (run `i`, bank) of a write group in one write (DRAM output) | each output row is gathered once, into its bank's slot of the group, and written once | 0 |
+
+| Case | Reads | Read bytes | Writes | Write bytes |
+|------|-------|------------|--------|-------------|
+| FLUX_74 DRAM | 19 blocks × 8–16 per core | 524288 × 64 B = 32 MiB | 2–3 groups × 2 runs × 8 banks = 32–48 per core, ≤ 1088 B each (was 300 × 64 B) | 2 MiB |
+| FLUX_73 DRAM | 5 blocks × 8–16 per core | 131072 × 64 B = 8 MiB | 1–2 groups × 2 runs × 8 banks per core | 512 KiB |
+
+Core-local: every payload moves twice by RISC-V loads and stores, the copy out of the staged slots and the gather. FLUX_74 DRAM reads alone take 71.2 µs of the 83.3 µs kernel (~508 GB/s, the DRAM peak), so the read bytes, not their count, bound it now.
 
 ## CB ledger (`nhwc_tile_bfp8_transpose`)
 

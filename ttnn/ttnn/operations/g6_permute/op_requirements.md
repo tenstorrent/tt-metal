@@ -116,7 +116,7 @@ Walking each block's pages bank-major (`p, p+8, p+16, …` share a bank) also le
 
 **Done when**: PANOPTIC_44 (golden) and L3 and L17 pass bit-exact; loud categories are all 0; every prior cell still passes.
 
-### [ ] Refinement 5 — FLUX profile: bank-coalesced reads
+### [x] Refinement 5 — FLUX profile: bank-coalesced reads
 
 **Type**: perf
 
@@ -130,3 +130,5 @@ The host selects between gather and coalesced by measured result, and `g6_permut
 - L0's `device_kernel_ns` improves by more than noise over Refinement 3's result;
 - the bit-exact gate holds and the golden suite is green;
 - nothing regresses across the config-spanning guard set (one representative per distinct kernel path × layout × placement).
+
+**Outcome**: L0 / FLUX_74 DRAM 554900 → **83545 ns** (−84.9 %; R3's gather in the same session 545233), FLUX_73 DRAM 144460 → 25486, FLUX_74 L1 141290 → 67718, FLUX_73 L1 38410 → 25233; Panoptic p4 unchanged (59219 / 87228 against 59226 / 87339). All bit-exact; golden ROW_MAJOR slice 7 / 7. Shipped: coalesced reads for DRAM and L1 input (256 / 2048 pages per block), load-batched staging copy and gather, one staging stage, and on DRAM output the writer twin, bank-grouped writes of 64 units (90.5 → 83.4 µs). Bottleneck now: the DRAM read bytes. Reads alone take 71.2 µs (~508 GB/s for 32 MiB of 64 B slots holding 2 MiB of payload); writes add 5.4 µs, the copies 5.4 µs, sync floor 5.2 µs. Two stages of staging lose once the copies are fast (116 µs): reads that never pause congest the NoC links into the far columns (x = 13–15). Next: fuse the staging copy into the gather (read payloads straight from the bank-ordered slots) to drop one RISC pass, and pace the reads with a per-core in-flight cap so two stages stop congesting; not tried because each changes the reader–writer contract and the read floor leaves at most ~12 µs.

@@ -316,3 +316,50 @@ def test_coalesced_in_l1_bit_exact(shape, device):
     actual = ttnn.to_torch(g6_permute(ttnn_input, BLOCKS))
     op_module._PROGRAM_CACHE.clear()
     _assert_bit_exact(actual, torch.permute(torch_input, BLOCKS).contiguous())
+
+
+# id, shape, write-group units, group buffers, other knobs. DRAM output, J dividing the 8 banks: groups
+# cut by the core's range and by (n, c) boundaries (H below the group size), runs starting mid bank
+# round, J = 1, 4 and 8, 128 B output slots (W = 33), one buffer, the gather read path, page-by-page
+# copies.
+FORCED_WRITE_GROUPS = [
+    ("flux73_g32", (1, 32, 64, 32, 2, 2), 32, 2, {}),
+    ("h5_groups_cut_by_nc", (2, 4, 5, 16, 3, 2), 4, 2, {}),
+    ("i4_j1_g7", (1, 3, 7, 24, 4, 1), 7, 2, {}),
+    ("j4_w33_slots128", (1, 2, 9, 33, 2, 4), 3, 1, {}),
+    ("j8_w40", (1, 2, 3, 40, 4, 8), 2, 2, {}),
+    ("gather_reads_g5", (2, 8, 37, 8, 3, 2), 5, 2, {"READ_MODE": "gather"}),
+    ("page_by_page_g16", (1, 32, 64, 32, 2, 2), 16, 2, {"COMPACT_BATCH_WORDS": 1, "GATHER_PAIR_BATCH": 1}),
+]
+
+
+@pytest.mark.parametrize(
+    "shape, group_units, group_depth, extra",
+    [c[1:] for c in FORCED_WRITE_GROUPS],
+    ids=[c[0] for c in FORCED_WRITE_GROUPS],
+)
+def test_forced_write_groups_bit_exact(shape, group_units, group_depth, extra, device, monkeypatch):
+    monkeypatch.setattr(regime_module, "WRITE_GROUP_UNITS", group_units)
+    monkeypatch.setattr(regime_module, "WRITE_GROUP_DEPTH", group_depth)
+    for name, value in extra.items():
+        monkeypatch.setattr(regime_module, name, value)
+    op_module._PROGRAM_CACHE.clear()
+    torch.manual_seed(19)
+    torch_input = _randn(shape)
+    plan = g6_permute_plan(_to_device(torch_input, device), BLOCKS)
+    assert 1 <= plan.write_group_units <= group_units
+    _permute_and_check(torch_input, device)
+    op_module._PROGRAM_CACHE.clear()
+
+
+def test_write_groups_need_j_dividing_banks(device, monkeypatch):
+    """J = 3 does not divide the 8 DRAM banks: a unit's rows would wrap past the last bank, so the
+    writer keeps one write per row."""
+    monkeypatch.setattr(regime_module, "WRITE_GROUP_UNITS", 8)
+    op_module._PROGRAM_CACHE.clear()
+    torch.manual_seed(23)
+    torch_input = _randn((1, 3, 5, 7, 3, 3))
+    plan = g6_permute_plan(_to_device(torch_input, device), BLOCKS)
+    assert plan.write_group_units == 0
+    _permute_and_check(torch_input, device)
+    op_module._PROGRAM_CACHE.clear()

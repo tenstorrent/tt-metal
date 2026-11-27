@@ -184,3 +184,68 @@
   - `test_g6_permute_nhwc_rm.py` (21 cases): p4 in L1 and DRAM, 10 other shapes, special values, negative dims, the plan report (including the 38 × 512 B output pages per core), program reuse, and 5 forced plans.
   - `test_g6_permute_nhwc_rm_perf.py`: the `BLOCK_W` sweep, run under `--profile`.
   - Unit regression net still green: `test_g6_permute_blocks_rm.py`, `test_g6_permute_nhwc_bfp8.py` (incl. FLUX in L1) and `test_g6_permute.py`, 82 / 82.
+
+## Refinement 5 — FLUX profile: bank-coalesced reads
+- Date: 2026-11-27
+- What was done:
+  - Regime `blocks_rm_bank_coalesced` is built and selected by measured result. `READ_MODE = "auto"` picks it for DRAM and L1 input (`COALESCED_BUFFERS`); `g6_permute_plan` reports `regime`, `coalesced`, the staging and the write-group plan. No SUPPORTED change.
+  - Reused: `blocks_rm_gather`'s reader, writer, plan, split and cache key. The interrupted earlier attempt of this refinement left the coalesced reader in the tree; it was reviewed, measured, kept and extended. Added, all host knobs in `knob_key()`:
+    - Reader (`coalesced` CT branch): each bank's pages of a block arrive in one read of whole slots (two when split over the NoCs) into the private `cb_bank_staging`. The reader then copies the payloads into `cb_input_slots` in page order at a 4 B stride. `COALESCED_BLOCK_PAGES` is per placement, 256 on DRAM and 2048 in L1; `STAGING_DEPTH = 1`.
+    - `COMPACT_BATCH_WORDS = 8` and `GATHER_PAIR_BATCH = 8`: the staging copy and the writer's gather issue a batch of loads before their stores (`std::integer_sequence`; DM kernels build at -Os, which does not unroll). FLUX_74 per block: copy 4356 → 1030 cycles, gather 3558 → 2144. `transpose_pages` gains a `pair_batch` template parameter, default 1, which the NHWC writer keeps.
+    - Writer twin, grouped writes (`WRITE_GROUP_UNITS = 64`, `WRITE_GROUP_DEPTH = 2`, DRAM output with `J | num_banks`). For a fixed `(n, c, i)`, consecutive `h` give consecutive output pages, so one bank's pages are consecutive slots. Up to 64 units of one `(n, c)` form a group. The gather places their rows bank by bank in `cb_output_rows`; the J rows of a `(unit, i)` sit one bank region apart and never wrap. Each (run `i`, bank) is then one write of whole slots. Two group buffers alternate, each with its own write transaction id. FLUX_74 goes from 300 × 64 B writes per core to 32–48 writes of ≤ 1088 B.
+- Device kernel time (Blackhole, 110 cores, one fresh-cache run each; final guard run in one session):
+
+  | Cell | R3 recorded | R3 gather, this session | Shipped | Change vs R3 |
+  |------|-------------|-------------------------|---------|--------------|
+  | L0 / FLUX_74 DRAM | 554900 | 545233 | **83545** | −84.9 % (6.6×) |
+  | FLUX_73 DRAM | 144460 | 142244 | **25486** | −82.4 % |
+  | FLUX_74 L1 | 141290 | 140964 | **67718** | −52.1 % |
+  | FLUX_73 L1 | 38410 | 37907 | **25233** | −34.3 % |
+  | Panoptic p4 L1 / DRAM (shares the reader and transpose) | 59226 / 87339 (R4) | — | 59219 / 87228 | unchanged |
+
+  `rows_tile_scatter` and `nhwc_tile_bfp8_transpose` are untouched.
+- Lever measurements (FLUX_74 DRAM unless noted, device kernel ns, ±3–5 % between sessions):
+
+  | Step | Setting | Kernel ns |
+  |------|---------|-----------|
+  | inherited coalesced reader | page-by-page copies, 2 stages, block 256 | 95405 – 100889 |
+  | | block 128 / 512 / 1024 | 101810 / 128100 / 123051 |
+  | batched copy only | 2 stages | 121770 – 122975 |
+  | | 2 stages + stagger / NoC0 only / block 128 | 123144 / 117638 / 110825 |
+  | | 1 stage | 91903 – 94657 |
+  | batched gather only | 2 stages, 4 / 8 pairs | 97344 / 98136 |
+  | batched copy + gather | 2 stages | 115881 – 116208 |
+  | | 1 stage | **89253** |
+  | + grouped writes | 8 / 16 / 32 / 48 / 64 / 128 units | 89849 / 86284 / 84681 / 83512 / **82900–83743** / 82156 |
+  | | 32 units, one buffer (two: 84681) | 86357 |
+  | | 64 units with 2 stages / block 512 / block 128 / NoC0 only | 83847 / 86291 / 93561 / 96781 |
+  | L1 input, coalesced | block 256 / 512 / 1024 / **2048** / 4096 | 188487 / 126726 / 72297 / **67720** / 91942 |
+  | | block 1024 / 2048 with 2 stages | 73379 / 73414 |
+  | | grouped writes into L1 output | 78067 (FLUX_73: 26623 against 25239) |
+
+- Bottleneck classification (ablation, every payload stubbed behind temporary guards, CB handshakes kept):
+  - Inherited reader (95.4 µs). Reads alone took 70.9 µs, the copies alone 69.2 µs, the writes alone 20.1 µs, and the sync floor was 4.9 µs. Zones showed the reader at 4355 cycles of copying per 256-page block against 443 cycles waiting on DRAM, so the RISC copies were binding.
+  - Faster copies with two stages make it slower. The reader then keeps reads in flight without a break, and the cores at x = 13–15 end 20–40 µs late. Their write issue rises 3300–4600 cycles per block against 1336 elsewhere, and their read barrier 2000+ cycles against 350: NoC congestion on the links into the far columns. One stage lets each core's reads pause during its copy, and the late columns disappear.
+  - Shipped plan (83.3 µs). Reads alone take 71.2 µs, 32 MiB at ~508 GB/s, the DRAM peak. Writes add 5.4 µs (11.5 µs before grouping), the copies 5.4 µs, sync floor 5.2 µs. The read bytes bound it now: every 4 B payload sits in its own 64 B DRAM slot.
+- Findings (remaining headroom, not filed as follow-ups):
+  - The `read_coalescing` bank-affinity arm does not apply. A unit's 64 input pages span all 8 banks, so a core reading one bank would need the other banks' pages of its units from other cores. Rotating each core's bank order (`COALESCED_BANK_STAGGER`) measured flat; it stays a live knob at `False`.
+  - Next levers:
+    1. Fuse the staging copy into the gather, reading payloads straight from the bank-ordered slots, to drop one RISC pass of 4800 words per core.
+    2. Cap the reads a core keeps in flight, so two stages stop congesting.
+  - Not tried: each changes the reader–writer contract, and the read floor leaves at most ~12 µs.
+  - L1 input stays on one NoC: the 2-NoC split loses there (Refinement 3).
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0, 0 differing bit patterns) on:
+  - FLUX_73 and FLUX_74 in DRAM and L1, and every sweep variant above (each checks bit for bit);
+  - every `test_g6_permute_blocks_rm.py` shape;
+  - 8 forced coalesced plans: blocks starting mid bank round, ragged blocks across `(n, c)`, fewer pages than banks, 2 B and 72 B pages, NoC shares 0 / 1/4 / 3/8, stagger, page-by-page and odd batches;
+  - coalesced L1 input on FLUX_73 and an odd-J shape;
+  - 7 forced write-group plans: groups cut by the core range and by `(n, c)`, J = 1 / 2 / 4 / 8, 128 B output slots (W = 33), one buffer, the gather read path, page-by-page copies;
+  - the `J ∤ num_banks` fallback.
+- Golden test progress: ROW_MAJOR slice 7 / 7 passed (FLUX_73, FLUX_74, loose L0 and L1; PANOPTIC_44, loose L3 and L17 on the shared reader and transpose). The other regimes' code is untouched; expected full suite unchanged at 32 / 32.
+- Issues encountered:
+  - The interrupted attempt left `test_plan_reports_regime` asserting `blocks_rm_gather` on DRAM; it now checks the coalesced plan, and a new test checks the gather plan. The forced gather tests pin `READ_MODE = "gather"` so they keep covering that path.
+  - `tracy-capture` crashed (exit 3) on most profiled runs, so no ops CSV was written. The device log is complete, so kernel time was taken from it: the span of the `*-KERNEL` zones of each program. It matched the CSV exactly on the runs that produced one.
+- Tests added:
+  - `test_g6_permute_blocks_rm.py`: `test_plan_reports_gather_regime`, `test_forced_coalesced_bit_exact` (8), `test_coalesced_in_l1_bit_exact` (2), `test_forced_write_groups_bit_exact` (7), `test_write_groups_need_j_dividing_banks`.
+  - `test_g6_permute_blocks_rm_perf.py`: coalesced, batch, staging, write-group and L1 block variants.
+  - `test_g6_permute_blocks_rm_ablation_debug.py`: copy and gather ablation arms.

@@ -6,7 +6,8 @@
 
 Regimes, selected on the host by (layout, canonical dims), each in DRAM or L1 (interleaved):
 - rows_tile_scatter: TILE bfloat16 rank 4, dims (0, 2, 1, 3);
-- blocks_rm_gather: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3);
+- blocks_rm_gather / blocks_rm_bank_coalesced: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3), one
+  read per input page or one read of whole slots per bank run (the host picks by placement);
 - nhwc_tile_bfp8_transpose: TILE bfloat8_b rank 4, dims (0, 3, 1, 2);
 - nhwc_rm_transpose: ROW_MAJOR bfloat16 rank 4, dims (0, 3, 1, 2).
 """
