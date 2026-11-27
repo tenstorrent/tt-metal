@@ -1,54 +1,40 @@
 # L1 Ledger: g6_expand
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axes: `src_col` (x pages; `image` and `tile_col` folded), `out_row` (out tile rows per image), `row_in_tile` (whole tile, never split). Regime: `column_group_broadcast` (`op_design.md`, Regimes).
 
-Block axes: `q` (x page = out tile column, images `n` folded in), `r` (out tile row), `i` (row inside a tile, fixed 32).
-
-## Buffers
+## CB ledger (per core, every core of the rectangle)
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_row_bcast_tiles` | `t_block_depth · block_pages` | `block_pages` while one block is loaded/replicated/published and written. `t_block_depth · block_pages` only when a group has more than one block (the injector fills block k+1 while block k is written). Production: 1 page. | `{q: spans → block_pages; r: streams → each resident page is written core_rows_tiles times from the same bytes, no capacity; i: spans → inside the page (32 rows, fixed by the tile)}` | `Float16_b` (bf16). A dataflow-only payload: no unpacker, DEST or packer touches it, so no DEST-width rule applies; the bytes move verbatim. | reader | writer | whole kernel; one slot per block | **Sole buffer — nothing to share with.** The x page read lands in it at its final offset (no staging buffer), the row replication is in place, the multicast sends from it and lands in it at the same address on receivers, and the writer writes out pages straight from it (no output buffer). |
+| `cb_expanded_tiles` | `src_block_depth · block_src_col_tiles` (page = `page_bytes`) | `block_src_col_tiles` pages: the whole block is live from `load_source_block` / `receive_block` until `store_block`'s last write is flushed. Capacity equals the live set at `src_block_depth = 1` (every production shape). At `src_block_depth = 2` the second block is the double-buffer window for the next block's read and multicast. | `{src_col: spans → block_src_col_tiles; out_row: streams → 0 (each E page is re-read from L1 for every out row; no out-row footprint); row_in_tile: spans → whole tile (page granularity); image: folded into src_col}` | input dtype (bf16, `Float16_b`). A dataflow-only payload that never passes through DEST, so the DEST-width audit has nothing to compare: the page is the byte image of x. | reader (sender: DRAM read + in-place expansion; receiver: multicast landing, credit owned by its reader) | writer | whole call (one block in production) | Only CB of the op, so nothing to alias. x pages land in it directly (Rule 3.1, no x staging CB) and are expanded in place (Rule 3.2, no separate E CB). The in-place step runs before `cb_push_back` on the producer thread, so the consumer never sees pre-expansion bytes. |
 
 ## Symbol table
 
-| Symbol | Bound | Predicate / source |
-|--------|-------|--------------------|
-| `page_bytes` | 2048 | bf16 32×32 tile; `x.buffer_aligned_page_size()`; TARGET dtype is bf16 only |
-| `group_pages_max` | `ceil(Q / num_groups)` | `select_plan` |
-| `block_pages` | `1 ≤ block_pages ≤ min(group_pages_max, floor(L1_OP_BUDGET / (t_block_depth · page_bytes)))` | `select_plan` clamp; production value 1 |
-| `t_block_depth` | `∈ {1, 2}`: 1 iff `ceil(group_pages_max / block_pages) == 1` | `select_plan`; production value 1 |
-| `L1_OP_BUDGET` | 1,347,776 B | model environment (BB-05) |
-| `core_rows_tiles` | `≤ ceil(Ht / row_splits)` | does not appear in any capacity (streams) |
+| Symbol | Bound | Predicate establishing it |
+|--------|-------|---------------------------|
+| `page_bytes` | 2048 | SUPPORTED dtype = bfloat16 and validate step 8 (32×32 tile) |
+| `core_src_col_tiles` | `ceil(S / min(S, grid_y))`, with `S = d_0·d_1·ceil(W/32)` | `select_plan`; production ≤ 2 |
+| `block_src_col_tiles` | `≤ min(core_src_col_tiles, floor(1347776 / (src_block_depth · page_bytes)))` = ≤ 658 at depth 1, ≤ 329 at depth 2 | `select_plan` clamp (BB-05) |
+| `src_block_depth` | ∈ {1, 2} | `select_plan`: 1 when `core_src_col_tiles · page_bytes ≤ 1347776`, else 2 |
+| `block_out_row_tiles` | `ceil(Hc / min(Hc, grid_x))`; appears in no capacity expression | `select_plan` |
+| semaphores (Mcast) | 2 per core (consumer-ready, data-ready), allocated by `Mcast.attach` in the semaphore region | fixed by the channel, independent of every knob |
 
 ## Total per-core footprint
 
-`L1_op = t_block_depth · block_pages · page_bytes` (+ two mcast semaphore words: data-ready, consumer-ready)
+`L1_op(core) = src_block_depth · block_src_col_tiles · page_bytes` (+ the channel's 2 semaphores, which live outside the CB region).
 
-- Scales with `block_pages` and `t_block_depth` only. Independent of `Ht`, `row_splits` and the core count; depends on `W` only through `group_pages_max` and is clamped.
-- Production (all five shapes): `1 · 1 · 2048 = 2048 B` per core, against a budget of 1,347,776 B.
+- It scales with `block_src_col_tiles` (the `src_col` extent knob) and `src_block_depth`; it does not scale with `out_row`, `num_row_groups`, `num_col_groups` or W beyond the clamp.
+- Production: W=512 → 1·2·2048 = **4096 B**; W=256, 196, 207, 185 → 1·1·2048 = **2048 B**; bound 1347776 B (BB-05) holds with 0.3 % used.
+- The clamp makes every shape fit: past it the core streams over `src_col` (more blocks), never refuses.
 
-## Audits
-
-| Audit | Result |
-|-------|--------|
-| 1 Capacity vs live set | Production: capacity = live set = 1 page. Multi-block groups: depth 2 is the pipelining reason (stated). Under: the live set spans `q` and capacity scales with `block_pages`. |
-| 2 Page format vs DEST | No DEST in the op (no compute kernel). `Float16_b` for a dataflow-only payload, which is the format of the bytes themselves. |
-| 3 Disjoint lifetimes | Single buffer; no pair exists. |
-| 4 Bounds and closed form | Every symbol above is bounded; the total is closed-form in `block_pages`, `t_block_depth`, `page_bytes`. |
-
-## Data-movement budget (chosen split: `column_group_bcast`)
+## Data-movement budget (`column_group_broadcast`, Phase 0 plan)
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x | 1 — each page read once, by its group's injector, as a whole 2048 B page (64 B logical) | Groups partition `q`. Receivers get the built page over the NoC instead of re-reading DRAM. | `(row_splits − 1) · page_bytes` per x page: one 1-D multicast down the strip, plus one data-ready flag multicast and `row_splits − 1` ready-ack increments per block |
-| out | 1 — each page written once, by the one core owning `(q, r)` | The built page stays resident while all `core_rows_tiles` copies are written | none |
+| x (`input_tensor`) | 1 — each x page read once, by its column group's sender (W=512: 16 pages, 32 KB; W=256: 8 pages, 16 KB; W=196/207: 7 pages, 14 KB; W=185: 6 pages, 12 KB) | the expanded tiles stay resident in the group's CBs and are delivered by multicast instead of re-read; a core writing several out rows re-reads E from L1, not DRAM | per group per block: one multicast of `block_src_col_tiles · 2 KB` to `num_row_groups − 1` receivers, `num_row_groups − 1` ready increments, 1 flag multicast. W=512: 8 × 4 KB to 7 receivers each = 224 KB delivered (32 KB injected); W=256: 8 × 2 KB × 7 = 112 KB; W=196/207: 7 × 2 KB × 6 = 84 KB; W=185: 6 × 2 KB × 5 = 60 KB |
+| out | 1 — each out page written once, by exactly one core, as a whole 2 KB page (W=512: 256 pages, 512 KB; W=256: 64 pages, 128 KB; W=196/207: 49 pages, 98 KB; W=185: 36 pages, 72 KB) | out is never read; no intermediate tensor touches DRAM | none |
+| E (intermediate, L1 only) | 0 | built in place inside `cb_expanded_tiles` | sender-local NoC self-reads ≈ 1.9 KB per E tile (fan-out 896 B at `seed_rows = 2` + lower faces 1024 B) |
 
-| W | x DRAM read | out DRAM write | NoC multicast delivered |
-|---|-------------|----------------|-------------------------|
-| 512 | 32 KiB | 512 KiB | 128 KiB (16 pages × 4 receivers) |
-| 256 | 16 KiB | 128 KiB | 112 KiB (8 × 7) |
-| 207, 196 | 14 KiB | 98 KiB | 84 KiB (7 × 6) |
-| 185 | 12 KiB | 72 KiB | 60 KiB (6 × 5) |
+Totals per call, W=512 (the PERF FOCUS case): DRAM 32 KB read + 512 KB written = 544 KB, which is the minimum (each tensor crosses once); NoC 32 KB multicast-injected (224 KB delivered) + ≈ 30 KB of sender-local self-reads.
 
-> Cheapest-traffic split considered: `q`-only (`row_splits = 1`, one core per group writing all `Ht` rows). Same DRAM bytes per tier, 0 NoC bytes (saves the last column above). Implemented: `column_group_bcast`, whose `row_splits = 1` setting **is** that split — built and test-pinned, not deferred. Phase 0's default `row_splits > 1` deliberately trades those NoC bytes, on the cheapest non-local tier, for write-issue parallelism and a core count chosen by the plan instead of by `Q` (blocking-model §4: an explicit trade, stated). Perf lamp L1 measures it.
+> Cheapest-traffic split considered: `src_col` only (`num_row_groups = 1`, column owners) — same DRAM bytes (x once, out once), 0 cross-core bytes (−224 KB delivered / −32 KB injected at W=512, −56 ready increments, −8 flags). Implemented: `column_group_broadcast`; its `num_row_groups = 1` setting **is** that split (same kernels, channel absent), so the cheapest split is not deferred but reachable by the knob alone. Phase 0 defaults to the full-grid `num_row_groups` because the spec requires the core count to be the blocking decision's choice rather than the `S`-column limit (6–16 cores), and the op is DRAM-write-bound with out ≈ 16× x. Lamp L1 (`op_design.md`) measures `num_row_groups ∈ {1, 2, 4, full}`.
