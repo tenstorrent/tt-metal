@@ -11,7 +11,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d.hpp"
 

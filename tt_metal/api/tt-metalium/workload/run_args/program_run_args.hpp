@@ -22,8 +22,8 @@
 #include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/workload/utils/group.hpp>
 #include <tt-metalium/workload/utils/table.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 

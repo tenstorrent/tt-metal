@@ -4,8 +4,8 @@
 
 #include "running_statistics_device_operation.hpp"
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

@@ -7,8 +7,8 @@
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
-#include <core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp"
@@ -29,7 +29,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
@@ -40,7 +40,8 @@
 #include <tt-umd/firmware/firmware_utils.hpp>
 #include <tt-umd-workload/simulation/simulation_chip.hpp>
 #include <tt-umd/tt_device/tt_device.hpp>
-#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/chip_helpers/system_memory_allocator.hpp>
+#include <tt-umd/tt_device/protocol/pcie_interface.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/cluster_types.hpp>
@@ -370,9 +371,8 @@ void Cluster::initialize_device_drivers() {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
             ChipId mmio_id = *mmio_ids.begin();
-            auto* pci = this->driver_->get_chip(mmio_id)->get_tt_device()->get_pci_device();
-            if (pci) {
-                this->iommu_enabled_ = pci->is_iommu_enabled();
+            if (auto* allocator = this->driver_->get_chip(mmio_id)->get_system_memory_allocator()) {
+                this->iommu_enabled_ = allocator->is_user_buffer_mapping_supported();
             }
             // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
             // IOMMU and KMD version gate here.
@@ -528,10 +528,10 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
                 .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
+                .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
@@ -550,8 +550,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
     } else if (this->target_type_ == TargetDevice::Emule) {
 #ifdef TT_METAL_USE_EMULE
@@ -560,8 +560,8 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::SWEMULE,
-            .sdesc_path = sdesc_path,
             .cluster_descriptor = mock_cluster_desc.get(),
+            .topology_discovery_options = {.soc_descriptor_path = sdesc_path},
         });
 #else
         TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
@@ -863,11 +863,11 @@ std::optional<int> Cluster::get_physical_slot(ChipId chip) const {
         log_warning(tt::LogDevice, "get_physical_slot is not supported for non-silicon devices");
         return std::nullopt;
     }
-    umd::PCIDevice* pci_device = this->driver_->get_tt_device(chip)->get_pci_device();
-    if (pci_device == nullptr) {
+    auto* pcie_interface = this->driver_->get_tt_device(chip)->get_pcie_interface();
+    if (pcie_interface == nullptr) {
         return std::nullopt;
     }
-    return pci_device->get_device_info().physical_slot;
+    return pcie_interface->get_physical_slot();
 }
 
 void Cluster::deassert_risc_reset_at_core(

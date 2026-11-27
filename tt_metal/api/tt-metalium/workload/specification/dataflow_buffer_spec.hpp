@@ -10,8 +10,8 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/workload/specification/tensor_parameter.hpp>
-#include <tt-metalium/tile.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
+#include <tt-metalium/data_formats/tile.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>  // tt::DataFormat
 #include <tt_stl/strong_type.hpp>
 
 // ============================================================================

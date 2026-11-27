@@ -9,8 +9,8 @@
 // delivered entry:
 //   1. pipe.wait_front(1)
 //   2. read this receiver's expected tile range from the source tensor via TensorAccessor
-//   3. compare expected vs received; on mismatch DPRINT details and hang so the dispatch timeout
-//      surfaces the core
+//   3. compare expected vs received, every compare_word_stride'th word; on mismatch DPRINT details
+//      and hang so the dispatch timeout surfaces the core
 //   4. pipe.pop_front(1)
 //
 // Differences from the GlobalCircularBuffer validator:
@@ -44,6 +44,9 @@ void kernel_main() {
     // groups set in group_mask: every group, or those a group selector picked.
     constexpr uint32_t num_groups = get_arg(args::num_groups);
     constexpr uint32_t group_mask = get_arg(args::group_mask);
+    // 1 compares every word of each block. Each compare reads both words uncached on Quasar, so a test with large
+    // blocks on a slow simulator may compare a sample.
+    constexpr uint32_t compare_word_stride = get_arg(args::compare_word_stride);
 
     // ---- Runtime args ----
     // The host derives n_col_start (= ring_pos * n_per_recv_tiles) and total_n_tiles from the
@@ -109,7 +112,8 @@ void kernel_main() {
                     n_per_recv_tiles,
                     group * group_pages);
 
-                const uint32_t mismatch_word = prefetcher_validator::first_mismatching_word(page, scratch, page_bytes);
+                const uint32_t mismatch_word =
+                    prefetcher_validator::first_mismatching_word(page, scratch, page_bytes, compare_word_stride);
                 if (mismatch_word != prefetcher_validator::kNoMismatch) {
                     DPRINT(
                         "PIPE_VALIDATOR_MISMATCH layer={} group={} blk={} bank={} recv_idx={} word={} got=0x{:x} "

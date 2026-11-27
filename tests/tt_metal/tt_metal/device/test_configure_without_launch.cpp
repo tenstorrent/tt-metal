@@ -14,10 +14,10 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "device_fixture.hpp"
 #include "impl/program/slow_dispatch.hpp"

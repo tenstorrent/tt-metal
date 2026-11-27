@@ -28,6 +28,7 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "hostdev/fabric_edm_packet_header.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/fabric2d_common/kernels/fabric2d_launch_credit.hpp"
 #include "dispatch_fabric2d_sender_ct_args.hpp"
 
 // Forwarded pages between arrival bumps to the downstream reader, per channel. With the section split by
@@ -174,30 +175,6 @@ struct Courier {
 };
 
 Courier courier;
-
-// Tell the chip across the cable that this chip has started the launch. Its sender on the stream back toward
-// us waits for this before it writes to us. Being in this launch means every kernel of this op's previous
-// launch on this chip, our readers included, has finished: a launch's go signal waits for every core of its
-// sub-device to finish the one before.
-//
-// Sent before this kernel waits on the reader or on any other chip, so the credit never depends on this
-// launch making progress.
-template <typename FabricSender>
-void grant_launch_credit(FabricSender& fabric) {
-    volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
-    hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        get_noc_addr(ct.credit_noc_x, ct.credit_noc_y, ct.launch_credit_addr), /*val=*/1, /*flush=*/true});
-    fabric.wait_for_empty_write_slot();
-    fabric.send_payload_flush_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
-}
-
-// Wait until the chip across the cable has started this launch, then take its credit. Taken by subtracting
-// one rather than by zeroing: that chip can start the next launch, and grant the next credit, while this
-// one is still running.
-void take_launch_credit() {
-    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.launch_credit_addr), 1);
-    noc_semaphore_inc(get_noc_addr(ct.launch_credit_addr), 0u - 1u);
-}
 
 // Blocks until the reader has announced at least one entry beyond `sent`, then reports how many.
 //
@@ -375,13 +352,14 @@ void kernel_main() {
     auto& fabric = fabric_connections.get(0).sender;
 
     prebuild_routes();
-    grant_launch_credit(fabric);
+    fabric2d::grant_launch_credit(
+        fabric, ct.pkt_hdr_signal_addr, ct.credit_noc_x, ct.credit_noc_y, ct.launch_credit_addr);
     uint32_t no_bumps[dspf2d::MAX_VCS] = {};
     // Once per launch, so the credits stay in step with the launches: every stream has at least its CMD_END
     // entry. The reader publishes its first entry only after building its tables, so the credit has usually
     // arrived by the time this wait starts.
     wait_for_filled(fabric, 0, no_bumps);
-    take_launch_credit();
+    fabric2d::take_launch_credit(ct.launch_credit_addr);
     pump_stream(fabric);
     // Before the drain, which fills every free write slot the channel has and would leave no room to post a
     // credit until it is done.

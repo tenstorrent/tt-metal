@@ -51,6 +51,9 @@ add_subdirectory(isin)
 add_subdirectory(minimal_matmul)
 add_subdirectory(rgb_to_yuv)
 
+# mstaletovic (named individual): the MoE block's prefill ops
+add_subdirectory(moe_block)
+
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
 # these in.
@@ -69,17 +72,16 @@ add_subdirectory(deepseek_moe_post_combine_tilize)
 add_subdirectory(dropout)
 add_subdirectory(fft)
 add_subdirectory(fused_msda)
+add_subdirectory(gdn)
 add_subdirectory(modulated_deform_conv2d)
 add_subdirectory(multi_scale_deformable_attn)
-add_subdirectory(nomic_embed_text_v2_moe/routed_combine)
-add_subdirectory(nomic_embed_text_v2_moe/grouped_matmul)
-add_subdirectory(nomic_embed_text_v2_moe/routing_metadata)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
 add_subdirectory(tensor_prefetcher)
 add_subdirectory(test)
 add_subdirectory(topk_router_gpt)
+add_subdirectory(untilize_and_split_heads)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -110,6 +112,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::RgbToYuv
+        TTNN::Ops::Experimental::MoEBlock
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::BcastTo
@@ -122,17 +125,16 @@ target_link_libraries(
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::FFT
         TTNN::Ops::Experimental::FusedMSDA
+        TTNN::Ops::Experimental::GDN
         TTNN::Ops::Experimental::ModulatedDeformConv2d
         TTNN::Ops::Experimental::MultiScaleDeformableAttn
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul
-        TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Experimental::TopkRouterGpt
+        TTNN::Ops::Experimental::UntilizeAndSplitHeads
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -168,6 +170,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::RgbToYuv>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEBlock>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
@@ -182,13 +185,11 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::FusedMSDA>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::ModulatedDeformConv2d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutedCombine>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::GroupedMatmul>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::NomicEmbedTextV2Moe::RoutingMetadata>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::UntilizeAndSplitHeads>
 )

@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operation.hpp"
 #include "kernels/sparse_push_constants.hpp"
 

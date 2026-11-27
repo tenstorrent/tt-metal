@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include "tt-metalium/mesh_event.hpp"
+#include "tt-metalium/execution/mesh_event.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
-#include "tt-metalium/device.hpp"
-#include "tt-metalium/sub_device_types.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 
 namespace ttnn {
 

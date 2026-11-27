@@ -1,10 +1,15 @@
 ## VADv2
 
-TTNN port of **VADv2** — the probabilistic-planning successor to VAD
-(*Vectorized Scene Representation for Efficient Autonomous Driving*). The model
-takes multi-camera images, lifts them into a Bird's-Eye-View (BEV) feature map,
-and jointly predicts object detection, vectorized map elements, agent motion,
-and the ego trajectory. This port targets the **Tiny** variant.
+TTNN port of **VAD** (*Vectorized Scene Representation for Efficient Autonomous
+Driving*), **Tiny** variant. The model takes multi-camera images, lifts them into
+a Bird's-Eye-View (BEV) feature map, and jointly predicts object detection,
+vectorized map elements, agent motion, and the ego trajectory.
+
+Despite the directory name, this is VAD v1: the reference follows
+`projects/mmdet3d_plugin/VAD/` (`VADHead`) of
+[hustvl/VAD](https://github.com/hustvl/VAD) with the `VAD_tiny_e2e` config. The
+planner regresses one trajectory per driving command (`ego_fut_mode=3`); it is not
+the probabilistic planner of VADv2 (`VADv2/VADv2_head.py`).
 
 ## Supported platforms
 - Wormhole (n150, n300)
@@ -20,8 +25,9 @@ bash models/experimental/vadv2/weights_download.sh
 ```
 
 This fetches `weights.zip` via `gdown`, unzips it into
-`models/experimental/vadv2/`, and cleans up. The reference PyTorch dumps used
-for PCC checks live in `models/experimental/vadv2/reference/dumps/`.
+`models/experimental/vadv2/`, and cleans up. The PCC tests run the PyTorch
+reference first; it writes its outputs to `models/experimental/vadv2/reference/dumps/`
+(not checked in), and the TTNN outputs are compared against them.
 
 ## How to Run
 
@@ -56,6 +62,7 @@ regression before running the full model:
 | `tests/pcc/test_tt_spatial_cross_attention.py` | Spatial Cross-Attention (SCA) | 0.99 |
 | `tests/pcc/test_tt_transformer.py` | Perception transformer (BEV encoder + decoders) | 0.98–0.99 |
 | `tests/pcc/test_tt_head.py` | `TtVADHead` (detection / map / motion / planning) | 0.98–0.99 |
+| `tests/pcc/test_tt_mha.py` | Multi-head attention with a key padding mask | 0.99 |
 | `tests/pcc/test_tt_vad.py` | Full model, all 9 output keys | per-key (see below) |
 
 ## Architecture

@@ -6,28 +6,29 @@
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_host_buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/memory/buffer/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <benchmark/benchmark.h>
 #include "context/metal_context.hpp"
-#include "mesh_coord.hpp"
+#include "tt-metalium/vocabulary/mesh_coord.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "perf/perf_contract_benchmark.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -488,6 +489,11 @@ int main(int argc, char** argv) {
         }
     }
 
+    // The devices stay open for the whole run, so AICLK read here is the clock every case runs at.
+    const auto& cluster = MetalContext::instance().get_cluster();
+    tt::perf::add_run_context("aiclk_mhz", std::to_string(cluster.get_device_aiclk(0)));
+    tt::perf::add_run_context("iommu", cluster.is_iommu_enabled() ? "on" : "off");
+    tt::perf::declare_metric("bytes_per_second", {"B/s", tt::perf::Better::Higher, tt::perf::Aggregate::Median});
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
 

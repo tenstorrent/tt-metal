@@ -4,8 +4,8 @@
 
 #include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_tile_mean.hpp"
 #include "moreh_group_norm_device_operation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 

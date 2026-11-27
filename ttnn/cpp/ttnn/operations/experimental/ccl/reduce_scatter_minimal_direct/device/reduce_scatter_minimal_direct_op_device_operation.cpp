@@ -10,7 +10,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 
 #include <algorithm>
 
@@ -258,7 +258,7 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
         "reduce_scatter_minimal_direct requires an explicit cluster_axis on a {} mesh: with both extents "
         "greater than one there is no single implied ring axis",
         mesh_shape);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};
