@@ -4,133 +4,120 @@
 
 #pragma once
 
-// Shared by the g6_slice reader and writer: CT-arg layout, common-RT-arg layout, the output-page
-// walker over the canonical (D0, D1, H, W) index space, and the in-tile byte geometry.
+// Tile geometry and the face-row run lists shared by the g6_slice reader and writer.
+//
+// A 32x32 tile is four 16x16 faces stored face-major (0: rows 0-15 cols 0-15, 1: rows 0-15
+// cols 16-31, 2: rows 16-31 cols 0-15, 3: rows 16-31 cols 16-31), each face row-major. A run of
+// consecutive tile rows in one column half is therefore contiguous only while it stays inside one
+// face; the builders below split there and merge whatever ends up contiguous again (a whole half
+// tile is one run, a whole tile is one run).
+//
+// Run lists depend only on (row offset, rows in the tile), so the kernels build them once per row
+// class at kernel start, never per page.
 
-#include <cstdint>
-
-#include "api/dataflow/dataflow_api.h"
+#include <stdint.h>
 
 namespace g6_slice {
 
-constexpr uint32_t TILE = 32;
-constexpr uint32_t FACE = 16;
+constexpr uint32_t TILE_ROWS = 32;
+constexpr uint32_t TILE_COLS = 32;
+constexpr uint32_t FACE_ROWS = 16;
+constexpr uint32_t LEFT_HALF = 1u << 0;
+constexpr uint32_t RIGHT_HALF = 1u << 1;
+constexpr uint32_t BOTH_HALVES = LEFT_HALF | RIGHT_HALF;
 
-// Mirrors REGIME_* in g6_slice_program_descriptor.py.
-constexpr uint32_t REGIME_PAGE_COPY = 0;
-constexpr uint32_t REGIME_ROW_SHIFT = 1;
-constexpr uint32_t REGIME_ELEMENT_SHIFT = 2;
+// One 16-row segment x two column halves.
+constexpr uint32_t MAX_BAND_RUNS = 4;
+// [0, rv) splits where the output row crosses 16 or the staging row crosses 16 or wraps at 32:
+// at most four pieces, two column halves each.
+constexpr uint32_t MAX_STORE_RUNS = 8;
 
-// CT args shared by both kernels; TensorAccessorArgs follow at CT_ACCESSOR_OFFSET.
-constexpr uint32_t cb_staged_tiles = get_compile_time_arg_val(0);
-constexpr uint32_t cb_assembled_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t block_pages = get_compile_time_arg_val(2);
-constexpr uint32_t regime = get_compile_time_arg_val(3);
-constexpr uint32_t sources_per_output = get_compile_time_arg_val(4);
-constexpr bool needs_right_any = get_compile_time_arg_val(5) != 0;
-constexpr bool needs_below_any = get_compile_time_arg_val(6) != 0;
-constexpr uint32_t page_bytes = get_compile_time_arg_val(7);
-constexpr uint32_t element_bytes = get_compile_time_arg_val(8);
-constexpr uint32_t CT_ACCESSOR_OFFSET = 9;
+template <uint32_t page_bytes>
+struct TileGeometry {
+    static constexpr uint32_t face_bytes = page_bytes / 4;
+    static constexpr uint32_t face_row_bytes = face_bytes / FACE_ROWS;
 
-constexpr uint32_t stencil_cols = needs_right_any ? 2 : 1;
-constexpr uint32_t stencil_rows = needs_below_any ? 2 : 1;
-static_assert(
-    sources_per_output == (regime == REGIME_PAGE_COPY   ? 1
-                           : regime == REGIME_ROW_SHIFT ? stencil_rows
-                                                        : stencil_cols * stencil_rows),
-    "sources_per_output disagrees with the regime's stencil");
-static_assert(regime != REGIME_PAGE_COPY || (!needs_right_any && !needs_below_any));
-static_assert(regime != REGIME_ROW_SHIFT || !needs_right_any);
-
-// Staged-block quantum: every reserve/push/wait/pop moves the nominal block, ragged last block
-// included, so a depth-2 ring wraps exactly at its end.
-constexpr uint32_t staged_block_pages = sources_per_output * block_pages;
-
-// Face-row and face bytes of one tile page.
-constexpr uint32_t face_row_bytes = FACE * element_bytes;
-constexpr uint32_t face_bytes = FACE * face_row_bytes;
-
-// Byte offset of row `r`, column half `c`, inside one tile page.
-FORCE_INLINE uint32_t row_byte(uint32_t r, uint32_t c) {
-    return ((r >= FACE ? 2 : 0) + c) * face_bytes + (r % FACE) * face_row_bytes;
-}
-
-FORCE_INLINE uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
-
-// Common RT args (COMMON_ARG_FIELDS in g6_slice_program_descriptor.py).
-struct Geometry {
-    uint32_t tensor_addr;
-    uint32_t M_D1, out_h_tiles, out_w_tiles;
-    uint32_t N_D1, in_h_tiles, in_w_tiles;
-    uint32_t b_D0, b_D1, hb, wb;
-    uint32_t row_offset, col_offset;
-    uint32_t M_H, M_W;
-
-    static Geometry load() {
-        Geometry g;
-        uint32_t i = 0;
-        g.tensor_addr = get_common_arg_val<uint32_t>(i++);
-        g.M_D1 = get_common_arg_val<uint32_t>(i++);
-        g.out_h_tiles = get_common_arg_val<uint32_t>(i++);
-        g.out_w_tiles = get_common_arg_val<uint32_t>(i++);
-        g.N_D1 = get_common_arg_val<uint32_t>(i++);
-        g.in_h_tiles = get_common_arg_val<uint32_t>(i++);
-        g.in_w_tiles = get_common_arg_val<uint32_t>(i++);
-        g.b_D0 = get_common_arg_val<uint32_t>(i++);
-        g.b_D1 = get_common_arg_val<uint32_t>(i++);
-        g.hb = get_common_arg_val<uint32_t>(i++);
-        g.wb = get_common_arg_val<uint32_t>(i++);
-        g.row_offset = get_common_arg_val<uint32_t>(i++);
-        g.col_offset = get_common_arg_val<uint32_t>(i++);
-        g.M_H = get_common_arg_val<uint32_t>(i++);
-        g.M_W = get_common_arg_val<uint32_t>(i++);
-        return g;
+    static constexpr uint32_t row_offset(uint32_t row, uint32_t half) {
+        return ((row / FACE_ROWS) * 2 + half) * face_bytes + (row % FACE_ROWS) * face_row_bytes;
     }
-
-    // Rows / columns of output tile (i, j) that hold logical output elements.
-    uint32_t valid_rows(uint32_t i) const { return min_u32(TILE, M_H - TILE * i); }
-    uint32_t valid_cols(uint32_t j) const { return min_u32(TILE, M_W - TILE * j); }
-    bool needs_below(uint32_t i) const { return needs_below_any && row_offset + valid_rows(i) > TILE; }
-    bool needs_right(uint32_t j) const { return needs_right_any && col_offset + valid_cols(j) > TILE; }
 };
 
-// Walks the flat output-page index row-major over (o0, o1, i, j) and tracks the source page A(p).
-struct OutPageWalker {
-    const Geometry& g;
-    uint32_t o0, o1, i, j;
-    uint32_t row_base;  // A of (o0, o1, i, j = 0)
+// Byte runs of tile rows [row_begin, row_end) in the column halves of `half_mask`, at their natural
+// in-tile offsets (the DRAM read source and the L1 staging destination share the offset).
+struct BandRuns {
+    uint32_t count = 0;
+    uint32_t offset[MAX_BAND_RUNS];
+    uint32_t bytes[MAX_BAND_RUNS];
 
-    OutPageWalker(const Geometry& geometry, uint32_t page) : g(geometry) {
-        j = page % g.out_w_tiles;
-        page /= g.out_w_tiles;
-        i = page % g.out_h_tiles;
-        page /= g.out_h_tiles;
-        o1 = page % g.M_D1;
-        o0 = page / g.M_D1;
-        rebase();
-    }
-
-    void rebase() {
-        row_base = (((g.b_D0 + o0) * g.N_D1 + g.b_D1 + o1) * g.in_h_tiles + g.hb + i) * g.in_w_tiles + g.wb;
-    }
-
-    uint32_t source_page() const { return row_base + j; }
-
-    void advance() {
-        if (++j < g.out_w_tiles) {
+    void append(uint32_t run_offset, uint32_t run_bytes) {
+        if (count > 0 && offset[count - 1] + bytes[count - 1] == run_offset) {
+            bytes[count - 1] += run_bytes;
             return;
         }
-        j = 0;
-        if (++i == g.out_h_tiles) {
-            i = 0;
-            if (++o1 == g.M_D1) {
-                o1 = 0;
-                ++o0;
-            }
-        }
-        rebase();
+        offset[count] = run_offset;
+        bytes[count] = run_bytes;
+        ++count;
     }
 };
+
+template <uint32_t page_bytes>
+BandRuns make_band_runs(uint32_t row_begin, uint32_t row_end, uint32_t half_mask) {
+    using Geometry = TileGeometry<page_bytes>;
+    BandRuns runs;
+    for (uint32_t segment_begin = row_begin; segment_begin < row_end;) {
+        const uint32_t face_end = (segment_begin / FACE_ROWS + 1) * FACE_ROWS;
+        const uint32_t segment_end = row_end < face_end ? row_end : face_end;
+        const uint32_t segment_bytes = (segment_end - segment_begin) * Geometry::face_row_bytes;
+        for (uint32_t half = 0; half < 2; ++half) {
+            if (half_mask & (1u << half)) {
+                runs.append(Geometry::row_offset(segment_begin, half), segment_bytes);
+            }
+        }
+        segment_begin = segment_end;
+    }
+    return runs;
+}
+
+// Output rows [0, rows_in_tile) of a page, taken from staging rows (i + row_offset) mod 32.
+struct StoreRuns {
+    uint32_t count = 0;
+    uint32_t src_offset[MAX_STORE_RUNS];
+    uint32_t dst_offset[MAX_STORE_RUNS];
+    uint32_t bytes[MAX_STORE_RUNS];
+
+    void append(uint32_t src, uint32_t dst, uint32_t run_bytes) {
+        if (count > 0 && src_offset[count - 1] + bytes[count - 1] == src &&
+            dst_offset[count - 1] + bytes[count - 1] == dst) {
+            bytes[count - 1] += run_bytes;
+            return;
+        }
+        src_offset[count] = src;
+        dst_offset[count] = dst;
+        bytes[count] = run_bytes;
+        ++count;
+    }
+};
+
+template <uint32_t page_bytes>
+StoreRuns make_store_runs(uint32_t row_offset, uint32_t rows_in_tile) {
+    using Geometry = TileGeometry<page_bytes>;
+    StoreRuns runs;
+    for (uint32_t out_row = 0; out_row < rows_in_tile;) {
+        const uint32_t staging_row = (out_row + row_offset) % TILE_ROWS;
+        uint32_t rows = rows_in_tile - out_row;
+        const uint32_t out_face_left = FACE_ROWS - out_row % FACE_ROWS;
+        const uint32_t staging_face_left = FACE_ROWS - staging_row % FACE_ROWS;
+        rows = rows < out_face_left ? rows : out_face_left;
+        rows = rows < staging_face_left ? rows : staging_face_left;
+        for (uint32_t half = 0; half < 2; ++half) {
+            runs.append(
+                Geometry::row_offset(staging_row, half),
+                Geometry::row_offset(out_row, half),
+                rows * Geometry::face_row_bytes);
+        }
+        out_row += rows;
+    }
+    return runs;
+}
 
 }  // namespace g6_slice

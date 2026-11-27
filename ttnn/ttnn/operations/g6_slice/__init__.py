@@ -5,9 +5,9 @@ from .g6_slice import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
+    describe_plan,
     g6_slice,
-    g6_slice_plan,
     validate,
 )
 
-__all__ = ["g6_slice", "g6_slice_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
+__all__ = ["g6_slice", "describe_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
