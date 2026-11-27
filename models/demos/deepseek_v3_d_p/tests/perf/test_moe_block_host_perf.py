@@ -85,9 +85,9 @@ TARGETS_MS = {
     "kimi_k3_1-4x4-sp1-2560": (3.20, 3.10),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
-    "glm53-xy4-sp1-2560": (1.49, 1.37),
-    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (1.99, 1.88),
-    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (3.05, 2.95),
+    "glm53-xy4-sp1-2560": (1.40, 1.28),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (1.90, 1.77),
+    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (2.96, 2.88),
 }
 
 
