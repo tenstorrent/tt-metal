@@ -18,3 +18,6 @@
 {"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-11-27T07:39:25-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T07:39:28-05:00"}
 {"event":"test_run","result":"pass","tests":"test_g6_permute_blocks_rm.py 21/21; Phase0 net 35/35; golden slice FLUX_73, FLUX_74, L0, L1 + Qwen reps 10/10","note":"blocks_rm_gather first build, bit-exact","ts":"2026-11-27T07:47:56-05:00"}
+{"event":"test_run","mode":"profile","scope":"test_g6_permute_blocks_rm_debug.py grid scaling FLUX_74","result":"pass","device_kernel_ns":{"110":1072189,"55":1154384,"22":1351387,"11":1345169},"ncrisc_ns":{"110":976066,"55":963919,"22":1163810,"11":1172698},"finding":"reader flat over 10x fewer cores: DRAM-request-rate bound (~1.85 ns per 4 B request chip-wide), not RISC issue","ts":"2026-11-27T08:10:57-05:00"}
+{"event":"fix_applied","what":"writer gather: two bf16 per 32-bit access for even J, plain loads/stores fenced by compiler barriers; halfword path kept for odd J","ts":"2026-11-27T08:10:57-05:00"}
+{"event":"test_run","mode":"prod+profile","scope":"test_g6_permute_blocks_rm.py 21/21; golden slice 10 passed 3 xfailed","result":"pass","device_kernel_ns":{"FLUX_74_L0":{"halfword":1076226,"word":1022579},"FLUX_73_L1":{"halfword":255859,"word":246041}},"ts":"2026-11-27T08:10:57-05:00"}

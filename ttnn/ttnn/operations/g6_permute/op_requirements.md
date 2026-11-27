@@ -29,7 +29,7 @@
 - **Golden baseline**: 20 / 20 registry cells inside SUPPORTED pass bit-exact. 12 cells are `xfail_expected` (FLUX ×4, Panoptic ×8). `test_regression.py` passes 4 / 7 under the graded runner; the 3 `test_malformed_dims_raise` failures are a harness L1-capture artifact (`verification_report.md`) and pass under `run_safe_pytest.sh`.
 - **Device time**: 1.26–2.23 µs per Qwen cell, 1 program, 2048 B L1 per core.
 
-### [ ] Refinement 1 — ROW_MAJOR rank-6 block gather (FLUX), DRAM
+### [x] Refinement 1 — ROW_MAJOR rank-6 block gather (FLUX), DRAM
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`, `6` to `SUPPORTED["rank"]` and `(0, 1, 4, 2, 5, 3)` to `SUPPORTED["dims"]`. Build regime `blocks_rm_gather` (`op_design.md` → Regimes) as a native ROW_MAJOR reader/writer pair:
 - the work unit is `(n, c, h)` and a block is `block_h` units;
