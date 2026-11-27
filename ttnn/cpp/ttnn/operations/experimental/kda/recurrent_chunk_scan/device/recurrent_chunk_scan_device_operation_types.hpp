@@ -42,8 +42,8 @@ struct RecurrentChunkScanParams {
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
     // Round the FP32 products that later matmuls and binary ops read (v_beta - kd S, q_decay S, v_new, the chunk
-    // output terms) and the matmuls' view of the state to TF32 nearest-even, instead of letting the unpacker
-    // truncate them.
+    // output terms) and the matmuls' view of the state to the 9 mantissa bits the FPU multiplier reads, nearest-even,
+    // instead of letting the source registers truncate them.
     bool round_fp32_operands = false;
 };
 

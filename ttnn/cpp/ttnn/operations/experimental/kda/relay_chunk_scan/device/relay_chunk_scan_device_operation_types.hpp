@@ -40,7 +40,8 @@ struct RelayChunkScanParams {
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;
     // Round the correction cores' fp32 FPU operands (FI - F0, the chunk outputs, their squares, 1 / rms and an FP32
-    // gated-norm output) to TF32 nearest-even before they are packed, instead of letting the unpacker truncate them.
+    // gated-norm output) to the 9 mantissa bits the FPU multiplier reads, nearest-even, before they are packed, instead
+    // of letting the source registers truncate them.
     bool round_fp32_operands = false;
 };
 

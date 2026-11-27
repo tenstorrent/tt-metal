@@ -25,9 +25,10 @@ They are read from the environment each time a module asks, so set them before t
                              LoFi truncates the 8th significant bit of the activation operand, exact for production's
                              bfp8 x / h but biased low (~0.27 % a matmul, ~0.9 % on the routed sum) for the bf16 x / h
                              of K3_ACC_FIDELITY; HiFi3 multiplies that bit too (the MXFP4 weights fit SrcA's high part)
-    K3_ACC_KDA_ROUND         round the KDA kernels' fp32 FPU operands to TF32 nearest-even before they are packed
-                             (the unpacker truncates fp32 operands, a -0.5 % bias on every KDA output that the
-                             eps-dominated gated norm passes through): today the SP relay's gated norm (x, 1 / rms)
+    K3_ACC_KDA_ROUND         round the KDA kernels' fp32 FPU operands, nearest-even, to the 9 mantissa bits the
+                             FPU multiplier reads before they are packed (SrcA / SrcB truncate fp32 operands, a
+                             -0.5 % bias on every KDA output that the eps-dominated gated norm passes through): the
+                             SP summary scan's products and state ring, and the relay's correction and gated norm
     K3_ACC_COMBINE_SNAP      under K3_ACC_FIDELITY, the MoE combine's snap step instead of none: "1" or a step (on:
                              2^-24). The routed terms then sum as an int32 count of the step, bit-identical in any
                              arrival order, so K3_ACC runs are deterministic; exact while |routed sum| < 2^31 x step
@@ -122,7 +123,8 @@ def routed_fidelity():
 
 
 def kda_round() -> bool:
-    """K3_ACC_KDA_ROUND: TF32 nearest-even rounding of the KDA kernels' fp32 FPU operands."""
+    """K3_ACC_KDA_ROUND: nearest-even rounding of the KDA kernels' fp32 FPU operands to the multiplier's 9 mantissa
+    bits."""
     return bool(knob("KDA_ROUND"))
 
 

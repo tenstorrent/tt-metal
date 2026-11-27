@@ -21,12 +21,12 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/tf32_round.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/fpu_operand_round.hpp"
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 
-// With Round, each product is rounded to TF32 nearest-even before it is packed (every consumer reads it through a
-// source register, which would truncate it).
+// With Round, each product is rounded to the multiplier's precision before it is packed (every consumer reads it
+// through a source register, which would truncate it; fpu_operand_round.hpp).
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Round = false>
 FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
@@ -50,7 +50,7 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
                 const uint32_t b_index = k * Nt + column_start;
                 matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, false, subblock_columns, subblock_rows, Kt);
             }
-            kda_round_tf32_tiles<Round>(0, subblock_rows * subblock_columns);
+            kda_round_operand_tiles<Round>(0, subblock_rows * subblock_columns);
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t row = 0; row < subblock_rows; ++row) {
@@ -111,9 +111,9 @@ FORCE_INLINE void combine_matrix_product(
             }
             // The operand unpacks to srcA; any BF16 output mask leaves it in a different format than the state. The
             // product moves from DST to srcB in srcB's format, kept FP32 (state_ring's, under every mask) so a BF16
-            // matmul input does not round it. The move keeps srcB's TF32 bits: with Round the product is rounded to
-            // them first.
-            kda_round_tf32_tiles<Round>(0, group_rows * group_columns);
+            // matmul input does not round it. The move keeps srcB's 10 mantissa bits: with Round the product is
+            // rounded first.
+            kda_round_operand_tiles<Round>(0, group_rows * group_columns);
             reconfig_data_format_srca(operand_id);
             reconfig_data_format_srcb(dfb::state_ring);
             if constexpr (Op == EltwiseBinaryType::ELWADD) {
@@ -132,7 +132,7 @@ FORCE_INLINE void combine_matrix_product(
                     }
                 }
             }
-            kda_round_tf32_tiles<Round>(0, group_rows * group_columns);  // (the next group re-inits the matmul)
+            kda_round_operand_tiles<Round>(0, group_rows * group_columns);  // (the next group re-inits the matmul)
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t row = 0; row < group_rows; ++row) {
@@ -233,7 +233,7 @@ FORCE_INLINE void reseed_state(DataflowBuffer& seed, DataflowBuffer& ring, Dataf
     kda::copy_exact<Tiles, Seed, Ring, Carry>(seed, ring, carry);
 }
 
-// The ring (the matmuls' view of the state) rewritten as the exact carry rounded to TF32 nearest-even, so the
+// The ring (the matmuls' view of the state) rewritten as the exact carry rounded to the multiplier's precision, so the
 // matmuls' source registers read it rounded rather than truncated. The carry stays exact, and the next update
 // accumulates its change onto both as before; the ring is rewritten again after it.
 template <uint32_t Tiles>
@@ -255,7 +255,7 @@ FORCE_INLINE void refresh_ring(DataflowBuffer& ring, DataflowBuffer& carry) {
         for (uint32_t tile = 0; tile < count; ++tile) {
             copy_tile(carry_id, first + tile, tile);
         }
-        kda_round_tf32_tiles<true>(0, count);
+        kda_round_operand_tiles<true>(0, count);
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t tile = 0; tile < count; ++tile) {
@@ -351,8 +351,8 @@ FORCE_INLINE void update_state(
 // With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
 // FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
 // segment's E and B also leave in FP32.
-// With Round, every FP32 product a later matmul or binary op reads, and the state ring, are rounded to TF32
-// nearest-even before the source registers read them.
+// With Round, every FP32 product a later matmul or binary op reads, and the state ring, are rounded to the
+// multiplier's precision before the source registers read them.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs, bool Round>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uint32_t value_block) {
     DataflowBuffer state(dfb::state);
@@ -540,7 +540,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     kda::copy_exact<key_value_tiles, dfb::state_carry, dfb::final_state>(state_carry, final_state);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs, uint32_t round_tf32>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs, uint32_t round_operands>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
@@ -556,8 +556,8 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt, emit_outputs != 0, round_tf32 != 0>(valid_chunks, reset_chunk, value_block);
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0, round_operands != 0>(valid_chunks, reset_chunk, value_block);
     } else {
-        compute_recurrent<Ct, Kt, Vt, round_tf32 != 0>(valid_chunks, reset_chunk);
+        compute_recurrent<Ct, Kt, Vt, round_operands != 0>(valid_chunks, reset_chunk);
     }
 }

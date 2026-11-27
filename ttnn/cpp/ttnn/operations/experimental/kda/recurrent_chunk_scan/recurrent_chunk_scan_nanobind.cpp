@@ -193,7 +193,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 emitted terms. Height-sharded, a shard holds one block (``C`` is its height over
                 64); otherwise ``C = N``. Defaults to ``memory_config``.
             round_fp32_operands (bool, optional): Round the FLOAT32 products later matmuls read and the
-                matmuls' view of the state to TF32 nearest-even instead of the unpacker's truncation.
+                matmuls' view of the state to the 9 mantissa bits the FPU multiplier reads, nearest-even,
+                instead of the source registers' truncation.
                 Defaults to False.
 
         Returns:

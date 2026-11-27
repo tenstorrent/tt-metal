@@ -661,10 +661,11 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     assert_accurate(b, packed_host[:, :, dim:], name="packed head B", nrmse_threshold=0.004)
 
 
-def _round_tf32(tensor: torch.Tensor) -> torch.Tensor:
-    """FP32 values rounded to TF32 (10 mantissa bits), nearest-even, as the device's SFPU rounding does."""
+def _round_operand(tensor: torch.Tensor) -> torch.Tensor:
+    """FP32 values rounded to the 9 mantissa bits the FPU multiplier reads from SrcA, nearest-even, as the device's
+    round_fp32_operands does."""
     bits = tensor.float().contiguous().view(torch.int32).to(torch.int64)
-    bits = (bits + 0xFFF + ((bits >> 13) & 1)) & ~0x1FFF
+    bits = (bits + 0x1FFF + ((bits >> 14) & 1)) & ~0x3FFF
     return bits.to(torch.int32).view(torch.float32)
 
 
@@ -682,11 +683,12 @@ def _terms_oracle(protocol: Sequence[torch.Tensor], entry: torch.Tensor) -> torc
 
 def test_summarize_chunk_recurrence_round_fp32_operands(zero_actual_start, device: ttnn.Device) -> None:
     """round_fp32_operands rounds every FP32 product a later source register reads, and the matmuls' view of the
-    state, to TF32 nearest-even. With inputs already on the TF32 grid (so reading them loses nothing), the emitted
-    terms land on that grid, and the bias the unpacker's truncation leaves (each truncated operand loses about
-    2^-11 ln 2 of its value) mostly goes."""
+    state, to the 9 mantissa bits the FPU multiplier reads. With inputs already on that grid (so reading them loses
+    nothing), the emitted terms land on it, and the bias the source registers' truncation leaves (an FP32 operand
+    loses about 0.72 * 2^-10 of its value in SrcA) mostly goes."""
     batch_heads, num_chunks, dim = 4, 4, 128
-    host_inputs = tuple(_round_tf32(tensor) for tensor in host_protocol(batch_heads, num_chunks, dim, dim, seed=813))
+    protocol = host_protocol(batch_heads, num_chunks, dim, dim, seed=813)
+    host_inputs = tuple(_round_operand(tensor) for tensor in protocol)
     zero_entry = torch.zeros(batch_heads, dim, dim)
     identity_entry = torch.eye(dim).expand(batch_heads, -1, -1).clone()
     expected = {"F(0)": _terms_oracle(host_inputs, zero_entry), "F(I)": _terms_oracle(host_inputs, identity_entry)}
@@ -704,8 +706,8 @@ def test_summarize_chunk_recurrence_round_fp32_operands(zero_actual_start, devic
     rounded = emitted_terms(round_fp32_operands=True)
     for name, reference in expected.items():
         assert_bit_identical(default[name], truncated[name], name=f"{name}, default vs round_fp32_operands=False")
-        low_bits = rounded[name].view(torch.int32) & 0x1FFF
-        assert int(torch.count_nonzero(low_bits)) == 0, f"{name}: rounded terms must lie on the TF32 grid"
+        low_bits = rounded[name].view(torch.int32) & 0x3FFF
+        assert int(torch.count_nonzero(low_bits)) == 0, f"{name}: rounded terms must keep 9 mantissa bits"
 
         def bias_and_error(got: torch.Tensor) -> tuple[float, float]:
             got = got.double()

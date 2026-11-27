@@ -22,7 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/tf32_round.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/fpu_operand_round.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -56,10 +56,10 @@ constexpr uint32_t cb_gin1 = get_compile_time_arg_val(20);
 constexpr uint32_t gate_kb = get_compile_time_arg_val(21);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(22);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(23));
-// Round the correction's fp32 FPU operands (FI - F0, x, x^2, 1 / rms and an FP32 result, which o_proj reads) to TF32
-// nearest-even before they are packed: the FPU reads them through SrcA / SrcB, which would truncate them
-// (tf32_round.hpp).
-constexpr bool round_tf32 = get_compile_time_arg_val(24);
+// Round the correction's fp32 FPU operands (FI - F0, x, x^2, 1 / rms and an FP32 result, which o_proj reads) to the
+// multiplier's precision before they are packed: the FPU reads them through SrcA / SrcB, which would truncate them
+// (fpu_operand_round.hpp).
+constexpr bool round_operands = get_compile_time_arg_val(24);
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -80,11 +80,11 @@ void subtract(uint32_t first, uint32_t tiles) {
         ckl::DataFormatReconfig::Enabled,
         ckl::TileAddressing::Offset);
     constexpr auto diff_rows = ckl::output(cb_diff, ckl::ReservePolicy::None, ckl::PushPolicy::None);
-    if constexpr (round_tf32) {  // (the differences feed the products with the seed)
+    if constexpr (round_operands) {  // (the differences feed the products with the seed)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(tiles).block_size(kt),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, term_rows, term_rows>{terms, terms, fi_offset + first, first},
-            kda::RoundTf32<>{},
+            kda::RoundOperand<>{},
             ckl::PackTile<diff_rows>{diff});
     } else {
         ckl::eltwise_chain(
@@ -147,11 +147,11 @@ void normalize() {
     constexpr auto out_row =
         ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
     constexpr auto square_row = ckl::output(cb_square, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
-    if constexpr (round_tf32) {  // (the squares feed the row mean)
+    if constexpr (round_operands) {  // (the squares feed the row mean)
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(kt).block_size(kt),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, out_row, out_row>{out, out},
-            kda::RoundTf32<>{},
+            kda::RoundOperand<>{},
             ckl::PackTile<square_row>{square});
     } else {
         ckl::square<out_row, square_row>(ckl::IterationShape::tiles(kt).block_size(kt), out, square);
@@ -175,13 +175,13 @@ void normalize() {
             add_unary_tile(dst, epsilon_bits, VectorMode::C);
             rsqrt_tile_init();
             rsqrt_tile(dst, VectorMode::C);
-            if constexpr (round_tf32) {
-                kda_round_tf32_init();
-                kda_round_tf32_tile(dst, VectorMode::C);
+            if constexpr (round_operands) {
+                kda_round_operand_init();
+                kda_round_operand_tile(dst, VectorMode::C);
             }
         });
-    // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32. With round_tf32 the result is rounded
-    // too: an FP32 output feeds o_proj's source register.
+    // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32. With round_operands the result is
+    // rounded too: an FP32 output feeds o_proj's source register.
     DataflowBuffer gate_factor(cb_gate_factor);
     DataflowBuffer norm(cb_norm);
     constexpr auto out_rows =
@@ -191,13 +191,13 @@ void normalize() {
     constexpr auto gate_rows =
         ckl::input(cb_gate_factor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
     constexpr auto norm_rows = ckl::output(cb_norm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
-    if constexpr (round_tf32 && fp32_output) {
+    if constexpr (round_operands && fp32_output) {
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(kt).block_size(kt),
             ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, out_rows, inv_rms_column>{out, inv_rms},
             ckl::CopyTile<gate_rows, ckl::Dst::D1>{gate_factor},
             ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-            kda::RoundTf32<>{},
+            kda::RoundOperand<>{},
             ckl::PackTile<norm_rows>{norm});
     } else {
         ckl::eltwise_chain(
@@ -243,10 +243,10 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
                 matmul_block(cb_diff, seed, row + k, j * kt + k, j, false, 1, 1, kt);
             }
         }
-        if constexpr (round_tf32) {  // (x feeds the norm's FPU products)
-            kda_round_tf32_init();
+        if constexpr (round_operands) {  // (x feeds the norm's FPU products)
+            kda_round_operand_init();
             for (uint32_t j = 0; j < kt; ++j) {
-                kda_round_tf32_tile(j);
+                kda_round_operand_tile(j);
             }
         }
         tile_regs_commit();
