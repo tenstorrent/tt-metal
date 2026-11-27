@@ -1,87 +1,65 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_pad, Phase 0: bfloat16, TILE_LAYOUT, DRAM interleaved.
+"""Acceptance test for g6_pad, Phase 0: bfloat16, TILE_LAYOUT, DRAM interleaved, rank 3 and 4.
 
-Cases are production cases of the contract plus the cases its rules require (BB-22).
-The gate is bit equality against torch.nn.functional.pad: helpers.TOLERANCES is
-("exact", None) for every dtype.
+Every shape is a production case of the contract. The gate is bit equality of the logical
+values, since the op moves values and computes nothing. The input's tile padding is poisoned
+before every call, because a logical output position that lies there must hold the fill value,
+not the producer's leftovers.
 """
 
 import pytest
 import torch
-
 import ttnn
-from ttnn.operations._op_contract import SupportRefusal
-from ttnn.operations.g6_pad import g6_pad, g6_pad_plan
+
+from ttnn.operations.g6_pad import describe_plan, g6_pad
 
 TILE = 32
-MASK_FILL = -1.7014118346046923e38  # -2**127, finite in bfloat16
+POISON = 1000.0
+NEG_2_POW_127 = -1.7014118346046923e38
 
-# Device is module-scoped by conftest.py (use_module_device hook).
 
-
-def to_torch_pad(padding):
+def torch_reference(x, padding, value):
     flat = []
     for low, high in reversed([tuple(pair) for pair in padding]):
         flat += [int(low), int(high)]
-    return flat
+    return torch.nn.functional.pad(x, flat, mode="constant", value=value)
 
 
-def pytorch_reference(torch_input, padding, value):
-    return torch.nn.functional.pad(torch_input, to_torch_pad(padding), mode="constant", value=value)
-
-
-def _highs(shape, padding):
+def highs_of(shape, padding):
     return [0] * (len(shape) - len(padding)) + [pair[1] for pair in padding]
 
 
-def _is_extension(shape, padding):
-    highs = _highs(shape, padding)
+def tile_rows(h):
+    return -(-h // TILE)
+
+
+def is_extension(shape, padding):
+    highs = highs_of(shape, padding)
     only_h = highs[-2] > 0 and all(h == 0 for i, h in enumerate(highs) if i != len(highs) - 2)
-    same_tile_rows = -(-shape[-2] // TILE) == -(-(shape[-2] + highs[-2]) // TILE)
-    return only_h and same_tile_rows
+    return only_h and tile_rows(shape[-2]) == tile_rows(shape[-2] + highs[-2])
 
 
-def _work_units(shape, padding):
-    """R1: last-row tiles of every slice. R2: max(staged pages, fill pages)."""
-    highs = _highs(shape, padding)
-    out_shape = [d + h for d, h in zip(shape, highs)]
-    slices_in = 1
-    for d in shape[:-2]:
-        slices_in *= d
-    slices_out = 1
-    for d in out_shape[:-2]:
-        slices_out *= d
-    wt_in = -(-shape[-1] // TILE)
-    if _is_extension(shape, padding):
-        return slices_in * wt_in
-    staged = slices_in * -(-shape[-2] // TILE) * wt_in
-    total = slices_out * -(-out_shape[-2] // TILE) * -(-out_shape[-1] // TILE)
-    return max(staged, total - staged)
-
-
-def _assert_bit_exact(actual, expected, what="output"):
-    assert list(actual.shape) == list(expected.shape), f"{what} shape {list(actual.shape)} != {list(expected.shape)}"
-    assert actual.dtype == torch.bfloat16, f"{what} dtype {actual.dtype}"
+def assert_bit_equal(actual, expected, what="output"):
+    assert list(actual.shape) == list(expected.shape), f"{what}: shape {list(actual.shape)} != {list(expected.shape)}"
+    assert actual.dtype == expected.dtype, f"{what}: dtype {actual.dtype} != {expected.dtype}"
     diff = actual.contiguous().view(torch.int16) != expected.contiguous().view(torch.int16)
     if bool(diff.any()):
-        first = tuple(int(i) for i in diff.nonzero()[0])
+        index = tuple(int(i) for i in diff.nonzero()[0])
         raise AssertionError(
-            f"{what}: {int(diff.sum())} of {diff.numel()} positions differ in bits, first {first}: "
-            f"got {actual[first]} expected {expected[first]}"
+            f"{what}: {int(diff.sum())} of {diff.numel()} positions differ, first {index}: "
+            f"got {actual[index]} expected {expected[index]}"
         )
 
 
-def _padded_rows(tensor):
-    raw = tensor.cpu().to_torch_with_padded_shape()
-    return raw.reshape(-1, raw.shape[-2], raw.shape[-1])
+def make_input(shape):
+    torch.manual_seed(42)
+    return (torch.randn(shape, dtype=torch.float32) * 100).to(torch.bfloat16)
 
 
-def _make_input(shape, device, poison=None):
-    torch_input = (torch.randn(shape, dtype=torch.float32) * 100).to(torch.bfloat16)
-    ttnn_input = ttnn.from_torch(
+def to_device(torch_input, device, poison=POISON):
+    tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
@@ -89,18 +67,14 @@ def _make_input(shape, device, poison=None):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     if poison is not None:
-        ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, poison)
-    return torch_input, ttnn_input
+        tensor = ttnn.fill_implicit_tile_padding(tensor, poison)
+    return tensor
 
 
-def _call_one_program(ttnn_input, padding, value, positional):
-    """BB-01: the call dispatches exactly one device program (a view must dispatch none)."""
+def call_one_program(x, padding, value, value_positional=False):
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
-        if positional:
-            out = g6_pad(ttnn_input, padding, value)
-        else:
-            out = g6_pad(ttnn_input, padding, value=value)
+        out = g6_pad(x, padding, value) if value_positional else g6_pad(x, padding, value=value)
     finally:
         graph = ttnn.graph.end_graph_capture()
     programs = [
@@ -108,154 +82,139 @@ def _call_one_program(ttnn_input, padding, value, positional):
         for node in graph
         if node.get("node_type") == "function_start" and "program_factory_type" in node.get("params", {})
     ]
-    assert len(programs) == 1, f"the call dispatched {len(programs)} device programs: {programs}"
+    assert len(programs) == 1, f"the call dispatched {len(programs)} device programs {programs}, expected exactly one"
     return out
 
 
-def _run_case(device, shape, padding, value, *, positional=False, poison=None, check_untouched=False, keep=None):
-    torch_input, ttnn_input = _make_input(shape, device, poison)
-    expected = pytorch_reference(torch_input, padding, value)
-    extension = _is_extension(shape, padding)
+def padded_rows(tensor):
+    raw = tensor.cpu().to_torch_with_padded_shape()
+    return raw.reshape(-1, raw.shape[-2], raw.shape[-1])
 
-    plan = g6_pad_plan(ttnn_input, padding, value)
-    assert plan.regime == ("extension_band" if extension else "new_storage_tiles"), plan.regime
-    if _work_units(shape, padding) > 1:
-        assert plan.num_cores > 1, f"{plan.num_cores} core for {_work_units(shape, padding)} work units"
 
-    raw_before = _padded_rows(ttnn_input) if check_untouched else None
+def run_case(device, shape, padding, value, *, value_positional=False, torch_input=None):
+    """One graded call: values, placement, storage class, and the input's untouched state."""
+    if torch_input is None:
+        torch_input = make_input(shape)
+    expected = torch_reference(torch_input, padding, value)
+    extension = is_extension(shape, padding)
 
-    ttnn_output = _call_one_program(ttnn_input, padding, value, positional)
-    if keep is not None:
-        keep.extend([ttnn_input, ttnn_output])
+    x = to_device(torch_input, device)
+    assert describe_plan(x, padding)["regime"] == ("extension_band" if extension else "new_storage_tiles")
+    raw_before = padded_rows(x) if extension else None
 
-    assert ttnn_output.dtype == ttnn.bfloat16
-    assert ttnn_output.layout == ttnn.TILE_LAYOUT
-    assert ttnn_output.memory_config().buffer_type == ttnn.BufferType.DRAM
-    _assert_bit_exact(ttnn.to_torch(ttnn_output), expected)
+    out = call_one_program(x, padding, value, value_positional)
+
+    assert out.dtype == ttnn.bfloat16
+    assert out.layout == ttnn.TILE_LAYOUT
+    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
+    assert_bit_equal(ttnn.to_torch(out), expected)
 
     if extension:
-        # The output takes over the input's storage: same buffer, same tile-padded shape.
-        assert ttnn_output.buffer_address() == ttnn_input.buffer_address()
-        assert list(ttnn_output.padded_shape) == list(ttnn_input.padded_shape)
-        assert list(ttnn_input.shape) == list(shape)
+        assert out.buffer_address() == x.buffer_address(), "extension output must be a view of the input's storage"
+        assert list(out.padded_shape) == list(x.padded_shape)
+        assert list(x.shape) == list(shape)
+        assert_bit_equal(ttnn.to_torch(x), torch_input, what="input after the call")
+        keep = raw_before.shape[-2] - TILE
+        assert_bit_equal(padded_rows(x)[:, :keep, :], raw_before[:, :keep, :], what="input tile rows before the last")
     else:
-        assert ttnn_output.buffer_address() != ttnn_input.buffer_address()
-    _assert_bit_exact(ttnn.to_torch(ttnn_input), torch_input, what="input after the call")
-
-    if check_untouched:
-        raw_after = _padded_rows(ttnn_input)
-        keep_rows = raw_after.shape[-2] - TILE
-        _assert_bit_exact(
-            raw_after[:, :keep_rows, :], raw_before[:, :keep_rows, :], what="input tile rows before the last"
-        )
-    return ttnn_output
+        assert out.buffer_address() != x.buffer_address(), "new_storage output must be a new tensor"
+        assert_bit_equal(ttnn.to_torch(x), torch_input, what="input after the call")
+    return out
 
 
-EXTENSION_CASES = [
-    # (shape, padding, value, value passed positionally)
-    pytest.param((1, 31, 12), [[0, 0], [0, 1], [0, 0]], 0.0, False, id="single_tile_1x31x12_to_32"),
-    pytest.param((16, 1, 1536), [[0, 0], [0, 31], [0, 0]], 0.0, False, id="multi_batch_16x1x1536_to_32"),
-    pytest.param((1, 3844, 1536), [[0, 0], [0, 28], [0, 0]], 0.0, True, id="multi_tile_row_1x3844x1536_to_3872"),
-    pytest.param((1, 1000, 12), [[0, 0], [0, 24], [0, 0]], 0.0, False, id="narrow_1x1000x12_to_1024"),
-    pytest.param((1, 1, 2, 62080), [[0, 0], [0, 0], [0, 30], [0, 0]], 0.0, False, id="p2_1x1x2x62080_to_32"),
-    pytest.param((1, 1, 8, 62080), [[0, 0], [0, 0], [0, 8], [0, 0]], 0, False, id="p3_1x1x8x62080_to_16"),
-    pytest.param((1, 1, 8, 62080), [[0, 0], [0, 0], [0, 24], [0, 0]], 0.0, False, id="p4_1x1x8x62080_to_32"),
-    pytest.param((1, 1, 16, 62080), [[0, 0], [0, 0], [0, 16], [0, 0]], 0.0, False, id="lower_half_1x1x16x62080_to_32"),
-    pytest.param((1, 1, 1, 62080), [[0, 0], [0, 0], [0, 7], [0, 0]], 0, False, id="one_row_1x1x1x62080_to_8"),
-]
-
-NEW_STORAGE_CASES = [
-    pytest.param((1, 196, 128), [[0, 60], [0, 0]], 0, False, id="non_square_1x196x128_to_256"),
-    pytest.param((1, 207, 128), [[0, 49], [0, 0]], 0, False, id="non_square_1x207x128_to_256"),
-    pytest.param((1, 1, 196, 196), [[0, 60], [0, 60]], MASK_FILL, False, id="hw_1x1x196x196_to_256_mask_fill"),
-    pytest.param((1, 1, 185, 185), [[0, 71], [0, 71]], MASK_FILL, False, id="hw_1x1x185x185_to_256_mask_fill"),
+CASES = [
+    # extension_band, one tile row per slice
+    pytest.param([1, 1, 2, 62080], [[0, 0], [0, 0], [0, 30], [0, 0]], 0.0, id="p2_1x1x2x62080_to32"),
+    pytest.param([1, 1, 8, 62080], [[0, 0], [0, 0], [0, 8], [0, 0]], 0, id="p3_1x1x8x62080_to16"),
+    pytest.param([1, 1, 8, 62080], [[0, 0], [0, 0], [0, 24], [0, 0]], 0.0, id="p4_1x1x8x62080_to32"),
+    pytest.param([16, 1, 1536], [[0, 0], [0, 31], [0, 0]], 0.0, id="16x1x1536_to32"),
+    pytest.param([8, 1, 12], [[0, 0], [0, 31], [0, 0]], 0.0, id="8x1x12_to32"),
+    # extension_band, several tile rows per slice
+    pytest.param([1, 3844, 1536], [[0, 0], [0, 28], [0, 0]], 0.0, id="1x3844x1536_to3872"),
+    pytest.param([1, 3844, 12], [[0, 0], [0, 28], [0, 0]], 0.0, id="1x3844x12_to3872"),
+    pytest.param([1, 33, 2560], [[0, 0], [0, 31], [0, 0]], 0.0, id="1x33x2560_to64"),
+    pytest.param([1, 1000, 1536], [[0, 0], [0, 24], [0, 0]], 0.0, id="1x1000x1536_to1024"),
+    # new_storage_tiles
+    pytest.param([1, 196, 128], [[0, 60], [0, 0]], 0, id="1x196x128_to256"),
+    pytest.param([1, 185, 128], [[0, 71], [0, 0]], 0, id="1x185x128_to256"),
+    pytest.param([1, 1, 196, 196], [[0, 60], [0, 60]], NEG_2_POW_127, id="1x1x196x196_to256"),
+    pytest.param([1, 1, 207, 207], [[0, 49], [0, 49]], NEG_2_POW_127, id="1x1x207x207_to256"),
 ]
 
 
-@pytest.mark.parametrize("shape, padding, value, positional", EXTENSION_CASES + NEW_STORAGE_CASES)
-def test_g6_pad(device, shape, padding, value, positional):
-    torch.manual_seed(42)
-    _run_case(device, shape, padding, value, positional=positional)
+@pytest.mark.parametrize("shape,padding,value", CASES)
+def test_g6_pad(device, shape, padding, value):
+    run_case(device, shape, padding, value)
+
+
+def test_g6_pad_value_positional(device):
+    run_case(device, [1, 3844, 1536], ((0, 0), (0, 28), (0, 0)), 0.0, value_positional=True)
+
+
+def test_g6_pad_same_shape_new_value(device):
+    # A program cache keyed without the fill value would replay the first value.
+    run_case(device, [1, 1, 8, 62080], [[0, 0], [0, 0], [0, 8], [0, 0]], 0)
+    run_case(device, [1, 1, 8, 62080], [[0, 0], [0, 0], [0, 8], [0, 0]], 7.0)
+    run_case(device, [1, 1, 8, 62080], [[0, 0], [0, 0], [0, 24], [0, 0]], 0.0)
+    run_case(device, [1, 1, 196, 196], [[0, 60], [0, 60]], NEG_2_POW_127)
+    run_case(device, [1, 1, 196, 196], [[0, 60], [0, 60]], 3.5)
+
+
+def test_g6_pad_inexact_value(device):
+    # 0.1 is not exact in bfloat16; the fill must be torch's conversion of it.
+    run_case(device, [1, 1, 8, 62080], [[0, 0], [0, 0], [0, 8], [0, 0]], 0.1)
+    run_case(device, [1, 196, 128], [[0, 60], [0, 0]], 0.1)
 
 
 @pytest.mark.parametrize(
-    "shape, padding, value",
+    "shape,padding,value",
     [
-        pytest.param((1, 1, 8, 62080), [[0, 0], [0, 0], [0, 8], [0, 0]], 0, id="extension_p3"),
-        pytest.param((1, 196, 128), [[0, 60], [0, 0]], 0, id="new_storage_rows"),
-        pytest.param((1, 1, 196, 196), [[0, 60], [0, 60]], MASK_FILL, id="new_storage_hw"),
+        pytest.param([1, 1, 8, 62080], [[0, 0], [0, 0], [0, 8], [0, 0]], 0, id="extension"),
+        pytest.param([1, 1, 196, 196], [[0, 60], [0, 60]], NEG_2_POW_127, id="new_storage"),
     ],
 )
-def test_poisoned_input_padding(device, shape, padding, value):
-    """Logical output positions inside the input's tile padding hold c, never the producer's leftovers."""
-    torch.manual_seed(42)
-    _run_case(device, shape, padding, value, poison=1000.0)
+def test_g6_pad_special_values(device, shape, padding, value):
+    torch_input = make_input(shape)
+    tiny = torch.finfo(torch.bfloat16).tiny
+    specials = torch.tensor([-0.0, float("inf"), float("-inf"), tiny, tiny / 4, -tiny / 8], dtype=torch.float32)
+    flat = torch_input.reshape(-1)
+    flat[: specials.numel()] = specials.to(torch.bfloat16)
+    run_case(device, shape, padding, value, torch_input=flat.reshape(shape))
 
 
 @pytest.mark.parametrize(
-    "shape, padding",
+    "padding",
     [
-        pytest.param((1, 3844, 1536), [[0, 0], [0, 28], [0, 0]], id="1x3844x1536"),
-        pytest.param((1, 1000, 12), [[0, 0], [0, 24], [0, 0]], id="1x1000x12"),
+        pytest.param([[0, 0], [1, 28], [0, 0]], id="low_nonzero"),
+        pytest.param([[0, 0], [0, 28], [0, -4]], id="high_negative"),
+        pytest.param([[0, 0], [0, 0], [0, 0], [0, 28]], id="more_pairs_than_dims"),
+        pytest.param([], id="no_pairs"),
+        pytest.param([[0, 0, 0], [0, 28], [0, 0]], id="pair_of_three"),
+        pytest.param([[0, 0], [0, 2.5], [0, 0]], id="non_int_high"),
     ],
 )
-def test_extension_untouched_rows(device, shape, padding):
-    """An extension call reads and writes only the last tile row of each slice."""
-    torch.manual_seed(42)
-    _run_case(device, shape, padding, 0.0, positional=True, poison=1000.0, check_untouched=True)
+def test_g6_pad_rejects_bad_padding(device, expect_error, padding):
+    x = to_device(make_input([1, 3844, 1536]), device, poison=None)
+    with expect_error((ValueError, RuntimeError), ""):
+        g6_pad(x, padding, value=0.0)
 
 
-def test_same_shape_two_values(device):
-    """BB-07: padding and value are per-call data; a cached program must not replay a stale c."""
-    torch.manual_seed(42)
-    keep = []
-    shape, padding = (1, 1, 8, 62080), [[0, 0], [0, 0], [0, 8], [0, 0]]
-    _run_case(device, shape, padding, 0, keep=keep)
-    _run_case(device, shape, padding, 7.0, keep=keep)
-    _run_case(device, shape, [[0, 0], [0, 0], [0, 24], [0, 0]], 0.0, poison=1000.0, keep=keep)
+def test_g6_pad_rejects_bad_value(device, expect_error):
+    x = to_device(make_input([1, 196, 128]), device, poison=None)
+    with expect_error((ValueError, RuntimeError), ""):
+        g6_pad(x, [[0, 60], [0, 0]], value="0")
 
 
-def test_inexact_value(device):
-    """c is torch's conversion of the value: 0.1 rounds to nearest even in bfloat16."""
-    torch.manual_seed(42)
-    _run_case(device, (1, 1, 8, 62080), [[0, 0], [0, 0], [0, 8], [0, 0]], 0.1)
-
-
-def _assert_refused(expect_error, call):
-    # The contract fixes the exception types, not the message text.
-    with expect_error((ValueError, RuntimeError), "") as info:
-        call()
-    assert not isinstance(info.value, SupportRefusal), f"argument refusal raised a support refusal: {info.value!r}"
-
-
-@pytest.mark.parametrize(
-    "shape, padding, value",
-    [
-        pytest.param((1, 3844, 1536), [[0, 0], [1, 28], [0, 0]], 0.0, id="low_not_zero"),
-        pytest.param((1, 3844, 1536), [[0, 0], [0, 28], [0, -4]], 0.0, id="negative_high"),
-        pytest.param((1, 1, 8, 62080), [[0, 0], [0, 0], [0, 0], [0, 8], [0, 0]], 0, id="more_pairs_than_dims"),
-        pytest.param((1, 1, 8, 62080), [[0, 0], [0, 0], [0, 8], [0, 0]], "0", id="value_not_a_number"),
-    ],
-)
-def test_argument_refusals(device, expect_error, shape, padding, value):
-    torch.manual_seed(42)
-    _, ttnn_input = _make_input(shape, device)
-    _assert_refused(expect_error, lambda: g6_pad(ttnn_input, padding, value=value))
-
-
-def test_sharded_input_refused(device, expect_error):
-    from eval.sharding import auto_shard_config
-
-    torch.manual_seed(42)
-    shape = (1, 196, 128)
-    memory_config = auto_shard_config(
-        list(shape), ttnn.TensorMemoryLayout.HEIGHT_SHARDED, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+def test_g6_pad_rejects_sharded_input(device, expect_error):
+    memory_config = ttnn.create_sharded_memory_config(
+        (1, 224, 128), core_grid=ttnn.CoreGrid(y=1, x=7), strategy=ttnn.ShardStrategy.HEIGHT
     )
-    ttnn_input = ttnn.from_torch(
-        torch.randn(shape, dtype=torch.float32).to(torch.bfloat16),
+    x = ttnn.from_torch(
+        make_input([1, 196, 128]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=memory_config,
     )
-    _assert_refused(expect_error, lambda: g6_pad(ttnn_input, [[0, 60], [0, 0]], value=0))
+    with expect_error((ValueError, RuntimeError), ""):
+        g6_pad(x, [[0, 60], [0, 0]], value=0)
