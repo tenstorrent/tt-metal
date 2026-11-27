@@ -57,51 +57,6 @@ constexpr uint32_t kPaddedSliceRmReaderSrcOffsetArgIdx = 7;
 constexpr uint32_t kPaddedSliceRmReaderMisalignmentArgIdx = 8;
 constexpr uint32_t kPaddedSliceRmReaderVarargsBase = 9;
 
-// The reader builds its TensorAccessor on the input buffer's base address and applies this core's
-// read-window offset to every read, so the address it receives is a plain buffer base.
-struct PaddedSliceRmReaderOffset {
-    uint32_t src_offset_bytes;  // W-begin plus this core's width offset, rounded down to the source alignment
-    uint32_t misalignment;      // bytes between that aligned offset and the exact start
-};
-
-PaddedSliceRmReaderOffset padded_slice_rm_reader_offset(
-    const Tensor& input_tensor,
-    const Tensor& output_tensor,
-    const ttnn::Shape& output_tensor_start,
-    const CoreCoord& core,
-    uint32_t core_index) {
-    auto* input_buffer = input_tensor.buffer();
-    auto* output_buffer = output_tensor.buffer();
-    TT_FATAL(input_buffer != nullptr, "Input buffer should be allocated on device");
-    TT_FATAL(output_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    const auto output_shard_spec = output_tensor.shard_spec().value();
-    const bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-    const bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    const bool is_width_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
-    const uint32_t output_row_size_bytes = output_shard_spec.shape[1] * input_tensor.element_size();
-
-    const auto src_buffer_alignment =
-        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
-    const auto dst_buffer_alignment =
-        output_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
-    const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
-    const uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, dst_buffer_alignment);
-
-    uint32_t core_w_index = 0;
-    if (is_block_sharded) {
-        core_w_index = rm_orientation ? core.x : core.y;
-    } else if (is_width_sharded) {
-        core_w_index = core_index;
-    }
-    const uint32_t width_offset = core_w_index * output_row_size_bytes_offset;
-    // When the exact start isn't aligned to the source buffer, create_program_artifacts enables the reader's
-    // non-aligned path, which reads from the aligned offset below it and skips `misalignment` bytes.
-    const uint32_t exact_offset = begins_bytes + width_offset;
-    const uint32_t misalignment = exact_offset % src_buffer_alignment;
-    return {.src_offset_bytes = exact_offset - misalignment, .misalignment = misalignment};
-}
-
 }  // namespace
 
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
@@ -202,6 +157,17 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     uint32_t start_offset = ttnn::operations::data_movement::get_rm_start_offset(input_tensor, output_tensor_start);
 
+    // The reader builds its TensorAccessor on the input buffer's base address and applies each core's read-window
+    // offset to every read: the slice's W begin plus the core's width offset, rounded down to the source alignment,
+    // and the bytes between that and the exact start. When the exact start isn't aligned, create_program_artifacts
+    // enables the reader's non-aligned path.
+    auto* input_buffer = input_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input buffer should be allocated on device");
+    TT_FATAL(output_tensor.buffer() != nullptr, "Output buffer should be allocated on device!");
+    const uint32_t src_buffer_alignment =
+        input_buffer->buffer_type() == BufferType::DRAM ? hal::get_dram_alignment() : hal::get_l1_alignment();
+    const uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
+
     uint32_t core_index = 0;
     for (const auto& core : cores) {
         uint32_t core_w_index = 0;
@@ -239,10 +205,10 @@ get_padded_slice_runtime_args_rm_sharded_output(
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset++] = this_core_num_sticks;
         reader_kernel_args[addr_offset] = this_core_num_sticks;
-        const auto reader_offset =
-            padded_slice_rm_reader_offset(input_tensor, output_tensor, output_tensor_start, core, core_index);
-        reader_kernel_args[kPaddedSliceRmReaderSrcOffsetArgIdx] = reader_offset.src_offset_bytes;
-        reader_kernel_args[kPaddedSliceRmReaderMisalignmentArgIdx] = reader_offset.misalignment;
+        const uint32_t exact_offset = begins_bytes + width_offset;
+        const uint32_t misalignment = exact_offset % src_buffer_alignment;
+        reader_kernel_args[kPaddedSliceRmReaderSrcOffsetArgIdx] = exact_offset - misalignment;
+        reader_kernel_args[kPaddedSliceRmReaderMisalignmentArgIdx] = misalignment;
         reader_kernel_args.insert(reader_kernel_args.end(), id_per_dim.begin(), id_per_dim.end());
 
         log_trace(
@@ -251,8 +217,8 @@ get_padded_slice_runtime_args_rm_sharded_output(
             "this_core_num_sticks : {}, this_input_row_size_bytes : {}",
             core,
             start_id,
-            reader_offset.src_offset_bytes,
-            reader_offset.misalignment,
+            exact_offset - misalignment,
+            misalignment,
             width_offset,
             this_core_num_sticks,
             this_input_row_size_bytes);
