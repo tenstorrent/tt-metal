@@ -1,6 +1,20 @@
 #!/bin/bash
 # usage: build-metal [branch]   -> submits the build of $XRUN_REPO to a build node and prints the job id
+#
+# With tt-sbatch installed (the cluster's build wrapper), the build runs through `tt-sbatch build`: the tree is
+# synced to the node, built in the CI build image (the toolchain is the image's) and build_Release / runtime/sfpi /
+# wheelhouse are synced back; build-wait then puts the fresh _ttnn.so into ttnn/ttnn/. It builds the tree as it is
+# (no fetch / checkout; a branch argument is refused). Otherwise build_tt_metal.sbatch builds in place on the node.
+# XRUN_BUILDER=sbatch forces the plain sbatch path.
 . "$(dirname "$(readlink -f "$0")")/env.sh"
+if [ "${XRUN_BUILDER:-}" != sbatch ] && command -v tt-sbatch >/dev/null 2>&1; then
+  [ -n "${1:-}" ] && { echo "build-metal: tt-sbatch builds the checked-out tree; check out $1 first"; exit 2; }
+  EXTRA=()
+  [ -n "$XRUN_BUILD_EXCLUDE" ] && EXTRA=(-- -x "$XRUN_BUILD_EXCLUDE")
+  # One node-local dir per tree: tt-sbatch defaults every tree to /tmp/$USER/tt-metal, so parallel builds collide.
+  LOCAL="/tmp/$USER/$(basename "$XRUN_REPO")"
+  exec tt-sbatch build --root "$XRUN_REPO" --local "$LOCAL" --build-args "${BUILD_ARGS:---enable-ccache}" "${EXTRA[@]}"
+fi
 EXTRA=()
 [ -n "$XRUN_BUILD_EXCLUDE" ] && EXTRA+=(--exclude="$XRUN_BUILD_EXCLUDE")
 sbatch --partition="$XRUN_BUILD_PARTITION" "${EXTRA[@]}" --output="$XRUN_LOGS/%x-%j.out" \

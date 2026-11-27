@@ -10,7 +10,7 @@ setting can be overridden from the environment.
 | `build-metal [branch]` | sbatch the tt-metal build to a build node (fetch, checkout, submodules, `build_metal.sh`) |
 | `build-wait <jobid>` | block until the build job ends; exit 0 only if `BUILD_DONE` |
 | `on-node "<cmd>"` | run a command in the repo as a Slurm step inside your reservation job (`srun --jobid --overlap`) |
-| `build_tt_metal.sbatch` | the build job (gcc-12 toolchain by default, ccache, `/tmp` free-space guard) |
+| `build_tt_metal.sbatch` | the plain-sbatch build job (gcc-12 toolchain by default, ccache, `/tmp` free-space guard), used when `tt-sbatch` is not installed or `XRUN_BUILDER=sbatch` |
 | `create_venv.sbatch` | create `python_env` on a build node with `HOME` on the shared filesystem |
 | `env.sh` | the settings below, plus the eval DB and run dir on the shared filesystem |
 
@@ -44,10 +44,16 @@ Overrides: `XRUN_MODE=login|local`, `XRUN_DRY_RUN=1`, `XRUN_BYPASS=1` (skip the 
 
 ## Building (host C++ only)
 - Never run `./build_metal.sh`, `cmake` or `ninja` on the login node.
-- Submit the build: `scripts/exabox/xrun build` (waits), or `scripts/exabox/build-metal [branch]` (prints a job id)
+- Submit the build: `scripts/exabox/xrun build` (waits), or `scripts/exabox/build-metal` (prints a job id)
   and then `scripts/exabox/build-wait <jobid>` in the background (exit 0 = built, `BUILD_OK`).
-  Logs: `$XRUN_DATA/logs/ttmetal-build-<jobid>.out`. A build can take up to 1 hour.
-- The build job fetches, fast-forwards and updates submodules in `$XRUN_REPO` before building; commit or stash first.
+- With `tt-sbatch` installed, the build is `tt-sbatch build` of the tree as it is (CI build image, synced back to
+  `$XRUN_REPO`; build-wait then copies the fresh `_ttnn.so` into `ttnn/ttnn/`). Log: `$TT_SBATCH_JOBDIR/logs/<jobid>.log`
+  (default `/data/$USER/jobs`). A build node with a full `/tmp` fails it in seconds: add it to `XRUN_BUILD_EXCLUDE`.
+- Without it (or with `XRUN_BUILDER=sbatch`), `build_tt_metal.sbatch` fetches, fast-forwards and updates submodules in
+  `$XRUN_REPO` and builds in place; log `$XRUN_DATA/logs/ttmetal-build-<jobid>.out`. Commit or stash first.
+- Fallback when the build partition does not work: `XRUN_BUILDER=local` builds on the login node itself, niced and
+  limited to `XRUN_LOCAL_JOBS` (default 16) parallel jobs, with an `ld.lld` shim when the host only has `ld.lld-<version>`.
+- A build can take up to 1 hour.
 - Kernel `.cpp` changes under `kernels/` need NO build (compiled at runtime); do not submit builds for them.
 
 ## Running tests / anything that touches a device

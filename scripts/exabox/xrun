@@ -9,7 +9,8 @@
 #       build -> sbatch on a build node (waits, exit 0 = built); test/run -> Slurm step in your reservation (on-node)
 #   anywhere else (IRD container, a dev box, a device node, inside a job): runs ./build_metal.sh /
 #       scripts/run_safe_pytest.sh / the command directly.
-# Overrides: XRUN_MODE=login|local   XRUN_DRY_RUN=1 (print, do not run)   NODE_JOB=<jobid>; see env.sh for the rest.
+# Overrides: XRUN_MODE=login|local   XRUN_DRY_RUN=1 (print, do not run)   NODE_JOB=<jobid>
+#            XRUN_BUILDER=local (build on the login node itself, XRUN_LOCAL_JOBS jobs, default 16) | sbatch; see env.sh.
 set -uo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 detect() {
@@ -25,10 +26,23 @@ case "$CMD" in
   build)
     WAIT=1; [ "${1:-}" = "--no-wait" ] && { WAIT=0; shift; }
     if [ "$MODE" = local ]; then cd "$REPO" && export XRUN_BYPASS=1 && do_run ./build_metal.sh "$@"; exit $?; fi
+    if [ "${XRUN_BUILDER:-}" = local ]; then
+      # Fallback when the build partition does not work: build here, throttled (a shared login node). The toolchain
+      # links with ld.lld, which some hosts only ship as ld.lld-<version>: a PATH shim supplies the plain name.
+      echo "[xrun] XRUN_BUILDER=local: building on this login node with ${XRUN_LOCAL_JOBS:-16} jobs"
+      if ! command -v ld.lld >/dev/null 2>&1; then
+        LLD="$(compgen -c ld.lld- | sort -V | tail -1)"
+        [ -n "$LLD" ] && { mkdir -p "$XRUN_DATA/bin-shim" && ln -sfn "$(command -v "$LLD")" "$XRUN_DATA/bin-shim/ld.lld"; export PATH="$XRUN_DATA/bin-shim:$PATH"; }
+      fi
+      export CMAKE_BUILD_PARALLEL_LEVEL="${XRUN_LOCAL_JOBS:-16}"
+      cd "$REPO" && export XRUN_BYPASS=1 && do_run nice -n 10 ./build_metal.sh "$@"; exit $?
+    fi
     echo "[xrun] Slurm login node: submitting the build to a build node (not building here)"
     if [ -n "${XRUN_DRY_RUN:-}" ]; then echo "[xrun:$MODE] BUILD_ARGS=\"$*\" $HERE/build-metal"; [ $WAIT = 1 ] && echo "[xrun:$MODE] $HERE/build-wait <jobid>"; exit 0; fi
     OUT="$(BUILD_ARGS="$*" "$HERE/build-metal" 2>&1)" || { echo "$OUT"; exit 1; }
-    JOB="$(echo "$OUT" | grep -oE "[0-9]+$" | tail -1)"; echo "[xrun] build job $JOB, log $XRUN_LOGS/ttmetal-build-$JOB.out"
+    JOB="$(echo "$OUT" | grep -oE "(Submitted batch job|build job) [0-9]+" | grep -oE "[0-9]+$" | tail -1)"
+    [ -n "$JOB" ] || { echo "$OUT"; echo "[xrun] could not read the build job id"; exit 1; }
+    echo "$OUT"; echo "[xrun] build job $JOB"
     [ $WAIT = 1 ] && exec "$HERE/build-wait" "$JOB"; exit 0 ;;
   test|run)
     if [ "$MODE" = local ]; then

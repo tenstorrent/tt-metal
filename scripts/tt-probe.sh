@@ -46,6 +46,15 @@ TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
+# Splitting one host's chips between jobs with TT_VISIBLE_DEVICES (e.g. the two 2x2 halves of a 2x4 box): each split
+# gets its own lock and dirty flag, and a reset touches only its own boards (UMD ids, as TT_VISIBLE_DEVICES names
+# them; tt-smi runs without the variable so the ids are not renumbered).
+TT_SMI_RESET_TARGETS=()
+if [[ -n "${TT_VISIBLE_DEVICES:-}" ]]; then
+    LOCK_FILE="/tmp/tt-device.lock.${TT_VISIBLE_DEVICES//,/-}"
+    DIRTY_FLAG="/tmp/tt-device.dirty.${TT_VISIBLE_DEVICES//,/-}"
+    read -ra TT_SMI_RESET_TARGETS <<< "${TT_VISIBLE_DEVICES//,/ }"
+fi
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
 
 # --- Device-lock contention profiling (see run_safe_pytest.sh for details) ---
@@ -217,7 +226,7 @@ if [[ "$SIM_MODE" == false ]]; then
 
     if [[ -f "$DIRTY_FLAG" ]]; then
         echo "TT_PROBE: Device dirty from previous run, resetting..."
-        if ! tt-smi -r; then
+        if ! env -u TT_VISIBLE_DEVICES tt-smi -r "${TT_SMI_RESET_TARGETS[@]}"; then
             echo "TT_PROBE_ERROR: Device reset failed"
             exit 3
         fi
@@ -286,7 +295,7 @@ fi
 # --- Reset device (hardware only) ---
 if [[ "$SIM_MODE" == false ]]; then
     echo "TT_PROBE: Resetting device..."
-    if tt-smi -r; then
+    if env -u TT_VISIBLE_DEVICES tt-smi -r "${TT_SMI_RESET_TARGETS[@]}"; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "TT_PROBE: Device reset complete"

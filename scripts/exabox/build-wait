@@ -1,11 +1,24 @@
 #!/bin/bash
-# usage: build-wait <jobid>   blocks until the build job ends; exit 0 only if it COMPLETED with BUILD_DONE in its log.
+# usage: build-wait <jobid>   blocks until the build job ends; exit 0 only if it COMPLETED and its log says the build
+# finished (BUILD_DONE from build_tt_metal.sbatch, "==> build done" from tt-sbatch).
 # Run it in the background / with a monitor: a build can take up to an hour, longer than one tool call.
 . "$(dirname "$(readlink -f "$0")")/env.sh"
 J="$1"; [ -n "$J" ] || { echo "usage: build-wait <jobid>"; exit 2; }
-while squeue -j "$J" -h 2>/dev/null | grep -q .; do sleep 20; done
+# squeue intermittently fails ("Unexpected message received"): only an empty, successful answer means the job ended.
+while :; do
+  out=$(squeue -j "$J" -h 2>/dev/null); rc=$?
+  [ $rc -eq 0 ] && [ -z "$out" ] && break
+  sleep 20
+done
 STATE=$(sacct -j "$J" -X -n -o State%20 | head -1 | tr -d " ")
 LOG=$XRUN_LOGS/ttmetal-build-$J.out
+[ -f "$LOG" ] || LOG="${TT_SBATCH_JOBDIR:-/data/$USER/jobs}/logs/$J.log"
 echo "job $J: $STATE  log: $LOG"
-if [ "$STATE" = "COMPLETED" ] && grep -q BUILD_DONE "$LOG" 2>/dev/null; then echo BUILD_OK; exit 0; fi
+if [ "$STATE" = "COMPLETED" ] && grep -qE "BUILD_DONE|==> build done" "$LOG" 2>/dev/null; then
+  # tt-sbatch syncs build_Release back but not the _ttnn.so the build places in ttnn/ttnn/, which `import ttnn` loads.
+  if [ -f "$XRUN_REPO/build_Release/lib/_ttnn.so" ]; then
+    cp -p "$XRUN_REPO/build_Release/lib/_ttnn.so" "$XRUN_REPO/ttnn/ttnn/_ttnn.so" || { echo BUILD_FAILED: could not copy _ttnn.so; exit 1; }
+  fi
+  echo BUILD_OK; exit 0
+fi
 echo BUILD_FAILED; grep -nE "FAILED:|error:|ABORT|No space|what\(\)" "$LOG" 2>/dev/null | tail -5 | cut -c1-200; exit 1
