@@ -35,34 +35,51 @@ inline void llk_math_eltwise_mul_reduce_scalar(
         dst_index, clear_fp32_dst_acc);
 }
 
+// The reduce tail calls take the DFB ids of both inputs. operand_A is the reduced operand in SrcA and
+// sets the tile shape. operand_B is the operand whose format SrcB holds. A sum passes its input twice.
+
+/**
+ * @brief Format the unpacker hands to the source register for a DFB.
+ */
+inline DataFormat llk_math_mul_reduce_scalar_src_format(const std::uint32_t operand) {
+    return static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operand)));
+}
+
 /**
  * @brief Init the reduce tail.
  *
- * @param operand: DFB id of the reduced input, which sets the pool fidelity and tile shape.
+ * @param operand_A: DFB id of the reduced input, which sets the SrcA format and the tile shape.
+ * @param operand_B: DFB id of the input whose format SrcB holds.
  */
 template <bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
-inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand) {
+inline void llk_math_mul_reduce_scalar_reduce_init(const std::uint32_t operand_A, const std::uint32_t operand_B) {
     static_assert(!enforce_fp32_accumulation || is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-    const std::uint32_t operand_id = get_operand_id(operand);
     _llk_math_mul_reduce_scalar_init_<math_fidelity>(
-        static_cast<DataFormat>(get_operand_dst_format(operand_id)), get_operand_tensor_shape(operand_id));
+        llk_math_mul_reduce_scalar_src_format(operand_A),
+        llk_math_mul_reduce_scalar_src_format(operand_B),
+        get_operand_tensor_shape(get_operand_id(operand_A)));
 }
 
 /**
  * @brief Add the column sums of the tile in SrcA to DEST tile dst_index.
  */
 template <MathFidelity math_fidelity>
-inline void llk_math_mul_reduce_column(const std::uint32_t dst_index, const std::uint32_t icb0) {
-    const std::uint32_t operand_id = get_operand_id(icb0);
-    _llk_math_mul_reduce_column_(dst_index, get_operand_tensor_shape(operand_id));
+inline void llk_math_mul_reduce_column(
+    const std::uint32_t dst_index, const std::uint32_t operand_A, const std::uint32_t operand_B) {
+    _llk_math_mul_reduce_column_<math_fidelity>(
+        dst_index,
+        llk_math_mul_reduce_scalar_src_format(operand_A),
+        llk_math_mul_reduce_scalar_src_format(operand_B),
+        get_operand_tensor_shape(get_operand_id(operand_A)));
 }
 
 /**
  * @brief Sum the column sums in DEST tile 0 into datum 0.
  */
 template <MathFidelity math_fidelity, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-inline void llk_math_mul_reduce_scalar() {
-    _llk_math_mul_reduce_scalar_<is_fp32_dest_acc_en>();
+inline void llk_math_mul_reduce_scalar(const std::uint32_t operand_A, const std::uint32_t operand_B) {
+    _llk_math_mul_reduce_scalar_<math_fidelity, is_fp32_dest_acc_en>(
+        llk_math_mul_reduce_scalar_src_format(operand_A), llk_math_mul_reduce_scalar_src_format(operand_B));
 }
 
 /**
@@ -72,8 +89,11 @@ inline void llk_math_mul_reduce_scalar_clear_dvalid() { _llk_math_mul_reduce_sca
 
 /**
  * @brief Move DEST tile idst into SrcA, or its row 0 into SrcB.
+ *
+ * @param operand_A: DFB id of the reduced input, which sets the tile shape.
  */
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
-inline void llk_math_mul_reduce_scalar_move_dest_to_src(const std::uint32_t idst = 0) {
-    _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(idst);
+inline void llk_math_mul_reduce_scalar_move_dest_to_src(const std::uint32_t idst, const std::uint32_t operand_A) {
+    _llk_math_mul_reduce_scalar_move_dest_to_src_<binary_reuse_dest>(
+        idst, get_operand_tensor_shape(get_operand_id(operand_A)));
 }

@@ -93,6 +93,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const DataFormat math_format            = static_cast<DataFormat>(formats.math);
+    // The copy leaves the input format in SrcA, and SrcB is configured to the same format.
+    const DataFormat src_format             = static_cast<DataFormat>(formats.unpack_A_dst);
     constexpr float scaler                  = 1.0f;
 
     {
@@ -116,20 +118,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_eltwise_unary_datacopy_(tile);
             }
 
-            _llk_math_mul_reduce_scalar_init_<MATH_FIDELITY>(static_cast<DataFormat>(formats.unpack_A_dst), tensor_shape);
-            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0);
+            _llk_math_mul_reduce_scalar_init_<MATH_FIDELITY>(src_format, src_format, tensor_shape);
+            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0 /*tile_idx*/, tensor_shape);
             // Load the scaler into SrcB through DEST tile 0, then zero that tile for the sums.
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, scaler);
-            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0);
+            _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0 /*tile_idx*/, tensor_shape);
             _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_calculate_fill_<2 /*ITERATIONS*/>, 0 /*dst_index*/, VectorMode::RC_custom, 0.0f);
 
-            _llk_math_mul_reduce_column_(0 /*dst_index*/, tensor_shape);
+            _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /*dst_index*/, src_format, src_format, tensor_shape);
             for (std::uint32_t tile = 1; tile < TILE_CNT; tile++)
             {
-                _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(tile);
-                _llk_math_mul_reduce_column_(0 /*dst_index*/, tensor_shape);
+                _llk_math_mul_reduce_scalar_move_dest_to_src_<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(tile, tensor_shape);
+                _llk_math_mul_reduce_column_<MATH_FIDELITY>(0 /*dst_index*/, src_format, src_format, tensor_shape);
             }
-            _llk_math_mul_reduce_scalar_<is_fp32_dest_acc_en>();
+            _llk_math_mul_reduce_scalar_<MATH_FIDELITY, is_fp32_dest_acc_en>(src_format, src_format);
             _llk_math_mul_reduce_scalar_clear_dvalid_();
 
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

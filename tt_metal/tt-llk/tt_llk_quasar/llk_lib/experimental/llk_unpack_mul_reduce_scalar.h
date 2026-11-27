@@ -7,8 +7,6 @@
 #include "ckernel_ops.h"
 #include "llk_defs.h"
 
-using namespace ckernel;
-
 /**
  * @brief Give math a zeroed SrcA and SrcB bank for the mul_reduce_scalar reduce tail.
  *
@@ -18,6 +16,7 @@ using namespace ckernel;
  */
 inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
 {
+    using namespace ckernel;
     TTI_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
     TTI_UNPACR_NOP(p_unpacr::UNP_B, 1 /*Set_Dvalid*/, 0 /*Stall_Cntrl*/, 0 /*Bank_Clr_Ctrl*/, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
 }
