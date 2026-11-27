@@ -183,9 +183,9 @@ public:
             return;
         }
         llvm::StringRef nm = II->getName();
-        // TT_INSN, TTI_INSN, TT_IP_* are pure encoding plumbing expanded inside the real
+        // TT_INSN and TTI_INSN are pure encoding plumbing expanded inside the real
         // instruction macros — never a fact of its own.
-        if (nm == "TT_INSN" || nm == "TTI_INSN" || nm.starts_with("TT_IP_"))
+        if (nm == "TT_INSN" || nm == "TTI_INSN")
         {
             return;
         }

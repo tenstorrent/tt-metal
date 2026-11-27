@@ -96,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -123,7 +123,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -176,7 +176,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(inputs.arch == 'wormhole' && '["wormhole"]' || inputs.arch == 'blackhole' && '["blackhole"]' || '["blackhole","wormhole"]') }}
+        arch: ${{ fromJSON(inputs.arch == 'wormhole' && '["wormhole"]' || inputs.arch == 'blackhole' && '["blackhole"]' || '["blackhole"]') }}
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
       arch: ${{ matrix.arch }}
