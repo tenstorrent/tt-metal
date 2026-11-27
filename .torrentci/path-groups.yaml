@@ -1,8 +1,11 @@
 ---
 # Path groups for dashboard member conditions (tenstorrent/torrentci#2809).
-# A port of .github/scripts/utils/find-changed-files.sh at main 0dddf9795bb
+# Mirrors .github/scripts/utils/find-changed-files.sh as of main 19a9e91a127
 # and the pr-gate llk-smoke-tests sku-allowlist. Update both together;
 # torrentci's scripts/path-conditions-compare diffs them on real PRs.
+# The script leaves deletions out except a deleted SFPU accuracy budget table
+# (sfpu_accuracy_budget_*.yaml, which sets llk-tests). TorrentCI counts every
+# deletion as a change, so tests/** -> llk-tests already covers that rule.
 #
 # Porting rules:
 # - Each bash `case` is one scan; its arms are rules in order, first match
