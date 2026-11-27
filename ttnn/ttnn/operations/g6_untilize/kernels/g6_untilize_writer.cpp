@@ -1,45 +1,60 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// store_row_block (BRISC, NoC1): each gathered row of cb_row_block leaves as one ROW_MAJOR page chunk.
-// The helper waits/pops block_tile_cols tile pages per <= tile_h-row block and write-barriers each
-// block, so no write is in flight when the kernel returns.
+// Writer (BRISC, NoC1): store_row_block, and with gather_riscs == 2 also the second share of
+// gather_row_block on NoC1, issued into the slot the reader is filling (the front slot this RISC
+// consumes next; it popped that slot's previous block itself, so the slot is free).
+// The store helper waits/pops block_tile_cols pages per <= tile_h-row block and write-barriers each
+// block, so no write is in flight when the kernel returns. One helper call per row block lets this
+// RISC's gather share interleave with the stores.
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
-#include "g6_untilize_work_split.hpp"
+#include "g6_untilize_gather.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_row_block = get_compile_time_arg_val(0);
-    constexpr uint32_t tensor_rows = get_compile_time_arg_val(1);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(2);
-    constexpr uint32_t rect_w = get_compile_time_arg_val(3);
-    constexpr uint32_t row_elems = get_compile_time_arg_val(4);
-    constexpr uint32_t tensor_tile_cols = get_compile_time_arg_val(5);
-    constexpr uint32_t block_tile_cols = get_compile_time_arg_val(6);
-    constexpr auto output_args = TensorAccessorArgs<7>();
+    using A = g6_untilize::GatherArgs;
+    constexpr auto input_args = TensorAccessorArgs<A::next_ct_arg>();
+    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr uint32_t block_elems = A::block_tile_cols * A::tile_w;
 
-    constexpr uint32_t tile_w = unpack_tile_c_dim[cb_row_block];
-    constexpr uint32_t elem_bytes = get_tile_size(cb_row_block) / get_tile_hw(cb_row_block);
-    constexpr uint32_t num_col_blocks = tensor_tile_cols / block_tile_cols;
-    constexpr uint32_t block_elems = block_tile_cols * tile_w;
-
-    const g6_untilize::CoreRows mine = g6_untilize::core_rows<tensor_rows, num_cores, rect_w>();
+    const g6_untilize::CoreRows mine = g6_untilize::core_rows();
+    const uint32_t first_c = g6_untilize::first_tile_col(mine);
     const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0));
+    [[maybe_unused]] const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(1));
 
-    for (uint32_t col_block_idx = 0; col_block_idx < num_col_blocks; ++col_block_idx) {
+    for (uint32_t col_block_idx = 0; col_block_idx < A::num_col_blocks; ++col_block_idx) {
         const uint32_t col_elem0 = col_block_idx * block_elems;
         // The last chunk may end inside a partial tile; it still spans block_tile_cols CB pages.
-        const uint32_t chunk_elems = (row_elems - col_elem0 < block_elems) ? row_elems - col_elem0 : block_elems;
-        {
-            // Zone-only split: the helper's own wait then returns at once.
-            DeviceZoneScopedN("G6U-store-wait");
-            cb_wait_front(cb_row_block, block_tile_cols);
-        }
-        {
-            DeviceZoneScopedN("G6U-store");
-            dataflow_kernel_lib::write_sticks_after_untilize<cb_row_block>(
-                output, mine.count, chunk_elems * elem_bytes, mine.start, col_elem0 * elem_bytes);
+        const uint32_t chunk_elems = (A::row_elems - col_elem0 < block_elems) ? A::row_elems - col_elem0 : block_elems;
+        for (uint32_t block_row = 0; block_row < mine.count; block_row += A::tile_h) {
+            const uint32_t block_rows = (mine.count - block_row < A::tile_h) ? mine.count - block_row : A::tile_h;
+            if constexpr (A::gather_riscs == 2) {
+                {
+                    DeviceZoneScopedN("G6U-gather-issue-br");
+                    g6_untilize::gather_row_block<1>(
+                        input,
+                        get_read_ptr(A::cb_row_block),
+                        mine.start + block_row,
+                        block_rows,
+                        col_block_idx,
+                        first_c);
+                }
+                {
+                    DeviceZoneScopedN("G6U-gather-wait-br");
+                    noc_async_read_barrier();
+                }
+            }
+            {
+                // Zone-only split: the helper's own wait then returns at once.
+                DeviceZoneScopedN("G6U-store-wait");
+                cb_wait_front(A::cb_row_block, A::block_tile_cols);
+            }
+            {
+                DeviceZoneScopedN("G6U-store");
+                dataflow_kernel_lib::write_sticks_after_untilize<A::cb_row_block>(
+                    output, block_rows, chunk_elems * A::elem_bytes, mine.start + block_row, col_elem0 * A::elem_bytes);
+            }
         }
     }
 }

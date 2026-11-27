@@ -12,3 +12,5 @@
 {"event":"test_run","result":"pass","modes":["dev","prod"],"acceptance":"11/11","golden":"6/6","note":"row_gather 8x4 rect, raw one-packet 64B reads + write_sticks_after_untilize","ts":"2026-11-27T06:01:52-05:00"}
 {"event":"perf","lever":"read_issue_with_state","kernel_ns_before":2380,"kernel_ns_after":2389,"note":"issue zone 500->481 cycles; issue not cmd-programming bound","ts":"2026-11-27T06:06:25-05:00"}
 {"event":"perf","lever":"bank_stagger","kernel_ns_before":2389,"kernel_ns_after":1910,"note":"gather-wait median 1269->741 cycles; all 32 cores no longer queue on tile-col-0 bank first","ts":"2026-11-27T06:06:25-05:00"}
+{"event":"perf","lever":"dual_noc_single_risc_experiment","kernel_ns_before":1910,"kernel_ns_after":1794,"note":"not committed; wait median 741->382 cycles but NCRISC issue 584->719","ts":"2026-11-27T06:11:06-05:00"}
+{"event":"perf","lever":"split_gather_two_riscs","kernel_ns_before":1910,"kernel_ns_after":1601,"note":"NCRISC NoC0 + BRISC NoC1 by tile-col step parity; issue per RISC ~315 cycles; first-to-last start 453 ns remains","ts":"2026-11-27T06:11:06-05:00"}

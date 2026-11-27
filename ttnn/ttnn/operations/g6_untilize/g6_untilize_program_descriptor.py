@@ -24,8 +24,11 @@ WRITER_KERNEL = KERNEL_DIR / "g6_untilize_writer.cpp"
 # Block knobs. None = no cap beyond the work units and the grid.
 CORE_LIMIT = None
 ROW_BLOCK_DEPTH = 2
-# Start each core's tile-column walk at core_idx mod block_tile_cols (reader CT switch).
+# Start each core's tile-column walk at core_idx mod block_tile_cols (gather CT switch).
 BANK_STAGGER = True
+# Data-movement RISCs issuing the gather: 1 = reader only (NoC0); 2 = reader on NoC0 and writer on NoC1,
+# split by tile-column walk step.
+GATHER_RISCS = 2
 # Free L1 per core the model leaves to the op (BB-05).
 L1_OP_BUDGET_BYTES = 1347776
 
@@ -128,7 +131,7 @@ def describe_plan(input_tensor) -> dict:
             start, rows = _core_rows(y * plan["rect_w"] + x, plan["tensor_rows"], plan["num_cores"])
             roles[(x, y)] = {
                 "reader": "gather_row_block",
-                "writer": "store_row_block",
+                "writer": "gather_row_block+store_row_block" if GATHER_RISCS == 2 else "store_row_block",
                 "row_start": start,
                 "rows": rows,
             }
@@ -154,7 +157,8 @@ def _build_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         ],
     )
 
-    reader_ct_args = [
+    # Shared prefix: g6_untilize::GatherArgs reads indices 0..10 in both kernels.
+    gather_ct_args = [
         CB_ROW_BLOCK,
         plan["tensor_rows"],
         plan["num_cores"],
@@ -165,19 +169,15 @@ def _build_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         plan["tensor_tile_cols"],
         plan["block_tile_cols"],
         int(BANK_STAGGER),
+        GATHER_RISCS,
     ]
-    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-
-    writer_ct_args = [
-        CB_ROW_BLOCK,
-        plan["tensor_rows"],
-        plan["num_cores"],
-        plan["rect_w"],
-        plan["row_elems"],
-        plan["tensor_tile_cols"],
-        plan["block_tile_cols"],
-    ]
-    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    input_accessor_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    reader_ct_args = gather_ct_args + list(input_accessor_args)
+    writer_ct_args = (
+        gather_ct_args
+        + list(input_accessor_args)
+        + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    )
 
     reader = ttnn.KernelDescriptor(
         kernel_source=str(READER_KERNEL),
@@ -190,7 +190,7 @@ def _build_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         kernel_source=str(WRITER_KERNEL),
         core_ranges=core_ranges,
         compile_time_args=writer_ct_args,
-        common_runtime_args=[output_tensor.buffer_address()],
+        common_runtime_args=[output_tensor.buffer_address(), input_tensor.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
     return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb_row_block])
@@ -225,6 +225,7 @@ def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescripto
         CORE_LIMIT,
         ROW_BLOCK_DEPTH,
         BANK_STAGGER,
+        GATHER_RISCS,
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
@@ -235,4 +236,5 @@ def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescripto
     kernels = descriptor.kernels
     kernels[READER_IDX].common_runtime_args[0] = input_tensor.buffer_address()
     kernels[WRITER_IDX].common_runtime_args[0] = output_tensor.buffer_address()
+    kernels[WRITER_IDX].common_runtime_args[1] = input_tensor.buffer_address()
     return descriptor
