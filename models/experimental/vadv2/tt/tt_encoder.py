@@ -247,9 +247,10 @@ class TtBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        # The camera projection depends on lidar2img, so it is part of the key.
+        # The camera projection depends on lidar2img and the image size, so both are part of the key.
         lidar2img = np.asarray([m["lidar2img"] for m in kwargs["img_metas"]])
-        cache_key = (bev_h, bev_w, bev_query.shape[1], lidar2img.tobytes())
+        image_hw = tuple(kwargs["img_metas"][0]["img_shape"][0][:2])
+        cache_key = (bev_h, bev_w, bev_query.shape[1], lidar2img.tobytes(), image_hw)
         if self._ref_cache_key == cache_key:
             ref_3d, ref_2d, reference_points_cam, bev_mask = self._ref_cache
         else:
