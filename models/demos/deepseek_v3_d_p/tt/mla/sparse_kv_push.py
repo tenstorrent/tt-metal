@@ -139,8 +139,8 @@ class SparseKvPushPlanner:
         # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
         # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
-        # Pre-sends on/off, for comparing against pushing every row in line (tests).
-        self.presend = True
+        # Pre-sends on/off, for comparing against pushing every row in line (tests; SCRATCH_NO_PRESEND=1 off).
+        self.presend = not os.environ.get("SCRATCH_NO_PRESEND")
         # Pushes enqueued by part name (ALL / PREFIX / REST), counted on the host as they are enqueued.
         self.pushes = Counter()
         # sparse_kv_dispatch (SPARSE_MLA_KV_DISPATCH=1): its four persistent words and its scratch, made on first use
@@ -152,19 +152,27 @@ class SparseKvPushPlanner:
     def dispatch_resources(self, max_rows: int, stripe_chunk: int, planners: int = KVD_PLANNERS):
         """(semaphores, scratch) of sparse_kv_dispatch for a cache of max_rows rows: made on first use (the warm pass,
         before any trace capture) and shared by every layer."""
+        # One set of persistent words per program variant (planner count: the full grid's and the beside-attention
+        # grid's): the fence pairs each TX with its neighbour's TX of the same program, whose cores differ between
+        # variants. Shared words let one chip's next call (the other variant) release a neighbour's TX still in the
+        # previous call, which then sends into landing pools not yet set up (non-deterministic rows).
         if self._kvd_sems is None:
+            self._kvd_sems = {}
+        if planners not in self._kvd_sems:
             grid = self.mesh_device.compute_with_storage_grid_size()
             cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
             l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
             buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
-            self._kvd_sems = [ttnn.create_global_semaphore(self.mesh_device, cores, 0, buffer_type) for _ in range(4)]
+            self._kvd_sems[planners] = [
+                ttnn.create_global_semaphore(self.mesh_device, cores, 0, buffer_type) for _ in range(4)
+            ]
         key = (max_rows, stripe_chunk, planners)
         if key not in self._kvd_scratch:
             spec = ttnn.experimental.sparse_kv_dispatch_scratch_spec(
                 self.mesh_device, max_rows, stripe_chunk, planners, self.links, KVD_LANES_PER_LINK
             )
             self._kvd_scratch[key] = ttnn.allocate_tensor_on_device(spec, self.mesh_device)
-        return self._kvd_sems, self._kvd_scratch[key]
+        return self._kvd_sems[planners], self._kvd_scratch[key]
 
     def grids(self, query_rows: int):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.

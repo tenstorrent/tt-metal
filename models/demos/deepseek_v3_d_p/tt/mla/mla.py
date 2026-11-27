@@ -53,6 +53,22 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 _K31_KV_DISPATCH_FROM: dict[int, int] = {}
 
 
+_SCRATCH_SECTIONS: dict = {}
+
+
+def _scratch_mark(mesh_device, name, t_prev):
+    """SCRATCH (SCRATCH_TIME_SECTIONS=1, untraced only): synchronize and add the time since t_prev to `name`."""
+    import time
+
+    if not os.environ.get("SCRATCH_TIME_SECTIONS"):
+        return t_prev
+    ttnn.synchronize_device(mesh_device)
+    t = time.perf_counter()
+    if t_prev is not None:
+        _SCRATCH_SECTIONS.setdefault(name, []).append((t - t_prev) * 1e6)
+    return t
+
+
 def _kvd_spike() -> bool:
     """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): shared layers' rows go through sparse_kv_dispatch with
     global landing instead of sparse_kv_push."""
@@ -2547,6 +2563,7 @@ class ttMLA:
     ):
         """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer.
         Trace-safe on the metadata path: the KV write, chunk start and pushed slot are all read on device."""
+        _t = _scratch_mark(self.mesh_device, None, None)
         cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
             tt_kvpe=tt_kvpe,
             kvpe_cache=kvpe_cache,
@@ -2562,7 +2579,9 @@ class ttMLA:
         expected_shape = self.indexer_indices_shape()
         if tuple(indices.shape) != expected_shape:
             raise ValueError(f"pushed attention needs this chip's top-k {expected_shape}, got {tuple(indices.shape)}")
+        _t = _scratch_mark(self.mesh_device, "prepare_kv", _t)
         plan = self._sparse_push_plan(indices, kv_actual_isl, metadata)
+        _t = _scratch_mark(self.mesh_device, "plan", _t)
         storage = kvpe_cache.storage
         # If the previous attention step pushed this step's prefix beside its attention, for these same indices (the
         # same cached plan), push only the rest into that buffer; otherwise push every needed row.
@@ -2578,8 +2597,9 @@ class ttMLA:
             part,
             self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
         )
+        _t = _scratch_mark(self.mesh_device, f"send_{part.name}", _t)
         spike = _kvd_spike()  # SPIKE: global landing, read with the natural indices
-        return self._finish_sparse_chunked_attn(
+        _ret = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
             indices=indices if spike else plan.compact_indices,
@@ -2598,6 +2618,8 @@ class ttMLA:
             ),
             compact=not spike,
         )
+        _scratch_mark(self.mesh_device, "attention+wkv_b2", _t)
+        return _ret
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
         """Cache slot of a push. On the metadata path it is recomposed on device from the user id tensor, so a captured

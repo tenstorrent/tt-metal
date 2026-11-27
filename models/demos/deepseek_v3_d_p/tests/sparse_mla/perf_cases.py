@@ -14,6 +14,7 @@ Boxes, from the device count and TT_MESH_GRAPH_DESC_PATH:
 """
 
 import copy
+import dataclasses
 import functools
 import gc
 import json
@@ -37,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     model_fabric_payload,
     torus_x_device_params,
     torus_xy_device_params,
+    torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import detect_num_devices
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import make_hidden
@@ -154,6 +156,19 @@ def _scaled_box(name, mesh, device_params):
 
 
 def _galaxy_box() -> PerfBox:
+    """SCRATCH (Phase 0): SCRATCH_FABRIC forces the 8x4 fabric (torus_x / torus_y / mesh_2d), SCRATCH_SP_AXIS the
+    sp_axis (both arms of an A/B use the same override)."""
+    box = _galaxy_box_detected()
+    fabric = os.environ.get("SCRATCH_FABRIC")
+    if fabric:
+        params = {"torus_x": torus_x_device_params, "torus_y": torus_y_device_params, "mesh_2d": fabric2d_device_params}
+        box = dataclasses.replace(box, name=f"{box.name} {fabric}", device_params=params[fabric])
+    if os.environ.get("SCRATCH_SP_AXIS") is not None:
+        box = dataclasses.replace(box, sp_axis=int(os.environ["SCRATCH_SP_AXIS"]))
+    return box
+
+
+def _galaxy_box_detected() -> PerfBox:
     """The Galaxy layout TT_MESH_GRAPH_DESC_PATH selects: a 4x4 stage or the full 8x4."""
     descriptor = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     topologies = set(mesh_descriptor_topologies(descriptor)) if descriptor else set()
@@ -194,7 +209,8 @@ class SparsePerfCase:
 
     def forward(self, start: int) -> ttnn.Tensor:
         """One chunk forward at `start`; the caller owns (and deallocates) the output."""
-        if self.prefix_entry is not None:  # restored each forward, so this layer pushes only the rest
+        # (SCRATCH_NO_PRESEND=1: no pre-sends at all, every forward sends ALL inline)
+        if self.prefix_entry is not None and not os.environ.get("SCRATCH_NO_PRESEND"):  # restored each forward
             self.mla.tt_ccl.sparse_kv_push_planner.prefetched[self.mla.layer_idx] = self.prefix_entry
         return self.mla.forward(
             self.x,
@@ -363,6 +379,22 @@ def build_sparse_perf_case(
         return_indexer_indices=True,
     )
     ttnn.deallocate(out)
+    if os.environ.get("SCRATCH_DUMP_TOPK"):  # SCRATCH: top-k for the push/dispatch bench
+        dump = (
+            Path(os.environ["SCRATCH_DUMP_TOPK"])
+            / f"topk_{'L' + str(real_data.layer) if real_data else 'gate'}_c{cache}.pt"
+        )
+        dump.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "indices": torch.stack([ttnn.to_torch(t) for t in ttnn.get_device_tensors(indices)]),
+                "chunk_start": cache,
+                "chunk": chunk,
+                "mesh": tuple(mesh_device.shape),
+                "sp_axis": sp_axis,
+            },
+            dump,
+        )
     planner = mla.tt_ccl.sparse_kv_push_planner  # None where the push is off: the shared layer gathers
     prefix_entry = planner.prefetched.get(mla_layer_idx + 1) if planner is not None else None
     # Free the full layer before building the shared one: ttMLA holds reference cycles, so without a collection its
@@ -439,7 +471,7 @@ def gate_params():
 
 def real_data_params():
     """GLM-5.3 gate cases x REAL_DATA_LAYERS x REAL_DATA_CASES, on the Galaxy 8x4 only: the capture holds its positions."""
-    if BOX is None or BOX.name != "Galaxy":
+    if BOX is None or not BOX.name.startswith("Galaxy"):  # SCRATCH (W4): every Galaxy box, 4x4 included
         return [
             pytest.param(
                 (8, 4),

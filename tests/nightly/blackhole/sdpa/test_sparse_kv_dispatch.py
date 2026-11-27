@@ -1065,7 +1065,7 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
 
     from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, SparseKvPushPlanner
 
-    files = sorted(glob.glob(f"{os.environ['KVD_TOPK_DIR']}/topk_L*_c*.pt"))
+    files = sorted(glob.glob(f"{os.environ['KVD_TOPK_DIR']}/topk_*_c*.pt"))
     assert files, "no top-k dumps"
     n = mesh_device.get_num_devices()
     g = mesh_device.compute_with_storage_grid_size()
@@ -1137,6 +1137,8 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
                 d = Dispatch(mesh_device, max_rows, width, dtype, planners=planners)
                 table = d.plan(idx, chunk_start=start)
                 kw = {"core_grid": grid} if grid is not None else {}
+                if os.environ.get("KVD_B"):  # rows per packet (smaller slots, less L1)
+                    kw["rows_per_packet"] = int(os.environ["KVD_B"])
                 d(cache, table, **kw)
                 ttnn.synchronize_device(mesh_device)
                 if name == "kvd":  # exactness on chips 0 and 17, as test_dispatch_ablate

@@ -216,6 +216,12 @@ def _measure_and_gate(
     samples = {}
     eager_repeat, traced_repeat = [], []
     samples["untraced"], eager_out = _time_untraced(mesh_device, case, cache, eager_repeat)
+    if os.environ.get("SCRATCH_TIME_SECTIONS"):  # SCRATCH: per-section medians of the untraced forwards
+        from models.demos.deepseek_v3_d_p.tt.mla import mla as _mla_mod
+
+        for k, v in _mla_mod._SCRATCH_SECTIONS.items():
+            print(f"SECTION {label} {k}: median {sorted(v)[len(v) // 2]:.0f} us over {len(v)}")
+        _mla_mod._SCRATCH_SECTIONS.clear()
     samples["traced"], traced_out = _time_traced(mesh_device, case, cache, traced_repeat)
 
     def min_pcc(xs, ys):

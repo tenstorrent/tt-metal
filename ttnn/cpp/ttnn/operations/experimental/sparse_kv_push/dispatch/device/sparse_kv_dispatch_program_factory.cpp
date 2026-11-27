@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include "sparse_kv_dispatch_program_factory.hpp"
 #include "sparse_kv_dispatch_device_operation.hpp"
 #include "sparse_kv_dispatch_layout.hpp"
@@ -390,7 +391,7 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
         B = std::min(B, p.rows_per_packet);
     }
     TT_FATAL(B >= 1, "sparse_kv_dispatch v3: a {} B row does not fit the {} B payload", row_bytes, max_payload);
-    const uint32_t sbytes = kvd::slot_bytes(B, row_bytes);
+    uint32_t sbytes = kvd::slot_bytes(B, row_bytes);  // (the L1 fit below may take fewer rows a packet)
     const uint32_t owner_slot_rows = t.output_tensor.padded_shape()[2] / N;
     const uint32_t inbox_slot = inbox_slot_bytes(p.max_rows, p.stripe_chunk, N);
     const uint32_t num_slots = t.input_tensor.padded_shape()[0];
@@ -489,9 +490,10 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     // (on the whole grid, not just this chip's cores: a CB's base is the L1 high-water mark of the cores it is on, and
     // the placed cores differ by chip; on the grid it is the same on every chip)
     const auto& grid_range = p.core_grid;
-    // Fit the staging and landing depths to the free L1: lines and partial tori have more classes G than a torus
-    // (8x4 open mesh: 10 vs 6), and both CBs scale with G. Free L1 is [allocator base, lowest live L1 buffer), as
-    // sparse_sdpa_msa computes it. Staging depth goes first (to 1), then pool depth (to 2); a torus keeps the defaults.
+    // Fit the landing and staging CBs to the free L1, [allocator base, lowest live L1 buffer) as sparse_sdpa_msa
+    // computes it: both scale with the classes G (more on lines and partial tori) and the slot size. Cheapest first
+    // (GLM 1M real top-k, 8x4): pool depth to 2 (~4%), then fewer rows a packet, halving to 4 (8 rows: ~20% on the
+    // full grid, faster on 40 cores), and staging depth last (1 is ~6x slower: TX and workers stop overlapping).
     {
         bool pool0 = false;
         for (const auto& [name, value] : abl_defs) {
@@ -517,13 +519,33 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             const uint64_t planner = ctrl + stage + inbox + rows + 64;
             return std::max(port, planner);
         };
-        while (!pool0 && need() > free_l1 && (kn.stage > 1 || kn.pool > 2)) {
-            if (kn.stage > 1) {
-                --kn.stage;
-            } else {
+        const uint32_t pool_in = kn.pool, stage_in = kn.stage, b_in = B;
+        while (!pool0 && need() > free_l1 && (kn.pool > 2 || B > 4 || kn.stage > 1)) {
+            if (kn.pool > 2) {
                 --kn.pool;
+            } else if (B > 4) {
+                B = (B + 1) / 2;
+                sbytes = kvd::slot_bytes(B, row_bytes);
+            } else {
+                --kn.stage;
+                kn.pstage = std::clamp<uint32_t>(G * kn.stage / kvd::kMaxLinks, 2u, 8u);
             }
-            kn.pstage = std::clamp<uint32_t>(G * kn.stage / kvd::kMaxLinks, 2u, 8u);
+        }
+        if (kn.pool != pool_in || kn.stage != stage_in || B != b_in) {
+            log_info(
+                tt::LogOp,
+                "sparse_kv_dispatch L1 fit: G {} stage {} pool {} pstage {} rows/packet {}: need {} B of {} B free (L1 "
+                "base "
+                "{}, top {})",
+                G,
+                kn.stage,
+                kn.pool,
+                kn.pstage,
+                B,
+                need(),
+                free_l1,
+                l1_base,
+                l1_top);
         }
         TT_FATAL(
             pool0 || need() <= free_l1,
