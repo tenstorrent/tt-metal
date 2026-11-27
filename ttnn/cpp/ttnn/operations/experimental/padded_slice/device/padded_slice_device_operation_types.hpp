@@ -13,6 +13,9 @@ struct PaddedSliceParams {
     const ttnn::Shape padded_slice_end;
     const ttnn::Shape step;
     const tt::tt_metal::MemoryConfig output_mem_config;
+    // A row-major interleaved input's program serves every start and input size, and H and W ends past the input
+    // read zeros (see padded_slice_rm_is_shape_free).
+    const bool runtime_shapes = false;
 };
 
 struct PaddedSliceInputs {

@@ -26,7 +26,8 @@ struct SliceWriteDeviceOperation {
     using program_factory_t = std::variant<
         SliceWriteRMShardedInputProgramFactory,
         SliceWriteTiledShardedInputProgramFactory,
-        SliceWriteRMInterleavedProgramFactory>;
+        SliceWriteRMInterleavedProgramFactory,
+        SliceWriteTiledShardedInputRuntimeShapesProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -49,6 +50,7 @@ Tensor slice_write(
     Tensor& output_tensor,
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
-    const ttnn::Shape& step);
+    const ttnn::Shape& step,
+    bool runtime_shapes = false);
 
 }  // namespace ttnn::prim

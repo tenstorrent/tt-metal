@@ -15,6 +15,9 @@ struct SliceWriteParams {
     const ttnn::Shape slice_start;
     const ttnn::Shape slice_end;
     const ttnn::Shape step;
+    // A tiled sharded input's program serves every start and output size, and the H and W ends may lie past the
+    // output, where the slice is clipped (see SliceWriteTiledShardedInputRuntimeShapesProgramFactory).
+    const bool runtime_shapes = false;
 };
 
 struct SliceWriteInputs {

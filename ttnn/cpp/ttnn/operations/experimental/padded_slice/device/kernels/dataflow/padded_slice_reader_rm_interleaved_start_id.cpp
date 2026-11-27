@@ -18,6 +18,19 @@ constexpr bool is_non_aligned = true;
 constexpr bool is_non_aligned = false;
 #endif
 
+#ifdef ZERO_FILL_PAST_END
+// Writes `size` bytes of zeros to L1 at `addr`, which is 16 B aligned; `size` is whole 2-byte elements.
+inline void zero_fill_stick(uint32_t addr, uint32_t size) {
+    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    for (uint32_t i = 0; i < size / sizeof(uint32_t); i++) {
+        words[i] = 0;
+    }
+    if (size % sizeof(uint32_t) != 0) {
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(addr + size - sizeof(uint16_t))[0] = 0;
+    }
+}
+#endif
+
 void kernel_main() {
     const uint32_t unpadded_stick_size = get_arg(args::unpadded_stick_size);
     const uint32_t stick_size_offset = get_arg(args::stick_size_offset);
@@ -29,6 +42,12 @@ void kernel_main() {
     // This core's aligned-down start within each input stick, and the bytes to skip after it.
     const uint32_t src_offset_bytes = get_arg(args::src_offset_bytes);
     const uint32_t misalignment = get_arg(args::misalignment);
+#ifdef ZERO_FILL_PAST_END
+    // The slice's columns and rows that lie inside the input; the sticks past them are zeros. id_per_dim[1] and
+    // id_per_dim[2] are the current stick's column and row within the slice.
+    const uint32_t valid_w = get_arg(args::valid_w);
+    const uint32_t valid_h = get_arg(args::valid_h);
+#endif
 
     const uint32_t num_unpadded_sticks_base = 0;
     const uint32_t num_padded_sticks_base = num_dims;
@@ -132,14 +151,24 @@ void kernel_main() {
                         // Start new src->scratch transfer
 
                         dest_offsets[slot] = current_dest_offset;
-                        noc.async_read<NocOptions::TXN_ID>(
-                            s0,
-                            dfb_non_aligned,
-                            unpadded_stick_size + misalignment,
-                            {.page_id = src_stick_id, .offset_bytes = src_offset_bytes},
-                            {.offset_bytes = scratch_offset},
-                            {.trid = active_trid});
-                        slot_states[slot] = SlotState::SRC_PENDING;
+#ifdef ZERO_FILL_PAST_END
+                        if (id_per_dim[1] >= valid_w || id_per_dim[2] >= valid_h) {
+                            // Past the input: zeros, done at once, and the slot stays free.
+                            zero_fill_stick(dfb_out.get_write_ptr() + current_dest_offset, unpadded_stick_size);
+                            sticks_read++;
+                            sticks_completed++;
+                        } else
+#endif
+                        {
+                            noc.async_read<NocOptions::TXN_ID>(
+                                s0,
+                                dfb_non_aligned,
+                                unpadded_stick_size + misalignment,
+                                {.page_id = src_stick_id, .offset_bytes = src_offset_bytes},
+                                {.offset_bytes = scratch_offset},
+                                {.trid = active_trid});
+                            slot_states[slot] = SlotState::SRC_PENDING;
+                        }
 
                         current_dest_offset += stick_size_offset;
                         src_stick_id++;
@@ -209,12 +238,19 @@ void kernel_main() {
 
             for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
                 sticks_read++;
-                noc.async_read(
-                    s0,
-                    dfb_out,
-                    unpadded_stick_size,
-                    {.page_id = src_stick_id, .offset_bytes = src_offset_bytes},
-                    {.offset_bytes = l1_offset});
+#ifdef ZERO_FILL_PAST_END
+                if (id_per_dim[1] >= valid_w || id_per_dim[2] >= valid_h) {
+                    zero_fill_stick(dfb_out.get_write_ptr() + l1_offset, unpadded_stick_size);
+                } else
+#endif
+                {
+                    noc.async_read(
+                        s0,
+                        dfb_out,
+                        unpadded_stick_size,
+                        {.page_id = src_stick_id, .offset_bytes = src_offset_bytes},
+                        {.offset_bytes = l1_offset});
+                }
                 l1_offset += stick_size_offset;
                 src_stick_id++;
                 for (uint32_t j = 0; j < num_dims; j++) {

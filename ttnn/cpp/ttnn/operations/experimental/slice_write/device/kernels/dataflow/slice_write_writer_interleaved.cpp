@@ -21,6 +21,12 @@ void kernel_main() {
 #ifdef UNPAD_INPUT_WIDTH
     const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
 #endif
+#ifdef CLIP_SLICE
+    // The slice's tile columns and rows inside the output; id_per_dim[1] and id_per_dim[2] are the current tile's
+    // column and row within the slice. The tiles past them are not written.
+    const uint32_t valid_w_tiles = get_arg_val<uint32_t>(22);
+    const uint32_t valid_h = get_arg_val<uint32_t>(23);
+#endif
 
 #ifdef DEBUG
     DPRINT("dst_addr: {}\n", dst_addr);
@@ -60,14 +66,20 @@ void kernel_main() {
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-#ifdef UNPAD_INPUT_WIDTH
-            if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
-            }
-#else
-            noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+#ifdef CLIP_SLICE
+            if (id_per_dim[1] < valid_w_tiles && id_per_dim[2] < valid_h)
 #endif
+            {
+#ifdef UNPAD_INPUT_WIDTH
+                if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
+                    noc.async_write(
+                        cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
+                }
+#else
+                noc.async_write(
+                    cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+#endif
+            }
 #ifdef DEBUG
             DPRINT(
                 "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",

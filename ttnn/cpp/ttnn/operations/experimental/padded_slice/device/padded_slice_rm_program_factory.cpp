@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "padded_slice_rm_program_factory.hpp"
+#include "padded_slice_device_operation.hpp"
 #include "padded_slice_utils.hpp"
 
 #include "hostdevcommon/kernel_structs.h"
@@ -265,21 +266,106 @@ get_padded_slice_runtime_args_rm_sharded_output(
     return ret_val;
 }
 
+namespace {
+
+// The slice's extent in every dim.
+ttnn::Shape padded_slice_extent(const PaddedSliceParams& operation_attributes) {
+    ttnn::Shape extent = operation_attributes.padded_slice_end;
+    for (int i = 0; i < extent.rank(); i++) {
+        extent[i] = operation_attributes.padded_slice_end[i] - operation_attributes.padded_slice_start[i];
+    }
+    return extent;
+}
+
+// Whether the writer pads each output row: when the output shard is wider than the slice's share of the channels.
+bool padded_slice_rm_pads_output_row(const Tensor& input, const Tensor& output, const ttnn::Shape& extent) {
+    const uint32_t num_cores_channels =
+        ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output);
+    const uint32_t output_row_size_bytes = output.shard_spec().value().shape[1] * output.element_size();
+    return output_row_size_bytes > (extent[-1] * input.element_size()) / num_cores_channels;
+}
+
+// Every core's reader and writer args, and the tensors. With `zero_fill`, the reader also gets how many of the
+// slice's columns and rows lie inside the input.
+tt::tt_metal::ProgramRunArgs padded_slice_rm_run_args(
+    const PaddedSliceParams& operation_attributes, const Tensor& a, Tensor& output, bool zero_fill) {
+    using namespace padded_slice_rm_metal2;
+
+    const auto& start = operation_attributes.padded_slice_start;
+    const ttnn::Shape extent = padded_slice_extent(operation_attributes);
+    const auto output_shard_spec = output.shard_spec().value();
+    const std::vector<CoreCoord> iter_cores = corerange_to_cores(
+        output_shard_spec.grid, std::nullopt, output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    const bool pad_output_row = padded_slice_rm_pads_output_row(a, output, extent);
+    const auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(a, output, start, extent, iter_cores);
+
+    const auto& input_shape = a.logical_shape();
+    const auto inside = [&](int dim) -> uint32_t {
+        return start[dim] < input_shape[dim] ? std::min<uint32_t>(extent[dim], input_shape[dim] - start[dim]) : 0;
+    };
+    const uint32_t valid_w = inside(-2);
+    const uint32_t valid_h = inside(-3);
+
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    uint32_t i = 0;
+    for (const auto& core : iter_cores) {
+        const std::vector<uint32_t>& r = all_runtime_args[i].first;
+        const std::vector<uint32_t>& w = all_runtime_args[i].second;
+
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"unpadded_stick_size", r[0]},
+             {"stick_size_offset", r[1]},
+             {"num_dims", r[2]},
+             {"start_id", r[3]},
+             {"num_sticks_per_core", r[4]},
+             {"num_sticks_per_core_read", r[5]},
+             {"num_read_per_barrier", r[6]},
+             {"src_offset_bytes", r[7]},
+             {"misalignment", r[8]}});
+        if (zero_fill) {
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values, core, {{"valid_w", valid_w}, {"valid_h", valid_h}});
+        }
+        // The three per-dimension blocks follow the scalars in the same order the kernel reads them.
+        reader_run_args.advanced_options.runtime_varargs[core] =
+            std::vector<uint32_t>(r.begin() + kPaddedSliceRmReaderVarargsBase, r.end());
+
+        if (pad_output_row) {
+            AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core,
+                {{"num_units", w[0]},
+                 {"num_elements_per_row", w[1]},
+                 {"unpadded_row_size_bytes", w[2]},
+                 {"padded_row_size_bytes", w[3]}});
+        } else {
+            // The plain writer reads only the unit count.
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_units", w[0]}});
+        }
+        i++;
+    }
+
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
+    run_args.tensor_args = {
+        {INPUT, a.mesh_tensor()},
+        {OUTPUT, output.mesh_tensor()},
+    };
+    return run_args;
+}
+
+}  // namespace
+
 ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_program_artifacts(
     const PaddedSliceParams& operation_attributes, const PaddedSliceInputs& tensor_args, Tensor& output) {
     using namespace padded_slice_rm_metal2;
 
     const auto& a = tensor_args.input;
     const auto& output_tensor_start = operation_attributes.padded_slice_start;
-    const auto& output_tensor_end = operation_attributes.padded_slice_end;
-    const auto& input_mesh = a.mesh_tensor();
-    const auto& output_mesh = output.mesh_tensor();
-
-    const ttnn::Shape output_shape = output.logical_shape();
-    ttnn::Shape actual_output_shape = output_tensor_end;
-    for (int i = 0; i < output_shape.rank(); i++) {
-        actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
-    }
+    const ttnn::Shape actual_output_shape = padded_slice_extent(operation_attributes);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     TT_FATAL(src0_buffer != nullptr, "Input buffer should be allocated on device");
@@ -292,9 +378,6 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     uint32_t output_row_size_bytes = output_shard_spec.shape[1] * output.element_size();
 
     CoreRangeSet total_cores = output.shard_spec().value().grid;
-    bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
-    std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
 
     uint32_t num_cores_channels =
         ttnn::operations::experimental::detail::get_num_cores_channels_from_sharded_tensor(output);
@@ -408,6 +491,24 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         });
         reader_defines.emplace("NON_ALIGNED", "1");
     }
+    // With runtime_shapes the slice may reach past the input, which reads zeros there.
+    const bool shape_free = padded_slice_rm_is_shape_free(operation_attributes, tensor_args);
+    Group<std::string> reader_arg_names = {
+        "unpadded_stick_size",
+        "stick_size_offset",
+        "num_dims",
+        "start_id",
+        "num_sticks_per_core",
+        "num_sticks_per_core_read",
+        "num_read_per_barrier",
+        "src_offset_bytes",
+        "misalignment",
+    };
+    if (shape_free) {
+        reader_defines.emplace("ZERO_FILL_PAST_END", "1");
+        reader_arg_names.push_back("valid_w");
+        reader_arg_names.push_back("valid_h");
+    }
 
     KernelSpec reader{
         .unique_id = READER,
@@ -431,21 +532,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
                 },
             },
         .compile_time_args = {{"num_trids", num_trids}},
-        .runtime_arg_schema =
-            {
-                .runtime_arg_names =
-                    {
-                        "unpadded_stick_size",
-                        "stick_size_offset",
-                        "num_dims",
-                        "start_id",
-                        "num_sticks_per_core",
-                        "num_sticks_per_core_read",
-                        "num_read_per_barrier",
-                        "src_offset_bytes",
-                        "misalignment",
-                    },
-            },
+        .runtime_arg_schema = {.runtime_arg_names = std::move(reader_arg_names)},
         .hw_config = ttnn::create_reader_datamovement_config(),
         // Three num_dims-long blocks: num_unpadded_sticks, num_padded_sticks, then the id_per_dim seed.
         .advanced_options = {.num_runtime_varargs = 3 * num_dims},
@@ -507,47 +594,11 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
                   .hw_config = ttnn::create_writer_datamovement_config(),
               };
 
-    // ---- Per-core runtime args ----
-    auto all_runtime_args = get_padded_slice_runtime_args_rm_sharded_output(
-        a, output, output_tensor_start, actual_output_shape, iter_cores);
-
-    KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs writer_run_args{.kernel = WRITER};
-    uint32_t i = 0;
-    for (const auto& core : iter_cores) {
-        const std::vector<uint32_t>& r = all_runtime_args[i].first;
-        const std::vector<uint32_t>& w = all_runtime_args[i].second;
-
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values,
-            core,
-            {{"unpadded_stick_size", r[0]},
-             {"stick_size_offset", r[1]},
-             {"num_dims", r[2]},
-             {"start_id", r[3]},
-             {"num_sticks_per_core", r[4]},
-             {"num_sticks_per_core_read", r[5]},
-             {"num_read_per_barrier", r[6]},
-             {"src_offset_bytes", r[7]},
-             {"misalignment", r[8]}});
-        // The three per-dimension blocks follow the scalars in the same order the kernel reads them.
-        reader_run_args.advanced_options.runtime_varargs[core] =
-            std::vector<uint32_t>(r.begin() + kPaddedSliceRmReaderVarargsBase, r.end());
-
-        if (pad_output_row) {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {{"num_units", w[0]},
-                 {"num_elements_per_row", w[1]},
-                 {"unpadded_row_size_bytes", w[2]},
-                 {"padded_row_size_bytes", w[3]}});
-        } else {
-            // The plain writer reads only the unit count.
-            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_units", w[0]}});
-        }
-        i++;
-    }
+    // With runtime_shapes the input's shape varies between the calls this program serves; its page size, one row
+    // of channels, is in the key.
+    TensorSpecRelaxations input_relaxations;
+    input_relaxations.dynamic_tensor_shape = shape_free;
+    input_relaxations.match_page_size = shape_free;
 
     ProgramSpec spec{
         .name = "padded_slice_rm",
@@ -556,7 +607,7 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
         .scratchpads = {std::move(id_per_dim_scratch)},
         .tensor_parameters =
             {
-                TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec()},
+                TensorParameter{.unique_id = INPUT, .spec = a.tensor_spec(), .relaxations = input_relaxations},
                 TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
             },
         .work_units =
@@ -569,25 +620,23 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             },
     };
 
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
-    run_args.tensor_args = {
-        {INPUT, input_mesh},
-        {OUTPUT, output_mesh},
-    };
-
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
-        .run_params = std::move(run_args),
+        .run_params = padded_slice_rm_run_args(operation_attributes, a, output, shape_free),
     };
 }
 
 ProgramRunArgs PaddedSliceRMProgramFactory::override_runtime_arguments(
-    const PaddedSliceParams& /*operation_attributes*/,
+    const PaddedSliceParams& operation_attributes,
     const PaddedSliceInputs& tensor_args,
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*coord*/) {
     using namespace padded_slice_rm_metal2;
+
+    if (padded_slice_rm_is_shape_free(operation_attributes, tensor_args)) {
+        // The key leaves out the start and the input's sizes, so every per-core arg is recomputed.
+        return padded_slice_rm_run_args(operation_attributes, tensor_args.input, output, true);
+    }
 
     const auto& src_tensor = tensor_args.input;
     auto& dst_tensor = output;
