@@ -15,7 +15,6 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from . import g6_zeros_like_program_descriptor as _pd
 
-
 # ---------------------------------------------------------------------------
 # 1. INPUT_TAGGERS
 # ---------------------------------------------------------------------------
@@ -123,11 +122,23 @@ def validate(input_tensor, *, optional_tensor=None):
 
 
 def describe_plan(input_tensor):
-    """One entry per participating core; cores not listed carry no kernel."""
+    """One entry per participating core; cores not listed carry no kernel.
+
+    A core writes pages start_page + k * page_stride for k < num_pages; `bank` is the DRAM bank of all of
+    them in the bank_run_coalesced regime, None in the page split.
+    """
     _validate_structure(input_tensor)
     plan = _pd.plan(input_tensor)
     return [
-        {"core": (c.core.x, c.core.y), "role": "writer", "start_page": c.start_page, "num_pages": c.num_pages}
+        {
+            "core": (c.core.x, c.core.y),
+            "role": "writer",
+            "regime": plan.regime,
+            "start_page": c.start_page,
+            "num_pages": c.num_pages,
+            "page_stride": c.page_stride,
+            "bank": c.bank,
+        }
         for c in plan.cores
     ]
 

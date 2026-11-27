@@ -61,7 +61,7 @@ Also flip the test drivers that bypass `validate()` for bf8b to the public entry
 
 **Outcome**: `bfloat8_b` added to `SUPPORTED["dtype"]`; no kernel or host change. Golden: both bf8b cells pass (6 / 6 axis cells). bf8b exact: 0 of 40960 elements ≠ 0. Perf-guard baseline for bfloat8_b (5,1,32,256) new_output through the public entry point: 813.5 ns median of 16 (789–841 ns), 40 cores.
 
-### [ ] Refinement 2 — DRAM write stream of the perf-flagged profile
+### [x] Refinement 2 — DRAM write stream of the perf-flagged profile
 
 **Type**: perf
 
@@ -98,6 +98,8 @@ Co-tune run length, core count (`NUM_CORES_CAP`) and placement (`ROW_WISE`). No 
 - No regression across the config-spanning guard set:
   - float32 (1,12,128,128) into_optional.
   - bfloat8_b (5,1,32,256) new_output, against its Refinement 1 baseline.
+
+**Outcome**: `bank_run_coalesced` built and default (bank-affine in-bank runs, `segment_rows` placement giving each bank its own NOC_1 route, 80 cores on one rectangle). Float32 flagged shape: 3603 ns (same session: 3522–3643) → 2079–2096 ns median of 12, both call forms. That meets ≤ 2.31 µs. Unprofiled trace replay: 5.27 → 4.26 µs per call. bfloat8_b guard unchanged (816–821 vs 824–826 ns; it stays on the page split because P = C). Wider transfers (8 KiB chunks) lose to their larger fill, so `ZERO_SCRATCH_PAGES` stays 1. The write stream now runs at ≈ 437 GB/s from first write to last ack, near the ~460 GB/s DRAM roofline. What remains is fixed cost: ~450 ns first→last core start and ~195 ns of zero fill before every core's first write. Next: hide the fill (first chunk straight from `MEM_ZEROS`) and shrink the launch skew. Not tried here because they are Refinement 3's scope and do not change the write stream.
 
 ### [ ] Refinement 3 — Per-core fixed cost of the perf-flagged profile
 

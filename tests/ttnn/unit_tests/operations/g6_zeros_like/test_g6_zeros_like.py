@@ -185,7 +185,13 @@ def test_plan_writes_every_page_once_on_many_cores(device, shape, dtype):
     grid = device.compute_with_storage_grid_size()
     assert all(0 <= cx < grid.x and 0 <= cy < grid.y for cx, cy in cores), f"core outside the worker grid: {cores}"
     assert all(entry["num_pages"] > 0 for entry in plan), "a planned core has no page"
-    pages = sorted(p for entry in plan for p in range(entry["start_page"], entry["start_page"] + entry["num_pages"]))
+    pages = sorted(
+        p
+        for entry in plan
+        for p in range(
+            entry["start_page"], entry["start_page"] + entry["num_pages"] * entry["page_stride"], entry["page_stride"]
+        )
+    )
     assert pages == list(range(x.buffer_num_pages())), "pages not covered exactly once"
 
 
