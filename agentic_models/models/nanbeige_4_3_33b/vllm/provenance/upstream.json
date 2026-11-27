@@ -1,0 +1,48 @@
+{
+  "repository": "https://github.com/tenstorrent/tt-metal",
+  "source": "m5:/home/ttuser/nanbeige43-33b/tt-metal (verified bundle m1:~/vkovacevic/rescue-m5/rescue-20261127/nanbeige-tt-metal.bundle)",
+  "branch": "main",
+  "revision": "2f0c96eae98998590fa7c7532c9068ee79beef3f",
+  "base": "single root commit 5caa2efe = tt-metal v0.83.0-dev20261123 (e39e42718ca) tree minus three Llama demos",
+  "path": "models/autoports/nanbeige_nanbeige4_3_33b",
+  "note": "Bring-up checkout on a QB2 host (tt-model-bringup 0.2.0); the revision is not published. Only the runtime closure of tt/generator_vllm.py, its kernels and the selected precision config are vendored.",
+  "import_rewrite": {
+    "from": "models.autoports.nanbeige_nanbeige4_3_33b",
+    "to": "agentic_models.models.nanbeige_4_3_33b.vllm",
+    "applies_to": "*.py, *.json (imports and string literals)"
+  },
+  "source_sha256": {
+    "config/precision.json": "2f5429d668312cca243f5abb31ec163557ced704b02a1e13c7ecbe1ebb5f285f",
+    "tt/cache.py": "c6aaec2de99d957f5b1fd405bc7ca8fdfececf790df2c813adff938b9944d777",
+    "tt/decoder.py": "5a2a43eb4eba7dad08d1c797d7b1251c213a4f74f12b6971f998a07268e8cf42",
+    "tt/generator.py": "5acf48696bf6b562adb0fbb9cfcf2b83528a7f21b7a87171bc91931d8d6cd68e",
+    "tt/generator_vllm.py": "b80df0abaa8a74cbfbdc0e8d2884101e7ee8a1812253c172a7f25abaa9919895",
+    "tt/model.py": "9710145dca2e41436484d7b12a8507739f292948ae0843cac53223a7ba587b03",
+    "tt/precision.py": "e678d3f65e86b805383fed75ecfcae263b3ebeb7c27b474a2d5369f525bddae1",
+    "tt/prefill_plan.py": "10f6b9b1cf4f442141e57ca917c91501e884244cafee8873d25fb649fd2bdebd",
+    "tt/kernels/advance_active_seeds.cpp": "638bdd1b0113de9bdd0e1f35514d6e169676678138b4197a5274c8b7f26f0a4e",
+    "tt/kernels/fill_partial.cpp": "cc2aefec12dc38dd810385041c996bb64b3cb4fcdd19bcee26373416db86b717",
+    "tt/kernels/mask_positions.cpp": "885fc18496631985dee4a9a234992c738b7b17482ab5877e559fa225abf55ce2",
+    "tt/kernels/remap_counts.cpp": "49e16121e805560318c455effa91bc2a3def7a1c906ddae5f9b109183ec0f57f",
+    "tt/kernels/remap_vector.cpp": "166a4a9613dad4dd695f7f42be953839088c3112f7c7b344483e5d4013b133ba",
+    "tt/kernels/store_rows.cpp": "67fa33e804cf7dd1441bd48902f1ac3dc001a9070c75a08e2ee8a72760d2ed82"
+  },
+  "excluded": [
+    "doc/",
+    "readiness/",
+    "scripts/",
+    "serve.sh",
+    "tk_adapter.py",
+    "reference_hooks.py",
+    ".gitignore",
+    "tt/accuracy_controls.py, tt/rotary.py (not imported by the adapter)"
+  ],
+  "modified": {
+    "tt/generator_vllm.py": "checkpoint from MODEL_WEIGHTS_DIR / HF_MODEL / the pinned HF snapshot instead of the bring-up's doc/targets.json; the tt_metal opt-in switches (TTNN_NANBEIGE_SAMPLING_TOP64 forced, TTNN_NANBEIGE_PRECISION default on); prefill_sampling_mask (shared plugin patch P2) mapped to the generator's sampling_mask; capability reconcile_async_grammar_rows",
+    "tt/decoder.py": "decode keeps the composite ttnn.all_reduce + add: the fused one-shot all_reduce_async(residual_tensor=...) is newer than the pinned tt-metal (FUSED_RESIDUAL_ALL_REDUCE = False); the SDPA scale is passed as the float32 value (_f32), since the pinned bindings reject a Python float that is not exactly a float32"
+  },
+  "modified_sha256": {
+    "tt/decoder.py": "1fb6255c6fa4c8864b220da71b4274101a407a01b28921eab26774939e77f46b",
+    "tt/generator_vllm.py": "1ba21d07e657effe2d8fe23dee86587d736beef1cc3f49fedcd0a9c5b48b3974"
+  }
+}

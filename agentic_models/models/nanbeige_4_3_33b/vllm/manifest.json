@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "model": "nanbeige_4_3_33b",
+  "phase": "vllm",
+  "entrypoint": "agentic_models.models.nanbeige_4_3_33b.vllm.model.entry",
+  "tests": [
+    "model/tests"
+  ],
+  "dependencies": {
+    "targets": [
+      "bh_qb2"
+    ]
+  },
+  "coverage": "full-model-serving",
+  "hf_model": "Nanbeige/Nanbeige4.3-33B",
+  "hf_revision": "df919e1e2cf077a22204c78b6c826bf3db18bc08",
+  "validation": {
+    "status": "pending",
+    "deployment": "manual_qb2",
+    "host": "QB2 (P300x2, 1x4 mesh)",
+    "revisions": {
+      "tt_metal": "58afa8579450ba8afd6df45d05ad01b2860cd32b + patches.json",
+      "vllm_tt_plugin": "f6fe76b63366053b648a7152e087daa3a507d033 + patches.json (P2 prefill sampling mask, P3 original prompt lengths, nanbeige_4_3_33b-plugin-sampling-routing)",
+      "vllm": "0.32.0"
+    },
+    "bring_up_reference": {
+      "revisions": {
+        "tt_metal": "v0.83.0-dev20261123 + bring-up commits (bundle head 2f0c96ea, not published)",
+        "vllm_tt_plugin": "f6fe76b + 6 commits (bundle head 6a7cc1d)",
+        "vllm": "5df63a7 + 2 commits (bundle head c7d4929)"
+      },
+      "evals": {
+        "gpqa_diamond": {
+          "score": 90.99,
+          "answered": 111,
+          "card": 89.5,
+          "note": "time-boxed partial run: 101/111 answered; the first 40 questions in dataset order 36/40"
+        },
+        "swe_bench_verified_10": {
+          "resolved": 9,
+          "of": 10
+        },
+        "terminal_bench_2_0_10": {
+          "resolved": 4,
+          "finished": 5,
+          "of": 10
+        }
+      },
+      "perf": {
+        "isl128_osl128_c1": {
+          "ttft_ms": 389,
+          "tok_s_user": 26.2
+        },
+        "isl1024_osl1024_c16": {
+          "tok_s_user": 20.4,
+          "output_tok_s": 296
+        }
+      }
+    },
+    "source": "README.md"
+  }
+}

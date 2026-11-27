@@ -1,0 +1,68 @@
+{
+  "name": "stage06_all_linear_bfp8_kv_bfp8",
+  "weights": {
+    "attention": "bfp8",
+    "mlp_gate_up": "bfp8",
+    "mlp_down": "bfp8",
+    "lm_head": "bfp8"
+  },
+  "compute": {
+    "prefill": {
+      "attention": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "mlp_gate_up": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "mlp_down": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "lm_head": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      }
+    },
+    "decode": {
+      "attention": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "mlp_gate_up": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "mlp_down": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      },
+      "lm_head": {
+        "fidelity": "HiFi4",
+        "fp32_dest_acc": true,
+        "packer_l1_acc": true,
+        "rounding": "nearest"
+      }
+    }
+  },
+  "kv_dtype": "bfp8",
+  "kv_pool_tokens": 589824,
+  "recurrent_state_dtype": "float32",
+  "rounding": "nearest",
+  "gptq_weights": null
+}

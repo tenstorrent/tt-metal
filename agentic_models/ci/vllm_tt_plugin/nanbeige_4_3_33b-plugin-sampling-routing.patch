@@ -1,0 +1,215 @@
+From ced6df776e6f3af005b863ff4e2f6b11c70051d1 Mon Sep 17 00:00:00 2001
+From: Vladan Kovacevic <vkovacevic@tenstorrent.com>
+Date: Fri, 27 Nov 2026 14:44:50 +0000
+Subject: [PATCH] [feat] Opt-in unset top-k on device and async grammar
+ reconciliation for host-sampled steps
+
+agentic-models patch nanbeige_4_3_33b-plugin-sampling-routing.patch (Nanbeige4.3-33B bring-up,
+vllm-tt-plugin nanbeige43-bringup 358ee85 and 7d2daa0, gated).
+
+- supports_device_top_k_unset (default False): with a bounded max_device_top_k, an unset top-k
+  (normalized to vocab_size) samples on device; explicit values above the bound keep the host route.
+- reconcile_async_grammar_rows (default False): under async scheduling, a host-sampled submission
+  uses the sample-time structured request set (as deferred device steps already do), so a request
+  that retired while the step was in flight does not fail the strict mask remap.
+
+Undeclared models keep the f6fe76b routing and grammar attach unchanged. The bring-up's duplicates of
+the shared prefill-sampling-mask / original-prompt-lens patches are not carried, nor 6a7cc1d (numpy
+views and one less block-table clone; its own measurement showed no throughput change).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/vllm_tt_plugin/config.py       | 11 ++++++
+ src/vllm_tt_plugin/model_runner.py | 19 +++++++--
+ tests/test_device_top_k_routing.py | 63 ++++++++++++++++++++++++++++++
+ tests/test_sample_time_grammar.py  | 37 ++++++++++++++++++
+ 4 files changed, 127 insertions(+), 3 deletions(-)
+
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index a08024a..31305ba 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -29,6 +29,17 @@ def get_model_supports_prefill_sampling_mask(model: Any) -> bool:
+     return value
+ 
+ 
++def get_model_capability_flag(model: Any, name: str) -> bool:
++    """Validate a boolean model_capabilities opt-in that defaults to False."""
++    capabilities = getattr(model, "model_capabilities", None) or {}
++    value = capabilities.get(name, False)
++    if not isinstance(value, bool):
++        raise ValueError(
++            f"model_capabilities['{name}'] must be a boolean, got {value!r}"
++        )
++    return value
++
++
+ def _extract_tt_config(
+     config: dict[str, Any], config_name: str
+ ) -> tuple[dict[str, Any], bool]:
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index e4e47c5..9a2b868 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -43,6 +43,7 @@ from vllm_tt_plugin.async_decode import (
+     TTDecodeSubmission,
+ )
+ from vllm_tt_plugin.config import (
++    get_model_capability_flag,
+     get_model_supports_prefill_sampling_mask,
+     get_tt_data_parallel_size,
+     get_tt_max_batch_size,
+@@ -3462,9 +3463,17 @@ class TTModelRunner:
+         previous step's output. A request that finished there has no grammar
+         row: its row samples unrestricted and vLLM drops the token. Every other
+         step requires a row for each structured request.
++
++        A model declaring ``reconcile_async_grammar_rows`` applies the same
++        sample-time rule to every async submission, host-sampled ones included.
+         """
+         allow_finished_rows = (
+             model_input.defer_device_sampling and self.scheduler_config.async_scheduling
++        ) or (
++            get_model_capability_flag(
++                getattr(self, "model", None), "reconcile_async_grammar_rows"
++            )
++            and self.scheduler_config.async_scheduling
+         )
+         bitmask = self._reorder_grammar_bitmask(
+             grammar_output,
+@@ -4183,9 +4192,13 @@ class TTModelRunner:
+         if max_top_k is not None:
+             temperature = sampling.temperature[rows]
+             top_k = sampling.top_k[rows]
+-            needs_unbounded_or_larger_k = (temperature != 0) & (
+-                (top_k < 1) | (top_k > max_top_k)
+-            )
++            unsupported_k = (top_k < 1) | (top_k > max_top_k)
++            if get_model_capability_flag(self.model, "supports_device_top_k_unset"):
++                # InputBatch normalizes unset top-k to vocab_size. The opting-in
++                # adapter owns and documents its unset-top-k sampling policy;
++                # explicit values above max_device_top_k still use the host.
++                unsupported_k &= (top_k > 0) & (top_k != self.vocab_size)
++            needs_unbounded_or_larger_k = (temperature != 0) & unsupported_k
+             if needs_unbounded_or_larger_k.any():
+                 return False
+         if not input_batch.no_penalties and not self.model.model_capabilities.get(
+diff --git a/tests/test_device_top_k_routing.py b/tests/test_device_top_k_routing.py
+index 72d559f..f9454fd 100644
+--- a/tests/test_device_top_k_routing.py
++++ b/tests/test_device_top_k_routing.py
+@@ -66,3 +66,66 @@ def test_loaded_model_without_device_sampler_uses_host(supports_device_sampler):
+         TTModelRunner.check_perform_device_sampling(runner, True, False)
+         is supports_device_sampler
+     )
++
++
++@pytest.mark.parametrize("unset_support", [False, True])
++@pytest.mark.parametrize("top_k", [-1, 0, 32, 64, 65, 1000])
++@pytest.mark.parametrize("is_decode", [False, True])
++def test_opt_in_unset_device_sampling(unset_support, top_k, is_decode):
++    # supports_device_top_k_unset: unset top-k (normalized to vocab_size) samples on
++    # device; explicit values above max_device_top_k keep the host route.
++    sampling = SamplingInputBatch(1)
++    sampling.top_k[0] = top_k
++    sampling.temperature[0] = 0.6
++    runner = SimpleNamespace(
++        sample_on_device_mode="all",
++        seeded_sampling_policy="auto",
++        num_devices=4,
++        tt_data_parallel_size=1,
++        vocab_size=1000,
++        model=SimpleNamespace(
++            model_capabilities={
++                "max_device_top_k": 64,
++                "supports_device_top_k_unset": unset_support,
++            }
++        ),
++        model_config=SimpleNamespace(logits_processors=[]),
++        input_batch=SimpleNamespace(
++            sampling=sampling,
++            req_id_to_index={"a": 0},
++            no_penalties=True,
++            no_allowed_token_ids=True,
++            max_num_logprobs=None,
++        ),
++    )
++    expected = 1 <= top_k <= 64 or (unset_support and (top_k <= 0 or top_k == 1000))
++    assert (
++        TTModelRunner.check_perform_device_sampling(runner, is_decode, False)
++        is expected
++    )
++
++
++def test_unset_top_k_capability_rejects_non_boolean():
++    sampling = SamplingInputBatch(1)
++    sampling.top_k[0] = 1000
++    sampling.temperature[0] = 0.6
++    runner = SimpleNamespace(
++        sample_on_device_mode="all",
++        seeded_sampling_policy="auto",
++        num_devices=4,
++        tt_data_parallel_size=1,
++        vocab_size=1000,
++        model=SimpleNamespace(
++            model_capabilities={"max_device_top_k": 64, "supports_device_top_k_unset": 1}
++        ),
++        model_config=SimpleNamespace(logits_processors=[]),
++        input_batch=SimpleNamespace(
++            sampling=sampling,
++            req_id_to_index={"a": 0},
++            no_penalties=True,
++            no_allowed_token_ids=True,
++            max_num_logprobs=None,
++        ),
++    )
++    with pytest.raises(ValueError, match="supports_device_top_k_unset"):
++        TTModelRunner.check_perform_device_sampling(runner, True, False)
+diff --git a/tests/test_sample_time_grammar.py b/tests/test_sample_time_grammar.py
+index b35ad64..a041f72 100644
+--- a/tests/test_sample_time_grammar.py
++++ b/tests/test_sample_time_grammar.py
+@@ -1296,3 +1296,40 @@ def test_finish_lane_sync_consumes_device_grammar_before_slot_extraction():
+     assert seen["submission"] is submission
+     assert seen["bitmask"] is bitmask
+     assert output.tolist() == [[11], [12]]
++
++
++# --------------------------------------------------------------------------
++# reconcile_async_grammar_rows: host-sampled async submissions (opt-in)
++# --------------------------------------------------------------------------
++
++
++@pytest.mark.parametrize("declared", [False, True])
++@pytest.mark.parametrize("async_scheduling", [False, True])
++def test_host_sampled_async_retired_rows_follow_the_capability(declared, async_scheduling):
++    seen = {}
++
++    def reorder(grammar_output, model_input, *, lane_total, require_complete=True):
++        seen["require_complete"] = require_complete
++        return None
++
++    runner = SimpleNamespace(
++        _reorder_grammar_bitmask=reorder,
++        scheduler_config=SimpleNamespace(async_scheduling=async_scheduling),
++        model=SimpleNamespace(
++            model_capabilities={"reconcile_async_grammar_rows": declared}
++        ),
++    )
++    model_input = _model_input(
++        input_tokens=torch.zeros((2, 1), dtype=torch.int32),
++        row_req_ids=["req-live", "req-retired"],
++        structured_output_req_ids=frozenset({"req-live", "req-retired"}),
++    )
++
++    result = TTModelRunner._apply_grammar_to_input(
++        runner, model_input, _live_grammar(), lane_total=None
++    )
++
++    reconciled = declared and async_scheduling
++    assert seen["require_complete"] is not reconciled
++    expected = {"req-live"} if reconciled else {"req-live", "req-retired"}
++    assert result.structured_output_req_ids == frozenset(expected)
+-- 
+2.43.0
+

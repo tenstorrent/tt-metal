@@ -1,0 +1,4 @@
+{
+  "arch": "LlamaForCausalLM",
+  "main_class": "agentic_models.models.nanbeige_4_3_33b.vllm.tt.generator_vllm:NanbeigeVLLM"
+}
