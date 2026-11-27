@@ -73,16 +73,13 @@ bool is_block_float(DataType dtype);
 // packed on the host" property but use different encodings, packers and supported architectures.
 bool is_mx(DataType dtype);
 
-// For a CB that a compute kernel unpacks or packs, use cb_dataformat_for instead.
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);
 
 /**
  * Returns the format to declare a CB when moving a tensor of this dtype through the unpacker/packer.
  *
- * The Tensix Int8 CB format is sign-magnitude, so unpack/pack maps 0x80 (-128) to 0. UInt8 moves the raw bits, so
- * INT8 maps to UInt8 here. This differs from datatype_to_dataformat_converter only for INT8.
- * Use it for any CB that a compute kernel unpacks or packs.
+ *This differs from datatype_to_dataformat_converter only for INT8.
  */
 tt::DataFormat cb_dataformat_for(DataType datatype);
 
