@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "sparse_kv_dispatch_device_operation_types.hpp"
 

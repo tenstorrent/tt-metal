@@ -31,6 +31,18 @@ _TORUS_XY = {
     "fabric_router_config": _ROUTER,
 }
 
+# every 2D fabric the dispatch supports, with the axes it wraps (wrap_x: along a mesh row, wrap_y: along a column)
+_FABRICS = {
+    "torus_xy": (ttnn.FabricConfig.FABRIC_2D_TORUS_XY, True, True),
+    "torus_x": (ttnn.FabricConfig.FABRIC_2D_TORUS_X, True, False),
+    "torus_y": (ttnn.FabricConfig.FABRIC_2D_TORUS_Y, False, True),
+    "mesh_2d": (ttnn.FabricConfig.FABRIC_2D, False, False),
+}
+
+
+def _fabric_params(name):
+    return {**_TORUS_XY, "fabric_config": _FABRICS[name][0]}
+
 
 def _grid(mesh_device):
     g = mesh_device.compute_with_storage_grid_size()
@@ -208,12 +220,17 @@ def _check(mesh_device, d, cache, slot, natural):
 
 @run_for_blackhole()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize(
+    "device_params, fabric",
+    [(_fabric_params(f), f) for f in _FABRICS],
+    ids=list(_FABRICS),
+    indirect=["device_params"],
+)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 @pytest.mark.parametrize("kv_fmt", ["fp8", "bf16"])
 @pytest.mark.parametrize("slabs, picks", [(4, 300), (8, 2048)], ids=["small", "dense_picks"])
 @pytest.mark.parametrize("lanes", [1, 2], ids=["lanes1", "lanes2"])
-def test_dispatch_exact(mesh_device, kv_fmt, slabs, picks, lanes):
+def test_dispatch_exact(mesh_device, fabric, kv_fmt, slabs, picks, lanes):
     """Random top-k over three calls (program cache hits, persistent words back at zero): uniform, per-chip extents, empty."""
     n = mesh_device.get_num_devices()
     max_rows = slabs * n * STRIPE
@@ -258,7 +275,7 @@ def test_dispatch_exact(mesh_device, kv_fmt, slabs, picks, lanes):
         bad = _check(mesh_device, d, cache, slot, natural)
         assert bad == 0, f"call {call}: {bad} needed rows wrong"
         # nothing else changed: every page outside the chip's needed and relayed rows still holds the poison
-        touched = _touched(tuple(mesh_device.shape), natural, max_rows)
+        touched = _touched(tuple(mesh_device.shape), natural, max_rows, *_FABRICS[fabric][1:])
         outs = ttnn.get_device_tensors(d.output if dtype == ttnn.bfloat16 else ttnn.typecast(d.output, ttnn.bfloat16))
         for i in sorted({0, n // 2, n - 1}):
             got = _as_bits(ttnn.to_torch(outs[i])[0, 0].to(torch.float32))
@@ -267,6 +284,78 @@ def test_dispatch_exact(mesh_device, kv_fmt, slabs, picks, lanes):
             stray = int((got[keep] != poison_bits[keep]).any(dim=1).sum())
             assert stray == 0, f"call {call} chip {i}: {stray} pages written that no tree puts there"
         logger.info(f"call {call}: every needed row landed, nothing else written")
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize(
+    "device_params, fabric",
+    [(_fabric_params(f), f) for f in _FABRICS],
+    ids=list(_FABRICS),
+    indirect=["device_params"],
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize("split_slabs", [0, 3, 7], ids=["split0", "split_mid", "split_last"])
+def test_dispatch_parts(mesh_device, fabric, split_slabs):
+    """part=PREFIX sends exactly the needed rows of blocks before the plan's split block, REST the others: each alone
+    into a poisoned buffer (its rows exact, the other part's rows still poison), then PREFIX + REST == ALL."""
+    n = mesh_device.get_num_devices()
+    slabs = 8
+    max_rows = slabs * n * STRIPE
+    cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=7)
+    d = Dispatch(mesh_device, max_rows, width, dtype)
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    rng = np.random.default_rng(11)
+    natural = np.stack([rng.integers(0, max_rows, size=(STRIPE, TOPK)) for _ in range(n)])
+    natural[:, :, 1024:] = max_rows
+    idx = ttnn.from_torch(
+        torch.from_numpy(natural.reshape(1, 1, n * STRIPE, TOPK).astype(np.int32)),
+        dtype=ttnn.uint32,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+        **common,
+    )
+    chunk_start = split_slabs * n * STRIPE
+    table = d.plan(idx, chunk_start=chunk_start)
+    split_block = chunk_start // STRIPE
+    poison = ttnn.from_torch(
+        torch.full((1, 1, max_rows, width), 3.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        **common,
+    )
+    poison = poison if dtype == ttnn.bfloat16 else ttnn.typecast(poison, dtype)
+    as_bf16 = lambda t: t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16)
+    cache_all = ttnn.to_torch(as_bf16(cache), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2))[0, 0]
+    cache_bits = _as_bits(cache_all.to(torch.float32))
+
+    def page(g):
+        return (g // STRIPE % n) * (max_rows // n) + (g // STRIPE // n) * STRIPE + g % STRIPE
+
+    def check(sent, label):
+        outs = ttnn.get_device_tensors(as_bf16(d.output))
+        for i in range(n):
+            need = np.unique(natural[i].ravel())
+            need = need[(need >= 0) & (need < max_rows)]
+            prefix = need // STRIPE < split_block
+            got = _as_bits(ttnn.to_torch(outs[i])[0, 0].to(torch.float32))
+            for sel, name in ((prefix, "PREFIX"), (~prefix, "REST")):
+                pages = torch.from_numpy(page(need[sel]).astype(np.int64))
+                if pages.numel() == 0:
+                    continue
+                exact = (got[pages] == cache_bits[pages]).all(dim=1)
+                if name in sent:
+                    assert bool(exact.all()), f"{label} chip {i}: {int((~exact).sum())} {name} rows wrong"
+                else:
+                    assert not bool(exact.any()), f"{label} chip {i}: {int(exact.sum())} {name} rows sent by mistake"
+
+    for parts in (("PREFIX",), ("REST",), ("PREFIX", "REST"), ("ALL",)):
+        ttnn.copy(poison, d.output)
+        for name in parts:
+            d(cache, table, part={"ALL": 0, "PREFIX": 1, "REST": 2}[name])
+        ttnn.synchronize_device(mesh_device)
+        sent = {"PREFIX", "REST"} if parts in (("ALL",), ("PREFIX", "REST")) else set(parts)
+        check(sent, "+".join(parts))
+        logger.info(f"{fabric} split {split_slabs}: {'+'.join(parts)} exact")
 
 
 _GLM_TRACE = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120/dsa"
@@ -404,7 +493,14 @@ def test_dispatch_ablate(mesh_device):
             if key not in dispatchers:
                 dispatchers[key] = Dispatch(mesh_device, max_rows, width, dtype, planners=key[0], lanes_per_link=key[1])
             d = dispatchers[key]
-            kw = cfg.get("kw", {})
+            kw = dict(cfg.get("kw", {}))
+            if "grid_cols" in cfg:  # [first, last] columns, every row: e.g. the columns beside GLM's attention
+                g = mesh_device.compute_with_storage_grid_size()
+                c0, c1 = cfg["grid_cols"]
+                kw["core_grid"] = ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(c0, 0), ttnn.CoreCoord(min(c1, g.x - 1), g.y - 1))]
+                )
+                logger.warning(f"KVDA {cfg.get('name')}: grid {g.x}x{g.y}, cores {kw['core_grid'].num_cores()}")
             for layer in layers:
                 natural, idx = data[layer]
                 table = d.plan(idx, chunk_start=_GLM_START)
@@ -954,4 +1050,131 @@ def test_dispatch_kv_sweep(mesh_device):
             f"KVDS | KV {kv:8d} | L{layer} | needed rows {need_max:7d} | plan {plan_us:5.0f} | dispatch {us:5.0f} | "
             f"plan+dispatch {plan_us + us:5.0f} (one trace {pd_us:5.0f}) | fused {fused_us:5.0f} | push {push_us:5.0f} | plan+push {plan_us + push_us:5.0f} | "
             f"hbag {hb_us:5.0f} us | {'real' if is_real else 'synthetic'}"
+        )
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [_TORUS_XY], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+def test_zz_push_vs_dispatch_real_scratch(mesh_device):
+    """SCRATCH: the existing push (sparse_push_plan + all-gather + sparse_kv_push ALL into the compact buffer) against
+    sparse_kv_dispatch, on GLM-5.3 real top-k dumped from test_sparse_mla_real_data_perf (KVD_TOPK_DIR, files
+    topk_L<layer>_c<cache>.pt). Traced us per call; each op on the full grid and on the cores beside GLM attention."""
+    import glob
+
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart, SparseKvPushPlanner
+
+    files = sorted(glob.glob(f"{os.environ['KVD_TOPK_DIR']}/topk_L*_c*.pt"))
+    assert files, "no top-k dumps"
+    n = mesh_device.get_num_devices()
+    g = mesh_device.compute_with_storage_grid_size()
+    common = dict(layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    planner = SparseKvPushPlanner(mesh_device, links=2)
+    _, push_grid = planner.grids(STRIPE)
+    beside = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))])
+    logger.warning(
+        f"PVD grid {g.x}x{g.y}: push beside {push_grid.num_cores()} cores, dispatch beside {beside.num_cores()}"
+    )
+    rows = []
+    for f in files:
+        dump = torch.load(f)
+        tag = os.path.basename(f)[5:-3]
+        start, chunk = dump["chunk_start"], dump["chunk"]
+        natural = dump["indices"].reshape(n, STRIPE, TOPK).to(torch.int64)
+        max_rows = -(-(start + chunk) // (n * STRIPE)) * (n * STRIPE)
+        valid = natural[(natural >= 0) & (natural < max_rows)]
+        distinct = [
+            int(torch.unique(natural[i][(natural[i] >= 0) & (natural[i] < max_rows)]).numel()) for i in range(n)
+        ]
+        idx = ttnn.from_torch(
+            natural.reshape(1, 1, n * STRIPE, TOPK).to(torch.int32),
+            dtype=ttnn.uint32,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=2),
+            **common,
+        )
+        cache, width, dtype = _cache(mesh_device, 1, max_rows, "fp8", seed=5)
+        res = {}
+        # existing: plan (+ table all-gather) and push of every needed row into the compact buffer
+        page_bytes = cache.buffer_aligned_page_size()
+        planner.invalidate()
+        plan = planner.plan(idx, stripe_chunk=STRIPE, page_bytes=page_bytes, max_rows=max_rows, chunk_start=start)
+        compact = planner.push_buffer(0, cache, distinct_rows=STRIPE * TOPK, max_rows=max_rows, stripe_chunk=STRIPE)
+
+        def push(grid=None):
+            return ttnn.experimental.sparse_kv_push(
+                cache,
+                output_tensor=compact,
+                table=plan.table,
+                stripe_chunk=STRIPE,
+                max_rows=max_rows,
+                part=SparseKvPushPart.ALL,
+                num_links=2,
+                sp_axis=0,
+                batch_index=0,
+                ready_semaphore=planner.ready_semaphore,
+                done_semaphore=planner.done_semaphore,
+                **({"core_grid": grid} if grid is not None else {}),
+            )
+
+        def push_plan():
+            planner.invalidate()
+            planner.plan(idx, stripe_chunk=STRIPE, page_bytes=page_bytes, max_rows=max_rows, chunk_start=start)
+
+        res["push"] = _traced_us(mesh_device, push)
+        res["push_beside"] = _traced_us(mesh_device, lambda: push(push_grid))
+        res["push_plan"] = _traced_us(mesh_device, push_plan)
+        # proposed: owner-major plan, then the dispatch (48 planners full grid; 16 planners K=2 beside attention)
+        for name, planners, env, grid in (
+            ("kvd", 48, {}, None),
+            ("kvd_beside", 16, {"KVD3": "K=2"}, beside),
+        ):
+            saved = {k: os.environ.get(k) for k in env}
+            os.environ.update(env)
+            try:
+                mesh_device.disable_and_clear_program_cache()
+                mesh_device.enable_program_cache()
+                d = Dispatch(mesh_device, max_rows, width, dtype, planners=planners)
+                table = d.plan(idx, chunk_start=start)
+                kw = {"core_grid": grid} if grid is not None else {}
+                d(cache, table, **kw)
+                ttnn.synchronize_device(mesh_device)
+                if name == "kvd":  # exactness on chips 0 and 17, as test_dispatch_ablate
+                    cache_all = ttnn.to_torch(
+                        ttnn.typecast(cache, ttnn.bfloat16), mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+                    )[0, 0]
+                    outs = ttnn.get_device_tensors(ttnn.typecast(d.output, ttnn.bfloat16))
+                    bad = 0
+                    for i in (0, 17):
+                        need = torch.unique(natural[i][(natural[i] >= 0) & (natural[i] < max_rows)])
+                        pages = (need // STRIPE % n) * (max_rows // n) + (need // STRIPE // n) * STRIPE + need % STRIPE
+                        got = ttnn.to_torch(outs[i])[0, 0]
+                        bad += int(
+                            (_as_bits(got[pages].to(torch.float32)) != _as_bits(cache_all[pages].to(torch.float32)))
+                            .any(dim=1)
+                            .sum()
+                        )
+                    assert bad == 0, f"{tag}: dispatch wrote {bad} wrong rows"
+                res[name] = _traced_us(mesh_device, lambda: d(cache, table, **kw))
+                if name == "kvd":
+                    res["kvd_plan"] = _traced_us(mesh_device, lambda: d.plan(idx, chunk_start=start))
+                ttnn.deallocate(d.output)
+                ttnn.deallocate(d.scratch)
+            finally:
+                for k, v in saved.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+        mesh_device.disable_and_clear_program_cache()
+        mesh_device.enable_program_cache()
+        row = (tag, start, int(valid.numel()), max(distinct), sum(distinct) // n, res)
+        rows.append(row)
+        logger.warning(f"PVD {tag}: " + " ".join(f"{k}={v:.0f}" for k, v in res.items()))
+        ttnn.deallocate(cache)
+        ttnn.deallocate(idx)
+    for tag, start, _, dmax, dmean, res in rows:
+        logger.warning(
+            f"PVD | {tag:12s} | distinct/chip mean {dmean:6d} max {dmax:6d} | "
+            + " | ".join(f"{k} {v:6.0f}" for k, v in res.items())
         )

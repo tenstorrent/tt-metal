@@ -21,10 +21,10 @@
 #include <internal/mesh_device.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/sparse_kv_push/common/sparse_kv_push_common.hpp"
@@ -489,6 +489,50 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
     // (on the whole grid, not just this chip's cores: a CB's base is the L1 high-water mark of the cores it is on, and
     // the placed cores differ by chip; on the grid it is the same on every chip)
     const auto& grid_range = p.core_grid;
+    // Fit the staging and landing depths to the free L1: lines and partial tori have more classes G than a torus
+    // (8x4 open mesh: 10 vs 6), and both CBs scale with G. Free L1 is [allocator base, lowest live L1 buffer), as
+    // sparse_sdpa_msa computes it. Staging depth goes first (to 1), then pool depth (to 2); a torus keeps the defaults.
+    {
+        bool pool0 = false;
+        for (const auto& [name, value] : abl_defs) {
+            pool0 = pool0 || name == "KVD_ABL_POOL0";
+        }
+        const uint64_t align = 64;
+        auto cb = [&](uint64_t bytes) { return tt::round_up(bytes, align); };
+        const uint64_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const uint64_t l1_end = l1_base + mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
+        const uint64_t l1_top =
+            std::min<uint64_t>(mesh_device->lowest_occupied_compute_l1_address().value_or(l1_end), l1_end);
+        const uint64_t free_l1 = l1_top - l1_base;
+        const uint64_t ctrl = cb(4 * kvd3::kCtrlWords);
+        const uint64_t send = cb(
+            std::max<uint64_t>(kvd3::send_cb_bytes(sbytes, ring_depth, kn.lanes), tt::round_up(max_payload, 64) + 64));
+        const uint64_t inbox = cb(std::max(inbox_slot, N * 64 + planner_units * N * 64));
+        // (the copy batch, plus KVD_ABL=PDEFER's deferred lists, counted always)
+        const uint64_t rows =
+            cb(static_cast<uint64_t>(std::max(row_bytes, 64u)) * 8 + 4 * kvd::kMaxLinks * 32 * 16 + row_bytes);
+        auto need = [&]() {
+            const uint64_t stage = cb(uint64_t{sbytes} * std::max(4 * G * kn.stage, 4 * kvd::kMaxLinks * kn.pstage));
+            const uint64_t port = ctrl + stage + cb(uint64_t{sbytes} * G * kn.pool) + send;
+            const uint64_t planner = ctrl + stage + inbox + rows + 64;
+            return std::max(port, planner);
+        };
+        while (!pool0 && need() > free_l1 && (kn.stage > 1 || kn.pool > 2)) {
+            if (kn.stage > 1) {
+                --kn.stage;
+            } else {
+                --kn.pool;
+            }
+            kn.pstage = std::clamp<uint32_t>(G * kn.stage / kvd::kMaxLinks, 2u, 8u);
+        }
+        TT_FATAL(
+            pool0 || need() <= free_l1,
+            "sparse_kv_dispatch: {} classes do not fit L1 ({} B needed at stage 1, pool 2; {} B free): fewer planners "
+            "or rows_per_packet",
+            G,
+            need(),
+            free_l1);
+    }
     add_cb(desc, grid_range, kCtrl, 4 * kvd3::kCtrlWords, 1);
     add_cb(desc, grid_range, kStage, sbytes, std::max(4 * G * kn.stage, 4 * kvd::kMaxLinks * kn.pstage));
     uint32_t pool_pages = G * kn.pool;  // (KVD_ABL=POOL0=n: class 0 has n slots)
@@ -501,7 +545,13 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
             pool_pages = G * kn.pool - kn.pool + std::stoul(value);
         }
     }
-    add_cb(desc, grid_range, kPool, sbytes, pool_pages);
+    // Landing pools on the port cores only: planners never land packets, and their L1 holds the inbox copy (which
+    // grows as planners get fewer). The pools still start at the same address on every chip: kCtrl and kStage, the
+    // only CBs below them, cover the whole grid.
+    std::vector<CoreCoord> port_cores = tx_cores;
+    port_cores.insert(port_cores.end(), w_cores.begin(), w_cores.end());
+    port_cores.insert(port_cores.end(), hlp_cores.begin(), hlp_cores.end());
+    add_cb(desc, to_range_set(port_cores), kPool, sbytes, pool_pages);
     add_cb(
         desc,
         send_range,
@@ -538,6 +588,8 @@ tt::tt_metal::ProgramDescriptor create_descriptor_v3(
         ring_defines.emplace_back("KVD_STATS", "1");
     }
     ring_defines.insert(ring_defines.end(), abl_defs.begin(), abl_defs.end());
+    // which rows of each requester this call sends (planners: kvd3_planner.cpp route_word)
+    ring_defines.emplace_back("KVD_PART", std::to_string(p.part));
     if (p.active_from != 0) {
         // every v3 kernel: return when the chunk starts before active_from (kvd3_common.hpp skip_chunk)
         TT_FATAL(kn.lanes == 1, "sparse_kv_dispatch active_from: LANES=1 only (the helper readers have no gate)");

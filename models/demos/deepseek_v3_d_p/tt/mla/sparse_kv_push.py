@@ -24,6 +24,12 @@ SparseKvPushPart = ttnn.experimental.SparseKvPushPart
 KVD_PLANNERS = int(os.environ.get("SPARSE_MLA_KV_DISPATCH_PLANNERS", "48"))
 KVD_LANES_PER_LINK = int(os.environ.get("SPARSE_MLA_KV_DISPATCH_LANES", "2"))
 
+
+def _spike() -> bool:
+    """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): see mla.py _kvd_spike."""
+    return os.environ.get("SPARSE_MLA_KVD_SPIKE", "0") == "1"
+
+
 # Cores the push needs per fabric link, for laying out its grid beside sparse_sdpa.
 PUSH_CORES_PER_LINK = ttnn.experimental.SPARSE_KV_PUSH_CORES_PER_LINK
 
@@ -140,8 +146,10 @@ class SparseKvPushPlanner:
         # sparse_kv_dispatch (SPARSE_MLA_KV_DISPATCH=1): its four persistent words and its scratch, made on first use
         self._kvd_sems = None
         self._kvd_scratch = {}
+        # SPIKE: dispatch calls by part name
+        self.kvd_calls = Counter()
 
-    def dispatch_resources(self, max_rows: int, stripe_chunk: int):
+    def dispatch_resources(self, max_rows: int, stripe_chunk: int, planners: int = KVD_PLANNERS):
         """(semaphores, scratch) of sparse_kv_dispatch for a cache of max_rows rows: made on first use (the warm pass,
         before any trace capture) and shared by every layer."""
         if self._kvd_sems is None:
@@ -150,10 +158,10 @@ class SparseKvPushPlanner:
             l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
             buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
             self._kvd_sems = [ttnn.create_global_semaphore(self.mesh_device, cores, 0, buffer_type) for _ in range(4)]
-        key = (max_rows, stripe_chunk)
+        key = (max_rows, stripe_chunk, planners)
         if key not in self._kvd_scratch:
             spec = ttnn.experimental.sparse_kv_dispatch_scratch_spec(
-                self.mesh_device, max_rows, stripe_chunk, KVD_PLANNERS, self.links, KVD_LANES_PER_LINK
+                self.mesh_device, max_rows, stripe_chunk, planners, self.links, KVD_LANES_PER_LINK
             )
             self._kvd_scratch[key] = ttnn.allocate_tensor_on_device(spec, self.mesh_device)
         return self._kvd_sems, self._kvd_scratch[key]
@@ -165,6 +173,15 @@ class SparseKvPushPlanner:
         push, so attention takes that many whole columns. The push sits in the remaining columns' rows furthest from
         the Ethernet row, where it contends least with attention."""
         grid = self.mesh_device.compute_with_storage_grid_size()
+        if _spike():  # SPIKE: the dispatch takes the 4 columns right of attention's 8, every row (40 cores)
+            attention_cols = grid.x - 4
+            attention = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(attention_cols - 1, grid.y - 1))]
+            )
+            push = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(attention_cols, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+            )
+            return attention, push
         push_cores = self.links * PUSH_CORES_PER_LINK
         # Attention's busiest core if it took every core the push leaves free...
         tokens_per_core = divup(query_rows, grid.x * grid.y - push_cores)
@@ -221,6 +238,8 @@ class SparseKvPushPlanner:
     ) -> ttnn.Tensor:
         """The compact buffer for `parity`, sized as buffer_spec; created by the op once and reused by every chunk."""
         key = (parity, like.shape[-1], like.dtype, distinct_rows, max_rows, stripe_chunk)
+        if key not in self._buffers and _spike():  # SPIKE: global landing needs a full-size buffer
+            self._buffers[key] = ttnn.allocate_tensor_on_device(like.spec, self.mesh_device)
         if key not in self._buffers:
             self._buffers[key] = ttnn.experimental.sparse_kv_push_create_output_buffer(
                 self.mesh_device,
@@ -298,7 +317,8 @@ class SparseKvPushPlanner:
         pages_per_packet, _ = ttnn._ttnn.operations.experimental._sparse_kv_push_packet_shape(
             self.mesh_device, page_bytes
         )
-        inbox_mode = owner_major and slot_bytes <= pages_per_packet * page_bytes
+        # (SPIKE: the dispatch fragments slots, so a dispatch plan is always owner-major)
+        inbox_mode = owner_major and (slot_bytes <= pages_per_packet * page_bytes or _spike())
         outputs = ttnn.experimental.sparse_push_plan(
             indices,
             stripe_chunk=stripe_chunk,

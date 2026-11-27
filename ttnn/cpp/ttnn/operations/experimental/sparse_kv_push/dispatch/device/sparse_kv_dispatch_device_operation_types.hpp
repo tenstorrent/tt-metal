@@ -46,6 +46,10 @@ struct SparseKvDispatchParams {
     // Active only for chunks starting at or after this row (0: always). The kernels read the chunk start from the plan
     // table's header and, below it, return before any fabric or semaphore traffic (every chip sees the same start).
     uint32_t active_from = 0;
+
+    // Which of each requester's needed rows this call sends (sparse_push::PushPart: 0 ALL, 1 PREFIX = rows of blocks
+    // before the plan's split block, 2 REST = the others). Hashed (a compile-time define of the planners).
+    uint32_t part = 0;
 };
 
 struct SparseKvDispatchInputs {

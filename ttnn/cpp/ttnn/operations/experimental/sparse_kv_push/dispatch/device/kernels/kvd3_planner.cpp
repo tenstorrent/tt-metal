@@ -27,6 +27,10 @@
 
 #include <cstdint>
 
+#ifndef KVD_PART
+#define KVD_PART 0
+#endif
+
 using namespace kvd;
 using namespace kvd3;
 
@@ -315,6 +319,14 @@ void kernel_main() {
     const uint32_t a_lo = bitmap_off, a_hi = bitmap_off + owned_words;
     const uint32_t g_lo = a_lo / kGW, g_hi = (a_hi + kGW - 1) / kGW;
     uint32_t g_hot = g_hi;
+    // The part this call sends (KVD_PART: 0 ALL, 1 PREFIX = blocks before the split block, 2 REST = the others). Every
+    // chip plans the same chunk, so the split block is the same for every requester; without one, every row is in the
+    // prefix (as sparse_kv_push).
+    const auto* hme = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr_l1 + me * 64);
+    const bool part_has_split = hme[::sparse_push::plan_table::kWordHasSplit] != 0;
+    const uint32_t part_split_block = hme[::sparse_push::plan_table::kWordSplitBlock];
+    (void)part_has_split;
+    (void)part_split_block;
     {
         const auto* h = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hdr_l1 + me * 64);
         if (h[::sparse_push::plan_table::kWordHasSplit] != 0) {
@@ -576,6 +588,14 @@ void kernel_main() {
         drain_all();
         const uint32_t u = aw - a_lo;
         const uint32_t lb = u / words_per_block, w = u % words_per_block;
+#if KVD_PART != 0
+        {
+            const bool in_prefix = !part_has_split || me + lb * N < part_split_block;
+            if (in_prefix != (KVD_PART == 1)) {
+                return;  // this word's block is in the other part
+            }
+        }
+#endif
         const uint32_t word_off = aw % 16;
         // only the slices with a bit in this word take part in the rows' masks
         uint32_t words[32], nz_of[32];

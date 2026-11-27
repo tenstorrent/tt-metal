@@ -4,7 +4,7 @@
 
 #include "sparse_kv_dispatch_device_operation.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <cstdlib>
 #include <string>
 
@@ -141,6 +141,7 @@ void validate_config(const SparseKvDispatchParams& p, const SparseKvDispatchInpu
     TT_FATAL(p.max_rows <= kvd::kMaxRows, "sparse_kv_dispatch supports at most {} rows", kvd::kMaxRows);
     TT_FATAL(p.num_links >= 1 && p.num_links <= 2, "sparse_kv_dispatch supports 1 or 2 links");
     TT_FATAL(p.planners >= 1 && p.planners <= 64, "sparse_kv_dispatch planners must be 1..64");
+    TT_FATAL(p.part <= 2, "sparse_kv_dispatch part must be 0 (ALL), 1 (PREFIX) or 2 (REST), got {}", p.part);
     TT_FATAL(p.landing_slots >= 1, "sparse_kv_dispatch needs at least one landing slot");
     TT_FATAL(
         p.lanes_per_link >= 1 && p.lanes_per_link <= kvd::kMaxLanes / p.num_links,
@@ -286,6 +287,7 @@ ttsl::hash::hash_t SparseKvDispatchDeviceOperation::compute_program_hash(
                                        : std::nullopt,
             p.plan_chunk_start.has_value(),
             p.active_from,
+            p.part,
             t.plan_chunk_start_tensor.has_value()
                 ? std::optional<tt::tt_metal::TensorSpec>(t.plan_chunk_start_tensor->tensor_spec())
                 : std::nullopt,
@@ -346,7 +348,8 @@ Tensor sparse_kv_dispatch(
     const std::optional<Tensor>& plan_indices,
     std::optional<uint32_t> plan_chunk_start,
     const std::optional<Tensor>& plan_chunk_start_tensor,
-    uint32_t active_from) {
+    uint32_t active_from,
+    uint32_t part) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_dispatch input must be on device");
@@ -371,7 +374,8 @@ Tensor sparse_kv_dispatch(
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
             .plan_chunk_start = plan_chunk_start,
-            .active_from = active_from},
+            .active_from = active_from,
+            .part = part},
         SparseKvDispatchInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,

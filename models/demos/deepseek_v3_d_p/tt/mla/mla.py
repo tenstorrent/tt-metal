@@ -51,6 +51,16 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 # SPARSE_MLA_KV_DISPATCH_FROM and SPARSE_MLA_KV_DISPATCH_FROM_LAYERS="layer:tokens,..." override). K3.1 L24 8x4 on a real
 # 1M prompt broke even at ~150-205k against the gather.
 _K31_KV_DISPATCH_FROM: dict[int, int] = {}
+
+
+def _kvd_spike() -> bool:
+    """SPIKE (GLM_KV_DISPATCH_PLAN.md Phase 0, not for merge): shared layers' rows go through sparse_kv_dispatch with
+    global landing instead of sparse_kv_push."""
+    return os.environ.get("SPARSE_MLA_KVD_SPIKE", "0") == "1"
+
+
+# SPIKE: planners of a pre-send beside attention (16 planners, K=2 workers: 40 cores)
+_KVD_SPIKE_PRESEND_PLANNERS = int(os.environ.get("SPARSE_MLA_KVD_SPIKE_PRESEND_PLANNERS", "16"))
 _KV_DISPATCH_FROM_DEFAULT = 204_800
 
 
@@ -819,8 +829,9 @@ class ttMLA:
         self._kv_dispatch_from = 0
         # One chip's rows of a chunk: the cache's block-cyclic block.
         push_stripe_chunk = self.active_seq_len_local // self.tp_factor
-        if self._sparse_kv_gather_buffer is not None and sparse_kv_push_supported(
-            mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2]
+        if self._sparse_kv_gather_buffer is not None and (
+            sparse_kv_push_supported(mesh_device, push_stripe_chunk, self._sparse_kv_gather_buffer.shape[2])
+            or _kvd_spike()  # SPIKE: the dispatch routes any 2D fabric
         ):
             dense = self._sparse_kv_gather_buffer
             self._push = self.tt_ccl.get_sparse_kv_push_planner(self.ccl_num_links)
@@ -835,7 +846,7 @@ class ttMLA:
             # The dense buffer is idle in shared layers, so when the push buffer fits in it, it serves as one parity.
             # The push buffers are created on the first push (the warm pass, before any trace capture), so models
             # whose layers all compute their own top-k never allocate one.
-            self._push_reuses_dense = self._push_rows <= dense.shape[2]
+            self._push_reuses_dense = self._push_rows <= dense.shape[2] or _kvd_spike()
             # Which buffer a layer reads depends only on the config, so pick it once for this layer and the next (whose
             # prefix this layer pushes).
             self._push_buffer_parity = {layer: self._push_parity(layer) for layer in (layer_idx, layer_idx + 1)}
@@ -2560,23 +2571,18 @@ class ttMLA:
         parity = entry[1] if prefetched else self._push_buffer_parity[self.layer_idx]
         part = SparseKvPushPart.REST if prefetched else SparseKvPushPart.ALL
         self._push.pushes[part.name] += 1
-        compact = ttnn.experimental.sparse_kv_push(
+        compact = self._kv_send(
             storage,
-            output_tensor=self._push_buffer(parity),
-            table=plan.table,
-            stripe_chunk=plan.stripe_chunk,
-            max_rows=plan.max_rows,
-            part=part,
-            num_links=self.ccl_num_links,
-            sp_axis=self.sp_axis,
-            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
+            self._push_buffer(parity),
+            plan,
+            part,
+            self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
         )
+        spike = _kvd_spike()  # SPIKE: global landing, read with the natural indices
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
-            indices=plan.compact_indices,
+            indices=indices if spike else plan.compact_indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
             prefetch=self._presend(
@@ -2590,7 +2596,7 @@ class ttMLA:
                 kv_actual_isl=kv_actual_isl,
                 metadata=metadata,
             ),
-            compact=True,
+            compact=not spike,
         )
 
     def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata):
@@ -2636,6 +2642,7 @@ class ttMLA:
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1] if metadata is not None else None,
+            owner_major=_kvd_spike(),
         )
 
     def _other_push_parity(self, parity):
@@ -2699,19 +2706,48 @@ class ttMLA:
             storage, self._cache_batch_idx(next_step.cache_user_id, target_layer_idx), next_step.metadata
         )
         _, push_grid = self._push_prefetch_grids
-        return lambda: ttnn.experimental.sparse_kv_push(
+        return lambda: self._kv_send(storage, output, plan, SparseKvPushPart.PREFIX, slot, core_grid=push_grid)
+
+    def _kv_send(self, storage, output, plan, part, slot, core_grid=None):
+        """Moves the rows of `plan`'s `part` into `output`: sparse_kv_push (compact layout), or, in the Phase 0 spike
+        (SPARSE_MLA_KVD_SPIKE=1), sparse_kv_dispatch with global landing (owner-major pages of a full-size buffer)."""
+        if not _kvd_spike():
+            return ttnn.experimental.sparse_kv_push(
+                storage,
+                output_tensor=output,
+                table=plan.table,
+                stripe_chunk=plan.stripe_chunk,
+                max_rows=plan.max_rows,
+                part=part,
+                num_links=self.ccl_num_links,
+                sp_axis=self.sp_axis,
+                **slot,
+                ready_semaphore=self._push.ready_semaphore,
+                done_semaphore=self._push.done_semaphore,
+                **({"core_grid": core_grid} if core_grid is not None else {}),
+            )
+        assert plan.inbox is not None, "SPIKE: the dispatch needs an owner-major plan"
+        planners = KVD_PLANNERS if core_grid is None else _KVD_SPIKE_PRESEND_PLANNERS
+        sems, scratch = self._push.dispatch_resources(plan.max_rows, plan.stripe_chunk, planners)
+        self._push.kvd_calls[part.name] += 1
+        return ttnn.experimental.sparse_kv_dispatch(
             storage,
             output_tensor=output,
             table=plan.table,
+            inbox=plan.inbox,
+            scratch=scratch,
             stripe_chunk=plan.stripe_chunk,
             max_rows=plan.max_rows,
-            part=SparseKvPushPart.PREFIX,
+            fence_semaphore=sems[0],
+            arrived_semaphore=sems[1],
+            credit_semaphore=sems[2],
+            inbox_semaphore=sems[3],
             num_links=self.ccl_num_links,
-            sp_axis=self.sp_axis,
+            planners=planners,
+            lanes_per_link=KVD_LANES_PER_LINK,
             **slot,
-            ready_semaphore=self._push.ready_semaphore,
-            done_semaphore=self._push.done_semaphore,
-            core_grid=push_grid,
+            **({"core_grid": core_grid} if core_grid is not None else {}),
+            part=int(part.value),
         )
 
     @contextlib.contextmanager

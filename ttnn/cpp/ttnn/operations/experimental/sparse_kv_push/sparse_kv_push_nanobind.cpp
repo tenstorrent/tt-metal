@@ -283,7 +283,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("plan_indices") = nb::none(),
         nb::arg("plan_chunk_start") = nb::none(),
         nb::arg("plan_chunk_start_tensor") = nb::none(),
-        nb::arg("active_from") = 0);
+        nb::arg("active_from") = 0,
+        nb::arg("part") = 0);
 
     ttnn::bind_function<"sparse_kv_dispatch_scratch_spec", "ttnn.experimental.">(
         mod,
