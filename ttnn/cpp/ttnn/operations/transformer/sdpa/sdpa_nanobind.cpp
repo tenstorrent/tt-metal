@@ -487,8 +487,9 @@ void bind_sdpa(nb::module_& mod) {
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
             sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores (default: all cores of the
                 first subdevice). Part of the program-cache key.
+            memory_config (ttnn.MemoryConfig, optional): interleaved output in DRAM (default) or L1.
         Returns:
-            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
+            ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
         &ttnn::transformer::sparse_sdpa,
         nb::arg("q").noconvert(),
@@ -505,7 +506,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
         nb::arg("attention_sink") = nb::none(),
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
@@ -888,6 +890,10 @@ void bind_sdpa(nb::module_& mod) {
           generated on device.
         - Kept blocks only (e.g. the VSA fine branch): omit pooled_k and pooled_v. The softmax normalizes over the
           kept blocks.
+
+        The op balances each mask's work over cores and devices on device, every call (traces included). Balancing
+        across devices keeps three DRAM buffers the size of input_tensor_q, block_mask and the output for each
+        cached program.
 
         Args:
             input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] TILE, sequence-sharded on cluster_axis; bf16,

@@ -24,10 +24,13 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
+from helpers.perf.blaze import execute_llk, with_functional_defaults
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    ITERATIONS,
+    LOOP_FACTOR,
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
     TemplateParameter,
@@ -84,47 +87,81 @@ def _assert_matches(golden, res, output_format, flat: bool, context: str) -> Non
     input_range=INPUT_RANGES,
     cap=CAPS,
 )
-def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
+def test_sfpu_logit_softcap(
+    formats,
+    dest_acc,
+    input_range,
+    cap,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    polynomial=False,
+    tile_count=1,
+):
     low, high = input_range
-    spec_A = (
-        StimuliSpec.constant(value=low, seed=0)
-        if low == high
-        else StimuliSpec.uniform(low=low, high=high, seed=0)
-    )
-    src_A, _, src_B, _ = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=[TILE_DIM, TILE_DIM],
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=[TILE_DIM, TILE_DIM],
-        spec_A=spec_A,
-    )
+    if tile_count == 1:
+        spec_A = (
+            StimuliSpec.constant(value=low, seed=0)
+            if low == high
+            else StimuliSpec.uniform(low=low, high=high, seed=0)
+        )
+        src_A, _, src_B, _ = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=[TILE_DIM, TILE_DIM],
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=[TILE_DIM, TILE_DIM],
+            spec_A=spec_A,
+        )
+    else:
+        # The polynomial epilogue re-enters the pack-side SFPU across tiles.
+        torch_dtype = (
+            torch.float32
+            if formats.input_format == DataFormat.Float32
+            else torch.bfloat16
+        )
+        src_A = torch.linspace(low, high, tile_count * TILE_DIM * TILE_DIM).to(
+            torch_dtype
+        )
+        src_B = torch.zeros(TILE_DIM * TILE_DIM, dtype=torch_dtype)
 
     golden_tensor = _logit_softcap_golden(src_A, cap, dest_acc)
 
-    configuration = TestConfig(
-        "sources/sfpu_logit_softcap_test.cpp",
-        formats,
-        templates=[
-            SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
-        ],
-        runtimes=[
-            TILE_COUNT(1),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=1,
-            tile_count_B=1,
-            tile_count_res=1,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sfpu_logit_softcap_test.cpp",
+            formats=formats,
+            templates=[
+                ITERATIONS(32),
+                SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
+                LOGIT_SOFTCAP_POLYNOMIAL(logit_softcap_polynomial=polynomial),
+            ],
+            runtimes=[
+                LOOP_FACTOR(1),
+                TILE_COUNT(tile_count),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_count,
+                tile_count_B=1,
+                tile_count_res=tile_count,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=formats.input_format.is_32_bit(),
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=formats.input_format.is_32_bit(),
     )
-
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
     res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     # Every lane lands on the same value, either because the whole range sits
@@ -161,7 +198,13 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
 
 @dataclass
 class LOGIT_SOFTCAP_POLYNOMIAL(TemplateParameter):
+    """Select the polynomial overload; ``False`` keeps the accurate one but still records the column."""
+
+    logit_softcap_polynomial: bool = True
+
     def convert_to_cpp(self):
+        if not self.logit_softcap_polynomial:
+            return ""
         return "#define LOGIT_SOFTCAP_POLYNOMIAL true"
 
 
@@ -180,24 +223,29 @@ def test_sfpu_logit_softcap_polynomial_rounding(cap, input_range):
 
     def variant(dest_acc):
         return TestConfig(
-            "sources/sfpu_logit_softcap_test.cpp",
-            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
-            templates=[
-                SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
-                LOGIT_SOFTCAP_POLYNOMIAL(),
-            ],
-            runtimes=[TILE_COUNT(3)],
-            variant_stimuli=StimuliConfig(
-                src,
-                DataFormat.Float16_b,
-                torch.zeros(1024, dtype=torch.bfloat16),
-                DataFormat.Float16_b,
-                DataFormat.Float32,
-                tile_count_A=3,
-                tile_count_B=1,
-                tile_count_res=3,
-            ),
-            dest_acc=dest_acc,
+            **with_functional_defaults(
+                dict(
+                    test_name="sources/sfpu_logit_softcap_test.cpp",
+                    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
+                    templates=[
+                        ITERATIONS(32),
+                        SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
+                        LOGIT_SOFTCAP_POLYNOMIAL(),
+                    ],
+                    runtimes=[LOOP_FACTOR(1), TILE_COUNT(3)],
+                    variant_stimuli=StimuliConfig(
+                        src,
+                        DataFormat.Float16_b,
+                        torch.zeros(1024, dtype=torch.bfloat16),
+                        DataFormat.Float16_b,
+                        DataFormat.Float32,
+                        tile_count_A=3,
+                        tile_count_B=1,
+                        tile_count_res=3,
+                    ),
+                    dest_acc=dest_acc,
+                )
+            )
         )
 
     fp32_config, bf16_config = variant(DestAccumulation.Yes), variant(

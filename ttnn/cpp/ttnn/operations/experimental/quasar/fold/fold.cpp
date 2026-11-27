@@ -412,6 +412,15 @@ Tensor fold(
     const std::optional<CoreRangeSet>& core_grid,
     const std::optional<MemoryConfig>& override_memory_config,
     bool input_is_nhwc) {
+    // Fold moves per-pixel channel rows (sticks) and pads with a fill value, and a TILE input is untilized to
+    // row-major first. An MX tile (32-element blocks with a shared scale in face order) has no row-major
+    // layout and cannot be addressed per row, so MX is not supported.
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input_tensor_.dtype()),
+        "Quasar fold does not support MX tensors ({}): it moves sub-tile rows and pads with fill values, which MX "
+        "tiles cannot take. Typecast to bfloat16 first.",
+        input_tensor_.dtype());
+
     // Extract padding values
     const std::array<uint32_t, 6> padding_values = operations::experimental::quasar::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];

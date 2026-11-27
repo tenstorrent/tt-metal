@@ -162,13 +162,17 @@ void kernel_main() {
             kreq_cb.push_back(1);
             continue;
         }
-        // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
-        q_cb.reserve_back(H);
-        for (uint32_t h = 0; h < H; ++h) {
-            noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
+        // Q: H head-rows -> cb_q_rm, one 32-head block at a time (compute tilizes each block as it lands, and
+        // cb_q_rm holds one block).  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
+        for (uint32_t h0 = 0; h0 < H; h0 += tt::constants::TILE_HEIGHT) {
+            q_cb.reserve_back(tt::constants::TILE_HEIGHT);
+            for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                noc.async_read(
+                    q, q_cb, q_row_bytes, {.page_id = (h0 + r) * S + tok}, {.offset_bytes = r * q_row_bytes});
+            }
+            noc.async_read_barrier();
+            q_cb.push_back(tt::constants::TILE_HEIGHT);
         }
-        noc.async_read_barrier();
-        q_cb.push_back(H);
         for (uint32_t chunk = c_lo; chunk < seg_hi; ++chunk) {
             const uint32_t base = chunk * k_chunk;
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]

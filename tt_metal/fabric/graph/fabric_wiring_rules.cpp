@@ -22,7 +22,7 @@ public:
     StockWiringRules(const std::vector<Port>& ports, const WiringOptions& options) :
         options_(options), is_2d_(is_2D_topology(options.topology)) {
         for (const auto& p : ports) {
-            chips_[p.node].at(*p.direction) = p.capability;
+            chips_[p.node].at(*p.direction) = stock_capability(p.capability);
         }
     }
 
@@ -40,11 +40,28 @@ public:
     // stock skips the VC2 receiver on the inter-mesh Z router, so it gets no VC2 at all here
     bool carries(const Port& port, uint32_t vc) const override { return vc != 2 || !is_z_boundary(port); }
 
-    bool has_worker(const Port&, uint32_t vc) const override { return vc != 1; }
+    bool has_worker(const Port&, uint32_t vc) const override {
+        return vc == 0 || (vc == 2 && !options_.vc_config.vc2_forwards);
+    }
+
+    // a perimeter router's VC0 only sends, into the peer's VC2
+    bool has_receiver(const Port& port, uint32_t vc) const override {
+        return vc != 0 || port.capability != EdgeCapability::INTERDOMAIN;
+    }
 
     bool wires(const Port& in, const Port& out, uint32_t vc) const override {
-        if (in.direction == out.direction || vc == 2 || options_.topology == Topology::NeighborExchange) {
+        const bool vc2_forwards = vc == 2 && options_.vc_config.vc2_forwards;
+        if (in.direction == out.direction || (vc == 2 && !vc2_forwards) ||
+            options_.topology == Topology::NeighborExchange) {
             return false;
+        }
+        const bool from_perimeter = in.capability == EdgeCapability::INTERDOMAIN;
+        const bool to_perimeter = out.capability == EdgeCapability::INTERDOMAIN;
+        if (from_perimeter || to_perimeter) {
+            return vc != 1 && from_perimeter != to_perimeter && (vc == 0 ? to_perimeter : from_perimeter);
+        }
+        if (vc2_forwards) {
+            vc = 0;
         }
         const auto turns = turn_set_for_router(
             options_.topology, *in.direction, chips_.at(in.node), axis_of(in.node.mesh_id), &options_.vc_config);

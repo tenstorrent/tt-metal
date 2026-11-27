@@ -4,15 +4,30 @@
 
 #pragma once
 
+#include "ckernel.h"
+#include "cmath_common.h"
 #include "llk_defs.h"
 #include "sfpi.h"
 #include "ckernel_sfpu_binary.h"
 
 namespace ckernel::sfpu {
 
+/**
+ * @brief Program ADDR_MOD_6 for @ref calculate_lerp.
+ * @note Run it after any other SFPU op's init and before calculate_lerp: other ops' inits program
+ *       ADDR_MOD_6 with a different stride.
+ */
 template <bool APPROXIMATION_MODE>
-inline void lerp_init() {}
+inline void lerp_init() {
+    // calculate_lerp's second store of a row pair advances Dest past both rows.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2 * ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
+}
 
+/**
+ * @brief out = input + weight * (end - input), two Dest rows per iteration.
+ * @tparam ITERATIONS Dest rows to process; must be even.
+ * @note Call @ref lerp_init first; the row pairs advance Dest through the ADDR_MOD_6 it programs.
+ */
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
 inline void calculate_lerp(
     const uint dst_index_in0,  // input (start)
@@ -22,6 +37,8 @@ inline void calculate_lerp(
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_lerp(). Supported data formats are: Float32, Float16_b.");
+
+    static_assert(ITERATIONS % 2 == 0, "two rows per iteration");
 
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr uint dst_tile_size_sfpi = 32;
@@ -34,18 +51,30 @@ inline void calculate_lerp(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
+    const uint off_in0 = dst_index_in0 * dst_tile_size_sfpi;
+    const uint off_in1 = dst_index_in1 * dst_tile_size_sfpi;
+    const uint off_in2 = dst_index_in2 * dst_tile_size_sfpi;
+    const uint off_out = dst_index_out * dst_tile_size_sfpi;
     // lerp: out = input + weight * (end - input)
+    // Two rows per iteration, so each row's SFPADD -> SFPMAD -> store chain fills the other's latency.
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
-        sfpi::vFloat result = in0 + in2 * (in1 - in0);
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        sfpi::vFloat a_in0 = sfpi::dst_reg[off_in0];
+        sfpi::vFloat a_in1 = sfpi::dst_reg[off_in1];
+        sfpi::vFloat a_in2 = sfpi::dst_reg[off_in2];
+        sfpi::vFloat b_in0 = sfpi::dst_reg[off_in0 + 1];
+        sfpi::vFloat b_in1 = sfpi::dst_reg[off_in1 + 1];
+        sfpi::vFloat b_in2 = sfpi::dst_reg[off_in2 + 1];
+        sfpi::vFloat a_diff = a_in1 - a_in0;
+        sfpi::vFloat b_diff = b_in1 - b_in0;
+        sfpi::vFloat a_res = a_in0 + a_in2 * a_diff;
+        sfpi::vFloat b_res = b_in0 + b_in2 * b_diff;
         if constexpr (round_to_bf16_rne) {
-            result = float32_to_bf16_rne(result, rne_bias, rne_mask);
+            a_res = float32_to_bf16_rne(a_res, rne_bias, rne_mask);
+            b_res = float32_to_bf16_rne(b_res, rne_bias, rne_mask);
         }
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg++;
+        sfpi::dst_reg[off_out] = a_res;
+        sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_6) = b_res;
     }
 }
 
