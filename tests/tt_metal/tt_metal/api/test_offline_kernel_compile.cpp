@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <csignal>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -79,7 +81,7 @@ constexpr const char* kShutdownDoneEnv = "TT_METAL_PREWARM_TEST_DONE";
 constexpr const char* kShutdownReleaseEnv = "TT_METAL_PREWARM_TEST_RELEASE";
 constexpr const char* kShutdownTeardownEnv = "TT_METAL_PREWARM_TEST_TEARDOWN";
 
-int run_test_subprocess(
+pid_t spawn_test_subprocess(
     const std::string& filter, const std::vector<std::pair<std::string, std::string>>& environment) {
     const pid_t pid = ::fork();
     if (pid == 0) {
@@ -96,10 +98,15 @@ int run_test_subprocess(
         ::execv("/proc/self/exe", args);
         std::_Exit(121);
     }
+    return pid;
+}
+
+int run_test_subprocess(
+    const std::string& filter, const std::vector<std::pair<std::string, std::string>>& environment) {
+    const pid_t pid = spawn_test_subprocess(filter, environment);
     if (pid < 0) {
         return -1;
     }
-
     int status = 0;
     if (::waitpid(pid, &status, 0) != pid) {
         return -1;
@@ -387,12 +394,62 @@ void fail_if_prewarm_reaches_dependency_teardown() {
     }
 }
 
-void wait_for_file(const fs::path& path) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+class ScopedShutdownChild {
+public:
+    explicit ScopedShutdownChild(pid_t pid) : pid_(pid) {}
+    ScopedShutdownChild(const ScopedShutdownChild&) = delete;
+    ScopedShutdownChild& operator=(const ScopedShutdownChild&) = delete;
+    ~ScopedShutdownChild() {
+        if (pid_ > 0 && !wait_for_exit(std::chrono::milliseconds(0)) && pid_ > 0) {
+            ::kill(pid_, SIGKILL);
+            EXPECT_TRUE(wait_for_exit(std::chrono::seconds(5))) << "failed to reap shutdown child";
+        }
+    }
+
+    bool wait_for_exit(std::chrono::milliseconds timeout) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (pid_ > 0) {
+            const pid_t result = ::waitpid(pid_, &status, WNOHANG);
+            if (result == pid_) {
+                pid_ = -1;
+                return true;
+            }
+            if (result < 0 && errno != EINTR) {
+                pid_ = -1;
+                ADD_FAILURE() << "waitpid failed: " << errno;
+                return false;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return status != -1;
+    }
+
+    int status = -1;
+
+private:
+    pid_t pid_;
+};
+
+bool wait_for_file(const fs::path& path, std::chrono::milliseconds timeout = std::chrono::seconds(10)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (!fs::exists(path) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_TRUE(fs::exists(path)) << "timed out waiting for " << path;
+    return fs::exists(path);
+}
+
+bool release_shutdown_fifo(const fs::path& path) {
+    // Own a read end too: a compiler exiting between open and write must not raise SIGPIPE.
+    const int fd = ::open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+    const bool released = ::write(fd, "continue\n", 9) == 9;
+    ::close(fd);
+    return released;
 }
 
 TEST(KernelPrewarmShutdownChild, WritesManifest) {
@@ -407,6 +464,10 @@ TEST(KernelPrewarmShutdownChild, WritesManifest) {
     kernel_prewarm::maybe_launch_prewarm(
         (out_root / std::to_string(build_key) / "kernels").string() + "/", (root / "firmware").string(), build_key, "");
     kernel_prewarm::append_manifest_entry(make_shutdown_request(root));
+    const char* manifest = kernel_prewarm::manifest_write_path();
+    ASSERT_NE(manifest, nullptr);
+    ASSERT_TRUE(fs::exists(manifest));
+    EXPECT_GT(fs::file_size(manifest), 0u);
 }
 
 TEST(KernelPrewarmShutdownChild, StartsRealBatchAndReturnsWithoutBarrier) {
@@ -434,8 +495,9 @@ TEST(KernelPrewarmShutdownChild, StartsRealBatchAndReturnsWithoutBarrier) {
     script << "#!/usr/bin/env bash\n"
               "set -eu\n"
               "if mkdir \"${TT_METAL_PREWARM_TEST_ACTIVE}.lock\" 2>/dev/null; then\n"
+              "  exec 3<> \"${TT_METAL_PREWARM_TEST_RELEASE}\"\n"
               "  : > \"${TT_METAL_PREWARM_TEST_ACTIVE}\"\n"
-              "  IFS= read -r _ < \"${TT_METAL_PREWARM_TEST_RELEASE}\"\n"
+              "  IFS= read -r -t 10 _ <&3\n"
               "  : > \"${TT_METAL_PREWARM_TEST_DONE}\"\n"
               "fi\n"
               "out=''\n"
@@ -461,7 +523,7 @@ TEST(KernelPrewarmShutdownChild, StartsRealBatchAndReturnsWithoutBarrier) {
 
     kernel_prewarm::maybe_launch_prewarm(
         (out_root / std::to_string(build_key) / "kernels").string() + "/", (root / "firmware").string(), build_key, "");
-    wait_for_file(active);
+    ASSERT_TRUE(wait_for_file(active)) << "timed out waiting for " << active;
 }
 
 TEST(KernelPrewarmShutdownTest, ActiveBatchJoinsBeforeLazyBuildDependenciesTeardown) {
@@ -472,60 +534,86 @@ TEST(KernelPrewarmShutdownTest, ActiveBatchJoinsBeforeLazyBuildDependenciesTeard
     const fs::path teardown = tree.path_ / "teardown";
     ASSERT_EQ(::mkfifo(release.c_str(), 0600), 0);
 
-    expect_subprocess_success(run_test_subprocess(
+    const pid_t writer_pid = spawn_test_subprocess(
         "KernelPrewarmShutdownChild.WritesManifest",
         {
             {kSubprocessModeEnv, "manifest"},
+            {"TT_METAL_KERNEL_PREWARM", "1"},
             {"TT_METAL_CACHE", tree.path_.string()},
-        }));
+        });
+    ASSERT_GT(writer_pid, 0) << "fork failed";
+    ScopedShutdownChild writer(writer_pid);
+    ASSERT_TRUE(writer.wait_for_exit(std::chrono::seconds(10))) << "manifest writer timed out";
+    ASSERT_NO_FATAL_FAILURE(expect_subprocess_success(writer.status));
+    ASSERT_FALSE(HasFailure());
 
-    const pid_t pid = ::fork();
-    ASSERT_GE(pid, 0) << "fork failed";
-    if (pid == 0) {
-        const std::vector<std::pair<std::string, std::string>> environment = {
+    const pid_t pid = spawn_test_subprocess(
+        "KernelPrewarmShutdownChild.StartsRealBatchAndReturnsWithoutBarrier",
+        {
             {kSubprocessModeEnv, "shutdown"},
+            {"TT_METAL_KERNEL_PREWARM", "1"},
             {"TT_METAL_CACHE", tree.path_.string()},
             {kShutdownActiveEnv, active.string()},
             {kShutdownDoneEnv, done.string()},
             {kShutdownReleaseEnv, release.string()},
             {kShutdownTeardownEnv, teardown.string()},
-        };
-        for (const auto& [name, value] : environment) {
-            if (::setenv(name.c_str(), value.c_str(), /*overwrite=*/1) != 0) {
-                std::_Exit(120);
-            }
-        }
-        const std::string filter_arg =
-            "--gtest_filter=KernelPrewarmShutdownChild.StartsRealBatchAndReturnsWithoutBarrier";
-        char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
-        ::execv("/proc/self/exe", args);
-        std::_Exit(121);
-    }
-
-    wait_for_file(active);
-    int status = 0;
-    bool child_exited = false;
+        });
+    ASSERT_GT(pid, 0) << "fork failed";
+    ScopedShutdownChild child(pid);
+    ASSERT_TRUE(wait_for_file(active)) << "timed out waiting for " << active;
     const auto teardown_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (!fs::exists(teardown) && std::chrono::steady_clock::now() < teardown_deadline) {
-        const pid_t result = ::waitpid(pid, &status, WNOHANG);
-        ASSERT_NE(result, -1) << "waitpid failed";
-        if (result == pid) {
-            child_exited = true;
+        if (child.wait_for_exit(std::chrono::milliseconds(0))) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    {
-        std::ofstream unblock(release);
-        unblock << "continue\n";
-    }
-    if (!child_exited) {
-        ASSERT_EQ(::waitpid(pid, &status, 0), pid);
-    }
+    ASSERT_TRUE(release_shutdown_fifo(release)) << "could not release shutdown compiler";
+    ASSERT_TRUE(child.wait_for_exit(std::chrono::seconds(10))) << "shutdown subprocess timed out";
+    ASSERT_TRUE(WIFEXITED(child.status)) << "shutdown subprocess terminated abnormally";
+    EXPECT_EQ(WEXITSTATUS(child.status), 0) << "active prewarm crossed the lazy-build dependency teardown boundary";
+    EXPECT_TRUE(fs::exists(done));
+    EXPECT_TRUE(fs::exists(teardown));
+}
 
-    ASSERT_TRUE(WIFEXITED(status)) << "shutdown subprocess terminated abnormally";
-    EXPECT_EQ(WEXITSTATUS(status), 0) << "active prewarm crossed the lazy-build dependency teardown boundary";
+TEST(KernelPrewarmShutdownTest, MissingMarkerReapsOwnedChild) {
+    ScopedTempDir tree("ttprewarm_missing_marker");
+    const pid_t pid = ::fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        for (;;) {
+            ::pause();
+        }
+    }
+    {
+        ScopedShutdownChild child(pid);
+        EXPECT_FALSE(wait_for_file(tree.path_ / "missing", std::chrono::milliseconds(30)));
+        EXPECT_FALSE(child.wait_for_exit(std::chrono::milliseconds(0)));
+    }
+    int status = 0;
+    EXPECT_EQ(::waitpid(pid, &status, WNOHANG), -1);
+    EXPECT_EQ(errno, ECHILD);
+}
+
+TEST(KernelPrewarmShutdownTest, EarlyExitIsReapedWithItsStatus) {
+    const pid_t pid = ::fork();
+    ASSERT_GE(pid, 0);
+    if (pid == 0) {
+        std::_Exit(17);
+    }
+    ScopedShutdownChild child(pid);
+    ASSERT_TRUE(child.wait_for_exit(std::chrono::seconds(1)));
+    ASSERT_TRUE(WIFEXITED(child.status));
+    EXPECT_EQ(WEXITSTATUS(child.status), 17);
+}
+
+TEST(KernelPrewarmShutdownTest, ReleaseWithoutReaderDoesNotBlock) {
+    ScopedTempDir tree("ttprewarm_no_reader");
+    const fs::path release = tree.path_ / "release";
+    ASSERT_EQ(::mkfifo(release.c_str(), 0600), 0);
+    EXPECT_TRUE(release_shutdown_fifo(release));
+    EXPECT_FALSE(release_shutdown_fifo(tree.path_ / "absent" / "release"));
 }
 
 TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
