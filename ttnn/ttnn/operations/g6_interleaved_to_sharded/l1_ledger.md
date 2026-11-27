@@ -34,11 +34,19 @@ What scales with which knob: the only term scales with the caller-pinned shard s
 
 ## Data-movement budget
 
+Implemented transfer for partial tile rows: `PARTIAL_TILE_TRANSFER = "valid_rows_span"` (design lamp L1),
+not the design's `valid_rows` default. One read per page from the first to the last valid byte: at
+`H = 1` that is `(0, face_bytes + 64)` = 576 B in one NoC issue, against 2 × 64 B in two issues. Measured
+on FLUX 58 (device kernel duration, 32 cores, 5 pages per core): `valid_rows_span` 1050–1067 ns over five
+runs, `valid_rows` 1180–1265 ns over four, `whole_page` 1662–1681 ns over three. At 5 pages per core the
+per-read issue cost (~50 cycles) outweighs the extra bytes. `valid_rows` and `whole_page` stay
+selectable.
+
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` | 1, valid bytes only: full tile rows 2048 B/page; partial tile rows 2 × `align_up(rows*32, 64)` B/page. p1: 160 × 128 = 20480 B. p2: 4 × 128 = 512 B | owner-fetch: each page is read once by the core that owns its shard. The valid-rows transfer skips the padding rows the contract excludes from the result. The 64 B DRAM read granule and the two-face split of a row set the excess over 64 logical B/tile | 0 |
+| `input_tensor` | 1 per page: full tile rows 2048 B/page; partial tile rows one span of `last valid byte + 1` rounded to 64 (576 B at `H = 1`). p1: 160 × 576 = 92160 B. p2: 4 × 576 = 2304 B | owner-fetch: each page is read once, by the core that owns its shard, in one NoC read. The span skips the padding rows after the last valid row; it carries the padding rows of face 0 that lie between the two face rows of row 0 | 0 |
 | output | 0 (lives in L1) | written once, by the read response, at its final slot | 0 (every page lands in the L1 of the core that read it) |
 
-Totals per call: DRAM → L1: p1 20480 B, p2 512 B. Core-to-core: 0 B. L1 → L1: 0 B.
+Totals per call: DRAM → L1: p1 92160 B, p2 2304 B (`valid_rows`: 20480 B and 512 B). Core-to-core: 0 B. L1 → L1: 0 B.
 
-> Cheapest-traffic split considered: owner-fetch with the valid-rows transfer (split by output shard, each owner reads its own pages, padding rows skipped) — p1 20480 B DRAM / 0 B NoC, against 327680 B DRAM / 0 B NoC for whole pages and 327680 B DRAM + 317440 B NoC for one mover core. Implemented: the same split. It is the cheapest-traffic split, so nothing is deferred for traffic. Reader-and-forward (regime C) is deferred only for issue parallelism, which no production shape needs.
+> Cheapest-traffic split considered: owner-fetch with the valid-rows transfer (split by output shard, each owner reads its own pages, padding rows skipped) — p1 20480 B DRAM / 0 B NoC, against 327680 B DRAM / 0 B NoC for whole pages and 327680 B DRAM + 317440 B NoC for one mover core. Implemented: the same split, with the span transfer per page (92160 B DRAM / 0 B NoC), which is faster than the cheapest-byte transfer at 5 pages per core because it halves the NoC read issues. Reader-and-forward (regime C) is deferred only for issue parallelism, which no production shape needs.

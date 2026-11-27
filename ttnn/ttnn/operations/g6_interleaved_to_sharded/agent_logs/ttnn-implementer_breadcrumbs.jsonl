@@ -1,0 +1,6 @@
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-26T19:09:17-05:00"}
+{"event":"test_run","result":"pass","detail":"acceptance 6 passed/2 xfailed; knobs 10 passed; --dev; env: LD_PRELOAD MPIX shim because /opt/openmpi-v5.0.7-ulfm vanished at 18:15 reboot","ts":"2026-11-26T19:09:17-05:00"}
+{"event":"fix_applied","detail":"reads_in_flight depth knob (design Buffer-depth knobs): host constant READS_IN_FLIGHT=0 -> CT arg 5, compiled out at 0, in cache key","ts":"2026-11-26T19:09:17-05:00"}
+{"event":"test_run","result":"pass","detail":"perf flux58 kernel ns: valid_rows 1180-1265, valid_rows_span 991-1067, whole_page 1662-1681, ablate_reads floor 529-547 (go skew ~500 cyc + FW->kernel ~590 cyc), brisc_noc0 1013-1099, brisc_noc1 1253-1289, split2 1015-1124","ts":"2026-11-26T19:16:42-05:00"}
+{"event":"fix_applied","detail":"PARTIAL_TILE_TRANSFER default valid_rows -> valid_rows_span (design lamp L1, -13%); READER_PROCESSOR and READER_SPLIT knobs added, parked at design default ncrisc_noc0 / 1 (no measured win)","ts":"2026-11-26T19:16:42-05:00"}
+{"event":"test_run","result":"pass","detail":"dev + plain: acceptance 6p/2xf, knobs 16p, golden 10p/3xf (all xfails rank=4 refinement)","ts":"2026-11-26T19:16:42-05:00"}

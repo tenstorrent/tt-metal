@@ -11,9 +11,9 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
+from . import g6_interleaved_to_sharded_program_descriptor as _descriptor
 from .g6_interleaved_to_sharded_program_descriptor import (
     L1_BUDGET_BYTES,
-    PARTIAL_TILE_TRANSFER,
     create_program_descriptor,
     describe_plan,
     plan,
@@ -234,7 +234,10 @@ def _cache_key(input_tensor, memory_config):
         grid,
         tuple(shard_spec.shape),
         str(shard_spec.orientation),
-        PARTIAL_TILE_TRANSFER,
+        _descriptor.PARTIAL_TILE_TRANSFER,
+        _descriptor.READS_IN_FLIGHT,
+        _descriptor.READER_PROCESSOR,
+        _descriptor.READER_SPLIT,
     )
 
 
