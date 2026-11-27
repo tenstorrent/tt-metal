@@ -45,6 +45,11 @@ _T = TypeVar("_T")
 # latents, a whole number of tiles of pixels.
 _DEFAULT_RESOLUTIONS = ((1024, 1024), (2048, 2048))
 
+# Untraced, `__call__` takes any size whose sides are multiples of _SIDE_MULTIPLE pixels (one token) and at
+# least _MIN_SIDE, up to the pipeline's `max_pixels`.
+_SIDE_MULTIPLE = 16
+_MIN_SIDE = 256
+
 # The prompt's token count, padded to it whatever the prompt.
 _PROMPT_SEQUENCE_LENGTH = 512
 
@@ -150,6 +155,7 @@ class Flux2Pipeline:
         height: int = 1024,
         width: int = 1024,
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
+        max_pixels: int | None = None,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
         trace_warmup: bool = False,
@@ -158,11 +164,19 @@ class Flux2Pipeline:
     ) -> None:
         """Build the pipeline.
 
-        ``resolutions`` are the image sizes (width, height) that ``__call__`` accepts; ``width`` and
-        ``height`` give the default one. The default size is warmed up here, and with
-        ``trace_warmup`` every size, untraced and traced.
+        Untraced, ``__call__`` takes any size (width, height) whose sides are multiples of 16 pixels and at
+        least 256, with at most ``max_pixels`` pixels, by default those of the largest of ``resolutions``, and
+        whose VAE attention takes no more tokens per device than the sizes of ``resolutions`` do. Rounded up per
+        device, that can refuse a size just under ``max_pixels``, such as 2032x2064 on a 2x4 mesh built for
+        2048x2048.
+        Traced, it takes the sizes of ``resolutions``. ``width`` and ``height`` give the default size. The
+        default size is warmed up here, and with ``trace_warmup`` every size of ``resolutions``, untraced and
+        traced.
         """
         self._resolutions = tuple(resolutions)
+        self._max_pixels = max_pixels if max_pixels is not None else max(w * h for w, h in self._resolutions)
+        for w, h in self._resolutions:
+            self._check_size(width=w, height=h)
         if (width, height) not in self._resolutions:
             msg = f"the default size {width}x{height} is not one of the resolutions {self._resolutions}"
             raise ValueError(msg)
@@ -272,6 +286,9 @@ class Flux2Pipeline:
             ccl_manager=self._vae_ccl_manager,
             use_conv3d=self._vae_use_conv3d,
         )
+        # The attention takes as many tokens per device as the resolutions reach, no more: past a threshold it
+        # needs a second program, which may not fit in L1 next to the pipeline (VaeAttention.warm_sdpa).
+        self._vae_tokens = max(self._vae_decoder.attention_tokens((h, w)) for w, h in self._resolutions)
         self._vae_decoder.warm_sdpa((height, width) for width, height in self._resolutions)
 
         # Editing is not supported with dynamic loading, which would have to evict the encoder too.
@@ -291,7 +308,9 @@ class Flux2Pipeline:
             # The reference images are encoded at most at one megapixel (_reference_size).
             self._vae_encoder.warm_sdpa(
                 (h, w)
-                for w, h in (self._reference_size(width=width, height=height) for width, height in self._resolutions)
+                for w, h in (
+                    self._reference_size(width=width, height=height) for width, height in self._largest_sizes()
+                )
             )
             cache.load_model(
                 tt_model=self._vae_encoder,
@@ -360,8 +379,42 @@ class Flux2Pipeline:
 
     @property
     def resolutions(self) -> tuple[tuple[int, int], ...]:
-        """The supported image sizes as (width, height)."""
+        """The image sizes (width, height) that traced calls take."""
         return self._resolutions
+
+    @property
+    def max_pixels(self) -> int:
+        """The most pixels of an image that untraced calls take."""
+        return self._max_pixels
+
+    def _check_size(self, *, width: int, height: int) -> None:
+        if width % _SIDE_MULTIPLE or height % _SIDE_MULTIPLE:
+            msg = f"{width}x{height}: the sides must be multiples of {_SIDE_MULTIPLE} pixels"
+            raise ValueError(msg)
+        if min(width, height) < _MIN_SIDE:
+            msg = f"{width}x{height}: the sides must be at least {_MIN_SIDE} pixels"
+            raise ValueError(msg)
+        if width * height > self._max_pixels:
+            msg = f"{width}x{height}: more than the {self._max_pixels} pixels the pipeline was built for"
+            raise ValueError(msg)
+        decoder = getattr(self, "_vae_decoder", None)
+        if decoder is not None and decoder.attention_tokens((height, width)) > self._vae_tokens:
+            msg = (
+                f"{width}x{height}: {decoder.attention_tokens((height, width))} VAE attention tokens per device, more "
+                f"than the {self._vae_tokens} that the resolutions {self._resolutions} reach"
+            )
+            raise ValueError(msg)
+
+    def _largest_sizes(self) -> list[tuple[int, int]]:
+        """Per width that `__call__` takes, the size (width, height) with the most pixels, and the
+        resolutions: what the token buffers and the warm-ups are sized for. Every size is at most one of
+        these on both sides."""
+        sizes = list(self._resolutions)
+        for width in range(_MIN_SIDE, self._max_pixels // _MIN_SIDE + 1, _SIDE_MULTIPLE):
+            height = self._max_pixels // width // _SIDE_MULTIPLE * _SIDE_MULTIPLE
+            if height >= _MIN_SIDE:
+                sizes.append((width, height))
+        return sizes
 
     def warmup(
         self, *, width: int, height: int, edit: bool = False, traced: bool = False, warmup_info: str = "warmup"
@@ -544,8 +597,9 @@ class Flux2Pipeline:
 
         width = width if width is not None else self._width
         height = height if height is not None else self._height
-        if (width, height) not in self._resolutions:
-            msg = f"{width}x{height} is not one of the resolutions {self._resolutions}"
+        self._check_size(width=width, height=height)
+        if traced and (width, height) not in self._resolutions:
+            msg = f"traced, {width}x{height} is not one of the resolutions {self._resolutions}"
             raise ValueError(msg)
 
         on_event = on_event if on_event is not None else null_callback
@@ -783,22 +837,18 @@ class Flux2Pipeline:
         return int(width * scale) // w_multiple * w_multiple, int(height * scale) // h_multiple * h_multiple
 
     def _transformer_row_capacity(self) -> int:
-        """The most tokens per device the transformer sees over all resolutions, rounded up to whole
-        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a
-        reference when dynamic loading rules out editing."""
+        """The most tokens per device the transformer sees at any size `__call__` takes, rounded up to whole
+        tiles: the single blocks' spatial, reference and prompt tokens of an edit, or without a reference when
+        dynamic loading rules out editing. A reference has at most a megapixel (`_reference_size`), and fewer
+        pixels than the image."""
         sp_factor = self._parallel_config.sequence_parallel.factor
         token_size = self._vae_scale_factor * self._patch_size
         prompt_rows = -(-_PROMPT_SEQUENCE_LENGTH // sp_factor) if self._shard_prompt else _PROMPT_SEQUENCE_LENGTH
-        rows = 0
-        for width, height in self._resolutions:
-            reference_width, reference_height = self._reference_size(width=width, height=height)
-            spatial_tokens = (height // token_size) * (width // token_size)
-            reference_tokens = (
-                0 if self.dynamic_load else (reference_height // token_size) * (reference_width // token_size)
-            )
-            tokens = spatial_tokens + reference_tokens
-            token_rows = self._token_rows(tokens) if self._prompt_first() else -(-tokens // sp_factor) * sp_factor
-            rows = max(rows, token_rows // sp_factor + prompt_rows)
+        spatial_tokens = max((height // token_size) * (width // token_size) for width, height in self._largest_sizes())
+        reference_tokens = 0 if self.dynamic_load else min(1024 * 1024, self._max_pixels) // token_size**2
+        tokens = spatial_tokens + reference_tokens
+        token_rows = self._token_rows(tokens) if self._prompt_first() else -(-tokens // sp_factor) * sp_factor
+        rows = token_rows // sp_factor + prompt_rows
         return -(-rows // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
     def _prompt_first(self) -> bool:

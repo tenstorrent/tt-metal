@@ -161,14 +161,16 @@ class Flux2VaeDecoder(Module):
         warm_token_gather(ctx, channel_counts[0])
         warm_zero_padding(ctx)
 
+    def attention_tokens(self, image_size: tuple[int, int]) -> int:
+        """The tokens per device of the mid block's attention for an image of size (height, width)."""
+        scale = 2 ** (len(self._conv_levels()) - 1)
+        h, w = image_size
+        return math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
+
     def warm_sdpa(self, image_sizes: Iterable[tuple[int, int]]) -> None:
         """Build the mid block's attention programs that images of the given sizes (height, width) reach; see
         VaeAttention.warm_sdpa."""
-        scale = 2 ** (len(self._conv_levels()) - 1)
-        tokens = max(
-            math.ceil(h / scale / self._ctx.h_factor) * math.ceil(w / scale / self._ctx.w_factor)
-            for h, w in image_sizes
-        )
+        tokens = max(self.attention_tokens(size) for size in image_sizes)
         for attention in self.mid_block.attentions:
             attention.warm_sdpa(tokens)
 
