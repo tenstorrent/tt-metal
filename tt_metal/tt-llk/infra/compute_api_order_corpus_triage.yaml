@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Triage for compute_api_order_corpus.md.
+#
+# Keys are either a full fingerprint
+#   arch|thread|rule|file:line|message
+# or a site/rule-wide default:
+#   rule|relative/path:line
+#   rule
+# A rule default applies only when there is no exact or site override.
+#
+# Verdicts are from reviewing the corpus against the source.  Unreviewed
+# findings are not counted as false positives.
+
+loop-invariant-init:
+  true_positive: false
+  note: advisory; the init is intentionally re-run after a reconfiguration or to restore per-iteration SFPU state
+
+deprecated-init:
+  true_positive: true
+  note: deprecated init API; migrate to the replacement named in the deprecation message
+
+deprecated-api:
+  true_positive: true
+  note: deprecated API (e.g. acquire_dst/release_dst); migrate to the replacement named in the deprecation message
+
+missing-init:
+  true_positive: true
+  note: no matching init on this path; pack-only kernels that skip compute_kernel_hw_startup, and bcast/reduce helpers whose init is missing
+
+missing-init|tests/tt_metal/tt_metal/test_kernels/compute/pack_block_2_0.cpp:46:
+  true_positive: false
+  note: checker limitation; the id-free 2.0 experimental::copy_init is outside the modelled API surface, so the legacy copy_tile init is not seen
+
+missing-init|tests/tt_metal/tt_metal/test_kernels/compute/reconfig_srca_2_0.cpp:40:
+  true_positive: false
+  note: checker limitation; the id-free 2.0 experimental::copy_init is outside the modelled API surface, so the legacy copy_tile init is not seen
+
+missing-init|tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp:35:
+  true_positive: false
+  note: checker limitation; libclang emits the dependent transpose_dest_init call as an UNEXPOSED_EXPR, so the LLK init it performs is not followed
+
+missing-uninit:
+  true_positive: true
+  note: the curated uninit contract is not met before the kernel ends or switches operation groups
+
+init-arg-mismatch:
+  true_positive: true
+  note: init and operation expose different compile-time arguments (e.g. unpack acc_to_dest / datacopy configuration)
+
+# The former groupnorm_sharded_v2.cpp wrong-init findings are not retriaged
+# here because they no longer occur: ExprEval now folds the helper-local
+# is_sfpu_reduce_path<...>() constexpr and selects the FPU reduce branch.
+# See test_helper_local_constexpr_reduce_path_has_no_false_positive.
+wrong-init:
+  true_positive: true
+  note: a reconfigured or stale init is used, or a sequence postcondition such as tilize_init seating the packer does not hold

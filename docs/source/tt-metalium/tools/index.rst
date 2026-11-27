@@ -57,6 +57,14 @@ LLK asserts provide validation checks within the low-level kernel library infras
 .. toctree::
     :maxdepth: 1
 
+    compute_api_order_checker
+
+The compute-kernel API ordering checker reports init/uninit/reconfig ordering
+mistakes statically, without hardware.
+
+.. toctree::
+    :maxdepth: 1
+
     inspector
 
 The Inspector is a tool that provides insights into Metal host runtime.
