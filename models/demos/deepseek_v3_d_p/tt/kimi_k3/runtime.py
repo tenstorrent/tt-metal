@@ -16,6 +16,9 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
+
+from loguru import logger
 
 import ttnn
 from models.demos.common.prefill.prefill_chunk import validate_chunks
@@ -32,7 +35,37 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # The shared build starts GLM-5.3's MTP predictor before MODEL_CLS runs, so reject here.
         if self.config.mtp_levels:
             raise ValueError(f"Kimi-K3 has no MTP predictor; got mtp_levels={self.config.mtp_levels}")
+        if not state_dict:
+            state_dict = self._accuracy_state_dict()
         super()._build_model(state_dict)
+
+    def _accuracy_state_dict(self) -> dict:
+        """K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py): a cache built without the knob holds no bf16 attention
+        projections, so its layers read as stale; read those layers' attention weights from the checkpoint (the model's
+        adapter's moe_block_checkpoint) and let the build write them beside the production ones. {} otherwise (also
+        when every layer already has them). The cache must be writable."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_stale, load_attention_weights
+        from models.demos.deepseek_v3_d_p.tt.moe_impl import model_adapter
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
+
+        root = self.config.weight_cache_path
+        if not (accuracy.bf16_weights() and root):
+            return {}
+        model_cfg = self.config.model_cfg
+        first, n = self.config.first_layer_idx, self.config.num_layers
+        listing = FastCacheChecker(Path(root))
+        stale = [i for i in range(first, first + n) if layer_is_stale(Path(root), i, model_cfg, listing=listing)]
+        if not stale:
+            return {}
+        checkpoint = model_adapter(model_cfg).moe_block_checkpoint()
+        logger.warning(f"K3_ACC_BF16_WEIGHTS: layers {stale} read their attention weights from {checkpoint}")
+        return {
+            "layers": [
+                load_attention_weights(checkpoint, i, model_cfg=model_cfg) if i in stale else {}
+                for i in range(first, first + n)
+            ]
+        }
 
     @property
     def activation_planes(self) -> int:
