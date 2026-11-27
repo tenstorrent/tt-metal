@@ -52,6 +52,8 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Comparing a perf test against the branch point | `perf-regression-check` (`.claude/skills/perf-regression-check/SKILL.md`) | Runs `perf_compare_commits.sh`; separates real deltas from deterministic layout sensitivity |
 | Analyzing performance-report CSV parameter impact | `perf-parameter-impact` (`.claude/skills/perf-parameter-impact/SKILL.md`) | Builds paired, bottleneck-aware Canvas reports for formats, fidelity, dimensions, accumulation, indexing, and related parameters |
 | Writing, trimming, or reviewing code comments | `code-comments` (`.claude/skills/code-comments/SKILL.md`) | Keeps comments to durable why/constraint/invariant, grounds hardware claims, scopes TODOs; defers docstrings to `doxygen-style.md` |
+| Writing, trimming, or reviewing `docs/**/*.md` or READMEs | `docs-writing` (`.claude/skills/docs-writing/SKILL.md`) | Keeps docs to current reference (no PR narrative or measurements), one source of truth per table or layout, ISA conflicts raised as questions, no internal oversharing |
+| Adding or reviewing a perf counter family | `perf-counter-family` (`.claude/skills/perf-counter-family/SKILL.md`) | Reuse of existing register headers and shared capture steps, host parsing of device constants, wrap/window/buffer/option checks, perturbation, scope, ISA cross-check |
 | TensorShape / tile-size API conversion or coverage | `tensor-shape` (`.claude/skills/tensor-shape/SKILL.md`) | Plumbs `TensorShape` through lib/API, TRISC coverage, review checklist |
 
 Trigger examples for `arch-lookup`:
@@ -70,6 +72,8 @@ Trigger examples for `arch-lookup`:
 We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@param`, `@tparam`, `@ref`, `@note`), with an imperative `@note` (plus `@ref`) encoding the init/execute/uninit contract and pairing the per-thread (T0/T1/T2) halves of an op. Do not use `@pre`/`@post` (they imply guarantees, but our contract is an imperative the caller must satisfy). Avoid bloat tags (`@details`, `@author`, `@date`, `@version`, `@todo`, `@remark`, and `@return` on void functions). Applies to LLK lib (`_llk_*`), LLK API (`llk_*`), and the Compute API (`tt_metal/hw/inc/api/compute/`) — the Compute API keeps its published prose+table format (it feeds the public Sphinx docs), not `@param` tags.
 
 **When writing or updating docstrings**, follow `.claude/references/doxygen-style.md`.
+
+**When writing or reviewing `docs/` pages or READMEs**, follow the `docs-writing` skill.
 
 ### Dead Code
 

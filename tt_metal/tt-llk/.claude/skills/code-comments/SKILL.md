@@ -45,6 +45,12 @@ and a comment review must flag any that lacks one.
   decorative headings or separator art for one statement.
 - Do not copy the same explanation to multiple branches. Extract a helper or
   place one comment above their shared decision.
+- Keep one rationale in one place. When a module, its README and a doc page
+  would all say the same "why", keep it in the most local durable place and
+  link to it from the others.
+- Leave PR narrative out of comments: board names, byte or image costs,
+  measured cycle or count results, and "measured on X" notes go stale with the
+  next build. They belong in the PR description.
 - Delete or update a comment in the same change that invalidates it.
 
 ## Hardware and performance claims
@@ -61,6 +67,13 @@ instruction timing, ordering, or errata.
   local implementation. Do not paste a long explanation that will drift.
 - Never preserve an uncertain hardware claim as fact. Mark the uncertainty
   and the authority needed to resolve it, or omit the verdict.
+- When tt-isa-documentation defines the behavior, link the page instead of
+  presenting it as a measurement. When the code contradicts the ISA or relies
+  on behavior the ISA does not cover, say so as an open question for the ISA
+  owners rather than as fact.
+- Do not overshare. No RTL file or signal names (`*.sv`), internal block names,
+  or design-internal paths. The public ISA and the repository's register
+  headers are the authority a comment may cite.
 
 ## Tests
 
@@ -95,5 +108,9 @@ Avoid/prefer pairs for each rule above are in
 - [ ] Does not duplicate nearby code or comments.
 - [ ] Describes current behavior without stale history.
 - [ ] Hardware and performance claims are grounded in an authoritative source.
+- [ ] ISA-defined behavior links the ISA; conflicts or gaps are open questions.
+- [ ] No board results, byte costs, or other PR evidence.
+- [ ] No RTL, signal, or design-internal names.
+- [ ] The same rationale is not repeated in another file.
 - [ ] Test comments describe unique behavior that the test actually reaches.
 - [ ] TODO has a tracking issue and removal condition.
