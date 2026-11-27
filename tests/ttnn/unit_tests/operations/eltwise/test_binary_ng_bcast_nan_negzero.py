@@ -151,8 +151,9 @@ MT_BCAST = {
     "scalar": (1, 1, 1, 1),
 }
 # Finite numerators and power-of-two denominators keep every quotient exact; a zero denominator gives +-inf.
+# A scalar-shaped b holds only the first value, so -0.0 goes first.
 NUMERATORS = [1.0, -3.0, 6.0, 0.25, -1.5]
-DENOMINATORS = [2.0, -0.0, -4.0, 0.0, 0.5, -0.0, 1.0]
+DENOMINATORS = [-0.0, 2.0, -4.0, 0.0, 0.5, -0.0, 1.0]
 NAN_MIX = [NAN, 1.0, -2.0, NAN, 0.5, -0.0, 3.0]
 COMPARANDS = [0.5, -3.0, 2.0, 1.0, -0.25]
 
