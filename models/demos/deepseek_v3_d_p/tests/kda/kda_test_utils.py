@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
-from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor  # noqa: F401 (re-export)
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 
 
 def encode_tail(rows: torch.Tensor, page_channels: int | None) -> torch.Tensor:
