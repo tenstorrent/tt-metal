@@ -932,7 +932,17 @@ def test_mtp_multiturn_pcc(
     # The turn schedule is the only axis the predictor does not depend on, so its cases share one build.
     predictor = acquire_module(
         mesh_device,
-        ("TtMTPPredictor multiturn", variant.name, use_pretrained, num_levels, num_links, CHUNK, CACHE_LEN, layer_idx),
+        (
+            "TtMTPPredictor multiturn",
+            variant.name,
+            use_pretrained,
+            num_levels,
+            num_links,
+            sp_axis,
+            CHUNK,
+            CACHE_LEN,
+            layer_idx,
+        ),
         lambda: TtMTPPredictor(
             mesh_device,
             config,
