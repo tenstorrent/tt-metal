@@ -14,7 +14,11 @@
 //   6 bounce_block_pages    pages per bounce block (bounce walk only)
 //   7 bounce_write_run_pages  cap on pages per bounce write; 0 = the whole run contiguous in the target
 //   8 bounce_order          BOUNCE_PAGE_ORDER | BOUNCE_STORAGE_ORDER (bounce walk only)
-//   9.. source TensorAccessorArgs, then target TensorAccessorArgs
+//   9 bounce_read_coalesce  0 = one bounce read per page; 1 = one read per run of pages contiguous in the source
+//  10 bounce_stage_pages    pages of cb_bounce_stage, through which a coalesced strided (interleaved) source is
+//                           reordered; 0 = no stage (the source is not strided)
+//  11 cb_bounce_stage       reader-private staging of a strided source (bounce walk only)
+//  12.. source TensorAccessorArgs, then target TensorAccessorArgs
 // Common runtime args: 0 source base address, 1 target base address.
 // Per-core runtime args: WALK_SHARD: [owned_shard_id]; WALK_BANK: none;
 //   WALK_BOUNCE: [first, core_pages, rotation], first = a page id (page order) or a target storage slot (target
@@ -46,7 +50,10 @@ constexpr uint32_t cb_bounce_pages = get_compile_time_arg_val(5);
 constexpr uint32_t bounce_block_pages = get_compile_time_arg_val(6);
 constexpr uint32_t bounce_write_run_pages = get_compile_time_arg_val(7);
 constexpr uint32_t bounce_order = get_compile_time_arg_val(8);
-constexpr auto src_args = TensorAccessorArgs<9>();
+constexpr bool bounce_read_coalesce = get_compile_time_arg_val(9) != 0;
+constexpr uint32_t bounce_stage_pages = get_compile_time_arg_val(10);
+constexpr uint32_t cb_bounce_stage = get_compile_time_arg_val(11);
+constexpr auto src_args = TensorAccessorArgs<12>();
 constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
 static_assert(walk <= WALK_BOUNCE, "unknown walk");

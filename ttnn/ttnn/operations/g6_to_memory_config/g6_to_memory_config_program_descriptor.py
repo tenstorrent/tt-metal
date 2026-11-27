@@ -36,11 +36,18 @@ BOUNCE_TARGET_ORDER = False
 # Page-order bounce into a sharded target: rotate each mover's walk so mover i starts on target shard i mod the
 # shard count (bank_stagger); False = every mover starts at its first page.
 BOUNCE_BANK_STAGGER = False
-# Kernel defines of both movers; perf ablation only (G6_ABLATE_READ / G6_ABLATE_WRITE stub the transfers).
+# Bounce reads: True = one NoC read per run of pages contiguous in the source (an interleaved source has one run per
+# bank, reordered to page order in cb_bounce_stage); False = one read per page.
+BOUNCE_READ_COALESCE = True
+# Pages of cb_bounce_stage, the reorder unit of a coalesced interleaved source: 0 = one bounce block.
+BOUNCE_STAGE_PAGES = 0
+# Kernel defines of both movers; perf ablation only (G6_ABLATE_READ / G6_ABLATE_WRITE stub the transfers,
+# G6_ABLATE_REORDER the L1 reorder of a staged read).
 ABLATE_DEFINES = ()
 L1_OP_BUDGET_BYTES = 1347776  # per-core L1 the model leaves the op (BB-05)
 
 CB_BOUNCE_PAGES = 0
+CB_BOUNCE_STAGE = 1
 WALK_SHARD, WALK_BANK, WALK_BOUNCE = 0, 1, 2  # g6_to_memory_config_common.hpp
 NO_SHARD = 0xFFFFFFFF
 
@@ -139,6 +146,15 @@ def target_shard_of(memory_config, rows_tiles, cols_tiles, tile_h, tile_w):
     return shard_of
 
 
+def source_strided(in_config, rows_tiles, cols_tiles, tile_h, tile_w):
+    """True when the source accessor's contiguous_page_stride() can exceed 1: pages round-robin over banks
+    (interleaved), or a sharded source whose shard is one page wide."""
+    if not in_config.is_sharded():
+        return True
+    _, shard_w_tiles, _, _ = shard_grid(in_config, rows_tiles, cols_tiles, tile_h, tile_w)
+    return shard_w_tiles == 1
+
+
 def bank_cores_cover_grid(device):
     """True when every L1 bank sits on a compute core of the launch grid, one bank per core."""
     device_id = device.id()
@@ -203,6 +219,7 @@ def build_plan(input_tensor, memory_config):
     roles = {}
     core_args = {}
     bounce_block_pages = 0
+    bounce_stage_pages = 0
     owners = []
     if regime in ("pull_shard", "push_shard"):
         owners = dst_owners if regime == "pull_shard" else src_owners
@@ -253,10 +270,23 @@ def build_plan(input_tensor, memory_config):
                 core_args[core] = [0, 0, 0]
                 roles[core] = "idle"
         core_pages_max = pages_1
+        # A coalesced read of a strided source (interleaved, or a sharded one a single page wide) needs the stage;
+        # BB-05 covers the ring and the stage together.
+        staged = BOUNCE_READ_COALESCE and source_strided(in_config, rows_tiles, cols_tiles, tile_h, tile_w)
+        block_slots, reserved = BOUNCE_DEPTH, 0
+        if staged and BOUNCE_STAGE_PAGES == 0:
+            block_slots += 1
+        elif staged:
+            reserved = BOUNCE_STAGE_PAGES * page_size
         bounce_block_pages = max(
             1,
-            min(math.ceil(core_pages_max / BOUNCE_DEPTH), L1_OP_BUDGET_BYTES // (BOUNCE_DEPTH * page_size)),
+            min(
+                math.ceil(core_pages_max / BOUNCE_DEPTH),
+                (L1_OP_BUDGET_BYTES - reserved) // (block_slots * page_size),
+            ),
         )
+        if staged:
+            bounce_stage_pages = bounce_block_pages if BOUNCE_STAGE_PAGES == 0 else min(BOUNCE_STAGE_PAGES, bounce_block_pages)
 
     cb_pages = BOUNCE_DEPTH * bounce_block_pages if regime == "bounce" else 0
     return {
@@ -277,8 +307,10 @@ def build_plan(input_tensor, memory_config):
         "bounce_block_pages": bounce_block_pages,
         "bounce_write_run_pages": BOUNCE_WRITE_RUN_PAGES,
         "bounce_order": bounce_order,
+        "bounce_read_coalesce": regime == "bounce" and BOUNCE_READ_COALESCE,
+        "bounce_stage_pages": bounce_stage_pages,
         "cb_bounce_pages": cb_pages,
-        "l1_op_bytes": dst_share_pages * page_size + cb_pages * page_size,
+        "l1_op_bytes": (dst_share_pages + cb_pages + bounce_stage_pages) * page_size,
     }
 
 
@@ -322,6 +354,9 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
             plan["bounce_block_pages"],
             plan["bounce_write_run_pages"],
             _BOUNCE_ORDER[plan["bounce_order"]],
+            int(plan["bounce_read_coalesce"]),
+            plan["bounce_stage_pages"],
+            CB_BOUNCE_STAGE,
         ] + accessor_args
         runtime_args = ttnn.RuntimeArgs()
         for (x, y), args in plan["core_args"].items():
@@ -347,6 +382,21 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=CB_BOUNCE_PAGES,
+                        data_format=input_tensor.dtype,
+                        page_size=plan["page_size"],
+                    )
+                ],
+            )
+        )
+
+    if plan["bounce_stage_pages"]:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=plan["bounce_stage_pages"] * plan["page_size"],
+                core_ranges=core_ranges,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_BOUNCE_STAGE,
                         data_format=input_tensor.dtype,
                         page_size=plan["page_size"],
                     )

@@ -202,6 +202,8 @@ def _cache_key(input_tensor, memory_config):
         descriptor_module.BOUNCE_WRITE_RUN_PAGES,
         descriptor_module.BOUNCE_TARGET_ORDER,
         descriptor_module.BOUNCE_BANK_STAGGER,
+        descriptor_module.BOUNCE_READ_COALESCE,
+        descriptor_module.BOUNCE_STAGE_PAGES,
         tuple(descriptor_module.ABLATE_DEFINES),
         descriptor_module.L1_OP_BUDGET_BYTES,
     )
