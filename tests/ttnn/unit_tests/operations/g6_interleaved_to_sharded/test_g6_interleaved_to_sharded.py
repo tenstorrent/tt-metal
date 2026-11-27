@@ -86,6 +86,26 @@ HEIGHT_MULTI_SHARD = _variant(
     grid=[[0, 0], [3, 0]],
     shard_shape=[32, 128],
 )
+# 6 images of 2 tile rows, 2 per shard, on a 4x2 COL_MAJOR grid: 6 owners, 2 idle cores.
+HEIGHT_MULTI_IMAGE_COL_MAJOR = _variant(
+    FLUX_58,
+    shape=(2, 3, 33, 128),
+    scheme="height_sharded",
+    grid=[[0, 0], [3, 1]],
+    shard_shape=[64, 128],
+    orientation="col_major",
+)
+# 3 tile rows in shards of 2: the last height shard holds one tile row.
+HEIGHT_PARTIAL_LAST_SHARD = _variant(
+    FLUX_58,
+    shape=(3, 1, 1, 256),
+    scheme="height_sharded",
+    grid=[[0, 0], [1, 0]],
+    shard_shape=[64, 256],
+)
+# Rank 4 on the width path: leading dims fold into tile rows of a width shard.
+WIDTH_RANK4_P1 = _variant(FLUX_58, shape=(1, 1, 1, 5120))
+WIDTH_RANK4_MULTI_IMAGE = _variant(FLUX_58, shape=(2, 1, 33, 256), grid=[[0, 0], [3, 0]], shard_shape=[128, 64])
 
 # bfloat16 bit patterns as int16: NaN payloads 0x7F81 and 0xFFA5, +inf, -inf, -0.0, smallest denormal.
 SPECIAL_BITS = (0x7F81, 0xFFA5 - 0x10000, 0x7F80, 0xFF80 - 0x10000, 0x8000 - 0x10000, 0x0001)
@@ -190,6 +210,10 @@ def _check(output, expected, shape, memory_config):
         _case(FLUX_58_COL_MAJOR, "flux58_width_8x4_col_major"),
         _case(REGIME_PIN, "regime_pin_33x5120_width"),
         _case(HEIGHT_MULTI_SHARD, "height_multi_shard_2x1x33x128"),
+        _case(HEIGHT_MULTI_IMAGE_COL_MAJOR, "height_multi_image_2x3x33x128_4x2_col_major"),
+        _case(HEIGHT_PARTIAL_LAST_SHARD, "height_partial_last_shard_3x1x1x256"),
+        _case(WIDTH_RANK4_P1, "width_rank4_1x1x1x5120"),
+        _case(WIDTH_RANK4_MULTI_IMAGE, "width_rank4_2x1x33x256"),
     ],
 )
 def test_placement(scenario, device):
@@ -288,6 +312,32 @@ def test_plan_report_core_order(scenario, row_wise, device):
         entry = owners[shard]
         assert tuple(entry["core"]) == (core.x, core.y), f"shard {shard} on {entry['core']}, expected {core}"
         assert (entry["block_tile_rows"], entry["block_tile_cols"]) == (1, 5)
+
+
+@pytest.mark.parametrize(
+    "scenario,row_wise,shards,last_rows",
+    [(HEIGHT_MULTI_IMAGE_COL_MAJOR, False, 6, 2), (HEIGHT_PARTIAL_LAST_SHARD, True, 2, 1)],
+    ids=["multi_image_col_major", "partial_last_shard"],
+)
+def test_plan_report_height_map(scenario, row_wise, shards, last_rows, device):
+    """Height shard s (tile rows [s*sh, min((s+1)*sh, rows))) is owned by the s-th grid core in the
+    orientation's order; cores past the last shard stay idle."""
+    ttnn_input = _device_input(_torch_input(scenario["shape"]), device)
+    memory_config = _memory_config(scenario["out_memory"], device)
+    plan = describe_plan(ttnn_input, memory_config)
+    assert plan["num_shards"] == shards
+    shard_rows = scenario["out_memory"]["shard_shape"][0] // 32
+    tile_cols = scenario["shape"][-1] // 32
+    expected_order = ttnn.corerange_to_cores(memory_config.shard_spec.grid, None, row_wise)
+    assert len(plan["cores"]) == len(expected_order)
+    for index, core in enumerate(expected_order):
+        entry = next(e for e in plan["cores"] if tuple(e["core"]) == (core.x, core.y))
+        if index >= shards:
+            assert entry["role"] == "idle", f"core {core} past the last shard is not idle"
+            continue
+        assert entry["role"] == "owner" and entry["shard"] == index, f"core {core} does not own shard {index}"
+        rows = last_rows if index == shards - 1 else shard_rows
+        assert (entry["block_tile_rows"], entry["block_tile_cols"]) == (rows, tile_cols)
 
 
 def _p1_target(device):

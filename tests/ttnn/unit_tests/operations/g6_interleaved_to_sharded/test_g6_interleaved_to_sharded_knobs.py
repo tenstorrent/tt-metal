@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Every value of the KNOBS dict (issuers_per_core: perf lamp L1; partial_tile_read: the
-valid-row span, the two face-row spans of perf lamp L2, the whole tile) is bit exact on the Phase 0 placements, and the host
-geometry of the span and the issuer split matches op_design.md.
+valid-row span, the two face-row spans of perf lamp L2, the whole tile) is bit exact on the width and
+height placements, and the host geometry of the span and the issuer split matches op_design.md.
 
 flux58: every tile row is partial (valid-row span). h33_width: tile row 0 full, tile row 1
-partial, so both spans run in one block. flux58_640: 20 tiles per core. NaN in the input's
+partial, so both spans run in one block. flux58_640: 20 tiles per core. height_2x1x33x128_4cores:
+one tile row per height shard, alternating full and partial across images. NaN in the input's
 tile padding must not reach the logical values.
 """
 
@@ -36,8 +37,15 @@ FLUX_58_640 = copy.deepcopy(FLUX_58)
 FLUX_58_640["out_memory"]["grid"] = [[0, 0], [7, 0]]
 FLUX_58_640["out_memory"]["shard_shape"] = [32, 640]
 
+# 2 images of 2 tile rows (the second partial) over 4 height shards of one tile row each.
+HEIGHT_4_CORES = copy.deepcopy(FLUX_58)
+HEIGHT_4_CORES["shape"] = [2, 1, 33, 128]
+HEIGHT_4_CORES["out_memory"].update(scheme="height_sharded", grid=[[0, 0], [3, 0]], shard_shape=[32, 128])
+
 SCENARIOS = pytest.mark.parametrize(
-    "scenario", [FLUX_58, H33_WIDTH, FLUX_58_640], ids=["flux58", "h33_width", "flux58_640"]
+    "scenario",
+    [FLUX_58, H33_WIDTH, FLUX_58_640, HEIGHT_4_CORES],
+    ids=["flux58", "h33_width", "flux58_640", "height_2x1x33x128_4cores"],
 )
 
 

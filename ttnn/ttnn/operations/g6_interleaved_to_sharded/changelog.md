@@ -20,3 +20,20 @@
   - Argument loading moved inside the `I2S-FETCH` zone.
   - `KNOB_VALUES["issuers_per_core"]` is derived from `ISSUERS`.
 - **Tests added**: test_g6_interleaved_to_sharded.py (acceptance), test_g6_interleaved_to_sharded_knobs.py, test_g6_interleaved_to_sharded_perf.py, test_g6_interleaved_to_sharded_precision_baseline.py, test_g6_interleaved_to_sharded_validation.py
+
+## Refinement 1 — Height-sharded placement and rank-4 inputs
+- **Date**: 2026-11-27
+- **What was done**: Knob-turn, as planned. `SUPPORTED` now holds `rank: [2, 4]` and `out_scheme: ["width_sharded", "height_sharded"]`. No kernel or descriptor change was needed:
+  - `owner_block()` already gives height shard `s` tile rows `[s*sh, min((s+1)*sh, rows))` with all tile columns;
+  - `compute_geometry()` already folds leading dims into tile rows at `ceil(H/32)` rows per image;
+  - the reader picks the partial-row span by `r mod image_tile_rows`.
+
+  The height path holds the Phase 0 perf bar: one block per issuer covering the whole shard, every read in flight, one barrier.
+- **Accuracy achieved**: bit-exact (PCC=1.0, relative RMS=0, NaN padding poisoned in the knob cases) on:
+  - height: `(1,1,1,128)` p2 on 1 core; `(2,1,33,128)` on 4 cores; `(2,3,33,128)` on a 4x2 COL_MAJOR grid (6 owners, 2 idle); `(3,1,1,256)` whose last shard is partial;
+  - rank-4 width: `(1,1,1,5120)` on 8x4; `(2,1,33,256)` on 4 cores.
+- **Golden test progress**: the two former xfail_expected cells pass (`test_op[1x1x1x128-height_sharded…]`, loose `flux57_p2`), as does regression `test_height_multi_shard`. Golden: 6/6 cells supported_pass. I ran only a `-k` slice: the 2 height cells plus `flux58_p1` as the width representative.
+- **Issues encountered**: None.
+- **Tests added**:
+  - `test_g6_interleaved_to_sharded.py`: 4 `test_placement` cases (multi-image COL_MAJOR height, partial last height shard, 2 rank-4 width) and `test_plan_report_height_map` (shard `s` on `G[s]`, idle cores past the last shard, short last block);
+  - `test_g6_interleaved_to_sharded_knobs.py`: the 4-core `(2,1,33,128)` height scenario, bit-exact on all 6 `issuers_per_core x partial_tile_read` values.

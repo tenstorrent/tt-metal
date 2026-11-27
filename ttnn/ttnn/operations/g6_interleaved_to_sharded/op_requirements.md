@@ -37,7 +37,7 @@
 
 Queue shape: TARGET − SUPPORTED is `rank: 4` and `out_scheme: height_sharded`. Both are knob-turns with the same production witness (p2), so they form one generality bundle. The perf-1 target (`flux58_p1`) is fully inside Phase 0 SUPPORTED, so no unlock precedes it. With a single generality bundle, the 2:1 cadence gives R1 generality, then R2 perf. No generality candidates remain after R1.
 
-### [ ] Refinement 1 — Height-sharded placement and rank-4 inputs
+### [x] Refinement 1 — Height-sharded placement and rank-4 inputs
 
 **Goal**: add `"height_sharded"` to `SUPPORTED["out_scheme"]` and `4` to `SUPPORTED["rank"]`. These cells move from `xfail_expected` to `supported_pass`:
 - golden `test_op[1x1x1x128-height_sharded…]` (FLUX case 57, p2: `(1, 1, 1, 128)` into one `(32, 128)` height shard on core (0,0));

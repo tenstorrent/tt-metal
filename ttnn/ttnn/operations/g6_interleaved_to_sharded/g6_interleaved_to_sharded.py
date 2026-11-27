@@ -66,9 +66,9 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.bfloat16],
     "layout": [ttnn.TILE_LAYOUT],
-    "rank": [2],
+    "rank": [2, 4],
     "alignment": ["h_non_aligned"],
-    "out_scheme": ["width_sharded"],
+    "out_scheme": ["width_sharded", "height_sharded"],
 }
 
 
