@@ -21,13 +21,13 @@ from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_w
 
 import ttnn
 
-# Qwen3-ASR-1.7B audio_config
+# Audio tower shared by Qwen3-ASR-1.7B and Qwen3-ForcedAligner-0.6B; the output width
+# (2048 / 1024) comes from the projector weights.
 D_MODEL = 1024
 N_LAYERS = 24
 N_HEADS = 16
 HEAD_DIM = D_MODEL // N_HEADS  # 64
 FFN = 4096
-OUTPUT_DIM = 2048
 LN_EPS = 1e-5
 HIFI4 = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False)
 
@@ -393,6 +393,6 @@ def encode(x_in, params, device, S=None, cu_window_seqlens=None, to_host=True):
     x = ttnn.linear(x, params["proj2_w"], bias=params["proj2_b"], core_grid=core, compute_kernel_config=HIFI4)
     if not to_host:
         return x
-    out = _to_torch(x).reshape(-1, OUTPUT_DIM)[:S].float()
+    out = _to_torch(x).reshape(-1, x.shape[-1])[:S].float()
     ttnn.deallocate(x)
     return out
