@@ -1,3 +1,7 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-26T19:00:54-05:00"}
 {"event":"integrity_note","detail":"boundary commit 6f7e935 contains a prior g6_embedding implementation in the working tree; deleted unread and rewriting from design","ts":"2026-11-26T19:00:54-05:00"}
 {"event":"test_run","mode":"dev+prod","result":"22/22 pass","note":"LD_PRELOAD ULFM stub needed: /opt/openmpi-v5.0.7-ulfm missing on host","ts":"2026-11-26T19:11:56-05:00"}
+{"event":"perf","case":"p1","baseline_ns":[754181,754717],"overlap_lamp_bt_sweep_ns":{"7":756057,"5":754717,"4":759452,"3":757804,"2":756627,"1":762379},"bank_stagger_rotate_by_tile_row_ns":[762761,763324],"verdict":"bt=5 default kept; write rotation regresses ~8us, reverted","ts":"2026-11-26T19:16:35-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T04:01:07-05:00"}
+{"event":"integrity_note","detail":"HEAD 8d373f2 working tree holds the boundary commit 9016a62 g6_embedding implementation; deleting op file, descriptor, kernels, __init__ unread and rewriting from the updated design","ts":"2026-11-27T04:01:07-05:00"}
+{"event":"test_run","mode":"dev+prod","result":"72/72 pass","note":"first compile failed: DeviceZoneScopedN needs api/debug/kernel_profiler.hpp in compute; LD_PRELOAD mpix stub needed on this host","ts":"2026-11-27T04:09:51-05:00"}
