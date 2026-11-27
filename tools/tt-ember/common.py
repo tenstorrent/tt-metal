@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers shared by auto.py and the sweep scripts (run_all.py, run_power_cases.py)."""
+"""Helpers shared by auto.py, run_sweep.py and the analysis scripts."""
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import re
@@ -24,7 +25,12 @@ RESET_COOLDOWN_S = 10
 # run as done only if this file exists and records the same settings it is about to use.
 RUN_COMPLETE_FILE = "run_complete.json"
 
-# Default --trim-ms. run_power_cases.py uses 1 ms instead: the published POWER_CASE results were
+# Joules to picojoules, for energy per FLOP.
+PJ_PER_J = 1e12
+# Tile edge, in elements.
+TILE = 32
+
+# Default --trim-ms. run_sweep.py uses 1 ms instead: the published POWER_CASE results were
 # made with it, and changing it would change them.
 DEFAULT_TRIM_MS = 6.0
 POWER_CASES_TRIM_MS = 1.0
@@ -103,6 +109,9 @@ WORKLOAD_ENV_VARS = (
     "TT_METAL_NULL_KERNELS",
     "TT_METAL_KERNELS_EARLY_RETURN",
     "TT_METAL_SLOW_DISPATCH_MODE",
+    # Record only: run_sweep.py sets it to the AICLK it pins after every reset (Blackhole), so the
+    # pin is part of run_complete.json. Nothing reads it, and exporting it does not pin the clock.
+    "TT_EMBER_AICLK_MHZ",
 )
 
 
@@ -222,9 +231,12 @@ def auto_py_command(
     slot_ms: int,
     device_id: Optional[int],
     trim_ms: float,
+    python_exe: Optional[str] = None,
 ) -> List[str]:
+    """python_exe, if given, runs auto.py and is passed on for the parser; otherwise both use
+    the Python running this script."""
     cmd: List[str] = [
-        sys.executable,
+        python_exe or sys.executable,
         str(auto_script),
         "--telemetry-exe",
         str(telemetry_exe),
@@ -249,6 +261,8 @@ def auto_py_command(
     ]
     if device_id is not None:
         cmd += ["--device-id", str(device_id)]
+    if python_exe:
+        cmd += ["--python-exe", python_exe]
     # --app-args must be last: auto.py passes everything after it to the app.
     return cmd + ["--app-args"] + [str(a) for a in app_args]
 
@@ -285,6 +299,37 @@ def whole_run_value(row: Mapping[str, str], column: str, legacy: bool) -> float:
     except (KeyError, ValueError):
         return float("nan")
     return value * run_s / window_s if window_s > 0 else float("nan")
+
+
+def matmul_flops(m: int, n: int, k: int, iterations: int) -> float:
+    """FLOPs of iterations M x K by K x N matmuls."""
+    return 2.0 * m * n * k * iterations
+
+
+def rows_by_grid(path: Path) -> Dict[str, Dict[str, str]]:
+    """program_intervals.csv as {grid: row}."""
+    with Path(path).open(newline="") as f:
+        return {r["grid"]: r for r in csv.DictReader(f)}
+
+
+def add_mode_argument(parser: argparse.ArgumentParser) -> None:
+    """--mode for the analysis scripts: how energy is scaled to the FLOP count (whole_run_value)."""
+    parser.add_argument(
+        "--mode",
+        choices=("updated", "legacy"),
+        default=os.environ.get("LONG_MATMUL_MODE") or "updated",
+        help="updated scales energy from the trimmed window to the whole run, as the FLOP count is; "
+        "legacy uses the window value, as the published figures did. Default: $LONG_MATMUL_MODE, else updated",
+    )
+
+
+def find_case_csv(root: Path, case: str) -> Optional[Path]:
+    """A case's program_intervals.csv, from a tt-ember output root (<root>/<case>/...) or a
+    directory of flat per-case CSVs (<root>/<case>.csv)."""
+    for cand in (root / case / "program_intervals.csv", root / f"{case}.csv"):
+        if cand.exists():
+            return cand
+    return None
 
 
 def environ_with(overrides: Mapping[str, str]) -> Dict[str, str]:
