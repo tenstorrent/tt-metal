@@ -3409,7 +3409,7 @@ class MiniMaxH3Pipeline:
         None keeps the request on the on-device projection: `MINIMAX_H3_ADALN_PRECOMPUTE=0`, a non-coresident
         preset (the tables would outlive the DiT's eviction), tables that could not be allocated before a trace
         was captured, or a schedule larger than the tables. The tables are allocated once, only while no trace
-        is live (#59645), and rewritten in place for a new schedule.
+        is live (#59645); a new schedule's rows are written in place beside the resident ones.
         """
         if not (self._adaln_precompute and self.coresident):
             return None
@@ -3451,23 +3451,24 @@ class MiniMaxH3Pipeline:
                 f"({ADALN_PRECOMPUTE_ENV}_ROWS); AdaLN stays on device for this request"
             )
             return None
-        step_inputs = []
-        for step_levels_, step_endpoints, row in plan.step_inputs(segments):
-            timestep_value, endpoint_value = self._timestep_inputs((step_levels_, step_endpoints))
+        writes = []
+        for write_levels, write_endpoints, placement, keep in plan.write_inputs(segments):
+            timestep_value, endpoint_value = self._timestep_inputs((write_levels, write_endpoints))
             endpoint = None
             if endpoint_value is not None:
                 endpoint = from_torch(endpoint_value, device=self.mesh_device, dtype=ttnn.float32)
-            step_inputs.append(
+            writes.append(
                 (
                     from_torch(timestep_value, device=self.mesh_device, dtype=ttnn.float32),
                     endpoint,
-                    from_torch(plan.placement(row), device=self.mesh_device, dtype=ttnn.bfloat16),
+                    from_torch(placement, device=self.mesh_device, dtype=ttnn.bfloat16),
+                    from_torch(keep, device=self.mesh_device, dtype=ttnn.bfloat16),
                 )
             )
-        transformer.write_adaln_tables(step_inputs)
+        transformer.write_adaln_tables(writes)
         plan.segments = segments
-        self._log(f"adaLN tables: wrote {len(segments)} schedule(s), {sum(s.rows for s in segments)} rows")
-        return plan.find(schedule)
+        self._log(f"adaLN tables: wrote {segments[-1].rows} rows, {len(segments)} schedule(s) resident")
+        return segments[-1]
 
     def release_traces(self) -> None:
         decoder = self._audio_decoder
@@ -3519,8 +3520,9 @@ class MiniMaxH3Pipeline:
         transformer.set_sol_request(None if sol is None else sol[:3], tau=1.0 if sol is None else sol[3])
         self._sol_key = sol
         self._log(
-            "attention: dense ring" if sol is None else
-            f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+            "attention: dense ring"
+            if sol is None
+            else f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
         )
 
     def _denoise_lowres(

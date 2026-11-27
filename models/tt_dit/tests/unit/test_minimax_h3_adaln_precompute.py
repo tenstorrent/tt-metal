@@ -7,7 +7,8 @@
 The device ops are replaced by torch stand-ins, so these check the row layout and bookkeeping: the rows a
 forward selects from the resident tables are exactly the rows the block's own `_modulation_tables` returns
 for that step, on #58676's layout (`slot * MODALITY_NUM + modality` rows, the norm weight folded into the
-`1 + scale` rows), and the tables are allocated only while no trace is live and never reallocated.
+`1 + scale` rows), a new schedule's write leaves the other resident rows as they are, and the tables are
+allocated only while no trace is live and never reallocated.
 """
 
 from __future__ import annotations
@@ -53,6 +54,9 @@ class _FakeBlock:
         self.weight = torch.randn(MODALITY_NUM * NUM_MODULATION_PARAMS * HIDDEN, TEMB_DIM, generator=generator)
         self.norm_weight = {p: torch.rand(HIDDEN, generator=generator) + 0.5 for p in (_SCALE_MSA, _SCALE_MLP)}
         self.calls = 0
+
+    def _compute_adaln_projection(self, temb):
+        return temb  # `_modulation_tables` projects here
 
     def _modulation_tables(self, temb):
         self.calls += 1
@@ -116,6 +120,20 @@ def _on_device_tables(transformer, block_index, levels, endpoints=None):
     return transformer.transformer_blocks[block_index]._modulation_tables(temb)
 
 
+def _step_by_step_tables(transformer, block_index, plan):
+    """The resident tables of `plan.segments` built a step at a time: every step's on-device rows at its place,
+    zeros elsewhere."""
+    tables = [torch.zeros(plan.capacity, HIDDEN) for _ in range(NUM_MODULATION_PARAMS)]
+    for seg in plan.segments:
+        for step in range(seg.schedule.num_steps):
+            endpoints = None if seg.schedule.endpoints is None else seg.schedule.endpoints[step]
+            row = seg.offset + step * seg.rows_per_step
+            step_tables = _on_device_tables(transformer, block_index, seg.schedule.levels[step], endpoints)
+            for p in range(NUM_MODULATION_PARAMS):
+                tables[p][row : row + seg.rows_per_step] = step_tables[p]
+    return tables
+
+
 # ---------------------------------------------------------------------------- row plan
 
 
@@ -132,7 +150,7 @@ def test_schedule_equality_is_bitwise(expect_error):
         _schedule([[1.0, 0.5, 0.25]], endpoints=[[0.5] * 3, [0.0] * 3])
 
 
-def test_row_plan_appends_then_restarts_then_refuses(expect_error):
+def test_row_plan_takes_free_rows_then_evicts_the_least_recently_used(expect_error):
     plan = AdalnRowPlan(64, ROLES)
     warm = _schedule([[1.0, 1.0, 1.0], [0.5, 0.5, 0.5]])  # 18 rows
     serve = _schedule([[0.9, 0.8, 0.9]] * 4)  # 36 rows
@@ -140,9 +158,14 @@ def test_row_plan_appends_then_restarts_then_refuses(expect_error):
     plan.segments = plan.placed(serve)
     assert [(s.offset, s.rows) for s in plan.segments] == [(0, 18), (18, 36)]
     assert plan.find(serve).offset == 18 and plan.find(warm).offset == 0
-    # 54 rows used; a 2-step schedule (18) no longer fits behind them, so it starts over alone.
-    other = _schedule([[0.7, 0.7, 0.7]] * 2)
-    assert [(s.offset, s.rows) for s in plan.placed(other)] == [(0, 18)]
+    # 54 rows used, warm used last: a 3-step schedule (27) does not fit behind them and takes serve's rows.
+    plan.segments = plan.placed(_schedule([[0.7, 0.7, 0.7]] * 3))
+    assert [(s.offset, s.rows) for s in plan.segments] == [(0, 18), (18, 27)]
+    # Free rows behind the resident schedules are taken without an eviction.
+    plan.segments = plan.placed(_schedule([[0.6, 0.6, 0.6]]))
+    assert [(s.offset, s.rows) for s in plan.segments] == [(0, 18), (18, 27), (45, 9)]
+    # 5 steps (45 rows): evicting warm frees 18 rows, not enough; the 3-step one goes too and the gap in front fits.
+    assert [(s.offset, s.rows) for s in plan.placed(_schedule([[0.3, 0.3, 0.3]] * 5))] == [(45, 9), (0, 45)]
     assert plan.placed(_schedule([[0.1, 0.1, 0.1]] * 8)) is None  # 72 rows > 64
     with expect_error(ValueError, "roles"):
         plan.placed(_schedule([[1.0, 1.0]], roles=("video", "audio")))
@@ -183,66 +206,68 @@ def test_capacity_env(monkeypatch, expect_error):
 
 
 @pytest.mark.parametrize("two_time", [False, True], ids=["one_time", "two_time"])
-def test_selected_rows_equal_the_on_device_tables(monkeypatch, two_time):
-    """Every step of every resident schedule: `selector @ resident` is bit-identical to `_modulation_tables`."""
+def test_resident_tables_equal_the_on_device_tables(monkeypatch, two_time):
+    """After every write the tables are bit-identical to the on-device rows of every resident step, zero elsewhere."""
     copies = _torch_ttnn(monkeypatch)
     transformer = _fake_transformer()
-    plan = AdalnRowPlan(64, ROLES)
+    plan = AdalnRowPlan(128, ROLES)
     transformer.allocate_adaln_tables(plan.capacity)
     allocated = [t.data_ptr() for tables in transformer._adaln_tables for t in tables]
 
-    warm = _schedule([[1.0, 1.0, 1.0], [0.5, 0.5, 0.5]], [[0.5, 0.5, 1.0], [0.0, 0.0, 0.5]] if two_time else None)
-    serve = _schedule(
-        [[0.95, 0.9, 0.95], [0.7, 0.6, 0.7], [0.4, 0.3, 0.4], [0.1, 0.05, 0.1]],
-        [[0.7, 0.6, 0.95], [0.4, 0.3, 0.7], [0.1, 0.05, 0.4], [0.0, 0.0, 0.1]] if two_time else None,
-    )
-    for schedule in (warm, serve):
-        segments = plan.placed(schedule)
-        transformer.write_adaln_tables([(t, e, plan.placement(row)) for t, e, row in plan.step_inputs(segments)])
+    def schedule(num_steps, seed):
+        levels = torch.rand(num_steps, len(ROLES), generator=torch.Generator().manual_seed(seed))
+        return _schedule(levels.tolist(), (levels * 0.5).tolist() if two_time else None)
+
+    warm, serve, eight, long, three, five = (schedule(n, seed) for seed, n in enumerate((2, 4, 8, 11, 3, 5)))
+    writes = 0
+    # warm, serve and eight fill 126 rows; long (99 rows, two writes) evicts all three; three fits behind long;
+    # five evicts long and takes the gap in front. Rows of evicted schedules that are not written again become zero.
+    for new, used, offsets in (
+        (warm, (), [0]),
+        (serve, (), [0, 18]),
+        (eight, (warm,), [18, 0, 54]),
+        (long, (), [0]),
+        (three, (), [0, 99]),
+        (five, (three,), [99, 0]),
+    ):
+        for seen in used:
+            plan.find(seen)
+        segments = plan.placed(new)
+        assert [seg.offset for seg in segments] == offsets
+        write_inputs = plan.write_inputs(segments)
+        assert all(levels.shape == (schedule_module.WRITE_SLOTS,) for levels, _, _, _ in write_inputs)
+        transformer.write_adaln_tables(write_inputs)
         plan.segments = segments
-
-    # Rewritten in place: the same buffers, every table copied into each write.
+        writes += len(write_inputs)
+        for b in range(len(transformer.transformer_blocks)):
+            for p, expected in enumerate(_step_by_step_tables(transformer, b, plan)):
+                assert torch.equal(transformer._adaln_tables[b][p], expected), (len(segments), b, p)
+    # Written in place: the same buffers, every table copied into once per write.
     assert [t.data_ptr() for tables in transformer._adaln_tables for t in tables] == allocated
-    assert len(copies) == 2 * len(allocated)
+    assert writes == 7 and len(copies) == writes * len(allocated)
 
-    for schedule in (warm, serve):
-        segment = plan.find(schedule)
-        for step in range(schedule.num_steps):
-            endpoints = None if schedule.endpoints is None else schedule.endpoints[step]
-            for slot_roles in (ROLES, ("video", "audio")):
-                index = [ROLES.index(role) for role in slot_roles]
-                selector = plan.selector(segment, step, slot_roles)
-                for b, block in enumerate(transformer.transformer_blocks):
-                    selected = block.select_modulation_tables(selector, transformer._adaln_tables[b])
-                    expected = _on_device_tables(
-                        transformer,
-                        b,
-                        schedule.levels[step][index],
-                        None if endpoints is None else endpoints[index],
-                    )
-                    for p in range(NUM_MODULATION_PARAMS):
-                        assert torch.equal(selected[p], expected[p]), (step, slot_roles, b, p)
-    # Rows past the last schedule stay zero.
-    used = sum(s.rows for s in plan.segments)
-    assert all(not t[used:].any() for tables in transformer._adaln_tables for t in tables)
+    # A request with fewer slots selects its own roles' rows.
+    slot_roles = ("audio", "video")
+    index = [ROLES.index(role) for role in slot_roles]
+    selector = plan.selector(plan.find(five), 4, slot_roles)
+    for b, block in enumerate(transformer.transformer_blocks):
+        selected = block.select_modulation_tables(selector, transformer._adaln_tables[b])
+        endpoints = None if five.endpoints is None else five.endpoints[4][index]
+        expected = _on_device_tables(transformer, b, five.levels[4][index], endpoints)
+        for p in range(NUM_MODULATION_PARAMS):
+            assert torch.equal(selected[p], expected[p]), (b, p)
 
 
 def test_tables_refuse_misuse(monkeypatch, expect_error):
     _torch_ttnn(monkeypatch)
     transformer = _fake_transformer()
-    plan = AdalnRowPlan(32, ROLES)
     with expect_error(RuntimeError, "allocate_adaln_tables"):
-        transformer.write_adaln_tables([(torch.ones(3), None, plan.placement(0))])
+        transformer.write_adaln_tables([(torch.ones(3), None, torch.zeros(32, 96), torch.zeros(32, 32))])
     transformer.allocate_adaln_tables(32)
     with expect_error(RuntimeError, "already allocated"):
         transformer.allocate_adaln_tables(32)
-    with expect_error(ValueError, "at least one step"):
+    with expect_error(ValueError, "at least one write"):
         transformer.write_adaln_tables([])
-    # A step placed past the end of the tables: 9 rows from row 24 overrun 32.
-    assert plan.placement(23).shape == (32, 9)
-    for row in (24, -1):
-        with expect_error(ValueError, "leaves no room"):
-            plan.placement(row)
 
 
 # ---------------------------------------------------------------------------- pipeline
@@ -281,9 +306,13 @@ class _CountingTransformer:
         self.allocated.append(capacity)
         self._allocated = True
 
-    def write_adaln_tables(self, step_inputs):
-        self.writes.append(len(step_inputs))
-        self.rows = [int(placement.argmax(dim=0)[0]) for _, _, placement in step_inputs]
+    def write_adaln_tables(self, writes):
+        self.writes.append(len(writes))
+        self.slots = [timestep.shape[2] for timestep, _, _, _ in writes]
+        self.placed = [
+            row for _, _, placement, _ in writes for row in placement.any(dim=1).nonzero().flatten().tolist()
+        ]
+        self.kept = writes[0][3].diagonal().nonzero().flatten().tolist()
 
 
 def _levels(rows, endpoints=False):
@@ -293,25 +322,26 @@ def _levels(rows, endpoints=False):
     ]
 
 
-def test_pipeline_allocates_once_and_rewrites_per_new_schedule(monkeypatch):
+def test_pipeline_allocates_once_and_writes_only_a_new_schedule(monkeypatch):
     monkeypatch.setattr(Tracer, "_traces_live", {})
     fake, _ = _fake_pipeline(monkeypatch)
     transformer = _CountingTransformer()
     warm, serve = _levels([[1.0] * 3, [0.5] * 3]), _levels([[0.9] * 3] * 4)
 
     first = pm.MiniMaxH3Pipeline._adaln_segment(fake, transformer, ROLES, warm)
-    assert transformer.allocated == [schedule_module.DEFAULT_CAPACITY_ROWS] and transformer.writes == [2]
-    # Warmup's captures are live from here on: a new schedule is rewritten in place, never reallocated.
+    assert transformer.allocated == [schedule_module.DEFAULT_CAPACITY_ROWS] and transformer.writes == [1]
+    # Warmup's captures are live from here on: a new schedule is written in place, never reallocated.
     monkeypatch.setattr(Tracer, "_traces_live", {7: 2})
     second = pm.MiniMaxH3Pipeline._adaln_segment(fake, transformer, ROLES, serve)
-    assert transformer.allocated == [schedule_module.DEFAULT_CAPACITY_ROWS] and transformer.writes == [2, 6]
+    assert transformer.allocated == [schedule_module.DEFAULT_CAPACITY_ROWS] and transformer.writes == [1, 1]
     assert (first.offset, second.offset) == (0, 18)
-    # The rewrite keeps the warm schedule's rows and places the new steps behind them.
-    assert transformer.rows == [0, 9, 18, 27, 36, 45]
+    # The write keeps the warm schedule's rows and places only the new steps, behind them, in one tile row of slots.
+    assert transformer.kept == list(range(18)) and transformer.placed == list(range(18, 54))
+    assert transformer.slots == [schedule_module.WRITE_SLOTS]
     # A repeated schedule reuses its rows without a write.
     assert pm.MiniMaxH3Pipeline._adaln_segment(fake, transformer, ROLES, serve) == second
     assert pm.MiniMaxH3Pipeline._adaln_segment(fake, transformer, ROLES, warm) == first
-    assert transformer.writes == [2, 6]
+    assert transformer.writes == [1, 1]
 
 
 def test_pipeline_stays_on_device_when_tables_cannot_be_used(monkeypatch):
