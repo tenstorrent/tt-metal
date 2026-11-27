@@ -31,6 +31,8 @@ class SD35JointAttention(Module):
         head_dim,
         heads,
         out_dim=None,
+        added_kv_proj_dim=None,
+        out_context_dim=None,
         bias=False,
         out_bias=True,
         context_pre_only=None,
@@ -49,8 +51,8 @@ class SD35JointAttention(Module):
         self.padded_heads = padding_config.target_heads if padding_config is not None else heads
 
         self.out_dim = out_dim if out_dim is not None else query_dim
-        # Note: added_kv_proj_dim should be passed as parameter, using query_dim as default
-        self.added_kv_proj_dim = query_dim
+        self.added_kv_proj_dim = added_kv_proj_dim if added_kv_proj_dim is not None else query_dim
+        self.out_context_dim = out_context_dim if out_context_dim is not None else self.out_dim
         self.context_pre_only = context_pre_only
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -98,10 +100,9 @@ class SD35JointAttention(Module):
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
-            # TODO: Use `out_context_dim` parameter if given
             self.to_add_out = ColParallelLinear(
                 self.padded_inner_dim,
-                self.out_dim,
+                self.out_context_dim,
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
