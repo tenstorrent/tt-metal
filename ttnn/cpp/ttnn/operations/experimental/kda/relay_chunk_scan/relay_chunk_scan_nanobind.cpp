@@ -89,6 +89,9 @@ void bind_relay_chunk_scan(nb::module_& mod) {
                 and every rank's final carry is written back into that entry, in place (nothing past the slab).
             slab_index_scale (int, optional): Defaults to 1.
             slab_index_offset (int, optional): Defaults to 0.
+            round_fp32_operands (bool, optional): round the gated norm's fp32 FPU operands (the chunk outputs and
+                1 / rms) to TF32 nearest-even before they are packed, instead of the unpacker's truncation.
+                Defaults to False.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: TILE-layout ``[B, local_rows, H*K]`` gated-norm outputs, token-major,
@@ -127,7 +130,8 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("slab_index") = nb::none(),
         nb::arg("slab_index_scale") = 1,
-        nb::arg("slab_index_offset") = 0);
+        nb::arg("slab_index_offset") = 0,
+        nb::arg("round_fp32_operands") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::relay_chunk_scan::detail

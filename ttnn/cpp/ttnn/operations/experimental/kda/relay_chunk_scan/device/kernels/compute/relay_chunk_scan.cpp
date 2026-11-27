@@ -22,6 +22,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/tf32_round.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -55,6 +56,9 @@ constexpr uint32_t cb_gin1 = get_compile_time_arg_val(20);
 constexpr uint32_t gate_kb = get_compile_time_arg_val(21);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(22);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(23));
+// Round the gated norm's fp32 FPU operands (x and 1 / rms) to TF32 nearest-even before they are packed: the FPU
+// reads them through SrcA / SrcB, which would truncate them (tf32_round.hpp).
+constexpr bool round_tf32 = get_compile_time_arg_val(24);
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
 static_assert(kt <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -153,6 +157,10 @@ void normalize() {
             add_unary_tile(dst, epsilon_bits, VectorMode::C);
             rsqrt_tile_init();
             rsqrt_tile(dst, VectorMode::C);
+            if constexpr (round_tf32) {
+                kda_round_tf32_init();
+                kda_round_tf32_tile(dst, VectorMode::C);
+            }
         });
     // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32.
     DataflowBuffer gate_factor(cb_gate_factor);
@@ -203,6 +211,12 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
         for (uint32_t j = 0; j < kt; ++j) {
             for (uint32_t k = 0; k < kt; ++k) {
                 matmul_block(cb_diff, seed, row + k, j * kt + k, j, false, 1, 1, kt);
+            }
+        }
+        if constexpr (round_tf32) {  // (x feeds the norm's FPU products)
+            kda_round_tf32_init();
+            for (uint32_t j = 0; j < kt; ++j) {
+                kda_round_tf32_tile(j);
             }
         }
         tile_regs_commit();

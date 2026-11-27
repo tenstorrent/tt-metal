@@ -141,6 +141,7 @@ class RelayChunkScan:
         local_rows,
         max_cores,
         math_fidelity=ttnn.MathFidelity.HiFi3,
+        round_fp32_operands=False,
     ):
         if key_dim != value_dim:
             raise ValueError("relay prefix requires K == V")
@@ -154,6 +155,7 @@ class RelayChunkScan:
                 f"which has semaphores for {_MAX_HEADS_PER_LINK}: use more links"
             )
         self.mesh_device = mesh_device
+        self.round_fp32_operands = round_fp32_operands
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
@@ -307,6 +309,7 @@ class RelayChunkScan:
             output_dtype=output_norm.output_dtype,
             memory_config=output_norm.memory_config,
             **slab_kwargs,
+            **({"round_fp32_operands": True} if self.round_fp32_operands else {}),
         )
         # Every write into it is consumed within the call: the predecessor's entry columns by this rank's heads, and
         # the last rank's final state by the first rank.

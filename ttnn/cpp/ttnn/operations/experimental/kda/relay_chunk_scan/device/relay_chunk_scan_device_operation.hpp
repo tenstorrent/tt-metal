@@ -53,6 +53,7 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     const std::optional<Tensor>& slab_index = std::nullopt,
     uint32_t slab_index_scale = 1,
-    uint32_t slab_index_offset = 0);
+    uint32_t slab_index_offset = 0,
+    bool round_fp32_operands = false);
 
 }  // namespace ttnn::experimental::prim

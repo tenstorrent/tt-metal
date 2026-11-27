@@ -454,7 +454,8 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
     const std::vector<tt::tt_metal::CoreCoord>& cores,
     const std::optional<Tensor>& slab_index,
     uint32_t slab_index_scale,
-    uint32_t slab_index_offset) {
+    uint32_t slab_index_offset,
+    bool round_fp32_operands) {
     auto outputs = ttnn::device_operation::launch<RelayChunkScanOperation>(
         RelayChunkScanParams{
             .sequence_parallel_axis = sequence_parallel_axis,
@@ -469,7 +470,8 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
             .compute_kernel_config = compute_kernel_config,
             .semaphore_addresses = semaphore_addresses,
             .slab_index_scale = slab_index_scale,
-            .slab_index_offset = slab_index_offset},
+            .slab_index_offset = slab_index_offset,
+            .round_fp32_operands = round_fp32_operands},
         RelayChunkScanInputs{
             .packed = packed,
             .terms = terms,

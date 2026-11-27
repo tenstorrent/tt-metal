@@ -39,6 +39,9 @@ struct RelayChunkScanParams {
     std::array<uint32_t, relay_semaphores> semaphore_addresses{};
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;
+    // Round the correction cores' fp32 FPU operands (the chunk outputs and 1 / rms of the gated norm) to TF32
+    // nearest-even before they are packed, instead of letting the unpacker truncate them.
+    bool round_fp32_operands = false;
 };
 
 // The landing buffer's K x K states per head: entry state, final state (relay_chunk_scan_heads_per_relay_core of each

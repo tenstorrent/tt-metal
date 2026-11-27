@@ -462,6 +462,7 @@ class KDARecurrence:
                 local_rows=local_rows,
                 max_cores=program_config.relay_max_cores,
                 math_fidelity=program_config.affine_prefix_math_fidelity or ttnn.MathFidelity.HiFi3,
+                round_fp32_operands=getattr(program_config, "round_fp32_operands", False),
             )
         # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
         # and chunk preparation's DRAM writes.

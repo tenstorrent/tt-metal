@@ -698,7 +698,8 @@ tt::tt_metal::ProgramDescriptor build_program(
              cb_gin1,
              gate_kb,
              gate_k / gate_kb,
-             static_cast<uint32_t>(attrs.gate_math_fidelity)},
+             static_cast<uint32_t>(attrs.gate_math_fidelity),
+             uint32_t(attrs.round_fp32_operands)},
         .config = std::move(compute_config),
     };
     tt::tt_metal::KernelDescriptor relay_reader{

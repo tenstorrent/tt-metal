@@ -119,6 +119,9 @@ class KDARecurrenceProgramConfig:
     # chunks in parallel (the entry correction). Matmul cores the relay may use (its correction and relay cores, so the
     # cores per head): their products count toward the Blackhole di/dt bound.
     relay_max_cores: int = 110
+    # Round the SP relay's fp32 FPU operands (the gated norm's x and 1 / rms) to TF32 nearest-even before they are
+    # packed, instead of the unpacker's truncation (tf32_round.hpp): K3_ACC_KDA_ROUND.
+    round_fp32_operands: bool = False
 
     def __post_init__(self) -> None:
         if self.local_scan_strategy not in ("direct", "grouped"):
@@ -264,6 +267,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             # low over long sequences. With SP these are the relay's hop and entry correction (affine prefix).
             scan_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
             affine_prefix_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
+            round_fp32_operands=accuracy.kda_round(),
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,

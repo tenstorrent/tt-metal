@@ -36,7 +36,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& slab_index,
     uint32_t slab_index_scale,
-    uint32_t slab_index_offset) {
+    uint32_t slab_index_offset,
+    bool round_fp32_operands) {
     TT_FATAL(
         packed.storage_type() == StorageType::DEVICE && packed.is_allocated(),
         "relay_chunk_scan: packed must be an allocated device tensor");
@@ -92,7 +93,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> relay_chunk_scan(
         cores,
         slab_index,
         slab_index_scale,
-        slab_index_offset);
+        slab_index_offset,
+        round_fp32_operands);
 }
 
 }  // namespace ttnn::experimental::kda
