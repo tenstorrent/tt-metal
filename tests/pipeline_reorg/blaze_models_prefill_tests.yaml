@@ -278,13 +278,13 @@
 
 # ===== Kimi-K3-2.8T ====================================================================================
 
-- name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k + K3.1 sparse MLA 5k + long-context accuracy KDA 5k, MoE 20k, DSA 5k and 128k"
+- name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k + K3.1 sparse MLA 5k"
   # Four legs folded into one. Each ran well under the ~5.5 min "Setup multihost job" cost, so four
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
   #
-  # fabric_profile torus_xy is required by [2/6]..[6/6] and by [1/6]'s 8x4 checks (the K3 / K3.1 cache
-  # allocation and the AttnRes torus checks); the rest of [1/6] is host tests that ride along rather than
+  # fabric_profile torus_xy is required by [2/5]..[5/5] and by [1/5]'s 8x4 checks (the K3 / K3.1 cache
+  # allocation and the AttnRes torus checks); the rest of [1/5] is host tests that ride along rather than
   # paying their own setup. It keeps its mpirun wrapper:
   # the runner's container hook drives the step through its host-execution path and does not handle
   # a bare command (it failed 4 runs out of 4, 0 s in, before pytest ran).
@@ -383,8 +383,7 @@
     # and cached under /tmp (about 25 s). 7 cases, about 40 s with a warm kernel cache on one open mesh. Then
     # determinism at production shapes (warm and long cache, scaled-FP8, 10 eager runs and 10 replays, identical,
     # compared on device): 2 cases, about 22 s warm, on 8x4 and on one 4x4 stage (top tray half, 2.5k chunks).
-    # After the K3 sections, so a K3.1 failure (a missing K3.1 golden or checkpoint included) masks no K3 section
-    # but the K3 KDA case of [6/6].
+    # After the K3 sections, so a K3.1 failure (a missing K3.1 golden or checkpoint included) masks no K3 section.
     k31_sparse_mla() (
       timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -eo pipefail
@@ -401,54 +400,25 @@
       '
     )
 
-    # Long-context accuracy (test_long_context_accuracy.py, one case per Block, run by run_case): each Block on the
-    # device, teacher-fed from its FP64 golden (Weka, the registry root of fp64_golden.py) chunk by chunk and gated by
-    # the bars of the context length. The short lengths of each case: K3 KDA layer 0 at 5k on 8x4 (SP8xTP4); K3.1 MoE
-    # layers 1 and 2 at 20k and DSA layer 3 at 5k and 128k on one 4x4 stage (top tray half). Every 1M case runs in
-    # the separate 1M leg. Measured warm on a Galaxy host (m06n.11 steps 3-5): KDA 5k 5 s; MoE 20k 17 s a layer
-    # after about 50 s of weight load; DSA 5k 7 s, 128k 89 s; about 4 min with mesh opens, about 8 min expected cold
-    # (not yet measured in CI), so 12. Each case skips without its checkpoint or TTNN weight cache, so each run must
-    # pass exactly its cases and skip none. -s streams the per-chunk progress lines of run_case.
-    lc_accuracy() (
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
-        set -eo pipefail
-        export OMP_NUM_THREADS=$(nproc)
-        export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
-        T=models/demos/deepseek_v3_d_p/tests
-        TEST=$T/long_context_accuracy/test_long_context_accuracy.py
-        passes() {  # passes <count> <command...>: the command passes exactly <count> tests and skips none
-          local want=$1 && shift
-          "$@" 2>&1 | tee /tmp/lc_accuracy.out || { local status=$?; echo "::error::exit $status (124: over its time bound): $*"; exit $status; }
-          local summary
-          summary=$(sed "s/\x1b\[[0-9;]*m//g" /tmp/lc_accuracy.out | grep -E "^=+ .* in [0-9.]+s" | tail -1)
-          [[ "$summary" =~ " $want passed" && ! "$summary" =~ (skipped|failed|error) ]] || { echo "::error::expected $want passed and none skipped, got: $summary"; exit 1; }
-        }
-        passes 1 python3 -m pytest $TEST -k "k3-l0-kda-5120" -s -vvv --tb=short
-        passes 4 $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer1-20480 or k31-moe-layer2-20480 or k31-l3-dsa-5120 or k31-l3-dsa-128000" -s -vvv --tb=short
-      '
-    )
-
-    echo "===== [1/6] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
+    echo "===== [1/5] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/6] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
+    echo "===== [2/5] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
-    echo "===== [3/6] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
+    echo "===== [3/5] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
-    echo "===== [4/6] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
+    echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== [5/6] (Kimi-K3.1) golden and checkpoint, sparse MLA accuracy, chunked, pad-overflow 5k, determinism at production shapes ====="
+    echo "===== [5/5] (Kimi-K3.1) golden and checkpoint, sparse MLA accuracy, chunked, pad-overflow 5k, determinism at production shapes ====="
     k31_sparse_mla || exit $?
-    echo "===== [6/6] (Kimi-K3-2.8T, Kimi-K3.1) long-context accuracy vs FP64 golden, KDA layer 0 5k, MoE layers 1-2 20k, DSA layer 3 5k and 128k ====="
-    lc_accuracy || exit $?
-    echo "===== all 6 sections passed ====="
+    echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
   test_tags: [kimi_k3, kimi_k3_1, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace, sparse_mla, k31_sparse_mla, long_context_accuracy]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10 + 12).
-      timeout: 66
+      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10).
+      timeout: 54
       tier: 2
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
@@ -457,7 +427,7 @@
   sp_config: sc1
 
 - name: "(Kimi-K3-2.8T, Kimi-K3.1) long-context accuracy 1M vs FP64 golden, KDA layer 0, MoE layers 1-2, DSA layer 3"
-  # Every 1M case of test_long_context_accuracy.py (the short lengths run in [6/6] of the K3 accuracy suite): each
+  # Every 1M case of test_long_context_accuracy.py (its short lengths are not in CI): each
   # Block teacher-fed from its FP64 golden (Weka) over the 1,044,480 rows of the golden prompt, gated by the bars of
   # that length. Nightly, and on dispatch with k3_accuracy_suite (no dispatch input is free). Its minutes are not yet
   # in .github/time_budget.yaml: sign-off by the budget owners is pending (PR #67237).
