@@ -152,6 +152,11 @@ def _normalise(mnemonic, operands, function, positions):
     return f"{mnemonic} {_TARGET.sub(repl, operands)}"
 
 
+def _code(text):
+    body = text.partition("Disassembly")[2]
+    return "code-" + hashlib.sha1(body.encode()).hexdigest()[:12] if body else "no-code"
+
+
 def _compute(objdump, elf_path):
     result = subprocess.run(
         [objdump, "-d", "--no-show-raw-insn", str(elf_path)],
@@ -160,6 +165,8 @@ def _compute(objdump, elf_path):
     )
     if result.returncode != 0:
         return "no-objdump"
+    if os.environ.get("LLK_WINDOW_HASH") == "code":
+        return _code(result.stdout)
     funcs = _functions(result.stdout)
     kernel = next((name for name in funcs if "run_kernel" in name), None)
     if kernel is None:
@@ -198,7 +205,7 @@ def fingerprint(objdump, elf_path):
 
 
 def enabled():
-    return os.environ.get("LLK_WINDOW_HASH") == "1"
+    return os.environ.get("LLK_WINDOW_HASH") in ("1", "code")
 
 
 def write_rows(run_dir, test_name, sweep, rows):

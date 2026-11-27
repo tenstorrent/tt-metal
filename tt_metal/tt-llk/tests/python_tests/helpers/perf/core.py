@@ -1085,6 +1085,17 @@ class PerfConfig(TestConfig):
                     )
                     for c in components
                 ]
+                if first and os.environ.get("LLK_WINDOW_HASH") == "code":
+                    window_rows.append(
+                        (
+                            run_type.name,
+                            "brisc",
+                            window_hash.fingerprint(
+                                TestConfig.OBJDUMP,
+                                TestConfig.SHARED_ELF_DIR / "brisc.elf",
+                            ),
+                        )
+                    )
 
             variant_raw_data = []
             variant_counter_results = []
