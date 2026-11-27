@@ -42,11 +42,12 @@ TRIAGE_TOOLS = {
 }
 
 
-# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. Both
-# count host state accumulated over a boot — correctable AER, kernel-log fault
-# lines — so they WARN on units everything else calls healthy, and one phase
-# WARN is a run WARN. FAIL continues to follow the normal triage gating policy.
-TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_kernel_log"})
+# Triage checks whose WARN is recorded as PASS, by bare (unprefixed) name. All
+# three count host state accumulated over a boot — AER on the chips and on the
+# bridges above them, kernel-log fault lines — so they WARN on units everything
+# else calls healthy, and one phase WARN is a run WARN. FAIL continues to follow
+# the normal triage gating policy.
+TRIAGE_ADVISORY_WARN = frozenset({"hostside_pcie_aer", "hostside_bridge_aer", "hostside_kernel_log"})
 
 # The scripts' home, relative to the repo root.
 TRIAGE_SUBDIR = "tools/scaleout/kmd_triage"

@@ -201,11 +201,12 @@ can't vanish from the console summary.
   32-chip Galaxy they were verified against, `host_side.sh` returned DEGRADED on five
   correctable-AER findings on a unit `device_side.sh` and the rest of the suite called
   healthy. Gating on that from day one would ticket the fleet.
-- Two are held the other way: **`hostside_pcie_aer` and `hostside_kernel_log` record
-  their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in `diag/triage.py`). Both count host
-  state accumulated over a boot, so they WARN on units everything else calls healthy,
-  and one phase WARN is a run WARN. FAIL continues to follow `--triage-gating`; the
-  finding still reaches `details` and `data`, annotated `[advisory: WARN recorded as PASS]`.
+- Three are held the other way: **`hostside_pcie_aer`, `hostside_bridge_aer` and
+  `hostside_kernel_log` record their WARN as PASS** (`TRIAGE_ADVISORY_WARN` in
+  `diag/triage.py`). All three count host state accumulated over a boot, so they WARN
+  on units everything else calls healthy, and one phase WARN is a run WARN. FAIL
+  continues to follow `--triage-gating`; the finding still reaches `details` and
+  `data`, annotated `[advisory: WARN recorded as PASS]`.
 
 The text reports land in `<output_dir>/logs/triage_<tool>.txt`, so
 `collect_run_artifacts()` attaches them to the JIRA ticket with no extra wiring.
