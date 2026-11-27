@@ -1046,6 +1046,8 @@ class MiniMaxH3Pipeline:
             waves_per_device=self.vae_waves_per_device,
             # Decode tile overlap in px (default: the VAE's 64); set, the strip stitch also packs every spare column.
             decode_tile_overlap=int(os.environ["H3_VAE_TILE_OVERLAP"]) if "H3_VAE_TILE_OVERLAP" in os.environ else None,
+            # Assemble the decoded clip while later chunks decode, also with no frame consumer (default: after).
+            assemble_beside_decode=os.environ.get("H3_VAE_ASSEMBLE_BESIDE_DECODE") == "1",
         )
         self._vae.load_state(self._read_safetensors("vae"))
 

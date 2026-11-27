@@ -22,6 +22,7 @@ def _vae(decode_clips):
     vae.config = vm.MiniMaxH3VaeConfig()
     vae.decoder = None
     vae.device_stitch = True
+    vae.assemble_beside_decode = False
     vae._assembled_shapes = {}
     vae._ensure_loaded = lambda module, subfolder: None
     vae._decoder_subfolder = lambda: "vae"
@@ -100,6 +101,24 @@ def test_the_batch_assembly_is_unchanged(output_type, latent_frames):
         np.testing.assert_array_equal(result, expected)
     else:
         torch.testing.assert_close(result, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("latent_frames", [7, 16, 31])
+def test_a_decode_with_no_consumer_can_assemble_beside_the_device_decode(latent_frames):
+    config = vm.MiniMaxH3VaeConfig()
+    recorded = []
+    fake = _fake_clips("yuv420", 2 * _chunk_frames(config), seed=latent_frames)
+
+    def decode_clips(chunk_latents, output_type_arg="float", on_clip=None):
+        assert on_clip is not None  # each clip reaches the assembly as it lands
+        clips = fake(chunk_latents, output_type_arg, on_clip)
+        recorded.extend(clips)
+        return clips
+
+    vae = _vae(decode_clips)
+    vae.assemble_beside_decode = True
+    result = vae._decode(torch.zeros(1, 1, latent_frames, 2, 2), "yuv420")
+    np.testing.assert_array_equal(result, _reference(recorded, config, latent_frames))
 
 
 class _FakeStream:

@@ -308,6 +308,7 @@ class MiniMaxH3Vae:
         waves_per_device: int = 1,
         stitch_exchange: str = "strips",
         decode_tile_overlap: int | None = None,
+        assemble_beside_decode: bool = False,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -327,6 +328,9 @@ class MiniMaxH3Vae:
         # packs an extra chunk onto every spare mesh column (`strip_waves`); unset, each canvas keeps its plan.
         self.decode_tile_overlap = tile_overlap if decode_tile_overlap is None else decode_tile_overlap
         self.pack_spare_columns = decode_tile_overlap is not None
+        # A yuv420 decode with no frame consumer still assembles its clip while later chunks decode
+        # (`StreamingClipAssembly`), instead of after the last one: same bytes, the host copy off the tail.
+        self.assemble_beside_decode = assemble_beside_decode
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
@@ -1683,6 +1687,8 @@ class MiniMaxH3Vae:
             for i in range(num_chunks)
         ]
         stream = None
+        if on_frames is None and self.assemble_beside_decode and self.device_stitch and output_type == "yuv420":
+            on_frames = lambda frames: None
         if on_frames is not None and chunk_latents:
             stream = StreamingClipAssembly(
                 num_chunks,
