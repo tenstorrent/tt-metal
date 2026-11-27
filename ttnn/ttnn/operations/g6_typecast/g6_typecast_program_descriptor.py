@@ -50,6 +50,8 @@ STAGING_ALIGN = 64
 # 32-bit sources must unpack straight to DEST (SRCA keeps 19 bits); 32-bit or integer destinations need
 # 32-bit DEST.
 _SRC_32BIT = (ttnn.float32, ttnn.int32, ttnn.uint32)
+# Integer sources (any width) also unpack straight to DEST: SRCA would reinterpret them as floats.
+_SRC_UNPACK_TO_DEST = _SRC_32BIT + (ttnn.uint16,)
 _DST_32BIT_DEST = (ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint8)
 _NUM_CBS = 64
 
@@ -102,7 +104,7 @@ def _compute_config(in_dtype, out_dtype):
     compute_config.fp32_dest_acc_en = out_dtype in _DST_32BIT_DEST or in_dtype in _SRC_32BIT
     compute_config.bfp8_pack_precise = out_dtype == ttnn.bfloat8_b
     compute_config.math_approx_mode = False
-    if in_dtype in _SRC_32BIT:
+    if in_dtype in _SRC_UNPACK_TO_DEST:
         modes = [ttnn.UnpackToDestMode.Default] * _NUM_CBS
         modes[CB_INPUT_TILES] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute_config.unpack_to_dest_mode = modes

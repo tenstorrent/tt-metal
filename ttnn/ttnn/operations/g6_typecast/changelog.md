@@ -47,3 +47,24 @@
 - Issues encountered: None (first run green).
 - Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_rm.py (regime pins for TILE and
   ROW_MAJOR, new arms, forced multi-block / ragged RM via BLOCK_TILES_CAP, L1 RM, host refusals).
+
+## Refinement 2 — 32-bit and 16-bit sources on TILE: float32 / int32 / uint16 sources, bfloat16 destination
+- Date: 2026-11-27
+- What was done: Reused the R1 `tile_stream` reader/writer/CBs unchanged (page size + format already come from
+  the tensors), plus the existing chain and the `fp32_dest_acc_en` / `UnpackToDestFp32` compute-config path.
+  Added: `float32`, `uint16` to SUPPORTED["dtype"]; `bfloat16` to SUPPORTED["output_dtype"]; three
+  CONVERSION_ARMS (fp32->bf16, int32->bf16, uint16->int32); `UnpackToDestFp32` also for the uint16 source
+  (integer source, so it must not go through SRCA). Compute kernel: an arm switch. int32->bf16 runs as
+  `Typecast<Int32,Float32> -> Typecast<Float32,Float16_b>` in ONE chain. The direct Int32->Float16_b LLK arm
+  rounds its fp32->bf16 step half-away (SFP_STOCH_RND), so it is wrong on ties: 257->258, 33685505->33816576,
+  2^24+2^16+1->16908288. The fp32->bf16 LLK arm is a software RNE. The two-step chain has two distinct SFPU
+  inits, so it cannot be boot-hoisted. It keeps `InitReconfigOwner::Chain` every block and re-inits per tile.
+  That costs a little on int32->bf16 only (decode-size cells). Every other arm is still hoisted.
+- Accuracy achieved: bit-exact (gate `exact`) on F315, F316, F318, F319, F320, F323, F324 (fp32->bf16, incl.
+  w_non_aligned), Q2228 (int32->bf16, two-rounding witnesses), Q2231 (uint16->int32).
+- Golden test progress: targeted slice 12/12. All golden (src,dst) pairs now have an arm and every TARGET axis
+  value is in SUPPORTED, so xfail_expected should be 0. The harness full run is the confirmation of record.
+- Issues encountered: hardware finding — fp32 subnormals and -0.0 come out of the fp32->bf16 path as +0
+  (Tensix flush-to-zero). No golden input contains them (randn + exact ties). Pinned as a non-strict xfail.
+- Tests added: tests/ttnn/unit_tests/operations/g6_typecast/test_g6_typecast_sources.py (fp32->bf16 with RNE
+  tie witnesses, DRAM/L1, non-aligned; int32->bf16 with the two-rounding witnesses; uint16->int32; FTZ xfail).

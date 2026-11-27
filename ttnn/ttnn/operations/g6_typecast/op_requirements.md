@@ -67,7 +67,7 @@ F321, F322 and the two loose cases (F322, F317).
 **Done when**: every golden cell listed above passes (`supported_fail = 0`), including both loose cases, with
 0 xpass_drift / xfail_wrong_mode; Phase 0 cells still pass.
 
-### [ ] Refinement 2 — 32-bit and 16-bit sources on TILE: float32 / int32 / uint16 sources, bfloat16 destination
+### [x] Refinement 2 — 32-bit and 16-bit sources on TILE: float32 / int32 / uint16 sources, bfloat16 destination
 
 **Goal**: add `ttnn.float32, ttnn.uint16` to `SUPPORTED["dtype"]` and `ttnn.bfloat16` to
 `SUPPORTED["output_dtype"]`, with the TILE-path arms float32→bfloat16 (RNE, exact ties: F315, F316, F318,

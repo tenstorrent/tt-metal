@@ -16,9 +16,15 @@
 // derived from the CB formats); eltwise_chain is called directly only to reach InitReconfigOwner:
 // the first block's call emits init + format reconfig, every later block reuses it
 // (InitReconfigOwner::Caller), so setup is paid once per kernel as the design intends.
-// Conversion arms (typecast.h): bf16->fp32 and bf16->bf8b in the packer; bf16->int32 SFPU truncation.
+// Conversion arms (typecast.h): bf16->fp32 and bf16->bf8b in the packer; bf16->int32 SFPU truncation;
+// fp32->bf16 SFPU RNE (ties-to-even); uint16->int32 SFPU zero-extend.
+// int32->bf16 is composed as Typecast<Int32,Float32> -> Typecast<Float32,Float16_b> in ONE chain (shared
+// dst-sync window): the direct Int32->Float16_b LLK arm rounds fp32->bf16 ties half-away (SFP_STOCH_RND),
+// so it gets e.g. 257 -> 258 and 33685505 -> 33816576 wrong; torch rounds through float32 with RNE twice.
+// With two SFPU elements the chain re-inits each per tile (their constant registers conflict).
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/debug/kernel_profiler.hpp"
@@ -47,19 +53,35 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input_tiles, cb_output_tiles);
 
+    // Arm selection: int32 -> bf16 needs the two-step (two-rounding) composition, every other arm is one
+    // Typecast element.
+    constexpr uint32_t df_int32 = static_cast<uint32_t>(DataFormat::Int32);
+    constexpr uint32_t df_fp32 = static_cast<uint32_t>(DataFormat::Float32);
+    constexpr uint32_t df_bf16 = static_cast<uint32_t>(DataFormat::Float16_b);
+    constexpr bool two_step_int32_to_bf16 = in_df == df_int32 && out_df == df_bf16;
+    auto convert = [&](auto owner_tag, const auto& shape, auto copy, auto pack) {
+        constexpr InitReconfigOwner owner = decltype(owner_tag)::value;
+        if constexpr (two_step_int32_to_bf16) {
+            // Not boot-hoistable (two distinct SFPU inits): the chain owns init every block; later blocks'
+            // specs still skip the (already-applied, unchanged) data-format reconfig.
+            (void)owner;
+            eltwise_chain<InitReconfigOwner::Chain>(
+                shape, copy, Typecast<df_int32, df_fp32>{}, Typecast<df_fp32, df_bf16>{}, pack);
+        } else {
+            eltwise_chain<owner>(shape, copy, Typecast<in_df, out_df>{}, pack);
+        }
+    };
+    using ChainOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Chain>;
+    using CallerOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Caller>;
+
     DeviceZoneScopedN("CONVERT");
     for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
         const uint32_t block_extent = (core_tiles - done < block_tiles) ? (core_tiles - done) : block_tiles;
         const auto shape = IterationShape::tiles(block_extent).block_size(block_extent);
         if (done == 0) {
-            eltwise_chain<InitReconfigOwner::Chain>(
-                shape, CopyTile<in_spec>{dfb_in}, Typecast<in_df, out_df>{}, PackTile<out_spec>{dfb_out});
+            convert(ChainOwned{}, shape, CopyTile<in_spec>{dfb_in}, PackTile<out_spec>{dfb_out});
         } else {
-            eltwise_chain<InitReconfigOwner::Caller>(
-                shape,
-                CopyTile<in_spec_hoisted>{dfb_in},
-                Typecast<in_df, out_df>{},
-                PackTile<out_spec_hoisted>{dfb_out});
+            convert(CallerOwned{}, shape, CopyTile<in_spec_hoisted>{dfb_in}, PackTile<out_spec_hoisted>{dfb_out});
         }
     }
 }

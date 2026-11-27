@@ -66,12 +66,12 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0 + Refinement 1: ROW_MAJOR regime R2 and its conversion arms)
+# 2. SUPPORTED (Phase 0 + Refinement 1: ROW_MAJOR regime R2 + Refinement 2: fp32/int32/uint16 sources)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.uint32, ttnn.int32],
-    "output_dtype": [ttnn.float32, ttnn.bfloat8_b, ttnn.int32, ttnn.uint8, ttnn.uint32],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.int32, ttnn.uint16],
+    "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.int32, ttnn.uint8, ttnn.uint32],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "buffer": ["dram", "l1"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
@@ -88,6 +88,9 @@ CONVERSION_ARMS = {
     (ttnn.bfloat16, ttnn.uint8),  # SFPU truncation, low byte
     (ttnn.uint32, ttnn.int32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
     (ttnn.int32, ttnn.uint32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
+    (ttnn.float32, ttnn.bfloat16),  # SFPU RNE (ties-to-even), fp32 unpacked to DEST
+    (ttnn.int32, ttnn.bfloat16),  # SFPU int32 -> fp32 -> bf16 (two roundings, as torch)
+    (ttnn.uint16, ttnn.int32),  # SFPU zero-extend (unpack-to-DEST)
 }
 
 
