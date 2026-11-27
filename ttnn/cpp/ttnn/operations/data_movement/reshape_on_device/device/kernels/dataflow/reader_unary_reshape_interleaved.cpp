@@ -8,21 +8,20 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 using uint32_t = std::uint32_t;
 
 // tile index to address
 void kernel_main() {
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t input_Wt = get_arg_val<uint32_t>(1);
-    uint32_t output_N = get_arg_val<uint32_t>(2);
-    uint32_t output_C = get_arg_val<uint32_t>(3);
-    uint32_t output_Ht = get_arg_val<uint32_t>(4);
-    uint32_t output_Wt = get_arg_val<uint32_t>(5);
+    uint32_t input_Wt = get_arg(args::input_Wt);
+    uint32_t output_N = get_arg(args::output_N);
+    uint32_t output_C = get_arg(args::output_C);
+    uint32_t output_Ht = get_arg(args::output_Ht);
+    uint32_t output_Wt = get_arg(args::output_Wt);
 
-    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(0);
-    constexpr uint32_t ELEMENT_SIZE = get_compile_time_arg_val(1);
-    constexpr auto src0_args = TensorAccessorArgs<2>();
+    constexpr uint32_t ALIGNMENT = get_arg(args::ALIGNMENT);
+    constexpr uint32_t ELEMENT_SIZE = get_arg(args::ELEMENT_SIZE);
 
     uint32_t num_sticks_per_input_tile_row = input_Wt << 5;  // Tile height is 32
     uint32_t num_sticks_per_output_tile_row = output_Wt << 5;
@@ -31,18 +30,27 @@ void kernel_main() {
     constexpr uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;
     constexpr uint32_t FACE_BYTES = 16 * SUBTILE_LINE_BYTES;
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
-    constexpr uint32_t dfb_id_intermed = 1;
-    DataflowBuffer dfb_intermed(dfb_id_intermed);
-    uint32_t intermed_l1_scratch = MISALIGNED ? dfb_intermed.get_write_ptr() : 0;
+    // The host declares the scratch DFB, and sets WIDE_ALIGNMENT_SCRATCH, only when the DRAM or L1 alignment is
+    // wider than one face row of this element type. That is the same test as MISALIGNED above.
+    // The host and the kernel spell the test separately. The asserts below fail the build if they disagree.
+    // Without the define the token dfb::intermed does not exist. The handle then cannot be built.
+    // A kernel that needs the scratch address but has no handle would copy through L1 address 0.
+#ifdef WIDE_ALIGNMENT_SCRATCH
+    static_assert(MISALIGNED, "host declared the scratch DFB but the kernel's own test disagrees");
+    DataflowBuffer dfb_intermed(dfb::intermed);
+    uint32_t intermed_l1_scratch = dfb_intermed.get_write_ptr();
+#else
+    static_assert(!MISALIGNED, "kernel needs the scratch DFB but the host did not declare it");
+    uint32_t intermed_l1_scratch = 0;
+#endif
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
+    const auto s0 = TensorAccessor(tensor::src0);
 
     Noc noc;
-    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in0(dfb::in0);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise

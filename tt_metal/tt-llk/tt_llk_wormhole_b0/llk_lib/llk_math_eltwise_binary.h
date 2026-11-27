@@ -12,7 +12,6 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
-#include "lltt.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_math.h"
 
@@ -814,7 +813,7 @@ inline void _llk_math_eltwise_binary_init_(std::uint32_t srca_reuse_count = 4)
 
     // Setup eltwise operation for one tile
     // TTI_REPLAY(0, 10, 0, 1);
-    lltt::record<lltt::NoExec>(0, 10);
+    TTI_REPLAY(0, 10, 0, 1);
 
     // Dest address is always incremented by 8 in address mode
     eltwise_op(ADDR_MOD_0); // srca_increment -> 0 | srcb_increment -> 8

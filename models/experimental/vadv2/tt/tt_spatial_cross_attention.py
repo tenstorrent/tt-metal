@@ -34,11 +34,9 @@ class TtSpatialCrossAttention:
         self.num_cams = num_cams
         self.batch_first = batch_first
 
-        # Cache for batched-scatter & host-gather lookup tables. Built once per
-        # session, keyed by id(bev_mask). bev_mask is encoder-cached (see
-        # iter#1 `_ref_cache` in TtBEVFormerEncoder), so id() is stable across
-        # all 3 layer calls of every forward, giving 100% cache-hit rate after
-        # the first call.
+        # Cache for batched-scatter & host-gather lookup tables, reused while the
+        # encoder passes the same cached bev_mask object. One entry, stored as
+        # (bev_mask, entry) and matched with `is`; a new camera rig replaces it.
         # Entry: (indexes_long, max_len, all_idx_expanded_2d)
         #   - indexes_long: list[torch.LongTensor] of per-camera valid query
         #                   positions; consumed by the host gather that builds
@@ -50,7 +48,7 @@ class TtSpatialCrossAttention:
         #                   Padded positions hold sentinel = num_query so
         #                   their contributions land in a sink row that is
         #                   sliced off after scatter.
-        self._sca_cache = {}
+        self._sca_cache = None
         # zeros/zeros_like do a host->device write of the fill, forbidden inside
         # trace capture. Cache the slot accumulator and sentinel-row templates;
         # each warm call clones them (kernel-level device copy, trace-safe).
@@ -90,12 +88,12 @@ class TtSpatialCrossAttention:
 
         D = reference_points_cam.shape[3]  # ttnn tensor since encoder no longer to_torch's it
 
-        # Build / look up the cached index tables. bev_mask is stable
-        # across layer calls + warm iterations (encoder ref-cache from iter#1),
-        # so id() works as a session-stable key.
-        cache_key = id(bev_mask)
-        cached = self._sca_cache.get(cache_key)
+        # Build / look up the cached index tables.
+        cached = self._sca_cache[1] if self._sca_cache is not None and self._sca_cache[0] is bev_mask else None
         if cached is None:
+            if self._sca_cache is not None:
+                for t in self._sca_cache[1][1:]:
+                    ttnn.deallocate(t)
             indexes = []
             for i, mask_per_img in enumerate(bev_mask):
                 index_query_per_img = ttnn.sum(mask_per_img[0], -1)
@@ -176,11 +174,14 @@ class TtSpatialCrossAttention:
             # need is now in the consolidated tensors above.
             for idx in indexes:
                 ttnn.deallocate(idx)
-            self._sca_cache[cache_key] = (
-                max_len,
-                all_idx_expanded,
-                all_idx_for_gather_q,
-                all_idx_for_gather_rc,
+            self._sca_cache = (
+                bev_mask,
+                (
+                    max_len,
+                    all_idx_expanded,
+                    all_idx_for_gather_q,
+                    all_idx_for_gather_rc,
+                ),
             )
         else:
             max_len, all_idx_expanded, all_idx_for_gather_q, all_idx_for_gather_rc = cached

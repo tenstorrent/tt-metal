@@ -25,8 +25,9 @@ struct QkvCausalConv1dSiluParams {
     // Layout of history, predecessor_carry and the replacement carry: token-paged [1, history_rows, Q+K+V] when
     // empty, else channel-paged [1, (Q+K+V) / P, history_rows * P] with P = page_channels channels per page.
     std::optional<uint32_t> page_channels;
-    // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.
-    std::array<uint32_t, 3> exchange_semaphore_addresses{};
+    // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival
+    // and (history slab) old-tail arrival.
+    std::array<uint32_t, 4> exchange_semaphore_addresses{};
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;
     tt::tt_metal::MemoryConfig output_mem_config;
@@ -48,7 +49,9 @@ struct QkvCausalConv1dSiluInputs {
     std::optional<Tensor> predecessor_carry;
     std::optional<Tensor> exchange_buffer;
     std::optional<Tensor> actual_end;
-    // Exchange only: history is a slab whose entry is read (zeros at actual_start == 0) and replaced in place.
+    // Exchange only: history is an SP-sharded slab whose entry is read (zeros at actual_start == 0) and replaced in
+    // place: per Q/K/V branch, SP rank r holds the branch's channel slice [r * W_b / SP, (r + 1) * W_b / SP), branches
+    // in order (channel-paged only).
     std::optional<Tensor> slab_index;
 };
 

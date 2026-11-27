@@ -78,7 +78,6 @@ void kernel_main() {
 
     constexpr uint32_t sqt = H / tt::constants::TILE_HEIGHT;
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
-    constexpr uint32_t block_tiles = sqt * vDHt;                                       // the [H,V_DIM] block
 
     Noc noc;
     experimental::CB out_cb(cb_out_rm);
@@ -271,12 +270,16 @@ void kernel_main() {
                 }
             }
         }
-        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        // Compute untilizes [H, V_DIM] one 32-head block at a time, and cb_out_rm holds one block.
+        for (uint32_t h0 = 0; h0 < H; h0 += tt::constants::TILE_HEIGHT) {
+            out_cb.wait_front(vDHt);
+            for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
+                // row r of the block (head h0 + r) at CB read-ptr byte offset r*row_bytes; DRAM page = h*S + tok.
+                noc.async_write(
+                    out_cb, out, row_bytes, {.offset_bytes = r * row_bytes}, {.page_id = (h0 + r) * S + tok});
+            }
+            noc.async_write_barrier();
+            out_cb.pop_front(vDHt);
         }
-        noc.async_write_barrier();
-        out_cb.pop_front(block_tiles);
     }
 }

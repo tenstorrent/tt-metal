@@ -39,11 +39,15 @@ TTNN_GRAPH_OPS_NO_GOLDEN=1 pytest models/experimental/ops/quasar/tests/panoptic_
 
 ## Running on Quasar (craq-sim / emulator)
 
-Two switches, both off on Wormhole/Blackhole by default:
+Switches, all off on Wormhole/Blackhole by default:
 
 - `TTNN_GRAPH_OPS_BF8_AS_BF16=1`: Quasar has no block-float formats, so build every captured
   bfloat8_b / bfloat4_b tensor (and a `DataType::BFLOAT8_B` inside a `Conv2dConfig`) as bfloat16.
   Same switch as the qwen3_vl / gpt_oss suites. The PCC floors still use the captured dtype.
+- `TTNN_GRAPH_OPS_BF8_AS_MXFP8R=1` / `TTNN_GRAPH_OPS_BF8_AS_MXFP8P=1`: build every captured
+  bfloat8_b tensor as an MX format instead, MXFP8R (`ttnn.mxfp8_e5m2`) or MXFP8P (`ttnn.mxfp8_e4m3`).
+  bfloat4_b (and the `Conv2dConfig` dtypes) still become bfloat16. Set at most one of the three
+  `BF8_AS_*` switches; the same names work in the gpt_oss suite.
 - `TTNN_GRAPH_OPS_QUASAR_FORKS=auto|1|0` (default `auto`, i.e. on when the device is Quasar):
   call `ttnn.experimental.quasar.<op>` for the ops whose base implementation has no Quasar kernels
   (`op_utils._QUASAR_FORKED_OPS`: conv2d, add, multiply, move, max_pool2d, avg_pool2d). Every other op

@@ -40,11 +40,11 @@ def _matmul_after_recovery():
     # multiplies what an earlier launch unpacked.
     run_matmul(
         MathFidelity.LoFi,
-        (
-            InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-            DestAccumulation.No,
-            ([32, 32], [32, 32]),
-        ),
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+        1,
+        1,
+        1,
     )
 
 

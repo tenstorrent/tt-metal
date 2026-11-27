@@ -64,7 +64,7 @@ def test_where_sharded_lower_rank_condition(device):
 def test_lerp_rejects_uint32(device, expect_error):
     a = _tt(torch.randint(0, 100, (1, 1, 64, 64), dtype=torch.int32), device, dtype=ttnn.uint32)
     b = _tt(torch.randint(0, 100, (1, 1, 64, 64), dtype=torch.int32), device, dtype=ttnn.uint32)
-    with expect_error(RuntimeError, "lerp does not support UINT32 inputs"):
+    with expect_error(RuntimeError, "LERP does not support DataType::UINT32"):
         ttnn.lerp(a, b, 0.5)
-    with expect_error(RuntimeError, "lerp does not support UINT32 inputs"):
+    with expect_error(RuntimeError, "LERP does not support DataType::UINT32"):
         ttnn.lerp(a, b, b)
