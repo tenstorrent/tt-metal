@@ -1,65 +1,50 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_concat page_copy reader (NCRISC / NOC0).
-// page_fetch_block: block_pages consecutive output pages per block, each one input page. Output
-// page p = o*C + c with Coff_k <= c < Coff_k + C_k comes from input k page o*C_k + (c - Coff_k).
-// The walk cursor (o, k, c') starts from per-core runtime args and only increments, so no
-// division happens per page. Pages whose tile row holds v <= TRIM_ROWS_MAX valid rows move only
-// rows [0, v), at identical in-tile offsets on both sides (row shift 0, always alignment-legal).
+// g6_concat page_copy reader (NCRISC / NOC0): every output page is one input page.
+// Output page p = o * C + c with Coff_k <= c < Coff_k + C_k reads input k page o * C_k + (c - Coff_k).
+// The core walks its output-page range in blocks of block_pages; the (o, k, c') cursor and the
+// accessor rebase advance incrementally, so nothing is divided per page.
 //
-// No kernel_lib helper covers an interleaved page fetch into a CB (see op_design.md, "Helpers
-// considered and rejected"), so this kernel uses raw dataflow calls.
+// No kernel_lib helper covers a raw page copy between DRAM and a dataflow CB (op_design.md,
+// "Helpers considered and rejected").
 
-#include <stdint.h>
+#include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "g6_concat_dataflow_common.hpp"
+#include "api/debug/kernel_profiler.hpp"
+#include "g6_concat_common.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_pages = get_compile_time_arg_val(0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t trim_rows_max = get_compile_time_arg_val(2);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t face_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t input_l1_mask_lo = get_compile_time_arg_val(5);
-    constexpr uint32_t input_l1_mask_hi = get_compile_time_arg_val(6);
-    constexpr auto dram_input_args = TensorAccessorArgs<7>();
-    constexpr auto l1_input_args = TensorAccessorArgs<dram_input_args.next_compile_time_args_offset()>();
-    static_assert(trim_rows_max <= g6_concat::FACE_ROWS, "row trimming only covers faces 0 and 1");
+    constexpr uint32_t face_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t row_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t trim_rows_max = get_compile_time_arg_val(4);
+    constexpr auto input_args = TensorAccessorArgs<5>();
 
-    // Common runtime args: block_pages, K, out_Wt, out_Ht, v_last, then (base_addr_k, C_k) per input.
-    constexpr uint32_t INPUT_ARGS_BASE = 5;
+    // Common: block_pages, K, out_Wt, out_Ht, v_last, base[K], C[K].
     const uint32_t block_pages = get_common_arg_val<uint32_t>(0);
     const uint32_t num_inputs = get_common_arg_val<uint32_t>(1);
-    g6_concat::OutputPageCursor out_cursor{
-        .out_Wt = get_common_arg_val<uint32_t>(2),
-        .out_Ht = get_common_arg_val<uint32_t>(3),
-        .v_last = get_common_arg_val<uint32_t>(4),
-        .R = 0,
-        .c = 0};
-    auto input_addr = [&](uint32_t k) { return get_common_arg_val<uint32_t>(INPUT_ARGS_BASE + 2 * k); };
-    auto input_pages_per_slice = [&](uint32_t k) { return get_common_arg_val<uint32_t>(INPUT_ARGS_BASE + 2 * k + 1); };
+    const uint32_t out_Wt = get_common_arg_val<uint32_t>(2);
+    const uint32_t out_Ht = get_common_arg_val<uint32_t>(3);
+    const uint32_t v_last = get_common_arg_val<uint32_t>(4);
+    constexpr uint32_t base_arg0 = 5;
+    const uint32_t pages_arg0 = base_arg0 + num_inputs;
 
-    const uint32_t start_page = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    uint32_t o = get_arg_val<uint32_t>(2);
-    uint32_t k = get_arg_val<uint32_t>(3);
-    uint32_t c_in = get_arg_val<uint32_t>(4);
+    uint32_t pages_left = get_arg_val<uint32_t>(0);
+    uint32_t outer = get_arg_val<uint32_t>(1);
+    uint32_t k = get_arg_val<uint32_t>(2);
+    uint32_t c_in = get_arg_val<uint32_t>(3);
+    uint32_t col = get_arg_val<uint32_t>(4);
+    uint32_t tile_row = get_arg_val<uint32_t>(5);
 
-    out_cursor.init(start_page);
-    g6_concat::InputPages<decltype(dram_input_args), decltype(l1_input_args), input_l1_mask_lo, input_l1_mask_hi>
-        inputs(dram_input_args, l1_input_args, page_bytes);
-    uint32_t C_k = input_pages_per_slice(k);
-    inputs.rebase(k, input_addr(k));
-    uint32_t in_page = o * C_k + c_in;
+    auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(base_arg0 + k), page_bytes);
+    uint32_t pages_k = get_common_arg_val<uint32_t>(pages_arg0 + k);
+    uint32_t page_id = outer * pages_k + c_in;
 
-    const uint32_t num_blocks = (num_pages + block_pages - 1) / block_pages;
-    uint32_t remaining = num_pages;
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        // Ragged last block: nominal reserve/push of block_pages, only `extent` pages transferred.
-        const uint32_t extent = remaining < block_pages ? remaining : block_pages;
+    while (pages_left > 0) {
+        const uint32_t extent = pages_left < block_pages ? pages_left : block_pages;
         {
             DeviceZoneScopedN("G6C-RESERVE");
             cb_reserve_back(cb_output_pages, block_pages);
@@ -68,33 +53,38 @@ void kernel_main() {
             DeviceZoneScopedN("G6C-FETCH");
             uint32_t slot = get_write_ptr(cb_output_pages);
             for (uint32_t i = 0; i < extent; ++i) {
-                const uint32_t v = out_cursor.valid_rows();
+                const uint32_t v = g6_concat::valid_rows(tile_row, out_Ht, v_last);
                 if (v <= trim_rows_max) {
-                    g6_concat::for_each_leading_rows_range(
-                        v, face_row_bytes, face_bytes, [&](uint32_t offset, uint32_t bytes) {
-                            noc_async_read(inputs.noc_addr(in_page, offset), slot + offset, bytes);
-                        });
+                    // Rows [0, v) sit at the top of faces 0 and 1, at the same offsets in both pages.
+                    const uint64_t src = input.get_noc_addr(page_id);
+                    if (v * row_bytes == face_bytes) {
+                        noc_async_read(src, slot, 2 * face_bytes);
+                    } else {
+                        noc_async_read(src, slot, v * row_bytes);
+                        noc_async_read(src + face_bytes, slot + face_bytes, v * row_bytes);
+                    }
                 } else {
-                    noc_async_read(inputs.noc_addr(in_page, 0), slot, page_bytes);
+                    noc_async_read(input.get_noc_addr(page_id), slot, page_bytes);
                 }
                 slot += page_bytes;
-                out_cursor.advance();
 
-                ++in_page;
-                if (++c_in == C_k) {
+                ++page_id;
+                if (++c_in == pages_k) {
                     c_in = 0;
                     if (++k == num_inputs) {
                         k = 0;
-                        ++o;
+                        ++outer;
                     }
-                    C_k = input_pages_per_slice(k);
-                    inputs.rebase(k, input_addr(k));
-                    in_page = o * C_k;
+                    input.bank_base_address = get_common_arg_val<uint32_t>(base_arg0 + k);
+                    pages_k = get_common_arg_val<uint32_t>(pages_arg0 + k);
+                    page_id = outer * pages_k;
                 }
+                g6_concat::advance_page(col, tile_row, out_Wt, out_Ht);
             }
             noc_async_read_barrier();
         }
+        // Always the nominal block: the ring pointers wrap only on an exact fifo_limit hit.
         cb_push_back(cb_output_pages, block_pages);
-        remaining -= extent;
+        pages_left -= extent;
     }
 }

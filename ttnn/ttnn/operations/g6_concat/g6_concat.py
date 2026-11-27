@@ -1,11 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_concat: torch.cat(tensors, dim) on device tensors, in one device program.
-
-Every logical input element is read once from its own buffer and every output element is written
-once, bit for bit. Design: op_design.md (Blocking Model) next to this file.
-"""
+"""g6_concat: torch.cat(tensors, dim) as one device program (reader + writer, no compute)."""
 
 from __future__ import annotations
 
@@ -13,20 +9,13 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from . import g6_concat_program_descriptor as pdesc
-
-TILE = 32
+from . import g6_concat_program_descriptor as pd
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — `inputs` is one scenario dict:
+# 1. INPUT_TAGGERS — each reads the scenario dict
 #    {"shapes", "dim", "dtype", "layout", "input_buffers", "memory_config"}
 # ---------------------------------------------------------------------------
-
-
-def _canonical_dim(inputs):
-    rank = len(inputs["shapes"][0])
-    return pdesc.canonical_dim(inputs["dim"], rank)
 
 
 def tag_dtype(inputs, axes):
@@ -39,7 +28,7 @@ def tag_layout(inputs, axes):
 
 def tag_concat_dim(inputs, axes):
     rank = len(inputs["shapes"][0])
-    d = _canonical_dim(inputs)
+    d = pd.canonical_dim(inputs["dim"], rank)
     if d == rank - 1:
         return "w"
     if d == rank - 2:
@@ -49,9 +38,9 @@ def tag_concat_dim(inputs, axes):
 
 def tag_alignment(inputs, axes):
     shapes = inputs["shapes"]
-    if any(s[-1] % TILE != 0 for s in shapes):
+    if any(s[-1] % 32 != 0 for s in shapes):
         return "w_non_aligned"
-    if any(s[-2] % TILE != 0 for s in shapes):
+    if any(s[-2] % 32 != 0 for s in shapes):
         return "h_non_aligned"
     return "tile_aligned"
 
@@ -115,8 +104,7 @@ def _buffer_name(buffer_type):
     return "l1" if buffer_type == ttnn.BufferType.L1 else "dram"
 
 
-def _scenario_of_call(tensors, dim, memory_config):
-    """The spec's scenario dict, built exactly as eval/golden_tests/g6_concat/axes.py builds it."""
+def _scenario(tensors, dim, memory_config):
     out_l1 = memory_config is not None and memory_config.buffer_type == ttnn.BufferType.L1
     return {
         "shapes": [list(t.shape) for t in tensors],
@@ -128,39 +116,27 @@ def _scenario_of_call(tensors, dim, memory_config):
     }
 
 
-def _validate_structure(tensors, dim, memory_config):
+def _check_structure(tensors, dim, memory_config):
     if not isinstance(tensors, (list, tuple)) or len(tensors) == 0:
-        raise ValueError("g6_concat: `tensors` must be a non-empty list of device tensors")
-    tensors = list(tensors)
-    for t in tensors:
-        if not isinstance(t, ttnn.Tensor) or not ttnn.is_tensor_storage_on_device(t):
-            raise ValueError("g6_concat: every input must be a ttnn.Tensor on device")
-    if len(tensors) > pdesc.K_MAX:
-        raise RuntimeError(f"g6_concat: {len(tensors)} inputs exceed K_MAX = {pdesc.K_MAX} (runtime-arg capacity)")
-
+        raise ValueError("g6_concat: tensors must be a non-empty list")
+    if len(tensors) > pd.K_MAX:
+        raise RuntimeError(f"g6_concat: {len(tensors)} inputs exceed K_MAX={pd.K_MAX} (runtime-arg capacity)")
     shapes = [list(t.shape) for t in tensors]
     rank = len(shapes[0])
     if rank not in (3, 4):
-        raise ValueError(f"g6_concat: rank must be 3 or 4, got {rank}")
+        raise ValueError(f"g6_concat: rank {rank} not in (3, 4)")
     if any(len(s) != rank for s in shapes):
-        raise ValueError(f"g6_concat: all inputs must have the same rank, got {[len(s) for s in shapes]}")
+        raise ValueError(f"g6_concat: inputs differ in rank: {shapes}")
     if any(t.dtype != tensors[0].dtype for t in tensors):
-        raise ValueError(f"g6_concat: all inputs must share one dtype, got {[t.dtype for t in tensors]}")
+        raise ValueError("g6_concat: inputs differ in dtype")
     if any(t.layout != tensors[0].layout for t in tensors):
-        raise ValueError(f"g6_concat: all inputs must share one layout, got {[t.layout for t in tensors]}")
-    if isinstance(dim, bool) or not isinstance(dim, int):
-        raise ValueError(f"g6_concat: dim must be an int, got {dim!r}")
-    if not -rank <= dim <= rank - 1:
-        raise ValueError(f"g6_concat: dim {dim} outside [{-rank}, {rank - 1}] for rank {rank}")
-    d = pdesc.canonical_dim(dim, rank)
-    for s in shapes:
-        if any(x == 0 for x in s):
-            raise ValueError(f"g6_concat: empty inputs are not accepted, got shape {s}")
-        if [x for i, x in enumerate(s) if i != d] != [x for i, x in enumerate(shapes[0]) if i != d]:
-            raise ValueError(f"g6_concat: input sizes differ outside dim {d}: {shapes}")
-    device_id = tensors[0].device().id()
-    if any(t.device().id() != device_id for t in tensors):
-        raise ValueError("g6_concat: all inputs must live on the same device")
+        raise ValueError("g6_concat: inputs differ in layout")
+    if not isinstance(dim, int) or not -rank <= dim <= rank - 1:
+        raise ValueError(f"g6_concat: dim={dim!r} outside [{-rank}, {rank - 1}]")
+    d = pd.canonical_dim(dim, rank)
+    for s in shapes[1:]:
+        if any(s[i] != shapes[0][i] for i in range(rank) if i != d):
+            raise ValueError(f"g6_concat: sizes differ outside dim {d}: {shapes}")
     for t in tensors:
         if t.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
             raise ValueError("g6_concat: sharded inputs are not accepted; every input must be interleaved")
@@ -170,14 +146,9 @@ def _validate_structure(tensors, dim, memory_config):
 
 
 def validate(tensors, dim=0, *, memory_config=None):
-    """Structural refusals (ValueError / RuntimeError), then the SUPPORTED / EXCLUSIONS gate.
+    _check_structure(tensors, dim, memory_config)
 
-    Returns the canonical dim.
-    """
-    d = _validate_structure(tensors, dim, memory_config)
-    tensors = list(tensors)
-
-    scenario = _scenario_of_call(tensors, dim, memory_config)
+    scenario = _scenario(tensors, dim, memory_config)
     axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(scenario, axes)
@@ -190,65 +161,55 @@ def validate(tensors, dim=0, *, memory_config=None):
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"g6_concat: unsupported combination (refinement candidate): {exc}")
 
-    if axes["layout"] == ttnn.TILE_LAYOUT and tuple(tensors[0].tile.tile_shape) != (TILE, TILE):
-        raise UnsupportedAxisValue(f"g6_concat: only 32x32 tiles are supported, got {tensors[0].tile.tile_shape}")
-    return d
-
 
 # ---------------------------------------------------------------------------
-# Program cache (BB-07): one descriptor per key, built once; a hit rewrites only the
-# buffer-address common runtime args.
+# Program cache (BB-07): key -> {plan, kernels, descriptor}
 # ---------------------------------------------------------------------------
-
-
-class _CacheEntry:
-    def __init__(self, plan):
-        self.plan = plan
-        self.descriptor = None
-        self.reader = None
-        self.writer = None
-
 
 _PROGRAM_CACHE = {}
 
 
-def _output_memory_config(memory_config):
-    return memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+def _output_shape(tensors, d):
+    shape = list(tensors[0].shape)
+    shape[d] = sum(int(t.shape[d]) for t in tensors)
+    return shape
 
 
-def _cache_key(tensors, d, out_mc):
-    device = tensors[0].device()
+def _cache_key(tensors, d, output_memory_config, device):
     grid = device.compute_with_storage_grid_size()
     return (
-        device.id(),
-        tuple(tuple(int(x) for x in t.shape) for t in tensors),
+        tuple(tuple(t.shape) for t in tensors),
         d,
-        str(tensors[0].dtype),
-        str(tensors[0].layout),
-        tuple(str(t.memory_config().buffer_type) for t in tensors),
-        str(out_mc.buffer_type),
-        str(out_mc.memory_layout),
+        tensors[0].dtype,
+        tensors[0].layout,
+        tuple(t.memory_config().buffer_type for t in tensors),
+        output_memory_config.buffer_type,
+        output_memory_config.memory_layout,
         (grid.x, grid.y),
-        pdesc.MAX_CORES,
-        pdesc.BLOCK_BYTES_CAP,
-        pdesc.OUTPUT_PAGES_DEPTH,
+        pd.MAX_CORES,
+        pd.BLOCK_BYTES_CAP,
+        pd.OUTPUT_PAGES_DEPTH,
+        pd.TRIM_ROWS_MAX,
     )
 
 
-def _cache_entry(tensors, d, out_mc):
-    key = _cache_key(tensors, d, out_mc)
+def _entry(tensors, d, output, output_memory_config, device):
+    key = _cache_key(tensors, d, output_memory_config, device)
     entry = _PROGRAM_CACHE.get(key)
     if entry is None:
-        entry = _CacheEntry(pdesc.make_plan(tensors, d, out_mc))
+        plan = pd.build_plan(tensors, d, _output_shape(tensors, d), output_memory_config, device)
+        if plan["l1_total"] > pd.L1_OP_BUDGET:
+            raise RuntimeError(
+                f"g6_concat: L1 use {plan['l1_total']} B per core exceeds the op budget {pd.L1_OP_BUDGET} B"
+            )
+        if output is None:
+            return plan, None
+        entry = pd.build_descriptor(plan, tensors, output, hash(key) & 0xFFFFFFFFFFFFFFFF)
         _PROGRAM_CACHE[key] = entry
-    return key, entry
-
-
-def g6_concat_plan(tensors, dim=0, *, memory_config=None):
-    """The plan a call with these arguments selects (BB-08/BB-21). Dispatches nothing."""
-    d = validate(tensors, dim, memory_config=memory_config)
-    _, entry = _cache_entry(list(tensors), d, _output_memory_config(memory_config))
-    return entry.plan.report()
+        return plan, entry["descriptor"]
+    if output is None:
+        return entry["plan"], None
+    return entry["plan"], pd.refresh_addresses(entry, tensors, output)
 
 
 # ---------------------------------------------------------------------------
@@ -257,36 +218,44 @@ def g6_concat_plan(tensors, dim=0, *, memory_config=None):
 
 
 def g6_concat(tensors, dim=0, *, memory_config=None):
-    """Concatenate `tensors` along `dim` (torch.cat semantics) in one device program.
+    validate(tensors, dim, memory_config=memory_config)
 
-    Args:
-        tensors: K >= 1 device tensors of rank 3 or 4, one dtype and layout, equal sizes outside dim.
-        dim: axis to join along; negative counts from the end.
-        memory_config: placement of the output; None gives DRAM interleaved.
-
-    Returns:
-        The output tensor: shape of tensors[0] with the summed size in dim.
-    """
-    d = validate(tensors, dim, memory_config=memory_config)
     tensors = list(tensors)
-    out_mc = _output_memory_config(memory_config)
-    key, entry = _cache_entry(tensors, d, out_mc)
-    plan = entry.plan
+    d = pd.canonical_dim(dim, len(tensors[0].shape))
+    device = tensors[0].device()
+    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
     output = ttnn.allocate_tensor_on_device(
-        ttnn.Shape(plan.out_shape), tensors[0].dtype, tensors[0].layout, tensors[0].device(), out_mc
+        ttnn.Shape(_output_shape(tensors, d)),
+        tensors[0].dtype,
+        tensors[0].layout,
+        device,
+        output_memory_config,
     )
+    _, descriptor = _entry(tensors, d, output, output_memory_config, device)
+    return ttnn.generic_op([*tensors, output], descriptor)
 
-    if entry.descriptor is None:
-        entry.descriptor, entry.reader, entry.writer = pdesc.create_program_descriptor(plan, tensors, output, key)
-    else:
-        reader_common = list(entry.reader.common_runtime_args)
-        for t, index in zip(tensors, pdesc.reader_address_indices(len(tensors))):
-            reader_common[index] = t.buffer_address()
-        entry.reader.common_runtime_args = reader_common
-        writer_common = list(entry.writer.common_runtime_args)
-        writer_common[pdesc.WRITER_ADDR_INDEX] = output.buffer_address()
-        entry.writer.common_runtime_args = writer_common
-        entry.descriptor.kernels = [entry.reader, entry.writer]
 
-    return ttnn.generic_op([*tensors, output], entry.descriptor)
+def g6_concat_plan(tensors, dim=0, *, memory_config=None):
+    """The plan a call selects (BB-08 / BB-21); dispatches nothing."""
+    validate(tensors, dim, memory_config=memory_config)
+    tensors = list(tensors)
+    d = pd.canonical_dim(dim, len(tensors[0].shape))
+    device = tensors[0].device()
+    output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    plan, _ = _entry(tensors, d, None, output_memory_config, device)
+    role = f"{plan['regime']} reader+writer"
+    return {
+        "regime": plan["regime"],
+        "num_cores": plan["num_cores"],
+        "core_ranges": str(plan["all_cores"]),
+        "block_pages": plan["block_pages"],
+        "depth": plan["depth"],
+        "cb_output_bytes": plan["cb_output_bytes"],
+        "cb_staging_bytes": plan["cb_staging_bytes"],
+        "l1_total": plan["l1_total"],
+        "roles": [
+            {"core": (c.x, c.y), "role": role, "pages": (plan["starts"][i], plan["starts"][i] + plan["counts"][i])}
+            for i, c in enumerate(plan["cores"])
+        ],
+    }
