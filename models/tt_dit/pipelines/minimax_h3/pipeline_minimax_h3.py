@@ -2714,21 +2714,20 @@ class MiniMaxH3Pipeline:
                     module.deallocate_weights()
         dram_probe.report("after transformer load, before denoise")
         with self._track_cache_misses(on_event, "denoising"):
-            if condition_spec is None:
-                video_rows, audio_rows, scheduler, audio_scheduler = self._denoise_lowres(
-                    transformer,
-                    layout,
-                    prompt_embeds,
-                    video_rows,
-                    audio_rows,
-                    scheduler,
-                    audio_scheduler,
-                    num_latent_frames,
-                    latent_height,
-                    latent_width,
-                    num_audio_latents,
-                    on_event,
-                )
+            video_rows, audio_rows, scheduler, audio_scheduler = self._denoise_lowres(
+                transformer,
+                layout,
+                prompt_embeds,
+                video_rows,
+                audio_rows,
+                scheduler,
+                audio_scheduler,
+                num_latent_frames,
+                latent_height,
+                latent_width,
+                num_audio_latents,
+                on_event,
+            )
             video_rows, audio_rows = self._denoise(
                 transformer,
                 layout,
@@ -3563,10 +3562,10 @@ class MiniMaxH3Pipeline:
             or layout.num_condition_video_rows
             or layout.num_condition_audio_rows
         ):
-            logger.info(f"{LOWRES_STEPS_ENV}={steps} does not apply to this request: all at full resolution")
+            self._log(f"{LOWRES_STEPS_ENV}={steps} does not apply to this request: all at full resolution")
             return video_rows, audio_rows, scheduler, audio_scheduler
         lowres_size = (int(lowres_height), int(lowres_width))
-        logger.info(f"low-res first stage: {steps} of {total} forwards at latent {lowres_size[0]}x{lowres_size[1]}")
+        self._log(f"low-res first stage: {steps} of {total} forwards at latent {lowres_size[0]}x{lowres_size[1]}")
         video_shape = (
             num_latent_frames,
             latent_height,
