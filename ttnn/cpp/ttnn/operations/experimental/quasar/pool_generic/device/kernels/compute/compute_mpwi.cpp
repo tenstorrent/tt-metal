@@ -158,13 +158,17 @@ void kernel_main() {
             if (first_iteration) {  // move the initial indexes from the reader to DST
                 in_idx_cb.wait_front(1);
                 copy_init(in_idx_cb_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                 copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 in_idx_cb.pop_front(1);
                 first_iteration = false;
             } else {  // move incremented indexes from compute back to DST
                 compute_tmp_idx_cb.wait_front(1);
                 copy_init(compute_tmp_idx_cb_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                 copy_tile(compute_tmp_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 compute_tmp_idx_cb.pop_front(1);
             }
             if constexpr (is_large_kernel) {
@@ -173,7 +177,9 @@ void kernel_main() {
                 // DST tiles 1 and 3 during the reduction of tiles 0 and 2
                 reconfig_data_format_srca(clear_value_cb_id);
                 copy_init(clear_value_cb_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                 copy_tile(clear_value_cb_id, mpwi_cb_tile_idx, data_accum_dst_idx);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
                 // make a copy of the initial indexes to be used for restoring between C blocks
                 copy_dest_values<copy_format>(index_dst_idx, index_temp_dst_idx);
@@ -185,7 +191,9 @@ void kernel_main() {
                 in_cb_0.wait_front(1);
                 reconfig_data_format_srca(in_cb_id_0);
                 copy_init(in_cb_id_0);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                 copy_tile(in_cb_id_0, mpwi_cb_tile_idx, data_dst_idx);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
 
                 // increments happen between every chunk within a C block, and between C blocks
                 bool increment_needed = false;
@@ -200,17 +208,23 @@ void kernel_main() {
                             // we reached the bottom right corner, wrap to the top and to the left
                             current_idx_row = 0;
                             copy_init(up_left_wrap_inc_cb_id);
+                            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                             copy_tile(up_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         } else {
                             current_idx_row += stride_h;
                             copy_init(down_left_wrap_inc_cb_id);
+                            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                             copy_tile(down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         }
                     } else {
                         // we are still in the same row, move to the right
                         current_idx_col += stride_w;
                         copy_init(right_inc_cb_id);
+                        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                         copy_tile(right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                     }
                 } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
                     if (!last_chunk) {         // increment for the next chunk within the same C block
@@ -219,12 +233,16 @@ void kernel_main() {
                         if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
                             intra_kernel_w += sticks_per_chunk;
                             copy_init(intra_kernel_right_inc_cb_id);
+                            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                             copy_tile(intra_kernel_right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         } else {  // move down to the next row
                             intra_kernel_w = 0;
                             intra_kernel_h += 1;
                             copy_init(intra_kernel_down_left_wrap_inc_cb_id);
+                            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();  // Quasar Dest loan
                             copy_tile(intra_kernel_down_left_wrap_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
+                            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                         }
                     }
                 }

@@ -86,6 +86,16 @@ inline void kahan_step_tile() {
 #define QSR_PACK_INIT(dfb_id)
 #endif
 
+// Copy one tile into Dest. On Quasar the acc DFB unpacks straight to Dest, which makes every unpack in this
+// kernel go to Dest (UnpackToDestEn is kernel-wide), and an unpack to Dest must borrow the Dest section from
+// MATH or it lands unsynchronized. tile_regs_borrow/return compile to nothing on WH/BH.
+#define ACC_COPY_TILE(dfb_id, dst_idx)                          \
+    do {                                                        \
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>(); \
+        copy_tile(dfb_id, 0, dst_idx);                          \
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>(); \
+    } while (0)
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -186,17 +196,17 @@ void kernel_main() {
             // configuration serves the three copies.
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
-            copy_tile(dfb::in, 0, DST_IN);
-            copy_tile(dfb::acc, 0, DST_ACC);
-            copy_tile(dfb::comp, 0, DST_COMP);
+            ACC_COPY_TILE(dfb::in, DST_IN);
+            ACC_COPY_TILE(dfb::acc, DST_ACC);
+            ACC_COPY_TILE(dfb::comp, DST_COMP);
 #else
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
-            copy_tile(dfb::in, 0, DST_IN);
+            ACC_COPY_TILE(dfb::in, DST_IN);
 
             reconfig_data_format(dfb::acc, dfb::acc);
             copy_init(dfb::acc);
-            copy_tile(dfb::acc, 0, DST_ACC);
+            ACC_COPY_TILE(dfb::acc, DST_ACC);
 #endif
 #ifdef COMPENSATED_SUM
             // Compensated (Kahan) summation on the running total. The plain path computes
