@@ -109,7 +109,7 @@ PYTESTS = {
     # report, with every failing address and its flipped bits, goes to the
     # check's log directory.
     "gddr_retention": {
-        "target": "tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py::test_gddr_retention",
+        "target": "tests/dram/test_dram_retention.py::test_gddr_retention",
         "args": ["-s"],
         "env": {"RETENTION_OUT_DIR": "{logs_dir}"},
     },

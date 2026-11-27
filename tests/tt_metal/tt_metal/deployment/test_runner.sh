@@ -290,7 +290,7 @@ run_tests() {
 	# The DRAM tests read each chunk straight back; this one writes all of DRAM, then reads it 2, 4 and 6 s later.
 	# Every iteration starts from a reset, so each run sees a fresh GDDR training.
 	run_test 'DRAM retention test' env RETENTION_OUT_DIR="$LOGDIR/dram_retention" PYTHONUNBUFFERED=1 \
-		$PYTHON -m pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py::test_gddr_retention -s &&
+		$PYTHON -m pytest tests/dram/test_dram_retention.py::test_gddr_retention -s &&
 		last_retention_ok=1 || last_retention_ok=0
 
 	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&

@@ -4,10 +4,11 @@
 """GDDR retention and read-disturb test: every DRAM address the allocator leaves free is written once, read later.
 
 The health check runs test_gddr_retention in its weekly and full tiers (PYTESTS["gddr_retention"] in
-diag/device_tests.py), and tests/tt_metal/tt_metal/deployment/test_runner.sh runs it every iteration. By hand, on every
-chip unless RETENTION_CHIPS lists some (RETENTION_CHIPS=0,5):
+tools/scaleout/exabox/health_check_test_suite/diag/device_tests.py), and
+tests/tt_metal/tt_metal/deployment/test_runner.sh runs it every iteration. By hand, on every chip unless
+RETENTION_CHIPS lists some (RETENTION_CHIPS=0,5):
 
-    pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py
+    pytest tests/dram/test_dram_retention.py
 
 test_gddr_retention writes each bank once with a hashed pattern, then reads and compares all of it in passes that start
 RETENTION_GAPS_S apart (default 2,2,2: reads 2, 4 and 6 s after the write). Every sweep visits a bank in the same
@@ -79,7 +80,7 @@ H_SEED, H_PASS, H_BAD_PAGES, H_BAD_WORDS, H_STALE, H_OTHER, H_UNDECODED, H_LOGGE
 H_WORDS_LO, H_WORDS_HI, H_BITS_LOST, H_BITS_GAINED, H_BANK, H_LO, H_HI, H_MAGIC = range(8, 16)
 H_LANES, H_OUTSIDE, H_ALIAS = 16, 20, 21
 
-REPO = Path(__file__).resolve().parents[5]
+REPO = Path(__file__).resolve().parents[2]
 UNSAFE_ENV = ("TT_METAL_DEVICE_PROFILER", "TT_METAL_DPRINT_CORES", "TT_METAL_WATCHER", "TT_METAL_DRAM_BACKED_CQ")
 
 KERNEL_DIR = "ttnn/cpp/ttnn/operations/experimental/diagnostics/dram/kernels"

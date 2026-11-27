@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // GDDR retention sweep: fill, check and poke modes for test_gddr_retention
-// (tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py).
+// (tests/dram/test_dram_retention.py).
 // The RETENTION_* macros are defines the test passes from its own constants (DM_DEFINES),
 // so this kernel and the host-side report decoder share one definition.
 

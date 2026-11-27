@@ -182,7 +182,7 @@ Output, per hit:
 - `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 `weekly` and `full` also run `gddr_retention`
-([`gddr/test_gddr_retention.py`](gddr/test_gddr_retention.py)), on 4 boots: the
+([`tests/dram/test_dram_retention.py`](../../../../tests/dram/test_dram_retention.py)), on 4 boots: the
 first run, then 3 retest rounds, each after `tt-smi -glx_reset` and a validated
 snapshot. The first round shares the ACT retest's reset and snapshot; the other
 two take ~1.4 min each on a galaxy (the reset 33 s, the snapshot 5.5 s and the
@@ -211,7 +211,7 @@ its negative test (`test_gddr_retention_detects_changes`), on every chip unless
 `RETENTION_CHIPS` lists some:
 
 ```bash
-python_env/bin/pytest tools/scaleout/exabox/health_check_test_suite/gddr/test_gddr_retention.py
+python_env/bin/pytest tests/dram/test_dram_retention.py
 ```
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
