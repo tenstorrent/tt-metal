@@ -81,9 +81,10 @@ std::vector<UniformCoreWork> uniform_core_layout(const UniformWorkSplit& ws) {
     return layout;
 }
 
-// Per-core seed; shared so the miss-build and the hit-patch derive it identically.
-uint32_t uniform_seed_for_core(const UniformDeviceOperation::operation_attributes_t& attrs, int i) {
-    return attrs.seed != 0 ? attrs.seed + i : get_random_seed();
+// Seed of the stream every core draws from: each value is a function of the seed and its tile and position, so
+// the cores share it. Seed 0 asks for a fresh random seed on every dispatch.
+uint32_t uniform_stream_seed(const UniformDeviceOperation::operation_attributes_t& attrs) {
+    return attrs.seed != 0 ? attrs.seed : get_random_seed();
 }
 
 // Inclusive, destination-representable bounds as the bit patterns the compute
@@ -169,13 +170,9 @@ ProgramDescriptor UniformDeviceOperation::UniformProgramFactory::create_descript
     // Runtime args per core
     const auto [lower_bound_bits, upper_bound_bits] = uniform_range(operation_attributes);
 
+    const uint32_t seed = uniform_stream_seed(operation_attributes);
     const auto layout = uniform_core_layout(ws);
-    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-
-        // Each core has its own seed to increase the number of generated random numbers
-        const uint32_t seed = uniform_seed_for_core(operation_attributes, i);
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         // Seed/range bounds are DYNAMIC (excluded from compute_program_hash): baked here for the
         // cache-miss build, re-applied on every cache hit by override_runtime_arguments().
         compute_desc.runtime_args.emplace_back(
@@ -209,12 +206,11 @@ void UniformDeviceOperation::UniformProgramFactory::override_runtime_arguments(
     const uint32_t out_addr = output.mesh_buffer().address();
 
     const auto ws = uniform_work_split(output);
+    const uint32_t seed = uniform_stream_seed(operation_attributes);
     const auto layout = uniform_core_layout(ws);
-    for (int i = 0; i < static_cast<int>(layout.size()); ++i) {
-        const auto& [core, units_per_core, tile_offset] = layout[i];
-
+    for (const auto& [core, units_per_core, tile_offset] : layout) {
         auto& compute_args = GetRuntimeArgs(program, compute_kernel_idx, core);
-        compute_args[0] = uniform_seed_for_core(operation_attributes, i);
+        compute_args[0] = seed;
         compute_args[1] = lower_bound_bits;
         compute_args[2] = upper_bound_bits;
         compute_args[3] = tile_offset;

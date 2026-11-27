@@ -44,4 +44,32 @@ struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
     }
 };
 
+/// RandKeyedTile chain element — counter-based rand.
+///
+/// Tile i of the chain is tile `start_tile + i` of the stream, and each of its values is a function of
+/// (seed, that tile index, element position) alone, so it does not depend on which core runs it or on what ran
+/// before. Nothing is seeded, so init is an ordinary static SFPU init.
+///
+/// @code
+///   eltwise_chain(IterationShape::tiles(num_tiles),
+///       RandKeyedTile<Dst::D0>{from, scale, seed, start_tile},
+///       PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{out});
+/// @endcode
+template <Dst DstSlot>
+struct RandKeyedTile : UnaryOp<RandKeyedTile<DstSlot>, DstSlot> {
+    uint32_t from_;
+    uint32_t scale_;
+    uint32_t seed_;
+    uint32_t start_tile_;
+
+    constexpr RandKeyedTile(uint32_t f, uint32_t s, uint32_t seed, uint32_t start_tile) noexcept :
+        from_(f), scale_(s), seed_(seed), start_tile_(start_tile) {}
+    constexpr RandKeyedTile() noexcept : from_(0), scale_(0), seed_(0), start_tile_(0) {}
+
+    static ALWI void init() { rand_keyed_tile_init(); }
+    ALWI void exec(uint32_t i, uint32_t slot_offset) const {
+        rand_keyed_tile(to_u32(DstSlot) + slot_offset, seed_, start_tile_ + i, from_, scale_);
+    }
+};
+
 }  // namespace compute_kernel_lib

@@ -251,3 +251,11 @@ def test_randn_same_seed_is_reproducible(device):
     a = ttnn.to_torch(ttnn.randn((256, 256), device=device, dtype=ttnn.bfloat16, seed=1234))
     b = ttnn.to_torch(ttnn.randn((256, 256), device=device, dtype=ttnn.bfloat16, seed=1234))
     assert torch.equal(a, b), "randn with the same explicit seed must be reproducible"
+
+
+@pytest.mark.parametrize("num_tiles", [7, 169])
+def test_randn_does_not_depend_on_work_split(device, num_tiles):
+    """A tile's values must not change with the number of tiles each core is given or where its range starts."""
+    small = ttnn.to_torch(ttnn.randn((num_tiles * 32, 32), device=device, dtype=ttnn.float32, seed=1234))
+    large = ttnn.to_torch(ttnn.randn((300 * 32, 32), device=device, dtype=ttnn.float32, seed=1234))
+    assert torch.equal(small, large[: num_tiles * 32])
