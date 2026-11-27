@@ -8,9 +8,9 @@
 #include <ttnn/tensor/tensor.hpp>
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include <tt_stl/reflection.hpp>
 
 #include "ttnn/config.hpp"

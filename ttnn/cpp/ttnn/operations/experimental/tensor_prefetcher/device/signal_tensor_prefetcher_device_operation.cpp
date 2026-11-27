@@ -9,7 +9,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
 namespace ttnn::operations::experimental::tensor_prefetcher {

@@ -87,8 +87,17 @@ class ApiValidationTests(unittest.TestCase):
             "stable": "tt-metalium/stable.hpp",
             "experimental": "tt-metalium/experimental/feature.hpp",
             "internal": "internal/private.hpp",
+            "legacy": "tt-metalium/mesh/legacy/old.hpp",
         }
-        forbidden = {("stable", "experimental"), ("stable", "internal"), ("experimental", "internal")}
+        forbidden = {
+            ("stable", "experimental"),
+            ("stable", "internal"),
+            ("experimental", "internal"),
+            ("stable", "legacy"),
+            ("experimental", "legacy"),
+            ("legacy", "experimental"),
+            ("legacy", "internal"),
+        }
         for source_tier, source in paths.items():
             for target_tier, target in paths.items():
                 with self.subTest(source=source_tier, target=target_tier):

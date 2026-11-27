@@ -53,8 +53,9 @@
  *   - the address counters reset by pack Dest init;
  *   - Default pack ADDR_MOD.
  *
- * Startup does not establish ambient unpack/math MOP or math ADDR_MOD state;
- * Cleanup uses NOP MOPs for unpack/math and zeros math ADDR_MOD_0..7.
+ * Cleanup leaves the unpack/math MOPs as NOPs and math ADDR_MOD_0..5 zero; ADDR_MOD_6/7 hold
+ * their hw_configure invariants (dest += 2 / zero advance), so an op sequence after cleanup may
+ * go straight to its format reconfig.
  * Pack MOP, strides, and PAC X are poisoned as well, so a following op must call
  * pack_init or pack_reconfig_data_format<true> before packing.
  *
