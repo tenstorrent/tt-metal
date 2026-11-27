@@ -3,9 +3,8 @@
 
 """g6_fill: out[i] = cast_T(fill_value) for every logical position of output_tensor.
 
-One device program per call, writer-only. The input tensor supplies shape, dtype,
-layout and placement and is never read. The 32-bit element reaches the cached
-program as a common runtime argument, so a new fill_value never rebuilds it.
+One device program per call (ttnn.generic_op), a single writer kernel. The
+input is never read; it supplies shape, dtype, layout and placement only.
 """
 
 from __future__ import annotations
@@ -19,14 +18,12 @@ from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from . import g6_fill_program_descriptor as _pd
 
-FLT_MAX = 3.4028234663852886e38
-INT32_MIN, INT32_MAX = -(2**31), 2**31 - 1
-_DTYPES = (ttnn.float32, ttnn.int32)
-
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — `inputs` is (scenario,) with keys shape, dtype, layout, fill_value
+# 1. INPUT_TAGGERS
 # ---------------------------------------------------------------------------
+#
+# `inputs` is (scenario,), a scenario being {"shape", "dtype", "layout", "fill_value"}.
 
 
 def tag_dtype(inputs, axes):
@@ -38,7 +35,7 @@ def tag_layout(inputs, axes):
 
 
 def tag_alignment(inputs, axes):
-    # [N] is the tile plane [1, N]: H = 1 is never aligned, so "tile_aligned" cannot occur.
+    # [N] is the tile plane [1, N]: H = 1 is never tile-aligned, so "tile_aligned" cannot occur.
     return "w_non_aligned" if inputs[0]["shape"][-1] % 32 else "h_non_aligned"
 
 
@@ -67,79 +64,46 @@ SUPPORTED = {
 EXCLUSIONS = []
 
 
-PROPERTIES = {
-    "multi_core": {"value": True, "source": "declared"},
-}
-
-
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
 
-
-def _on_device(tensor):
-    return isinstance(tensor, ttnn.Tensor) and tensor.storage_type() == ttnn.StorageType.DEVICE
-
-
-def _is_dram_interleaved(memory_config):
-    return (
-        memory_config.buffer_type == ttnn.BufferType.DRAM
-        and memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-    )
+FLT_MAX = 3.4028234663852886e38
+_FLT_MAX_INT = int(FLT_MAX)
+_INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
+_ADMITTED_DTYPES = (ttnn.float32, ttnn.int32)
 
 
-def _check_input(input_tensor):
-    if not _on_device(input_tensor):
-        raise ValueError("g6_fill: input_tensor must be a ttnn.Tensor on the device")
-    shape = tuple(input_tensor.shape)
-    if len(shape) != 1:
-        raise ValueError(f"g6_fill: input_tensor must have rank 1, got shape {shape}")
-    if shape[0] < 1:
-        raise ValueError(f"g6_fill: input_tensor must have N >= 1, got shape {shape}")
-    if input_tensor.dtype not in _DTYPES:
-        raise ValueError(f"g6_fill: input_tensor dtype must be float32 or int32, got {input_tensor.dtype}")
-    if not _is_dram_interleaved(input_tensor.memory_config()):
-        raise ValueError(f"g6_fill: input_tensor must be DRAM interleaved, got {input_tensor.memory_config()}")
+def _check_tensor(tensor, what):
+    if not isinstance(tensor, ttnn.Tensor):
+        raise ValueError(f"g6_fill: {what} must be a ttnn.Tensor, got {type(tensor).__name__}")
+    if not ttnn.is_tensor_storage_on_device(tensor):
+        raise ValueError(f"g6_fill: {what} must be on the device")
+    mc = tensor.memory_config()
+    if mc.buffer_type != ttnn.BufferType.DRAM or mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        raise ValueError(f"g6_fill: {what} must be DRAM interleaved, got {mc.buffer_type}, {mc.memory_layout}")
 
 
-def _check_fill_value(dtype, fill_value):
-    if isinstance(fill_value, bool) or not isinstance(fill_value, (int, float)):
-        raise ValueError(f"g6_fill: fill_value must be an int or a float, got {type(fill_value).__name__}")
+def _check_fill_value(dtype, value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"g6_fill: fill_value must be a Python int or float, got {type(value).__name__}")
     if dtype == ttnn.int32:
-        if isinstance(fill_value, float):
-            raise ValueError("g6_fill: a float fill_value is not admitted for an int32 tensor")
-        if not INT32_MIN <= fill_value <= INT32_MAX:
-            raise ValueError(f"g6_fill: fill_value {fill_value} is outside the int32 range")
-    elif isinstance(fill_value, int):
-        # Compared exactly: float(fill_value) could round an over-range int down to FLT_MAX.
-        if abs(fill_value) > int(FLT_MAX):
-            raise ValueError(f"g6_fill: fill_value {fill_value} exceeds the float32 range")
-    elif math.isfinite(fill_value) and abs(fill_value) > FLT_MAX:
-        raise ValueError(f"g6_fill: fill_value {fill_value!r} exceeds the float32 range")
-
-
-def _check_output(input_tensor, output_tensor):
-    if output_tensor is None:
-        raise ValueError("g6_fill: output_tensor is required")
-    if not _on_device(output_tensor):
-        raise ValueError("g6_fill: output_tensor must be a ttnn.Tensor on the device")
-    if output_tensor.device().id() != input_tensor.device().id():
-        raise ValueError("g6_fill: output_tensor must be on the device of input_tensor")
-    got = (tuple(output_tensor.shape), output_tensor.dtype, output_tensor.layout)
-    want = (tuple(input_tensor.shape), input_tensor.dtype, input_tensor.layout)
-    if got != want:
-        raise ValueError(f"g6_fill: output_tensor is (shape, dtype, layout) {got}, input_tensor is {want}")
-    if output_tensor.memory_config() != input_tensor.memory_config():
-        raise ValueError(
-            f"g6_fill: output_tensor memory config {output_tensor.memory_config()} "
-            f"differs from input_tensor's {input_tensor.memory_config()}"
-        )
+        if isinstance(value, float):
+            raise ValueError("g6_fill: a float fill_value cannot fill an int32 tensor")
+        if not _INT32_MIN <= value <= _INT32_MAX:
+            raise ValueError(f"g6_fill: fill_value {value} is outside the int32 range")
+        return
+    if isinstance(value, int):
+        if abs(value) > _FLT_MAX_INT:
+            raise ValueError(f"g6_fill: fill_value {value} exceeds the float32 range")
+    elif math.isfinite(value) and abs(value) > FLT_MAX:
+        raise ValueError(f"g6_fill: fill_value {value!r} exceeds the float32 range")
 
 
 def _scenario(input_tensor, fill_value):
     return (
         {
-            "shape": tuple(int(d) for d in input_tensor.shape),
+            "shape": tuple(input_tensor.shape),
             "dtype": input_tensor.dtype,
             "layout": input_tensor.layout,
             "fill_value": fill_value,
@@ -147,15 +111,36 @@ def _scenario(input_tensor, fill_value):
     )
 
 
-def validate(input_tensor, fill_value, *, output_tensor):
-    # Contract violations (ValueError) come before the support gate: a SupportRefusal
-    # would be read as "not yet supported" instead of "invalid".
-    _check_input(input_tensor)
+def validate(input_tensor, fill_value, output_tensor):
+    # Contract violations (ValueError) come before the support gate: a support
+    # refusal reads as "not yet supported", which these inputs never become.
+    _check_tensor(input_tensor, "input_tensor")
+    if len(input_tensor.shape) != 1 or int(input_tensor.shape[0]) < 1:
+        raise ValueError(f"g6_fill: input_tensor must have shape [N] with N >= 1, got {tuple(input_tensor.shape)}")
+    if input_tensor.dtype not in _ADMITTED_DTYPES:
+        raise ValueError(f"g6_fill: input_tensor dtype must be float32 or int32, got {input_tensor.dtype}")
+
     _check_fill_value(input_tensor.dtype, fill_value)
-    _check_output(input_tensor, output_tensor)
+
+    if output_tensor is None:
+        raise ValueError("g6_fill: output_tensor is required")
+    _check_tensor(output_tensor, "output_tensor")
+    if output_tensor.device().id() != input_tensor.device().id():
+        raise ValueError("g6_fill: output_tensor must be on the device of input_tensor")
+    if (tuple(output_tensor.shape), output_tensor.dtype, output_tensor.layout) != (
+        tuple(input_tensor.shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+    ):
+        raise ValueError(
+            f"g6_fill: output_tensor {tuple(output_tensor.shape)} {output_tensor.dtype} {output_tensor.layout} "
+            f"differs from input_tensor {tuple(input_tensor.shape)} {input_tensor.dtype} {input_tensor.layout}"
+        )
+    if output_tensor.memory_config() != input_tensor.memory_config():
+        raise ValueError("g6_fill: output_tensor memory config differs from input_tensor")
 
     inputs = _scenario(input_tensor, fill_value)
-    axes = {"dtype": input_tensor.dtype, "layout": input_tensor.layout}
+    axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger(inputs, axes)
 
@@ -173,67 +158,53 @@ def validate(input_tensor, fill_value, *, output_tensor):
 # ---------------------------------------------------------------------------
 
 
-def _int_to_float_once(v):
-    """Python float holding cast_float32(v) exactly, rounded once from the exact integer.
+def _int_to_float32_exact(value: int) -> float:
+    """The float32 nearest to an int (ties to even), rounded once from the exact integer.
 
-    float(v) rounds to 53 bits and struct.pack then to 24, which double-rounds above 2**53.
+    float(value) would round to float64 first and then to float32: a double
+    rounding for |value| > 2**53.
     """
-    a = abs(v)
-    if a <= 2**53:
-        return float(v)
-    shift = a.bit_length() - 24
-    q, r = divmod(a, 1 << shift)
+    magnitude = abs(value)
+    if magnitude <= 2**53:
+        return float(value)
+    shift = magnitude.bit_length() - 24
+    q, r = divmod(magnitude, 1 << shift)
     half = 1 << (shift - 1)
     if r > half or (r == half and q & 1):
         q += 1
         if q == 1 << 24:
             q >>= 1
             shift += 1
-    f = float(q << shift)
-    return -f if v < 0 else f
+    result = float(q << shift)
+    return -result if value < 0 else result
 
 
-def fill_bits_of(dtype, fill_value):
+def fill_bits(dtype, value) -> int:
     if dtype == ttnn.int32:
-        return fill_value & 0xFFFFFFFF
-    v = _int_to_float_once(fill_value) if isinstance(fill_value, int) else fill_value
-    return struct.unpack("<I", struct.pack("<f", v))[0]
+        return value & 0xFFFFFFFF
+    as_float = _int_to_float32_exact(value) if isinstance(value, int) else value
+    return struct.unpack("<I", struct.pack("<f", as_float))[0]
 
 
 # ---------------------------------------------------------------------------
-# Descriptor cache (BB-07): build once per key, patch the common runtime args per call
+# Plan report and descriptor cache
 # ---------------------------------------------------------------------------
 
 _DESCRIPTOR_CACHE = {}
 
 
-def _cache_key(tensor):
-    memory_config = tensor.memory_config()
-    return (
-        tensor.device().id(),
-        tuple(int(d) for d in tensor.shape),
-        tensor.dtype,
-        tensor.layout,
-        memory_config.buffer_type,
-        memory_config.memory_layout,
-        _pd.MAX_FILL_CORES,
-        _pd.BLOCK_W_TILES,
-        _pd.FILL_ROW_DEPTH,
-    )
+def g6_fill_plan(input_tensor: ttnn.Tensor) -> dict:
+    """The plan a call on this tensor dispatches (regime, cores, per-core tiles, roles). No dispatch."""
+    return _pd.plan_fill(input_tensor).report()
 
 
 def _cached_descriptor(output_tensor):
-    key = _cache_key(output_tensor)
+    key = _pd.descriptor_cache_key(output_tensor)
     entry = _DESCRIPTOR_CACHE.get(key)
     if entry is None:
-        entry = _pd.create_program_descriptor(output_tensor)
+        entry = _pd.create_program_descriptor(output_tensor, _pd.plan_fill(output_tensor))
         _DESCRIPTOR_CACHE[key] = entry
     return entry
-
-
-def g6_fill_plan(input_tensor):
-    """The plan a call on input_tensor selects (regime, cores, per-core tiles, roles). No dispatch."""
-    return _pd.plan_report(input_tensor)
 
 
 # ---------------------------------------------------------------------------
@@ -241,18 +212,17 @@ def g6_fill_plan(input_tensor):
 # ---------------------------------------------------------------------------
 
 
-def g6_fill(input_tensor, fill_value, *, output_tensor):
-    validate(input_tensor, fill_value, output_tensor=output_tensor)
+def g6_fill(input_tensor: ttnn.Tensor, fill_value, *, output_tensor: ttnn.Tensor) -> ttnn.Tensor:
+    validate(input_tensor, fill_value, output_tensor)
 
-    desc, writer = _cached_descriptor(output_tensor)
-    common_args = [0] * _pd.NUM_COMMON_RT_ARGS
-    common_args[_pd.CRTA_DST_ADDR] = output_tensor.buffer_address()
-    common_args[_pd.CRTA_FILL_BITS] = fill_bits_of(output_tensor.dtype, fill_value)
+    descriptor, writer = _cached_descriptor(output_tensor)
+    common_args = [0, 0]
+    common_args[_pd.COMMON_ARG_DST_ADDR] = output_tensor.buffer_address()
+    common_args[_pd.COMMON_ARG_FILL_BITS] = fill_bits(output_tensor.dtype, fill_value)
     writer.common_runtime_args = common_args
-    # desc.kernels is a by-value property: the patched writer must be assigned back.
-    desc.kernels = [writer]
+    # ProgramDescriptor.kernels is a by-value vector: patching an element read
+    # back from it edits a copy, so the patched kernel is assigned back whole.
+    descriptor.kernels = [writer]
 
-    # output_tensor is the only io tensor: the input is never an operand, so the
-    # in-place form needs nothing of its own.
-    ttnn.generic_op([output_tensor], desc)
+    ttnn.generic_op([output_tensor], descriptor)
     return output_tensor

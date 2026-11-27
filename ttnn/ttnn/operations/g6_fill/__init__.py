@@ -4,11 +4,10 @@
 from .g6_fill import (
     EXCLUSIONS,
     INPUT_TAGGERS,
-    PROPERTIES,
     SUPPORTED,
     g6_fill,
     g6_fill_plan,
     validate,
 )
 
-__all__ = ["g6_fill", "g6_fill_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS", "PROPERTIES"]
+__all__ = ["EXCLUSIONS", "INPUT_TAGGERS", "SUPPORTED", "g6_fill", "g6_fill_plan", "validate"]
