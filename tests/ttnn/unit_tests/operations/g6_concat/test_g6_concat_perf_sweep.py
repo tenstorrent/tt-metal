@@ -56,19 +56,25 @@ _P1_CACHE = {}
 
 @pytest.fixture
 def p1(device):
-    # Built once per module: the module-scoped device keeps the inputs alive across settings.
-    if "p1" in _P1_CACHE:
-        return _P1_CACHE["p1"]
-    torch.manual_seed(0)
-    torch_inputs = [torch.randn(s, dtype=torch.float32) for s in P1_SHAPES]
+    # Built once per device: the module-scoped device keeps the inputs alive across settings. The
+    # device is part of the key because precompile's collect pass runs the bodies on its own
+    # capture device first, and its tensors must not leak into the real pass.
+    cached = _P1_CACHE.get("p1")
+    if cached is not None and cached[0] is device:
+        return cached[1]
+    if "torch" not in _P1_CACHE:
+        torch.manual_seed(0)
+        torch_inputs = [torch.randn(s, dtype=torch.float32) for s in P1_SHAPES]
+        _P1_CACHE["torch"] = (torch_inputs, torch.cat(torch_inputs, dim=0))
+    torch_inputs, expected = _P1_CACHE["torch"]
     tt_inputs = [
         ttnn.from_torch(
             t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         for t in torch_inputs
     ]
-    _P1_CACHE["p1"] = (tt_inputs, torch.cat(torch_inputs, dim=0))
-    return _P1_CACHE["p1"]
+    _P1_CACHE["p1"] = (device, (tt_inputs, expected))
+    return _P1_CACHE["p1"][1]
 
 
 @pytest.mark.parametrize("knobs", _selected())
