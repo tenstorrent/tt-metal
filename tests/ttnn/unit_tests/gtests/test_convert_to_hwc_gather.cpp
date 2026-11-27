@@ -8,7 +8,7 @@
 #include <cstring>
 #include <numeric>
 #include <set>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/cpp/ttnn/operations/experimental/cnn/convert_to_hwc/device/gather.hpp"
 

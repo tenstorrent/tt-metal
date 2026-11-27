@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "untilize_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/device_operation.hpp"
 
 #include "ttnn/operation.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
@@ -19,7 +20,7 @@
 #include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/common/constants.hpp"
-#include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
@@ -178,7 +179,7 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
         // Use the effective output element size for alignment checks.
         // Untilize converts BFLOAT8_B inputs to BFLOAT16 outputs, so the element size becomes 2 bytes.
         uint32_t output_element_size_in_bytes = input_tensor_a.element_size();
-        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+        if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B || is_mx(input_tensor_a.dtype())) {
             output_element_size_in_bytes = 2;
         }
         const uint32_t output_row_size_bytes = output_shard_width * output_element_size_in_bytes;
@@ -276,7 +277,8 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor = tensor_args.input;
-    DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
+    // BFP and MX tiles cannot exist in ROW_MAJOR; they untilize to BFLOAT16.
+    DataType output_dtype = ttnn::operations::experimental::quasar::untilize_output_dtype(input_tensor.dtype());
 
     return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),

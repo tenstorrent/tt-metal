@@ -9,8 +9,8 @@
 
 #include "offset_cumsum_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::experimental::prim::qsr {
 

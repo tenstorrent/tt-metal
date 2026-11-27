@@ -15,23 +15,12 @@
 
 using namespace ckernel;
 
-template <BroadcastType bcast_type>
-inline void eltwise_binary_configure_addrmod_custom()
-{
-    constexpr std::uint32_t srcb_incr = (bcast_type == BroadcastType::NONE || bcast_type == BroadcastType::COL) ? 8 : 0;
-    addr_mod_t {
-        .srca = {.incr = 8},
-        .srcb = {.incr = srcb_incr},
-        .dest = {.incr = 8},
-    }
-        .set(ADDR_MOD_7);
-}
-
 /**
  * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
  * SrcA/SrcB contain 1 tile each, and output is 1 tile in destination register
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
- * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>. Ignored on BH;
+ *       present for signature parity with WH, whose init programs the bcast addr-mods from it.
  * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4> (ELWMUL only)
  * @param num_faces: Number of faces to process (1, 2, or 4)
  * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
@@ -48,8 +37,6 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
         (eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB) ||
             (eltwise_binary_type == EltwiseBinaryType::ELWMUL),
         "eltwise_binary_type must be ELWADD, ELWSUB, or ELWMUL");
-
-    eltwise_binary_configure_addrmod_custom<src_b_bcast_type>();
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -114,6 +101,8 @@ inline void _bcast_cols_op_()
  *                   callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
  *                   lands on its own dest slots; single-tile-row callers leave it at 0.
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
+ * @note Programs ADDR_MOD_7 (+8/+8/+8) for the walk and restores its zero-advance invariant on return.
+ *       Every later op depends on that restore: nothing else re-establishes slot 7.
  * @note Call @ref _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag
  *       at keep.
  */
@@ -222,6 +211,10 @@ inline void _llk_math_bcast_cols_reuse_custom_(
 
     // Restore the dest base offset so the next op starts from tile slot 0.
     math::clear_dst_reg_addr();
+
+    // Restore the ADDR_MOD_7 and ADDR_MOD_6 invariants (zero advance, dest += 2) for the next op.
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+    addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
 }
 
 /**
@@ -246,7 +239,7 @@ inline void _llk_math_sub_bcast_cols_compensated_init_()
 {
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 8}, .dest = {.incr = 8}}.set(ADDR_MOD_3);
     addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 0x3F & -8}, .dest = {.incr = 8}}.set(ADDR_MOD_5);
-    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_6);
+    addr_mod_t {.srca = {.incr = 8}, .srcb = {.incr = 24}, .dest = {.incr = 8}}.set(ADDR_MOD_2);
     addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -305,7 +298,7 @@ inline void _llk_math_sub_bcast_cols_compensated_(
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_5, 0);
             TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_3, 0);
-            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_6, 0);
+            TTI_ELWSUB(p_setrwc::CLR_NONE, 1, p_elwise::SRCB_BCAST_COL, ADDR_MOD_2, 0);
         }
 
         // Publish SrcA for the next input tile while keeping the split mean resident.

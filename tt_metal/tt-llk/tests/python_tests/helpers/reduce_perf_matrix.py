@@ -91,6 +91,6 @@ def perf_math_fidelities(pool_type, valid_fidelities=None):
     ]
 
 
-def perf_input_dimensions(tile_dimensions, tile_count=PERF_TILE_COUNT):
-    """Stack ``tile_count`` tiles vertically so every tile shape runs the same tile count."""
-    return [tile_dimensions[0] * tile_count, tile_dimensions[1]]
+def perf_input_dimensions(tile_dimensions, tile_cnt=PERF_TILE_COUNT):
+    """Stack ``tile_cnt`` tiles vertically so every tile shape runs the same tile count."""
+    return [tile_dimensions[0] * tile_cnt, tile_dimensions[1]]

@@ -75,7 +75,7 @@ inline void calculate_sfpu_binary_two_row(
 }
 
 /**
- * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, MUL and DIV.
+ * @brief LLK caller for binary SFPU operations, currently supports ADD, SUB, RSUB, MUL and DIV.
  *
  * @note DIV special cases (matching BH semantics):
  *   - 0 / 0 -> NaN
@@ -83,9 +83,9 @@ inline void calculate_sfpu_binary_two_row(
  *   - x / x -> 1.0 (forced exact, regardless of reciprocal rounding)
  *
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
- * @tparam BINOP: selects which binary op to compute (ADD, SUB, MUL or DIV)
- * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB)
- * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB results (no-op if is_fp32_dest_acc_en).
+ * @tparam BINOP: selects which binary op to compute (ADD, SUB, RSUB, MUL or DIV)
+ * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV, ADD, SUB, RSUB)
+ * @tparam dst_rounding_mode: bf16 narrowing applied to ADD/SUB/RSUB results (no-op if is_fp32_dest_acc_en).
  *         DIV ignores this and always rounds RNE, to match BH semantics.
  * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
@@ -100,12 +100,14 @@ template <
 inline void calculate_sfpu_binary(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::MUL || BINOP == BinaryOp::DIV,
-        "calculate_sfpu_binary only supports ADD, SUB, MUL and DIV");
+        BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB || BINOP == BinaryOp::MUL ||
+            BINOP == BinaryOp::DIV,
+        "calculate_sfpu_binary only supports ADD, SUB, RSUB, MUL and DIV");
     static_assert(
-        dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
-        "NearestEven rounding parameter is currently supported for ADD and SUB only");
-    // ADD/SUB narrow to bf16 in software only under NearestEven on a 16-bit Dest; MUL never does
+        dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB ||
+            BINOP == BinaryOp::RSUB,
+        "NearestEven rounding parameter is currently supported for ADD, SUB and RSUB only");
+    // ADD/SUB/RSUB narrow to bf16 in software only under NearestEven on a 16-bit Dest; MUL never does
     // (no narrowing), DIV always does on a 16-bit Dest and is excluded by use_two_row_binary.
     constexpr bool round_to_bf16_rne = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
     if constexpr (use_two_row_binary<BINOP, round_to_bf16_rne, ITERATIONS>) {
@@ -142,6 +144,8 @@ inline void calculate_sfpu_binary(
                 result = in0 * in1;
             } else if constexpr (BINOP == BinaryOp::SUB) {
                 result = in0 - in1;
+            } else if constexpr (BINOP == BinaryOp::RSUB) {
+                result = in1 - in0;
             } else if constexpr (BINOP == BinaryOp::DIV) {
                 constexpr int reciprocal_iterations = 2;  // Two Newton-Raphson iterations
                 result = in0 * _sfpu_reciprocal_<reciprocal_iterations>(in1);
@@ -167,12 +171,78 @@ inline void calculate_sfpu_binary(
                 }
             }
 
-            if constexpr ((BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB) && round_to_bf16_rne) {
+            if constexpr (
+                (BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB || BINOP == BinaryOp::RSUB) && round_to_bf16_rne) {
                 result = float32_to_bf16_rne(result, rne_bias, rne_mask);
             }
 
             sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         }
+        sfpi::dst_reg++;
+    }
+}
+
+/**
+ * @brief Float binary compare on Dest: y = (x0 OP x1) ? 1.0f : 0.0f, OP one of SfpuType::eq/ne/lt/gt/le/ge.
+ *
+ * IEEE semantics: -0 and +0 compare equal, a NaN operand makes every ordering and eq false and ne true.
+ * Width-agnostic (default sfpmem mode), so it serves a 16-bit and a 32-bit Dest alike.
+ *
+ * @tparam APPROXIMATION_MODE: unused, preserved to match the BH signature
+ * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
+ * @tparam OP: the comparison
+ * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
+ */
+template <
+    [[maybe_unused]] bool APPROXIMATION_MODE,
+    int ITERATIONS,
+    SfpuType OP,
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+inline void calculate_binary_comp_fp32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
+    static_assert(
+        OP == SfpuType::eq || OP == SfpuType::ne || OP == SfpuType::lt || OP == SfpuType::gt || OP == SfpuType::le ||
+            OP == SfpuType::ge,
+        "calculate_binary_comp_fp32 supports eq, ne, lt, gt, le and ge");
+    constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);
+    // gt/ge are lt/le with the operands swapped.
+    constexpr bool swap_operands = OP == SfpuType::gt || OP == SfpuType::ge;
+    const std::uint32_t idx_a = (swap_operands ? dst_index_in1 : dst_index_in0) * dst_tile_size_sfpi;
+    const std::uint32_t idx_b = (swap_operands ? dst_index_in0 : dst_index_in1) * dst_tile_size_sfpi;
+    const std::uint32_t idx_out = dst_index_out * dst_tile_size_sfpi;
+    constexpr std::int32_t kAbsMask = 0x7FFFFFFF;
+    constexpr std::int32_t kInfBits = 0x7F800000;
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        const sfpi::vFloat a = sfpi::dst_reg[idx_a];
+        const sfpi::vFloat b = sfpi::dst_reg[idx_b];
+        const sfpi::vInt mag_a = sfpi::as<sfpi::vInt>(a) & kAbsMask;
+        const sfpi::vInt mag_b = sfpi::as<sfpi::vInt>(b) & kAbsMask;
+        // Flat v_ifs: the sfpi predication pass does not survive || nested around && in one condition.
+        sfpi::vFloat result = 0.0f;
+        if constexpr (OP == SfpuType::eq || OP == SfpuType::ne) {
+            v_if(a == b) { result = 1.0f; }
+            v_endif;
+        } else if constexpr (OP == SfpuType::lt || OP == SfpuType::gt) {
+            v_if(a < b) { result = 1.0f; }
+            v_endif;
+        } else {
+            v_if(a <= b) { result = 1.0f; }
+            v_endif;
+        }
+        // -0 and +0 are equal: not ordered strictly, equal for eq / le / ge.
+        constexpr float both_zero_result = (OP == SfpuType::lt || OP == SfpuType::gt) ? 0.0f : 1.0f;
+        v_if(mag_a == 0 && mag_b == 0) { result = both_zero_result; }
+        v_endif;
+        // A NaN operand is neither ordered nor equal; ne inverts after the guard.
+        v_if(mag_a > kInfBits) { result = 0.0f; }
+        v_endif;
+        v_if(mag_b > kInfBits) { result = 0.0f; }
+        v_endif;
+        if constexpr (OP == SfpuType::ne) {
+            result = 1.0f - result;
+        }
+        sfpi::dst_reg[idx_out] = result;
         sfpi::dst_reg++;
     }
 }

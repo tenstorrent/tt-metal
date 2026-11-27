@@ -25,8 +25,9 @@ public:
         scratch_base_(scratch_base), scratch_bytes_(scratch_bytes) {}
 
     // Selects the groups of the tensor `entry` names and returns how many there are. With a selector the mask is
-    // read here, from DRAM by bank or from a NoC endpoint's L1, and its words become the list of selected groups.
-    FORCE_INLINE uint32_t select(volatile tt_l1_ptr TensorPrefetcherEntry* entry) {
+    // read here, from DRAM by bank or from a NoC endpoint's L1, with transaction id `read_trid`, and its words become
+    // the list of selected groups.
+    FORCE_INLINE uint32_t select(volatile tt_l1_ptr TensorPrefetcherEntry* entry, uint32_t read_trid) {
         const uint32_t num_groups = entry->num_groups;
         listed_ = entry->selector_mode == tt::tt_metal::TENSOR_PREFETCHER_SELECTOR_NONZERO_MASK;
         if (!listed_) {
@@ -39,8 +40,9 @@ public:
         const uint64_t mask_addr = entry->selector_location == tt::tt_metal::TENSOR_PREFETCHER_SELECTOR_IN_DRAM_BANK
                                        ? get_noc_addr_from_bank_id<true>(xy, entry->selector_addr)
                                        : get_noc_addr(xy & 0xFFFFu, xy >> 16, entry->selector_addr);
+        noc_async_read_set_trid(read_trid);
         noc_async_read(mask_addr, scratch_base_, read_bytes);
-        noc_async_read_barrier_with_trid(kTrid);
+        noc_async_read_barrier_with_trid(read_trid);
         // Group g is listed at a position no later than g, so the mask's words become the list in place.
         volatile tt_l1_ptr uint16_t* words = listed_groups();
         uint32_t num_selected = 0;

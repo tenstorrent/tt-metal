@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "lltt.h"
 
 using namespace sfpi;
 
@@ -23,7 +22,10 @@ inline void abs_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+// Whether BF16 DEST runs the generated abs kernel as one call over the whole tile.
+inline constexpr bool abs_bf16_whole_tile = false;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_abs() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -47,11 +49,11 @@ inline void calculate_abs_int32() {
     // body is recorded without executing and then replayed once per row: one RISC issue per row.
     // The store advances Dest by one sfpi row (SFP_ROWS Dest counter rows) through ADDR_MOD_6, in
     // place of a TTINCRWC, which would be a fourth instruction in the window.
-    lltt::record<lltt::NoExec>(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
+    TTI_REPLAY(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN, 0, 0, 0, 1);
     const sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
     sfpi::dst_reg[0].mode<sfpi::DataLayout::M32>(ADDR_MOD_6) = sfpi::abs(v);
     for (int d = 0; d < ITERATIONS; d++) {
-        lltt::replay(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN);
+        TTI_REPLAY(ABS_INT32_REPLAY_SLOT, ABS_INT32_REPLAY_LEN, 0, 0, 0, 0);
     }
 }
 
