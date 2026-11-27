@@ -584,6 +584,8 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
 
+    // TT_METAL_EXECUTOR_THREADS: the host executor pool size (unset: hardware_concurrency()), process-wide.
+    static size_t get_executor_threads();
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();
     static bool get_trace_allocation_skip_program_cache_enabled();

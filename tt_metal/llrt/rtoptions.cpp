@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <unordered_set>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -83,6 +86,7 @@ enum class EnvVarID {
     // HOST MEMORY
     // ========================================
     TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES,  // Maximum cached pinned host memory
+    TT_METAL_EXECUTOR_THREADS,                 // Host executor thread pool size
 
     // ========================================
     // DEBUG & TESTING
@@ -448,6 +452,26 @@ const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocati
     return options;
 }
 
+size_t RunTimeOptions::get_executor_threads() {
+    // Like the trace allocation options, read before a MetalContext exists (the executor also serves host-only tensor
+    // conversion), so parsed once into a process-wide snapshot.
+    static const size_t threads = [] {
+        const char* value = std::getenv("TT_METAL_EXECUTOR_THREADS");
+        if (value == nullptr) {
+            return std::max<size_t>(1, std::thread::hardware_concurrency());
+        }
+        size_t n = 0;
+        const char* end = value + std::strlen(value);
+        const auto [ptr, ec] = std::from_chars(value, end, n);
+        TT_FATAL(
+            ec == std::errc() && ptr == end && n > 0,
+            "TT_METAL_EXECUTOR_THREADS must be a positive integer, got \"{}\"",
+            value);
+        return n;
+    }();
+    return threads;
+}
+
 bool RunTimeOptions::get_trace_allocation_tracking_enabled() { return get_trace_allocation_options().tracking_enabled; }
 
 bool RunTimeOptions::get_trace_allocation_diagnostics_enabled() {
@@ -670,6 +694,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // ========================================
         // HOST MEMORY
         // ========================================
+
+        // TT_METAL_EXECUTOR_THREADS
+        // Size of one process's host executor thread pool, e.g. for several device processes on one host.
+        // Default: hardware_concurrency()
+        // Usage: export TT_METAL_EXECUTOR_THREADS=8
+        // Parsed by get_executor_threads(), a process-wide snapshot; a value that is not a whole positive integer
+        // raises.
+        case EnvVarID::TT_METAL_EXECUTOR_THREADS: (void)get_executor_threads(); break;
 
         // TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES
         // Maximum host memory bytes held by the pinned memory cache.

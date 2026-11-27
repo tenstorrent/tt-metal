@@ -26,8 +26,11 @@
 #include <cstring>
 #include <thread>
 
+#include "llrt/rtoptions.hpp"
+
 namespace tt::tt_metal::detail {
-inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
+// TT_METAL_EXECUTOR_THREADS caps the pool, e.g. for several device processes on one host (each compiles on it).
+inline size_t executor_threads() { return llrt::RunTimeOptions::get_executor_threads(); }
 
 using Executor = tf::Executor;
 using ExecTask = tf::Task;
@@ -60,7 +63,7 @@ inline Executor& GetExecutor() {
     // The Executor holds no OS resources (no FDs, no shared memory, no
     // GPU handles), so no handles are stranded.
     static Executor* exec = [] {
-        auto* e = new Executor(EXECUTOR_NTHREADS);
+        auto* e = new Executor(executor_threads());
         std::atexit([] {
             delete exec;
             exec = nullptr;
@@ -98,13 +101,13 @@ inline Executor& GetExecutor() {
                 __lsan_ignore_object(exec);
 #undef TT_LSAN_ACTIVE
 #endif
-                exec = new Executor(EXECUTOR_NTHREADS);
+                exec = new Executor(executor_threads());
             });
         return e;
     }();
     return *exec;
 #else
-    static Executor exec(EXECUTOR_NTHREADS);
+    static Executor exec(executor_threads());
     return exec;
 #endif
 }
