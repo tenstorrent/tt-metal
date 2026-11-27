@@ -1,60 +1,47 @@
 # L1 Ledger: g6_zeros
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes, from the Blocking Model in
-`op_design.md`: `bank` (extent `block_banks = 1`), `bank_slot` (extent `block_slots`), `device`. The
-logical axes `d_0`, `d_1`, `d_2/32`, `d_3/32` are folded into the page index, which `bank` and
-`bank_slot` decompose.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axes: `op_design.md` → Blocking Model (`d0`, `d1`, `ht`, `wt` folded into the page index; `bank`, `bank_slot`, `packet`).
+
+## Inventory
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_zero_source` | 1 page of `zero_source_bytes` B, where `zero_source_bytes = min(ZERO_SOURCE_MAX_BYTES, max_c run_bytes(c))` | 1 page (`zero_source_bytes` B). Every write issued so far reads it until the final barrier, so all of it is live for the whole kernel. Capacity = live set | `{bank: streams → 0 (one bank's run at a time; the source does not grow with banks), bank_slot: streams → window zero_source_bytes (each chunk of a run re-reads the same bytes), device: streams → per-device copy (SPMD)}` | `float32` for every output dtype (`ZERO_SOURCE_CB_FORMAT`): a dataflow-only byte scratch that never passes DEST, so a fixed non-block format avoids a `Bfp8_b` CB whose 16384 B page is not a multiple of its 1088 B tile. There is no compute kernel and `fp32_dest_acc_en` does not apply (op_design Key Risks) | writer (L1 loopback zero fill) | writer (NoC write source) | whole writer kernel: filled once, read by every write, never re-zeroed | none: it is the op's only CB. The pack-into-destination pattern does not apply (the destination is DRAM, and the source is what makes the zeros). No other buffer exists to alias. The hardware zero region `MEM_ZEROS_BASE` (512 B) could replace it as the direct source but caps writes at 512 B (regime R4, rejected) |
+| `cb_zero_src` | `zero_src_depth` = 1 page of `zero_src_bytes = min(ZERO_SRC_BYTES_MAX, ceil(P / cores_used) * page_bytes)` | 1 page: every packet in flight reads the same bytes, so capacity = live set | `{d0: streams → folded, d1: streams → folded, ht: streams → folded, wt: streams → folded, bank: streams → 1 per run, bank_slot: streams → run_slots, packet: spans → packet_bytes <= zero_src_bytes}` | output `dtype`. Metadata only: a dataflow-only payload that never passes DEST or the packer, so the DEST-width audit does not apply | writer | writer | whole kernel: zero-filled once (`make_zero_source`), read-only through every `write_zero_run` | The only CB, so nothing to share with. It is not folded into an output CB because none exists: pages go from this source straight to DRAM. Not replaced by the 512 B hardware zero region (`MEM_ZEROS_BASE`): that would cap packets at 512 B, 32x the packets (regime `zero_region_direct`, rejected) |
 
-Over/under audit: capacity equals the live set. The buffer spans no block axis, so its capacity
-correctly does not scale with `block_slots`, which can grow to the whole per-core assignment at no
-L1 cost.
+Rule 1 (inventory before solve): one buffer, no budget solve, no safety fraction. Rule 3 patterns: pack-into-destination is the design (the output gets no CB at all). Transform-in-place, aliasing and DEST folding have nothing to apply to: there is one buffer and no compute phase.
 
 ## Symbol table
 
-| Symbol | Bound | Predicate establishing it |
-|--------|-------|---------------------------|
-| `ZERO_SOURCE_MAX_BYTES` | 16384 | one host constant (= `NOC_MAX_BURST_SIZE` on Blackhole, `noc_parameters.h:287-290`) |
-| `zero_source_bytes` | `<= 16384`, multiple of 64 | `min(ZERO_SOURCE_MAX_BYTES, max run_bytes)`. `run_bytes` is a multiple of `page_bytes`, and every `page_bytes` is a multiple of 64 |
-| `page_bytes` | in {1088, 2048, 4096} | `output.buffer_aligned_page_size()` for the TARGET dtypes (bfloat8_b, bfloat16, float32) |
-| `run_bytes(c)` | `<= bank_pages(b) * page_bytes`, unbounded above (p1: 2232576 B per core) | does not enter any capacity expression. Only the trip count `ceil(run_bytes / zero_source_bytes)` depends on it |
-| `num_dram_banks` | device constant (8 on this Blackhole) | `device.dram_grid_size()`, checked against the kernel's `NUM_DRAM_BANKS` |
+| Symbol | Meaning | Bound | Predicate establishing it |
+|--------|---------|-------|---------------------------|
+| `page_bytes` | tile bytes of `dtype` | ∈ {1088, 2048, 4096} | TARGET dtype ∈ {bfloat8_b, bfloat16, float32}, TILE only (`validate()`) |
+| `P` | output pages, `d_0*d_1*ceil(d_2/32)*ceil(d_3/32)` | ≥ 1, unbounded above (262648 in INPUTS) | shape validation; appears only under `min(...)`, never as a capacity on its own |
+| `cores_used` | `min(C, P)` | ≥ 1 | `C = grid.x * grid.y >= 1` |
+| `ZERO_SRC_BYTES_MAX` | host constant, one Blackhole NoC burst | = 16384 | single source in the descriptor builder |
+| `zero_src_bytes` | zero source size | `<= 16384`, multiple of 16 (all `page_bytes` are multiples of 64) | `min(ZERO_SRC_BYTES_MAX, ...)` |
+| `packet_bytes` | per-packet transfer | `<= min(zero_src_bytes, NOC_MAX_BURST_SIZE)` | kernel clamp |
+| `zero_src_depth` | pages of `cb_zero_src` | = 1 | constant source, never refilled |
 
-## Total per-core footprint
+## Footprint
 
-`L1(core) = zero_source_bytes` for a writer core (0 for an idle core), at most 16384 B. Nothing
-scales with `block_slots`, `banks_per_core`, `max_writer_cores` or the shape. Lamp L3 (a second
-writer lane) doubles it to `2 * zero_source_bytes`, and lamp L6 raises it to at most 65536 B. Both
-stay far below the 1347776 B the model leaves to the op (BB-05).
+Per-core L1 = `zero_src_depth * zero_src_bytes` = `zero_src_bytes` ≤ **16384 B** for every shape (p1/p2/p3: 16384; p4: 4096 at C = 110, 2048 at C = 130). That is ≤ 1.2 % of the model's 1347776 B (BB-05). Only the `packet`-axis knob (`ZERO_SRC_BYTES_MAX`) scales it. No term scales with `P` or with the shape: the footprint is constant in the tensor size, so p1's 285,761,024 B output needs the same 16 KiB per core as p4. The second-NoC lamp (`writer_riscs = 2`) adds a second identical 16 KiB source per core (32 KiB total).
 
 ## Data-movement budget
 
-Chosen split: bank-affine bank runs (regime R1), per device.
-
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `out` | 1 (write only) | every page belongs to exactly one block and is written once from the core-local zero source. Nothing is read: the zeros are made in L1 by a loopback read of the core's own `MEM_ZEROS` region | 0 |
-| zero source (L1, not a tensor) | 0 | core-local: one loopback fill of `zero_source_bytes` per writer core per call | 0 |
+| `out` | 1 (write only) | each page lies in exactly one run of exactly one core and is written once, straight from L1; nothing is cleared first and nothing is read back | 0 |
+| zero source | 0 | made in each core's own L1 by NoC loopback from the hardware zero region, once per kernel; never read from DRAM (spec rule 4) | 0 (loopback is core-local: `zero_src_bytes` per active core) |
 
-Bytes per tier, per device and per call:
+Totals per device per call:
 
-| Case | DRAM write | DRAM read | Cross-core NoC | Core-local fill (all writer cores: 8 = one per bank, `WRITER_CORES_PER_BANK = 1`) |
-|------|-----------:|----------:|---------------:|-----------------------------------------------------------|
-| p1 (32831,1,32,256) bfloat8_b | 285761024 | 0 | 0 | 8 x 16384 = 131072 |
-| p2 (16,12,128,128) float32 | 12582912 | 0 | 0 | 8 x 16384 = 131072 |
-| p3 (8,12,128,128) float32 | 6291456 | 0 | 0 | 8 x 16384 = 131072 |
-| p4 (1,4,256,128) bfloat16 | 262144 | 0 | 0 | 8 x 16384 = 131072 |
+| Case | DRAM written | DRAM read | Cross-core | Core-local loopback (C = 110) |
+|------|--------------|-----------|------------|-------------------------------|
+| p1 bfloat8_b | 285,761,024 B | 0 | 0 | 110 x 16384 = 1,802,240 B |
+| p2 float32 | 12,582,912 B | 0 | 0 | 1,802,240 B |
+| p3 float32 | 6,291,456 B | 0 | 0 | 1,802,240 B |
+| p4 bfloat16 | 262,144 B | 0 | 0 | 110 x 4096 = 450,560 B |
 
-Writer count: lamp L1 turned from the whole grid to one writer core per DRAM bank
-(`max_writer_cores = num_dram_banks * WRITER_CORES_PER_BANK`). Unprofiled trace-replay time on a
-110-core Blackhole, 8 banks: p1 1118 -> 913 us, p2 51.3 -> 43.0 us, p3 27.1 -> 23.1 us,
-p4 5.70 -> 2.81 us. Bytes per tier are unchanged; only the fill count and the core count drop.
+On a mesh each device writes its own copy (x4 in production), with no inter-chip traffic.
 
-> Cheapest-traffic split considered: every candidate split (bank-affine, slot-range across all
-> banks, page-range) ties at the minimum: `out` written once, 0 B read, 0 B cross-core. Delta: 0 B
-> on every tier. Implemented: bank-affine bank runs, which is the cheapest. The tie is broken by
-> transfer shape: one contiguous run per core, issued in 16 KiB writes. The slot-range split stays
-> reachable as an RT-arg value of the same kernel (`banks_per_core`, lamp L4).
+> Cheapest-traffic split considered: bank-major position split (`bank_run_write`). Every candidate split ties on bytes (output written once, 0 read, 0 cross-core) and this one has the fewest transfers (≤ 2 contiguous runs per core). Implemented: the same split. It is also the cheapest-traffic split; no deferred alternative exists.
