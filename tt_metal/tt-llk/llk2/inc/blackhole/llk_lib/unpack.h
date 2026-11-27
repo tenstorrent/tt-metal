@@ -431,8 +431,8 @@ inline __attribute__((always_inline)) void unpack_tile_to_dest()
 {
     static_assert(Un.index == 0, "only unpacker 0 writes Dest");
     constexpr std::uint8_t next_dest_tile = 1; // channel 1 Z += 1: one Dest tile further on
-    hal::unpack::run<hal::unpack::DataTransfer {
-        .engine = Un.engine, .increments = {.channel1 = {.z = next_dest_tile}}, .handoff = hal::unpack::SourceHandoff::Keep}>();
+    hal::unpack::Unpacker {Un.engine}
+        .transfer<hal::unpack::Transfer {.increments = {.channel1 = {.z = next_dest_tile}}, .handoff = hal::unpack::SrcHandoff::Keep}>();
 }
 
 /// Unpacks one tile of a stream: to Dest (unpack_tile_to_dest), or to Src with one UNPACR. The UNPACR is the same for
@@ -459,7 +459,7 @@ inline __attribute__((always_inline)) void unpack_tile()
     {
         // One UNPACR covers the tile (the X counter runs to unpack_x_end), then hands the bank to math. With Haloize_mode
         // on, each 16-row face is transposed as it is written.
-        hal::unpack::run<hal::unpack::DataTransfer {.engine = Un.engine, .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid}>();
+        hal::unpack::Unpacker {Un.engine}.transfer<hal::unpack::Transfer {.handoff = hal::unpack::SrcHandoff::FlipAndSetDataValid}>();
     }
 }
 
@@ -467,8 +467,8 @@ inline __attribute__((always_inline)) void unpack_tile()
 template <unpacker Un, unpack_stream St>
 inline __attribute__((always_inline)) void unpack_tile_and_step()
 {
-    hal::unpack::run<hal::unpack::DataTransfer {
-        .engine = Un.engine, .increments = unpack_tile_post_increments(St), .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid}>();
+    hal::unpack::Unpacker {Un.engine}
+        .transfer<hal::unpack::Transfer {.increments = unpack_tile_post_increments(St), .handoff = hal::unpack::SrcHandoff::FlipAndSetDataValid}>();
 }
 
 // ---- configure ------------------------------------------------------------------------------------------------------
