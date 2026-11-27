@@ -120,7 +120,7 @@ Cut the DRAM write transactions. The design's deferred **`same_bank_slot_writes`
 - **Next**: the read-side levers of Refinement 4 (bank stagger, read batches across blocks). They aim at that row gradient and belong to that refinement's scope, so they were not tried here.
 - The 866-µs write floor only moves with fewer output bytes, and the 64-B page slot forbids that for a contiguous write.
 
-### [ ] Refinement 4 — Speed up the perf-flagged profile: read overlap and block co-tune on case 308
+### [x] Refinement 4 — Speed up the perf-flagged profile: read overlap and block co-tune on case 308
 
 **Type**: perf
 
@@ -136,3 +136,14 @@ No SUPPORTED change.
 **Verifier notes**: first re-profile 308 on Refinement 3's result. If the profile shows the reader off the critical path (writer/DRAM-bound with the reader idle), that measurement is the outcome. Record it in the changelog, and say which stage now bounds 308.
 
 **Done when**: device-ns improves on 308 (measured), golden suite green, and no regression across the same guard set as Refinement 3. Alternatively, the post-Refinement-3 profile shows the read side off 308's critical path, recorded with numbers in the changelog.
+
+**Outcome**: no lever moved 308. Every one is built, bit-exact and parked at its no-op default: 1095–1130 µs before, 1109–1113 µs after (BH, 110 cores); 286 is 269–273 µs both times.
+- **The reader is on the critical path, but not for want of overlap.** Kernel time grades by core row with equal work per core: 400 µs on row y = 11, 1120 µs on y = 2. The top rows wait up to 725 µs for their read responses. The writer's flush wait is 1.6 µs in total; the rest of its time waits for the reader.
+- **Read-ring depth makes it worse.** At `SLOT_READ_DEPTH` 2/3/4, 308 runs 1144/1152/1151 µs.
+- **Adaptive read-ahead makes it worse.** At `SLOT_READ_DEPTH_MAX` 2/4: 1147/1173 µs.
+- **Read `bank_stagger` is noise.** `SLOT_READ_STAGGER`: 1110 vs 1109 µs.
+- **The co-tune is flat.** 64 or 256 blocks per core, with read depth 1 or 2: 1109–1128 µs.
+- **What binds is the DRAM, not the distribution.**
+  - A probe-only split, weighted by measured row speed, gives 1075 µs: the top rows still finish at ~1066 µs with 40% less work.
+  - 308's 402.6 MB of DRAM traffic runs at ≈368 GB/s. c304 (363 GB/s) and c1978 (375 GB/s) reach the same combined read + write rate through different kernels. So the op sits at this board's DRAM ceiling for mixed reads and writes.
+- **Next**: only fewer DRAM bytes would move 308. The 128 MiB of reads is already the face-row minimum, and the 64-B page slot fixes the bytes of a run write. A block queue claimed by NoC atomic fetch-and-add would let fast cores take more blocks, but the weighted-split probe bounds its gain at ≈2–5%, so it was not built.

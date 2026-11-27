@@ -51,10 +51,18 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 READ_BATCH_TILES = 8  # tiles per DRAM read batch in R1
 TILE_WINDOW_DEPTH = 2  # R1 batches resident in cb_tile_window
 ROW_DEPTH = 2  # blocks resident in cb_row_block / cb_left_faces / cb_tile_block
-# R7 cb_left_faces / cb_slot_image depths. With the build split, 3 lets the reader build block k
-# while the writer still builds block k - 1 (whose faces page and the image of k - 2, still draining,
-# are held); at 2 the two halves of consecutive blocks serialize.
-SLOT_FACES_DEPTH = 3
+# R7: blocks whose face reads are on the wire (one trid each) while the reader builds its share of
+# the oldest landed block, and the most it issues when the next block has still not landed after the
+# build (equal: no adaptive read-ahead).
+SLOT_READ_DEPTH = 1
+SLOT_READ_DEPTH_MAX = 1
+# R7 bank_stagger: each core starts every block's reads at the input bank of its own (x + y), not at the
+# block's first tile.
+SLOT_READ_STAGGER = False
+# R7 cb_left_faces / cb_slot_image depths. Besides the blocks in flight, cb_left_faces holds the block
+# the reader builds and the block k - 1 the writer still builds; the image ring holds k - 2 (still
+# draining), k - 1 and k. Below that the two halves of consecutive blocks serialize.
+SLOT_FACES_DEPTH = SLOT_READ_DEPTH_MAX + 2
 SLOT_IMAGE_DEPTH = 3
 # R7: eighths of each block's rows the reader moves into the slot image with RISC loads/stores (while
 # the next block's reads are in flight); the writer moves the rest, with self-aimed NoC reads when
@@ -128,6 +136,7 @@ assert ROW_WINDOW_DEPTH + _REORDER_TRIDS * (2 if SPLIT_REORDER else 1) <= _MAX_T
 assert not SPLIT_REORDER or ROW_WINDOW_DEPTH >= 2  # a pushed-ahead slot needs a second page
 assert 2 * READ_BATCH_TILES <= _MAX_TRID_OUTSTANDING  # at most 2 reads per tile per batch
 assert 0 <= READER_SLOT_EIGHTHS <= 8
+assert 1 <= SLOT_READ_DEPTH <= SLOT_READ_DEPTH_MAX <= _MAX_TRID
 
 
 def _div_up(a, b):
@@ -215,11 +224,13 @@ def _slot_image_bytes(block_rows_tiles, stage_rows, slot_bytes):
 
 
 def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_bytes, slot_bytes):
+    # The face regimes' reader tags a block's face reads (two per tile) with one trid, whose outstanding
+    # count is capped.
     if regime == FACE_DIRECT:
-        return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * LEFT_SLOT_BYTES)
+        return min((L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * LEFT_SLOT_BYTES), _MAX_TRID_OUTSTANDING // 2)
     if regime == SAME_BANK_SLOT_WRITES:
         per_tile = SLOT_FACES_DEPTH * LEFT_SLOT_BYTES + SLOT_IMAGE_DEPTH * _slot_image_bytes(1, stage_rows, slot_bytes)
-        return (L1_BUDGET_BYTES - out_l1_share) // per_tile
+        return min((L1_BUDGET_BYTES - out_l1_share) // per_tile, _MAX_TRID_OUTSTANDING // 2)
     if regime == ROW_MAJOR_TO_TILE:
         # The row window scales with block_cols_tiles only; charging it per tile bounds it for any
         # block_rows_tiles >= 1.
@@ -366,6 +377,9 @@ class Plan:
             "split_reorder": SPLIT_REORDER if self.regime == ROW_MAJOR_TO_TILE else None,
             "slot_image_depth": SLOT_IMAGE_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
             "slot_faces_depth": SLOT_FACES_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "slot_read_depth": SLOT_READ_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "slot_read_depth_max": SLOT_READ_DEPTH_MAX if self.regime == SAME_BANK_SLOT_WRITES else None,
+            "slot_read_stagger": SLOT_READ_STAGGER if self.regime == SAME_BANK_SLOT_WRITES else None,
             "reader_slot_eighths": READER_SLOT_EIGHTHS if self.regime == SAME_BANK_SLOT_WRITES else None,
             "writer_slot_noc_copies": WRITER_SLOT_NOC_COPIES if self.regime == SAME_BANK_SLOT_WRITES else None,
             "out_slot_bytes": self.out_slot_bytes,
@@ -556,7 +570,12 @@ class G6ToLayoutProgram:
                 cbs.append(_cb(CB_SLOT_IMAGE, image_bytes, image_bytes // SLOT_IMAGE_DEPTH, all_cores))
             reader_source, writer_source = "g6_to_layout_face_reader.cpp", "g6_to_layout_face_writer.cpp"
             slot_ct_args = [CB_LEFT_FACES, int(slot_writes), CB_SLOT_IMAGE]
-            reader_ct_args = geometry_ct_args + slot_ct_args + [READER_SLOT_EIGHTHS, plan.out_slot_bytes]
+            read_knobs = (
+                (SLOT_READ_DEPTH, SLOT_READ_DEPTH_MAX, SLOT_FACES_DEPTH, int(SLOT_READ_STAGGER))
+                if slot_writes
+                else (1, 1, ROW_DEPTH, 0)
+            )
+            reader_ct_args = geometry_ct_args + slot_ct_args + [READER_SLOT_EIGHTHS, plan.out_slot_bytes, *read_knobs]
             # The reader lays out the image by the output's bank interleaving, so it gets the output's
             # accessor args after its own.
             reader_out_ct_args = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()

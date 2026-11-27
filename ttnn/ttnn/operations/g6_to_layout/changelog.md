@@ -159,3 +159,58 @@
 - **Tests added**:
   - `test_g6_to_layout_slot_writes.py` (14 tests): regime selection and bit-exact output on ragged images, `H < 32`, a single row, `W = 16` with ragged `H`, L1 outputs with 16-B and 32-B slots, and `face_direct` on an L1 full slot, each with randn and NaN-poisoned padding.
   - `test_g6_to_layout.py::test_regime_selection` pins updated.
+
+## Refinement 4 — Speed up the perf-flagged profile: read overlap and block co-tune on case 308
+- **Date**: 2026-11-27
+- **What was done**: every named lever is built into the R7 reader as a host knob, measured on 308 and left at its no-op default. None moved 308.
+  - **Trid read ring across blocks** (`SLOT_READ_DEPTH`). Block `n`'s face reads carry trid `n % depth + 1`, and only the oldest block's trid is waited on, so reads stay in flight across every wait. Block `n` lands in page `n % SLOT_FACES_DEPTH`, addressed from the ring base, because the CB write pointer lags the blocks issued ahead of it. `SLOT_FACES_DEPTH` is now derived as `SLOT_READ_DEPTH_MAX + 2`. Depth 1 is Refinement 3's schedule. `face_direct` runs the same reader at depth 1.
+  - **Adaptive read-ahead** (`SLOT_READ_DEPTH_MAX`). After its build, the reader issues more blocks only while the oldest has not landed (a non-blocking trid poll), so only starved cores deepen their queue.
+  - **Read `bank_stagger`** (`SLOT_READ_STAGGER`). Each block's first read goes to input bank `(x + y) % banks` of the core.
+  - **Block co-tune**: `SLOT_PIPELINE_BLOCKS_PER_CORE` × read depth.
+  - R2/R7 blocks are capped at 127 tiles. A block's two reads per tile share one trid, whose outstanding counter holds 255.
+  - `select_plan` reports `slot_read_depth`, `slot_read_depth_max` and `slot_read_stagger`. `op_design.md` and `l1_ledger.md` carry the knobs, the derived faces depth and the findings.
+  - **Reused**: R7's reader loop, `load_left_faces`, the kernel_lib trid helpers (`set_read_trid` / `async_read_barrier_with_trid`), `_max_block_tiles`.
+  - **Added**: the trid ring, the adaptive issue and the stagger offset in `g6_to_layout_face_reader.cpp`, plus three knobs.
+- **Perf (device kernel time, BH, 110 cores, 308 unless noted)**:
+
+  | Variant | 308 (µs) |
+  |---------|---------:|
+  | Refinement 3 baseline (4 runs) | 1095–1130 |
+  | Read depth 2 / 3 / 4 | 1144 / 1152 / 1151 |
+  | Adaptive max 2 / 4 | 1147 / 1173 |
+  | Stagger on / off | 1110 / 1109 |
+  | 64 blocks/core, depth 1 / 2 | 1119 / 1128 |
+  | 256 blocks/core, depth 1 / 2 | 1109 / 1125 |
+  | Final (defaults) | 1112.7 (286: 273.0) |
+
+  The guard paths match Refinement 3 within noise: c304 2933, c1978 1788, c2031 153, c294 19.3, c2038 3.6, c29 4.9, c37 9.2, c301 130, c38 67.7, Q3 6.2 µs.
+- **What binds 308**:
+  - **Ablations** (at Refinement 3's code):
+    - reads only: 530 µs;
+    - writes only: 866 µs;
+    - both without the copies: 1041 µs;
+    - sync only: 9.7 µs.
+  - **Per-core gradient.** With equal work per core, kernel time runs from 400 µs (core row y = 11) to 1120 µs (y = 2). NoC0 traffic grades by row:
+    - reads on NoC0: 155 → 528 µs;
+    - writes on NoC0: 80 → 1500 µs.
+
+    NoC1 traffic grades by column instead:
+    - reads on NoC1: x = 1 at 222 µs, x = 15 at 590 µs;
+    - writes on NoC1: 74 → 862 µs.
+  - **Zone split.** The top rows' readers wait up to 725 µs for read responses, and their read issue costs 59–293 µs, graded by column. The writer's flush wait is 1.6 µs in total; it spends up to 777 µs waiting for the reader's input. So the reader is the critical path, and no writer twin would move 308.
+  - **Queue depth does not help.** Deeper rings, uniform or adaptive, raise the favoured cores' share and slow the top rows further.
+  - **Volume barely helps.** Removing 30% of the reads outright gives only 977 µs.
+  - **Distribution barely helps.** A probe-only split weighted by measured row speed gives 1075 µs. The top rows still finish at ~1066 µs with 40% less work.
+  - **Conclusion.** The gradient is NoC0 arbitration order, not idle capacity. 308 moves 402.6 MB at ≈368 GB/s; c304 (363 GB/s) and c1978 (375 GB/s) reach the same combined read + write rate through different kernels. The op sits at this board's DRAM ceiling for mixed traffic.
+- **What next**:
+  - Only fewer DRAM bytes would move 308. The reads (128 MiB) are the face-row minimum, and the 64-B page slot fixes the bytes of a run write.
+  - A dynamic block queue (NoC atomic fetch-and-add, which BH supports) is bounded at ≈2–5% by the weighted-split probe, so it was not built.
+- **Accuracy achieved**: bit-exact (PCC = 1.0, relative RMS = 0). This holds on 308 and 286 at every knob setting measured, and on the new knob tests with NaN-poisoned padding.
+- **Golden test progress**:
+  - The targeted slice passes 11/11: every 308 cell (INPUTS plus 4 loose: perf, specials, poison 1000, poison NaN), 286 and its loose case, c304 and c2038.
+  - Expected total: 89/89 (no SUPPORTED change).
+- **Issues encountered**:
+  - The NoC estimator CLI is not built on this checkout (it needs `--build-tests`), so the DRAM ceiling comes from the measured mixed-traffic rate of three ops.
+  - `tt_metal/third_party/tt_ops_code_gen` shows as modified in the working tree. It is not part of this change.
+- **Tests added**: `test_g6_to_layout_slot_writes.py::test_read_ring_knobs` (6 tests). It checks bit-exact output with NaN-poisoned padding at read depth 3, adaptive max 4, and depth 2 + adaptive 4 + stagger, on a ragged 12-block-per-core shape and on c286. These cases pin the ring's landing-page arithmetic.
+  - The probe `probes/test_probe_r4_variant.py` swaps the kernel directory, knobs, NoCs and a row-weighted split for measurement.
