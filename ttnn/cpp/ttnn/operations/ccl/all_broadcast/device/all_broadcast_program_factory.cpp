@@ -273,7 +273,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
         // Build reader RT args.  The first arg is the input tensor buffer
         // address; push it as Buffer* so the framework records a BufferBinding
-        // and patches it directly on cache hit (no override_runtime_arguments).
+        // and patches it on a cache hit. override_runtime_arguments rewrites it
+        // too, with the page range, for a row-free program.
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.push_back(input_tensor.buffer());                   // tensor_address0
         reader_rt_args.push_back(input_tile_id_start * num_width_shards);  // tile_id_start
@@ -298,7 +299,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         // The fabric helper appends to a plain std::vector<uint32_t>; build the
         // writer args there first, then push them into the kernel descriptor.
         // Index 0 is a placeholder (output buffer base address) that is replaced
-        // with a Buffer* binding before emplace_runtime_args() below.
+        // with a Buffer* binding before emplace_runtime_args() below;
+        // override_runtime_arguments rewrites it with the page range on a hit.
         std::vector<uint32_t> writer_rt_args = {
             output_tensors[ring_index]
                 .buffer()
@@ -349,8 +351,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
 
         // Promote the writer RT args to the kernel descriptor.  Index 0 is the
         // output buffer's base address — push it as Buffer* so the framework
-        // records a BufferBinding for the cache-hit fast path.  All other
-        // positions remain plain uint32_t.
+        // records a BufferBinding for the cache hit.  All other positions
+        // remain plain uint32_t.
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args_builder;
         writer_rt_args_builder.reserve(writer_rt_args.size());
         writer_rt_args_builder.push_back(output_tensors[ring_index].buffer());
@@ -409,9 +411,10 @@ tt::tt_metal::WorkloadDescriptor AllBroadcastProgramFactory::create_workload_des
     return workload_descriptor;
 }
 
-bool all_broadcast_program_is_row_free(const Tensor& input) {
+bool all_broadcast_program_is_row_free(const AllBroadcastParams& operation_attributes, const Tensor& input) {
     return input.layout() == ttnn::TILE_LAYOUT &&
-           input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED;
+           input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+           operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED;
 }
 
 void AllBroadcastProgramFactory::override_runtime_arguments(

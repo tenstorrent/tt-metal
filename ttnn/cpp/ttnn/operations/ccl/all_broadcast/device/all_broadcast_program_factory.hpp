@@ -9,9 +9,10 @@
 #include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::prim {
-// A tiled interleaved input: the program copies its pages in per-link ranges that are runtime args, so one
-// program serves every row count, and the hash leaves the rows out.
-bool all_broadcast_program_is_row_free(const Tensor& input);
+// A tiled interleaved input and output: the program copies the pages in per-link ranges that are runtime args, so
+// one program serves every row count, and the hash leaves the rows out. A sharded output's accessor takes its
+// shard and tensor shapes as compile-time args, which follow the rows.
+bool all_broadcast_program_is_row_free(const AllBroadcastParams& operation_attributes, const Tensor& input);
 
 struct AllBroadcastProgramFactory {
     // Declarative workload-scoped factory (Contract 2).

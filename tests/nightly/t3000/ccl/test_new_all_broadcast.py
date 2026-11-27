@@ -657,3 +657,34 @@ def test_all_broadcast_tile_rows_one_program(mesh_device):
                 assert torch.equal(ttnn.to_torch(t), chunks[k]), f"rows {rows}, source {k}"
         assert added == (1 if first else 0), f"rows {rows}: all_broadcast added {added} programs"
         first = False
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+def test_all_broadcast_tile_rows_sharded_output(mesh_device):
+    """A sharded output's accessor takes its shapes at compile time, so an interleaved input with a sharded output
+    keeps a program per row count."""
+    torch.manual_seed(0)
+    cluster_axis, ring_size = 1, mesh_device.shape[1]
+    for rows in [32, 64]:
+        chunks = [torch.randn(1, 1, rows, 512).bfloat16() for _ in range(ring_size)]
+        x = ttnn.from_torch(
+            torch.cat(chunks, dim=2),
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 2)),
+        )
+        output_mem_config = ttnn.create_sharded_memory_config(
+            [rows, 512],
+            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+        outs = ttnn.all_broadcast(
+            x, cluster_axis=cluster_axis, topology=ttnn.Topology.Linear, memory_config=output_mem_config
+        )
+        for k, out in enumerate(outs):
+            for t in ttnn.get_device_tensors(out):
+                assert torch.equal(ttnn.to_torch(t), chunks[k]), f"rows {rows}, source {k}"

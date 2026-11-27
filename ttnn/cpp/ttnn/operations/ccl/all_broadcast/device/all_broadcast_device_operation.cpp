@@ -40,7 +40,7 @@ void AllBroadcastDeviceOperation::validate_on_program_cache_miss(
 
 ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const Tensor& input) {
-    if (all_broadcast_program_is_row_free(input)) {
+    if (all_broadcast_program_is_row_free(operation_attributes, input)) {
         return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
             operation_attributes, ttnn::operations::common::hash_spec_without_rows(input));
     }
