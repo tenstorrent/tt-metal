@@ -109,6 +109,16 @@ ALWI void relu_max_tile_pack(uint32_t idst, uint32_t param0) {
         param0 /*threshold*/));
 }
 
+// Init for relu_{min,max}_tile_{int32,uint32}; the float and uint16 calls take relu_min_tile_init /
+// relu_max_tile_init.
+#ifdef ARCH_WORMHOLE
+ALWI void relu_clamp_int_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::relu_min>(sfpu::relu_clamp_int_init)));
+}
+#else
+ALWI void relu_clamp_int_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
+#endif
+
 ALWI void relu_max_tile_int32(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
