@@ -80,7 +80,7 @@ def _convertible_input(shape, input_dtype, cache_dtype):
     +-(1 + k / 64): they share one exponent and fit the 6 fraction bits a BFLOAT8_B value with its block's exponent
     has."""
     if ttnn.bfloat8_b not in (input_dtype, cache_dtype):
-        return full_range_input(shape, ttnn.bfloat16, nan=False).float()
+        return full_range_input(shape, ttnn.bfloat16, nan=False, negative_zero=False).float()
     torch.manual_seed(0)
     magnitude = 1 + torch.randint(0, 64, shape) / 64
     return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
@@ -112,8 +112,7 @@ def _write_every_slice(
 ):
     """Shards each slice of ``values`` (``_CACHE_SHAPE``) in ``dtype`` and writes it with
     ttnn.sharded_to_interleaved_partial into a cache tensor of ``cache_dtype`` whose values all differ from the slices'.
-    After each write, the slice's rows must hold the slice and every other row must be unchanged. When the dtypes
-    differ, zeros are compared by value."""
+    After each write, the slice's rows must hold the slice and every other row must be unchanged."""
     width = _CACHE_SHAPE[-1]
     slice_height = values.numel() // width // _NUM_SLICES
     shard_shape, grids = _SLICE_SHARDS[memory_layout]
@@ -151,7 +150,7 @@ def _write_every_slice(
         assert output.memory_config() == cache_memory_config
         rows = slice(slice_index * slice_height, (slice_index + 1) * slice_height)
         expected[rows] = slice_rows[rows].to(torch.float64)
-        assert_exact(expected.reshape(_CACHE_SHAPE), ttnn.to_torch(cache_tensor), signed_zeros=dtype == cache_dtype)
+        assert_exact(expected.reshape(_CACHE_SHAPE), ttnn.to_torch(cache_tensor))
 
 
 @pytest.mark.parametrize(

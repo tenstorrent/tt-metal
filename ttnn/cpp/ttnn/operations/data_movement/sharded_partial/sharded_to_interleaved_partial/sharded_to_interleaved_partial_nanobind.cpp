@@ -33,7 +33,7 @@ void bind_sharded_to_interleaved_partial(nb::module_& mod) {
             slice_index (int): index of the slice to write, from 0 to ``num_slices - 1``.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): Must be `None` or the memory configuration of `cache_tensor`. Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): The output keeps the memory configuration of `cache_tensor`, whatever `memory_config` is. Defaults to `None`.
             output_dtype (ttnn.DataType, optional): Must be `None` or the dtype of `cache_tensor`. Defaults to `None`.
 
         Returns:
