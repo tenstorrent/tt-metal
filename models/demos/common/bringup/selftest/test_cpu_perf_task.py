@@ -31,3 +31,14 @@ def test_ab_test_names_stay_short_for_long_env_differences():
     names = [n for n, _ in Orchestrator.ab_test_names([a, b])]
     assert len(set(names)) == 2 and all(len(n) < 120 for n in names), names
     assert names[0].startswith("test_skip_positions__BRINGUP_CHUNK-8192") and "BRINGUP_CHUNK-5120" in names[1]
+
+
+def test_an_ab_side_overrides_an_inline_switch_of_the_gate():
+    """F308: a gate command that sets the pick's switch inline runs each A/B side at the side's value."""
+    from models.demos.common.bringup.orchestrator import side_cmd
+
+    cmd = "A=1 DS41_X=on scripts/run_safe_pytest.sh t.py && DS41_X=on B=2 scripts/run_safe_pytest.sh u.py"
+    off = side_cmd(cmd, {"DS41_X": "off"})
+    assert off.count("DS41_X=off") == 2 and "DS41_X=on" not in off and "A=1" in off and "B=2" in off
+    assert side_cmd(cmd, {"DS41_X": "on"}) == cmd
+    assert side_cmd("XDS41_X=on t", {"DS41_X": "off"}) == "XDS41_X=on t"  # another variable's suffix stays

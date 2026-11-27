@@ -634,6 +634,15 @@ def ab_finished(result: dict) -> bool:
     return any(v is not None for k, v in result.items() if k not in ("rc", "limits", "checks"))
 
 
+def side_cmd(cmd: str, env: dict) -> str:
+    """F308 (DeepSeek-V4.1 WA.4): an A/B side's command with every inline assignment of a switch of the side (``env``:
+    ab.env / ab.change) set to the side's value. A gate written with the change on (``DS41_X=on scripts/...``) otherwise
+    ran its 'off' side with the switch on: the shell's prefix wins over the side's environment."""
+    for k, v in (env or {}).items():
+        cmd = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(k)}=\S+", f"{k}={shlex.quote(str(v))}", cmd)
+    return cmd
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -733,9 +742,11 @@ class Orchestrator:
         desc = (
             f"`{brief.get('step')}` ({brief.get('kind')}) of block type `{brief.get('block_type')}`, layer {brief.get('layer')}"
             if "step" in brief
-            else f"the `{brief.get('block_type')}` block with {brief.get('swapped')} on device"
-            if "swapped" in brief
-            else task["title"]
+            else (
+                f"the `{brief.get('block_type')}` block with {brief.get('swapped')} on device"
+                if "swapped" in brief
+                else task["title"]
+            )
         )
         vals = {
             "tid": task["id"],
@@ -2017,6 +2028,7 @@ class Orchestrator:
         for name, kind, cmd, extra in self.ab_items(task):
             if only is not None and name not in only and kind not in only:
                 continue
+            cmd = side_cmd(cmd, env)  # F308: the side's switch beats an inline assignment of it in the gate's command
             stamp = {"code": code, "env": env, "cmd": cmd, "extra": extra}
             full = dict(base, **env, **extra)  # F270: a knob its tests read, set in the environment the side inherits
             knobs = {k: full[k] for k in sorted(stamps.knob_names(cmd.split(), self.spec.repo)) if k in full}
