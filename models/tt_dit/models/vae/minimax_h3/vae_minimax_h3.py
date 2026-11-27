@@ -326,7 +326,6 @@ class MiniMaxH3Vae:
         stitch_exchange: str = "strips",
         waves_per_call: int = 1,
         decode_tile_overlap: int | None = None,
-        pack_spare_columns: bool = False,
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
@@ -342,10 +341,10 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
-        # The decode's own tile overlap (the encoder keeps `tile_overlap`) and whether the strip stitch
-        # packs an extra chunk onto more than one spare mesh column (`strip_waves`).
+        # The decode's own tile overlap (the encoder keeps `tile_overlap`). Given, the strip stitch also
+        # packs an extra chunk onto every spare mesh column (`strip_waves`); unset, each canvas keeps its plan.
         self.decode_tile_overlap = tile_overlap if decode_tile_overlap is None else decode_tile_overlap
-        self.pack_spare_columns = pack_spare_columns
+        self.pack_spare_columns = decode_tile_overlap is not None
         self._weight_loader = weight_loader
         self._stitcher = None
         self._yuv_pool = None
