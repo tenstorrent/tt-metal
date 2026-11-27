@@ -1,13 +1,17 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_to_memory_config.
+"""Acceptance test for g6_to_memory_config (the spec the implementation is held to; do not edit).
 
-Bfloat16 production cases of eval/golden_tests/g6_to_memory_config/feature_spec.py (shape and both
-placements copied verbatim, case ids in the test ids), the regime pins op_design.md requires, and the
-validation errors the spec names. Every case is graded by exact equality and by the placement of the
-result; the op does no arithmetic, so no tolerance applies.
+Cases are production cases only (BB-22): shapes and both placements are copied verbatim from
+eval/golden_tests/g6_to_memory_config/feature_spec.py, every shard spec row-major as written there.
+On top of them come the cells the design's rules require: a regime pin for every built regime
+(push_bank and bounce have no bfloat16 production case), program-cache reuse and determinism
+(BB-06, BB-07), the support refusals of the registry contract, and the host validation errors.
+
+Graded exactly: helpers.TOLERANCES is ("exact", None) for every dtype, so values are compared with
+torch.equal against the identity reference, and the result's memory configuration is compared with
+the requested one, shard grid range order included.
 """
 
 import math
@@ -16,158 +20,22 @@ import pytest
 import torch
 import ttnn
 
-from ttnn.operations.g6_to_memory_config import g6_to_memory_config, select_plan
+from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
+from ttnn.operations.g6_to_memory_config import g6_to_memory_config, plan_of
 
-_BUFFER = {"dram": ttnn.BufferType.DRAM, "l1": ttnn.BufferType.L1}
-_SCHEME = {
-    "interleaved": ttnn.TensorMemoryLayout.INTERLEAVED,
-    "height_sharded": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    "width_sharded": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    "block_sharded": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-}
+SEED = 42
+# The refusal and validation messages are the implementation's own wording; only the type is the contract.
+ANY_MESSAGE = ""
 
-DRAM = {"buffer": "dram", "scheme": "interleaved"}
-L1 = {"buffer": "l1", "scheme": "interleaved"}
-
-
-def _sharded(buffer, scheme, grid, shard_shape):
-    return {"buffer": buffer, "scheme": scheme, "grid": grid, "shard_shape": shard_shape}
-
-
-def torch_reference(x):
-    return x.clone()
-
-
-def _memory_config(mem, orientation=ttnn.ShardOrientation.ROW_MAJOR):
-    if mem["scheme"] == "interleaved":
-        return ttnn.MemoryConfig(_SCHEME["interleaved"], _BUFFER[mem["buffer"]])
-    grid = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(ex, ey)) for sx, sy, ex, ey in mem["grid"]]
-    )
-    shard_spec = ttnn.ShardSpec(grid, tuple(mem["shard_shape"]), orientation)
-    return ttnn.MemoryConfig(_SCHEME[mem["scheme"]], _BUFFER[mem["buffer"]], shard_spec)
-
-
-def _skip_if_grid_outside_device(device, mem):
-    if "grid" not in mem:
-        return
-    size = device.dram_grid_size() if mem["buffer"] == "dram" else device.compute_with_storage_grid_size()
-    for _, _, ex, ey in mem["grid"]:
-        if ex > size.x - 1 or ey > size.y - 1:
-            pytest.skip(f"shard grid end ({ex},{ey}) is outside this device's {mem['buffer']} grid")
-
-
-def _tile_grid(shape):
-    # Each image is tile-padded on its own, so leading dims multiply ceil(H/32), not H.
-    rows = math.prod(shape[:-2]) * math.ceil(shape[-2] / 32)
-    cols = math.ceil(shape[-1] / 32)
-    return rows, cols
-
-
-def _holders(mem, shape, num_l1_banks, l1_bank_owners):
-    rows, cols = _tile_grid(shape)
-    if mem["buffer"] == "dram":
-        return 0
-    if mem["scheme"] == "interleaved":
-        return min(rows * cols, num_l1_banks) if l1_bank_owners else 0
-    shard_rows = mem["shard_shape"][0] // 32
-    shard_cols = mem["shard_shape"][1] // 32
-    return math.ceil(rows / shard_rows) * math.ceil(cols / shard_cols)
-
-
-def _expected_regime(holders_in, holders_out):
-    if holders_in == 0 and holders_out == 0:
-        return "bounce"
-    return "pull" if holders_out >= holders_in else "push"
-
-
-def _cores(shard_spec):
-    cores = []
-    for core_range in shard_spec.grid.ranges():
-        for y in range(core_range.start.y, core_range.end.y + 1):
-            for x in range(core_range.start.x, core_range.end.x + 1):
-                cores.append((x, y))
-    return cores
-
-
-def _assert_placement(output, requested):
-    got = output.memory_config()
-    assert got.buffer_type == requested.buffer_type
-    assert got.memory_layout == requested.memory_layout
-    if requested.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        assert got.shard_spec is not None
-        assert tuple(got.shard_spec.shape) == tuple(requested.shard_spec.shape)
-        assert got.shard_spec.orientation == requested.shard_spec.orientation
-        assert _cores(got.shard_spec) == _cores(requested.shard_spec)
-
-
-def _assert_regime(device, tt_input, out_config, shape, in_mem, out_mem):
-    plan = select_plan(tt_input, out_config)
-    grid = device.compute_with_storage_grid_size()
-    num_l1_banks = ttnn._ttnn.reports.get_device_info(device).l1_num_banks
-    assert plan.l1_bank_owners == (num_l1_banks == grid.x * grid.y)
-    holders_in = _holders(in_mem, shape, num_l1_banks, plan.l1_bank_owners)
-    holders_out = _holders(out_mem, shape, num_l1_banks, plan.l1_bank_owners)
-    assert (plan.holders_in, plan.holders_out) == (holders_in, holders_out)
-    assert plan.regime == _expected_regime(holders_in, holders_out)
-    return plan
-
-
-def _make_input(device, shape, in_mem):
-    torch.manual_seed(42)
-    torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=_memory_config(in_mem),
-    )
-    return torch_input, tt_input
-
-
-def _run_and_check(device, shape, in_mem, out_mem):
-    _skip_if_grid_outside_device(device, in_mem)
-    _skip_if_grid_outside_device(device, out_mem)
-    torch_input, tt_input = _make_input(device, shape, in_mem)
-    out_config = _memory_config(out_mem)
-
-    plan = _assert_regime(device, tt_input, out_config, shape, in_mem, out_mem)
-    tt_output = g6_to_memory_config(tt_input, out_config)
-
-    assert list(tt_output.shape) == list(shape)
-    assert tt_output.dtype == ttnn.bfloat16
-    assert tt_output.layout == ttnn.TILE_LAYOUT
-    _assert_placement(tt_output, out_config)
-    readback = ttnn.to_torch(tt_output)
-    expected = torch_reference(torch_input)
-    assert readback.shape == expected.shape
-    assert torch.equal(readback, expected), f"{(readback != expected).sum().item()} of {expected.numel()} values differ"
-    return plan, tt_input, tt_output
-
-
-PRODUCTION_CASES = [
-    # (test id, shape, input placement, target placement)
-    (
-        "flux313_dram_to_l1_height_1core_single_tile_row",
-        [1, 1, 16, 128],
-        DRAM,
-        _sharded("l1", "height_sharded", [[0, 0, 0, 0]], [32, 128]),
-    ),
-    (
-        "qwen2154_dram_to_l1_height_1core_off_origin",
-        [1, 1, 1, 256],
-        DRAM,
-        _sharded("l1", "height_sharded", [[1, 0, 1, 0]], [32, 256]),
-    ),
-    (
-        "qwen2058_dram_to_l1_height_16_single_core_ranges",
+# "<model> <case id>": (shape, input placement, target placement)
+CASES = {
+    "Qwen 2058": (
         [1, 16, 1, 256],
-        DRAM,
-        _sharded(
-            "l1",
-            "height_sharded",
-            [
+        {"buffer": "dram", "scheme": "interleaved"},
+        {
+            "buffer": "l1",
+            "scheme": "height_sharded",
+            "grid": [
                 [0, 2, 0, 2],
                 [1, 2, 1, 2],
                 [2, 2, 2, 2],
@@ -185,224 +53,358 @@ PRODUCTION_CASES = [
                 [9, 2, 9, 2],
                 [10, 1, 10, 1],
             ],
-            [32, 256],
-        ),
+            "shard_shape": [32, 256],
+        },
     ),
-    (
-        "qwen2121_dram_to_l1_height_8_single_core_ranges",
-        [1, 8, 1, 256],
-        DRAM,
-        _sharded(
-            "l1",
-            "height_sharded",
-            [
-                [0, 1, 0, 1],
-                [1, 1, 1, 1],
-                [2, 1, 2, 1],
-                [3, 1, 3, 1],
-                [4, 1, 4, 1],
-                [8, 0, 8, 0],
-                [9, 0, 9, 0],
-                [10, 0, 10, 0],
-            ],
-            [32, 256],
-        ),
-    ),
-    (
-        "qwen2061_l1_height_two_ranges_to_dram",
-        [1, 16, 1, 256],
-        _sharded("l1", "height_sharded", [[0, 0, 10, 0], [0, 1, 4, 1]], [32, 256]),
-        DRAM,
-    ),
-    (
-        "qwen2062_l1_height_two_ranges_to_dram_h6",
-        [1, 16, 6, 256],
-        _sharded("l1", "height_sharded", [[0, 0, 10, 0], [0, 1, 4, 1]], [32, 256]),
-        DRAM,
-    ),
-    (
-        "qwen2063_l1_width_10c_to_l1_interleaved",
-        [1, 1, 16, 3584],
-        _sharded("l1", "width_sharded", [[0, 0, 9, 0]], [32, 384]),
-        L1,
-    ),
-    (
-        "qwen2064_l1_interleaved_to_l1_width_8c",
-        [1, 1, 16, 4352],
-        L1,
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 544]),
-    ),
-    (
-        "qwen2065_l1_width_34_shards_on_36_cores_to_l1_interleaved",
-        [1, 1, 16, 8704],
-        _sharded("l1", "width_sharded", [[0, 0, 10, 2], [0, 3, 2, 3]], [32, 256]),
-        L1,
-    ),
-    (
-        "qwen2067_l1_width_8c_to_l1_width_40c",
-        [1, 1, 16, 5120],
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 640]),
-        _sharded("l1", "width_sharded", [[0, 0, 9, 3]], [32, 128]),
-    ),
-    (
-        "qwen2070_l1_width_40c_to_l1_width_10c",
-        [1, 1, 16, 5120],
-        _sharded("l1", "width_sharded", [[0, 0, 9, 3]], [32, 128]),
-        _sharded("l1", "width_sharded", [[0, 0, 9, 0]], [32, 512]),
-    ),
-    (
-        "qwen2068_dram_to_l1_width_8c",
-        [1, 1, 16, 1536],
-        DRAM,
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 192]),
-    ),
-    (
-        "qwen2071_l1_width_uneven_last_shard_to_dram",
-        [1, 1, 16, 12928],
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 1664]),
-        DRAM,
-    ),
-    (
-        "qwen2072_l1_width_8c_512_pages_to_dram",
-        [1, 1, 16, 16384],
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 2048]),
-        DRAM,
-    ),
-    ("qwen2078_rank3_multi_batch_dram_to_l1_interleaved", [16, 128, 5120], DRAM, L1),
-    ("qwen2105_rank3_h77_dram_to_l1_interleaved", [1, 77, 4352], DRAM, L1),
-    (
-        "qwen2155_l1_block_1c_to_l1_interleaved",
+    "Qwen 2154": (
         [1, 1, 1, 256],
-        _sharded("l1", "block_sharded", [[0, 0, 0, 0]], [32, 256]),
-        L1,
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[1, 0, 1, 0]], "shard_shape": [32, 256]},
     ),
-    (
-        "qwen2158_l1_height_1c_to_l1_block_1c_same_core",
-        [1, 1, 6, 256],
-        _sharded("l1", "height_sharded", [[0, 0, 0, 0]], [32, 256]),
-        _sharded("l1", "block_sharded", [[0, 0, 0, 0]], [32, 256]),
+    "Qwen 2067": (
+        [1, 1, 16, 5120],
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 640]},
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 9, 3]], "shard_shape": [32, 128]},
     ),
-    (
-        "qwen2163_l1_width_8c_to_l1_width_40c_one_row",
-        [1, 1, 1, 5120],
-        _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 640]),
-        _sharded("l1", "width_sharded", [[0, 0, 9, 3]], [32, 128]),
+    "Qwen 2064": (
+        [1, 1, 16, 4352],
+        {"buffer": "l1", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 544]},
     ),
-    (
-        "qwen2168_rank3_dram_to_l1_width_40c",
-        [1, 1, 5120],
-        DRAM,
-        _sharded("l1", "width_sharded", [[0, 0, 9, 3]], [32, 128]),
+    "FLUX 313": (
+        [1, 1, 16, 128],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 0, 0]], "shard_shape": [32, 128]},
     ),
-    (
-        "flux314_l1_width_two_ranges_to_dram",
+    "Qwen 2157": (
+        [1, 1, 1, 256],
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 0, 0]], "shard_shape": [32, 256]},
+        {"buffer": "l1", "scheme": "block_sharded", "grid": [[0, 0, 0, 0]], "shard_shape": [32, 256]},
+    ),
+    "Qwen 2078": (
+        [16, 128, 5120],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2105": (
+        [1, 77, 4352],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2089": (
+        [1, 64, 1536],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2104": (
+        [1, 256, 5120],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2071": (
+        [1, 1, 16, 12928],
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 1664]},
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+    "Qwen 2065": (
+        [1, 1, 16, 8704],
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 10, 2], [0, 3, 2, 3]], "shard_shape": [32, 256]},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2073": (
+        [1, 1, 16, 5120],
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 9, 3]], "shard_shape": [32, 128]},
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 640]},
+    ),
+    "Qwen 2061": (
+        [1, 16, 1, 256],
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 10, 0], [0, 1, 4, 1]], "shard_shape": [32, 256]},
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+    "Qwen 2155": (
+        [1, 1, 1, 256],
+        {"buffer": "l1", "scheme": "block_sharded", "grid": [[0, 0, 0, 0]], "shard_shape": [32, 256]},
+        {"buffer": "l1", "scheme": "interleaved"},
+    ),
+    "Qwen 2062": (
+        [1, 16, 6, 256],
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 10, 0], [0, 1, 4, 1]], "shard_shape": [32, 256]},
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+    "FLUX 314": (
         [1, 1, 32, 2048],
-        _sharded("l1", "width_sharded", [[0, 0, 10, 0], [0, 1, 4, 1]], [32, 128]),
-        DRAM,
+        {"buffer": "l1", "scheme": "width_sharded", "grid": [[0, 0, 10, 0], [0, 1, 4, 1]], "shard_shape": [32, 128]},
+        {"buffer": "dram", "scheme": "interleaved"},
     ),
-]
+    "Qwen 2124": (
+        [1, 8, 1, 256],
+        {"buffer": "l1", "scheme": "height_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [32, 256]},
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+    # bfloat4_b in production; used here only for its target placement (DRAM width sharded).
+    "Qwen 2178": (
+        [1536, 5120],
+        {"buffer": "dram", "scheme": "interleaved"},
+        {"buffer": "dram", "scheme": "width_sharded", "grid": [[0, 0, 7, 0]], "shard_shape": [1536, 640]},
+    ),
+    # bfloat8_b in production.
+    "Panoptic 11": (
+        [1, 32, 64, 256],
+        {"buffer": "l1", "scheme": "block_sharded", "grid": [[0, 0, 7, 7]], "shard_shape": [256, 32]},
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+}
+
+# Regime the design selects for each bfloat16 production case (op_design.md, Regimes).
+PRODUCTION_REGIMES = {
+    "Qwen 2058": "pull_shard",  # target grid of 16 single-core ranges forming no rectangle
+    "Qwen 2154": "pull_shard",  # one-core target grid away from core (0, 0)
+    "Qwen 2067": "pull_shard",  # width grid of 8 -> width grid of 40
+    "Qwen 2064": "pull_shard",  # L1 interleaved source
+    "FLUX 313": "pull_shard",  # 4 pages, H = 16
+    "Qwen 2157": "pull_shard",  # source and target shard on the same core
+    "Qwen 2078": "pull_bank",  # 10240 pages, the largest bfloat16 case
+    "Qwen 2105": "pull_bank",  # H = 77
+    "Qwen 2089": "pull_bank",  # fewer pages than L1 banks
+    "Qwen 2071": "push_shard",  # uneven last shard: 40 of 52 tile columns
+    "Qwen 2065": "push_shard",  # 36-core grid of two ranges holding 34 shards
+    "Qwen 2073": "push_shard",  # width grid of 40 -> width grid of 8
+    "Qwen 2061": "push_shard",  # height grid of two ranges -> DRAM
+    "Qwen 2155": "push_shard",  # block sharded source -> L1 interleaved
+    "Qwen 2062": "push_shard",  # H = 6
+    "FLUX 314": "push_shard",  # width grid of two ranges -> DRAM
+}
+
+# SUPPORTED cells with no bfloat16 production case; production shapes, pinned to their regime.
+SUPPORTED_CELLS = {
+    "push_bank": (
+        [1, 1, 16, 4352],
+        {"buffer": "l1", "scheme": "interleaved"},  # Qwen 2064's input
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+    "bounce": (
+        [16, 128, 1536],
+        {"buffer": "dram", "scheme": "interleaved"},  # Qwen 2077's shape
+        {"buffer": "dram", "scheme": "interleaved"},
+    ),
+}
+
+_BUFFER = {"dram": ttnn.BufferType.DRAM, "l1": ttnn.BufferType.L1}
+_SCHEME = {
+    "interleaved": ttnn.TensorMemoryLayout.INTERLEAVED,
+    "height_sharded": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    "width_sharded": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    "block_sharded": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+}
 
 
-@pytest.mark.parametrize(
-    "shape,in_mem,out_mem",
-    [pytest.param(shape, in_mem, out_mem, id=case_id) for case_id, shape, in_mem, out_mem in PRODUCTION_CASES],
-)
-def test_g6_to_memory_config(device, shape, in_mem, out_mem):
-    _run_and_check(device, shape, in_mem, out_mem)
+def torch_reference(x):
+    """The identity: the result holds the input's stored values, bit for bit."""
+    return x.clone()
 
 
-def test_bounce_regime_dram_to_dram(device):
-    # No bfloat16 production case moves DRAM to DRAM, but validate() admits it; this pins the
-    # bounce regime on the shape of production weight Qwen 2178.
-    shape = [1536, 5120]
-    plan, _, _ = _run_and_check(device, shape, DRAM, DRAM)
-    assert plan.regime == "bounce"
+def _memory_config(memory, *, orientation=ttnn.ShardOrientation.ROW_MAJOR, shard_shape=None, grid=None):
+    buffer_type = _BUFFER[memory["buffer"]]
+    scheme = _SCHEME[memory["scheme"]]
+    if memory["scheme"] == "interleaved":
+        return ttnn.MemoryConfig(scheme, buffer_type)
+    ranges = grid if grid is not None else memory["grid"]
+    core_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(sx, sy), ttnn.CoreCoord(ex, ey)) for sx, sy, ex, ey in ranges]
+    )
+    shape = shard_shape if shard_shape is not None else memory["shard_shape"]
+    return ttnn.MemoryConfig(scheme, buffer_type, ttnn.ShardSpec(core_grid, tuple(shape), orientation))
 
 
-def test_repeat_call_is_bit_identical_and_reuses_the_program(device):
-    shape = [1, 1, 1, 5120]
-    in_mem = _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 640])
-    out_mem = _sharded("l1", "width_sharded", [[0, 0, 9, 3]], [32, 128])
-    _skip_if_grid_outside_device(device, in_mem)
-    _skip_if_grid_outside_device(device, out_mem)
-    torch_input, tt_input = _make_input(device, shape, in_mem)
-    out_config = _memory_config(out_mem)
-
-    first = ttnn.to_torch(g6_to_memory_config(tt_input, out_config))
-    entries_after_first = device.num_program_cache_entries()
-    second = ttnn.to_torch(g6_to_memory_config(tt_input, out_config))
-
-    assert device.num_program_cache_entries() == entries_after_first
-    assert torch.equal(first, second)
-    assert torch.equal(second, torch_reference(torch_input))
+def _skip_unless_grid_fits(device, *memories):
+    for memory in memories:
+        if "grid" not in memory:
+            continue
+        size = device.dram_grid_size() if memory["buffer"] == "dram" else device.compute_with_storage_grid_size()
+        for _, _, ex, ey in memory["grid"]:
+            if ex > size.x - 1 or ey > size.y - 1:
+                pytest.skip(f"shard grid end ({ex},{ey}) outside this device's {memory['buffer']} grid")
 
 
-# The spec fixes the error types, not their text, so any message is accepted.
-_REJECTED = (ValueError, RuntimeError)
+def _num_shards(shape, memory):
+    rows_tiles = math.prod(shape[:-2]) * math.ceil(shape[-2] / 32)
+    cols_tiles = math.ceil(shape[-1] / 32)
+    shard_h_tiles = memory["shard_shape"][0] // 32
+    shard_w_tiles = memory["shard_shape"][1] // 32
+    return math.ceil(rows_tiles / shard_h_tiles) * math.ceil(cols_tiles / shard_w_tiles)
 
 
-def test_rejects_host_tensor(expect_error):
-    torch_input = torch.randn([1, 1, 16, 128], dtype=torch.bfloat16)
+def _bank_regimes_available(device):
+    info = ttnn.reports.get_device_info(device)
+    return info.l1_num_banks == info.num_compute_cores
+
+
+def _make_input(device, shape, memory, *, dtype=ttnn.bfloat16, seed=SEED):
+    torch.manual_seed(seed)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    if dtype == ttnn.bfloat16:
+        torch_input = torch_input.to(torch.bfloat16)
+    return ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=_memory_config(memory)
+    )
+
+
+def _cores(shard_spec):
+    cores = []
+    for core_range in shard_spec.grid.ranges():
+        for y in range(core_range.start.y, core_range.end.y + 1):
+            for x in range(core_range.start.x, core_range.end.x + 1):
+                cores.append((x, y))
+    return cores
+
+
+def _check_result(output, tt_input, requested):
+    assert list(output.shape) == list(tt_input.shape)
+    assert output.dtype == tt_input.dtype
+    assert output.layout == ttnn.TILE_LAYOUT
+
+    got = output.memory_config()
+    assert got.buffer_type == requested.buffer_type
+    assert got.memory_layout == requested.memory_layout
+    if requested.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        assert got.shard_spec is not None
+        assert tuple(got.shard_spec.shape) == tuple(requested.shard_spec.shape)
+        assert got.shard_spec.orientation == requested.shard_spec.orientation
+        assert _cores(got.shard_spec) == _cores(requested.shard_spec)
+
+    expected = torch_reference(ttnn.to_torch(tt_input))
+    actual = ttnn.to_torch(output)
+    assert actual.shape == expected.shape
+    assert torch.equal(actual, expected), f"{(actual != expected).sum().item()} of {expected.numel()} values differ"
+
+
+@pytest.mark.parametrize("case_id", list(PRODUCTION_REGIMES))
+def test_production_case(device, case_id):
+    shape, in_memory, out_memory = CASES[case_id]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    tt_input = _make_input(device, shape, in_memory)
+    out_config = _memory_config(out_memory)
+
+    regime = PRODUCTION_REGIMES[case_id]
+    if regime == "pull_bank" and not _bank_regimes_available(device):
+        regime = "bounce"
+    plan = plan_of(tt_input, out_config)
+    assert plan["regime"] == regime
+    if regime == "pull_shard":
+        assert len(plan["movers"]) == _num_shards(shape, out_memory)
+    if regime == "push_shard":
+        assert len(plan["movers"]) == _num_shards(shape, in_memory)
+
+    output = g6_to_memory_config(tt_input, out_config)
+    _check_result(output, tt_input, out_config)
+
+
+@pytest.mark.parametrize("regime", list(SUPPORTED_CELLS))
+def test_supported_cell_regimes(device, regime):
+    shape, in_memory, out_memory = SUPPORTED_CELLS[regime]
+    tt_input = _make_input(device, shape, in_memory)
+    out_config = _memory_config(out_memory)
+
+    expected = regime
+    if regime == "push_bank" and not _bank_regimes_available(device):
+        expected = "bounce"
+    assert plan_of(tt_input, out_config)["regime"] == expected
+
+    output = g6_to_memory_config(tt_input, out_config)
+    _check_result(output, tt_input, out_config)
+
+
+@pytest.mark.parametrize("case_id", ["Qwen 2104", "Qwen 2071", "Qwen 2067"])
+def test_repeat_call_cache_and_determinism(device, case_id):
+    shape, in_memory, out_memory = CASES[case_id]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    out_config = _memory_config(out_memory)
+
+    first_input = _make_input(device, shape, in_memory, seed=SEED)
+    first = g6_to_memory_config(first_input, out_config)
+    entries = device.num_program_cache_entries()
+
+    # A second input at another address: the cached program must be reused with new addresses.
+    second_input = _make_input(device, shape, in_memory, seed=SEED + 1)
+    second = g6_to_memory_config(second_input, out_config)
+    assert device.num_program_cache_entries() == entries
+    _check_result(second, second_input, out_config)
+
+    repeat = g6_to_memory_config(first_input, out_config)
+    assert device.num_program_cache_entries() == entries
+    assert torch.equal(ttnn.to_torch(repeat), ttnn.to_torch(first))
+    _check_result(first, first_input, out_config)
+
+
+def test_refused_cells(device, expect_error):
+    shape, in_memory, out_memory = CASES["Panoptic 11"]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    block_format_input = _make_input(device, shape, in_memory, dtype=ttnn.bfloat8_b)
+    with expect_error(UnsupportedAxisValue, ANY_MESSAGE):
+        g6_to_memory_config(block_format_input, _memory_config(out_memory))
+
+    shape, in_memory, out_memory = CASES["Qwen 2178"]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    bf16_input = _make_input(device, shape, in_memory)
+    with expect_error(ExcludedCell, ANY_MESSAGE):
+        g6_to_memory_config(bf16_input, _memory_config(out_memory))
+
+
+def test_validation_errors(device, expect_error):
+    shape, in_memory, out_memory = CASES["Qwen 2058"]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    out_config = _memory_config(out_memory)
+    torch.manual_seed(SEED)
+    torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+
     host_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    with expect_error(_REJECTED, ""):
-        g6_to_memory_config(host_tensor, ttnn.L1_MEMORY_CONFIG)
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(host_tensor, out_config)
 
-
-def test_rejects_row_major_input(device, expect_error):
-    torch_input = torch.randn([1, 1, 16, 128], dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(
+    row_major_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with expect_error(_REJECTED, ""):
-        g6_to_memory_config(tt_input, ttnn.L1_MEMORY_CONFIG)
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(row_major_input, out_config)
 
+    tt_input = _make_input(device, shape, in_memory)
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(tt_input, _memory_config(out_memory, orientation=ttnn.ShardOrientation.COL_MAJOR))
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(tt_input, _memory_config(out_memory, shard_shape=[16, 256]))
+    # 16 shards are needed; the first 8 single-core ranges hold only 8.
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(tt_input, _memory_config(out_memory, grid=out_memory["grid"][:8]))
 
-def test_rejects_rank_5(device, expect_error):
-    torch_input = torch.randn([1, 1, 1, 16, 128], dtype=torch.bfloat16)
-    tt_input = ttnn.from_torch(
-        torch_input,
+    rank5_input = ttnn.from_torch(
+        torch.randn([1, 1, 16, 1, 256], dtype=torch.float32).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    with expect_error(_REJECTED, ""):
-        g6_to_memory_config(tt_input, ttnn.L1_MEMORY_CONFIG)
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(rank5_input, ttnn.L1_MEMORY_CONFIG)
 
 
-@pytest.mark.parametrize(
-    "grid,shard_shape,orientation",
-    [
-        pytest.param([[0, 0, 7, 0]], [32, 200], ttnn.ShardOrientation.ROW_MAJOR, id="shard_width_not_multiple_of_32"),
-        pytest.param([[0, 0, 7, 0]], [16, 192], ttnn.ShardOrientation.ROW_MAJOR, id="shard_height_not_multiple_of_32"),
-        pytest.param([[0, 0, 3, 0]], [32, 192], ttnn.ShardOrientation.ROW_MAJOR, id="fewer_cores_than_shards"),
-        pytest.param([[0, 0, 7, 0]], [32, 192], ttnn.ShardOrientation.COL_MAJOR, id="col_major_target"),
-    ],
-)
-def test_rejects_target_shard_spec(device, expect_error, grid, shard_shape, orientation):
-    # Qwen 2068's shape and input placement (48 tile columns, DRAM interleaved), with a broken target.
-    _, tt_input = _make_input(device, [1, 1, 16, 1536], DRAM)
-    out_config = _memory_config(_sharded("l1", "width_sharded", grid, shard_shape), orientation)
-    with expect_error(_REJECTED, ""):
-        g6_to_memory_config(tt_input, out_config)
-
-
-def test_rejects_col_major_input(device, expect_error):
-    in_mem = _sharded("l1", "width_sharded", [[0, 0, 7, 0]], [32, 192])
-    torch_input = torch.randn([1, 1, 16, 1536], dtype=torch.bfloat16)
+def test_validation_error_col_major_input(device, expect_error):
+    shape, in_memory, out_memory = CASES["Qwen 2124"]
+    _skip_unless_grid_fits(device, in_memory, out_memory)
+    torch.manual_seed(SEED)
+    torch_input = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
     try:
-        tt_input = ttnn.from_torch(
+        col_major_input = ttnn.from_torch(
             torch_input,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=device,
-            memory_config=_memory_config(in_mem, ttnn.ShardOrientation.COL_MAJOR),
+            memory_config=_memory_config(in_memory, orientation=ttnn.ShardOrientation.COL_MAJOR),
         )
     except RuntimeError as exc:
-        pytest.skip(f"ttnn cannot build a col-major width-sharded input here: {exc}")
-    with expect_error(_REJECTED, ""):
-        g6_to_memory_config(tt_input, ttnn.DRAM_MEMORY_CONFIG)
+        pytest.skip(f"ttnn cannot build a column-major sharded input here: {exc}")
+    with expect_error((ValueError, RuntimeError), ANY_MESSAGE):
+        g6_to_memory_config(col_major_input, _memory_config(out_memory))

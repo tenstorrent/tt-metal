@@ -5,19 +5,18 @@
 | Field | Value |
 |-------|-------|
 | Classification | data_movement (no compute kernel, no arithmetic) |
-| Goal | Return the input's tile pages, bit for bit, in the placement `memory_config` names. Every page is read once from its source location and written once to its target location, in one program, by the core that holds one side of it. |
-| Math | `y[i] = x[i]` for every logical index `i`; `shape(y) = shape(x)`, `dtype(y) = dtype(x)`, `layout(y) = TILE`, `placement(y) = memory_config` |
-| Unit of work | one tile **page** (bf16 2048 B; bfloat8_b 1088 B, bfloat4_b 576 B in the refinement). A page is never cut: a sub-page transfer re-forms the shared-exponent groups of a block format. |
-| References | `eval/golden_tests/g6_to_memory_config/feature_spec.py` (TARGET, 105 INPUTS, LOOSE_CASES); `eval/golden_tests/g6_to_memory_config/helpers.py` (oracle = `clone`, exact gate, placement gate); `.claude/references/blocking-model.md`; `.claude/references/l1-footprint-discipline.md`; `tech_reports/tensor_accessor/tensor_accessor.md`, `tensor_accessor_iterator.md`; `tt_metal/impl/buffers/buffer_distribution_spec.cpp` (shard→core order); `ttnn/ttnn/operations/examples/master.md` (catalog entries listed under Perf lamps) |
+| Goal | Return the input's tile pages, bit-identical, in the placement `memory_config` names. One device program per call; every page is read once from its place under the input's placement and written once to its place under the target placement, through the L1 of the core that moves it. |
+| Math | `y[i] = x[i]`. Per tile page: `out_page[p] = in_page[p]` for `p ∈ [0, P)`, `p = tile_row · tensor_cols_tiles + tile_col` over the padded 2D tile grid both placements share. Positions past the logical H/W inside a tile are copied as they are (unspecified by the contract). |
+| References | spec (this task); `eval/golden_tests/g6_to_memory_config/{feature_spec.py,helpers.py}`; `.claude/references/{blocking-model.md,l1-footprint-discipline.md,noc-alignment-in-tt-metal.md}`; `.claude/skills/memory-layouts/SKILL.md` §3.4; `tech_reports/tensor_accessor/{tensor_accessor.md,tensor_accessor_iterator.md}`; catalog `ttnn/ttnn/operations/examples/master.md` entries `noc_placement`, `double_buffer`, `trid_double_issue`, `tile_reorder`, `bank_stagger`, `read_coalescing`, `split_reader` |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes, positional | on device, TILE, rank 2–4, any placement (DRAM/L1 × interleaved/height/width/block, row-major shard orientation) | — | buffer address: RT; geometry/placement: CT (TensorAccessorArgs) |
-| `memory_config` | `ttnn.MemoryConfig` | yes, positional | DRAM or L1; interleaved or height/width/block sharded with a row-major shard spec that covers the padded tile grid | — | output buffer address: RT; placement: CT (TensorAccessorArgs of the allocated output) |
+| `input_tensor` | `ttnn.Tensor` | yes, positional | on device, `TILE_LAYOUT`, rank 2–4, any placement with a row-major shard spec if sharded | — | shape / dtype / placement → plan + CT args; buffer address → common RT arg |
+| `memory_config` | `ttnn.MemoryConfig` | yes, positional | DRAM or L1; interleaved, or height / width / block sharded with a row-major shard spec whose shard shape is a multiple of 32 and whose grid holds every shard | — | plan + CT args (both TensorAccessor arg blocks are CT); output buffer address → common RT arg |
 
-There is no dtype, layout or compute-config parameter. Nothing else is accepted.
+Second public function (BB-08 / BB-21): `plan_of(input_tensor, memory_config) -> dict` returns the plan the call selects — the same function and the same cache the op uses (see Host plan). No dtype, layout or compute-config parameter exists.
 
 ## Tensors
 
@@ -25,322 +24,304 @@ There is no dtype, layout or compute-config parameter. Nothing else is accepted.
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | `(..., H, W)`, rank 2–4. `H` any positive value; `W` a multiple of 32 in every production case (a non-multiple is still legal: pages are whole tiles). |
-| Tile grid | `tensor_rows_tiles = prod(shape[:-2]) * ceil(H/32)` (per-image ceil: each image is tile-padded on its own), `tensor_cols_tiles = ceil(W/32)`, `tensor_pages = tensor_rows_tiles * tensor_cols_tiles`. Page id = `row * tensor_cols_tiles + col` — identical under every placement (the buffer distribution folds leading dims into the outer shard dim: `buffer_distribution_spec.cpp:442-444`). |
-| Dtype | Phase 0: bfloat16. Refinement: bfloat8_b, bfloat4_b (pages moved whole; no kernel change). |
+| Shape | `(..., H, W)`, rank 2–4; H any positive value; W a multiple of 32 in every production case (any W is still page-exact) |
+| Dtype | `bfloat16` (Phase 0); `bfloat8_b`, `bfloat4_b` (refinement — same kernels, page size is a parameter) |
 | Layout | TILE |
-| Memory | any: DRAM or L1; interleaved, height, width or block sharded (uneven last shard, more cores than shards, multi-range and off-origin grids all legal) |
+| Memory | any: DRAM / L1 × interleaved / height / width / block sharded |
 
 ### Output
 
 | Property | Value |
 |----------|-------|
-| Shape | `input_tensor.shape` (logical; padded shape identical) |
+| Shape | `input_tensor.shape` |
 | Dtype | `input_tensor.dtype` |
 | Layout | TILE |
-| Memory | exactly `memory_config` (buffer type, memory layout, shard grid with its ranges in the given order, shard shape, orientation). Allocated with `ttnn.allocate_tensor_on_device(shape, dtype, TILE, device, memory_config)` — never the input returned, never another placement. Rows `H..32*ceil(H/32)-1` of the last tile row of each image are copied as part of the whole page; their content is unspecified. |
+| Memory | exactly `memory_config` (buffer type, memory layout, shard grid with its range order, shard shape, orientation): allocated with `ttnn.allocate_tensor_on_device(shape, dtype, TILE_LAYOUT, device, memory_config)` |
+
+## Registry contract (op file)
+
+Axis names are TARGET's in `feature_spec.py`. Taggers read only the scenario dict `inputs[0]`; `validate()` builds the same scenario dict from the tensor and `memory_config` and runs the same taggers (single source of truth).
+
+| Tagger (declaration order) | Returns |
+|---|---|
+| `tag_dtype` | `scenario["dtype"]` |
+| `tag_layout` | `scenario["layout"]` |
+| `tag_rank` | `int(len(scenario["shape"]))` |
+| `tag_alignment` | `"tile_aligned"` if `shape[-2] % 32 == 0 and shape[-1] % 32 == 0` else `"h_non_aligned"` |
+| `tag_in_scheme` / `tag_out_scheme` | `scenario["in_memory"|"out_memory"]["scheme"]` |
+| `tag_in_buffer` / `tag_out_buffer` | `scenario["in_memory"|"out_memory"]["buffer"]` |
+
+| Declaration | Phase 0 value |
+|---|---|
+| `SUPPORTED` | `dtype: [bfloat16]`, `layout: [TILE]`, `rank: [2,3,4]`, `alignment: ["tile_aligned","h_non_aligned"]`, `in_scheme`/`out_scheme`: all four, `in_buffer`/`out_buffer`: `["dram","l1"]` |
+| `EXCLUSIONS` | exactly `[{"out_scheme": "width_sharded", "out_buffer": "dram"}]` |
+| INVALID | not declared, not checked (lives in feature_spec.py; empty) |
+
+`validate(input_tensor, memory_config)` order: (1) `ValueError` if the input is not a device tensor (the axes cannot be read otherwise); (2) build scenario, tag; (3) SUPPORTED per axis → `UnsupportedAxisValue`; (4) EXCLUSIONS → `ExcludedCell`; (5) structural checks below → `ValueError`. `UnsupportedAxisValue`/`ExcludedCell` subclass `NotImplementedError` (`_op_contract.py`), itself a `RuntimeError`, so a ROW_MAJOR input or a rank-5 input is refused with a `RuntimeError` subclass, as the spec requires.
+
+| Structural check (`ValueError`) | Rule |
+|---|---|
+| shard orientation | input's and `memory_config`'s shard spec must be `ROW_MAJOR` |
+| shard shape | both dims multiples of 32 |
+| height sharded | `shard_w == padded W` |
+| width sharded | `shard_h == tensor_rows_tiles · 32` |
+| shard capacity (1D: height/width) | `num_shards ≤ grid.num_cores()`; more cores than shards is valid |
+| shard capacity (2D: block) | grid is one `CoreRange`; `n_shard_cols ≤ grid width`, `n_shard_rows ≤ grid height` (`buffer_distribution_spec.cpp:176-193` would `TT_FATAL` otherwise) |
+| BB-05 budget | per-core op L1 (output share on the most loaded core + CB bytes, Ledger) `≤ L1_OP_BUDGET_BYTES = 1347776`; refuse on the host otherwise. Every golden shape passes (max 192512 B, Qwen 2078). |
+
+No host-side tensor transformation of any kind (BB-02): no `to_layout`, `pad`, `slice`, `typecast`, `to_memory_config`, `clone`.
 
 ## Blocking Model
+
+The op is a permutation of whole tile pages between two placements. Every page is independent; the design question is entirely **who moves each page and through how many NoC transfers**. The minimum is one NoC transfer per page whenever one endpoint is the mover's own L1 (a NoC read lands only in the issuer's L1 and a NoC write sources only from it), and two when neither endpoint is a core's L1 (DRAM→DRAM). So the mover of a page is chosen to *own* one side of it: the core that holds the page's target slot pulls it, or the core that holds the page's source slot pushes it. That makes the core-assignment a property of the placements, and the block of a mover is the whole set of pages it owns.
 
 ### Axes
 
 | Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
 |------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `tile_row` (leading dims folded × `ceil(H/32)` per image) | **independent** — output page `(r, c)` depends on input page `(r, c)` alone | `core_rows_tiles` (rows of the owned block) | **whole owned extent**: sharded owner → its shard's rows (`shard_rows_tiles = shard_shape[0]/32`, ragged last shard = `tensor_rows_tiles − (n_shard_rows−1)·shard_rows_tiles`); L1-bank owner → not cut separately (flattened with `tile_col`, see `bank_pages`); bounce → flattened (see `bounce_block_pages`) | the owned placement's shard spec (host), or the regime knob named in the cell | by the **mover side's placement** (see Regimes): height/block shards → one row band per core; width shards → not split (every core spans all rows); L1 interleaved → page id mod `num_l1_banks`; bounce → contiguous target-order chunks over the full compute grid | knob-turn |
-| `tile_col` (`ceil(W/32)`) | **independent** — same reason | `core_cols_tiles` | **whole owned extent**: sharded owner → its shard's columns (`shard_cols_tiles = shard_shape[1]/32`, ragged last shard = remainder); L1-bank owner / bounce → flattened as above | as above | width/block shards → one column band per core; height shards → not split; L1 interleaved / bounce → as above | knob-turn |
-| flattened page index (`tile_row × tile_col`) — only for the two owners that have no rectangle | independent | `bank_pages` (L1-bank owner) / `bounce_block_pages` (bounce) | `bank_pages` = every page of the bank, `ceil((tensor_pages − b)/num_l1_banks)` (one block); `bounce_block_pages = min(ceil(max_chunk_pages / bounce_depth), floor(MODEL_L1_BUDGET_BYTES / (bounce_depth · aligned_page_size)))` | host constants `MODEL_L1_BUDGET_BYTES = 1347776`, `bounce_depth`; derived once in the plan | as above | knob-turn |
+| `leading` (dims before H) | independent — each output page depends on the one input page at the same index; folds into `tile_row` exactly, since TILE pads each image to whole tile rows and both TensorAccessors index the same flattened padded grid (legacy shard specs fold leading dims too: `squeeze_shape_ranks`, `buffer_distribution_spec.cpp:398-447`) | none (folded): `tensor_rows_tiles = prod(leading) · ceil(H/32)` | folded | host `tile_grid(input)` | carried by `tile_row` | none needed — folding is exact for every placement |
+| `tile_row` | independent — no output page reads another row | `block_extent[tile_row]` | shard regimes: the owned shard's tile rows, `shard_h_tiles`, ragged last shard `tensor_rows_tiles − (n_shard_rows − 1)·shard_h_tiles` (one block = the whole resident shard); bank / bounce regimes: not cut on its own — the `page` walk below owns it | the owned side's `ShardSpec` (target's for pull, input's for push), read once by the host plan | shard row → its owner core, exactly as the buffer places it | knob-turn (`movers_per_owner` sub-cuts an owner's block across its second RISC) |
+| `tile_col` | independent — no output page reads another column | `block_extent[tile_col]` | shard regimes: `shard_w_tiles`, ragged last shard (e.g. 40 of 52 for Qwen 2071) | owned side's `ShardSpec` | shard column → owner core | knob-turn |
+| `page` (`tile_row · tensor_cols_tiles + tile_col`; the view interleaved placements and both accessors use) | independent — same argument, flattened | `bank_block_pages` (bank regimes); `bounce_block_pages` (bounce) | bank: the whole stripe of bank `b`, `ceil((P − b)/nb)` pages, one block; bounce: `min(ceil(core_pages_max / bounce_depth), floor(L1_OP_BUDGET_BYTES / (bounce_depth · page_size)))` | host plan from `P`, `nb`, `bounce_depth`, `page_size`, `L1_OP_BUDGET_BYTES` | bank: page `p` → the core holding L1 bank `p mod nb`; bounce: `ttnn.split_work_to_cores(grid, P, row_wise=True)` contiguous page ranges | knob-turn |
 
-No axis is **dependent** (nothing is reduced, scanned or combined) and no operand is **reuse-shared**:
-operand-reuse check for the chosen split — the single input varies along every split (each moved
-page is a distinct source page), so no core re-reads bytes another core also reads; no broadcast row
-exists.
+Phase 0 values at a glance: every owner moves its whole owned set as **one block under one barrier**; the bounce mover cuts its range into `bounce_depth` blocks so the read of one overlaps the write of the other at no extra L1 (the CB holds the whole assignment either way). Bounce is the only regime with a block below the coarsest; the reason is overlap at zero L1 cost, measured by lamp L6.
 
-Every intermediate stage's data is the page itself: there is no derived tensor to re-block.
+Additional core-assignment knob: `movers_per_owner` ∈ {1, 2} — how many data-movement RISCs share one owner's block. Phase 0 = 1 (NCRISC/NoC0 for pull, BRISC/NoC1 for push). Source: host constant → CT arg. It is a knob, not a regime: the block, the NoC path and the bytes are unchanged; lamp L1 measures 2.
 
-Transfer granularity inside a block (not a block axis — a mechanism of the move): a **segment** is
-the maximal run of consecutive pages **in the mover's walk order** (R1/R2: row-major slot order of
-the owned shard, or increasing page id of the owned bank; R3: the worker's target-order chunk) whose
-address advances by exactly `aligned_page_size` from page to page on **both** sides, clipped to the
-block and to `max_segment_pages`. One NoC transaction moves one segment. Phase 0 value of `max_segment_pages` = `floor(MAX_TRANSFER_BYTES / aligned_page_size)`
-with `MAX_TRANSFER_BYTES = 1 MiB` — i.e. every maximal run in one call; single source: one host
-constant passed as a CT arg.
+Single sources: `page_size = input_tensor.buffer_aligned_page_size()` (host asserts equal to the output's); `P = tensor_rows_tiles · tensor_cols_tiles` from `tile_grid(input)` with `ceil` per image (never `buffer_num_pages()` of a sharded buffer, which can count padded shard slots); `nb = G` (one L1 bank per compute core, mechanism cap 4); `owner_cores` and `owned_shard_id` from the host plan; `bounce_depth = 2`, `L1_OP_BUDGET_BYTES = 1347776` as named host constants. Every CT/RT value and the CB capacity derive from these.
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_staging_pages` (bounce regime only) | `bounce_depth` | 2 | reader gathers block k+1 while writer scatters block k. With `bounce_block_pages = ceil(max_chunk_pages / 2)` the two slots hold the whole chunk, so depth 2 costs the same L1 as one whole-chunk block and buys the overlap. |
-| — (pull / push regimes: no CB) | NoC transactions in flight | all of a core's segments issued back to back, **one** barrier per core per call; in-flight count bounded only by NoC command-buffer back-pressure | issue/latency overlap across the whole owned block. Catalog `double_buffer`: one tile per barrier is "the trap" (6.5 GB/s); `trid_double_issue`: several blocks per barrier is "the bigger win". |
+| `cb_bounce_pages` (bounce only) | `bounce_depth` | 2 | reader fills block `k+1` while the writer drains block `k` |
+| none (pull / push regimes) | in-flight transactions = whole owned block | `|owned set|` NoC transactions before the one barrier | every transfer of the block is on the wire at once; there is no staging buffer to deepen |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| Whole-page transfer (block formats) | segment | ≥ 1 whole page; sizes are `n · aligned_page_size` | a sub-page cut re-forms bfp8/bfp4 exponent groups → values change, equality gate fails |
-| NoC call size (`noc_async_read`/`noc_async_write` document `size` 0..1MB, `dataflow_api.h:540-541`) | segment | `max_segment_pages = floor(1 MiB / aligned_page_size)` | out-of-range size argument |
-| Single-packet stateful APIs (`read_with_state`, `*_one_packet*`), if the implementer uses them | segment | `≤ NOC_MAX_BURST_SIZE` (16 KiB on BH, `noc_parameters.h:290`; `local_copy_helpers_dataflow.inl:66` static_asserts it) | static_assert / truncated transfer |
-| Contiguity | segment | `min(run(side_a), run(side_b), block remainder, max_segment_pages)` with, per side: staging slot → the whole block; a sharded side walked in its own slot order (R1/R2 owned shard, R3 sharded target) → to the end of the shard when its rows are full (`core_cols_tiles == shard_cols_tiles`), else to the end of the current row; a sharded side walked by consecutive page ids (the remote side of R1/R2) → `acc.num_contiguous_pages(p, row_end)` when `acc.contiguous_page_stride() == 1`, else 1; an interleaved side → 1 (consecutive pages sit in different banks) | a segment crossing a shard edge, a ragged row's padding slots, or a bank boundary reads/writes the wrong slots → wrong pages |
-| Equal page stride on both sides | segment > 1 | multi-page segments only when `input.buffer_aligned_page_size() == output.buffer_aligned_page_size()` (true for 2048/1088/576 B in DRAM and L1); otherwise `max_segment_pages = 1` | pages land at the wrong stride |
-| Sharded slot stride | owned-block addressing | the slot of page `(r, c)` in shard `(si, sj)` is `(r − si·shard_rows_tiles)·shard_cols_tiles + (c − sj·shard_cols_tiles)` — the **full** shard width, also in a ragged last shard (`buffer_distribution_spec.cpp:41-52` strides by the full shard shape) | ragged last shard (e.g. 40 of 52 columns in Qwen 2071) packed at the ragged width → every row after the first misplaced |
-| One shard per core | owned set | validation refuses a grid with fewer cores than shards (block: fewer columns/rows than shard columns/rows); host asserts `n_shards ≤ len(core list)` | round-robin wrap gives a core two shards; a one-shard walk misses pages |
-| L1-bank ownership | `bank_pages` blocks | predicate `l1_bank_owners := ttnn._ttnn.reports.get_device_info(device).l1_num_banks == grid.x · grid.y` (`grid = device.compute_with_storage_grid_size()`); when false an L1-interleaved side has 0 holders (falls to another regime) | pages of a bank hosted outside the launch grid are never moved |
-| Staging capacity | `bounce_block_pages` | `≤ floor(MODEL_L1_BUDGET_BYTES / (bounce_depth · aligned_page_size))` | BB-05 overflow; launch failure in the model |
-| CB ring wrap | bounce push/pop count | every push/pop is the nominal `bounce_block_pages`, capacity `bounce_depth · bounce_block_pages`; a ragged last block narrows only the NoC transfers | pointers never reset on `fifo_limit` → slot drift, hang or corruption |
-| Page-id width | `tensor_pages` | `< 2^32` (host assert) | page-id wraparound |
-| Static accessor rank (`shard_pages` static_asserts it, `tensor_accessor.h:336`) | accessor args | `ttnn.TensorAccessorArgs(tensor)` default config (all compile-time) | compile error |
+| Blackhole DRAM-read alignment: local L1 address ≡ DRAM address (mod 64) (`noc-alignment-in-tt-metal.md` §1) | any DRAM→L1 transfer (pull from a DRAM source, bounce reads) | holds by construction: L1 allocations are 64 B aligned (`bank_manager.cpp:122-131,176` — the FreeListOpt is built with `dram_alignment`), the CB region starts 64 B aligned (`l1_banking_allocator.cpp:249-250`), and every tile page (2048 / 1088 / 576 B) is a multiple of 64. Host asserts `page_size % ttnn.get_dram_alignment() == 0` and, for each L1 side paired with a DRAM side, `buffer_address() % ttnn.get_dram_alignment() == 0` per call. | silent data corruption (watcher stops only under `--dev`) |
+| Legacy shard specs hold at most one shard per core (`ROUND_ROBIN_1D` with `num_shards ≤ num_cores`; `GRID_2D` trims the grid to exactly the shard grid: `buffer_distribution_spec.cpp:162-201`) | owned shards per mover | one `owned_shard_id` per core; validation refuses `num_shards > capacity` | a second shard on a core would be silently unmoved |
+| Owner order is the buffer's, not the grid's written order: 1D → `corerange_to_cores(grid, row_wise=True)[:num_shards]`; 2D block → the trimmed rectangle from the grid start, row-wise | `owned_shard_id` ↔ core | the plan derives `owner_cores` with that rule and, once per cache key, asserts it equals `ttnn.get_optimal_worker_cores_for_sharded_tensor(t)` (`tensor_utils.cpp:191-212`, = `cores_with_data()`) for the real tensors; mismatch → `RuntimeError` | a pull core would compute a non-local "local" address and read into the wrong L1 |
+| One L1 bank per compute core, banks only on compute cores (`l1_banking_allocator.cpp:96-111`, ComputeAndStore = logical compute cores `:285-289`); bank ids are shuffled (`:80-86`) and no Python binding exposes the map | bank stripe ownership | bank regimes launch on the full `compute_with_storage_grid`; each core finds its bank in-kernel (scan `b < min(NUM_L1_BANKS, P)` for the `b` whose `get_noc_addr(b)` node bits equal its own); host predicate `bank_cores_cover_grid = (ttnn.reports.get_device_info(device).l1_num_banks == G)`, cached per device; false → the bounce regime (reported by `plan_of`) | a bank on an unlaunched core keeps its pages unmoved: wrong output |
+| `shard_pages()` requires a static-rank accessor (`tensor_accessor.h:336`) | sharded owned-side walk | both accessors' args are fully compile-time (`ttnn.TensorAccessorArgs(t).get_compile_time_args()`, default config) | compile error |
+| Same page id on both sides | every transfer | interleaved and legacy-sharded accessors both index the flattened padded tile grid (`squeeze_shape_ranks`); host asserts input/output padded shapes and page sizes are equal | a page would land at another page's slot |
+| Bounce CB L1 budget (BB-05) | `bounce_block_pages` | `bounce_depth · bounce_block_pages · page_size ≤ L1_OP_BUDGET_BYTES` (bounce targets DRAM, so no output share on the core) | CB/L1 clash at launch inside the model |
 
 ### Regimes
 
-Holder count of a side (host, exact):
-`holders(side) = 0` for DRAM (any scheme);
-`min(tensor_pages, num_l1_banks)` for L1 interleaved if `l1_bank_owners`, else 0;
-`ceil(tensor_rows_tiles / shard_rows_tiles) · ceil(tensor_cols_tiles / shard_cols_tiles)` (non-empty shards) for L1 sharded.
-
-**Regime-selection function** (`h_in = holders(input)`, `h_out = holders(memory_config)`):
-
-```
-regime = "bounce" if h_in == 0 and h_out == 0
-       = "pull"   if h_out >= h_in          (ties go to pull)
-       = "push"   otherwise
-```
+Named boundary for "minimum": each input page crosses its source tier once and each output page its target tier once; in NoC terms **one transfer per page when the mover owns one endpoint, two when neither endpoint is a core's L1**.
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| **R1 pull** — each core holding target pages reads them from the source straight into its own target slots | **built** (57 bf16 + 6 bf8 production cases at 110 L1 banks; DRAM→L1 and L1→L1 with `h_out ≥ h_in`) | `h_out > 0 and h_out >= h_in` | the core's whole owned target set: sharded → `core_rows_tiles × core_cols_tiles` (its shard); L1 bank → `bank_pages` | **minimum** against the DRAM boundary and the NoC: each page crosses its source tier once and lands in its final slot; no staging, no second hop. L1→L1 on the same core is a NoC loopback (still one move). | one kernel launch, one accessor construction, one bank discovery (bank owners), and **one** `noc_async_read_barrier` per core per call; maximal segments amortize the ~115 ns per-transaction issue cost (catalog `double_buffer`). Nothing scales per page except the transaction itself. |
-| **R2 push** — each core holding source pages writes them straight to their target slots | **built** (29 bf16 + 6 bf8 production cases at 110 L1 banks; L1→DRAM and L1→L1 with `h_in > h_out`) | `h_in > h_out` | the core's whole owned source set (shard or `bank_pages`) | **minimum**, same accounting as R1 | same as R1 with one `noc_async_write_barrier` per core per call |
-| **R3 bounce** — full-grid workers gather a block from the source into an L1 staging slot, then scatter it to the target | **built** — positive reason: `validate()` admits DRAM→DRAM cells in Phase 0 (SUPPORTED holds `dram` on both sides; EXCLUSIONS removes only DRAM width-sharded targets), so they need a regime; it is also the stepping stone of the bfloat4_b DRAM width-sharded refinement (the PERF FOCUS case Qwen 2183), which then only drops the exclusion | `h_in == 0 and h_out == 0` (DRAM↔DRAM, or an L1-interleaved side when `l1_bank_owners` is false) | `bounce_block_pages` consecutive pages of the worker's target-order chunk | **minimum for DRAM→DRAM**: each page crosses DRAM once read, once written; the L1 bounce is structural (no core holds either side, a NoC read lands only in the issuer's L1). 2 NoC transactions per segment. | per block: one CB reserve/push + one read barrier (reader), one wait/pop + one write flush (writer); one final write barrier. Bigger block = fewer handshakes/barriers and longer coalesced target writes (a full-row DRAM width shard is contiguous in slot order, so one block is one write — Qwen 2183: 373 pages, 215 KB). |
-| **R4 helper fan-out** — holders keep their pages; extra grid cores take a share by bouncing (pull from the source into their staging, push to the target) | **deferred** — R1/R2 already serve every shape R4 would, at the minimum crossing count; R4 is the measured trade "+1 L1→L1 NoC crossing per helper-moved page (`+helper_pages · aligned_page_size` bytes) for issue parallelism beyond the holder count". The busiest Phase 0 mover holds 94 pages (Qwen 2078, all 110 banks busy, DRAM-bound) and the busiest narrow mover 64 pages (8 width-shard holders pushing 1 MiB to DRAM: Qwen 2072/2080/2135/2171). Reachable unchanged: a helper is an R3 worker whose chunk is a subset of the owner's pages; only the host assignment changes. | — | — | +1 cross-core crossing per helper page | — |
-| **R5 grid-split bounce for every pair** (`split_work_to_cores` over pages, every page staged) | **rejected** — superseded by R1/R2 wherever a side is in L1: same DRAM crossings, +1 NoC crossing per page, +1 staging CB per core. Dead end: nothing of it survives under R1/R2. | — | — | +1 crossing/page | — |
-| **R6 two-step through a third placement** (interleaved intermediate, or an existing ttnn data-movement op) | **rejected** — forbidden by the spec (one program, read once/write once, BB-01); doubles the traffic | — | — | 2× | — |
-| **R7 dependent-axis split + cross-core combine** | **rejected** — no axis is dependent; there is nothing to combine | — | — | — | — |
-| **R8 move through compute** (unpack → DEST → pack, e.g. `copy_tile`) | **rejected** — not bit-exact for block formats (re-derives exponents), adds a compute kernel and two CBs per core; superseded by R1/R2/R3 everywhere | — | — | +2 L1 passes/page | — |
+| `pull_shard` | built | `dst_l1 ∧ dst_sharded ∧ ¬(src_l1 ∧ src_sharded ∧ n_src_owners > n_dst_owners)` — 24 bf16 golden cases (e.g. Qwen 2058, 2067, 2154, FLUX 313) | the owned target shard, `block_extent[tile_row] × block_extent[tile_col]` (ragged last), one per owner | minimum: one NoC read per page, landing at its final address; source read once from wherever it lives | the whole shard is one block, so one `noc_async_read_barrier` and one kernel launch per owner per call; per-page cost is only the issue |
+| `pull_bank` | built | `dst_l1 ∧ ¬dst_sharded ∧ ¬(src_l1 ∧ src_sharded) ∧ bank_cores_cover_grid` — 27 bf16 golden cases, all DRAM interleaved → L1 interleaved, up to P = 10240 (Qwen 2078) | the stripe of the core's L1 bank `b`: pages `b, b+nb, …`, `ceil((P−b)/nb)` of them, one block | minimum: one NoC read per page from the source straight into its final bank slot (the bounce alternative adds an L1→L1 write per page) | one bank scan + one read barrier per core per call |
+| `push_shard` | built | `src_l1 ∧ src_sharded ∧ (¬(dst_l1 ∧ dst_sharded) ∨ n_src_owners > n_dst_owners)` — 35 bf16 golden cases (e.g. Qwen 2071, 2065, 2073, FLUX 314) | the owned source shard (ragged last), one per owner | minimum: one NoC write per page from its resident source address; the resident shard is never re-read over the NoC | one `noc_async_write_barrier` and one launch per owner per call |
+| `push_bank` | built | `src_l1 ∧ ¬src_sharded ∧ ¬dst_l1 ∧ bank_cores_cover_grid` — no golden case; a SUPPORTED cell (L1 interleaved → DRAM), pinned by the acceptance test | the stripe of the core's L1 bank on the source side | minimum: one NoC write per page | one scan + one write barrier per core |
+| `bounce` | built | `¬src_l1 ∧ ¬dst_l1` (DRAM → DRAM), or a bank regime when `¬bank_cores_cover_grid` — no bf16 golden case (DRAM→DRAM SUPPORTED cells, pinned by the acceptance test); the 7 bf4b weight cases land here with the refinement | `bounce_block_pages` contiguous pages; `bounce_blocks_this_core = ceil(core_pages / bounce_block_pages)` (Phase 0: `bounce_depth`) | DRAM minimum (read once, write once); two NoC transfers per page, which **is** the minimum for DRAM→DRAM. In the fallback case (an L1 side exists) it is one transfer above minimum, stated and reported by `plan_of` | fewer CB handshakes and read barriers per core; bounded below by `bounce_depth` blocks so read and write overlap |
+| `bounce_dram_shard` | deferred — every DRAM-sharded target in INPUTS is width-sharded `bfloat4_b` (Qwen 2178–2184, PERF FOCUS 2183), a cell the spec excludes from Phase 0 by dtype and by EXCLUSIONS; it arrives with the block-format refinement. Reachable: `bounce` already takes a host-computed per-mover page set and a block; this row changes only the host assignment order and the writer's transfer unit. | `¬src_l1 ∧ dst_dram ∧ dst_sharded` | a run of `bounce_block_pages` pages contiguous inside one target shard row (assignment over the **target's storage order**, `shard_pages(s, off0, off1)`), up to `shard_w_tiles` pages (64 × 576 B = 36 KB for 2183) | DRAM minimum; NoC writes drop from one per page to one per run (`num_contiguous_pages` on the target accessor); reads stay per page (interleaved source) | one write per run instead of one per page; measure bank-affine mover placement (`read_coalescing`: affinity 0.91–1.28×) and `bank_stagger` on top |
+| `bounce_all` | rejected — superseded by the four owner regimes wherever an L1 side exists (two transfers per page → one). A dead end: the owner regimes are built instead of it, not on top of it. | — | contiguous page ranges on third-party cores | one transfer per page above minimum for every L1-side case | — |
+| `two_step` (stage through an interleaved tensor in a third placement, or call an existing data-movement op) | rejected — forbidden by the spec and BB-01; pays every crossing twice | — | — | 2× the DRAM/L1 crossings and two programs | — |
+| `fan_out` (spread one owner's pages over extra third-party cores) | rejected — adds a NoC hop per page; superseded by `movers_per_owner = 2` (the owner's second RISC, no hop). Every golden case above 8 pages already has ≥ 8 owners; the largest per-owner load is 131072 B (Qwen 2072 push), far under a single core's measured NoC ceiling (~122 GB/s, `trid_double_issue`) | — | — | +1 transfer per page | — |
+| `single_core` | rejected — same bytes, no parallelism; Phase 0 is multi-core | — | — | minimum bytes, serialized issue | — |
 
-Regime-pinned tests are required and present in the acceptance test (`select_plan(...).regime`
-asserted per case, with the expected value recomputed from the predicate above).
+No dependent axis exists, so there is no "split the dependent axis and combine" row. Operand-reuse check: the single operand varies along every axis any regime splits, so no broadcast row.
+
+Selection function (exact, host-checkable; also what `plan_of` reports):
+
+```
+src_l1, dst_l1 = in.buffer_type == L1, out.buffer_type == L1
+src_sh, dst_sh = in.is_sharded(), out.is_sharded()
+n_src_owners / n_dst_owners = len(owner_cores(side))           # cores holding a shard
+if dst_l1 and dst_sh:  regime = "push_shard" if (src_l1 and src_sh and n_src_owners > n_dst_owners) else "pull_shard"
+elif dst_l1:           regime = "push_shard" if (src_l1 and src_sh) else "pull_bank"
+elif src_l1:           regime = "push_shard" if src_sh else "push_bank"
+else:                  regime = "bounce"
+if regime in ("pull_bank", "push_bank") and not bank_cores_cover_grid: regime = "bounce"
+```
 
 ### Traffic ranking
 
-Per call, `B = tensor_pages · aligned_page_size`. DRAM crossings count whole-tensor moves across
-the DRAM boundary.
+| Candidate split | DRAM crossings (input / output) | NoC transfers per page | Fan-out | Verdict |
+|---|---|---|---|---|
+| by target ownership (pull) | 1 if in DRAM / 1 if in DRAM — 0 for an L1 side | 1 | none — each page goes to one core | rank 1 (tie) |
+| by source ownership (push) | same | 1 | none | rank 1 (tie) |
+| third-party contiguous ranges (bounce) | same | 2 | none | rank 2 — chosen only when neither side is any core's L1 (DRAM→DRAM), where it is the minimum |
+| two-step through a third placement | 2 / 2 | 2–4 | — | rejected |
+| split a dependent axis + combine | n/a — none exists | — | — | — |
 
-| Rank | Candidate split | DRAM crossings | Cross-core NoC bytes | Core-local staging | Verdict |
-|------|-----------------|----------------|----------------------|--------------------|---------|
-| 1 | Owner split (R1/R2): the L1-side holder moves each page in one transaction | input 1× if in DRAM, output 1× if in DRAM | `B` when both sides are L1 on different cores (one hop per page); 0 extra otherwise | none | **chosen** — the minimum: every page crosses once, lands in place |
-| 1 (DRAM↔DRAM only) | Bounce (R3) | input 1×, output 1× | 0 cross-core (DRAM→worker L1→DRAM) | `bounce_depth · bounce_block_pages` pages | chosen where no L1 side exists — the minimum there |
-| 2 | Owner + helpers (R4) | same | `B + helper_pages · page` | helpers only | deferred (measured trade vs. issue parallelism) |
-| 3 | Grid split + bounce for every pair (R5) | same | `2B`-class: every page makes two hops | every core | rejected |
-| 4 | Two-step via an intermediate placement (R6) | +1× read and +1× write of the whole tensor | +`B` | intermediate tensor | rejected (forbidden) |
-| — | Dependent-axis split + combine | n/a — no dependent axis | — | — | not applicable |
+Pull/push tiebreak (equal bytes): the side with more owner cores moves (more injection points); exact tie → pull. An L1-interleaved side is never the mover when the other side is L1-sharded (the shard side has the owners and needs no bank scan). Occupancy is kept out of the ranking; separately: bank and bounce regimes use the whole grid, shard regimes use every core that holds a shard of the owned side.
 
-Occupancy is ranked separately and does not override the table: R1/R2 occupancy = the holder count
-of the mover side (1–110 cores in production); the full-grid alternative is R4.
+Stall-shadow check: the only waits are the final barrier of each owner (everything is already issued — nothing independent remains to schedule into it), the bank scan (must precede any issue: the bank id names the pages), and the bounce CB waits (covered by `bounce_depth = 2`). No reorder is available or needed; there is no arithmetic, so nothing changes floating-point order.
 
 ### Block schedule
 
-R1 pull — one kernel per mover core, RISCV_1 on NoC0 (catalog `noc_placement`: reads on NoC0):
+Logical schedule per regime; reader / writer are separate kernels and adjacent bounce blocks pipeline.
 
 ```cpp
-resolve_owned_set();                              // shard (id, core_rows_tiles, core_cols_tiles) or own L1 bank(s)
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // Phase 0: 1 (whole owned set)
-    gather_block(block_idx);                      // one NoC read per segment: source -> own target slots
+// pull_shard / pull_bank — one mover kernel per owner core (NCRISC, NoC0)
+for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {  // Phase 0: 1 for an owner, 0 for an idle core
+    own_block(block_idx);     // shard: owned_shard_id (RT arg); bank: scan once for this core's bank b
+    pull_block(block_idx);    // one NoC read per owned page: source page p -> its final local target slot
+    drain_block(block_idx);   // one noc_async_read_barrier
 }
-drain_reads();                                    // one noc_async_read_barrier
+
+// push_shard / push_bank — one mover kernel per owner core (BRISC, NoC1)
+for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
+    own_block(block_idx);     // shard: owned_shard_id; bank: scan once
+    push_block(block_idx);    // one NoC write per owned page: resident source slot -> target page p
+    drain_block(block_idx);   // one noc_async_write_barrier
+}
+
+// bounce — reader (NCRISC, NoC0) and writer (BRISC, NoC1) over cb_bounce_pages
+for (uint32_t block_idx = 0; block_idx < bounce_blocks_this_core; ++block_idx) {
+    load_block(block_idx);    // reader: reserve, one read per page, one read barrier, push bounce_block_pages
+    store_block(block_idx);   // writer: wait, one write per page, writes_flushed, pop bounce_block_pages
+}
+// writer ends with noc_async_write_barrier (BB-03)
 ```
 
-R2 push — one kernel per mover core, RISCV_0 on NoC1 (catalog `noc_placement`: writes on NoC1):
+| Operation | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
+|---|---|---|---|
+| `own_block` | — | — | shard: none (host-given id); bank: one scan of ≤ `min(NUM_L1_BANKS, P)` table entries per core per call |
+| `pull_block` | owned target shard `block_extent[tile_row] × block_extent[tile_col]`, or the bank stripe | the target buffer (it *is* the destination) | 0 barriers inside; reads issued back to back |
+| `push_block` | owned source shard or source bank stripe | the source buffer (read in place, never over the NoC) | 0 barriers inside |
+| `drain_block` | the block | — | 1 barrier per core per call (BB-03 is met by this barrier) |
+| `load_block` | `bounce_block_pages` pages | `cb_bounce_pages` slot | 1 `cb_reserve_back`, 1 read barrier, 1 `cb_push_back` per block; Phase 0 `bounce_depth` blocks per core |
+| `store_block` | `bounce_block_pages` pages | `cb_bounce_pages` slot | 1 `cb_wait_front`, 1 `noc_async_writes_flushed`, 1 `cb_pop_front` per block; 1 final write barrier per core |
 
-```cpp
-resolve_owned_set();
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // Phase 0: 1
-    scatter_block(block_idx);                     // one NoC write per segment: own source slots -> target
-}
-drain_writes();                                   // one noc_async_write_barrier
-```
-
-R3 bounce — reader on RISCV_1/NoC0 and writer on RISCV_0/NoC1 of every worker, staging CB between:
-
-```cpp
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // Phase 0: 2 (ceil(chunk/2) per block)
-    reserve_slot(block_idx);   gather_block(block_idx);  publish_slot(block_idx);    // reader
-    await_slot(block_idx);     scatter_block(block_idx); release_slot(block_idx);    // writer
-}
-drain_writes();                                                                       // writer
-```
-
-| Block operation | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
-|-----------------|------------------------|--------------------|-----------------------------------|
-| `resolve_owned_set` | — | — | once per kernel: read RT args; bank owners scan `NUM_L1_BANKS` entries once to find their bank(s) |
-| `gather_block` (R1, R3 reader) | R1: whole owned set (`core_rows_tiles × core_cols_tiles` or `bank_pages`); R3: `bounce_block_pages` target-order pages | R1: the target slots (they are the output); R3: the staging slot | one source `get_noc_addr` + one `noc_async_read` per **segment**; no barrier inside (R1) / one read barrier per block (R3) |
-| `scatter_block` (R2, R3 writer) | R2: whole owned set; R3: `bounce_block_pages` | R2: the source slots (the input, untouched); R3: the staging slot | one target `get_noc_addr` + one `noc_async_write` per segment; R3: one `noc_async_writes_flushed` per block before release |
-| `reserve_slot` / `publish_slot` / `await_slot` / `release_slot` (R3) | `bounce_block_pages` | staging slot | one CB handshake pair per block per side, nominal count even for a ragged last block |
-| `drain_reads` / `drain_writes` | — | — | exactly once per kernel, last statement (BB-03) |
-
-Stall-shadow check: the only waits are the final barrier (R1/R2), the per-block slot waits and the
-read barrier (R3). Everything a mover could do is issued before its wait; no work is independent of
-the awaited transfers. Nothing to reorder.
+Ragged tails: the last owner shard and the last bounce block are shorter. Push/pop counts stay at the nominal `bounce_block_pages` (two pushes of `bounce_block_pages` close the ring exactly: capacity = `bounce_depth · bounce_block_pages`); only the NoC work narrows. Owner regimes have no CB, so the ragged shard only shortens the page walk (`shard_pages()` skips slots beyond the tensor).
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| Two-RISC issue split | R1/R2 use one data-movement RISC per core; narrow movers are issue-bound (8 holders × 64 pages pushed to DRAM in Qwen 2072/2080/2135/2171; ~115 ns/transaction, catalog `double_buffer`) | split each mover's segments between RISCV_1/NoC0 and RISCV_0/NoC1 (catalog `split_reader`: 1.21× at 2048 B when issue-bound) |
-| Pull-vs-push tie rule for L1↔L1 | max-holder rule picks push for Qwen 2064/2127/2161 (≈110 bank holders × 1–2 pages) and 2070/2133/2166/2073/2136/2172/2081 (40 holders × 4 pages); catalog `tensix_all_reduce`: pull wins ≤ 24 tiles/core, push is monotone | always-pull for L1↔L1 |
-| Grid synchronization (bank-owner launch) | R1/R2 with an L1-interleaved mover side launch the full compute grid even when `tensor_pages` is tiny (Qwen 2155/2156: 8 pages, 110-core launch) | pick the side with fewer cores when its per-core pages stay ≤ a few (here: push from the 1 block-shard holder) |
-| Bank discovery on device | each bank-owner core scans `NUM_L1_BANKS` (110) table entries per call | host-provided bank id per core (needs a host bank→core map) |
-| Segment cap | `max_segment_pages` = maximal run; one long transfer serializes on one source/target pair (catalog `read_coalescing`: coalescing wins, but "does not prove one full-block call is the best transfer size") | cap at 4–8 KiB on L1↔L1 width-shard moves (Qwen 2067/2070/2163/2166) |
-| Overlap (R3) | `bounce_block_pages = ceil(chunk/2)` gives only two blocks per worker; first gather and last scatter do not overlap | smaller blocks with `bounce_depth` 3–4 at equal L1 (catalog `trid_double_issue`: `ahead = cb_blocks/2`) — PERF FOCUS case Qwen 2183 |
-| DRAM bank affinity (R1 bank owners from DRAM, R3) | workers read interleaved DRAM in page-id order; the PERF FOCUS writes land in one DRAM bank per worker chunk | stagger each core's start page by `core % num_dram_banks` (catalog `bank_stagger`: 1.04–1.07× interleaved, 1.13–1.32× width-sharded); place R3 workers of shard k near DRAM bank k via `ttnn.get_optimal_dram_bank_to_logical_worker_assignment` (catalog `read_coalescing`: affinity 1.22–1.48× alone) |
-
-Catalog entries that informed the knobs: `double_buffer` (no per-page barrier; one barrier per
-block), `trid_double_issue` (several blocks per barrier; DRAM→DRAM bounce structure and depth),
-`noc_placement` (reads NoC0 / writes NoC1; `split_work_to_cores(row_wise=True)` for R3),
-`split_reader` (two-RISC lamp), `read_coalescing` (segment coalescing legal only on physically
-contiguous bytes — never across interleaved pages), `bank_stagger` (affinity lamp),
-`tensix_all_reduce` (pull vs push), `tile_reorder` (one transfer per whole 2 KiB tile, no face split).
+| L1 RISC split (`split_reader`) | an owner with tens of pages issues them all from one RISC on one NoC; if issue-bound, half the core's issue capacity and one NoC sit idle | `movers_per_owner = 2`: halves of the block on NCRISC/NoC0 and BRISC/NoC1 (reads on NoC1 can lose for spread placements — `noc_placement`; measure pull and push separately) |
+| L2 transfer coalescing (`read_coalescing`, `tile_reorder`) | shard↔shard moves have runs contiguous on both sides (Qwen 2067: each 4-page target shard lies inside one source shard), moved one 2 KB page per transaction | transfer = maximal run contiguous on both sides (`num_contiguous_pages` on both accessors when their `contiguous_page_stride()` agree), vs. one page per transaction |
+| L3 bank stagger (`bank_stagger`) | owners of height-sharded targets read row-aligned DRAM pages: every owner starts on DRAM bank 0 (Qwen 2058: 16 owners × pages `8k..8k+7`) | start each owner's walk at offset `owner_idx mod NUM_DRAM_BANKS` and wrap |
+| L4 pull vs push on L1-shard↔L1-shard | the "more owners moves" tiebreak assumes injection points dominate; posted writes vs. round-trip reads may reverse it at 8 vs 40 owners | force the other direction on Qwen 2067 (8→40) and 2073 (40→8) |
+| L5 bank scan on small P / grid-synchronization | `pull_bank` launches all G cores and every core scans even when `P < nb` (Qwen 2089: 96 pages on 110 banks; most cores move ≤ 1 page) | `bounce` over `min(P, G)` movers (no scan, +1 hop), and the scan written against the firmware bank table directly instead of `get_noc_addr` |
+| L6 overlap (bounce) | `bounce_depth` blocks of half the assignment trade one extra handshake for read/write overlap; at DRAM-bound grid scale overlap may buy nothing (`double_buffer`: no gain once bandwidth-bound) | one block (no overlap), and 8-page blocks with `trid` pipelining (`trid_double_issue`, `local_copy_helpers_dataflow.hpp:147,158`) |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| R1: source page(s) → own target slots | the page bytes, untouched | one `noc_async_read(src_noc_addr, dst_local_addr, n·aligned_page)` per segment; `src_noc_addr` from the source TensorAccessor, `dst_local_addr` = local address of the owned target slot (from the output TensorAccessor's `get_noc_addr(page)` local part, or `shard_pages`) | no CB: the read lands in the output buffer itself (pack-into-destination); a resident target shard is written in place, never re-read |
-| R2: own source slots → target page(s) | untouched | one `noc_async_write(src_local_addr, dst_noc_addr, n·aligned_page)` per segment | no CB: the resident source shard/bank is read in place by the write itself |
-| R3: source → staging slot → target | untouched | reader `noc_async_read` per source segment into `cb_staging_pages`, read barrier, push; writer `noc_async_write` per target segment from the slot, `noc_async_writes_flushed`, pop | the only CB of the op; dataflow-only payload, never through DEST |
-| Page → core ownership (sharded side) | — | shard id `k` (row-major over the shard grid `ceil(R/shard_rows_tiles) × ceil(C/shard_cols_tiles)`) lives on `cores[k]`, with `cores = ttnn.corerange_to_cores(grid, grid.num_cores(), True)` for height/width (ROUND_ROBIN_1D, `buffer_distribution_spec.cpp:162-175`) and the grid's first range trimmed to `n_shard_cols × n_shard_rows`, row-major, for block (GRID_2D, `:177-201`) | the host must use the buffer's own order, never a re-derived regular grid |
-| Page → core ownership (L1 interleaved side) | — | page `p` lives in L1 bank `p mod NUM_L1_BANKS`; a mover core finds its bank(s) on device by testing `is_local(bank_address<false>(b, 0, noc), noc)` for every `b` (`noc_address_backend_xy.h:50-66`) | gated by `l1_bank_owners` |
+| source page | tile page, bytes untouched (`page_size` B) | source TensorAccessor (`get_noc_addr(p)`, or the owned side's `shard_pages()` / strided `Pages` iterator) | interleaved or sharded, DRAM or L1 — one accessor type covers all |
+| pull: source → final target slot | same bytes | one `noc_async_read` per page into the local L1 address of target page `p` (taken from the target accessor; local by construction) | no CB, no staging; a same-core source is a NoC self-read |
+| push: resident source slot → target | same bytes | one `noc_async_write` per page from the local L1 address of source page `p` | the resident shard / bank stripe is consumed in place — never re-read over the NoC |
+| bounce: DRAM → `cb_bounce_pages` → DRAM | same bytes | reader `noc_async_read` per page, writer `noc_async_write` per page | the only CB of the op |
+| tile padding (rows `H..`, cols `W..` inside a tile) | copied as stored | whole-page moves | content unspecified by the contract; block formats keep every shared exponent because no page is cut |
 
-TARGET placement axes, as regime rows (no inter-Tensix protocol exists or is needed: no semaphores, no multicast):
+No regime needs inter-Tensix synchronization: every page has exactly one mover, sources are immutable during the call, and targets are written by exactly one core. No semaphores, no multicast.
 
-| TARGET value | Cost class | Why |
-|--------------|-----------|-----|
-| `in_scheme`/`out_scheme` = `height_sharded`, `width_sharded`, `block_sharded` | knob-turn | every cut leaves each page's move self-contained (both axes independent); the scheme only changes which cores hold which pages (owned-set description) |
-| `in_buffer`/`out_buffer` = `dram` / `l1` | knob-turn | the buffer type only changes holder count and so the regime choice; all regimes are built |
-| `{out_scheme: width_sharded, out_buffer: dram}` (Phase 0 EXCLUSION) | knob-turn | R3 bounce already serves DRAM→DRAM; drop the exclusion |
-| `dtype` = `bfloat8_b`, `bfloat4_b` | knob-turn | page size comes from the buffer (`aligned_page_size` in the accessor); whole-page moves are bit-exact |
+TARGET placement axes as schemes (no axis is dependent, so every placement value is a knob-turn of the same structure):
 
-Structural impossibilities: none to add (feature_spec `INVALID = []` is correct).
+| source \ target | L1 sharded | L1 interleaved | DRAM interleaved | DRAM sharded |
+|---|---|---|---|---|
+| L1 sharded | `pull_shard` / `push_shard` (more owners moves) | `push_shard` | `push_shard` | `push_shard` |
+| L1 interleaved | `pull_shard` | `pull_bank` (same bank both sides: local copies) | `push_bank` | `push_bank` |
+| DRAM interleaved | `pull_shard` | `pull_bank` | `bounce` | `bounce` (width: Phase 0 EXCLUSION; `bounce_dram_shard` deferred) |
+| DRAM sharded | `pull_shard` | `pull_bank` | `bounce` | `bounce` |
+
+Refinement classes: `dtype` bfloat8_b / bfloat4_b — knob-turn (`page_size` is the only dtype-dependent quantity; kernels move bytes). `out_scheme=width_sharded ∧ out_buffer=dram` — knob-turn on `bounce` (remove the EXCLUSION) plus the deferred `bounce_dram_shard` regime for performance.
+
+Structural impossibilities: none beyond `feature_spec.py`'s (INVALID is empty, and every axis is projected from production cases).
 
 ## Work Distribution
 
 | Field | Value |
 |-------|-------|
-| Work unit | a block (whole owned set for R1/R2; `bounce_block_pages` for R3); a segment inside it is one NoC transaction |
-| Grid | R1/R2 sharded mover side: that placement's shard grid, as given, merged into maximal rectangles (BB-17: ≤ 3 ranges for every production grid — the 16 and 8 single-core ranges of Qwen 2058/2121 merge to 2); cores of the grid with no shard get zero-work args. R1/R2 L1-interleaved mover side and R3: `device.compute_with_storage_grid_size()` as one rectangle (R3: the `split_work_to_cores(..., row_wise=True)` prefix). |
-| Per-core work | R1/R2 sharded: shard id + `core_rows_tiles`, `core_cols_tiles` (ragged on the last shard row/column). R1/R2 bank: every page `p ≡ b (mod NUM_L1_BANKS)`, `p < tensor_pages`, of each owned bank `b`. R3: contiguous chunk `[chunk_start, chunk_start + chunk_pages)` of the target-order sequence (interleaved target: page ids; sharded target: shards in shard-id order, row-major over the real pages of each shard), from `ttnn.split_work_to_cores(grid, tensor_pages, row_wise=True)`; `num_blocks_this_core = ceil(chunk_pages / bounce_block_pages)`. |
-| Remainder | ragged last shard via `ceil`; partial tile rows are whole pages (`tensor_rows_tiles = prod(shape[:-2]) · ceil(H/32)`, never `floor(prod·H/32)`); R3 ragged last block narrows only NoC transfers |
-| Mover count | R1 = `h_out`, R2 = `h_in`, R3 = `min(tensor_pages, grid cores)` — chosen by the regime function, not by the shape |
-| Plan report (BB-08/BB-21) | `select_plan(input_tensor, memory_config)` returns the plan (regime, holders, `l1_bank_owners`, kernel cores, per-core role) — see Host Contract |
+| Work unit | one mover's block (Blocking Model): an owned shard, an owned bank stripe, or a bounce range |
+| Grid | `G = device.compute_with_storage_grid_size()` (x·y); bank and bounce regimes use all of it |
+| Per-core work | `pull_shard`/`push_shard`: owner `k` of `owner_cores(side)` moves shard `k` (`owned_shard_id = k`); `pull_bank`/`push_bank`: every core moves its bank's stripe; `bounce`: `split_work_to_cores(G, P, row_wise=True)` → `(start_page, core_pages)` per core |
+| Remainder | shard regimes: the ragged last shard is the owner's smaller block (`shard_pages()` skips slots past the tensor); bank: stripe lengths differ by ≤ 1; bounce: group-2 cores get one page fewer, the last block of a core is shorter. Tile counts: `tensor_rows_tiles = prod(padded_shape[:-2]) · ceil(H/32)`, `tensor_cols_tiles = ceil(W/32)` — per image, never `floor`. |
+| Kernel core range (BB-17) | the bounding rectangle of the regime's movers — one `CoreRange`. Shard regimes: bounding box of `owner_cores` (Qwen 2058: 16 single-core ranges → one 11×2 box, 6 idle cores); bank / bounce: the full grid. Non-mover cores in the box get `owned_shard_id = NO_SHARD` / zero pages and return at once. |
+| NoC / RISC | pull and bounce-reader: NCRISC, NoC0 (`ReaderConfigDescriptor`); push and bounce-writer: BRISC, NoC1 (`WriterConfigDescriptor`) — the default `noc_placement` measured fastest |
+| Regime selection | the function above; regime-pinned tests: one acceptance test per built regime asserts `plan_of(...)["regime"]` |
 
 ## Circular Buffers
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
 |---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
-| `cb_staging_pages` (R3 only; absent in R1/R2) | 0 | `input.buffer_aligned_page_size()` | `bounce_depth · bounce_block_pages` | live set spans `bounce_block_pages` of the flattened target-order axis per slot, `bounce_depth` slots; streams over `tile_row`/`tile_col` | `input.dtype` | reader | writer | whole R3 kernel |
+| `cb_bounce_pages` | 0 | `page_size` (= `input_tensor.buffer_aligned_page_size()`) | `bounce_depth · bounce_block_pages` | spans `page` → `bounce_block_pages` per slot × `bounce_depth` slots; `tile_row`/`tile_col` folded into `page`; `leading` folded | input dtype (dataflow-only payload, never in DEST) | reader | writer | bounce kernels, whole call |
 
-R1/R2 declare **no CB** (inventory minimized to zero): the mover owns one side of every page it
-moves and the NoC transfer itself is the copy. A `cb_descriptor_from_sharded_tensor` alias would add
-no handshake (there is no second kernel on the core to hand off to) and is deliberately not used;
-the owned shard/bank is addressed through its TensorAccessor. Full ledger: `l1_ledger.md`.
+Pull and push regimes allocate no CB: the target (pull) or source (push) buffer is the mover's own L1 and is addressed directly. Full ledger: `l1_ledger.md`.
 
 ## Block Operation Realization
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
-| 1 | `resolve_owned_set` | — | no (raw: RT args; bank scan) | — | — | — |
-| 2 | `gather_block` (R1) | owned set | no (raw NoC + TensorAccessor) | — (source tensor via accessor) | — (target slots of the output) | — |
-| 3 | `scatter_block` (R2) | owned set | no | — (own source slots) | — (target via accessor) | — |
-| 4 | `reserve_slot` → `gather_block` → `publish_slot` (R3 reader) | `bounce_block_pages` | no | — | `cb_staging_pages`, `bounce_block_pages` | +`bounce_block_pages` published |
-| 5 | `await_slot` → `scatter_block` → `release_slot` (R3 writer) | `bounce_block_pages` | no | `cb_staging_pages`, `bounce_block_pages`, waited | — | −`bounce_block_pages` popped after `noc_async_writes_flushed` |
-| 6 | `drain_reads` / `drain_writes` | — | no | — | — | — |
+| 1 | `own_block` | — | no (raw: accessor + firmware bank table / RT arg) | — | — | — |
+| 2 | `pull_block` | owned target shard or bank stripe | no (raw dataflow) | — | — (writes land in the output buffer) | — |
+| 3 | `push_block` | owned source shard or bank stripe | no (raw dataflow) | — (reads the resident input buffer) | — | — |
+| 4 | `drain_block` | the block | no | — | — | all transactions complete (BB-03) |
+| 5 | `load_block` | `bounce_block_pages` pages | no (raw dataflow) | — | `cb_bounce_pages`, `bounce_block_pages` | +`bounce_block_pages` filled |
+| 6 | `store_block` | `bounce_block_pages` pages | no (raw dataflow) | `cb_bounce_pages`, `bounce_block_pages`, filled | — | slot freed after `noc_async_writes_flushed` |
 
 ## API Mapping
 
 | Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
 |-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
-| accessor setup (all) | raw_api | `TensorAccessorArgs<cta, crta>()`, `TensorAccessor(args, base_addr)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:71`; host `ttnn.TensorAccessorArgs(tensor)` `ttnn/cpp/ttnn-nanobind/tensor_accessor_args.cpp:26` | CT args from both tensors (scalars first, accessors last); base addresses RT | — | — | — |
-| page address | raw_api | `get_noc_addr(page_id)` | `tensor_accessor.h:165` | page id | — | — | — |
-| segment length | raw_api | `num_contiguous_pages(page_id, end_page_id)`, `contiguous_page_stride()` | `tensor_accessor.h:192`, `:181` | end = owned-block remainder | — | — | `max_segment_pages` clamps the result |
-| sharded owned walk | raw_api | `shard_pages(shard_id, start, end)` (or slot arithmetic per Mechanism caps) | `tensor_accessor.h:331` | shard id from RT args | — | — | owned extents |
-| bank discovery | raw_api | `bank_address<false>(b, 0, noc)`, `is_local(addr, noc)`, `extract_local_address` | `tt_metal/hw/inc/internal/dataflow/noc_address_backend_xy.h:50-66` | `NUM_L1_BANKS` | — | — | — |
-| `gather_block` | raw_api | `noc_async_read` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:547` | `(src_noc_addr, dst_local_addr, n·aligned_page)` | — / `cb_staging_pages` slot (R3) | — | segment `n` |
-| `scatter_block` | raw_api | `noc_async_write` | `dataflow_api.h:876` | `(src_local_addr, dst_noc_addr, n·aligned_page)` | — / `cb_staging_pages` slot (R3) | — | segment `n` |
-| `drain_reads` / R3 read barrier | raw_api | `noc_async_read_barrier` | `dataflow_api.h:1921` | — | — | — | — |
-| `drain_writes` | raw_api | `noc_async_write_barrier` | `dataflow_api.h:1951` | — | — | — | — |
-| `release_slot` precondition (R3) | raw_api | `noc_async_writes_flushed` | `dataflow_api.h:1980` | — | — | — | — |
-| R3 slot handshake | raw_api | `cb_reserve_back` / `cb_push_back` / `cb_wait_front` / `cb_pop_front` | `dataflow_api.h:406` / `:208` / `:479` / `:260` | `bounce_block_pages` | `cb_staging_pages` | `cb_staging_pages` | `bounce_block_pages` |
-| profiler zones (BB-21) | raw_api | `DeviceZoneScopedN(name)` | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1012` | zone names in Host Contract | — | — | — |
+| all | raw_api | `TensorAccessor` ctor + `TensorAccessorArgs` (two arg blocks chained by `next_compile_time_args_offset()`) | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:97-114` (sharded), `:516-530` (interleaved) | `(args, base_addr, page_size)`; base addresses are common RT args | — | — | `page_size` |
+| `own_block` (shard) | raw_api | `TensorAccessor::shard_pages(shard_id)` | `tensor_accessor.h:331-339`; skips slots beyond the tensor: `shard_pages_address_iterator.h:38-50` | `owned_shard_id` | — | — | the shard is the block |
+| `own_block` (bank) | raw_api | interleaved `get_noc_addr(b)` vs own node bits (`get_noc_addr(0)`), `NOC_UNICAST_ADDR_X/Y` | `tensor_accessor.h:554-556`; `noc_parameters.h:221,314` (BH) | scan bound `min(NUM_L1_BANKS, P)` | — | — | — |
+| `pull_block`/`push_block` (bank walk) | raw_api | `tensor_accessor::Pages(accessor, b, P, nb)` strided iterator | `pages_address_iterator.h:284-300` | `start=b`, `stride=nb` | — | — | stripe length |
+| `pull_block`, `load_block` | raw_api | `noc_async_read` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:547` | `(src_noc_addr, local_l1_addr, page_size)` | — | — | — |
+| `push_block`, `store_block` | raw_api | `noc_async_write` | `dataflow_api.h:876` | `(local_l1_addr, dst_noc_addr, page_size)` | — | — | — |
+| `drain_block`, `load_block` | raw_api | `noc_async_read_barrier` | `dataflow_api.h:1921` | — | — | — | — |
+| `drain_block`, `store_block` | raw_api | `noc_async_write_barrier`, `noc_async_writes_flushed` | `dataflow_api.h:1951`, `:1980` | — | — | — | — |
+| `load_block`/`store_block` | raw_api | `cb_reserve_back`, `cb_push_back`, `cb_wait_front`, `cb_pop_front`, `get_write_ptr`, `get_read_ptr` | `dataflow_api.h:406`, `:208`, `:479`, `:260`, `:325`, `:346` | count = `bounce_block_pages` | `cb_bounce_pages` | `cb_bounce_pages` | `bounce_block_pages` |
+| host | raw_api | `ttnn.get_optimal_worker_cores_for_sharded_tensor` (owner cross-check), `ttnn.split_work_to_cores`, `ttnn.reports.get_device_info`, `ttnn.TensorAccessorArgs` | `ttnn/cpp/ttnn-nanobind/pytensor.cpp:1919`, `operations/core.cpp:471`, `reports.cpp:92`, `tensor_accessor_args.cpp:15` | — | — | — | — |
 
-**Helpers considered and rejected** (applies to every `raw_api` row above — the op has no compute phase):
+Helpers considered and rejected (every row above is `raw_api`):
 
-| Candidate | File:Line of the mismatch | Why it cannot express the shape |
-|-----------|---------------------------|---------------------------------|
-| `local_addr` / `set_read_state` / `read_with_state` (`local_copy_helpers_dataflow.hpp`) | `local_copy_helpers_dataflow.hpp:57` (source is always this core's own L1), `local_copy_helpers_dataflow.inl:66` (`transfer_size <= NOC_MAX_BURST_SIZE`) | self-aimed L1→L1 copies only; the move's source is a remote core or DRAM bank and segments exceed one packet |
-| `McastArgs` / `ttnn.Mcast` (`mcast/kernel/mcast_args.hpp`) | `mcast_args.hpp:15-29` (one sender delivers the same payload to a receiver group) | no page goes to more than one destination; nothing is reuse-shared |
-| `TensorAccessor::is_local_bank` for bank ownership | `tensor_accessor.h:582` ("not supported by the interleaved tensor accessor") | cannot identify the owned L1 bank of an interleaved buffer; hence the firmware bank-table scan |
-| compute helpers (`eltwise_convenience.hpp` `copy`, `tilize`, `untilize`, `reduce`, `matmul_block`) | — | no compute phase exists; a DEST round trip is regime R8 (rejected: not bit-exact for block formats) |
-| `tilize_helpers_dataflow.hpp`, `reduce_helpers_dataflow.hpp`, `tile_column_dataflow.hpp`, `index_tile_dataflow.hpp`, `dfb_helpers_dataflow.hpp` | headers' @brief (`tile_column_dataflow.hpp:9`, `index_tile_dataflow.hpp:45`, `dfb_helpers_dataflow.hpp:9`) | sub-tile fills / index tiles / tile-dimension queries; none moves whole pages between placements |
+| Candidate | File:line of the mismatch | Why it cannot express the planned shape |
+|---|---|---|
+| compute helpers (`tilize`, `untilize`, `reduce`, `eltwise_*`, `matmul_block`, …) | `ttnn/cpp/ttnn/kernel_lib/` (whole compute family) | the op has no compute phase: a page that went through unpack/pack would no longer be bit-exact for block formats (spec), and a byte copy needs no TRISC at all |
+| `local_copy_helpers_dataflow.hpp` `local_addr` / `set_read_state` / `read_with_state` | `local_copy_helpers_dataflow.hpp:57,75,95` | self-aimed reads only (the source is this core's L1); our sources are remote DRAM / remote L1 in every regime but the same-core special case |
+| `set_read_trid` / `async_read_barrier_with_trid` | `local_copy_helpers_dataflow.hpp:147,158` | not needed by the Phase 0 bounce (two large blocks); it is the measured alternative of lamp L6 |
+| `mcast` (`McastArgs`, `ttnn.Mcast`) | `ttnn/cpp/ttnn/kernel_lib/mcast/` | every page has exactly one destination; there is no reuse-shared operand to broadcast |
+| `tilize_helpers_dataflow.hpp` (`read_sticks_for_tilize`) | `tilize_helpers_dataflow.hpp` | row-major sticks; both sides here are TILE pages |
 
-`compute_kernel_hw_startup()`: not applicable — the op has no compute kernel.
+No compute kernel exists, so `compute_kernel_hw_startup()` does not apply. No missing helper blocks the plan: each block operation is a loop of single NoC calls inside the block it owns, with one barrier per block.
+
+## Host plan, cache and reporting
+
+| Concern | Decision |
+|---|---|
+| Entry point | `g6_to_memory_config(input_tensor, memory_config)`: `validate()` first line → allocate the output → plan (cached) → patch addresses → `ttnn.generic_op([input_tensor, output], descriptor)` (output last). Exactly one program. |
+| Plan | `{regime, owner_cores, kernel_core_range, roles: {(x, y): "pull_owner k" / "push_owner k" / "bank_walker" / "bounce [start, start+n)" / "idle"}, bounce_block_pages, bounce_depth, page_size, P}` — derived from configs and shapes only, no allocation, so `plan_of` and the op share it |
+| Cache key (BB-07) | `(device id, padded shape, dtype, input MemoryConfig incl. shard spec + range order, output MemoryConfig incl. shard spec + range order)`; value: plan + `ProgramDescriptor` (CT args, per-core RT args, CB) + `custom_program_hash` set from the key. A repeat call rebuilds nothing; it patches only the two base addresses (common RT args of every kernel). The owner cross-check against `get_optimal_worker_cores_for_sharded_tensor` runs once per key, at build. |
+| What is CT | `page_size`, `P`, regime/walk flags, `movers_per_owner`, both `TensorAccessorArgs` blocks (placement-dependent, so part of the key) |
+| What is RT | per core: `owned_shard_id` (shard regimes) or `(start_page, core_pages)` (bounce); common: `src_base_addr`, `dst_base_addr` |
+| Trace (BB-16) | the only allocation is the output tensor; no kernel build after the first (eager) call for a key |
+| Plan reporting (BB-08) | `plan_of(input_tensor, memory_config)` returns the plan dict above (keys `regime`, `movers`, `kernel_cores`, `roles`, …); `movers` lists `owner_cores` in owned-shard order for shard regimes and every grid core for bank/bounce regimes |
+| Zones (BB-21) | one named zone per piece of work and per wait, under a define that is off in the plain build: `G6_OWN_SCAN`, `G6_PULL_ISSUE`, `G6_PULL_DRAIN`, `G6_PUSH_ISSUE`, `G6_PUSH_DRAIN`, `G6_BOUNCE_RD_WAIT_FREE`, `G6_BOUNCE_RD_ISSUE`, `G6_BOUNCE_RD_DRAIN`, `G6_BOUNCE_WR_WAIT_DATA`, `G6_BOUNCE_WR_ISSUE`, `G6_BOUNCE_WR_FLUSH`, `G6_BOUNCE_WR_DRAIN`; the role dump is `plan_of(...)["roles"]` |
+| Kernel size (BB-04/BB-18) | four small dataflow kernels (pull, push, bounce reader, bounce writer) or two with a CT walk flag; no size-optimising build flag; per-core RT args ≤ 2 words |
+
+## Acceptance test
+
+`tests/ttnn/unit_tests/operations/g6_to_memory_config/test_g6_to_memory_config.py` (immutable spec). Exact equality (`helpers.TOLERANCES` is `("exact", None)` for every dtype). Production cases only (BB-22), plus the cells the rules require:
+
+| Test | Cases | Asserts |
+|---|---|---|
+| `test_production_case` | Qwen 2058, 2154, 2067, 2064, 2157, FLUX 313 (`pull_shard`); Qwen 2078, 2105, 2089 (`pull_bank`); Qwen 2071, 2065, 2073, 2061, 2155, 2062, FLUX 314 (`push_shard`) | regime pinned, owner count, shape/dtype/layout, exact placement (grid range order included), bit-exact values |
+| `test_supported_cell_regimes` | L1 interleaved → DRAM interleaved on Qwen 2064's input (`push_bank`); DRAM interleaved → DRAM interleaved on Qwen 2077's shape (`bounce`) | regime pinned, placement, bit-exact values |
+| `test_repeat_call_cache_and_determinism` | Qwen 2104 shape (`pull_bank`), 2071 (`push_shard`), 2067 (`pull_shard`) | second call on a new input at a new address adds no program-cache entry and is exact; a repeat on the first input is bit-identical |
+| `test_refused_cells` | Panoptic 11 (bf8b), Qwen 2178 placements in bf16 | `UnsupportedAxisValue`, `ExcludedCell` |
+| `test_validation_errors` | host tensor, ROW_MAJOR, col-major target shard spec, col-major input shard spec, shard shape not ×32, too few grid cores, rank 5 | `ValueError` / `RuntimeError` |
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| Shard→core order differs from the buffer's | multi-range grids (Qwen 2058: 16 single-core ranges; 2065: two ranges, 34 shards on 36 cores) and off-origin grids (2154 at core (1,0)) read back right only if placed by the buffer's own order | host derives the core list with the buffer's own function (`corerange_to_cores(grid, grid.num_cores(), row_wise=True)`; GRID_2D trim for block); an `ASSERT(acc.is_local_shard(shard_id))` in the `--dev` build |
-| Ragged last shard slot stride | Qwen 2071/2079/2134/2170: last width shard holds 40 of 52 columns; Panoptic 7 last block-shard row 1 of 7 | slots use the full shard width (Mechanism caps); the walk covers only real pages |
-| Kernel group is not rectangular | BB-17: sharded mover grids given as single-core lists | merge the mover grid into maximal rectangles; idle members get zero work |
-| L1-interleaved page ownership | no host binding maps L1 bank → core | device-side discovery, gated by `l1_bank_owners` on host; when false the side has 0 holders and the regime function falls back (correct, slower) |
-| NoC coordinate space | the pull kernel issues on NoC0, the push kernel on NoC1; bank discovery and any self-address must use the issuing NoC's coordinates (`local_copy_helpers_dataflow.hpp:48-51` warning) | pass the issuing NoC id to `bank_address`/`is_local` |
-| Source and target on the same core | Qwen 2157/2158 (1-core he → 1-core bl), L1-interleaved ↔ L1-interleaved | NoC loopback read is the one move; never a raw RISC-V memcpy (would bypass the NoC ordering the barrier relies on) |
-| In-flight transactions at return | BB-03: the next program starts right after | every kernel ends with its barrier, including idle cores (trivially satisfied) and the R3 writer (`noc_async_write_barrier`, not only `writes_flushed`) |
-| Page size assumption | refinement pages are 1088 B and 576 B | every size from `aligned_page_size` (accessor / `buffer_aligned_page_size()`); no literal 2048 |
-| Non-aligned H | 67 of 105 cases; leading dims fold per image (Qwen 2058 `[1,16,1,256]` = 16 tile rows) | `tensor_rows_tiles = prod(shape[:-2]) · ceil(H/32)`; whole tiles moved, padding rows ride along |
-| Program cache key incomplete | BB-07: two placements with the same shape (e.g. 2067 vs 2163 grids) | key = every field that changes the program (see Host Contract); addresses are runtime args only |
-| Returning the input or a wrong placement | values read back right either way | always allocate the output with `memory_config` and dispatch; never short-circuit identical placements |
-
-## Host Contract (registry, validation, plan, caching)
-
-### Registry declarations (op file `g6_to_memory_config.py`)
-
-| Item | Value |
-|------|-------|
-| `INPUT_TAGGERS` (order) | `dtype → scenario["dtype"]`; `layout → scenario["layout"]`; `rank → int(len(scenario["shape"]))`; `alignment → "tile_aligned" if H % 32 == 0 and W % 32 == 0 else "h_non_aligned"`; `in_scheme`, `out_scheme → scenario["in_memory"/"out_memory"]["scheme"]`; `in_buffer`, `out_buffer → ...["buffer"]`. `inputs` is `(scenario,)`. |
-| `SUPPORTED` (Phase 0) | `dtype [bfloat16]`, `layout [TILE_LAYOUT]`, `rank [2, 3, 4]`, `alignment ["tile_aligned", "h_non_aligned"]`, `in_scheme`/`out_scheme` all four, `in_buffer`/`out_buffer ["dram", "l1"]` |
-| `EXCLUSIONS` (Phase 0) | exactly `[{"out_scheme": "width_sharded", "out_buffer": "dram"}]` |
-| Exports of the package `ttnn.operations.g6_to_memory_config` | `g6_to_memory_config`, `select_plan`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS` |
-
-### `validate(input_tensor, memory_config)` — first line of the entry point
-
-| Order | Check | Raises |
-|-------|-------|--------|
-| 1 | input is a device tensor (`ttnn.is_tensor_storage_on_device`) | `ValueError` |
-| 2 | input layout is TILE | `ValueError` |
-| 3 | rank in 2..4 | `ValueError` |
-| 4 | every shard spec (input's and `memory_config`'s) has ROW_MAJOR orientation | `ValueError` |
-| 5 | `memory_config` shard spec covers the padded tile grid: shard dims multiples of 32; height → shard width = padded W; width → shard height = `tensor_rows_tiles · 32`; `n_shards ≤ grid.num_cores()` (block: one range with ≥ `n_shard_cols` columns and ≥ `n_shard_rows` rows) | `ValueError` |
-| 6 | build the scenario dict from the tensor and `memory_config` (`shape`, `dtype`, `layout`, `in_memory`/`out_memory` `buffer`+`scheme`, as `eval/golden_tests/g6_to_memory_config/axes.py:40-54` does), run `INPUT_TAGGERS` | — |
-| 7 | SUPPORTED per axis | `UnsupportedAxisValue` |
-| 8 | EXCLUSIONS per cell | `ExcludedCell` |
-| 9 | BB-05: `out_l1_bytes_per_core + staging_bytes ≤ MODEL_L1_BUDGET_BYTES` (`out_l1_bytes_per_core` = `ceil(tensor_pages/num_l1_banks)·aligned_page` for L1 interleaved, `shard_rows_tiles·shard_cols_tiles·aligned_page` for L1 sharded, 0 for DRAM; `staging_bytes` = R3 CB or 0). Every golden shape passes (largest: Qwen 2078, 94 pages = 188 KiB/core). | `ValueError` (never an EXCLUSION, never a size tag) |
-
-### Plan report — `select_plan(input_tensor, memory_config) -> G6Plan`
-
-Frozen dataclass, pure host function, deterministic for a given placement pair and device
-(BB-08); the entry point uses the same function.
-
-| Field | Meaning |
-|-------|---------|
-| `regime` | `"pull"` / `"push"` / `"bounce"` from the selection function |
-| `holders_in`, `holders_out` | `h_in`, `h_out` |
-| `l1_bank_owners` | the L1-bank ownership predicate |
-| `kernel_cores` | `ttnn.CoreRangeSet` per kernel group (merged rectangles) |
-| `roles` | `{(x, y): role}` with role one of `"pull"`, `"push"`, `"bounce_reader+writer"`, `"idle"`, for every launched core (BB-21 role dump) |
-| `bounce_block_pages`, `bounce_depth` | R3 knobs (`None` otherwise) |
-
-### One dispatch, caching, zones
-
-| Concern | Decision |
-|---------|----------|
-| Dispatch (BB-01) | exactly one `ttnn.generic_op([input_tensor, output_tensor], descriptor)` per call; no other device op, no host readback, no host-side padding/slicing/layout change |
-| Descriptor cache (BB-07, BB-16) | module dict keyed by (device id, compute grid, logical + padded shape, dtype, input memory config, output memory config — buffer type, layout, shard grid ranges in order, shard shape, orientation). Value: plan + `ProgramDescriptor` with `custom_program_hash = hash(key)`. Per call only the two buffer base addresses change — keep them in runtime args (common runtime args where the kernel shares them) and patch them on the cached descriptor; nothing else is rebuilt. |
-| Kernels (BB-18) | two small sources: a gather kernel (R1, R3 reader) and a scatter kernel (R2, R3 writer); local side (owned buffer vs staging slot) selected by a CT flag |
-| Profiler zones (BB-21) | `G6-RESOLVE` (RT args + bank scan), `G6-ISSUE` (segment loop), `G6-DRAIN` (final barrier); R3 adds `G6-SLOT-WAIT` (reserve/wait) and `G6-BLOCK-BARRIER` (per-block read barrier / write flush). Zones compile out of the plain build. |
+| Owner order ≠ the grid as written | block sharding trims the grid to the shard grid from its start (`buffer_distribution_spec.cpp:195-200`); a grid with more cores than shards leaves the tail empty (Qwen 2065: 36 cores, 34 shards) | `owner_cores` replicates `compute_core_list` and is cross-checked once per key against `get_optimal_worker_cores_for_sharded_tensor` |
+| Pull into a non-local slot | `noc_async_read` can only land in the issuer's L1; a wrong `owned_shard_id` or bank id silently reads into another tensor's bytes | shard ids from the cross-checked owner list; bank id found by matching the page's own NoC node bits; `--dev` ASSERT that the derived target address is local |
+| Stale addresses on a program-cache hit | the descriptor is cached; only base addresses change per call | addresses are common RT args patched on every call; acceptance test calls twice with a different input and checks exactness and the cache-entry count |
+| `buffer_num_pages()` on a sharded buffer | can count padded shard slots, not `P` | `P` from the padded shape, per image (`ceil(H/32)`) |
+| Bank regimes on a device whose L1 banks do not match the compute grid | a bank on an unlaunched core keeps its pages unmoved | `bank_cores_cover_grid` predicate (cached per device) → `bounce`, reported by `plan_of` |
+| A write left in flight | the next program starts right away (BB-03) | every push kernel and the bounce writer end with `noc_async_write_barrier`; every pull kernel with `noc_async_read_barrier` |
+| H not a multiple of 32 (67 of 105 cases) | the last tile row of each image is partial | nothing to do: whole pages move, padding is copied as stored; `P` uses `ceil` per image |
+| Block formats (refinement) | any unpack/repack or partial-page move changes shared exponents | pages move whole as bytes; `page_size` (576 / 1088 B) is the only dtype-dependent quantity and is a 64 B multiple |

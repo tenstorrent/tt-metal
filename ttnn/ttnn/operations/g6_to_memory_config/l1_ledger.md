@@ -1,66 +1,77 @@
 # L1 Ledger: g6_to_memory_config
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking Model: `op_design.md`.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (from `op_design.md`):
+`leading` (folded into `tile_row`), `tile_row`, `tile_col`, `page` (the flattened `tile_row × tile_col` view).
 
-Block axes named in the Blocking Model: `tile_row`, `tile_col`, and the flattened page index
-(`tile_row × tile_col`) used by the L1-bank owners (`bank_pages`) and the bounce workers
-(`bounce_block_pages`).
-
-## CB table
+## Circular buffers
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_staging_pages` (regime R3 bounce only) | `bounce_depth · bounce_block_pages`, with `bounce_block_pages = min(ceil(max_chunk_pages / bounce_depth), floor(MODEL_L1_BUDGET_BYTES / (bounce_depth · aligned_page_size)))` | `bounce_depth · bounce_block_pages` — reader fills slot k+1 while writer drains slot k; capacity = live set (the two slots together hold the worker's whole chunk) | `{tile_row: streams (flattened into the target-order chunk), tile_col: streams (flattened), page index: spans → bounce_block_pages per slot × bounce_depth slots}` | the input dtype (bfloat16 in Phase 0; bfloat8_b / bfloat4_b later). Dataflow-only payload that never passes through DEST — the format is the tensor's own page format, not a DEST-width choice | reader (RISCV_1) | writer (RISCV_0) | the whole R3 kernel | nothing — it is the op's only CB. Pack-into-destination is impossible in R3: neither side is in L1 on any core, and a NoC read lands only in the issuer's own L1, so a page bound DRAM→DRAM must rest in a worker slot. |
-| *(R1 pull, R2 push: no CB)* | 0 | 0 | `{tile_row: n/a, tile_col: n/a, page index: n/a}` — the owned block is the output (R1) or the input (R2) itself | — | — | — | — | Inventory minimized to zero: R1 reads each page straight into its final target slot (pattern 1, pack into the destination); R2 writes from the resident source slot. A zero-copy `cb_descriptor_from_sharded_tensor` alias was considered and dropped: one kernel per core has no handshake partner, so the alias would be bookkeeping only. |
+| `cb_bounce_pages` (bounce regime only) | `bounce_depth · bounce_block_pages`, with `bounce_block_pages = min(ceil(core_pages_max / bounce_depth), floor(L1_OP_BUDGET_BYTES / (bounce_depth · page_size)))` | `bounce_depth · bounce_block_pages` — both slots are live at once by design (reader fills block `k+1` while the writer drains block `k`); equals capacity | `{leading: folded into tile_row, tile_row: folded into page, tile_col: folded into page, page: spans → bounce_block_pages per slot × bounce_depth}` | input dtype (`Float16_b` Phase 0; `Bfp8_b` / `Bfp4_b` refinement) — a dataflow-only byte payload that never passes through DEST, so the DEST-width rule does not apply | reader | writer | bounce kernels, the whole call | nothing to share with: it is the op's only buffer. Not aliased onto the input or output: in `bounce` both live in DRAM, and an L1 staging slot is the only place a DRAM→DRAM page can land (a NoC read lands only in the issuer's L1) |
+
+Pull and push regimes allocate **no CB**. Considered and decided per the reuse patterns: the
+phase boundary "page arrived" → "page stored" is not storage — pull packs straight into the
+destination (pattern 1: the read lands at the page's final address in the output buffer), and push
+reads the resident source in place (the shard / bank stripe is consumed where it lies, never re-read
+over the NoC). There is no transform, so patterns 2–4 have nothing to act on.
+
+## Other L1 the BB-05 bound counts (tensor-backed, not CBs)
+
+| Term | Bytes on the most loaded core | Axis accounting | Bound / predicate |
+|------|-------------------------------|-----------------|-------------------|
+| output share, L1-sharded target (`pull_shard`, `push_shard` into L1 shards) | `shard_h_tiles · shard_w_tiles · page_size` (the full shard allocation, also on the ragged last shard) | `{tile_row: spans → shard_h_tiles, tile_col: spans → shard_w_tiles, page: n/a}` | the caller's shard spec; golden max 40960 B (20 pages, Qwen 2073's [32, 640] target shard) |
+| output share, L1-interleaved target (`pull_bank`, `push_shard` into L1 interleaved) | `ceil(P / nb) · page_size` | `{page: spans → ceil(P / nb)}` | golden max 94 pages · 2048 B = 192512 B (Qwen 2078, nb = 110) |
+| output share, DRAM target | 0 | — | — |
+| input | not counted (the model's tensor, per spec) | — | — |
 
 ## Symbol table
 
-| Symbol | Meaning | Bound | Predicate that establishes it |
-|--------|---------|-------|-------------------------------|
-| `aligned_page_size` | bytes per tile page, from the buffer | 2048 (bf16), 1088 (bf8), 576 (bf4) | dtype ∈ TARGET; TILE layout |
-| `tensor_pages` | `prod(shape[:-2]) · ceil(H/32) · ceil(W/32)` | `< 2^32` | host assert |
-| `num_l1_banks` | `get_device_info(device).l1_num_banks` | 110 on the campaign's Blackhole (11×10 grid) | `l1_bank_owners` (`num_l1_banks == grid.x · grid.y`) |
-| `shard_rows_tiles`, `shard_cols_tiles` | target/source shard extents in tiles | given by the shard spec; one shard per core | validation (shard dims multiple of 32, cores ≥ shards) |
-| `max_chunk_pages` | largest R3 worker chunk | `ceil(tensor_pages / min(tensor_pages, grid.x · grid.y))` | R3 predicate `h_in == 0 and h_out == 0` |
-| `bounce_depth` | staging slots | 2 (Phase 0) | host constant |
-| `bounce_block_pages` | pages per staging slot | `≤ floor(MODEL_L1_BUDGET_BYTES / (bounce_depth · aligned_page_size))` (329 bf16, 619 bf8, 1169 bf4) | clamp in the plan |
-| `MODEL_L1_BUDGET_BYTES` | L1 the model leaves to the op per core (BB-05) | 1347776 | spec, Model environment |
+| Symbol | Meaning | Bound | Predicate establishing it |
+|--------|---------|-------|---------------------------|
+| `P` | total tile pages, `prod(padded_shape[:-2]) · ceil(H/32) · ceil(W/32)` | ≤ 81920 in INPUTS (bf4b 2183); ≤ 10240 for bf16 (Qwen 2078) | none needed for CB sizing: `P` enters only through `core_pages_max`, itself clamped below |
+| `G` | compute grid cores, `compute_with_storage_grid_size().x · .y` | device constant (110 on this Blackhole board) | — |
+| `nb` | L1 banks = `G` (one per compute core) | = `G` | `bank_cores_cover_grid`; otherwise bank regimes become `bounce` |
+| `core_pages_max` | `ceil(P / min(P, G))` — largest bounce assignment | ≤ 745 in INPUTS (bf4b 2183, G = 110) | `split_work_to_cores` balance |
+| `page_size` | `input_tensor.buffer_aligned_page_size()` | ∈ {2048, 1088, 576} B | TILE layout; dtype ∈ TARGET |
+| `bounce_depth` | bounce buffer depth | 2 | host constant |
+| `L1_OP_BUDGET_BYTES` | L1 the model leaves the op per core | 1347776 B | model environment (BB-05) |
+| `bounce_block_pages` | bounce block | ≤ `floor(1347776 / (2 · page_size))` = 329 (bf16), 619 (bf8b), 1169 (bf4b) | the `min(...)` in its definition |
 
 ## Total per-core footprint
 
 ```
-L1_core = out_l1_bytes_on_core + [regime == bounce] · bounce_depth · bounce_block_pages · aligned_page_size
-
-out_l1_bytes_on_core = ceil(tensor_pages / num_l1_banks) · aligned_page_size        (L1 interleaved output)
-                     = shard_rows_tiles · shard_cols_tiles · aligned_page_size        (L1 sharded output; full slot, also a ragged last shard)
-                     = 0                                                               (DRAM output)
+L1_op(core) = output_share(regime, core)                                   # scales with shard_h_tiles·shard_w_tiles, or ceil(P/nb); 0 for DRAM targets
+            + [regime == bounce] · bounce_depth · bounce_block_pages · page_size   # scales with bounce_depth and bounce_block_pages; ≤ L1_OP_BUDGET_BYTES by construction
 ```
 
-- Scales with the input shape: `out_l1_bytes_on_core` only — the output's own pages, which BB-05
-  counts and the op cannot avoid. The op's own buffers add nothing in R1/R2.
-- Scales with a knob: the R3 staging term, linear in `bounce_block_pages` and `bounce_depth`,
-  clamped so `L1_core ≤ MODEL_L1_BUDGET_BYTES` (R3 has a DRAM output, so the first term is 0).
-- Golden maximum: Qwen 2078 `[16,128,5120]` DRAM→L1 interleaved, `ceil(10240/110) = 94` pages =
-  192512 B per core (14 % of the bound). PERF FOCUS Qwen 2183 (refinement, R3): `max_chunk_pages =
-  745`, `bounce_block_pages = 373`, staging 2 · 373 · 576 = 429696 B.
-- Host refusal (`ValueError`) when `L1_core > MODEL_L1_BUDGET_BYTES` — no golden shape reaches it.
+Only one term is non-zero per regime: owner regimes into L1 carry the output share and no CB;
+`push_*` into DRAM carry nothing; `bounce` carries only the CB (its target is DRAM). Golden maxima:
+192512 B (`pull_bank`, Qwen 2078), 40960 B (L1-sharded targets), 429120 B
+(`bounce`, bf4b 2183, refinement) — all under 1347776 B. A shape whose `L1_op` exceeds the budget is
+refused on the host before allocation (BB-05).
 
 ## Data-movement budget
 
-`B = tensor_pages · aligned_page_size` bytes.
+`B = P · page_size` bytes per tensor.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input | 1 if the input is in DRAM, else 0 | each page is read exactly once, by its single mover (R1 target holder, R3 worker) or sent once from its holder (R2); no re-read, no intermediate placement | 0 beyond the move itself |
-| output | 1 if the output is in DRAM, else 0 | each page is written exactly once by its single mover; never staged through a third placement | 0 beyond the move itself |
-| the move itself (both sides in L1 on different cores) | — | one NoC transaction per segment, landing in the final slot | `B` (one hop per page); 0 when source and target sit on the same core (NoC loopback) |
+| input, DRAM placement | 1 (each page read once) | every page has exactly one mover, which reads it once — owner regimes into its final slot, `bounce` into its CB | none beyond that read |
+| input, L1 placement | 0 | read in place by its owner (`push_*`) or read once over the NoC by the target owner (`pull_*`) | `pull_*`: 1 NoC read per page (B bytes); `push_*`: the read is local (0) |
+| output, DRAM placement | 1 (each page written once) | one mover writes each page once | none beyond that write |
+| output, L1 placement | 0 | written once, by the pull owner's read landing in place or the push owner's write | `push_*` into L1: 1 NoC write per page (B bytes); `pull_*`: 0 extra |
 
-Totals per tier: DRAM `B · ([input in DRAM] + [output in DRAM])`; cross-core NoC `B` only for
-L1↔L1 moves between different cores; core-local staging `0` (R1/R2) or `B` through worker slots (R3,
-DRAM→DRAM only, where it is structural).
+Totals per tier for the chosen splits:
 
-> Cheapest-traffic split considered: owner split (R1/R2; R3 where no side is in L1) — every page
-> crosses each tier it must cross exactly once, `+0` bytes per tier over the minimum. Implemented:
-> owner split. It is also the cheapest; the occupancy alternative R4 (helper fan-out, `+helper_pages
-> · aligned_page_size` cross-core bytes) is the `deferred` regime row in `op_design.md`, reachable
-> without restructuring because a helper is an R3 worker on a subset of the owner's pages.
+| Regime | DRAM bytes | NoC transfers (bytes) |
+|--------|-----------|------------------------|
+| `pull_shard`, `pull_bank` | `B` if the source is DRAM, else 0 | `B` (one transfer per page) |
+| `push_shard`, `push_bank` | `B` if the target is DRAM, else 0 | `B` |
+| `bounce` | `2B` (read once, write once) | `2B` — the minimum for DRAM→DRAM |
+
+> Cheapest-traffic split considered: owner moves (pull by the target's owner or push by the source's
+> owner) — one NoC transfer per page, each tensor crossing its tier once. Implemented: the owner
+> regimes for every placement pair with an L1 side, and `bounce` for DRAM→DRAM, where two transfers
+> per page are the minimum. The implemented split is the cheapest-traffic split for every placement
+> pair. The only above-minimum path is `bounce` taken as the fallback of a bank regime when
+> `bank_cores_cover_grid` is false (+`B` NoC bytes, same DRAM bytes); `plan_of` reports it.
