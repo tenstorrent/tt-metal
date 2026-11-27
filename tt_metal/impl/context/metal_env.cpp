@@ -165,29 +165,30 @@ std::string error_message(const std::exception& e) {
 // failed.
 std::optional<std::string> hold_dram_core_seats(
     const Cluster& cluster, std::vector<internal::drisc_service::SeatLock>& held) {
-    try {
-        for (const ChipId chip : cluster.all_chip_ids()) {
-            const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
-            for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
-                auto lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
+    for (const ChipId chip : cluster.all_chip_ids()) {
+        const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+        for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+            std::optional<internal::drisc_service::SeatLock> lock;
+            try {
+                lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
                     {.asic_id = asic_id,
                      .noc0_x = static_cast<uint32_t>(core.x),
                      .noc0_y = static_cast<uint32_t>(core.y)});
-                if (!lock.has_value()) {
-                    held.clear();
-                    return fmt::format(
-                        "another process (a DRISC service client or metal) holds the seat of chip {} DRAM core {} "
-                        "(ASIC {})",
-                        chip,
-                        core.str(),
-                        asic_id);
-                }
-                held.push_back(std::move(*lock));
+            } catch (const std::exception& e) {
+                held.clear();
+                return fmt::format("taking their DRISC seat locks failed ({})", error_message(e));
             }
+            if (!lock.has_value()) {
+                held.clear();
+                return fmt::format(
+                    "another process (a DRISC service client or metal) holds the seat of chip {} DRAM core {} (ASIC "
+                    "{})",
+                    chip,
+                    core.str(),
+                    asic_id);
+            }
+            held.push_back(std::move(*lock));
         }
-    } catch (const std::exception& e) {
-        held.clear();
-        return fmt::format("taking their DRISC seat locks failed ({})", error_message(e));
     }
     return std::nullopt;
 }
