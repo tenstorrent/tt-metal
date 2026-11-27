@@ -1,50 +1,54 @@
 # L1 Ledger: g6_sharded_to_interleaved
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (op_design.md, Blocking Model): `tile_rows` (extent `block_tile_rows`), `tile_cols` (extent `block_tile_cols`). No `fp32_dest_acc_en`: the op has no compute kernel and nothing passes through DEST.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md` → Blocking Model: `tile_rows`, `tile_cols`, `lane`.
 
-## CB table
+**Inventory.** The op owns no scratch, staging or intermediate buffer. The store reads each tile in place from the resident shard and writes it straight to its output page (Rule 3, pattern 1: the destination is the output page itself). The only CBs are two zero-copy views of the input shard, one per writer lane. They exist only so that each lane kernel has its own CB.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_shard` | `shard_tile_rows * shard_tile_cols` — the input's sharded buffer itself (`aligned_size_per_bank`), globally allocated, 0 B taken from the op's budget | `block_tile_rows * block_tile_cols` (the whole shard is resident at once; on a short last shard the capacity exceeds the live set by the shard's padding pages, which the buffer already holds — mechanism reason: shard geometry) | `{tile_rows: spans → block_tile_rows (capacity: shard_tile_rows), tile_cols: spans → block_tile_cols (capacity: shard_tile_cols)}` | input dtype, unconverted (Float16_b / Bfp8_b): a dataflow-only payload that never goes through DEST | none in this program (the shard is resident before launch) | writer | whole program | aliases the input tensor's buffer (zero-copy) — this IS the input's storage; no second CB exists to share with |
+| `cb_input_shard_lane0` | `shard_tiles_h · shard_tiles_w` (= `aligned_size_per_bank / page_bytes`, set by `cb_descriptor_from_sharded_tensor`). Globally allocated **on the input buffer**: 0 B of op L1 | the whole shard (`rows_k · cols_k` valid tiles), resident before the call and owned by the producer. Lane 0 reads `ceil(rows_k·cols_k / L)` of its pages in place | `{tile_rows: spans → shard_tiles_h, tile_cols: spans → shard_tiles_w, lane: streams → lane 0's sub-range of ceil(n_k/L) tiles}` | input dtype: Float16_b (bfloat16) / Bfp8_b (bfloat8_b). A dataflow-only payload that never passes through DEST, so no DEST-width question exists (audit 2 n/a) | none — the resident shard, written by the program that produced `input_tensor`; never pushed | writer lane 0 | whole call | **Shares the same bytes with `cb_input_shard_lane1`** (both backed on the input buffer at offset 0). Two CB entries rather than one so each consumer kernel owns its CB (one-consumer rule). The alias costs no L1. Capacity = live set (the shard), so audit 1 holds in both directions |
+| `cb_input_shard_lane1` | same expression; same buffer; 0 B of op L1 | the whole shard, resident. Lane 1 reads the remaining `floor`-side pages of its sub-range | `{tile_rows: spans → shard_tiles_h, tile_cols: spans → shard_tiles_w, lane: streams → lane 1's sub-range}` | same as lane 0 | none — resident shard | writer lane 1 | whole call | Shares the same bytes with `cb_input_shard_lane0` (same reason). Absent when `num_writer_lanes = 1` |
 
-Inventory before solve (Rule 1, Rule 3): the op has no scratch CB. Pack-into-destination is the whole design — every tile goes from its resident shard straight to its output page; there is no phase boundary, no staging tile, no intermediate. No budget predicate, safety fraction or blocking search exists.
+Non-CB L1 that counts against the per-core budget (spec D16 / BB-05: counted before the output is allocated):
 
-## Non-CB L1 the op uses
+| Item | Per-core bytes | Scales with | When |
+|------|----------------|-------------|------|
+| Output pages of an L1-interleaved output | `ceil(P / N_L1_banks) · page_bytes` (the same range is reserved in every L1 bank) | P, `page_bytes` | `memory_config.buffer_type == L1` only (p1). 0 for DRAM output (p2) |
+| Input shard | `shard_tiles_h · shard_tiles_w · page_bytes` | shard spec | **Outside the budget**: already allocated by the producer when the call starts (spec) |
 
-| Item | Bytes per core | Scales with | Counted against `L1_FREE_BYTES` |
-|------|----------------|-------------|---------------------------------|
-| output pages when `buffer = l1` (the output's own L1 banks) | `ceil(num_pages / num_l1_banks) * out_aligned_page_bytes` | `num_pages` (tensor), page bytes (dtype) — not a block knob | yes (contract §8: the output's own L1 pages come out of the 1347776 B) |
-| output pages when `buffer = dram` | 0 | — | — |
-| input shard | `shard_tile_rows * shard_tile_cols * in_aligned_page_bytes` | shard spec | no (allocated by the producer before the call; outside the budget) |
-
-## Symbol table
+### Symbol table
 
 | Symbol | Meaning | Bound | Predicate establishing it |
 |--------|---------|-------|---------------------------|
-| `shard_tile_rows`, `shard_tile_cols` | nominal shard extent in tiles | ≥ 1; the shard already fits in L1 (allocated by the producer) | input is a valid sharded L1 tensor (`validate()` structural checks) |
-| `block_tile_rows`, `block_tile_cols` | this core's actual shard extent | `1 ≤ block ≤ shard` | `min()` clamp in the host plan |
-| `num_pages` | `R * C` output pages | p2: 160; p1: 1024 (golden INPUTS) | shape of the input |
-| `num_l1_banks` | L1 banks of the interleaved allocator | device property (one per worker core on the campaign board, 110 — INFERENCE, tensix.md) | device |
-| `out_aligned_page_bytes`, `in_aligned_page_bytes` | page bytes | 2048 (bfloat16), 1088 (bfloat8_b) | dtype; host asserts both equal the page size |
-| `L1_FREE_BYTES` | free L1 per core at the call | 1347776 | model environment (contract §5, §8) |
+| `shard_tiles_h`, `shard_tiles_w` | input shard shape in tiles | p2: 1 x 5; p2 other: 1 x 3; p1: 10 x 1; p1 other: 11 x 1 | read from `input_tensor.shard_spec`; validation requires whole tiles. No op buffer depends on them (the CBs alias the producer's shard) |
+| `rows_k`, `cols_k`, `n_k` | valid extent of shard k (ragged last shard) | `≤ shard_tiles_h`, `≤ shard_tiles_w`, `n_k ≤ shard_tiles_h·shard_tiles_w` | `min` formulas in `op_design.md` → Work Distribution |
+| `L` = `num_writer_lanes` | writer lanes per core | {1, 2}; Phase 0 = 2 | host constant `NUM_WRITER_LANES` |
+| `page_bytes` | aligned tile page | 2048 (bfloat16), 1088 (bfloat8_b) | TARGET dtypes |
+| `P` | output pages = R·C | ≤ 1024 over the golden INPUTS (p1); 160 (p2) | INPUTS; no op buffer scales with P, only the L1 output share does |
+| `N_L1_banks` | L1 interleaved bank count of the device (`NUM_L1_BANKS`) | ≥ 103 on the production Blackhole, so `ceil(1024 / N_L1_banks) ≤ 10` (INFERENCE: one L1 bank per worker core, 110 worker cores per spec section 3; more banks only shrink the share) | device constant |
 
-## Total per-core footprint
+### Total per-core footprint
 
-`op_L1(core) = 0 [CBs] + (buffer == l1 ? ceil(num_pages / num_l1_banks) * out_aligned_page_bytes : 0)`
+`op_L1 = 0` (CB entries alias the input shard) `+ [buffer == L1] · ceil(P / N_L1_banks) · page_bytes`
 
-No term scales with a block knob: the only CB aliases the input, and the output share depends on the tensor and the bank count. Golden INPUTS: p2 (DRAM output) 0 B; p1 (L1 output) `ceil(1024 / 110) * 1088 = 10880 B` at 110 banks (17408 B even at 64 banks), 0.8 % of `L1_FREE_BYTES`. The BB-05 host guard (`op_L1 > L1_FREE_BYTES` → `RuntimeError`) cannot trigger on any golden shape.
+- p2 (DRAM output): **0 B**.
+- p1 (L1 output): ≤ `10 · 1088 = 10880 B` per core, 0.8 % of the 1347776 B budget.
+- No term scales with a block knob. `L` changes only the number of zero-byte CB entries. The single output-share term scales with P and `page_bytes` alone.
+- No budget predicate, safety fraction or blocking search exists. No shape in INPUTS approaches the bound, so the op never refuses a shape on L1 grounds.
 
 ## Data-movement budget
 
-Chosen split: owner writes whole shard. P = number of pages, `page_bytes` as above.
-
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| input (sharded L1) | 0 | every tile is read in place from the L1 of the core that holds its shard (`cb_input_shard`, zero-copy); no NoC read | 0 |
-| output, `buffer = dram` (p2) | 1 (327680 B: 160 pages × 2048 B, whole tiles incl. 31 padding rows each) | each page written once by its owner core; whole-tile writes (logical-rows-only writes rejected, regime table) | the writes themselves: 160 transfers from 32 cores |
-| output, `buffer = l1` (p1) | 0 | the output lives in L1 banks | 1114112 B over the NoC (1024 pages × 1088 B), each page once, from 103 cores |
+| `input_tensor` (sharded L1) | 0 | Resident shard read in place through the zero-copy CB. It never crosses the NoC as a read and never touches DRAM | 0 |
+| output, DRAM interleaved (p2: 160 pages, 327680 B) | 1 (write) | Each page written exactly once, by the core holding its source tile | none beyond the write itself (each tile's one NoC crossing *is* the DRAM write) |
+| output, L1 interleaved (p1: 1024 pages, 1114112 B) | 0 | L1 destination | 1114112 B: each page crosses the NoC once to its L1 bank (a loopback where the bank is the source core) |
 
-Totals per tier — p2: DRAM 327680 B written, NoC 327680 B (the same writes), L1 reads 327680 B local. p1: DRAM 0 B, NoC 1114112 B, L1 reads 1114112 B local.
+Totals per call:
 
-> Cheapest-traffic split considered: owner writes whole shard — 0 B above the minimum on every tier (each tile read locally once, one NoC crossing per tile). Implemented: owner writes whole shard. The implemented split is the cheapest; every other split adds at least one NoC crossing per moved tile (regime table: gather, rebalance, DRAM staging — all rejected).
+| Case | DRAM read | DRAM write | NoC | Core-local L1 reads |
+|------|-----------|------------|-----|---------------------|
+| p2 | 0 | 327680 B | 327680 B (160 writes from 32 cores, 64 issuing RISCs) | 327680 B |
+| p1 | 0 | 0 | 1114112 B (1024 writes from 103 cores, 206 issuing RISCs) | 1114112 B |
+
+> Cheapest-traffic split considered: the input's own shard split (owner writes) — every tile crosses the NoC once, zero NoC or DRAM reads, the output written once. Implemented: the same split. It is the cheapest; every alternative (gather, redistribution, DRAM staging) adds P·`page_bytes` or more per tier, and none is deferred.
