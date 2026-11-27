@@ -136,7 +136,7 @@ def main():
     if tf:
         print("\n## C3: fp32 teacher-forced on the trace's inputs vs the trace's outputs (rows 0-8191, dB)\n")
         print(
-            "| L | attn | type | attn dB | attn bf16 floor | DSA recall | KV latent dB | FFN dB (own route) | routing identical | FFN dB same-route rows (n) | FFN dB trace route |"
+            "| L | attn | FFN | attn dB | attn bf16 floor | DSA recall | KV latent dB | FFN dB (own route) | routing identical | FFN dB same-route rows (n) | FFN dB trace route |"
         )
         print("|---|---|---|---|---|---|---|---|---|---|---|")
         for l in layers:
