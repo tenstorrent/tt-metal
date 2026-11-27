@@ -12,11 +12,28 @@ schedule and the read count cannot diverge between them. The in-layer order is
 per-backend, because only this one owns tensors.
 """
 
+import os
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import as_sealed_list
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import walk_sites
 
 BLOCK_SIZE = 12
+
+# Opt-in: a walk inheriting a sealed set ON a block edge takes the boundary read as the undivided walk
+# does (one-site batch over the inherited set, then the ordinary read / seal / batch). Off, it keeps the
+# closed-site read (seal first, score the owed site with the next block's batch): the same mixture, a
+# different reduction, 1-3 bf16 ulps off the undivided walk on about half the read's elements. A walk
+# starting INSIDE a block always takes the exact path; there is no other.
+EXACT_BOUNDARY_ENV = "K3_ATTN_RES_EXACT_BOUNDARY"
+
+
+def attn_res_planes(boundary_layer_idx, block_size=BLOCK_SIZE):
+    """Planes a pipeline boundary before `boundary_layer_idx` carries: the live stream plus one per
+    snapshot sealed so far. Layers `0, block_size, 2 * block_size, ...` each seal one, so that is
+    `ceil(boundary / block_size)` snapshots: `boundary // block_size` on a block edge, one more inside
+    a block, where the live stream is the open block's partial sum."""
+    return 1 + -(-boundary_layer_idx // block_size)
 
 
 class TtAttnResStream(object):
@@ -133,7 +150,7 @@ class TtAttnResStream(object):
         self._running_sum, self._pending, self.sealed = None, None, []
 
 
-def _block_sites(layers, q_pre, q_post, q_out, block_size):
+def _block_sites(layers, q_pre, q_post, q_out, block_size, first_layer_idx=None):
     """Queries grouped by the sealed set they read, in the order the walk consumes them.
 
     A sealed set outlives the block that installed it by one read. The seal
@@ -141,10 +158,19 @@ def _block_sites(layers, q_pre, q_post, q_out, block_size):
     `L`'s post-attention read through layer `L + block_size`'s pre-attention read. Groups
     are cut on the read sequence every `2 * block_size` sites for that reason, not on layer
     boundaries — and the trailing group is short whenever the stack does not divide evenly.
+
+    `first_layer_idx` is given for a walk that inherits a sealed set (a rank that does not
+    hold layer 0). Its first site is then `q_pre[0]`, global site `2F - 1` of the undivided
+    walk, and its first group is what is left of the undivided group holding that site: one
+    site (the owed pre-read) when `F` is a block edge, `2 * block_size + 1 - 2 * (F % block_size)`
+    sites when `F` is inside a block. Every later group is the undivided walk's.
     """
-    order = walk_sites(q_pre[:layers], q_post[:layers], q_out)
+    inherited = first_layer_idx is not None
+    order = walk_sites(q_pre[:layers], q_post[:layers], q_out, first_pre_issued=inherited)
     sites = 2 * block_size
-    return [order[start : start + sites] for start in range(0, len(order), sites)]
+    head = sites - (2 * first_layer_idx - 1) % sites if inherited else 0
+    groups = [order[:head]] if head else []
+    return groups + [order[start : start + sites] for start in range(head, len(order), sites)]
 
 
 class TtAttnResWalk(object):
@@ -182,34 +208,61 @@ class TtAttnResWalk(object):
     """
 
     def __init__(
-        self, op, hidden_states, q_pre, q_post, q_out, num_layers, block_size=BLOCK_SIZE, inherited_block_residual=None
+        self,
+        op,
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        num_layers,
+        block_size=BLOCK_SIZE,
+        inherited_block_residual=None,
+        first_layer_idx=0,
+        exact_boundary=None,
     ):
-        """`inherited_block_residual` is the sealed set an upstream pipeline rank handed over.
+        """`inherited_block_residual` is the sealed set an upstream pipeline rank handed over,
+        and `first_layer_idx` the GLOBAL index of this walk's layer 0.
 
-        Given one, the walk opens OWING a read: `q_pre[0]`, the site `walk_sites` drops
-        because layer 0 of a *whole* model has nothing sealed to read against. On a rank
-        that does not hold layer 0 that site is real — it is the pre-read of the layer
-        opening the next block, the one read that straddles the boundary, and it scores
-        against the set that arrives rather than anything this rank has sealed.
+        Given a sealed set, the walk opens owing a read: `q_pre[0]`, the site `walk_sites`
+        drops because layer 0 of a *whole* model has nothing sealed to read against. On a
+        rank that does not hold layer 0 that site is real, and it reads against the set that
+        arrives together with the live stream that arrives.
 
         Nothing statistical crosses the boundary: `inter_block` is a pure function of
-        `(sealed set, queries)`, and this rank owns `q_pre[0]`, so the batch is
-        recomputed here rather than shipped. Ownership of the tensor transfers in.
+        `(sealed set, queries)`, so the rest of the undivided walk's current group is batched
+        here over the inherited set rather than shipped. That leaves this walk in exactly
+        the state an undivided walk is in at that layer, so every read is the undivided
+        walk's computation: at a block edge the group is the owed site alone and
+        `open_layer(0)` then reads, seals and batches the next block; inside a block (the
+        live stream is that block's partial sum, sealed is every snapshot before it) it is
+        the block's remaining sites and `open_layer(0)` only reads. Seals follow the GLOBAL
+        layer index. Ownership of both tensors transfers in.
 
-        The owed read is taken in `open_layer(0)`, which seals first. The live stream it
-        reads arrives complete, and a seal right after the read is what layer 0 owes
-        anyway, so scoring `q_pre[0]` against the set *with* that stream sealed is the same
-        read, and it puts `q_pre[0]` in the batch of the block that opens there.
+        On a block edge that exact path is opt-in (`exact_boundary`, default from
+        `K3_ATTN_RES_EXACT_BOUNDARY=1`); off, the walk keeps the closed-site read: `open_layer(0)`
+        seals the inherited live stream first and scores the owed site as a closed site of the
+        next block's batch. Same mixture, different reduction, so not bit-equal to the undivided
+        walk.
         """
+        if exact_boundary is None:
+            exact_boundary = os.environ.get(EXACT_BOUNDARY_ENV, "0") == "1"
         self.op = op
         self.block_size = block_size
+        self.first_layer_idx = first_layer_idx
         self.stream = TtAttnResStream(op, hidden_states, block_size=block_size, sealed=inherited_block_residual)
-        # Unchanged by the inheritance: local group 0 is the group that opens after this
-        # rank's first seal, which is exactly what `_block_sites` yields first.
-        self._blocks = iter(_block_sites(num_layers, q_pre, q_post, q_out, block_size))
+        inherited = inherited_block_residual is not None
+        on_edge = first_layer_idx % block_size == 0
         self._pending = iter(())
         self._partials = self._shifts = self._masses = None
-        self._owed = q_pre[0] if inherited_block_residual is not None else None
+        self._owed = q_pre[0] if inherited and on_edge and not exact_boundary else None
+        exact_inheritance = inherited and self._owed is None
+        self._blocks = iter(
+            _block_sites(num_layers, q_pre, q_post, q_out, block_size, first_layer_idx if exact_inheritance else None)
+        )
+        if exact_inheritance:
+            queries = next(self._blocks)
+            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)[:3]
+            self._pending = enumerate(queries)
 
     def read(self):
         """The next read site, in the order the schedule issues them."""
@@ -233,19 +286,20 @@ class TtAttnResWalk(object):
         borrowed = self.stream.num_sealed == 0
         h = self.stream.running_sum if borrowed else self.read()
 
-        if layer_idx % self.block_size == 0:
+        if (self.first_layer_idx + layer_idx) % self.block_size == 0:
             self.stream.seal()
             # The read above was the outgoing block's last site, so replacing the batches
             # here strands nothing.
             queries = next(self._blocks)
             self._free_batches()
-            self._partials, self._shifts, self._masses, _ = self.op.inter_block(self.stream.sealed, queries)
+            self._partials, self._shifts, self._masses = self.op.inter_block(self.stream.sealed, queries)[:3]
             self._pending = enumerate(queries)
         return h, borrowed
 
     def _open_owing(self):
-        """The rank's first layer: seal the inherited live stream, then batch the owed read
-        with the block it opens. With nothing live left to fold in, the owed read is closed.
+        """The closed-site boundary read (exact boundary off): seal the inherited live stream,
+        then batch the owed read with the block it opens. With nothing live left to fold in,
+        the owed read is closed.
         """
         self.stream.seal()
         queries = next(self._blocks)

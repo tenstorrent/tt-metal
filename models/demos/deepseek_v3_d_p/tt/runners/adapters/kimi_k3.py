@@ -296,10 +296,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         A read scores the live sum against every sealed snapshot, and the snapshots for layers
         upstream of the boundary are produced on another rank — nothing on this side can recompute
-        them, so they ride the payload. `layer_split_boundaries` keeps `boundary_layer_idx` a
-        multiple of the block size, which is what makes this count exact rather than approximate.
+        them, so they ride the payload. Inside a block the live stream is that block's partial sum
+        and the block's opening snapshot is already sealed, so the count is one more than at the
+        block edge below it (`attn_res_planes`).
         """
-        return 1 + boundary_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+        from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import attn_res_planes
+
+        return attn_res_planes(boundary_layer_idx, KimiK3Config.ATTN_RES_BLOCK_SIZE)
 
     # --- migration table configs: kvpe, the DSA index cache on K3.1, then KDA recurrent and convolution ---
     # K3: 0 kvpe / 1 recurrent / 2 convolution. K3.1: 0 kvpe / 1 index / 2 recurrent / 3 convolution.

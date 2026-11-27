@@ -26,7 +26,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk, attn_res_planes
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, build_attention, build_kda_scalars
@@ -153,17 +153,13 @@ class TtKimiK3Transformer(LightweightModule):
         self.num_layers = num_layers
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
-        # A rank boundary has to land on an AttnRes block edge. Off one, three things break at
-        # once: local layer 0 fires a seal the architecture does not have there and suppresses
-        # the real one; the boundary lands inside a read group, so the sealed set alone no
-        # longer carries the handoff; and the plane count stops being a function of the
-        # boundary. `KimiK3Adapter.layer_split_boundaries` already constrains this — repeated
-        # here so a direct user of the module cannot route around the adapter.
-        if not is_first_rank and first_layer_idx % BLOCK_SIZE != 0:
-            raise ValueError(
-                f"a non-first rank must start on an AttnRes block boundary (a multiple of "
-                f"{BLOCK_SIZE}); got first_layer_idx={first_layer_idx}"
-            )
+        # A rank may start at any layer. Inside an AttnRes block it inherits that block's live partial
+        # sum plus every snapshot sealed before it (`attn_res_planes`); the walk seals on the GLOBAL
+        # layer index and batches the rest of the block's read group over the inherited set, so every
+        # read is the undivided walk's. On a block edge that exact read is opt-in (K3_ATTN_RES_EXACT_BOUNDARY=1,
+        # see `TtAttnResWalk`); the default keeps main's closed-site read. `KimiK3Adapter.layer_split_boundaries`
+        # still keeps the runner's pipeline splits on block edges, which is what its traced socket sizing was
+        # measured with.
         self.kv_only_last_layer = kv_only_last_layer
         # AttnRes is the model, not an option. Defaulting to a plain running sum would run, produce
         # 0.447 against the golden where AttnRes gives 0.99985, and issue none of the 2N reads — so it
@@ -209,6 +205,7 @@ class TtKimiK3Transformer(LightweightModule):
                         attn_res.weights.output,
                         _n,
                         inherited_block_residual=block_residual,
+                        first_layer_idx=first_layer_idx,
                     )
                 )
 
@@ -365,16 +362,17 @@ class TtKimiK3Transformer(LightweightModule):
     def inbound_planes(self) -> int:
         """Planes this rank receives: one live stream plus the snapshots sealed before it.
 
-        A seal fires every `BLOCK_SIZE` layers starting at layer 0, so a boundary at layer F
-        has `F // BLOCK_SIZE` snapshots behind it. A function of the boundary alone, which is
-        what keeps the transfer a static shape and therefore trace-capturable.
+        A seal fires at every layer `L % BLOCK_SIZE == 0` (layer 0 seals the embedding), so a
+        boundary at layer F has `ceil(F / BLOCK_SIZE)` snapshots behind it. A function of the
+        boundary alone, which is what keeps the transfer a static shape and therefore
+        trace-capturable.
         """
-        return 1 + self.first_layer_idx // BLOCK_SIZE
+        return attn_res_planes(self.first_layer_idx)
 
     @property
     def outbound_planes(self) -> int:
         """Planes this rank sends on — the same count evaluated at the far edge of its slice."""
-        return 1 + (self.first_layer_idx + self.num_layers) // BLOCK_SIZE
+        return attn_res_planes(self.first_layer_idx + self.num_layers)
 
     def _pack_handoff(self, live, sealed):
         """Fuse the live stream and the sealed set into the one tensor the D2D socket carries.

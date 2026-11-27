@@ -43,7 +43,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         `KimiK3Adapter.pipeline_activation_planes`, which sizes the socket — the two are read at the
         same boundary and disagreeing shows up as a rendezvous failure, not a wrong answer.
         """
-        return 1 + self.config.first_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+        from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import attn_res_planes
+
+        return attn_res_planes(self.config.first_layer_idx, KimiK3Config.ATTN_RES_BLOCK_SIZE)
 
     def _pack_activation(self, hidden, partial):
         """The drafter partial rides the handoff as one more plane after the AttnRes ones: the payload is
