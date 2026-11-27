@@ -2949,10 +2949,10 @@ class MiniMaxH3Pipeline:
             self._force_bucket = rung
         else:
             self._force_pad_to = rung
-        # With Sol-Attn on, run one step past its dense steps: a sparse step must run untraced, and then be
-        # captured, here, because `run_blocks` captures a new trace key without a prep run.
-        schedule = self._requested_sol_schedule()
-        steps = 2 if schedule is None else max(2, schedule.dense_steps + 1)
+        # With Sol-Attn on, run a second step (three schedule points), which `_is_sol_dense_step` makes a sparse one:
+        # a sparse step must run untraced, and then be captured, here, because `run_blocks` captures a new trace key
+        # without a prep run.
+        steps = 2 if self._requested_sol_schedule() is None else 3
         try:
             self(prompt, num_inference_steps=steps, **generation_kwargs)
         finally:
@@ -3426,6 +3426,12 @@ class MiniMaxH3Pipeline:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
         return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
 
+    def _is_sol_dense_step(self, step: int) -> bool:
+        """Whether denoise step `step` runs dense under the Sol-Attn schedule in force. Warm-up keeps only its
+        first step dense, whatever the schedule's count, so that its second one is a sparse step."""
+        schedule = self._sol_schedule
+        return schedule is not None and schedule.is_dense_step(step) and not (self._warming and step > 0)
+
     def _sol_preset(self) -> str | None:
         """The `policy.SOL_PRESETS` entry this pipeline's files name, if any."""
         return None
@@ -3776,8 +3782,7 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
-                    schedule = self._sol_schedule
-                    transformer.set_sol_dense_step(schedule is not None and schedule.is_dense_step(i))
+                    transformer.set_sol_dense_step(self._is_sol_dense_step(i))
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,

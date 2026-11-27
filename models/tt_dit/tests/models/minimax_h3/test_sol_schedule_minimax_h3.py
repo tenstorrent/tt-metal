@@ -23,6 +23,7 @@ from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3T
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
+from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 _SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_PRESET", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS", "H3_SOL_DENSE_LAYERS", "H3_SOL_SINKS")
 
@@ -135,6 +136,7 @@ def _pipeline(monkeypatch, env, cls=MiniMaxH3Pipeline):
     pipeline.bucket_denoise = True
     pipeline.sp_factor = 8
     pipeline._sol_key = pipeline._sol_schedule = None
+    pipeline._warming = False
     pipeline._buckets = {76800: SimpleNamespace(warm=True)}
     pipeline._request_state = SimpleNamespace(warm=True)
     pipeline._release_denoise_traces = Mock()
@@ -196,21 +198,35 @@ def test_pipeline_releases_traces_only_on_a_schedule_change(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "env, steps",
+    "env, dense",
     [
-        ({}, 2),
-        ({"H3_SOL_ATTN": "1"}, 3),
-        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "0"}, 2),
-        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "1"}, 2),
-        ({"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "2"}, 2),
+        ({}, [False]),
+        ({"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "2"}, [False]),
+        ({"H3_SOL_ATTN": "1"}, [True, False]),
+        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "1"}, [True, False]),
+        ({"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "0"}, [False, False]),
     ],
 )
-def test_warmup_runs_one_step_past_the_dense_steps(monkeypatch, env, steps):
+def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, env, dense):
+    """The dense flag of each forward of a warm-up generation. `num_inference_steps` counts the schedule's points,
+    one more than its forwards."""
     pipeline, calls = _pipeline(monkeypatch, env), []
+    pipeline._warming = True
     monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: calls.append(kwargs))
     pipeline._run_forced(76800, "a prompt", {"num_frames": 158})
-    assert calls == [{"num_inference_steps": steps, "num_frames": 158}]
     assert pipeline._force_bucket is None
+    assert calls == [{"num_inference_steps": len(dense) + 1, "num_frames": 158}]
+    scheduler = MiniMaxH3Scheduler(shift=6.0)
+    scheduler.set_timesteps(len(dense) + 1)
+    pipeline._sol_schedule = pipeline._requested_sol_schedule()
+    assert [pipeline._is_sol_dense_step(step) for step in range(len(scheduler.timesteps))] == dense
+
+
+def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
+    pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"})
+    assert not any(pipeline._is_sol_dense_step(step) for step in range(4))  # Sol-Attn not set up: the off switch
+    pipeline._sol_schedule = pipeline._requested_sol_schedule()
+    assert [pipeline._is_sol_dense_step(step) for step in range(4)] == [True, True, False, False]
 
 
 _RULE = {"band": 1, "force_first_block": True, "dense_prefix_queries": True}
