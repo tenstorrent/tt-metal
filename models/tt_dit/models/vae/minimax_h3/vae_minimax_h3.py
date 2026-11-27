@@ -324,11 +324,12 @@ class MiniMaxH3Vae:
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
-        # The decode's own tile overlap (the encoder keeps `tile_overlap`). Given, the strip stitch also
-        # packs an extra chunk onto every spare mesh column (`strip_waves`); unset, each canvas keeps its plan.
+        # The decode's own tile overlap (the encoder keeps `tile_overlap`). Given, the strip stitch also spreads
+        # one extra chunk's tile columns over the spare mesh columns (`strip_waves`); unset, each canvas keeps its plan.
         self.decode_tile_overlap = tile_overlap if decode_tile_overlap is None else decode_tile_overlap
+        assert self.decode_tile_overlap % config.spatial_compression_ratio == 0, "tiles start on the latent grid"
         self.pack_spare_columns = decode_tile_overlap is not None
-        # A yuv420 decode with no frame consumer still assembles its clip while later chunks decode
+        # Set, a yuv420 decode with no frame consumer assembles its clip while later chunks decode
         # (`StreamingClipAssembly`), instead of after the last one: same bytes, the host copy off the tail.
         self.assemble_beside_decode = assemble_beside_decode
         self._weight_loader = weight_loader
@@ -1687,7 +1688,7 @@ class MiniMaxH3Vae:
             for i in range(num_chunks)
         ]
         stream = None
-        if on_frames is None and self.assemble_beside_decode and self.device_stitch and output_type == "yuv420":
+        if on_frames is None and self.assemble_beside_decode and output_type == "yuv420":
             on_frames = lambda frames: None
         if on_frames is not None and chunk_latents:
             stream = StreamingClipAssembly(
