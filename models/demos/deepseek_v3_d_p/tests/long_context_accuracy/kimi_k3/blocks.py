@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_device_case,
     mla_row_permutation,
     reconstruct_sp_tp_tensor,
-    reconstruct_state_at_sp_rank,
     to_sp_input,
 )
 
@@ -76,10 +75,17 @@ class KimiK3KdaBlock:
         ttnn.deallocate(output_tt)
         output = torch.empty_like(rotated)
         output[:, self.permutation, :] = rotated
-        recurrent = reconstruct_state_at_sp_rank(
-            self._state.recurrent, self.mesh, self.sp_axis, self.tp_axis, self.sp_size - 1
-        )
-        return BlockOutputs(output[0], {"recurrent": recurrent[0]})
+        return BlockOutputs(output[0], {"recurrent": self._last_rank_recurrent()[0]})
+
+    def _last_rank_recurrent(self) -> torch.Tensor:
+        """The recurrent state ``[1, heads, k, v]`` held by the last sequence rank: its tensor-parallel head shards,
+        concatenated. Reads back only those shards (``reconstruct_state_at_sp_rank`` reads every device's)."""
+        shards = ttnn.get_device_tensors(self._state.recurrent)
+        columns = tuple(self.mesh.shape)[1]
+        tp_size = tuple(self.mesh.shape)[self.tp_axis]
+        last = self.sp_size - 1
+        coordinates = [(last, tp) if self.sp_axis == 0 else (tp, last) for tp in range(tp_size)]
+        return torch.cat([ttnn.to_torch(shards[row * columns + column]) for row, column in coordinates], dim=1)
 
     def carried_state(self) -> Mapping[str, torch.Tensor]:
         return {}

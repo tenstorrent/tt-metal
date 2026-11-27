@@ -245,13 +245,16 @@ def test_kda_scorer_tiers_through_run_case(golden_root) -> None:
     assert tiers[2][0]["state_head_gain_final_worst_gain"] == pytest.approx(0.9)
 
 
-def test_kda_scorer_stops_at_a_call_over_its_bar_and_on_non_finite_output(golden_root) -> None:
+def test_kda_scorer_stops_at_a_call_over_its_bar_and_on_non_finite_output_or_state(golden_root) -> None:
     result = _run(golden_root, FakeKdaBlock(output_scale={4: 1.3}))
     assert (result.stopped_at, result.metric_tiers) == (4, {})
     assert result.violations == ["rows [4, 8): call_nrmse 0.3 > 0.2 in [4, 8)"]
     result = _run(golden_root, FakeKdaBlock(output_scale={0: math.nan}))
     assert result.stopped_at == 0
     assert result.violations[0] == "rows [0, 4): output has 8 non-finite values"
+    result = _run(golden_root, FakeKdaBlock(state_scale={(4, 1): math.nan}))
+    assert (result.stopped_at, result.metric_tiers) == (0, {})
+    assert result.violations[0] == "rows [0, 4): recurrent state has 2 non-finite values"
 
 
 def test_kda_scorer_fails_a_constant_final_state_head(golden_root) -> None:
