@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import struct
+from fractions import Fraction
 from typing import List
 
+import numpy as np
 import pytest
 import torch
 from helpers.format_config import DataFormat
@@ -1514,6 +1517,462 @@ def test_eltwise_binary_sfpu_quant_quasar(
         is_perf=is_perf,
         perf_report=perf_report,
     )
+
+
+# ===========================================================================
+# Family 4b — the 8-bit quantization.h entry points on the quant_family kernel: UInt8
+# output (saturate to [0, 255]), Int8 output (the two's complement byte in [0, 255], packed
+# as UInt8) and int8 input (the UInt8-unpacked byte), with Blackhole semantics. The Int32
+# entry points (BinaryOp QUANT / REQUANT / DEQUANT) are family 4 above; they appear here
+# only in the special-value test, which drives the round / clamp body the 8-bit ones share.
+#
+# Staged like family 4: raw 32-bit words in buffer_A, unpack-to-dest, one result tile per
+# (operand A, scale) tile pair. Stimuli and goldens follow the Blackhole tests
+# test_eltwise_binary_sfpu_quant_byte / _quant_byte_special.
+# ===========================================================================
+_QAPI_INT8_MIN = -128
+_QAPI_INT8_MAX = 127
+_QAPI_UINT8_MAX = 255
+_QAPI_INT8_BIAS = 0x80  # the int8 output's offset-128 bias; also the int8 byte of -128
+
+# The quant_tile / requant_tile / dequant_tile entry points (Int32 container output), family 4's ids.
+_QAPI_INT32_OPS = ["QUANT", "REQUANT", "DEQUANT"]
+# The 8-bit entry points, each named after its quantization.h *_tile_init wrapper.
+_QAPI_BYTE_OPS = [
+    "QUANT_UINT8",
+    "QUANT_INT8",
+    "REQUANT_UINT8",
+    "REQUANT_INT8",
+    "REQUANT_INT8_IN",
+    "REQUANT_INT8_IN_UINT8_OUT",
+    "REQUANT_INT8_IN_INT8_OUT",
+    "DEQUANT_INT8",
+]
+_QAPI_ALL_OPS = _QAPI_INT32_OPS + _QAPI_BYTE_OPS
+
+# Operand-0 width and result width of each entry point.
+_QAPI_FP32_IN = frozenset({"QUANT", "QUANT_UINT8", "QUANT_INT8"})
+_QAPI_INT8_IN = frozenset(
+    {
+        "REQUANT_INT8_IN",
+        "REQUANT_INT8_IN_UINT8_OUT",
+        "REQUANT_INT8_IN_INT8_OUT",
+        "DEQUANT_INT8",
+    }
+)
+_QAPI_INT8_OUT = frozenset({"QUANT_INT8", "REQUANT_INT8", "REQUANT_INT8_IN_INT8_OUT"})
+_QAPI_UINT8_OUT = frozenset(
+    {"QUANT_UINT8", "REQUANT_UINT8", "REQUANT_INT8_IN_UINT8_OUT"}
+)
+_QAPI_FP32_OUT = frozenset({"DEQUANT", "DEQUANT_INT8"})
+
+_QAPI_F32_MAX = Fraction(float(np.finfo(np.float32).max))
+
+
+def _qapi_f32_bits(values) -> np.ndarray:
+    return np.asarray(values, dtype=np.float32).view(np.int32)
+
+
+def _qapi_bits_f32(words) -> np.ndarray:
+    """fp32 values from 32-bit patterns given as int32 or as unsigned Python ints."""
+    return (
+        (np.asarray(words, dtype=np.int64) & 0xFFFFFFFF)
+        .astype(np.uint32)
+        .view(np.float32)
+    )
+
+
+def _run_quant_api_words(
+    binary_op,
+    in0_words,
+    in1_words,
+    zero_point_bits,
+    output_format,
+    *,
+    tile_indices=DEFAULT_SFPU_BINARY_TILE_INDICES,
+    sign_magnitude=False,
+    pack_format=None,
+):
+    """Run *binary_op* on (in0, in1) tile pairs of raw 32-bit words; return the result words.
+
+    Each pair is one Dest block laid out by *tile_indices*; the result tile of every block is
+    packed as *pack_format* (default: *output_format*, the Dest result encoding).
+    """
+    pack_format = output_format if pack_format is None else pack_format
+    pairs = in0_words.size // MAX_TILE_ELEMENTS
+    assert pairs * MAX_TILE_ELEMENTS == in0_words.size == in1_words.size
+    blocks = []
+    for p in range(pairs):
+        sl = slice(p * MAX_TILE_ELEMENTS, (p + 1) * MAX_TILE_ELEMENTS)
+        block, tiles_per_block = _stage_binary_operands(
+            torch.from_numpy(in0_words[sl].astype(np.int32)),
+            torch.from_numpy(in1_words[sl].astype(np.int32)),
+            tile_indices,
+            torch.int32,
+        )
+        blocks.append(block)
+    buffer_A = torch.cat(blocks)
+    tile_cnt = pairs * tiles_per_block
+    src0_idx, src1_idx, dst_idx = tile_indices
+    num_faces = MAX_NUM_FACES
+
+    test_config_kwargs = {
+        "test_name": _CPP_SOURCE,
+        "formats": InputOutputFormat(
+            input_format=DataFormat.Int32, output_format=pack_format
+        ),
+        "templates": [
+            SFPU_BINARY_OP(binary_op),
+            APPROX_MODE(),
+            DATA_COPY_TYPE(DataCopyType.A2D),
+            UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
+            DEST_SYNC(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+            SFPU_DST_ROUNDING_MODE(),
+            TYPECAST_FORMATS(),
+            BROADCAST_TYPE(BroadcastType.None_),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt),
+            NUM_FACES(num_faces),
+            TEST_FACE_DIMS(),
+            DEST_INDEX(0),
+            SFPU_TILE_INDICES(src0_idx, src1_idx, dst_idx),
+            LOOP_FACTOR(1),
+            ZERO_POINT(zero_point_bits),
+        ],
+        "variant_stimuli": StimuliConfig(
+            buffer_A,
+            DataFormat.Int32,
+            buffer_A[:MAX_TILE_ELEMENTS],  # dummy buffer_B (unused by kernel)
+            DataFormat.Int32,
+            pack_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=1,
+            tile_count_res=pairs,
+            num_faces=num_faces,
+            twos_complement=True,  # raw 32-bit identity staging
+        ),
+        "unpack_to_dest": True,
+        "dest_acc": DestAccumulation.Yes,  # all quant endpoints are 32-bit
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs=test_config_kwargs,
+    )
+    # Dest holds the output_format result; the packer converts it to pack_format.
+    fc = configuration.formats_config[0]
+    fc.pack_src = output_format
+    fc.pack_dst = pack_format
+    fc.pack_S_src = output_format
+    fc.pack_S_dst = pack_format
+
+    res = configuration.run().result
+    if pack_format == DataFormat.Float32:
+        words = fp32_bits_as_int32(torch.tensor(res, dtype=torch.float32).flatten())
+    else:
+        words = torch.tensor(res, dtype=torch.int64).flatten().to(torch.int32)
+    words = words.numpy()
+    assert words.size == pairs * MAX_TILE_ELEMENTS
+    return words.copy()
+
+
+# ---------------------------------------------------------------------------
+# The quantization.h entry points on exact stimuli against a bit-exact emulation.
+# ---------------------------------------------------------------------------
+def _qapi_exact_f32(fr: Fraction):
+    """The fp32 equal to *fr*; +-inf past FLT_MAX; None when finite but not representable."""
+    if abs(fr) > _QAPI_F32_MAX:
+        return np.float32(np.inf) if fr > 0 else np.float32(-np.inf)
+    f = np.float32(float(fr))
+    return f if Fraction(float(f)) == fr else None
+
+
+def _qapi_golden(binary_op, in0_words, scale_words, zero_point_bits):
+    """Bit-exact emulation of one quantization.h entry point on raw Int32 words.
+
+    Returns (expected words, defined mask, tie mask). A lane is undefined when the result needs
+    an unspecified hardware choice: a NaN operand, inf * 0 or an inexact fp32 multiply-add.
+    Port of the Blackhole _quant_byte_golden, extended to the Int32-output entry points.
+    The requant output zero point is 0 (the harness passes none).
+    """
+    in0_words = np.asarray(in0_words, dtype=np.int32)
+    scales = _qapi_bits_f32(scale_words)
+    n = in0_words.size
+    expected = np.zeros(n, dtype=np.int32)
+    defined = np.ones(n, dtype=bool)
+    tie = np.zeros(n, dtype=bool)
+    zp = float(_qapi_bits_f32([zero_point_bits])[0])
+    # Quant adds its zero point after rounding. The kernel adds it exactly only when it is an integer.
+    if not math.isfinite(zp) or (binary_op in _QAPI_FP32_IN and not zp.is_integer()):
+        defined[:] = False
+        return expected, defined, tie
+    zp_fr = Fraction(zp)
+    in0_f32 = _qapi_bits_f32(in0_words) if binary_op in _QAPI_FP32_IN else None
+    if binary_op in _QAPI_UINT8_OUT:
+        lo, hi = 0, _QAPI_UINT8_MAX
+    else:
+        lo, hi = _QAPI_INT8_MIN, _QAPI_INT8_MAX
+
+    def store(i, q):
+        """Saturate q to the output range. Int8 output keeps the 2's complement byte."""
+        q = min(max(q, lo), hi)
+        expected[i] = q & 0xFF if binary_op in _QAPI_INT8_OUT else q
+
+    def saturate(i, v_inf):
+        """An infinite value saturates each int path by its sign; the fp32 path keeps it."""
+        if binary_op in _QAPI_FP32_OUT:
+            expected[i] = _qapi_f32_bits([v_inf])[0]
+        else:
+            store(i, hi if v_inf > 0 else lo)
+
+    for i in range(n):
+        s = float(scales[i])
+        if not math.isfinite(s):
+            defined[i] = False
+            continue
+        s_fr = Fraction(s)
+        if binary_op in _QAPI_FP32_IN:
+            a = float(in0_f32[i])
+            if not math.isfinite(a):
+                if math.isnan(a) or s == 0.0:
+                    defined[i] = False  # NaN in, or inf * 0
+                else:
+                    saturate(i, a * s)
+                continue
+            # One SFPMAD rounds the exact A * B to nearest even. The zero point is added after.
+            prod = Fraction(a) * s_fr
+            tie[i] = prod.denominator == 2
+            store(i, round(prod) + int(zp))
+            continue
+        elif binary_op in _QAPI_INT8_IN:
+            # The byte as the UInt8 unpacker delivers it, after the kernel's `^ 0x80` unbias.
+            a_fr = Fraction((int(in0_words[i]) & 0xFF) ^ _QAPI_INT8_BIAS)
+        else:
+            a_fr = Fraction(int(in0_words[i]))
+            if a_fr == -(2**31):
+                # No sign-magnitude encoding: the input cast has to pick some neighbour.
+                defined[i] = False
+                continue
+
+        if binary_op in _QAPI_FP32_OUT:
+            # dequant: (A + LREG2) * B, LREG2 holding the bits the caller passed.
+            summ = _qapi_exact_f32(a_fr + zp_fr)
+            if summ is None or (np.isinf(summ) and s == 0.0):
+                defined[i] = False
+                continue
+            if np.isinf(summ):
+                saturate(i, float(summ) * (1.0 if s > 0 else -1.0))
+                continue
+            prod = _qapi_exact_f32(Fraction(float(summ)) * s_fr)
+            if prod is None:
+                defined[i] = False
+                continue
+            expected[i] = _qapi_f32_bits([prod])[0]
+            continue
+
+        # Requant: SFPMAD gives v = A * B + zp in fp32, and v is rounded to nearest even.
+        # The output zero point is 0 here.
+        v = _qapi_exact_f32(a_fr * s_fr + zp_fr)
+        if v is None:
+            defined[i] = False
+            continue
+        if np.isinf(v):
+            saturate(i, float(v))
+            continue
+        v_fr = Fraction(float(v))
+        tie[i] = v_fr.denominator == 2
+        store(i, round(v_fr))
+    return expected, defined, tie
+
+
+# Power-of-two scales and odd-sixteenth (fp32) or 1/16-offset zero-point (integer) operands keep
+# every multiply-add exact in fp32 and never land on a .5 tie.
+_QAPI_SWEEP_SCALES = np.array([0.125, 0.25, 0.5, 1.0, 2.0, 4.0], dtype=np.float32)
+_QAPI_SWEEP_PAIRS = 8  # sweep size, in (in0, scale) tile pairs
+
+
+def _qapi_sweep_stimuli(binary_op, n, generator):
+    """(in0 words, scale words, zero-point bits) reaching the saturation sides."""
+    scales = generator.choice(_QAPI_SWEEP_SCALES, size=n).astype(np.float32)
+    if binary_op in _QAPI_FP32_IN:
+        # Odd sixteenths in [-512, 512): every output saturates on both sides.
+        k = generator.integers(-4096, 4096, size=n)
+        in0_words = _qapi_f32_bits(((2 * k + 1) / 16.0).astype(np.float32))
+        zp = 5.0
+    elif binary_op in _QAPI_INT8_IN:
+        # Every byte value; the unbiased byte is in [0, 255], so a negative zero-point reaches the low side.
+        in0_words = generator.integers(0, 256, size=n).astype(np.int32)
+        zp = -128.0625 if binary_op in _QAPI_FP32_OUT else -300.0625
+    else:
+        # Int32 two's complement in [-2048, 2048): exact in fp32, saturates for scale >= 1/8.
+        in0_words = generator.integers(-2048, 2048, size=n).astype(np.int32)
+        zp = 5.0625
+    return in0_words, _qapi_f32_bits(scales), int(np.uint32(_qapi_f32_bits([zp])[0]))
+
+
+def _qapi_saturation_ends(binary_op):
+    if binary_op in _QAPI_INT8_OUT:
+        return {_QAPI_INT8_BIAS, _QAPI_INT8_MAX}
+    if binary_op in _QAPI_UINT8_OUT:
+        return {0, _QAPI_UINT8_MAX}
+    if binary_op in _QAPI_FP32_OUT:
+        return set()
+    return {_QAPI_INT8_MIN, _QAPI_INT8_MAX}
+
+
+def _qapi_output_format(binary_op):
+    return DataFormat.Float32 if binary_op in _QAPI_FP32_OUT else DataFormat.Int32
+
+
+def _qapi_hex(words) -> str:
+    return ", ".join(f"0x{int(np.uint32(np.int32(w))):08x}" for w in words)
+
+
+def _qapi_assert_lanes(
+    binary_op,
+    in0_words,
+    scale_words,
+    result,
+    expected,
+    defined,
+    tie,
+    label,
+    n_real=None,
+):
+    """Assert the defined lanes, assert ties round to even, log the undefined lanes."""
+    n_real = result.size if n_real is None else n_real
+    live = np.zeros(result.size, dtype=bool)
+    live[:n_real] = True
+
+    def lanes(mask, limit=16):
+        idx = np.flatnonzero(mask)[:limit]
+        return "\n".join(
+            f"  lane {i}: in0={_qapi_hex([in0_words[i]])} "
+            f"scale={float(_qapi_bits_f32([scale_words[i]])[0]):g} "
+            f"got={_qapi_hex([result[i]])} expected={_qapi_hex([expected[i]])}"
+            for i in idx
+        )
+
+    ties = tie & live
+    if ties.any():
+        assert np.array_equal(
+            result[ties], expected[ties]
+        ), f"{binary_op} {label}: ties do not round to even\n" + lanes(
+            ties & (result != expected)
+        )
+    undefined = ~defined & live
+    if undefined.any():
+        print(
+            f"{binary_op} {label}: implementation-defined lanes ->\n"
+            + lanes(undefined, limit=64)
+        )
+    check = defined & ~tie & live
+    mismatch = check & (result != expected)
+    assert not mismatch.any(), (
+        f"{binary_op} {label}: {int(mismatch.sum())} of {int(check.sum())} defined lanes "
+        "differ\n" + lanes(mismatch)
+    )
+
+
+# A lone axis goes through plain pytest.mark.parametrize: the harness @parametrize hands it over
+# as a 1-tuple.
+@pytest.mark.quasar
+@pytest.mark.parametrize("binary_op", _QAPI_BYTE_OPS)
+def test_eltwise_binary_sfpu_quant_api_sweep_quasar(binary_op):
+    """Sweep: eight pairs of exact, tie-free stimuli that reach the saturation sides."""
+    generator = np.random.default_rng(0)
+    in0, sc, zp = _qapi_sweep_stimuli(
+        binary_op, _QAPI_SWEEP_PAIRS * MAX_TILE_ELEMENTS, generator
+    )
+    expected, defined, tie = _qapi_golden(binary_op, in0, sc, zp)
+    assert defined.all() and not tie.any(), "sweep stimuli must be exact and tie-free"
+    assert _qapi_saturation_ends(binary_op) <= set(
+        expected.tolist()
+    ), f"{binary_op} stimuli never saturate"
+    result = _run_quant_api_words(
+        binary_op, in0, sc, zp, _qapi_output_format(binary_op)
+    )
+    _qapi_assert_lanes(binary_op, in0, sc, result, expected, defined, tie, "sweep")
+
+
+# Special lanes, against zero-point 0: the edges each kernel's clamp / saturation /
+# conversion path is built around.
+_QAPI_F32_SPECIALS = [
+    0.0, -0.0, float("inf"), float("-inf"),
+    1.0e-45, -1.0e-45,  # smallest denormal
+    1.17549435e-38, -1.17549435e-38,  # FLT_MIN
+    3.4028235e38, -3.4028235e38,  # FLT_MAX
+    1.0e6, -1.0e6, 300.0, -300.0, 256.0, 255.5, 255.0, 254.5,
+    129.0, 128.5, 128.0, 127.5, 127.25, 127.0, 126.75, 126.5,
+    -126.5, -126.75, -127.0, -127.25, -127.5, -127.75,
+    -128.0, -128.25, -128.5, -128.75, -129.0, -200.0, 200.0,
+    0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.5, -1.5, 2.5, -2.5, 3.5, -3.5, 1.0, -1.0,
+]  # fmt: skip
+_QAPI_F32_SPECIAL_WORDS = [
+    0x7FC00000, 0xFFC00000,  # canonical quiet NaN, both signs
+    0x7F800001, 0xFF800001,  # signalling NaN payloads, both signs
+    0x7FFFFFFF, 0xFFFFFFFF,  # all-ones payload NaN, both signs
+]  # fmt: skip
+_QAPI_INT32_SPECIALS = [
+    0, 1, -1, 127, 128, -127, -128, -129, 255, 256, -255, -256, 1000, -1000,
+    2**23, -(2**23), 2**24, -(2**24), 2**31 - 1, -(2**31), -(2**31) + 1,
+]  # fmt: skip
+_QAPI_INT8_SPECIALS = [0x00, 0x01, 0x7F, 0x80, 0x81, 0xFF, 0xFE, 0x40, 0xC0]
+
+
+def _qapi_special_stimuli(binary_op):
+    """(in0 words, scale words, number of real lanes); the rest of the tile is padding."""
+    if binary_op in _QAPI_FP32_IN:
+        words = list(_qapi_f32_bits(_QAPI_F32_SPECIALS)) + [
+            int(np.int32(np.uint32(w))) for w in _QAPI_F32_SPECIAL_WORDS
+        ]
+        scales = [1.0, 0.5, 2.0]
+    elif binary_op in _QAPI_INT8_IN:
+        words, scales = _QAPI_INT8_SPECIALS, [1.0]
+    else:
+        words, scales = _QAPI_INT32_SPECIALS, [1.0]
+    words = np.array(words, dtype=np.int32)
+    in0 = np.concatenate([words for _ in scales])
+    sc = np.concatenate([np.full(words.size, s, dtype=np.float32) for s in scales])
+    pad = (-in0.size) % MAX_TILE_ELEMENTS
+    in0 = np.concatenate([in0, np.zeros(pad, dtype=np.int32)])
+    sc = np.concatenate([sc, np.ones(pad, dtype=np.float32)])
+    return in0, _qapi_f32_bits(sc), in0.size - pad
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("binary_op", _QAPI_ALL_OPS)
+def test_eltwise_binary_sfpu_quant_api_special_quasar(binary_op):
+    """Special lanes against zero-point 0: +-0, +-inf, NaN payloads, denormals, FLT_MIN/MAX,
+    the -128 / 127 / 255 edges and exact .5 ties."""
+    in0, sc, n_real = _qapi_special_stimuli(binary_op)
+    expected, defined, tie = _qapi_golden(binary_op, in0, sc, zero_point_bits=0)
+    result = _run_quant_api_words(binary_op, in0, sc, 0, _qapi_output_format(binary_op))
+    _qapi_assert_lanes(
+        binary_op, in0, sc, result, expected, defined, tie, "special lanes", n_real
+    )
+
+
+# The 8-bit outputs end to end: the Int32 Dest word packed by the Int32 -> UInt8 packer. Int8
+# output takes this path too (the two's complement byte rides in [0, 255]), as on Blackhole.
+_QAPI_BYTE_OUT_OPS = sorted(_QAPI_UINT8_OUT | _QAPI_INT8_OUT, key=_QAPI_BYTE_OPS.index)
+
+
+@pytest.mark.quasar
+@pytest.mark.parametrize("binary_op", _QAPI_BYTE_OUT_OPS)
+def test_eltwise_binary_sfpu_quant_api_pack_uint8_quasar(binary_op):
+    """One sweep pair packed to UInt8 L1: the byte the packer writes equals the Dest word."""
+    generator = np.random.default_rng(1)
+    in0, sc, zp = _qapi_sweep_stimuli(binary_op, MAX_TILE_ELEMENTS, generator)
+    expected, defined, tie = _qapi_golden(binary_op, in0, sc, zp)
+    assert defined.all() and not tie.any(), "sweep stimuli must be exact and tie-free"
+    assert ((expected >= 0) & (expected <= _QAPI_UINT8_MAX)).all()
+    result = _run_quant_api_words(
+        binary_op, in0, sc, zp, DataFormat.Int32, pack_format=DataFormat.UInt8
+    )
+    _qapi_assert_lanes(binary_op, in0, sc, result, expected, defined, tie, "UInt8 pack")
 
 
 # ===========================================================================
