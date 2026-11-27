@@ -5,7 +5,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/experimental/eltwise_mul_fidelity.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 

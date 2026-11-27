@@ -1016,7 +1016,7 @@ PERF_TEST_SCHEMAS = {
         "aliases": {},
         "test_name_aliases": {"perf_sum_reduce_scalar": "perf_sum_reduce_scalar"},
     },
-    "perf_rmsnorm_clear_product_tile": {
+    "perf_mul_reduce_scalar_clear_product_tile": {
         "version": 1,
         "columns": [
             "capacity",
@@ -1037,7 +1037,8 @@ PERF_TEST_SCHEMAS = {
         ],
         "aliases": {},
         "test_name_aliases": {
-            "perf_rmsnorm_clear_product_tile": "perf_rmsnorm_clear_product_tile"
+            "perf_mul_reduce_scalar_clear_product_tile": "perf_mul_reduce_scalar_clear_product_tile",
+            "perf_rmsnorm_clear_product_tile": "perf_mul_reduce_scalar_clear_product_tile",
         },
     },
     "perf_mul_reduce_scalar_chunked": {
@@ -1067,11 +1068,17 @@ PERF_TEST_SCHEMAS = {
             "perf_mul_reduce_scalar_chunked": "perf_mul_reduce_scalar_chunked"
         },
     },
-    "perf_rmsnorm_bcast_scalar_dest_reuse": {
-        "version": 1,
+    "perf_bcast_dest_reuse": {
+        "version": 2,
         "columns": [
+            "bcast_clobber_unpa_x_end",
+            "bcast_dest_reuse_num_faces",
+            "bcast_dest_reuse_num_tiles",
+            "bcast_dest_reuse_type",
+            "bcast_preserve_src_zero_flag",
             "clear_dest",
             "dest_acc",
+            "dest_sync",
             "formats.input_A",
             "formats.input_B",
             "formats.output",
@@ -1083,17 +1090,19 @@ PERF_TEST_SCHEMAS = {
             "marker",
             "math_fidelity",
             "mathop",
-            "rmsnorm_clobber_unpa_x_end",
-            "rmsnorm_num_faces",
-            "rmsnorm_num_tiles",
-            "rmsnorm_preserve_src_zero_flag",
             "tile_cnt",
             "unpack_full_transpose",
             "unpack_to_dest",
         ],
-        "aliases": {},
+        "aliases": {
+            "rmsnorm_clobber_unpa_x_end": "bcast_clobber_unpa_x_end",
+            "rmsnorm_num_faces": "bcast_dest_reuse_num_faces",
+            "rmsnorm_num_tiles": "bcast_dest_reuse_num_tiles",
+            "rmsnorm_preserve_src_zero_flag": "bcast_preserve_src_zero_flag",
+        },
         "test_name_aliases": {
-            "perf_rmsnorm_bcast_scalar_dest_reuse": "perf_rmsnorm_bcast_scalar_dest_reuse"
+            "perf_bcast_dest_reuse": "perf_bcast_dest_reuse",
+            "perf_rmsnorm_bcast_scalar_dest_reuse": "perf_bcast_dest_reuse",
         },
     },
     "perf_rope": {
@@ -1840,7 +1849,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_sdpa_fw": "perf_sfpu_sdpa_fw"},
     },
     "perf_sfpu_softmax_k": {
-        "version": 1,
+        "version": 2,
         "columns": [
             "dest_acc",
             "dest_sync",
@@ -1854,6 +1863,7 @@ PERF_TEST_SCHEMAS = {
             "loop_factor",
             "marker",
             "softmax_k",
+            "softmax_num_rows",
             "tile_cnt",
             "unpack_to_dest",
         ],

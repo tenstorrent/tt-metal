@@ -9,8 +9,7 @@
 // it is a core-wide constant every other SFPU kernel reads as -1.0. The file's own
 // comment states the constraint ("this clobbers the HW -1.0 constant") but scopes it to
 // sinkhorn's own row-norm body; nothing takes the mask down when sinkhorn returns.
-// Sinkhorn is the only site in the tree that programs register 11 without restoring it --
-// ckernel_sfpu_softmax_k.h programs it too, and puts -1.0 back before it returns.
+// Sinkhorn is the only site in the tree that programs register 11 without restoring it.
 //
 // This driver composes two ops the public compute API exposes side by side, in the order
 // a kernel would call them, and checks only the SECOND one:

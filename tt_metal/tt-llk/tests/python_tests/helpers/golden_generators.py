@@ -6284,39 +6284,26 @@ def round_to_dest_width(
 
 @register_golden
 class SoftmaxKGolden:
-    """Golden for the softmax_k SFPU entry (experimental/ckernel_sfpu_softmax_k.h).
+    """Golden for the softmax_k SFPU entry (experimental/llk_sfpu/ckernel_sfpu_softmax_k.h).
 
-    Per-row softmax over the 16 columns of face 0's first row band, with the row
-    maximum supplied by the caller instead of being reduced on the fly:
+    Per-row softmax over the first ``k`` columns (``1 <= k <= 16``) of ``rows``
+    (``1, 2, 4, or 8``) independent rows in face 0:
 
-        out[r][c] = exp(x[r][c] - m[r]) / sum_{c' < k} exp(x[r][c'] - m[r])   c < k
-        out[r][c] = 0                                                        c >= k
+        out[r][c] = exp(x[r][c] - max_{c' < k} x[r][c']) / sum_{c' < k} exp(x[r][c'] - max)   c < k
+        out[r][c] = 0                                                                          c >= k
 
-    Columns >= k have to be exactly 0.0 in the input: the kernel takes a condition
-    code from |even-column value| before subtracting the max and only re-enables all
-    lanes after the exponential, so those lanes stay 0 and are then multiplied by the
-    reciprocal. Rows outside the processed band come back untouched.
-
-    The kernel round-trips through Dest three times -- x - max, exp(), and the
-    normalized result -- so the golden quantizes at each of those stores to the width
-    dest_acc selects. Plain SFPSTORE truncates; only the exp kernels round, via the
-    SFP_STOCH_RND(RND_EVEN, FP32_TO_FP16B) they do before their own store.
+    All intermediate reductions (max, exp, sum, reciprocal) stay in FP32 inside SFPU LRegs;
+    only the final store rounds to the DEST width (BF16 nearest when ``dest_acc == No``,
+    FP32 when ``dest_acc == Yes``). Dirty tail columns ``[k, face_dim)`` are masked before
+    max and zeroed on output. Rows outside the processed SFPU band and face 1 remain untouched.
     """
 
     def __call__(self, input_tile, logits, k, dest_acc, rows=4, face_dim=16):
         golden = input_tile.to(torch.float32).clone()
-
-        def stored(values):
-            """A plain SFPSTORE: truncating on a 16-bit Dest, exact on a 32-bit one."""
-            if dest_acc == DestAccumulation.Yes:
-                return values.to(torch.float32)
-            return truncate_to_bfloat16(values)
-
-        for row in range(rows):
-            shifted = stored(logits[row] - logits[row].max())
-            exponentials = round_to_dest_width(torch.exp(shifted), dest_acc)
-            golden[row, :k] = stored(exponentials / exponentials.sum())
-            golden[row, k:face_dim] = 0.0
+        probs = torch.softmax(logits.to(torch.float32), dim=-1)
+        probs = round_to_dest_width(probs, dest_acc)
+        golden[:rows, :k] = probs
+        golden[:rows, k:face_dim] = 0.0
         return golden
 
 

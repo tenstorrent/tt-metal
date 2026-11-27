@@ -1165,7 +1165,7 @@ def test_srcreg_dest_to_src_direction_and_opcode_exclusions():
 def test_srcreg_dest_to_src_unrelated_stall():
     # A preceding STALLWAIT that gates on neither the bank nor the FPU pipe must
     # not be credited as the gate.
-    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_bcast_dest_reuse.h"
     facts = [
         fn("reuse_dest_as_src", F, 100, 200),
         macro(

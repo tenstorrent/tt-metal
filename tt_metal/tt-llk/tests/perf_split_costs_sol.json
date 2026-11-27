@@ -35,6 +35,7 @@
   "perf_vif_equiv_sweep": 6.4
  },
  "blackhole": {
+  "perf_bcast_dest_reuse": 196.9,
   "perf_compressed_custom_mm": 85.6,
   "perf_csa_index_remap": 22.4,
   "perf_custom_mm": 165.1,
@@ -65,6 +66,7 @@
   "perf_matmul_in1_column_stride": 9.1,
   "perf_mul_reduce_scalar": 838.8,
   "perf_mul_reduce_scalar_chunked": 89.1,
+  "perf_mul_reduce_scalar_clear_product_tile": 12.1,
   "perf_pack": 543.9,
   "perf_pack_l1_acc": 4.4,
   "perf_pack_rows": 321.4,
@@ -74,8 +76,6 @@
   "perf_pack_untilize": 774.5,
   "perf_reduce": 73.7,
   "perf_reduce_block_max": 58.2,
-  "perf_rmsnorm_bcast_scalar_dest_reuse": 196.9,
-  "perf_rmsnorm_clear_product_tile": 12.1,
   "perf_rope": 202.7,
   "perf_sdpa_bcast_col_srca_srcb_reuse": 31.0,
   "perf_sdpa_bcast_col_srcb_reuse": 18.2,

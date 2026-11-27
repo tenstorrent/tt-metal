@@ -6,7 +6,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.perf.blaze import PERF_MEASUREMENT_AXES
-from test_rmsnorm_bcast_scalar_dest_reuse import (
+from test_bcast_dest_reuse import (
     FORMATS,
     NUM_TILES,
     OPS,
@@ -38,7 +38,7 @@ def _perf_kwargs(perf_report, run_types, loop_factor, is_perf):
     clear_dest=lambda mathop: _clear_dest_values(mathop),
     **PERF_MEASUREMENT_AXES,
 )
-def test_perf_rmsnorm_bcast_scalar_dest_reuse(
+def test_perf_bcast_dest_reuse(
     perf_report,
     formats,
     dest_acc,
@@ -72,7 +72,7 @@ def test_perf_rmsnorm_bcast_scalar_dest_reuse(
     math_fidelity=lambda mathop: _fidelities(mathop),
     **PERF_MEASUREMENT_AXES,
 )
-def test_perf_rmsnorm_bcast_scalar_dest_reuse_partial_faces(
+def test_perf_bcast_dest_reuse_partial_faces(
     perf_report,
     formats,
     dest_acc,
@@ -105,7 +105,7 @@ def test_perf_rmsnorm_bcast_scalar_dest_reuse_partial_faces(
     math_fidelity=lambda mathop: _fidelities(mathop),
     **PERF_MEASUREMENT_AXES,
 )
-def test_perf_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
+def test_perf_bcast_dest_reuse_unpack_full_transpose(
     perf_report,
     formats,
     dest_acc,

@@ -4,12 +4,12 @@
 
 #pragma once
 #include <cstdint>
-#include "experimental/llk_unpack_A_rmsnorm.h"
+#include "experimental/llk_unpack_A_bcast_dest_reuse.h"
 #include "llk_unpack_common_api.h"
 #include "sanitizer/api.h"
 
 /*************************************************************************
- * LLK UNPACK A
+ * LLK UNPACK A - BCAST DEST REUSE
  *************************************************************************/
 
 template <
@@ -18,7 +18,7 @@ template <
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
-inline void llk_unpack_A_rmsnorm_init(
+inline void llk_unpack_A_bcast_dest_reuse_init(
     const std::uint32_t transpose_of_faces,
     const std::uint32_t within_face_16x16_transpose,
     const std::uint32_t operand) {
@@ -30,7 +30,7 @@ inline void llk_unpack_A_rmsnorm_init(
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
 
-    _llk_unpack_A_rmsnorm_init_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
+    _llk_unpack_A_bcast_dest_reuse_init_<num_tiles, BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         transpose_of_faces,
         within_face_16x16_transpose,
         face_r_dim,

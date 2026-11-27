@@ -21,7 +21,7 @@
 //   lane is unspecified and MUST NOT be validated.
 //
 // The math chunk loop follows mul_reduce_scalar_chunked_tile in
-// api/compute/experimental/rmsnorm.h: one DEST slot is the cross-chunk
+// api/compute/experimental/mul_reduce_scalar.h: one DEST slot is the cross-chunk
 // accumulator, each chunk re-inits the multiply, clears only the product slot
 // it is about to reuse, reduces that chunk to a scalar, and adds the scalar
 // into the accumulator. Scaler is 1, so the packed accumulator element [0] is
@@ -150,7 +150,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "experimental/llk_math_mul_reduce_scalar.h"
-#include "experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_binary_sfpu.h"
@@ -244,7 +243,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     for (std::uint32_t j = 0; j < count; ++j)
                     {
-                        _llk_math_rmsnorm_clear_product_tile_<DST_CAPACITY, is_fp32_dest_acc_en>(j);
+                        _llk_math_mul_reduce_scalar_clear_product_tile_<DST_CAPACITY, is_fp32_dest_acc_en>(j);
                         _llk_math_eltwise_binary_<
                             EltwiseBinaryType::ELWMUL,
                             BroadcastType::NONE,

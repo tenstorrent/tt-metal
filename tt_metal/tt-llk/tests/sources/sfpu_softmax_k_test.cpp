@@ -3,36 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Driver for the softmax_k SFPU entry
-// (tt_llk_blackhole/common/inc/sfpu/experimental/ckernel_sfpu_softmax_k.h).
+// (hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_softmax_k.h).
 //
-// `_softmax_k_<k>` is a single-shot (VectorMode::RC_custom) kernel over ONE
-// 4-row band of face 0. It reads:
-//   DEST addr 0  -> rows 0-3, even columns : x
-//   DEST addr 2  -> rows 0-3, odd columns  : x
-//   DEST addr 8  -> rows 8-11, even columns: max(x) per row, pre-broadcast
-// and writes the finished softmax back over addr 0 / addr 2, i.e. rows 0-3.
-// So it is a per-row softmax over the 16 columns of face 0, with the row maximum
-// supplied by the caller in rows 8-11 rather than computed here.
+// `_calculate_softmax_k_<is_fp32_dest_acc_en, NUM_ROWS>(k)` is a single-shot
+// (VectorMode::RC_custom) per-row softmax over the first `k` columns (1 <= k <= 16)
+// of `NUM_ROWS` (1, 2, 4, or 8) independent rows in face 0:
+//   NUM_ROWS in {1, 2, 4}: 1 SFPU row-group (rows 0..3)
+//   NUM_ROWS == 8:         2 SFPU row-groups (rows 0..3 and rows 4..7)
 //
-// Padding: the sequence sets a condition code from |even-column value| before
-// subtracting the max, and only calls SFPENCC after the exponential, so lanes
-// whose EVEN column holds exactly 0.0 skip both the subtract and the exp and stay
-// 0. Padding therefore has to be exact 0.0, and it predicates the even/odd column
-// PAIR (the odd lane inherits its even partner's condition code). That is why odd
-// k needs `_zero_paired_odd_tail_lane_`: for odd k the tail column k is odd and
-// its even partner k-1 is a valid non-zero lane, so it would otherwise be
-// exponentiated. Valid inputs must be non-zero.
-//
-// ckernel_sfpu_softmax_k.h self-includes its exp/reduce prerequisites and declares
-// SFPCONFIG_TARGET_LREG11 / SFPCONFIG_MOD_SET_LREG11 itself, so this driver needs no
-// prerequisite includes and no local #defines. Note the header still spells those
-// includes unqualified ("ckernel_sfpu_exp.h"), and the exp/reduce kernels live one
-// layer up in the metal tree (hw/ckernels/blackhole/metal/llk_api/llk_sfpu/), so the
-// tt-llk test build has to put that directory on the include path -- see
-// setup_compilation_options in helpers/test_config.py.
-//
-// Both even and odd k are swept. Odd k is what exercises
-// `_zero_paired_odd_tail_lane_` and its 1u << (k - 1) tail mask.
+// Computes row max, exp(x - row_max), sum, and reciprocal in FP32 SFPU LRegs.
+// Handles unsorted or presorted inputs, zero logits inside [0, k), arbitrary odd or
+// even k, dirty tail elements in [k, 16) (masked before max and zeroed after exp),
+// and both BF16 and FP32 DEST.
 
 #include <cstdint>
 
@@ -122,7 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
 #define DST_ACCUM_MODE is_fp32_dest_acc_en
-#include "sfpu/experimental/ckernel_sfpu_softmax_k.h"
+#include "experimental/llk_sfpu/ckernel_sfpu_softmax_k.h"
 #undef DST_ACCUM_MODE
 
 using namespace ckernel;
@@ -132,7 +114,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    static_assert(SOFTMAX_K >= 2 && SOFTMAX_K <= 16, "softmax_k operates on the 16 columns of one face");
+    static_assert(SOFTMAX_K >= 1 && SOFTMAX_K <= 16, "softmax_k operates on 1..16 columns of face 0");
+    static_assert(SOFTMAX_NUM_ROWS == 1 || SOFTMAX_NUM_ROWS == 2 || SOFTMAX_NUM_ROWS == 4 || SOFTMAX_NUM_ROWS == 8, "softmax_k supports 1, 2, 4, or 8 rows");
 
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
@@ -151,7 +134,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-        ckernel::sfpu::_init_softmax_k_<is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {
@@ -190,7 +172,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
                         0 /* dst_index */, formats.math, formats.math);
                     // RC_custom: the kernel does its own DEST addressing, so no per-face loop.
-                    SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _softmax_k_, (SOFTMAX_K, is_fp32_dest_acc_en), 0 /* dst_index */, VectorMode::RC_custom);
+                    SFPU_UNARY_CALL(
+                        DST_SYNC,
+                        is_fp32_dest_acc_en,
+                        _calculate_softmax_k_,
+                        (is_fp32_dest_acc_en, SOFTMAX_NUM_ROWS),
+                        0 /* dst_index */,
+                        VectorMode::RC_custom,
+                        SOFTMAX_K);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();

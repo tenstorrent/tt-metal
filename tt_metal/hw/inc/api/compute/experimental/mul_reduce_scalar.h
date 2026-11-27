@@ -5,6 +5,10 @@
 #pragma once
 
 #include "api/compute/eltwise_binary.h"
+#if defined(ARCH_BLACKHOLE)
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/eltwise_unary/fill.h"
+#endif
 #include "llk_assert.h"
 #ifdef TRISC_MATH
 #include "ckernel_sfpu_fill.h"  // _calculate_fill_ used by mul_reduce_scalar_tile
@@ -215,6 +219,91 @@ ALWI void mul_reduce_scalar_tile_fidelity(
     detail::
         mul_reduce_scalar_tile_impl<false, mul_fidelity, reduce_fidelity, accumulate_in_one_tile, is_fp32_dest_acc_en>(
             icb0, icb1, ocb, num_tiles, scaler);
+}
+
+/**
+ * Reduce a row of products whose tile count exceeds DST capacity.
+ *
+ * One DST slot is reserved as a cross-chunk accumulator; the remaining
+ * dst_capacity - 1 slots stage products. The caller must initialize
+ * mul_reduce_scalar and add_binary, then acquire DST before calling.
+ *
+ * ocb programs the packer's face_r_dim for the reduce mask. On return,
+ * DST[dst_capacity - 1] contains scaler * scaler * sum(A * B): the column
+ * and row reductions both apply scaler, so a mean requires 1 / sqrt(width).
+ * The reduce pack mask remains configured; call
+ * mul_reduce_scalar_uninit() before normal packing.
+ */
+template <
+    uint32_t num_tiles,
+    uint32_t dst_capacity,
+    PoolType reduce_type = PoolType::SUM,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f) {
+    static_assert(reduce_type == PoolType::SUM, "Only SUM reduction is currently supported");
+    static_assert(dst_capacity >= 2 && dst_capacity <= 8, "Chunked reduction requires 2 to 8 DST slots");
+    static_assert(
+        dst_capacity <= get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(),
+        "dst_capacity exceeds the DST tiles available in this sync/accum mode");
+    static_assert(num_tiles > dst_capacity, "Use mul_reduce_scalar_tile when the row fits DST");
+
+    constexpr uint32_t batch_size = dst_capacity - 1;
+    constexpr uint32_t accumulator = batch_size;
+    constexpr uint32_t num_batches = (num_tiles + batch_size - 1) / batch_size;
+    constexpr uint32_t last_batch_size = num_tiles - (num_batches - 1) * batch_size;
+
+    fill_tile(accumulator, 0.0f);
+
+    for (uint32_t batch = 0; batch < num_batches; ++batch) {
+        const uint32_t input_start = batch * batch_size;
+        const uint32_t count = batch + 1 < num_batches ? batch_size : last_batch_size;
+
+        // Each reduction consumes the UNPACK/MATH state. The caller provides
+        // the first initialization; subsequent chunks restore it here.
+        if (batch > 0) {
+            mul_reduce_scalar_init(icb0, icb1);
+        }
+        for (uint32_t j = 0; j < count; ++j) {
+            // Products reuse DEST slots across chunks; preserve the running
+            // accumulator while clearing only the next multiplication's tile.
+            MATH((llk_math_mul_reduce_scalar_clear_product_tile<dst_capacity, is_fp32_dest_acc_en>(j)));
+            UNPACK((llk_unpack_AB(icb0, icb1, input_start + j, input_start + j)));
+            MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, MATH_FIDELITY>(j, icb0)));
+        }
+
+        UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
+        MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_fill_,
+            (APPROX, 2 /*ITERATIONS*/),
+            0 /*dst_index*/,
+            VectorMode::RC_custom,
+            scaler));
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            _calculate_fill_,
+            (APPROX, 2 /*ITERATIONS*/),
+            0 /*dst_index*/,
+            VectorMode::RC_custom,
+            0.0f));
+
+        if (batch == 0) {
+            PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, ckernel::PackMode::Default>(ocb)));
+        }
+        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
+        for (uint32_t j = 1; j < count; ++j) {
+            MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(j)));
+            MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb0)));
+        }
+        MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
+        MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
+        add_binary_tile<DstRoundingMode::Default, is_fp32_dest_acc_en>(accumulator, 0, accumulator);
+    }
 }
 
 #endif  // ARCH_BLACKHOLE

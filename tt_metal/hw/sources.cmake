@@ -145,6 +145,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/2_0/transpose.h
     inc/api/compute/experimental/2_0/internal/llk_descriptor.h
     inc/api/compute/experimental/add_rsqrt.h
+    inc/api/compute/experimental/bcast_dest_reuse.h
     inc/api/compute/experimental/block_max8.h
     inc/api/compute/experimental/cluster_semaphore.h
     inc/api/compute/experimental/compressed_custom_mm.h
@@ -155,6 +156,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/custom_pack_untilize.h
     inc/api/compute/experimental/deepseek_compute_kernel_hw_startup.h
     inc/api/compute/experimental/eltwise_add_scalar.h
+    inc/api/compute/experimental/eltwise_mul_fidelity.h
     inc/api/compute/experimental/eltwise_mul_scalar.h
     inc/api/compute/experimental/face_compressed_mm.h
     inc/api/compute/experimental/fast_untilize.h
@@ -168,8 +170,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/pack_block.h
     inc/api/compute/experimental/pack_rows_to_addr.h
     inc/api/compute/experimental/reg_api.h
-    inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
+    inc/api/compute/experimental/row_norm.h
     inc/api/compute/experimental/sdpa.h
     inc/api/compute/experimental/sdpa_custom_mm.h
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h

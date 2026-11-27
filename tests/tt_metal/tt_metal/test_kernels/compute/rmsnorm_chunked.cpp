@@ -3,7 +3,7 @@
 
 #include <cstdint>
 
-#include "api/compute/experimental/rmsnorm.h"
+#include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -28,7 +28,7 @@ void kernel_main() {
                 }
                 // Verify every face of every slot, including the accumulator
                 // and the neighboring bank, survives unless explicitly cleared.
-                MATH((llk_math_rmsnorm_clear_product_tile<capacity, DST_ACCUM_MODE>(target)));
+                MATH((llk_math_mul_reduce_scalar_clear_product_tile<capacity, DST_ACCUM_MODE>(target)));
                 tile_regs_commit();
                 tile_regs_wait();
                 for (std::uint32_t tile = 0; tile < capacity; ++tile) {
