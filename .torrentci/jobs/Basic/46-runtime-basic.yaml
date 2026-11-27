@@ -1,0 +1,123 @@
+---
+# Merge Gate runtime-basic-tests: tt-metalium-validation-basic on one card per
+# SKU, against asan-build's packages. The package install provides the test
+# binary, so the job needs no checkout.
+jobs:
+  - id: runtime-basic-n150-asan
+    name: Runtime basic n150 (ASan)
+    checkout: false
+    description: "Run the Merge Gate runtime basic test on one n150 with the ASan packages"
+    # The test's 15 min plus a few minutes for the step around it. Image pull
+    # and package restore happen before this clock starts.
+    timeout: 20m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image:
+          from-job: ci-build-image
+          image: ci-build
+        accelerator:
+          type: n150
+          count: 1
+        resources:
+          requests:
+            cpu: '8'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+          limits:
+            cpu: '8'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation]
+    env:
+      - name: TT_METAL_CACHE
+        value: /tmp/tt-metal-cache
+      - name: ASAN_OPTIONS
+        value: color=always
+      - name: UBSAN_OPTIONS
+        value: color=always:print_stacktrace=1:halt_on_error=1
+      - name: GTEST_COLOR
+        value: 'yes'
+      - name: TT_METAL_HOME
+        value: /usr/libexec/tt-metalium
+      - name: TT_METAL_WATCHER
+        value: '5'
+      - name: TT_METAL_WATCHER_TEST_MODE
+        value: '1'
+      - name: LSAN_OPTIONS
+        value: suppressions=/usr/share/tt-metalium/lsan.supp
+      - name: TT_LOGGER_LEVEL
+        value: warn
+    steps:
+      - id: basic
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$TT_METAL_CACHE" test-reports
+            # 15 min fails a hung test as fast as the Merge Gate does. Measured
+            # runs with cold kernel JIT take a few minutes.
+            - ulimit -n 4096; timeout 15m tt-metalium-validation-basic --gtest_output=xml:test-reports/
+  - id: runtime-basic-p150b-asan
+    name: Runtime basic p150b (ASan)
+    checkout: false
+    description: "Run the Merge Gate runtime basic test on one p150b with the ASan packages"
+    # The test's 15 min plus a few minutes for the step around it. Image pull
+    # and package restore happen before this clock starts.
+    timeout: 20m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image:
+          from-job: ci-build-image
+          image: ci-build
+        accelerator:
+          type: p150b
+          count: 1
+        resources:
+          requests:
+            cpu: '8'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+          limits:
+            cpu: '8'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation]
+    env:
+      - name: TT_METAL_CACHE
+        value: /tmp/tt-metal-cache
+      - name: ASAN_OPTIONS
+        value: color=always
+      - name: UBSAN_OPTIONS
+        value: color=always:print_stacktrace=1:halt_on_error=1
+      - name: GTEST_COLOR
+        value: 'yes'
+      - name: TT_METAL_HOME
+        value: /usr/libexec/tt-metalium
+      - name: TT_METAL_WATCHER
+        value: '5'
+      - name: TT_METAL_WATCHER_TEST_MODE
+        value: '1'
+      - name: LSAN_OPTIONS
+        value: suppressions=/usr/share/tt-metalium/lsan.supp
+      - name: TT_LOGGER_LEVEL
+        value: warn
+    steps:
+      - id: basic
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$TT_METAL_CACHE" test-reports
+            # 15 min fails a hung test as fast as the Merge Gate does. Measured
+            # runs with cold kernel JIT take a few minutes.
+            - ulimit -n 4096; timeout 15m tt-metalium-validation-basic --gtest_output=xml:test-reports/
