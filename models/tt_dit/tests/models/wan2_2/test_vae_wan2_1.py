@@ -29,7 +29,7 @@ from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
-from ....utils.golden import load_golden, save_golden
+from ....utils.golden import golden_path, load_golden, save_golden
 from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import typed_tensor_2dshard
 from ....utils.test import skip_if_unsupported_num_links
@@ -1237,7 +1237,7 @@ def test_wan_resample(
         (1, 384, 384, 1, 90, 160, "upsample3d", 2),  # decoder.up_blocks.0
         (1, 192, 384, 2, 180, 320, "upsample3d", 2),  # decoder.up_blocks.1
         (1, 192, 192, 4, 360, 640, "upsample2d", 2),  # decoder.up_blocks.2
-        (1, 192, 192, 4, 720, 1280, None, 2),  # decoder.up_blocks.3 # OOM on 720p input
+        (1, 96, 96, 4, 720, 1280, None, 2),  # decoder.up_blocks.3
         # (1, 192, 192, 4, 480, 832, None, 2),  # decoder.up_blocks.3 on 480p input
     ],
     ids=[
@@ -1304,9 +1304,12 @@ def test_wan_upblock(
     torch_feat_cache = [None for _ in range(num_convs)]
     tt_feat_cache = [None for _ in range(num_convs)]
 
+    # Without TT_DIT_TEST_GOLDEN_CACHE_DIR, save_golden() does nothing, and keeping every iteration's input, output
+    # and cloned caches costs about 14 GB of host memory per iteration on upblock_3.
+    record_golden = golden is None and golden_path(VAE_COMMIT_HASH_PLACEHOLDER, "wan_upblock", param_id) is not None
     if golden is None:
         logger.warning("Computing reference results from scratch (wan_upblock).")
-        golden_iterations = []
+    golden_iterations = []
 
     # Run 4 times to get models to create their own caches
     for iter_idx in range(4):
@@ -1341,13 +1344,14 @@ def test_wan_upblock(
                     feat_cache=torch_feat_cache,
                     feat_idx=torch_feat_idx,
                 )
-            golden_iterations.append(
-                {
-                    "torch_input_tensor": torch_input_tensor,
-                    "torch_output": torch_output,
-                    "torch_feat_cache": [t.clone() if isinstance(t, torch.Tensor) else t for t in torch_feat_cache],
-                }
-            )
+            if record_golden:
+                golden_iterations.append(
+                    {
+                        "torch_input_tensor": torch_input_tensor,
+                        "torch_output": torch_output,
+                        "torch_feat_cache": [t.clone() if isinstance(t, torch.Tensor) else t for t in torch_feat_cache],
+                    }
+                )
 
         logger.info(f"torch_output shape {torch_output.shape}")
 
@@ -1414,7 +1418,7 @@ def test_wan_upblock(
 
         defrag_feat_cache(tt_feat_cache, mesh_device, concat_dims, h_axis, w_axis, dtype=tt_input_dtype)
 
-    if golden is None:
+    if record_golden:
         save_golden(
             VAE_COMMIT_HASH_PLACEHOLDER,
             "wan_upblock",
