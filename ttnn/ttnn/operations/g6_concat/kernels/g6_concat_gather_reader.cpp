@@ -1,250 +1,251 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_concat row_gather reader (NCRISC / NOC0): h joins whose offsets o_k are not multiples of 32.
-// Each output page is assembled in its cb_output_pages slot from row-range reads of the inputs
-// whose rows land in its tile row. Output tile row R gets one run table (built once per output-row
-// segment, shared by every column of the segment); each run is cut at row 16 on the source and on
-// the destination so a piece never leaves a face half.
+// row_gather reader (NCRISC, NOC0): h joins whose offsets are not tile-aligned. Each output page
+// is assembled in its cb_output_pages slot from row-range reads of the inputs whose rows land in
+// it; only logical input rows are read, each exactly once.
 //
-// Per block:
-//   gather_fetch_block — every piece x face column x page: one DRAM read. Direct into the output
-//                        slot when (src_off - dst_off) is DRAM-read aligned, otherwise into the
-//                        cb_gather_staging mirror slot at dst_off + shift.
-//   gather_place_block — every staged piece: one self-aimed L1->L1 read into the output slot.
+// Per block: gather_fetch_block issues every piece's DRAM read, directly into the output slot when
+// the source and destination agree modulo the DRAM read alignment, otherwise into the same offset
+// (+shift) of a cb_gather_staging mirror slot. gather_place_block then moves the staged pieces to
+// their slots with self-aimed L1 -> L1 reads (L1 alignment, always legal).
 //
-// No kernel_lib helper copies runtime-sized row ranges; set_read_state<transfer_size> bakes the size
-// in at compile time (local_copy_helpers_dataflow.hpp), so only its local_addr() builder is used.
+// Raw NoC reads: no kernel_lib helper copies runtime-sized row ranges; local_addr() from
+// local_copy_helpers_dataflow.hpp builds the self-aimed source (set_read_state fixes the size at
+// compile time, piece sizes here are runtime).
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/assert.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
-#include "g6_concat_common.hpp"
+#include "g6_concat_tile_rows.hpp"
 
 namespace {
 
+using g6_concat::FACE_COLS_PER_TILE;
 using g6_concat::FACE_ROWS;
 using g6_concat::TILE_ROWS;
 
-// Every piece covers at least one destination row of a 32-row tile, so a tile row has <= 32.
-constexpr uint32_t MAX_PIECES = TILE_ROWS;
-constexpr uint32_t DRAM_READ_ALIGN_MASK = NOC_DRAM_READ_ALIGNMENT_BYTES - 1;
+// Common runtime args; layout mirrors GATHER_READER_COMMON_ARGS in g6_concat_program_descriptor.py.
+constexpr uint32_t CRTA_BLOCK_PAGES = 0;
+constexpr uint32_t CRTA_OUT_WT = 1;
+constexpr uint32_t CRTA_OUT_HT = 2;
+constexpr uint32_t CRTA_OUT_ROWS = 3;
+constexpr uint32_t CRTA_NUM_INPUTS = 4;
+constexpr uint32_t CRTA_FIRST_INPUT = 5;
+constexpr uint32_t CRTA_WORDS_PER_INPUT = 2;  // base address, rows along the joined dim
 
-struct Piece {
-    uint32_t img_pages;  // pages per image of the source input: Ht_k * Wt
-    uint32_t row_page;   // first page of the source tile row inside its image: t * Wt
-    uint16_t input;
-    uint16_t bytes;
-    uint16_t src_off;
-    uint16_t dst_off;
-    uint16_t shift;      // (src_off - dst_off) mod DRAM read alignment; 0 = direct read
-    uint16_t face_cols;  // 2 = one transfer per face column, 1 = both face columns are contiguous
-};
-
-struct RunTable {
-    Piece pieces[MAX_PIECES];
-    uint32_t count = 0;
-    uint32_t tile_row = 0xFFFFFFFF;
-    bool any_staged = false;
-};
-
-template <uint32_t face_bytes, uint32_t row_bytes, bool use_staging>
-void add_piece(
-    RunTable& table, uint32_t input, uint32_t img_pages, uint32_t row_page, uint32_t s, uint32_t d, uint32_t rows) {
-    Piece& p = table.pieces[table.count++];
-    p.input = input;
-    p.img_pages = img_pages;
-    p.row_page = row_page;
-    p.src_off = (s / FACE_ROWS) * 2 * face_bytes + (s % FACE_ROWS) * row_bytes;
-    p.dst_off = (d / FACE_ROWS) * 2 * face_bytes + (d % FACE_ROWS) * row_bytes;
-    if (rows == TILE_ROWS) {
-        p.bytes = 4 * face_bytes;
-        p.face_cols = 1;
-    } else if (rows == FACE_ROWS && s % FACE_ROWS == 0 && d % FACE_ROWS == 0) {
-        p.bytes = 2 * face_bytes;
-        p.face_cols = 1;
-    } else {
-        p.bytes = rows * row_bytes;
-        p.face_cols = 2;
-    }
-    p.shift = (p.src_off - p.dst_off) & DRAM_READ_ALIGN_MASK;
-    if constexpr (!use_staging) {
-        ASSERT(p.shift == 0);
-    }
-    table.any_staged |= p.shift != 0;
+FORCE_INLINE uint32_t input_base_address(uint32_t input_idx) {
+    return get_common_arg_val<uint32_t>(CRTA_FIRST_INPUT + input_idx * CRTA_WORDS_PER_INPUT);
 }
 
-// Runs of output tile row R: input k covers output rows [o_k, o_k + n_k); its rows inside
-// [32R, 32R + 32) are cut at its own tile rows and at row 16 on both sides.
-template <uint32_t face_bytes, uint32_t row_bytes, bool use_staging>
-void build_run_table(RunTable& table, uint32_t tile_row, uint32_t num_inputs, uint32_t sizes_arg0, uint32_t Wt) {
-    table.count = 0;
-    table.any_staged = false;
-    table.tile_row = tile_row;
-    const uint32_t y_lo = tile_row * TILE_ROWS;
-    const uint32_t y_hi = y_lo + TILE_ROWS;
-    uint32_t offset = 0;
-    for (uint32_t k = 0; k < num_inputs && offset < y_hi; ++k) {
-        const uint32_t n = get_common_arg_val<uint32_t>(sizes_arg0 + k);
-        if (offset + n > y_lo) {
-            const uint32_t img_pages = ((n + TILE_ROWS - 1) / TILE_ROWS) * Wt;
-            uint32_t j = (y_lo > offset ? y_lo : offset) - offset;
-            const uint32_t j_end = (y_hi < offset + n ? y_hi : offset + n) - offset;
-            while (j < j_end) {
-                const uint32_t s = j % TILE_ROWS;
-                const uint32_t d = offset + j - y_lo;
-                uint32_t rows = j_end - j;
-                if (s == 0 && d == 0 && rows >= TILE_ROWS) {
-                    rows = TILE_ROWS;
-                } else {
-                    if (s + rows > TILE_ROWS) {
-                        rows = TILE_ROWS - s;
-                    }
-                    if (s < FACE_ROWS && s + rows > FACE_ROWS) {
-                        rows = FACE_ROWS - s;
-                    }
-                    if (d < FACE_ROWS && d + rows > FACE_ROWS) {
-                        rows = FACE_ROWS - d;
-                    }
-                }
-                add_piece<face_bytes, row_bytes, use_staging>(table, k, img_pages, (j / TILE_ROWS) * Wt, s, d, rows);
-                j += rows;
+FORCE_INLINE uint32_t input_rows(uint32_t input_idx) {
+    return get_common_arg_val<uint32_t>(CRTA_FIRST_INPUT + input_idx * CRTA_WORDS_PER_INPUT + 1);
+}
+
+FORCE_INLINE uint32_t min3(uint32_t a, uint32_t b, uint32_t c) {
+    const uint32_t ab = a < b ? a : b;
+    return ab < c ? ab : c;
+}
+
+struct OutputGeometry {
+    uint32_t out_wt;
+    uint32_t out_ht;
+    uint32_t out_rows;
+    uint32_t num_inputs;
+};
+
+// Pages [first_col, first_col + num_cols) of output tile row (image, tile_row), held in block slots
+// [first_slot, first_slot + num_cols).
+struct Segment {
+    uint32_t image;
+    uint32_t tile_row;
+    uint32_t first_col;
+    uint32_t num_cols;
+    uint32_t first_slot;
+};
+
+// Rows [src_row, src_row + num_rows) of an input tile -> rows [dst_row, ...) of an output tile.
+// Never crosses row FACE_ROWS on either side, so each face column is one contiguous transfer.
+struct RowPiece {
+    uint32_t input_idx;
+    uint32_t input_row_first_page;  // input page of tile column 0 of the source tile row
+    uint32_t src_row;
+    uint32_t dst_row;
+    uint32_t num_rows;
+};
+
+// Run table of one output tile row, generated in order; shared by every column of a segment.
+template <typename F>
+FORCE_INLINE void for_each_row_piece(const OutputGeometry& geom, const Segment& seg, F&& f) {
+    const uint32_t row_lo = seg.tile_row * TILE_ROWS;
+    const uint32_t row_hi = (row_lo + TILE_ROWS < geom.out_rows) ? row_lo + TILE_ROWS : geom.out_rows;
+    uint32_t input_offset = 0;
+    for (uint32_t input_idx = 0; input_idx < geom.num_inputs && input_offset < row_hi; ++input_idx) {
+        const uint32_t rows_k = input_rows(input_idx);
+        const uint32_t first = row_lo > input_offset ? row_lo : input_offset;
+        const uint32_t last = (row_hi < input_offset + rows_k) ? row_hi : input_offset + rows_k;
+        if (first < last) {
+            const uint32_t input_ht = (rows_k + TILE_ROWS - 1) / TILE_ROWS;
+            const uint32_t image_first_page = seg.image * input_ht * geom.out_wt;
+            const uint32_t src_end = last - input_offset;
+            for (uint32_t src = first - input_offset; src < src_end;) {
+                const uint32_t src_row = src % TILE_ROWS;
+                const uint32_t dst_row = input_offset + src - row_lo;
+                const uint32_t num_rows =
+                    min3(FACE_ROWS - src_row % FACE_ROWS, FACE_ROWS - dst_row % FACE_ROWS, src_end - src);
+                f(RowPiece{input_idx, image_first_page + (src / TILE_ROWS) * geom.out_wt, src_row, dst_row, num_rows});
+                src += num_rows;
             }
         }
-        offset += n;
+        input_offset += rows_k;
     }
 }
+
+// Splits block_extent pages starting at (image, tile_row, col) into output-row segments.
+struct BlockCursor {
+    uint32_t image;
+    uint32_t tile_row;
+    uint32_t col;
+
+    template <typename F>
+    FORCE_INLINE void for_each_segment(const OutputGeometry& geom, uint32_t block_extent, F&& f) const {
+        Segment seg{image, tile_row, col, 0, 0};
+        uint32_t remaining = block_extent;
+        while (remaining > 0) {
+            const uint32_t cols_left = geom.out_wt - seg.first_col;
+            seg.num_cols = remaining < cols_left ? remaining : cols_left;
+            f(seg);
+            remaining -= seg.num_cols;
+            seg.first_slot += seg.num_cols;
+            seg.first_col = 0;
+            if (++seg.tile_row == geom.out_ht) {
+                seg.tile_row = 0;
+                ++seg.image;
+            }
+        }
+    }
+
+    FORCE_INLINE void advance(const OutputGeometry& geom, uint32_t pages) {
+        col += pages;
+        while (col >= geom.out_wt) {
+            col -= geom.out_wt;
+            if (++tile_row == geom.out_ht) {
+                tile_row = 0;
+                ++image;
+            }
+        }
+    }
+};
 
 }  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_output_pages = get_compile_time_arg_val(0);
     constexpr uint32_t cb_gather_staging = get_compile_time_arg_val(1);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t face_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t row_bytes = get_compile_time_arg_val(4);
-    constexpr bool use_staging = get_compile_time_arg_val(5) != 0;
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr bool has_staging = get_compile_time_arg_val(2) != 0;
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(4);
+    constexpr auto input_args = TensorAccessorArgs<5>();
 
-    // Common: block_pages, K, out_Wt, out_Ht, v_last, base[K], n[K].
-    const uint32_t block_pages = get_common_arg_val<uint32_t>(0);
-    const uint32_t num_inputs = get_common_arg_val<uint32_t>(1);
-    const uint32_t Wt = get_common_arg_val<uint32_t>(2);
-    const uint32_t out_Ht = get_common_arg_val<uint32_t>(3);
-    constexpr uint32_t base_arg0 = 5;
-    const uint32_t sizes_arg0 = base_arg0 + num_inputs;
+    // Inputs are DRAM-interleaved; every piece whose shift is non-zero needs the staging mirror.
+    constexpr uint32_t input_read_alignment = NOC_DRAM_READ_ALIGNMENT_BYTES;
+    static_assert(has_staging || face_row_bytes % input_read_alignment == 0, "row shifts need cb_gather_staging");
+    static_assert(page_bytes % input_read_alignment == 0, "slot addresses must keep the CB base alignment");
 
-    uint32_t pages_left = get_arg_val<uint32_t>(0);
-    uint32_t img = get_arg_val<uint32_t>(1);
-    uint32_t tile_row = get_arg_val<uint32_t>(2);
-    uint32_t col = get_arg_val<uint32_t>(3);
+    const uint32_t start_page = get_arg_val<uint32_t>(0);
+    const uint32_t core_pages = get_arg_val<uint32_t>(1);
 
-    auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(base_arg0), page_bytes);
+    const uint32_t block_pages = get_common_arg_val<uint32_t>(CRTA_BLOCK_PAGES);
+    const OutputGeometry geom{
+        get_common_arg_val<uint32_t>(CRTA_OUT_WT),
+        get_common_arg_val<uint32_t>(CRTA_OUT_HT),
+        get_common_arg_val<uint32_t>(CRTA_OUT_ROWS),
+        get_common_arg_val<uint32_t>(CRTA_NUM_INPUTS)};
 
-    // Direct and staged reads rely on slot bases being DRAM-read aligned (CB bases are allocated
-    // DRAM-aligned and page_bytes is a multiple of the alignment).
-    ASSERT((get_write_ptr(cb_output_pages) & DRAM_READ_ALIGN_MASK) == 0);
-    uint32_t staging_base = 0;
-    if constexpr (use_staging) {
-        staging_base = get_write_ptr(cb_gather_staging);
-        ASSERT((staging_base & DRAM_READ_ALIGN_MASK) == 0);
-    }
+    const uint32_t start_tile_row_global = start_page / geom.out_wt;
+    BlockCursor cursor{
+        start_tile_row_global / geom.out_ht, start_tile_row_global % geom.out_ht, start_page % geom.out_wt};
 
-    RunTable table;
+    const uint32_t staging_base = has_staging ? get_write_ptr(cb_gather_staging) : 0;
+    ASSERT(staging_base % input_read_alignment == 0);
 
-    while (pages_left > 0) {
-        const uint32_t extent = pages_left < block_pages ? pages_left : block_pages;
+    Noc noc;
+    UnicastEndpoint self_endpoint;
+    CircularBuffer output_slots(cb_output_pages);
+
+    const uint32_t num_blocks_this_core = (core_pages + block_pages - 1) / block_pages;
+    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
+        const bool last_block = block_idx + 1 == num_blocks_this_core;
+        const uint32_t block_extent = last_block ? core_pages - block_idx * block_pages : block_pages;
+
         {
             DeviceZoneScopedN("G6C-RESERVE");
             cb_reserve_back(cb_output_pages, block_pages);
         }
-        const uint32_t out_base = get_write_ptr(cb_output_pages);
-        const uint32_t seg_row = tile_row, seg_col = col;
-        bool block_staged = false;
+        const uint32_t slots_base = get_write_ptr(cb_output_pages);
+        ASSERT(slots_base % input_read_alignment == 0);
 
-        // gather_fetch_block: piece-major, page-minor inside each output-row segment.
         {
             DeviceZoneScopedN("G6C-FETCH");
-            for (uint32_t i = 0; i < extent;) {
-                const uint32_t seg_pages = (Wt - col < extent - i) ? Wt - col : extent - i;
-                if (table.tile_row != tile_row) {
-                    build_run_table<face_bytes, row_bytes, use_staging>(table, tile_row, num_inputs, sizes_arg0, Wt);
-                }
-                block_staged |= table.any_staged;
-                const uint32_t out_slot = out_base + i * page_bytes;
-                const uint32_t staging_slot = staging_base + i * page_bytes;
-                for (uint32_t pi = 0; pi < table.count; ++pi) {
-                    const Piece& p = table.pieces[pi];
-                    input.bank_base_address = get_common_arg_val<uint32_t>(base_arg0 + p.input);
-                    const uint32_t first_page = img * p.img_pages + p.row_page + col;
-                    for (uint32_t fc = 0; fc < p.face_cols; ++fc) {
-                        const uint32_t src_off = p.src_off + fc * face_bytes;
-                        uint32_t dst = (p.shift == 0 ? out_slot : staging_slot) + p.dst_off + fc * face_bytes + p.shift;
-                        for (uint32_t c = 0; c < seg_pages; ++c) {
-                            noc_async_read(input.get_noc_addr(first_page + c, src_off), dst, p.bytes);
-                            dst += page_bytes;
+            // gather_fetch_block: piece-major, page-minor, so both offsets stay fixed across a sweep.
+            cursor.for_each_segment(geom, block_extent, [&](const Segment& seg) {
+                for_each_row_piece(geom, seg, [&](const RowPiece& piece) {
+                    const auto input = TensorAccessor(input_args, input_base_address(piece.input_idx), page_bytes);
+                    const uint32_t piece_bytes = piece.num_rows * face_row_bytes;
+                    for (uint32_t face_col = 0; face_col < FACE_COLS_PER_TILE; ++face_col) {
+                        const uint32_t src_off = g6_concat::face_offset<face_row_bytes>(piece.src_row, face_col);
+                        const uint32_t dst_off = g6_concat::face_offset<face_row_bytes>(piece.dst_row, face_col);
+                        const uint32_t shift = (src_off - dst_off) % input_read_alignment;
+                        uint32_t dst_addr =
+                            (shift == 0 ? slots_base : staging_base) + seg.first_slot * page_bytes + dst_off + shift;
+                        uint32_t input_page = piece.input_row_first_page + seg.first_col;
+                        for (uint32_t col = 0; col < seg.num_cols; ++col) {
+                            noc_async_read(input.get_noc_addr(input_page, src_off), dst_addr, piece_bytes);
+                            ++input_page;
+                            dst_addr += page_bytes;
                         }
                     }
-                }
-                i += seg_pages;
-                col += seg_pages;
-                if (col == Wt) {
-                    col = 0;
-                    if (++tile_row == out_Ht) {
-                        tile_row = 0;
-                        ++img;
-                    }
-                }
-            }
+                });
+            });
             noc_async_read_barrier();
         }
 
-        // gather_place_block: move the staged pieces from their mirror slots into the output slots.
-        if constexpr (use_staging) {
-            if (block_staged) {
-                DeviceZoneScopedN("G6C-PLACE");
-                uint32_t p_row = seg_row, p_col = seg_col;
-                for (uint32_t i = 0; i < extent;) {
-                    const uint32_t seg_pages = (Wt - p_col < extent - i) ? Wt - p_col : extent - i;
-                    if (table.tile_row != p_row) {
-                        build_run_table<face_bytes, row_bytes, use_staging>(table, p_row, num_inputs, sizes_arg0, Wt);
-                    }
-                    const uint32_t out_slot = out_base + i * page_bytes;
-                    const uint32_t staging_slot = staging_base + i * page_bytes;
-                    for (uint32_t pi = 0; pi < table.count; ++pi) {
-                        const Piece& p = table.pieces[pi];
-                        if (p.shift == 0) {
+        if constexpr (has_staging) {
+            DeviceZoneScopedN("G6C-PLACE");
+            // gather_place_block: staged pieces -> their output slots, same block, same thread.
+            cursor.for_each_segment(geom, block_extent, [&](const Segment& seg) {
+                for_each_row_piece(geom, seg, [&](const RowPiece& piece) {
+                    const uint32_t piece_bytes = piece.num_rows * face_row_bytes;
+                    for (uint32_t face_col = 0; face_col < FACE_COLS_PER_TILE; ++face_col) {
+                        const uint32_t src_off = g6_concat::face_offset<face_row_bytes>(piece.src_row, face_col);
+                        const uint32_t dst_off = g6_concat::face_offset<face_row_bytes>(piece.dst_row, face_col);
+                        const uint32_t shift = (src_off - dst_off) % input_read_alignment;
+                        if (shift == 0) {
                             continue;
                         }
-                        for (uint32_t fc = 0; fc < p.face_cols; ++fc) {
-                            const uint32_t off = p.dst_off + fc * face_bytes;
-                            const auto src = dataflow_kernel_lib::local_addr(staging_slot + off + p.shift, noc_index);
-                            uint64_t src_noc = get_noc_addr(src.noc_x, src.noc_y, src.addr);
-                            uint32_t dst = out_slot + off;
-                            for (uint32_t c = 0; c < seg_pages; ++c) {
-                                noc_async_read(src_noc, dst, p.bytes);
-                                src_noc += page_bytes;
-                                dst += page_bytes;
-                            }
+                        uint32_t slot_offset = seg.first_slot * page_bytes + dst_off;
+                        uint32_t staged_addr = staging_base + slot_offset + shift;
+                        for (uint32_t col = 0; col < seg.num_cols; ++col) {
+                            noc.async_read(
+                                self_endpoint,
+                                output_slots,
+                                piece_bytes,
+                                dataflow_kernel_lib::local_addr(staged_addr, noc.get_noc_id()),
+                                {.offset_bytes = slot_offset});
+                            slot_offset += page_bytes;
+                            staged_addr += page_bytes;
                         }
                     }
-                    i += seg_pages;
-                    p_col += seg_pages;
-                    if (p_col == Wt) {
-                        p_col = 0;
-                        if (++p_row == out_Ht) {
-                            p_row = 0;
-                        }
-                    }
-                }
-                noc_async_read_barrier();
-            }
+                });
+            });
+            noc_async_read_barrier();
         }
 
+        // Nominal count on the ragged last block keeps the ring cycle closed.
         cb_push_back(cb_output_pages, block_pages);
-        pages_left -= extent;
+        cursor.advance(geom, block_extent);
     }
 }
