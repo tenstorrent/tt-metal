@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_embedding compute: tilize_block for every unit of this core, one helper call.
-//
-// Both CBs are UInt16, so the helper takes the standard (integer) tilize path with 16-bit DEST:
-// every bfloat16 bit pattern (-0.0, subnormals, inf, NaN payloads) passes through unchanged.
+// g6_embedding compute: tilize_block over the core's units, one tile row of block_width_tiles
+// tiles per unit. Both CBs are UInt16, so the helper takes the standard integer tilize path
+// (16-bit DEST) and every bfloat16 bit pattern passes through unchanged.
 
 #include <cstdint>
 
