@@ -243,6 +243,9 @@ def _sinusoid_pe(per_chunk=13):
 
 # Chunk counts encode_mel pads clips of 1-32 s to (whole 8-chunk windows).
 WARM_BUCKETS = (8, 16, 24, 32)
+MEL_FRAMES_PER_SECOND = 100
+# The longest clip encode_mel takes after warmup(): one chunk is N_WINDOW * 2 mel frames.
+MAX_MEL_FRAMES = WARM_BUCKETS[-1] * N_WINDOW * 2
 
 
 def warmup(params, device):

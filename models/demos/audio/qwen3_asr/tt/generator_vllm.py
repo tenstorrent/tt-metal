@@ -20,12 +20,38 @@ from vllm.model_executor.models.qwen3_asr_realtime import Qwen3ASRRealtimeMultiM
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
+from models.demos.audio.qwen3_asr.tt.audio_encoder import MAX_MEL_FRAMES, MEL_FRAMES_PER_SECOND
 from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
+class _MaxClipCheck:
+    """Rejects a clip longer than the TT encoder takes. Here it fails the request; raised in the
+    model, it stops the engine and every request after it."""
+
+    def _postprocess_hf_mm_data(self, hf_data, hf_kwargs, processed_data):
+        out = super()._postprocess_hf_mm_data(hf_data, hf_kwargs, processed_data)
+        lengths = out.get("audio_feature_lengths")
+        frames = int(lengths.max()) if lengths is not None and lengths.numel() else 0
+        if frames > MAX_MEL_FRAMES:
+            raise ValueError(
+                f"audio clip of {frames / MEL_FRAMES_PER_SECOND:.1f} s is longer than the "
+                f"{MAX_MEL_FRAMES / MEL_FRAMES_PER_SECOND:.0f} s the TT Qwen3-ASR encoder takes"
+            )
+        return out
+
+
+class Qwen3ASRTTMultiModalProcessor(_MaxClipCheck, Qwen3ASRMultiModalProcessor):
+    pass
+
+
+# Realtime segments are 5 s, but /v1/audio/transcriptions on this class sends whole files.
+class Qwen3ASRTTRealtimeMultiModalProcessor(_MaxClipCheck, Qwen3ASRRealtimeMultiModalProcessor):
+    pass
+
+
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen3ASRMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+    Qwen3ASRTTMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
 )
 class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal, SupportsTranscription):
     # Speech-to-text serving (prompt with the `prompt` field as system turn, audio clip
@@ -72,7 +98,7 @@ class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal, Su
 
 
 @MULTIMODAL_REGISTRY.register_processor(
-    Qwen3ASRRealtimeMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+    Qwen3ASRTTRealtimeMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
 )
 class Qwen3ASRRealtimeGeneration(Qwen3ASRForConditionalGeneration, SupportsRealtime):
     # vLLM runs one streaming session per connection: each audio segment from
