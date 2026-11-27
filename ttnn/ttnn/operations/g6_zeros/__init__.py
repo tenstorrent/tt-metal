@@ -5,9 +5,9 @@ from .g6_zeros import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    describe_plan,
     g6_zeros,
+    g6_zeros_plan,
     validate,
 )
 
-__all__ = ["g6_zeros", "validate", "describe_plan", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
+__all__ = ["EXCLUSIONS", "INPUT_TAGGERS", "SUPPORTED", "g6_zeros", "g6_zeros_plan", "validate"]

@@ -3,31 +3,40 @@
 
 """g6_zeros: a new DRAM-interleaved TILE tensor whose every element is +0.0.
 
-One device program per call: each worker core zeroes a small L1 source once and writes its share
-of one DRAM bank as wide single-packet NoC writes. Nothing is read from DRAM.
+One device program per call: each writer core makes its zero bytes in its own
+L1 and writes its DRAM bank runs from them. Nothing is read, nothing is made
+on the host.
 """
 
 from __future__ import annotations
+
+import operator
 
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_zeros_program_descriptor import get_program, plan_for
+from .g6_zeros_program_descriptor import (
+    TILE_DIM,
+    create_program_descriptor,
+    device_geometry,
+    make_plan,
+    set_output_address,
+)
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS
+# 1. INPUT_TAGGERS — project the scenario dict {"shape", "dtype", "layout"}
 # ---------------------------------------------------------------------------
-# `inputs` is (scenario,), scenario = {"shape": tuple, "dtype": ..., "layout": ...}: the op has no
-# input tensor, so both axes are projected off the call's own arguments.
 
 
 def tag_dtype(inputs, axes):
+    """The dtype sets the page size (4096 / 2048 / 1088 B per tile); the bytes written are zero in all."""
     return inputs[0]["dtype"]
 
 
 def tag_layout(inputs, axes):
+    """A page is one 32x32 tile."""
     return inputs[0]["layout"]
 
 
@@ -58,35 +67,36 @@ EXCLUSIONS = []
 # 4. validate()
 # ---------------------------------------------------------------------------
 
-_RANK = 4
-_TILE_DIM = 32
 
-
-def _check_structure(shape, layout, device, memory_config):
-    if not isinstance(shape, (list, tuple)) or len(shape) != _RANK:
-        raise ValueError(f"g6_zeros: shape must be a list or tuple of {_RANK} ints, got {shape!r}")
-    for d in shape:
-        if isinstance(d, bool) or not isinstance(d, int):
-            raise ValueError(f"g6_zeros: shape must hold ints, got {shape!r}")
-        if d < 1:
-            raise ValueError(f"g6_zeros: every size must be >= 1, got {shape!r}")
-    if shape[-2] % _TILE_DIM != 0 or shape[-1] % _TILE_DIM != 0:
-        raise ValueError(f"g6_zeros: the last two sizes must be multiples of {_TILE_DIM}, got {shape!r}")
+def _check_arguments(shape, layout, device, memory_config):
+    if not isinstance(shape, (list, tuple)) or len(shape) != 4:
+        raise ValueError(f"g6_zeros: shape must be a list or tuple of 4 ints, got {shape!r}")
+    for size in shape:
+        if isinstance(size, bool):
+            raise ValueError(f"g6_zeros: shape sizes must be ints, got {shape!r}")
+        try:
+            operator.index(size)
+        except TypeError:
+            raise ValueError(f"g6_zeros: shape sizes must be ints, got {shape!r}") from None
+        if size < 1:
+            raise ValueError(f"g6_zeros: shape sizes must be >= 1, got {shape!r}")
+    if shape[2] % TILE_DIM or shape[3] % TILE_DIM:
+        raise ValueError(f"g6_zeros: the last two sizes must be multiples of {TILE_DIM}, got {shape!r}")
     if layout != ttnn.TILE_LAYOUT:
-        raise ValueError(f"g6_zeros: layout must be TILE_LAYOUT, got {layout!r}")
+        raise ValueError(f"g6_zeros: layout must be TILE_LAYOUT, got {layout}")
     if not isinstance(memory_config, ttnn.MemoryConfig) or not (
-        memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        and memory_config.buffer_type == ttnn.BufferType.DRAM
+        memory_config.buffer_type == ttnn.BufferType.DRAM
+        and memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     ):
-        raise ValueError(f"g6_zeros: memory_config must be DRAM interleaved, got {memory_config!r}")
+        raise ValueError(f"g6_zeros: memory_config must be DRAM interleaved, got {memory_config}")
     if not isinstance(device, ttnn.MeshDevice):
-        raise ValueError(f"g6_zeros: device must be an open device or mesh device, got {device!r}")
+        raise ValueError(f"g6_zeros: device must be an open ttnn.MeshDevice, got {device!r}")
 
 
 def validate(shape, *, dtype, layout, device, memory_config):
-    _check_structure(shape, layout, device, memory_config)
+    _check_arguments(shape, layout, device, memory_config)
 
-    scenario = {"shape": tuple(shape), "dtype": dtype, "layout": layout}
+    scenario = {"shape": tuple(int(d) for d in shape), "dtype": dtype, "layout": layout}
     axes = {}
     for axis_name, tagger in INPUT_TAGGERS.items():
         axes[axis_name] = tagger((scenario,), axes)
@@ -95,9 +105,35 @@ def validate(shape, *, dtype, layout, device, memory_config):
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"g6_zeros: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
 
-    for exc in EXCLUSIONS:
-        if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"g6_zeros: unsupported combination (refinement candidate): {exc}")
+    for excluded in EXCLUSIONS:
+        if all(axes.get(k) == v for k, v in excluded.items()):
+            raise ExcludedCell(f"g6_zeros: unsupported combination (refinement candidate): {excluded}")
+
+
+# ---------------------------------------------------------------------------
+# Host descriptor cache and plan report
+# ---------------------------------------------------------------------------
+
+# Key -> built ProgramDescriptor. Holds descriptors only, never a tensor: every call allocates its output.
+_DESCRIPTOR_CACHE = {}
+
+
+def _cache_key(shape, dtype, layout, memory_config, grid, num_dram_banks):
+    return (
+        tuple(int(d) for d in shape),
+        dtype,
+        layout,
+        memory_config.buffer_type,
+        memory_config.memory_layout,
+        grid,
+        num_dram_banks,
+    )
+
+
+def g6_zeros_plan(shape, *, dtype, device):
+    """The split a call with these arguments runs, without dispatching (writer role per core)."""
+    grid, num_dram_banks = device_geometry(device)
+    return make_plan(tuple(int(d) for d in shape), dtype, grid, num_dram_banks)
 
 
 # ---------------------------------------------------------------------------
@@ -109,15 +145,15 @@ def g6_zeros(shape, *, dtype, layout, device, memory_config):
     validate(shape, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
 
     output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, memory_config)
-    program = get_program(output, device)
-    return ttnn.generic_op([output], program)
 
+    grid, num_dram_banks = device_geometry(device)
+    key = _cache_key(shape, dtype, layout, memory_config, grid, num_dram_banks)
+    descriptor = _DESCRIPTOR_CACHE.get(key)
+    if descriptor is None:
+        plan = make_plan(key[0], dtype, grid, num_dram_banks)
+        descriptor = create_program_descriptor(output, plan)
+        _DESCRIPTOR_CACHE[key] = descriptor
+    else:
+        set_output_address(descriptor, output)
 
-def describe_plan(shape, *, dtype, layout, device, memory_config):
-    """The plan a call with these arguments selects (regime, knobs, per-core roles); dispatches nothing."""
-    validate(shape, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
-    output = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), dtype, layout, device, memory_config)
-    try:
-        return plan_for(output, device)
-    finally:
-        ttnn.deallocate(output)
+    return ttnn.generic_op([output], descriptor)
