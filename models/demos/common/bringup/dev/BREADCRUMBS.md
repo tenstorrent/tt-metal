@@ -2994,3 +2994,13 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   than one is an error before any device work. Grouping itself is unchanged. Selftest:
   test_resident_gate.py::test_one_load_counts_two_chunks_as_two_loads. It also flags passed X.8 / PB.NR (real two-chunk
   gates from before the strict rule): only a re-run of them would need splitting.
+
+## F308 (2026-11-27, DeepSeek-V4.1 WA.4): an A/B side's switch beats an inline assignment in the gate command
+- Seen: WA.4's gate commands set DS41_WOA_BANK=on inline (the accept gate's form). The A/B's batch entries take a segment's
+  prefix over the side's environment (ab_batches: "as the shell"), so the 'off' side ran every ladder with the switch on:
+  the off columns of the WA.4 ladders were on vs on (WA.5's agent found it from ab/WA.4/old/batch0.json). The accept was
+  decided on test_woa_offon, which toggles inside one load, so it stands.
+- Fix: orchestrator.side_cmd(cmd, env) rewrites every inline assignment of a side switch to the side's value before the
+  run is stamped, batched or run; the off side's stamp changes, so only it re-measures. Selftest:
+  test_cpu_perf_task.py::test_an_ab_side_overrides_an_inline_switch_of_the_gate. test_perf_ab.py: 16 failed / 34 passed
+  with and without the change (the pre-existing failures, open item).
