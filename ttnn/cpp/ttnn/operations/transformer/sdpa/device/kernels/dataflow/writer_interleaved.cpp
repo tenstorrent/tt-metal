@@ -159,34 +159,41 @@ void kernel_main() {
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
     // Q chunk from it (so the reader streams Q/K/V only).
     if constexpr (use_windowed_mask) {
-        const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
-        constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
-        CircularBuffer cb_cu(cb_cu_window_in);
-        cb_cu.reserve_back(1);
-        noc.async_read(
-            cu_window_reader, CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()), cu_tile_bytes, {.page_id = 0}, {});
-        noc.async_read_barrier();
-        // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
-        // every other CB here has a producer/consumer contract with another kernel that a writer-side
-        // reserve/push would break.
-        if (q_tok_offset_addr != 0) {
-            const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
-            CircularBuffer cb_off(cb_windowed_q_offset);
-            cb_off.reserve_back(1);
-            const uint32_t off_ptr = cb_off.get_write_ptr();
-            noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+        // Only the Q chunk loop below reads the windows (windowed_mode.hpp, loads_window_lengths).
+        if (loads_window_lengths(global_q_count)) {
+            const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
+            constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
+            CircularBuffer cb_cu(cb_cu_window_in);
+            cb_cu.reserve_back(1);
+            noc.async_read(
+                cu_window_reader,
+                CoreLocalMem<uint32_t>(cb_cu.get_write_ptr()),
+                window_lengths_read_bytes(cu_tile_bytes, cu_window_seqlens_eles),
+                {.page_id = 0},
+                {});
             noc.async_read_barrier();
-            q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+            // Per-device Q origin, if the caller passed it as a tensor. Lands in its own dedicated CB —
+            // every other CB here has a producer/consumer contract with another kernel that a writer-side
+            // reserve/push would break.
+            if (q_tok_offset_addr != 0) {
+                const auto q_offset_reader = TensorAccessor(q_offset_args, q_tok_offset_addr);
+                CircularBuffer cb_off(cb_windowed_q_offset);
+                cb_off.reserve_back(1);
+                const uint32_t off_ptr = cb_off.get_write_ptr();
+                noc.async_read(q_offset_reader, CoreLocalMem<uint32_t>(off_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                q_tok_offset = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(off_ptr);
+            }
+            // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
+            // per-device value lives on device, so validate() never sees it): the origin must be
+            // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
+            // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
+            ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
+            ASSERT(
+                q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
+                (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
+            cb_cu.push_back(1);
         }
-        // Watcher-build guard for the offset contract the host cannot check in the tensor form (the
-        // per-device value lives on device, so validate() never sees it): the origin must be
-        // tile-aligned, and the Q shard must fit in the K sequence. Tile-granular -- the host's
-        // scalar-form check rounded up to whole tiles. Compiled out of non-watcher builds.
-        ASSERT(q_tok_offset % tt::constants::TILE_HEIGHT == 0);
-        ASSERT(
-            q_tok_offset / tt::constants::TILE_HEIGHT + valid_Sqt <=
-            (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
-        cb_cu.push_back(1);
     }
 
     if constexpr (is_chunked) {
