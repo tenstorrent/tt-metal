@@ -99,6 +99,9 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
+        LLK_ASSERT(
+            (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
+            "llk_math_eltwise_unary_datacopy: dst_index exceeds dest capacity");
         _llk_math_eltwise_unary_broadcast_(dst_index);
     } else {
         // Unpack-to-dest: the unpacker writes Dest under a loan, so math has nothing to do.
