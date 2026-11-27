@@ -4,8 +4,8 @@
 
 Not a gate: it measures and records. First it times one traced 5,120-token call at start 0 (real weights and
 tokens; not the ``test_layer_perf`` gate, which times a start inside a rank); then it runs consecutive full prefill
-calls from token 0 carrying its own state, exactly as ``test_golden_accuracy_long_context.py`` does, and after every
-call writes the call's per-token output sums and per-head recurrent-state sums against the golden to the run
+calls from token 0 carrying its own state, exactly as the ``k3-l0-kda`` case of
+``long_context_accuracy/test_long_context_accuracy.py`` does, and after every call writes the call's per-token output sums and per-head recurrent-state sums against the golden to the run
 directory (format in ``layer0_run_analysis.py``) and prints a timestamped progress line. An interrupted run keeps
 every finished call. Analyze with ``python layer0_run_analysis.py report <run dir>``.
 

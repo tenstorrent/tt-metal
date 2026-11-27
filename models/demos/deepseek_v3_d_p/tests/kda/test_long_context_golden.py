@@ -145,7 +145,7 @@ def _readable_by_anyone(path: Path) -> bool:
 
 
 def test_registered_k3_layer0_golden_serves_the_device_test() -> None:
-    """The golden ``layer/test_golden_accuracy_long_context.py`` gates on is registered, complete, and has its token
+    """The golden the ``k3-l0-kda`` long-context case gates on is registered, complete, and has its token
     ids, token floor and every segment file, so a broken golden fails here before a device run (reads only metadata
     and the 8 MB token ids)."""
     golden = open_k3_layer0_golden()
