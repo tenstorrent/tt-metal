@@ -2423,10 +2423,12 @@
     fi
     cd "${TT_METAL_HOME}"
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 60 * 60 ))  # the bh_sc1_high_power timeout below
+    export PREFILL_PERF_MISSES=$(mktemp)  # a launch that misses only a perf gate lists itself and the next one still runs
     echo "===== [1/2] (GLM-5.3-744B) prefill KV accuracy 1M tail@5k + perf 1M@5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 || exit $?
     echo "===== [2/2] (GLM-5.3-744B) packed prefill KV accuracy 1M tail@5k + perf 1M@5k, two chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant packed || exit $?
+    if [ -s "${PREFILL_PERF_MISSES}" ]; then echo "===== perf gates missed:"; cat "${PREFILL_PERF_MISSES}"; exit 1; fi
     echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
@@ -2457,10 +2459,12 @@
     fi
     cd "${TT_METAL_HOME}"
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 50 * 60 ))  # the bh_sc1_high_power timeout below
+    export PREFILL_PERF_MISSES=$(mktemp)  # a launch that misses only a perf gate lists itself and the next one still runs
     echo "===== [1/2] (GLM-5.3-744B) 2x[4,4] prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || exit $?
     echo "===== [2/2] (GLM-5.3-744B) 2x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed || exit $?
+    if [ -s "${PREFILL_PERF_MISSES}" ]; then echo "===== perf gates missed:"; cat "${PREFILL_PERF_MISSES}"; exit 1; fi
     echo "===== both runs passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
@@ -2489,6 +2493,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_MISSES=$(mktemp)  # a launch that misses only a perf gate lists itself and the next sections still run
     echo "===== [1/4] (GLM-5.3-744B) MTP KV share prefill KV accuracy 1M tail@5k + perf 1M@5k, runner ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
     echo "===== [2/4] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
@@ -2517,6 +2522,7 @@
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_glm_prefill_multiuser.py -k "torus-xy-8x4 and mtp" -vvv --tb=short
       '
     ) || exit $?
+    if [ -s "${PREFILL_PERF_MISSES}" ]; then echo "===== perf gates missed:"; cat "${PREFILL_PERF_MISSES}"; exit 1; fi
     echo "===== all 4 sections passed ====="
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
@@ -2557,10 +2563,12 @@
     # Below the job timeout, as for the SC1 legs; the job deadline caps it further for the second launch.
     export TABLE_WAIT_SECS=2400
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 90 * 60 ))  # the bh_sc4 timeout below
+    export PREFILL_PERF_MISSES=$(mktemp)  # a launch that misses only a perf gate lists itself and the next one still runs
     echo "===== [1/2] (Kimi-K3.1) prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 || exit $?
     echo "===== [2/2] (Kimi-K3.1) packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc4 --variant packed || exit $?
+    if [ -s "${PREFILL_PERF_MISSES}" ]; then echo "===== perf gates missed:"; cat "${PREFILL_PERF_MISSES}"; exit 1; fi
     echo "===== both runs passed ====="
   test_type: k31_prefill_runner_93l
   test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]
@@ -2634,10 +2642,12 @@
     # Below the job timeout, as for K3's leg above; the job deadline caps it further for the second launch.
     export TABLE_WAIT_SECS=2400
     export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 70 * 60 ))  # the bh_sc1_high_power timeout below
+    export PREFILL_PERF_MISSES=$(mktemp)  # a launch that misses only a perf gate lists itself and the next one still runs
     echo "===== [1/2] (Kimi-K3.1) L24 prefill KV accuracy 8k@2.5k + perf 1M@2.5k, one chunk per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 || exit $?
     echo "===== [2/2] (Kimi-K3.1) L24 packed prefill KV accuracy 8k@2.5k + perf 1M@2.5k, four chunks per forward ====="
     bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3_1 sc1 --variant packed || exit $?
+    if [ -s "${PREFILL_PERF_MISSES}" ]; then echo "===== perf gates missed:"; cat "${PREFILL_PERF_MISSES}"; exit 1; fi
     echo "===== both runs passed ====="
   test_type: k31_prefill_runner_24l
   test_tags: [kimi_k3_1, k31_runner, runner, kv_cache, k31_packed]

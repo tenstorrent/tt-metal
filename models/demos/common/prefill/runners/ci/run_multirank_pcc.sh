@@ -920,7 +920,18 @@ if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
 fi
+if [ "${PCC_GATE_RC}" -ne 0 ]; then
+  exit "${PCC_GATE_RC}"
+fi
 if [ "${PERF_GATE_RC}" -ne 0 ]; then
+  # A job running several launches sets PREFILL_PERF_MISSES to a file it checks after the last one: a launch whose
+  # only failure is a perf gate lists itself there and exits 0, since its devices came through the run cleanly and
+  # the next launch can still measure.
+  if [ -n "${PREFILL_PERF_MISSES:-}" ]; then
+    echo "${RUN_NAME}_${CONFIG}: perf gate rc=${PERF_GATE_RC}" >> "${PREFILL_PERF_MISSES}"
+    echo "perf gate missed (rc=${PERF_GATE_RC}); listed in ${PREFILL_PERF_MISSES}, the job fails after its last launch" >&2
+    exit 0
+  fi
   exit "${PERF_GATE_RC}"
 fi
-exit "${PCC_GATE_RC}"
+exit 0

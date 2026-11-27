@@ -1046,6 +1046,42 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
         self.assertEqual(reasons, [])
 
+    def misses_file(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return Path(directory.name) / "perf_misses"
+
+    def test_a_listed_perf_miss_lets_the_next_launch_run(self):
+        # The miss still fails the job (its last step reads the list) and still marks it non-retryable.
+        misses = self.misses_file()
+        result, reasons = self.failure_records(
+            extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000", "PREFILL_PERF_MISSES": str(misses)}
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertEqual(len(reasons), 1, reasons)
+        self.assertRegex(misses.read_text(), r"^mistral4_\S+: perf gate rc=[1-9]")
+
+    def test_a_perf_miss_is_listed_only_when_everything_else_passed(self):
+        cases = {
+            "runner failure": {"runner_rc": 17},
+            "pcc failure": {"verdict": "false"},
+        }
+        for name, kwargs in cases.items():
+            with self.subTest(name):
+                misses = self.misses_file()
+                result, _ = self.run_harness(
+                    "mistral4",
+                    extra_env={
+                        "TEST_TPS": "10000",
+                        "PREFILL_EXPECTED_TPS": "17000",
+                        "PREFILL_PERF_MISSES": str(misses),
+                    },
+                    **kwargs,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(misses.exists(), misses.read_text() if misses.exists() else "")
+
     def test_perf_gate_pass_records_nothing(self):
         result, reasons = self.failure_records(extra_env={"TEST_TPS": "17000", "PREFILL_EXPECTED_TPS": "17500"})
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
