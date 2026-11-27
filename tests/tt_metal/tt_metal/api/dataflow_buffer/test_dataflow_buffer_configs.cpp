@@ -645,12 +645,14 @@ TEST_F(UnitMeshFixture, DfbSerializeImplicitSyncHalfWrapBound) {
         {
             Program program = CreateProgram();
             experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config_for(32771));
+            program.impl().finalize_dataflow_buffer_configs();
         },
         std::exception);
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config_for(65534));
+    program.impl().finalize_dataflow_buffer_configs();
     const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1u);
     EXPECT_EQ(dfbs[0]->producer_txn_descriptor.num_txn_ids, 2u);
