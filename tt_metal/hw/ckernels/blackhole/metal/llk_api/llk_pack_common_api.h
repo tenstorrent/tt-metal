@@ -330,6 +330,18 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_table_i
     }
 }
 
+// LLK_SIZE_MODE_GDN: the reconfigure and its state stores out of line, one call per site as on main
+template <bool is_fp32_dest_acc_en, std::uint32_t skip>
+__attribute__((noinline)) void llk_pack_reconfig_data_format_size(
+    const std::uint32_t pack_src_format,
+    const std::uint32_t pack_dst_format,
+    const std::uint32_t tile_size,
+    const std::uint32_t tile_c_dim,
+    const std::uint32_t num_faces) {
+    _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, skip, true, true>(
+        pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, false /* partial_face */);
+}
+
 /**
  * Reconfigure the packer for a new output operand's data format.
  *
@@ -380,6 +392,16 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
         llk_pack_reconfig_data_format_table_inl<is_fp32_dest_acc_en>(output_id);
     } else if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>()) {
         llk_pack_reconfig_data_format_table<is_fp32_dest_acc_en, gate>(output_id);
+    } else if constexpr (LLK_SIZE_MODE_GDN) {
+        llk_pack_reconfig_data_format_size<
+            is_fp32_dest_acc_en,
+            ckernel::packer::llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+                pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face)>(
+            pack_src_format[output_id],
+            pack_dst_format[output_id],
+            get_local_cb_interface(output_id).fifo_page_size,
+            tile_c_dim,
+            num_faces);
     } else {
         constexpr std::uint32_t skip = ckernel::packer::
             llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
