@@ -30,6 +30,8 @@ inline void calculate_logical_not() {
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
+    const vType zero = 0;
+    const vType one = 1;
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
@@ -37,10 +39,9 @@ inline void calculate_logical_not() {
             // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
             v = sfpi::setsgn(v, 0 /* sgn */);
         }
-        vType r = 0;
-        v_if(v == 0) { r = 1; }
+        sfpi::dst_reg[0].mode<layout>() = zero;
+        v_if(v == 0) { sfpi::dst_reg[0].mode<layout>() = one; }
         v_endif;
-        sfpi::dst_reg[0].mode<layout>() = r;
         sfpi::dst_reg++;
     }
 }

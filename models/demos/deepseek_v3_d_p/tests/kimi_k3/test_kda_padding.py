@@ -53,6 +53,14 @@ pytestmark = run_for_blackhole()
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            kda_device_params((4, 4), wrap_both_axes=True),
+            1,
+            0,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="xy4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -60,8 +68,12 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
     sp = tuple(mesh_device.shape)[sp_axis]
     local_rows = 256
     capacity = sp * local_rows
-    # head_dim 128, as Kimi-K3's: the carries live in the migration slabs, whose segment geometry needs it.
-    config = KDAConfig(hidden_size=256, num_heads=8, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5)
+    # head_dim 128, as Kimi-K3's: the carries live in the migration slabs, whose segment geometry needs it. One head
+    # per chip: the slabs store each head once on the mesh, so the head count must divide over SP x TP.
+    num_heads = tuple(mesh_device.shape)[0] * tuple(mesh_device.shape)[1]
+    config = KDAConfig(
+        hidden_size=256, num_heads=num_heads, head_k_dim=128, head_v_dim=128, conv_kernel_size=4, norm_eps=1e-5
+    )
     weights = random_weights(config)
     hidden = torch.randn(1, capacity, config.hidden_size, generator=torch.Generator().manual_seed(197)).bfloat16()
     layer = build_layer(

@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 #include "tests/tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -41,8 +41,10 @@ protected:
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        // These tests are only supported on Wormhole and Blackhole (skip Quasar)
-        skip_if_unsupported_arch();
+        if (arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar caps data movement kernel text at MEM_DM_KERNEL_SIZE, so kernels large enough "
+                            "to reach the kernel config buffer limit fail to link";
+        }
 
         uint32_t worker_l1_size = max_worker_l1_size_ - DEFAULT_KERNEL_CONFIG_BUFFER_SIZE;
         create_devices(DEFAULT_TRACE_REGION_SIZE, worker_l1_size);
@@ -75,12 +77,6 @@ protected:
         log_info(LogTest, "Actual space used by kernel config buffer   : {} B", actual_kernel_config_size_);
         log_info(LogTest, "Actual unreserved space                     : {} B", unreserved_size_);
     }
-
-    void skip_if_unsupported_arch() {
-        if (arch_ == tt::ARCH::QUASAR) {
-            GTEST_SKIP() << "Kernel size config tests are only supported on Wormhole and Blackhole";
-        }
-    }
 };
 
 // Test a big kernel config buffer size by setting the worker_l1_size to 64 KB
@@ -95,8 +91,10 @@ protected:
             GTEST_SKIP();
         }
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        skip_if_unsupported_arch();
+        if (arch_ == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Quasar caps data movement kernel text at MEM_DM_KERNEL_SIZE, so kernels large enough "
+                            "to reach the kernel config buffer limit fail to link";
+        }
 
         create_devices(DEFAULT_TRACE_REGION_SIZE, MIN_WORKER_L1_SIZE);
         compute_memory_layout();
@@ -149,7 +147,7 @@ TEST_F(KernelSizeTestBigBuffer, LargeKernelWorks) {
 
 // Test 2: Verify that kernels exceeding kernel config buffer size are rejected
 // This test intentionally creates an oversized kernel (100 KB) and expects
-// the dispatch system to throw TT_FATAL in ProgramImpl::finalize_program_offsets()
+// the dispatch system to throw in ProgramImpl::check_kernel_config_fits()
 TEST_F(KernelSizeTestDefaultBuffer, LargeKernelFails) {
     ScopedNullifyKernels nullify_kernels;
 

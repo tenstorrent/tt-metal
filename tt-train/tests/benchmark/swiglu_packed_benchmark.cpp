@@ -25,7 +25,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <vector>
 

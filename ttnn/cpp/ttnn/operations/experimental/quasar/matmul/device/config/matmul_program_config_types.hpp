@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt-metalium/buffer_types.hpp"
-#include "tt-metalium/core_coord.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
+#include "tt-metalium/vocabulary/core_coord.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::operations::experimental::quasar::matmul {

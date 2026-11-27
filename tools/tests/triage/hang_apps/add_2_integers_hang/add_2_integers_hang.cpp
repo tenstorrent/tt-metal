@@ -6,17 +6,17 @@
 #include <iostream>
 #include <random>
 #include <sys/prctl.h>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/global_semaphore.hpp>
-#include <tt-metalium/tensor/host_tensor.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/tensor/tensor_apis.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
+#include <tt-metalium/memory/tensor/host_tensor.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/tensor/tensor_apis.hpp>
 
 #include "stop_simulation_on_termination.hpp"
 

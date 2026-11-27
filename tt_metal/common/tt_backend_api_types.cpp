@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 #include "common/tt_backend_api_types.hpp"
 
 #include <fmt/base.h>

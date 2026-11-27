@@ -5,14 +5,14 @@
 #pragma once
 
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/memory/cross_program/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "ttnn/operation.hpp"

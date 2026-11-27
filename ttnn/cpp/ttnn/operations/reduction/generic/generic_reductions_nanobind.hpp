@@ -25,16 +25,21 @@ inline std::string get_generic_reduction_doc(
     const char* qualified_name,
     bool int32_supported,
     bool has_output_layout = false,
-    bool has_fast_approximate_mode = false) {
-    // INT32 (TILE only) is supported for sum/min/max via the SFPU reduce path, but not for mean:
+    bool has_fast_approximate_mode = false,
+    bool has_output = false) {
+    // INT32 is supported for sum/min/max via the SFPU reduce path, but not for mean:
     // the average (sum / N) is usually fractional, so there is no canonical INT32 result to return.
-    // UINT32 follows INT32. sum/min/max convert it to INT32 and reduce it on the same path.
+    // UINT32 sum/min/max take the same SFPU reduce path as INT32 with unsigned compares.
     const char* int32_row = int32_supported ? R"doc(
                 * - INT32
-                  - TILE
-                * - UINT32 (scalar=1.0 only)
-                  - TILE)doc"
+                  - ROW_MAJOR, TILE
+                * - UINT32
+                  - ROW_MAJOR, TILE)doc"
                                             : "";
+    const char* int_scalar_note =
+        int32_supported
+            ? R"doc(For INT32 and UINT32 the scalar multiplies the reduced value in float32. The result is `trunc(float32(value) * scalar)`. It is not exact above 2^24 and is truncated toward zero. INT32 results clamp to the INT32 range and UINT32 results clamp to [0, 2^32 - 1]. The default `scalar=1.0` skips the multiply and is exact.)doc"
+            : "";
     // All four generic reductions (sum/mean/max/min) expose fast_and_approximate_mode. std/var do
     // not: Welford already reduces on the SFPU at full fp32, so there is no FPU path to select.
     // ttnn.sum and ttnn.mean both expose output_layout.
@@ -46,6 +51,9 @@ inline std::string get_generic_reduction_doc(
             fast_and_approximate_mode (bool, optional): must stay `False` (the default) for FLOAT32. The FPU has no min pool, so there is no faster path to select: a FLOAT32 min with `True` is rejected rather than lowered to `-max(-x)`. No effect for non-FLOAT32 inputs.)doc"
                                                                          : R"doc(
             fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc";
+    const char* output_kwarg = has_output ? R"doc(
+            output (ttnn.Tensor, optional): preallocated tensor to write the result into. Its shape and layout must match the result; its memory config is used when `memory_config` is not given. Not supported together with `sub_core_grids`. Defaults to `None`.)doc"
+                                          : "";
     return fmt::format(
         R"doc(
         Computes the {0} of the input tensor :attr:`input_tensor` along the specified dimension(s) :attr:`dim`.
@@ -59,8 +67,8 @@ inline std::string get_generic_reduction_doc(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
-            scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
-            sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.{3}{4}
+            scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.{5}
+            sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.{3}{4}{6}
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -96,12 +104,19 @@ inline std::string get_generic_reduction_doc(
         qualified_name,
         int32_row,
         fast_approx_kwarg,
-        output_layout_kwarg);
+        output_layout_kwarg,
+        int_scalar_note,
+        output_kwarg);
 }
 
 inline void bind_generic_reductions(nb::module_& mod) {
     const auto sum_doc = get_generic_reduction_doc(
-        "sum", "ttnn.sum", /*int32_supported=*/true, /*has_output_layout=*/true, /*has_fast_approximate_mode=*/true);
+        "sum",
+        "ttnn.sum",
+        /*int32_supported=*/true,
+        /*has_output_layout=*/true,
+        /*has_fast_approximate_mode=*/true,
+        /*has_output=*/true);
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
@@ -115,14 +130,16 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("scalar") = 1.0f,
         nb::arg("sub_core_grids") = nb::none(),
         nb::arg("fast_and_approximate_mode") = false,
-        nb::arg("output_layout") = nb::none());
+        nb::arg("output_layout") = nb::none(),
+        nb::arg("output") = nb::none());
 
     const auto mean_doc = get_generic_reduction_doc(
         "mean",
         "ttnn.mean",
         /*int32_supported=*/false,
         /*has_output_layout=*/true,
-        /*has_fast_approximate_mode=*/true);
+        /*has_fast_approximate_mode=*/true,
+        /*has_output=*/true);
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
@@ -138,7 +155,8 @@ inline void bind_generic_reductions(nb::module_& mod) {
         // fast_and_approximate_mode=false (default) selects the accurate fp32 SFPU reduce; true selects the FPU. No
         // effect for non-fp32.
         nb::arg("fast_and_approximate_mode") = false,
-        nb::arg("output_layout") = nb::none());
+        nb::arg("output_layout") = nb::none(),
+        nb::arg("output") = nb::none());
 
     const auto max_doc = get_generic_reduction_doc(
         "max", "ttnn.max", /*int32_supported=*/true, /*has_output_layout=*/false, /*has_fast_approximate_mode=*/true);

@@ -13,7 +13,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::prim::qsr {
 

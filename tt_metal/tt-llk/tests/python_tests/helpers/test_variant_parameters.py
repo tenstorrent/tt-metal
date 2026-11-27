@@ -120,6 +120,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class ADDRMOD_CALLER_SCOPED(TemplateParameter):
+    """Scalar-block multiply: the kernel brackets its executes with the addrmod set/restore helpers."""
+
+    caller_scoped: bool = False
+
+    def convert_to_cpp(self) -> str:
+        scope = "CallerScoped" if self.caller_scoped else "PerCall"
+        return f"constexpr auto ADDRMOD_SCOPE = ckernel::AddrModScope::{scope};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
@@ -149,6 +160,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
 
 
 @dataclass
@@ -186,6 +207,14 @@ class REUSE_DEST_TYPE(TemplateParameter):
 class EN_DEST_REUSE(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define EN_DEST_REUSE"
+
+
+@dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
 
 
 @dataclass
@@ -357,10 +386,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
@@ -498,6 +536,43 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
         if not self.max_min_sign_magnitude:
             return ""
         return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
+class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
+    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
+    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+
+    A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+    """
+
+    compute_api_kernels: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.compute_api_kernels:
+            return ""
+        return "#define SFPU_COMPUTE_API_KERNELS 1"
+
+
+@dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -1270,6 +1345,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     do_extra_scale: bool = False
     extra_scale: int = 0x3F800000
     output_tiles: int = 3
+    sanitize_output: bool = True
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1305,6 +1381,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr bool GMG_DO_EXTRA_SCALE = {str(self.do_extra_scale).lower()};",
             f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
             f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
+            f"constexpr bool GMG_SANITIZE_OUTPUT = {str(self.sanitize_output).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1430,14 +1507,6 @@ class TOPK_XL(TemplateParameter):
 class TOP32_RM(TemplateParameter):
     """Compile-time knobs for ``top32_rm_test.cpp`` (the DeepSeek top32_rm family).
 
-    ``row_elements``  length of the row being reduced to its top 32. The driver walks it in
-                      64-element chunks, so a value that is 32 (mod 64) is what reaches the
-                      ``num_faces=2`` tail path -- the same shape the Metal dev test covers
-                      with row=160.
-    ``datum_bytes``   L1 datum size of both operands, which is the only thing the driver
-                      needs to turn a chunk index into an address: one chunk is
-                      ``64 * datum_bytes`` bytes, and unpacker addresses count 16-byte words.
-                      Must match the format the stimuli are written in.
     ``top_min``       ``_bitonic_top32_merge_``'s template polarity. False (the consumer's
                       value) keeps the max half of each compare-exchange, i.e. a top-32.
     ``top32_mode``    0 walks the row in 64-element chunks through this family's own unpack
@@ -1455,13 +1524,10 @@ class TOP32_RM(TemplateParameter):
                       layer, and the only thing in the tree that calls those 7 entry points at
                       all. In the plain mode the unpack goes through
                       ``experimental/llk_unpack_A_top32_rm_api.h`` too, which picks its own
-                      branch (Float32 takes SrcA there, not unpack-to-dest, so those cells differ
-                      from their primitives-path namesakes) and the per-chunk L1 offset, so
-                      ``datum_bytes`` is then only the primitives' fallback for mode 1.
+                      branch (Float32 takes SrcA there, not unpack-to-dest) and applies the
+                      per-chunk L1 offsets used by the consumer.
     """
 
-    row_elements: int = 64
-    datum_bytes: int = 2
     top_min: bool = False
     via_wrappers: bool = False
     # Named for the constant it emits rather than bare `mode`: field names have to be unique
@@ -1470,25 +1536,15 @@ class TOP32_RM(TemplateParameter):
     top32_mode: int = 0
 
     def convert_to_cpp(self) -> str:
-        if self.row_elements % 32 != 0:
-            raise ValueError(
-                f"row_elements must be a multiple of 32, got {self.row_elements}"
-            )
         if self.top32_mode not in (0, 1):
             raise ValueError(
                 f"top32_mode must be 0 (plain) or 1 (pre-sorted), got {self.top32_mode}"
             )
-        if self.top32_mode == 1 and self.row_elements < 1024:
-            raise ValueError(
-                "the pre-sorted mode needs at least one whole 1024-element chunk, got "
-                f"{self.row_elements}"
-            )
         return "\n".join(
             [
-                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
-                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
                 f"constexpr bool TOP32_TOP_MIN = {str(self.top_min).lower()};",
                 f"constexpr std::uint32_t TOP32_MODE = {self.top32_mode}u;",
+                f"#define TOP32_PRE_SORTED_MODE {int(self.top32_mode == 1)}",
                 f"#define TOP32_VIA_WRAPPERS {int(self.via_wrappers)}",
             ]
         )
@@ -1591,6 +1647,16 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_TOPK_STIMULUS(TemplateParameter):
+    """Record stimulus-only MoE-gate settings in perf reports."""
+
+    spread_biased_scores: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -1725,6 +1791,45 @@ class LOOP_FACTOR(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t LOOP_FACTOR;", "I"
+
+
+@dataclass
+class TOP32_GEOMETRY(RuntimeParameter):
+    """Top32 row geometry: runtime in normal builds, generated constants in SoL."""
+
+    row_elements: int
+    datum_bytes: int
+    top32_result_stride: int = 0
+
+    def __post_init__(self):
+        if self.row_elements % 32 != 0:
+            raise ValueError(
+                f"row_elements must be a multiple of 32, got {self.row_elements}"
+            )
+        if self.datum_bytes not in (2, 4):
+            raise ValueError(f"datum_bytes must be 2 or 4, got {self.datum_bytes}")
+        if self.top32_result_stride not in (0, 2):
+            raise ValueError(
+                "top32_result_stride must be 0 (reuse outputs) or 2 "
+                f"(retain every repeat), got {self.top32_result_stride}"
+            )
+
+    def convert_to_cpp(self) -> str:
+        return "\n".join(
+            [
+                f"constexpr std::uint32_t TOP32_ROW_ELEMENTS = {self.row_elements}u;",
+                f"constexpr std::uint32_t TOP32_DATUM_BYTES = {self.datum_bytes}u;",
+                f"constexpr std::uint32_t TOP32_RESULT_STRIDE = {self.top32_result_stride}u;",
+            ]
+        )
+
+    def convert_to_struct_fields(self) -> tuple[str, str]:
+        return (
+            "std::uint32_t TOP32_ROW_ELEMENTS;\n"
+            "std::uint32_t TOP32_DATUM_BYTES;\n"
+            "std::uint32_t TOP32_RESULT_STRIDE;",
+            "III",
+        )
 
 
 @dataclass
@@ -2583,13 +2688,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 
@@ -2616,14 +2721,14 @@ class SPARSE_K_CONFIG(TemplateParameter):
 @dataclass
 class CLAMPED_SILU_PARAMS(TemplateParameter):
     clamped_silu_op: str = "GATE"
-    scalar0: float = 1.0
-    scalar1: float = 1.0
+    clamped_silu_scalar0: float = 1.0
+    clamped_silu_scalar1: float = 1.0
 
     def convert_to_cpp(self) -> str:
         return (
             f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.scalar1)}u;"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {fp32_bits(self.clamped_silu_scalar0)}u;\n"
+            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {fp32_bits(self.clamped_silu_scalar1)}u;"
         )
 
 

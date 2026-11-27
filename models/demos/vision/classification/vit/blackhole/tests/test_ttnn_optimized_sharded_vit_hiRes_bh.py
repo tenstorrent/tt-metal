@@ -38,22 +38,19 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     """
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.hidden_size = hidden_size
-    config.intermediate_size = hidden_size * 4
-    config.num_attention_heads = 16
-    if config.hidden_size >= 2048:
-        config.num_attention_heads = 12
-    config.num_hidden_layers = 12
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size)
+    hf_config = transformers.ViTConfig.from_pretrained(model_name)
+    hf_config.hidden_size = hidden_size
+    hf_config.intermediate_size = hidden_size * 4
+    hf_config.num_attention_heads = 16
+    if hf_config.hidden_size >= 2048:
+        hf_config.num_attention_heads = 12
+    hf_config.num_hidden_layers = 12
+    config = ttnn_optimized_sharded_vit.update_model_config(hf_config, batch_size, sequence_size, device)
 
-    model = transformers.models.vit.modeling_vit.ViTLayer(config).eval()
+    model = transformers.models.vit.modeling_vit.ViTLayer(hf_config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    # transformers 5.x ViTLayer.forward returns a Tensor (4.x returned a tuple); unwrap only when it is
-    # a tuple (otherwise `*_` unpacking slices off the batch dim).
-    _layer_out = model(torch_hidden_states)
-    torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
+    torch_output = model(torch_hidden_states)
     torch_hidden_states = torch_hidden_states.unsqueeze(1)
 
     parameters = preprocess_model_parameters(
@@ -90,4 +87,4 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, hidden_size, m
     output = ttnn.to_torch(output)
 
     output = output.squeeze(1)
-    assert_with_pcc(torch_output, output, 0.985)
+    assert_with_pcc(torch_output, output, 0.99)
