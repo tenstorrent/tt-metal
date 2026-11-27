@@ -2,28 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Checks that dbg_read_cfgreg(bank, addr) returns the configuration word it names. The layout its
-// bank bases follow is described once, at dbg_cfgreg in ckernel_debug.h; the static_asserts below
-// hold those bases to the HAL's (hal/cfg/detail/register_layout.h).
-//
-// The math thread plants a known value where each read must land and reads it back:
-//   - a state-CFG word in bank 1 (the inactive bank; written through the bank-1 MMIO window at the
-//     HAL's bank-1 location, expected = the MMIO read-back of the same word)
-//   - a second bank-1 word far from the first, so a wrong base cannot pass by coincidence
-//   - the same word in bank 0 as a control (base 0 on every layout)
-//   - its own thread-CFG word, set with SETC16 (thread 1 is the math TRISC). The hardware places
-//     this value, so this probe checks the thread base, and through it both state banks and the
-//     dual-write window, against silicon rather than against another copy of the layout.
-// State words are restored afterwards; the thread word is reset to its boot value 0. No LLK runs on
-// any thread, so the words are free to use.
-//
-// Result words (math thread only):
-//   0          magic
-//   1          number of probes
-//   8 + 4p     probe p: identifier (bank << PROBE_ID_BANK_SHIFT | addr)
-//   9 + 4p     probe p: expected value
-//   10 + 4p    probe p: value dbg_read_cfgreg returned
-//   11 + 4p    reserved, left 0 (WORDS_PER_PROBE is 4 on both sides; change them together)
+// Math thread plants values in two HW_CFG_1 words, an HW_CFG_0 control and (via SETC16) its own thread word, then checks dbg_read_cfgreg returns each.
+// Result: [0] magic, [1] probe count, then from word 8 one 4-word record per probe: id (bank << PROBE_ID_BANK_SHIFT | addr), expected, got, 0.
 
 #include <cstdint>
 

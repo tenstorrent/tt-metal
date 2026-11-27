@@ -1,14 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-``dbg_read_cfgreg(bank, addr)`` must return the configuration word it names.
+"""``dbg_read_cfgreg(bank, addr)`` must return the configuration word it names.
 
-The math thread plants a known value in two bank-1 words, a bank-0 word (control) and its own
-thread-CFG word, reads each back through ``dbg_read_cfgreg`` and restores it. The bank layout
-is described at ``dbg_cfgreg`` in tt_llk_blackhole/common/inc/ckernel_debug.h; the probes and
-result layout are described in sources/dbg_read_cfgreg_layout_test.cpp.
-"""
+Probes and result layout: sources/dbg_read_cfgreg_layout_test.cpp."""
 
 from conftest import blackhole_only
 from helpers.format_config import DataFormat

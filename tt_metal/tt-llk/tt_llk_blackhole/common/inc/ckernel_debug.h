@@ -23,11 +23,8 @@ struct dbg_cfgreg
     constexpr static std::uint32_t THREAD_2_CFG = 2; // Thread 2 config
     constexpr static std::uint32_t HW_CFG_0     = 3; // Hardware config state 0
     constexpr static std::uint32_t HW_CFG_1     = 4; // Hardware config state 1
-    // The debug CFG read indexes the RISC's word view of TENSIX_CFG_BASE:
-    //   Config[2][CFG_STATE_SIZE * 4], ConfigDualWrite[CFG_STATE_SIZE * 4], ThreadConfig[3][THD_STATE_SIZE]
-    // (one 16-bit thread value per word), so every base below follows this architecture's bank sizes.
-    // The HAL names the same layout in llk_lib/hal/cfg/detail/register_layout.h (StateCfgBankCount,
-    // ConfigDualWriteWords, ThreadCfgBase, CregSelectorMax); the two must agree.
+    // Debug read index = word offset from TENSIX_CFG_BASE: Config[2][HW_CFG_SIZE], ConfigDualWrite, ThreadConfig[3][THREAD_CFG_SIZE].
+    // Must match hal/cfg/detail/register_layout.h; tests/sources/dbg_read_cfgreg_layout_test.cpp static_asserts it.
     constexpr static std::uint32_t HW_CFG_BANKS     = 2;                                            // HW_CFG_0 and HW_CFG_1
     constexpr static std::uint32_t THREAD_CFG_BANKS = 3;                                            // THREAD_0_CFG to THREAD_2_CFG
     constexpr static std::uint32_t HW_CFG_SIZE      = CFG_STATE_SIZE * 4;                           // Words in one hardware config state bank
