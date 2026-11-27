@@ -26,7 +26,7 @@ from models.demos.common.prefill.long_context_accuracy.block import (
     LongContextCase,
     PreparedCase,
 )
-from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import WEIGHTS, Dims
+from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import WEIGHTS, Dims, normed_input
 from models.demos.common.prefill.long_context_accuracy.dsa.scorer import DsaScorer, GoldenNames
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer
@@ -164,15 +164,16 @@ def dsa_context_bars(maxima: Mapping[str, float]) -> ContextBars:
 
 def _prepare_dsa(golden: Fp64Golden, checkpoint: Path, context_len: int) -> PreparedCase:
     """Layer 3's FP64 attention weights and the digest of the tensor set the chain read for the layer; the scorer,
-    which reads the golden's sampled rows."""
+    which reads the golden's sampled rows. The device input is the FP64 ``input_layernorm`` of the layer input, rounded
+    once to bf16."""
     tensors, digest = layer_weights(checkpoint, DSA_LAYER)
     weights = {n: tensors[n].double() for n in WEIGHTS}
-    scorer = DsaScorer(golden, context_len, DSA_GOLDEN_NAMES, weights, DSA_DIMS)
+    dsa_input = DSA_GOLDEN_NAMES.input
     return PreparedCase(
         identity=GoldenIdentity({"model": MODEL}, digest),
-        scorer=scorer,
-        input_tensors=(DSA_GOLDEN_NAMES.input,),
-        block_input=lambda lo, hi, rows: scorer.device_input(rows),
+        scorer=DsaScorer(golden, context_len, DSA_GOLDEN_NAMES, weights, DSA_DIMS),
+        input_tensors=(dsa_input,),
+        block_input=lambda lo, hi, rows: normed_input(rows[dsa_input], weights, DSA_DIMS).to(torch.bfloat16),
         device_block=KimiK31DsaBlock(DSA_LAYER),
     )
 

@@ -95,13 +95,6 @@ def run_exact(scorer, data, w, dims):
     return scorer.score_run(carried)
 
 
-def test_device_input_is_the_normed_input_rounded_once() -> None:
-    scorer, data, w, dims = stub_run([5])
-    x = scorer.device_input({"x": data["x"][:4]})
-    assert x.dtype == torch.bfloat16
-    assert torch.equal(x, fa.normed_input(data["x"][:4], w, dims).to(torch.bfloat16))
-
-
 def test_exact_run_tiers() -> None:
     # Rows 5 and 7 are sampled rows past top-k, in one chunk: scored, and their recompute matches the golden's stored
     # attention row for row.

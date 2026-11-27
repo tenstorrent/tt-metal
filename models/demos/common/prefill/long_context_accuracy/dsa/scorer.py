@@ -170,11 +170,6 @@ class DsaScorer:
         self.arms: list[RowArms] = []
         self.recompute: list[torch.Tensor] = []
 
-    def device_input(self, rows: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        """The device input of the golden ``rows``: the FP64 ``input_layernorm`` of the layer input, rounded once to
-        bf16."""
-        return normed_input(rows[self.names.input], self.w, self.dims).to(torch.bfloat16)
-
     def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> ChunkScore:
         names, out, got = self.names, outputs.output, outputs.extras["topk"]
         n = rows[names.input].shape[0]
