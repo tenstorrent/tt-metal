@@ -1653,6 +1653,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         if outbound.activation is not None:
             _forward_send_warmup(runtime, outbound, rank, send_indices)
         runtime.capture_trace(kv_caches)
+        # DRAM headroom per bank once caches, weights and the trace are resident: compared across ranks at the
+        # same num_users, it shows which stage limits the slot count. print, as the ranks may log at ERROR.
+        dram = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        mib = 1 << 20
+        print(
+            f"[pp rank {rank}/{num_ranks}] DRAM after trace capture, num_users={NUM_USERS}: "
+            f"free {dram.total_bytes_free_per_bank / mib:.1f} MiB/bank, "
+            f"largest free block {dram.largest_contiguous_bytes_free_per_bank / mib:.1f} MiB/bank, "
+            f"bank {dram.total_bytes_per_bank / mib:.1f} MiB",
+            flush=True,
+        )
         _capture_socket_ops(
             sockets,
             mesh_device,
