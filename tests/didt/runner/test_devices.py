@@ -118,6 +118,10 @@ def test_nd_report_real_duty():
     )
 
 
+def test_nd_report_interval_zero_is_empty():
+    assert nd_report_devices("=== 1 passed in 9s ===\n", c10u08) == ([], [])
+
+
 def test_nd_report_real_pass_is_empty():
     # 32 Chip map lines and "ND report: 0 of 32", no summary
     assert nd_report_devices(read("nd_pass_duty.log"), c10u08) == ([], [])
