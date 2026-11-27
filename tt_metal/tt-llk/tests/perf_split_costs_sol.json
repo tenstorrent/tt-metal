@@ -36,6 +36,8 @@
   "perf_vif_equiv_sweep": 6.4
  },
  "blackhole": {
+  "perf_block_max8": 292.6,
+  "perf_block_max8_phases": 8.0,
   "perf_compressed_custom_mm": 85.6,
   "perf_csa_index_remap": 22.4,
   "perf_custom_mm": 165.1,
