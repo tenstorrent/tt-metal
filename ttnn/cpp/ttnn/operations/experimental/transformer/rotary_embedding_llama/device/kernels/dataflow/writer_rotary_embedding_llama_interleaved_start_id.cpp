@@ -17,6 +17,8 @@ void kernel_main() {
     auto batch_end = get_arg(args::batch_end);
     auto seq_t_start = get_arg(args::seq_t_start);
     auto seq_t_end = get_arg(args::seq_t_end);
+    auto head_start = get_arg(args::head_start);
+    auto head_end = get_arg(args::head_end);
 
     constexpr auto n_heads = get_arg(args::n_heads);
     constexpr auto Wt = get_arg(args::Wt);
@@ -51,7 +53,7 @@ void kernel_main() {
 #endif
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
-        for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
+        for (uint32_t head_num = head_start; head_num < head_end; ++head_num) {
             for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
                 uint32_t output_curr_idx = batch_id * n_heads * Ht * Wt + head_num * Ht * Wt + seq_tile * Wt;
                 const bool write_rotary_output = seq_tile < rotary_Ht;
@@ -59,13 +61,14 @@ void kernel_main() {
                     dfb_out.wait_front(Wt);
                 }
 
-                uint32_t l1_read_addr = write_rotary_output ? dfb_out.get_read_ptr() : zero_stage.get_base_address();
+                CoreLocalMem<volatile uint32_t> l1_read = write_rotary_output
+                                                              ? CoreLocalMem<volatile uint32_t>(dfb_out.get_read_ptr())
+                                                              : zero_stage.local_mem();
                 const uint32_t l1_read_stride = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 const uint32_t write_bytes = write_rotary_output ? tile_bytes : zero_tile_bytes;
                 for (uint32_t j = 0; j < Wt; j++) {
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(l1_read_addr), s, write_bytes, {}, {.page_id = output_curr_idx});
-                    l1_read_addr += l1_read_stride;
+                    noc.async_write(l1_read, s, write_bytes, {}, {.page_id = output_curr_idx});
+                    l1_read += l1_read_stride / sizeof(uint32_t);
                     output_curr_idx++;
                 }
                 noc.async_write_barrier();

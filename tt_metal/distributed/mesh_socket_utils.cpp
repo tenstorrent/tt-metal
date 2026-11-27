@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_env_impl.hpp"
@@ -12,9 +13,9 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
-#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <internal/mesh_device.hpp>
 
 using namespace tt::tt_metal::distributed::multihost;
 
@@ -27,7 +28,7 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     }
     uint32_t local_service_core = 0;
     if (mesh_device.is_local(endpoint.device_coord)) {
-        auto* device = mesh_device.get_device(endpoint.device_coord);
+        auto* device = internal::get_device(mesh_device, endpoint.device_coord);
         auto& service = mesh_device.impl().metal_context().get_service_core_manager();
         local_service_core = service.claimed_cores(device->id()).contains(endpoint.core_coord) ? 1 : 0;
     }
@@ -37,11 +38,12 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     TT_FATAL(service_core == 0, "Host sockets on shared meshes do not support claimed service-core endpoints.");
 }
 
-void validate_host_socket_access(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint) {
-    TT_FATAL(
-        !mesh_device || mesh_device->is_local(endpoint.device_coord),
-        "Host socket I/O requires the rank owning endpoint {}.",
-        endpoint.device_coord);
+bool rank_owns_host_socket_endpoint(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint) {
+    return !mesh_device || mesh_device->is_local(endpoint.device_coord);
+}
+
+void validate_host_socket_access(bool rank_owns_endpoint, const MeshCoreCoord& endpoint) {
+    TT_FATAL(rank_owns_endpoint, "Host socket I/O requires the rank owning endpoint {}.", endpoint.device_coord);
 }
 
 namespace {
@@ -238,7 +240,7 @@ Tag generate_rank_scoped_exchange_tag(
 
 bool mesh_is_coowned(const MeshDevice& mesh_device) {
     const auto& view = mesh_device.get_view();
-    return view.num_devices() != view.get_devices().size();
+    return view.num_devices() != view.impl().get_devices().size();
 }
 
 std::unordered_set<MeshCoreCoord> socket_endpoint_cores(const SocketConfig& config, SocketEndpoint socket_endpoint) {
@@ -266,22 +268,22 @@ bool socket_is_fully_per_core(const SocketConfig& config) {
            socket_endpoint_uses_per_core_allocation(config, SocketEndpoint::RECEIVER);
 }
 
-// Logical core -> page index within a device's shard of the config buffer, used by
+// Logical core -> page index within the shard of the config buffer on a local device, used by
 // write_socket_configs to find the entry for a given socket core.
 //
-// A lockstep config buffer reads this off its backing buffer's page mapping. A per-core config
-// buffer has no backing buffer (MeshBuffer::create's per-core branch gives each device its own
-// Buffer), and needs none: per-core requires a single (device, core) for the endpoint, so the
-// shard is one page belonging to that core.
+// A lockstep config buffer reads this off the device buffer's page mapping. A per-core config
+// buffer needs no page mapping: per-core requires a single (device, core) for the endpoint, so
+// the shard is one page belonging to that core.
 std::unordered_map<CoreCoord, uint32_t> config_buffer_core_to_id(
-    const std::shared_ptr<MeshBuffer>& config_buffer, const SocketConfig& config, SocketEndpoint socket_endpoint) {
+    const std::shared_ptr<MeshBuffer>& config_buffer,
+    const MeshCoordinate& device_coord,
+    const SocketConfig& config,
+    SocketEndpoint socket_endpoint) {
     if (socket_endpoint_uses_per_core_allocation(config, socket_endpoint)) {
         const auto cores = socket_endpoint_cores(config, socket_endpoint);
         return {{cores.begin()->core_coord, 0}};
     }
-    auto* backing_buffer = config_buffer->get_backing_buffer();
-    TT_FATAL(backing_buffer, "Lockstep socket config buffer has no backing buffer to derive its page mapping from.");
-    return backing_buffer->get_buffer_page_mapping()->core_to_core_id;
+    return config_buffer->get_device_buffer(device_coord)->get_buffer_page_mapping()->core_to_core_id;
 }
 
 std::shared_ptr<MeshBuffer> create_socket_config_buffer(
@@ -429,7 +431,6 @@ void write_socket_configs(
     // metadata generated from the local MeshSocket stays available even though
     // the serialized peer descriptor does not carry that extra context.
     const auto& config = local_descriptor.config;
-    const auto core_to_core_id = config_buffer_core_to_id(config_buffer, config, socket_endpoint);
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
     auto& metal_env = mesh_device->impl().metal_env();
@@ -487,6 +488,7 @@ void write_socket_configs(
             if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
+            const auto core_to_core_id = config_buffer_core_to_id(config_buffer, device_coord, config, socket_endpoint);
             if (cores_map.size() > 1) {
                 log_warning(
                     tt::LogAlways,
@@ -549,6 +551,7 @@ void write_socket_configs(
             if (!mesh_device->is_local(device_coord)) {
                 continue;
             }
+            const auto core_to_core_id = config_buffer_core_to_id(config_buffer, device_coord, config, socket_endpoint);
 
             for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
                 const auto& connection =

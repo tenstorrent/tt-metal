@@ -857,7 +857,7 @@ def load_and_compute_layer_by_layer(
                 "ffn_norm_weight": layer_dequant["post_attention_layernorm.weight"],
             }
 
-            # DSA-sparse variants (GLM-5.1, DeepSeek-V3.2) carry lightning-indexer weights; include them
+            # DSA-sparse variants (GLM-5.3, DeepSeek-V3.2) carry lightning-indexer weights; include them
             # so ttMLA.build_ttnn_cache writes a complete sparse cache — it resolves has_indexer from the
             # config and errors if the indexer host weights are missing. Auto-engages only when present
             # (dense DeepSeek-R1 / Kimi checkpoints have no self_attn.indexer.*). The checkpoint's

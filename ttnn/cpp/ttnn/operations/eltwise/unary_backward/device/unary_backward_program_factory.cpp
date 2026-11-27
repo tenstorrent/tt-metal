@@ -120,7 +120,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                 return false;
             }
             for (const Tensor* t : std::initializer_list<const Tensor*>{&grad_output, &input, &output}) {
-                if (t->buffer()->page_size() != t->buffer()->aligned_page_size()) {
+                if (t->mesh_buffer().page_size() != t->mesh_buffer().aligned_page_size()) {
                     return false;
                 }
             }
@@ -159,12 +159,12 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
         const auto paging_of = [&](const Tensor& t, DataFormat df) {
             const uint32_t element_bytes = datum_size(df);
-            const uint32_t page_elements = static_cast<uint32_t>(t.buffer()->page_size()) / element_bytes;
+            const uint32_t page_elements = static_cast<uint32_t>(t.mesh_buffer().page_size()) / element_bytes;
             return RmPaging{
                 .page_elements = page_elements,
                 .pages_per_row = (row_elements + page_elements - 1) / page_elements,
                 .element_bytes = element_bytes,
-                .alignment = t.buffer()->alignment()};
+                .alignment = t.mesh_buffer().alignment()};
         };
         grad_paging = paging_of(grad_output, grad_output_cb_data_format);
         input_paging = paging_of(input, input_cb_data_format);
@@ -175,7 +175,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // aligned_page_size on its one input; here every tensor has to satisfy it, for its whole
         // row and for each of its pages, since a piece may start at either boundary.
         const auto packs_rows = [&](const Tensor& t, const RmPaging& paging) {
-            const uint32_t alignment = t.buffer()->alignment();
+            const uint32_t alignment = t.mesh_buffer().alignment();
             return (row_elements * paging.element_bytes) % alignment == 0 &&
                    (paging.page_elements * paging.element_bytes) % alignment == 0;
         };
@@ -194,7 +194,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
     // -- only its element count must be (enforced by can_alias_shards).
     const uint32_t shard_tiles = can_alias_shards ? static_cast<uint32_t>(shard_of(grad_output)->numel() / TILE_HW) : 0;
 
-    IDevice* device = input.device();
+    auto* device = input.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
@@ -384,7 +384,10 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                                                 : "ckernel::DstRoundingMode::Default";
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = std::string(spec.compute_kernel_path);
+    const std::string_view compute_kernel_path = (fp32_dest_acc_en && !spec.compute_kernel_path_fp32_dest.empty())
+                                                     ? spec.compute_kernel_path_fp32_dest
+                                                     : spec.compute_kernel_path;
+    compute_desc.kernel_source = std::string(compute_kernel_path);
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_cores;
     compute_desc.config = ComputeConfigDescriptor{

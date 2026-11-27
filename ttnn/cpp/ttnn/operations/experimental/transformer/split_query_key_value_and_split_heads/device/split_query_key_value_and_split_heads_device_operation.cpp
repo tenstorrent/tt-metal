@@ -25,11 +25,25 @@ void SplitFusedQKVAndSplitHeadsDeviceOperation::validate_on_program_cache_miss(
 
     // TODO: See issue #1744
     TT_FATAL(input_tensor.storage_type() == ttnn::StorageType::DEVICE, "Operands to TM need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to TM need to be allocated in buffers on device!");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
             input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
+
+    // The program factories bake in a per-head width of 64, so derive that width the way they do and
+    // reject anything else rather than writing two tiles per head for a wider head, which silently
+    // garbles every value past column 64.
+    constexpr uint32_t num_tensors = 3;  // one fused input carries Q, K and V
+    const uint32_t padded_hidden = input_tensor.padded_shape()[3];
+    const uint32_t head_dim = (padded_hidden / num_tensors) / operation_attributes.num_heads;
+    TT_FATAL(
+        head_dim == 64,
+        "split_query_key_value_and_split_heads requires a per-head width of 64, got {} (padded hidden {} / "
+        "num_heads {}). This op only supports the BERT-large layout.",
+        head_dim,
+        padded_hidden,
+        operation_attributes.num_heads);
 
     if (!input_tensor.is_sharded()) {
         TT_FATAL(batch_size >= 7 && batch_size <= 9, "Input batch size must be between 7 to 9 for bert large TM ops!");
@@ -67,6 +81,7 @@ SplitFusedQKVAndSplitHeadsDeviceOperation::compute_output_specs(
 
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_tensors = tensor_args.output_tensors;
+    TT_FATAL(operation_attributes.num_heads > 0, "num_heads must be greater than 0");
 
     if (output_tensors.size() == 3 && output_tensors[0].has_value() && output_tensors[1].has_value() &&
         output_tensors[2].has_value()) {

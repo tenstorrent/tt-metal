@@ -14,6 +14,7 @@
 #include <string>
 
 #include "autograd/tensor.hpp"
+#include "datasets/in_memory_token_dataset.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 #include "optimizers/optimizer_registry.hpp"
@@ -104,6 +105,21 @@ void load_model_parameters(std::string &model_path, Model &model, const std::str
 }
 
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32);
+
+struct TrainingSteps {
+    double steps_per_epoch = 0.0;
+    uint32_t effective_max_steps = 0U;
+};
+
+TrainingSteps compute_training_steps(
+    const ttml::datasets::InMemoryTokenDataset &dataset,
+    const std::string &data_path,
+    uint32_t sequence_length,
+    uint32_t batch_size,
+    uint32_t gradient_accumulation_steps,
+    uint32_t num_data_workers,
+    uint32_t max_steps,
+    uint32_t num_epochs);
 
 class GradientAccumulator {
 public:

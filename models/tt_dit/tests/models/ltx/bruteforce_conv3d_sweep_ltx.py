@@ -11,11 +11,13 @@ Add each winner JSON to ``_BLOCKINGS`` keyed ``(4, 8, C_in, C_out, kernel, T, H-
 (output dims!), then re-run ~/ltx-25fps-validate.sh to confirm ~7 s.
 """
 
+import os
+
 import pytest
 
 import ttnn
 
-from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, run_sweep
+from ..wan2_2.bruteforce_conv3d_sweep import TRACE_REGION_SIZE, HaloSpec, run_sweep
 
 # LTX-2.3 1080p 153f, BH Galaxy 4x8 (h=tensor_parallel factor, w=sequence_parallel factor).
 # T is post-temporal-pad; H/W are per-device conv INPUT dims = _BLOCKINGS output-dim key + (kH-1, kW-1).
@@ -91,4 +93,179 @@ def test_bruteforce_sweep_ltx_1080p_153f(
         max_t_block=8,
         # Never None: unconstrained, the search balloons past 500 combos with minutes-long compiles.
         hw_product=_hw_product(kernel, H, W),
+    )
+
+
+# LTX-2.5 conv VAE decode, 544x960 / 145f on a 2x4 submesh: each chip holds the same shard as 1088x1920 on
+# the production 4x8, so the winners key as (4, 8, ...). Timed in halo mode (LTX_VAE_HALO_ONLY, the default
+# path): the conv reads the unpadded shard plus the neighbor halo and masks the logical edge.
+# T/H/W are the padded per-device input dims (unpadded shard + 2), key is the _BLOCKINGS (T, H_out, W_out),
+# logical_hw the global logical size on the 2x4 (the shards overhang it, so the edge chips mask).
+_SWEEP_LAYERS_LTX25_544P_145F_HALO = [
+    # (name,   C_in, C_out,  T,   H,  W,  key,            logical_hw)
+    ("s2_res", 512, 512, 75, 38, 34, (75, 34, 30), (68, 120)),
+    ("s3_res", 256, 256, 147, 38, 34, (147, 34, 30), (68, 120)),
+    ("s4_res", 128, 128, 147, 74, 66, (147, 68, 60), (136, 240)),
+    ("s1_res", 512, 512, 39, 20, 18, (39, 17, 15), (34, 60)),
+    ("s1_up", 512, 4096, 39, 20, 18, (39, 17, 15), (34, 60)),
+    ("s3_chg", 256, 512, 147, 38, 34, (147, 34, 30), (68, 120)),
+    # Exact shards (LTX_VAE_EXACT_SHARD, the default): ceil(logical / mesh) per chip, so s1 and s4
+    # do not overhang and only s0 masks. Names avoid the older ids as substrings for -k selection.
+    ("s4res_x", 128, 128, 147, 70, 62, (147, 68, 60), (136, 240)),
+    ("s4out_x", 128, 48, 147, 70, 62, (147, 68, 60), (136, 240)),
+    ("s1up_x", 512, 4096, 39, 19, 17, (39, 17, 15), (34, 60)),
+    ("s0res_x", 1024, 1024, 21, 11, 10, (21, 9, 8), (17, 30)),
+    ("s0up_x", 1024, 4096, 21, 11, 10, (21, 9, 8), (17, 30)),
+]
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, T, H, W, key, logical_hw",
+    _SWEEP_LAYERS_LTX25_544P_145F_HALO,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX25_544P_145F_HALO],
+)
+def test_bruteforce_sweep_ltx25_544p_145f_halo(
+    mesh_device, device_params, layer_name, C_in, C_out, T, H, W, key, logical_hw
+):
+    # A bare 2x4 on the galaxy fails fabric router sync, so open the system mesh and sweep on a 2x4 submesh.
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    kernel = (3, 3, 3)
+    out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx25_544p_145f_halo")
+    # SWEEP_ONLY_BLOCKINGS="64,64,3,8,8;64,128,6,8,8" times just those blockings (hang bisects).
+    only = os.environ.get("SWEEP_ONLY_BLOCKINGS")
+    only_blockings = [tuple(int(v) for v in b.split(",")) for b in only.split(";")] if only else None
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        padding=(0, 0, 0),
+        h_factor=4,
+        w_factor=8,
+        max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "300")),
+        max_t_block=8,
+        hw_product=(16, 32, 64),
+        halo=HaloSpec(2, 4, *logical_hw),
+        table_key=key,
+        max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
+        near_table=True,
+        only_blockings=only_blockings,
+        combo_watchdog_s=float(os.environ.get("SWEEP_COMBO_WATCHDOG_S", "90")),
+    )
+
+
+# 1080p-portrait (576x1088) conv VAE decode on the 4x8, swept as 288x544 on a 2x4 submesh (same per-chip shard).
+# None of these per-chip H/W had a _BLOCKINGS entry, so every decoder conv took the channel fallback
+# (1024/512-ch sites at T=H=W=1) and the warm decode ran 1.32 s against 0.40 s for 1920x1088 (exabox job 137104).
+# Same layout as the 544p list: padded per-device input dims (shard + 2), _BLOCKINGS key, 2x4 logical H/W.
+_SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO = [
+    # (name,       C_in, C_out, T,   H,  W,  key,           logical_hw)
+    ("s4_res", 128, 128, 123, 70, 20, (123, 68, 18), (136, 72)),
+    ("s3_res", 256, 256, 123, 36, 11, (123, 34, 9), (68, 36)),
+    ("s2_res", 512, 512, 63, 36, 11, (63, 34, 9), (68, 36)),
+    ("s3_chg", 256, 512, 123, 36, 11, (123, 34, 9), (68, 36)),
+    ("s1_up", 512, 4096, 33, 19, 8, (33, 17, 5), (34, 18)),
+    ("s4_out", 128, 48, 123, 70, 20, (123, 68, 18), (136, 72)),
+    ("s1_res", 512, 512, 33, 19, 8, (33, 17, 5), (34, 18)),
+    ("s0_up", 1024, 4096, 18, 11, 5, (18, 9, 3), (17, 9)),
+    ("s0_res", 1024, 1024, 18, 11, 5, (18, 9, 3), (17, 9)),
+    ("s0_conv_in", 128, 1024, 18, 11, 5, (18, 9, 3), (17, 9)),
+]
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, T, H, W, key, logical_hw",
+    _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_PORTRAIT_121F_HALO],
+)
+def test_bruteforce_sweep_ltx_portrait_121f_halo(
+    mesh_device, device_params, layer_name, C_in, C_out, T, H, W, key, logical_hw
+):
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx_portrait_121f_halo")
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        (3, 3, 3),
+        T,
+        H,
+        W,
+        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        padding=(0, 0, 0),
+        h_factor=4,
+        w_factor=8,
+        max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "300")),
+        max_t_block=8,
+        hw_product=(16, 32),
+        halo=HaloSpec(2, 4, *logical_hw),
+        table_key=key,
+        max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "720")),
+    )
+
+
+# 1080p-portrait (576x1088) latent upsampler and VAE encoder on the 4x8. The upsampler shards (5x2 before the
+# 2x upsample, 10x4 after) and the encoder's full-res shard (68x18 at T=3) had no _BLOCKINGS entries, so 21 convs
+# per run took the channel fallback, the 1024-ch ones at T=H=W=1 (exabox job 137185). Same layout as the 1080p/153f
+# list: per-device conv input dims (key + kernel - 1) on one chip, pre-padded input. hw_product per site: the 5x2
+# shards cannot reach 16 or 32.
+_SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC = [
+    # (name,          C_in, C_out, kernel,    T,  H,  W,  hw_product)
+    ("ups_post_res", 1024, 1024, (3, 3, 3), 18, 12, 6, (16, 32)),  # key 18x10x4, 8 per run
+    ("ups_pre_res", 1024, 1024, (3, 3, 3), 18, 7, 4, (4, 8)),  # key 18x5x2, 8 per run
+    ("ups_ups", 1024, 4096, (1, 3, 3), 16, 7, 4, (4, 8)),  # key 16x5x2
+    ("ups_final", 1024, 128, (3, 3, 3), 18, 12, 6, (16, 32)),  # key 18x10x4
+    ("ups_initial", 128, 1024, (3, 3, 3), 18, 7, 4, (4, 8)),  # key 18x5x2
+    ("enc_conv_in", 64, 128, (3, 3, 3), 3, 70, 20, 32),  # key 3x68x18
+    ("enc_down", 128, 64, (3, 3, 3), 3, 70, 20, 32),  # key 3x68x18
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [[(1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_1x1"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, T, H, W, hw_product",
+    _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC,
+    ids=[l[0] for l in _SWEEP_LAYERS_LTX_PORTRAIT_UPS_ENC],
+)
+def test_bruteforce_sweep_ltx_portrait_ups_enc(
+    mesh_device, device_params, layer_name, C_in, C_out, kernel, T, H, W, hw_product
+):
+    out_dir = os.environ.get("SWEEP_OUT_DIR", "sweep_results_ltx_portrait_ups_enc")
+    run_sweep(
+        mesh_device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        f"{out_dir}/{layer_name}_{C_in}x{C_out}.json",
+        padding=(0, 0, 0),
+        h_factor=4,
+        w_factor=8,
+        max_combos=int(os.environ.get("SWEEP_MAX_COMBOS", "80")),
+        max_t_block=8,
+        hw_product=hw_product,
+        max_seconds=float(os.environ.get("SWEEP_MAX_SECONDS", "300")),
     )

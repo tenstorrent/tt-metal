@@ -4,11 +4,15 @@
 
 from __future__ import annotations
 
+import fcntl
+import functools
 import hashlib
 import json
 import os
+import secrets
 import shutil
-import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -31,6 +35,14 @@ CACHE_FORMAT = 1
 # shape or dtype — e.g. GemmaFeatureExtractor's D-major→layer-major column permutation.
 # Shape, dtype, layout and sharding changes need no bump: `module_signature` already sees them.
 CACHE_VERSION = 1
+
+# A cache hit up to this many bytes of tensorbins is scanned for NaN/inf before it is served
+# (TT_DIT_CACHE_VERIFY=1): connectors and VAEs, not a transformer, whose publish-time verify covers it.
+SCAN_MAX_BYTES_DEFAULT = 8 << 30
+# A clean scan leaves this stamp, keyed on the tensorbins' names, sizes and mtimes, so the next process
+# skips the scan (it costs ~90 s of a cs04 worker start) until a tensorbin is rewritten.
+SCAN_OK_FILE = ".nonfinite-scan-ok"
+_scanned_cache_dirs: set[str] = set()
 
 
 class MissingCacheError(Exception):
@@ -58,15 +70,33 @@ def source_id(path: str | Path) -> str:
 
     A HuggingFace hub blob is stored under its own git-lfs sha256, so for the common case the
     resolved filename *is* an exact content hash and costs one `readlink` — no read of the 46GB
-    file. Anything else falls back to size, mtime, ctime and inode. A re-download or a swapped
-    file changes at least one; ctime closes the aliasing gap a plain size+mtime key leaves, since
-    the kernel bumps it on any write and userspace cannot reset it, so even a metadata-preserving
-    copy that restores size and mtime is still caught (its ctime and inode differ).
+    file. Anything else falls back to size and mtime: a re-download or a rewrite in place changes
+    the mtime, so the key still tracks the weights. Neither the file's name, its directory, its
+    ctime nor its inode is part of it: a rename in place (ltx-server's model_rename) moves the
+    ctime on and keeps the bytes, and must not rebuild the cache (~10 min of weight prep per DiT).
     """
     p = Path(path).resolve()
     st = p.stat()
-    if p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name):
+    if _is_hub_blob(p):
         return f"sha256:{p.name}"
+    return f"stat:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _is_hub_blob(p: Path) -> bool:
+    return p.parent.name == "blobs" and len(p.name) == 64 and all(c in "0123456789abcdef" for c in p.name)
+
+
+def legacy_source_id(path: str | Path) -> str:
+    """`source_id` as trees before the rename-stable key spelled it, to find what they cached.
+
+    A sha256 answer (a hub blob, or one a wrapper of `source_id` recorded) was the same then;
+    a stat key also carried the ctime and inode. Used only to adopt an old-key cache for an
+    unchanged file, so the key change rebuilds nothing.
+    """
+    sid = source_id(path)
+    if sid.startswith("sha256:"):
+        return sid
+    st = Path(path).resolve().stat()
     return f"stat:{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}:{st.st_ino}"
 
 
@@ -87,16 +117,17 @@ def module_signature(module: Module) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
-def content_key(module: Module, sources: Sequence[str | Path] = ()) -> str:
+def content_key(module: Module, sources: Sequence[str | Path] = (), *, _source_id=None) -> str:
     """Cache-key component binding an artifact to the weights and the code that produced it.
 
     Invalidates when the source checkpoint changes (`source_id`), when the module's weight
     structure or dtype changes (`module_signature`), or when weight-prep code changes values
     under a fixed structure (`CACHE_VERSION`). Every input is O(1) in the weight bytes.
     """
+    sid = _source_id or source_id
     h = hashlib.sha256(f"fmt{CACHE_FORMAT}|v{CACHE_VERSION}".encode())
     for s in sources:
-        h.update(f"|src:{source_id(s)}".encode())
+        h.update(f"|src:{sid(s)}".encode())
     h.update(f"|sig:{module_signature(module)}".encode())
     return h.hexdigest()[:12]
 
@@ -116,6 +147,114 @@ def _kernel_capture_only() -> bool:
     return os.environ.get("TT_METAL_KERNEL_CAPTURE_ONLY", "") != ""
 
 
+# Set while an in-process capture pass (set_kernel_capture_only) has dispatch off.
+_runtime_capture_only = False
+
+
+def set_kernel_capture_only(enabled: bool) -> None:
+    """Flip kernel-prewarm capture-only at runtime and remember it, so weight loads can lift it.
+
+    The in-process cold start runs its capture warmup this way. A module loaded lazily inside that
+    warmup (the Gemma encoder, the feature extractor) would otherwise prepare its weights with
+    dispatch off: the on-device prep ops never run, the tensors keep stale DRAM, and the module stays
+    marked loaded with those values for the real run (blx06 2026-11-18: every chip of the feature
+    extractor's bias held another tensor's data, caught only by the replicated-shard check on publish).
+    """
+    global _runtime_capture_only
+    ttnn._ttnn.device.kernel_prewarm_set_capture_only(enabled)
+    _runtime_capture_only = enabled
+
+
+def _forget_capture_only_builds(mesh_device) -> None:
+    """Make kernels first seen during the capture pass compile for real on their next use.
+
+    Under capture-only, ProgramImpl::compile writes a kernel's genfiles through jit_build_once and skips
+    gcc, so the build memo marks that kernel hash built with no ELF on disk, and the program cache keeps
+    a binary-less program. A weight load that lifts capture-only then reuses both and fails to read the
+    ELF (blx06 2026-11-18: a VAE-encoder cache miss inside the capture pass died with
+    'writer_unary_interleaved_start_id .../brisc.elf: cannot map elf file into memory').
+    """
+    ttnn.device.ClearKernelCache()
+    if mesh_device is not None:
+        mesh_device.clear_program_cache()
+
+
+def warm_build_only_enabled() -> bool:
+    """True when warm-ups may run build-only (env TT_DIT_WARM_BUILD_ONLY=1; off by default)."""
+    return os.environ.get("TT_DIT_WARM_BUILD_ONLY", "") == "1"
+
+
+def set_program_build_only(enabled: bool) -> bool:
+    """Set tt-metal's build-only mode and return the previous value (False if the runtime lacks it).
+
+    Build-only: a program-cache miss creates, compiles, allocates and uploads its binaries and caches
+    the program, but skips the enqueue; a hit does nothing. Every output is undefined, so nothing may
+    read one. Ignored by the runtime while a trace is being captured.
+    """
+    setter = getattr(ttnn._ttnn.device, "set_program_build_only", None)
+    return bool(setter(enabled)) if setter is not None else False
+
+
+@contextmanager
+def program_build_only(enabled: bool = True):
+    """Run the body with build-only on (or off) and restore the previous mode, so it nests."""
+    previous = set_program_build_only(enabled)
+    try:
+        yield
+    finally:
+        set_program_build_only(previous)
+
+
+def warm_stage(build_only_fn, eager_fn, *, name: str = "stage"):
+    """Run a warm-up stage build-only when TT_DIT_WARM_BUILD_ONLY=1, else eagerly.
+
+    `build_only_fn` and `eager_fn` are zero-argument callables (usually the same one). A stage that
+    reads device values on the host to decide what to run must pass `build_only_fn=None` and stays
+    eager. Any exception in the build-only attempt falls back to the eager run of that stage: the
+    programs it cached have real binaries, so the eager run reuses them.
+    """
+    t0 = time.perf_counter()
+    if (
+        build_only_fn is None
+        or not warm_build_only_enabled()
+        or not hasattr(ttnn._ttnn.device, "set_program_build_only")
+    ):
+        out = eager_fn()
+        logger.info(f"WARMSTAGE|{name}|eager|{time.perf_counter() - t0:.2f}s")
+        return out
+    try:
+        with program_build_only(True):
+            build_only_fn()
+    except Exception as exc:  # noqa: BLE001 - any failure means this stage warms eagerly
+        logger.warning(f"build-only warm-up of {name} failed ({type(exc).__name__}: {exc}); running it eagerly")
+        out = eager_fn()
+        logger.info(f"WARMSTAGE|{name}|fallback-eager|{time.perf_counter() - t0:.2f}s")
+        return out
+    logger.info(f"WARMSTAGE|{name}|build-only|{time.perf_counter() - t0:.2f}s")
+    return None
+
+
+def _dispatch_during_capture(fn):
+    """Run a weight load with dispatch on when a runtime capture pass or build-only has it off, then restore it."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if not _runtime_capture_only:
+            # Build-only programs hold real binaries, so a weight load only needs the mode lifted.
+            with program_build_only(False):
+                return fn(*args, **kwargs)
+        logger.info("kernel capture-only pass: loading weights with dispatch on")
+        set_kernel_capture_only(False)
+        _forget_capture_only_builds(kwargs.get("mesh_device"))
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            set_kernel_capture_only(True)
+
+    return wrapper
+
+
+@_dispatch_during_capture
 def load_model(
     tt_model: Module,
     *,
@@ -130,6 +269,8 @@ def load_model(
     get_torch_state_dict: Callable[[], dict] | None = None,
     create_cache: bool = True,
     post_load_hook: Callable[[Module], None] | None = None,
+    split_load: bool | None = None,
+    ccl_manager=None,
 ) -> None:
     """
     Load model weights from cache or PyTorch state dict.
@@ -155,6 +296,9 @@ def load_model(
             evaluation - PyTorch model only loads if the cache does not exist. If `None`, cache
             must exist or `MissingCacheError` is raised.
         `create_cache`: Create cache after loading from PyTorch (default: True).
+        `split_load`, `ccl_manager`: a cache hit loads replicated tensors as 1/N slices of the cache file over each
+            chip's own link, then all-gathers them with `ccl_manager` (see `split_load.py`); the result equals a
+            plain load bit for bit. `None` means on when a `ccl_manager` is given and `TT_DIT_SPLIT_LOAD` is not `0`.
 
     Raises:
         `MissingCacheError`: Cache does not exist and `get_torch_state_dict` is `None`.
@@ -183,16 +327,23 @@ def load_model(
             "Loading transformer weights from PyTorch state dict. "
             "To use caching, set the TT_DIT_CACHE_DIR environment variable."
         )
-        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False, detail="TT_DIT_CACHE_DIR unset"):
             tt_model.load_torch_state_dict(get_torch_state_dict())
         if post_load_hook is not None:
             post_load_hook(tt_model)
         ttnn.distributed_context_barrier()
         return
 
-    if _cache_is_complete(cache_dir, tt_model, key):
+    if key is not None and not _cache_is_complete(cache_dir, tt_model, key):
+        _adopt_legacy_keyed(tt_model, sources, key_args, cache_dir, key)
+
+    if _cache_is_complete(cache_dir, tt_model, key) and not (
+        get_torch_state_dict is not None and _set_aside_if_nonfinite(tt_model, cache_dir)
+    ):
         logger.info(f"loading cache at '{cache_dir}'.")
-        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True):
+        with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=True), _split_loading(
+            ccl_manager, split_load, f"{model_name}/{subfolder}"
+        ):
             tt_model.load(cache_dir)
         if post_load_hook is not None:
             post_load_hook(tt_model)
@@ -203,7 +354,7 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False):
+    with walltime.timed("weight_load", f"{model_name}/{subfolder}", cached=False, detail=miss_reason(cache_dir)):
         tt_model.load_torch_state_dict(get_torch_state_dict())
 
     # Hook (e.g. quant typecast) must run BEFORE save so the cache holds the post-hook
@@ -224,54 +375,188 @@ def load_model(
         # weight load; a bad cache costs every run until someone deletes it by hand.
         logger.warning(f"kernel capture-only pass: NOT writing weight cache to '{cache_dir}'")
     elif create_cache:
-        if key is not None:
+        if key is not None and _reclaim_enabled():
             _reclaim_superseded(model_cache_dir(**key_args, content=None, required=False))
         logger.info(f"Writing cache to '{cache_dir}'.")
         _publish_cache(tt_model, cache_dir, key)
+        _place_like_a_cache_hit(tt_model, cache_dir, key, post_load_hook)
 
 
-def verify_saved_model(tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "") -> bool:
-    """Reload every tensor `tt_model.save(cache_dir)` wrote and compare it, shard by shard, with the
-    resident one. Returns `False` and logs each mismatch rather than raising: the resident weights
-    are still good, so the run can go on; only the cache is untrustworthy.
+@contextmanager
+def _split_loading(ccl_manager, requested: bool | None, label: str):
+    from . import split_load
 
-    Costs one read of the cache and one device round trip per tensor, at cache creation only.
+    on = requested if requested is not None else os.environ.get("TT_DIT_SPLIT_LOAD", "1") != "0"
+    if not on or ccl_manager is None:
+        yield
+        return
+    loader = split_load.SplitLoad(ccl_manager)
+    with loader.active():
+        yield
+    stats = loader.stats
+    logger.info(
+        f"split load {label}: {stats['split']} tensors split ({stats['bytes'] / 2**20:.0f} MiB per chip, "
+        f"{stats['seconds']:.2f} s), {stats['plain']} plain, {stats['fallback']} failed"
+    )
+
+
+def _place_like_a_cache_hit(
+    tt_model: Module, cache_dir: Path, key: str | None, post_load_hook: Callable[[Module], None] | None
+) -> None:
+    """After a miss has published the cache, reload the weights from it, so they sit on the device
+    exactly where every later cache hit puts them.
+
+    A miss builds the weights from the state dict, which allocates differently from a cache load. A
+    trace captured on those weights bakes their addresses, and a dynamic-load mesh reloads the module
+    from the cache before the next replay: the replay then reads memory the reload did not put there.
+    On f07cs04 a job whose transformer missed in-gen captured its denoise traces on the state-dict
+    weights, and the next job, reloaded from the cache, replayed them into pure noise (jobs 2749-2750,
+    2026-10-18). Reloading here costs one cache read, on a miss only. A cache that was not published
+    (capture-only pass, failed verify, no disk room) keeps the weights as built.
     """
+    if not _cache_is_complete(cache_dir, tt_model, key):
+        return
+    tt_model.deallocate_weights()
+    logger.info(f"reloading from the cache just written at '{cache_dir}', as a cache hit places it.")
+    tt_model.load(cache_dir)
+    if post_load_hook is not None:
+        post_load_hook(tt_model)
+    ttnn.distributed_context_barrier()
+
+
+def _verification_parameters(model: Module, prefix: str):
+    for name, child in model.named_children():
+        yield from _verification_parameters(child, f"{prefix}{name}.")
+    for name, parameter in model.named_parameters():
+        yield f"{prefix}{name}", parameter
+
+
+@contextmanager
+def _verification_phase(stats: dict, phase: str):
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        stats[phase] += time.monotonic() - started
+
+
+def _verify_shard_pair(resident, fresh, stats: dict) -> tuple[bool, bool]:
+    # Keep public decorated conversions and independent readbacks on the caller.
+    # Release decoded storage before the next logical pair, including on errors.
     import torch
+
+    a = b = None
+    try:
+        with _verification_phase(stats, "convert_s"):
+            a = ttnn.to_torch(resident)
+            b = ttnn.to_torch(fresh)
+        with _verification_phase(stats, "compare_s"):
+            equal = a.shape == b.shape and torch.equal(a, b)
+            finite = bool(torch.isfinite(b).all()) if equal else True
+        return equal, finite
+    finally:
+        # An escaping exception's traceback must not retain decoded storage either.
+        a = b = resident = fresh = None
+
+
+def _stored_once(tensor) -> bool:
+    """Whether every shard of `tensor` replicates one copy: ttnn dumps a replica group once, after checking
+    each replica holds the same values, unless ttnn.CONFIG.verify_replicated_shards_on_dump is off."""
+    if not getattr(ttnn.CONFIG, "verify_replicated_shards_on_dump", False):
+        return False
+    try:
+        placements = tensor.tensor_topology().placements()
+    except (AttributeError, RuntimeError):
+        return False
+    return bool(placements) and all(isinstance(p, ttnn.PlacementReplicate) for p in placements)
+
+
+def verify_saved_model(
+    tt_model: Module, cache_dir: str | Path, /, *, prefix: str = "", stats: dict | None = None
+) -> bool:
+    """Independently reload all logical shards, retaining one decoded pair at a time.
+
+    Public TTNN conversions run serially on the caller, preserving instrumentation.
+    The pair bound excludes resident weights, the reloaded parameter and storage
+    retained by instrumentation. It is not a byte cap on an individual shard.
+    Optional ``stats`` reports completed work and elapsed phases, even on interruption.
+    ``load_s`` includes metadata, mapping and any upload; ``convert_s`` includes
+    readback, lazy page faults and decode. Neither isolates disk I/O. These phases
+    are not added to walltime's ledger: load_model already counts them in weight_load.
+    Callers must keep resident weights unchanged during verification.
+    """
+    started = last_report = time.monotonic()
+    counters = dict(
+        parameters_completed=0,
+        parameters_failed=0,
+        shards_completed=0,
+        tensorbin_bytes=0,
+        load_s=0.0,
+        convert_s=0.0,
+        compare_s=0.0,
+        completed=False,
+    )
+
+    def report_progress():
+        nonlocal last_report
+        now = time.monotonic()
+        if now - last_report >= 5.0:
+            last_report = now
+            logger.info("cache verify progress: " + json.dumps(counters, sort_keys=True))
 
     cache_dir = Path(cache_dir)
     ok = True
-    for name, child in tt_model.named_children():
-        ok &= verify_saved_model(child, cache_dir, prefix=f"{prefix}{name}.")
-    for name, parameter in tt_model.named_parameters():
-        path = cache_dir / f"{prefix}{name}.tensorbin"
-        if not path.is_file():
-            # `Module.save` writes one tensorbin per parameter and `Module.load` reads every one of
-            # them back, so a missing file is an incomplete cache, not a parameter stored elsewhere
-            # (the Mochi/Wan torch fallbacks are plain torch modules, not parameters).
-            ok = False
-            logger.error(f"cache incomplete: no tensorbin for '{prefix}{name}' at '{path}'")
-            continue
-        reloaded = None
-        try:
-            # A truncated or malformed file raises here; that is a bad cache, not a bad run.
-            reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
-            resident = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(parameter.data)]
-            fresh = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(reloaded)]
-            bad = [i for i, (a, b) in enumerate(zip(resident, fresh)) if a.shape != b.shape or not torch.equal(a, b)]
-            if len(resident) != len(fresh) or bad:
-                ok = False
-                logger.error(
-                    f"cache mismatch in '{path.name}': shards {bad or 'count'} differ "
-                    f"({len(resident)} resident vs {len(fresh)} reloaded)"
-                )
-        except RuntimeError as err:
-            ok = False
-            logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
-        finally:
-            if reloaded is not None and not parameter.on_host:
-                ttnn.deallocate(reloaded)
-    return ok
+    try:
+        for name, parameter in _verification_parameters(tt_model, prefix):
+            path = cache_dir / f"{name}.tensorbin"
+            reloaded = resident = fresh = a = b = None
+            parameter_ok = True
+            try:
+                if not path.is_file():
+                    parameter_ok = False
+                    logger.error(f"cache incomplete: no tensorbin for '{name}' at '{path}'")
+                else:
+                    counters["tensorbin_bytes"] += path.stat().st_size
+                    with _verification_phase(counters, "load_s"):
+                        reloaded = ttnn.load_tensor(path, device=None if parameter.on_host else parameter.device)
+                    resident = ttnn.get_device_tensors(parameter.data)
+                    fresh = ttnn.get_device_tensors(reloaded)
+                    if len(resident) != len(fresh):
+                        parameter_ok = False
+                        logger.error(f"cache mismatch in '{path.name}': shard count {len(resident)} vs {len(fresh)}")
+                    # A replica group is stored once, and the dump already compared every resident
+                    # replica with it, so one pair checks the file; anything else is compared shard by shard.
+                    pairs = zip(resident, fresh)
+                    if _stored_once(reloaded):
+                        pairs = zip(resident[:1], fresh[:1])
+                    for i, (a, b) in enumerate(pairs):
+                        equal, finite = _verify_shard_pair(a, b, counters)
+                        counters["shards_completed"] += 1
+                        if not equal or not finite:
+                            parameter_ok = False
+                            reason = "mismatch" if not equal else "NaN or inf"
+                            logger.error(f"cache {reason} in '{path.name}': shard {i}")
+                        report_progress()
+                    del resident, fresh
+            except (RuntimeError, OSError, ValueError, TypeError) as err:
+                parameter_ok = False
+                logger.error(f"cache unreadable: '{path.name}' failed to load or compare: {err}")
+            finally:
+                resident = fresh = a = b = None
+                if reloaded is not None and not parameter.on_host:
+                    ttnn.deallocate(reloaded)
+                reloaded = None
+            ok &= parameter_ok
+            counters["parameters_completed"] += 1
+            counters["parameters_failed"] += int(not parameter_ok)
+            report_progress()
+        counters["completed"] = True
+        return ok
+    finally:
+        counters["wall_s"] = time.monotonic() - started
+        if stats is not None:
+            stats.update(counters)
+        logger.info("cache verify summary: " + json.dumps(counters, sort_keys=True))
 
 
 def _verify_env_enabled() -> bool:
@@ -290,6 +575,32 @@ def model_cache_dir(
     content: str | None = None,
     required: bool = True,
 ) -> Path | None:
+    return _leaf_dir(
+        model_name=model_name,
+        subfolder=subfolder,
+        parallel_config=parallel_config,
+        mesh_shape=mesh_shape,
+        mesh_device=mesh_device,
+        dtype=dtype,
+        is_fsdp=is_fsdp,
+        content=content,
+        required=required,
+    )
+
+
+def _leaf_dir(
+    *,
+    model_name: str,
+    subfolder: str,
+    parallel_config: NamedTuple,
+    mesh_shape: Sequence[int],
+    mesh_device: ttnn.MeshDevice,
+    dtype: str = "bf16",
+    is_fsdp: bool = False,
+    content: str | None = None,
+    required: bool = True,
+) -> Path | None:
+    """`model_cache_dir` without the wrappers a server puts on it: a path looked at, not loaded."""
     cache_dir = _cache_root()
     if cache_dir is None:
         if required:
@@ -316,6 +627,98 @@ def model_cache_dir(
         path = path / ownership_suffix
 
     return path
+
+
+def nonfinite_tensorbins(tt_model: Module, cache_dir: str | Path) -> list[str]:
+    """The parameters of `tt_model` whose tensorbin in `cache_dir` holds NaN or inf, read on the host.
+
+    Only logical values count: to_torch drops tile padding. A file that does not load is listed too.
+    """
+    import torch
+
+    bad = []
+    for name, _ in _walk_parameters(tt_model):
+        try:
+            stored = ttnn.load_tensor(Path(cache_dir) / f"{name}.tensorbin", device=None)
+            if not all(torch.isfinite(ttnn.to_torch(t)).all() for t in ttnn.get_device_tensors(stored)):
+                bad.append(name)
+        except RuntimeError as err:
+            logger.warning(f"cache tensorbin '{name}' in '{cache_dir}' does not load on the host: {err}")
+            bad.append(name)
+    return bad
+
+
+def _scan_signature(cache_dir: Path) -> str:
+    entries = sorted((f.name, st.st_size, st.st_mtime_ns) for f in cache_dir.glob("*.tensorbin") for st in [f.stat()])
+    return hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+
+
+def _stamp_clean_scan(cache_dir: Path, stamp: str | None = None) -> None:
+    """Record that `cache_dir`'s tensorbins hold no NaN or inf, so `_set_aside_if_nonfinite` skips them."""
+    try:
+        stamp = stamp or _scan_signature(cache_dir)
+        tmp = cache_dir / f"{SCAN_OK_FILE}.{os.getpid()}"
+        tmp.write_text(stamp)
+        tmp.replace(cache_dir / SCAN_OK_FILE)
+    except OSError as err:
+        logger.debug(f"cannot stamp the clean scan of '{cache_dir}' ({err}); the next load scans it again")
+
+
+def _set_aside_if_nonfinite(tt_model: Module, cache_dir: Path) -> bool:
+    """Whether a cache hit holds NaN or inf; if so it is moved aside, so `load_model` rebuilds it.
+
+    The manifest check sees only sizes, so a cache written from bad weights (a faulty device, a
+    torn prep) is otherwise served on every run until someone deletes it by hand (#208: an ltx VAE
+    encoder cache of inf/NaN). Opt-in with TT_DIT_CACHE_VERIFY=1, like the publish-time verify; once
+    per cache dir per process; single-process meshes only, since a rebuild on one rank alone would
+    leave the others waiting at its barriers; and only up to TT_DIT_CACHE_SCAN_MAX_BYTES of tensorbins.
+    """
+    if not _verify_env_enabled() or str(cache_dir) in _scanned_cache_dirs or _distributed_world_size() > 1:
+        return False
+    _scanned_cache_dirs.add(str(cache_dir))
+    size = sum(f.stat().st_size for f in cache_dir.glob("*.tensorbin"))
+    if size > int(os.environ.get("TT_DIT_CACHE_SCAN_MAX_BYTES", SCAN_MAX_BYTES_DEFAULT)):
+        return False
+    stamp = _scan_signature(cache_dir)
+    try:
+        if (cache_dir / SCAN_OK_FILE).read_text() == stamp:
+            return False
+    except OSError:
+        pass
+    t0 = time.time()
+    bad = nonfinite_tensorbins(tt_model, cache_dir)
+    logger.info(f"scanned cache at '{cache_dir}' ({size / 2**30:.2f} GiB) for NaN/inf in {time.time() - t0:.1f}s")
+    if not bad:
+        _stamp_clean_scan(cache_dir, stamp)
+        return False
+    aside = cache_dir.with_name(f"{cache_dir.name}.bad-nonfinite-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}")
+    logger.warning(
+        f"cache at '{cache_dir}' holds NaN or inf in {len(bad)} tensors ({', '.join(bad[:5])}"
+        f"{', ...' if len(bad) > 5 else ''}); moving it to '{aside}' and rebuilding"
+    )
+    try:
+        cache_dir.rename(aside)
+    except FileNotFoundError:
+        pass  # another process moved it first
+    except OSError as err:
+        # Not ours to move (a cache root shared read-only): rebuilding could not publish over it either.
+        logger.error(f"cannot move the NaN/inf cache at '{cache_dir}' aside ({err}); serving it as it is")
+        return False
+    return True
+
+
+def miss_reason(cache_dir: str | Path) -> str:
+    """Why `load_model` is rebuilding `cache_dir`, for the wall-time anomaly list."""
+    if _kernel_capture_only():
+        # The capture pass never publishes, so its misses say nothing about the next run's hits.
+        return f"kernel capture-only pass, cache not written to '{cache_dir}'"
+    if not (Path(cache_dir) / CACHE_DICT_FILE).is_file():
+        reason = f"no cache at '{cache_dir}' yet, writing it"
+        if Path("/tmp") in Path(cache_dir).resolve().parents:
+            # systemd-tmpfiles empties /tmp at boot, so a reboot silently turns a warm cache cold.
+            reason += "; /tmp is wiped at every boot, keep TT_DIT_CACHE_DIR on persistent storage"
+        return reason
+    return f"cache at '{cache_dir}' rejected by the manifest check, rebuilding"
 
 
 def _cache_is_complete(cache_dir: str | Path, tt_model: Module, key: str | None) -> bool:
@@ -383,19 +786,174 @@ def _structure(tt_model: Module) -> dict:
     }
 
 
-def _reclaim_superseded(legacy_dir: Path | None) -> None:
+def _reclaim_enabled() -> bool:
+    """Whether a new content-keyed build may delete its content-blind predecessor (off by default).
+
+    Off because a cache root is shared by every tree on a box: the tree being prepared beside the
+    served one (a rollout's second slot) builds its keyed leaf while the served tree still reads
+    the content-blind one, and deleting it would make the served tree's next load cold. This code
+    cannot see which trees still read a leaf; ltx-server's cache_prune can (every load is logged)
+    and removes superseded leaves once nothing uses them. TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 turns it back on
+    for a single-tree checkout whose disk cannot hold both copies.
+    """
+    return os.environ.get("TT_DIT_CACHE_RECLAIM_SUPERSEDED", "0") == "1"
+
+
+# A content-blind leaf touched (read or written) this recently is still in use: never reclaimed.
+RECLAIM_IDLE_HOURS = 72.0
+
+
+def _last_touched(path: Path) -> float:
+    """Newest mtime or atime in a leaf. Under relatime (the Linux default) a read moves the atime
+    at least once a day; on a noatime mount a read leaves no trace, so there only writes count."""
+    newest = path.stat().st_mtime
+    for f in path.iterdir():
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        newest = max(newest, st.st_mtime, st.st_atime)
+    return newest
+
+
+def _reached_through_a_link(path: Path) -> bool:
+    """Whether a directory below the cache root is reached through a symlink in a path component.
+
+    Deleting through such a link deletes the target's contents, which another cache root owns.
+    A symlinked cache root itself is fine: only links below it count."""
+    root = _cache_root()
+    if root is None:
+        return True
+    try:
+        rel = Path(os.path.abspath(path)).relative_to(os.path.abspath(root))
+    except ValueError:
+        return True  # outside the cache root: not ours to delete
+    return Path(root).resolve() / rel != Path(path).resolve()
+
+
+def _reclaim_superseded(legacy_dir: Path | None, *, idle_hours: float = RECLAIM_IDLE_HOURS) -> None:
     """Drop the content-blind directory that a content key replaces, before rebuilding over it.
 
-    Once a module keys on content, nothing constructs its old path again, so whatever sits there
-    is unreachable — and for the 22B transformer it is 37GB. Freeing it first makes the one-time
-    migration disk-neutral; leaving it would need room for two copies of a checkpoint that only
-    just fits once. It is not a fallback: an unverifiable artifact is exactly what is being
-    retired, so there is nothing to keep.
+    Only with TT_DIT_CACHE_RECLAIM_SUPERSEDED=1 (`_reclaim_enabled`), and even then a leaf any
+    process read or wrote within `idle_hours` stays: another tree on the box may still serve it.
+    For the 22B transformer it is 37GB, so a disk-tight single-tree checkout frees it here.
+    A leaf reached through a symlink below the cache root (ltx-server links the base model's
+    shared VAE and encoder leaves into a variant's root) belongs to that other root, whose trees
+    still read it, so it is never deleted from here.
     """
     if legacy_dir is None or not legacy_dir.is_dir():
         return
+    if _reached_through_a_link(legacy_dir):
+        logger.info(f"Keeping content-blind cache at '{legacy_dir}': it is linked in from another cache root.")
+        return
+    if time.time() - _last_touched(legacy_dir) < idle_hours * 3600:
+        logger.info(f"Keeping content-blind cache at '{legacy_dir}': used within {idle_hours:g} h.")
+        return
     logger.info(f"Reclaiming superseded content-blind cache at '{legacy_dir}'.")
     shutil.rmtree(legacy_dir, ignore_errors=True)
+
+
+def _adopt_legacy_keyed(tt_model: Module, sources, key_args: dict, cache_dir: Path, key: str) -> bool:
+    """Make a cache built under the old (ctime/inode) source key readable under the new one.
+
+    The tensorbins are the same bytes: only the key's spelling of the source changed. Each file is
+    hard-linked into a new leaf with a manifest naming the new key, so no weight is rebuilt and
+    the old leaf, which a tree still on the old key serves, stays as it is. A refused link (another
+    filesystem) adopts nothing: a copy would need a second 37 GB without the room checks a build
+    gets. Returns whether the new leaf is now complete.
+    """
+    try:
+        old_key = content_key(tt_model, sources, _source_id=legacy_source_id)
+    except OSError:
+        return False
+    if old_key == key:
+        return False
+    old_dir = _leaf_dir(**key_args, content=old_key, required=False)
+    if old_dir is None or not _cache_is_complete(old_dir, tt_model, old_key):
+        return False
+
+    cache_dir = Path(cache_dir)
+    staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
+    try:
+        staging.parent.mkdir(parents=True, exist_ok=True)
+        staging.mkdir()
+        for f in old_dir.iterdir():
+            if f.name == CACHE_DICT_FILE or not f.is_file():
+                continue
+            os.link(f, staging / f.name)
+        manifest = json.loads((old_dir / CACHE_DICT_FILE).read_text()) | {"content_key": key}
+        (staging / CACHE_DICT_FILE).write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        # Never delete what sits at cache_dir: a process that published it after our check may be
+        # loading from it. rename() refuses a non-empty target, so only a staging dir is ever removed.
+        try:
+            os.rename(staging, cache_dir)
+        except OSError:
+            if _cache_is_complete(cache_dir, tt_model, key):
+                return True
+            raise
+    except OSError as err:
+        logger.warning(f"could not adopt '{old_dir}' as '{cache_dir}' ({err}); building it instead.")
+        return _cache_is_complete(cache_dir, tt_model, key)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    logger.info(f"adopted cache at '{old_dir}' as '{cache_dir}' (source key now rename-stable).")
+    return _cache_is_complete(cache_dir, tt_model, key)
+
+
+@contextmanager
+def _leaf_lock(cache_dir: Path):
+    """Hold an exclusive lock on one leaf's replacement (flock on a dot-file beside the leaf).
+
+    Only a builder about to delete an incomplete leaf takes it; readers and the first-publish
+    rename never do. Opened read-only so a lock file another user created (0644) still locks.
+    """
+    fd = os.open(cache_dir.parent / f".{cache_dir.name}.lock", os.O_CREAT | os.O_RDONLY, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+_RENAME_EXCHANGE = 2  # linux/fs.h
+
+
+def _swap_into_place(staging: Path, cache_dir: Path) -> None:
+    """Put `staging` at `cache_dir` in one step; whatever was at `cache_dir` ends at `staging`.
+
+    renameat2(RENAME_EXCHANGE) swaps two directories atomically, so `cache_dir` is never absent.
+    Where it is unavailable (not Linux, an old kernel or a filesystem without it), a plain
+    rename moves the old leaf aside first; `cache_dir` is then absent only between two renames.
+    """
+    if cache_dir.is_dir() and _rename_exchange(staging, cache_dir):
+        return
+    if cache_dir.exists() or cache_dir.is_symlink():
+        aside = staging.with_name(staging.name + ".old")
+        os.rename(cache_dir, aside)
+        os.rename(staging, cache_dir)
+        os.rename(aside, staging)
+    else:
+        os.rename(staging, cache_dir)
+
+
+def _rename_exchange(a: Path, b: Path) -> bool:
+    """Atomically swap two paths with renameat2(RENAME_EXCHANGE). False if unsupported here."""
+    import ctypes
+    import errno
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (OSError, AttributeError):
+        return False
+    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    at_fdcwd = -100
+    if renameat2(at_fdcwd, os.fsencode(a), at_fdcwd, os.fsencode(b), _RENAME_EXCHANGE) == 0:
+        return True
+    err = ctypes.get_errno()
+    if err in (errno.EINVAL, errno.ENOSYS, errno.EOPNOTSUPP):
+        return False
+    raise OSError(err, os.strerror(err), str(b))
 
 
 def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> None:
@@ -407,7 +965,13 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
     """
     cache_dir = Path(cache_dir)
     cache_dir.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=f".{cache_dir.name}.staging-", dir=cache_dir.parent))
+    # Not tempfile.mkdtemp: it creates the directory 0700 and the rename below publishes that mode.
+    # Under a default ACL (a cache root shared by several users) the 0700 also sets the leaf's ACL
+    # mask to ---, so every other user, the serving account included, is denied the cache. A plain
+    # mkdir gets 0777 less the umask, the parent's default ACL and its setgid group like any other
+    # directory; the pid and random suffix keep concurrent builders apart as mkdtemp did.
+    staging = cache_dir.parent / f".{cache_dir.name}.staging-{os.getpid()}-{secrets.token_hex(4)}"
+    staging.mkdir()
 
     try:
         tt_model.save(staging)
@@ -415,9 +979,12 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         # Without this a handful of flipped bytes on the way to disk is reused on every later run,
         # and nothing downstream can tell a damaged weight from a real one. Off by default because
         # it re-reads the whole cache once at creation.
-        if _verify_env_enabled() and not verify_saved_model(tt_model, staging):
-            logger.error(f"cache for {cache_dir} did not verify; not publishing it, so it is rebuilt next time.")
-            return
+        if _verify_env_enabled():
+            if not verify_saved_model(tt_model, staging):
+                logger.error(f"cache for {cache_dir} did not verify; not publishing it, so it is rebuilt next time.")
+                return
+            # The verify found every stored value finite, so the first cache hit need not scan it again.
+            _stamp_clean_scan(staging)
 
         manifest = {"format": CACHE_FORMAT}
         if key is not None:
@@ -430,13 +997,21 @@ def _publish_cache(tt_model: Module, cache_dir: str | Path, key: str | None) -> 
         # A concurrent process may have finished publishing this key while we prepared weights (a
         # long, on-device window since load_model's completeness check). Its artifact is already
         # complete — for a content key its bytes are ours by construction — so adopt it rather than
-        # delete a valid cache out from under a concurrent reader mid-load.
-        if _cache_is_complete(cache_dir, tt_model, key):
-            logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
-            return
-        if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-        os.replace(staging, cache_dir)
+        # delete a valid cache out from under a concurrent reader mid-load. rename() refuses a
+        # non-empty target, so a leaf is deleted only when found incomplete after that refusal.
+        # Two builders can both find the same stale leaf: the check and the delete are one step
+        # under the leaf's lock, so the second sees the first's complete leaf instead of deleting it.
+        try:
+            os.rename(staging, cache_dir)
+        except OSError:
+            with _leaf_lock(cache_dir):
+                if _cache_is_complete(cache_dir, tt_model, key):
+                    logger.info(f"cache at '{cache_dir}' was published concurrently; adopting it.")
+                    return
+                # One atomic swap, never delete-then-move: a worker killed (preempted, SIGTERM,
+                # reset) between the two would leave no leaf at all. The incomplete leaf ends at
+                # the staging path, which the finally below removes.
+                _swap_into_place(staging, cache_dir)
     except OSError:
         # A racing process may have published this exact key first. Its content key matches ours,
         # so its bytes are ours; adopt them rather than fight over the directory.

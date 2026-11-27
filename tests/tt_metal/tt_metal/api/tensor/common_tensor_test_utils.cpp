@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <string>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include <tt-metalium/mesh_device.hpp>
@@ -19,6 +21,12 @@
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>
 
 namespace test_utils {
+
+std::string dtype_param_name(const ::testing::TestParamInfo<tt::tt_metal::DataType>& info) {
+    // DataType prints as "DataType::MXFP8_E4M3", and gtest names allow only alphanumerics and '_'.
+    const std::string name = fmt::format("{}", info.param);
+    return name.substr(name.rfind(':') + 1);
+}
 
 void test_tensor_on_device(
     const tt::tt_metal::Shape& input_shape,

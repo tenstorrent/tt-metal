@@ -352,6 +352,26 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
     assert torch.allclose(torch_tensor, opt_tensor)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("fill_value", [0, 1.0])
+def test_full_with_opt_tensor_block_float(device, dtype, fill_value):
+    input_shape = [32, 32]
+    torch_tensor = torch.full(input_shape, dtype=torch.bfloat16, fill_value=fill_value)
+    opt_tensor = ttnn.from_torch(
+        torch.ones(input_shape, dtype=torch.bfloat16),
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
+    ttnn.full(input_shape, device=device, fill_value=fill_value, optional_tensor=opt_tensor)
+    assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
+    assert ttnn.is_tensor_storage_on_device(opt_tensor)
+    assert_equal(torch_tensor, ttnn.to_torch(opt_tensor))
+
+
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -574,6 +594,16 @@ def test_empty_like(device, input_shapes):
     assert (
         output_tensor.memory_config() == input_tensor.memory_config()
     ), f"memory_config mismatch: input={input_tensor.memory_config()}, output={output_tensor.memory_config()}"
+
+
+def test_empty_like_host_tensor():
+    input_tensor = ttnn.from_torch(torch.ones((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.empty_like(input_tensor)
+
+    assert ttnn.is_tensor_storage_on_device(output_tensor) is False
+    assert list(output_tensor.shape) == list(input_tensor.shape)
+    assert output_tensor.dtype == input_tensor.dtype
+    assert output_tensor.layout == input_tensor.layout
 
 
 @pytest.mark.parametrize(

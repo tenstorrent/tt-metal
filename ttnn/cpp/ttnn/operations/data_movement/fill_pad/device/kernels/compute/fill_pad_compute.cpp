@@ -11,8 +11,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
-ALWI void process_masked_tile(
-    DataflowBuffer& dfb_data_in, DataflowBuffer& dfb_mask, DataflowBuffer& dfb_data_out, std::uint32_t fill_bits) {
+template <typename DFBIn, typename DFBMask, typename DFBOut>
+ALWI void process_masked_tile(DFBIn& dfb_data_in, DFBMask& dfb_mask, DFBOut& dfb_data_out, std::uint32_t fill_bits) {
     constexpr std::uint32_t CB_DATA_IN = 0;
     constexpr std::uint32_t CB_DATA_PADDING = 1;
     constexpr std::uint32_t CB_MASK = 2;
@@ -44,11 +44,12 @@ ALWI void process_masked_tile(
 }
 
 // Corner tile: two sequential where_tile calls give (right_mask OR bot_mask) → fill.
+template <typename DFBIn, typename DFBRightMask, typename DFBBotMask, typename DFBOut>
 ALWI void process_corner_tile(
-    DataflowBuffer& dfb_data_in,
-    DataflowBuffer& dfb_right_mask,
-    DataflowBuffer& dfb_bot_mask,
-    DataflowBuffer& dfb_data_out,
+    DFBIn& dfb_data_in,
+    DFBRightMask& dfb_right_mask,
+    DFBBotMask& dfb_bot_mask,
+    DFBOut& dfb_data_out,
     std::uint32_t fill_bits) {
     constexpr std::uint32_t CB_DATA_IN = 0;
     constexpr std::uint32_t CB_DATA_PADDING = 1;

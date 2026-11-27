@@ -346,6 +346,40 @@ def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
         submesh_device.reset_sub_device_stall_group()
 
 
+# Unicast factory (WH ring, >= 20 large pages per device) with pages too big for scatter writes:
+# one fp32 tile per packet (needs Watcher to catch) and fp32 rows larger than a packet (hangs).
+@skip_for_blackhole("This test is for wormhole")
+@pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "ag_output_shape, ag_input_dtype, layout",
+    [
+        ([1, 1, 256, 1024], ttnn.float32, ttnn.TILE_LAYOUT),
+        ([1, 1, 32, 10240], ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["fp32_tile_one_page_per_packet", "fp32_rm_page_larger_than_packet"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}],
+    indirect=True,
+    ids=["fabric_ring"],
+)
+def test_all_gather_unicast_non_scatter_pages(mesh_device, ag_output_shape, ag_input_dtype, layout):
+    run_all_gather_impl(
+        mesh_device,
+        ag_output_shape,
+        dim=3,
+        ag_input_dtype=ag_input_dtype,
+        layout=layout,
+        mem_config_input=ttnn.DRAM_MEMORY_CONFIG,
+        mem_config_ag=ttnn.DRAM_MEMORY_CONFIG,
+        enable_trace=False,
+        num_iters=3,
+        cluster_axis=0,
+    )
+    ttnn.ReadDeviceProfiler(mesh_device)
+
+
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [

@@ -221,6 +221,54 @@ def test_roll_height_sharded_tile_aligned(device, shape, ncores, sh, sw, shifts,
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), ttnn.TILE_LAYOUT, mem_config, shifts, dims)
 
 
+# ─── HEIGHT_SHARDED with tile or shard padding (interleaved round trip) ──────
+
+
+@pytest.mark.parametrize(
+    "shape,layout,shifts,dims",
+    [
+        ([1, 40, 64], ttnn.TILE_LAYOUT, [32], [1]),  # tile-aligned shift took the native path
+        ([1, 40, 64], ttnn.TILE_LAYOUT, [8], [1]),
+        ([1, 40, 64], ttnn.ROW_MAJOR_LAYOUT, [8], [1]),
+        ([1, 64, 48], ttnn.TILE_LAYOUT, [32], [2]),  # padded width
+    ],
+    ids=["tile_h_aligned_shift", "tile_h_unaligned_shift", "row_major_h", "tile_w_aligned_shift"],
+)
+def test_roll_height_sharded_padded(device, shape, layout, shifts, dims):
+    # Regression: padding was rolled into real rows, or the op hit a TT_FATAL.
+    torch.manual_seed(4)
+    mem_config = _explicit_height_shard(device, 2, 32, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+    )
+
+    ttnn_output = ttnn.roll(ttnn_input, shifts, dims)
+
+    assert ttnn_output.memory_config() == ttnn_input.memory_config()
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.roll(torch_input, shifts, dims))
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
+def test_roll_height_sharded_padded_zero_shift(device, layout):
+    # A shift equal to the logical size is a no-op, so the padded fallback must not copy anything.
+    mem_config = _explicit_height_shard(device, 2, 32, 64)
+    torch_input = torch.randn([1, 40, 64], dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+    )
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        ttnn_output = ttnn.roll(ttnn_input, [40], [1])
+    finally:
+        captured = ttnn.graph.end_graph_capture()
+
+    device_ops = [n for n in ttnn.graph.extract_calltrace(captured) if n.endswith("DeviceOperation")]
+    assert device_ops == []
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch_input)
+
+
 # ─── HEIGHT_SHARDED + TILE, non-tile-aligned (sharded untilize→roll→tilize) ──
 
 
@@ -410,6 +458,46 @@ def test_roll_dram_sharded_tile_native(device, shape, sh, sw, shifts, dims):
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
     run_roll(device, torch.randn(shape, dtype=torch.bfloat16), ttnn.TILE_LAYOUT, mem_config, shifts, dims)
+
+
+@pytest.mark.parametrize("first_bank", [0, 1, 3])
+@pytest.mark.parametrize(
+    "shape,sh,sw,layout,shifts,dims",
+    [
+        ([1, 1, 8, 16], 2, 16, ttnn.ROW_MAJOR_LAYOUT, [2], [2]),  # mode 2: full-shard staging
+        ([1, 1, 128, 64], 32, 64, ttnn.TILE_LAYOUT, [32], [2]),  # mode 1: per-tile transfers
+    ],
+)
+def test_roll_dram_sharded_grid_not_at_bank_zero(device, shape, sh, sw, layout, shifts, dims, first_bank):
+    """DRAM-sharded roll on a shard grid that starts at bank `first_bank`. A DRAM shard grid is one
+    row whose x-coordinate is the bank id, so shard i lives in bank first_bank + i, not bank i.
+    Run twice on freshly allocated tensors: the second call is a program-cache hit that must pick up
+    the new input and output base addresses."""
+    torch.manual_seed(13)
+    ncores = shape[0] * shape[1] * shape[2] // sh
+    grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(first_bank, 0), ttnn.CoreCoord(first_bank + ncores - 1, 0))}
+    )
+    shard_spec = ttnn.ShardSpec(grid, [sh, sw], ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    def roll_once():
+        torch_input = torch.randn(shape, dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_config
+        )
+        got = ttnn.to_torch(ttnn.roll(tt_input, shifts, dims).cpu())
+        assert torch.equal(torch.roll(torch_input, shifts, dims), got)
+
+    roll_once()
+    # Shift the allocator so the second call's input and output land at different addresses.
+    keep = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16), layout=layout, device=device, memory_config=mem_config
+    )
+    entries = device.num_program_cache_entries()
+    roll_once()
+    assert device.num_program_cache_entries() == entries, "second roll should reuse the cached program"
+    ttnn.deallocate(keep)
 
 
 # ─── Program-cache hash: distinct shifts must produce distinct programs ──────

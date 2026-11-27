@@ -94,7 +94,7 @@ class MLP:
                 for neighbor_tp in ((tp_coord - 1) % layout.tp, (tp_coord + 1) % layout.tp):
                     dst_coord = ttnn.MeshCoordinate([sp_coord, neighbor_tp])
                     dst_node = self.mesh_device.get_fabric_node_id(dst_coord)
-                    forwarding_indices = tuple(ttnn.get_forwarding_link_indices(src_node, dst_node))
+                    forwarding_indices = tuple(ttnn.get_forwarding_link_indices(self.mesh_device, src_node, dst_node))
                     if 0 not in forwarding_indices or 1 not in forwarding_indices:
                         raise RuntimeError(
                             "MLP requires two live TP forwarding links (indices 0 and 1) on every ring edge; "

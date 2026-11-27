@@ -8,11 +8,11 @@ pass under a SINGLE shared ``init_reduce`` (see ``sources/sfpu_reduce_multidim_t
 mirrors how a multi-axis reduce (e.g. ``ttir.max`` ``dim=[1,2]``) is lowered to two ``sfpu_reduce``
 calls sharing one ``sfpu_reduce_init``.
 
-This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path runs first
-(``INT32_2S_COMP``, and its own ``init_reduce_max_min_int32`` that flips the SFPSWAP-direction config
-bit), then the row path runs trusting state established by the shared init. Because the row stage
-inherited the column stage's inverted comparator direction, it misordered values and returned wrong
-results once negatives/extremes were present. The single-axis ``test_sfpu_reduce`` suite only
+This configuration is what exposed an Int32 MAX/MIN regression: the column Int32 path ran first and
+left the SFPSWAP-direction config bit inverted, then the row path ran trusting state established by the
+shared init. Because the row stage inherited the column stage's inverted comparator direction, it
+misordered values and returned wrong results once negatives/extremes were present. Every MAX/MIN
+calculate now sets the direction on entry. The single-axis ``test_sfpu_reduce`` suite only
 exercises one path per init (with its matching init) and therefore could not catch it.
 
 Pool coverage is MAX, SUM, MIN (all formats) and AVG (float formats only): the kernel's ``REDUCE_ROW``
@@ -24,6 +24,13 @@ full 32x32 tile: the column pass writes each column's mean (over 32 rows) into r
 averages those 32 column-means (over 32 columns) into element [0][0], which equals the overall tile
 mean. It stays float-only because integer row AVG is unsupported (the row divisor is the runtime column
 count, divided exactly only by the float reciprocal-multiply).
+
+MAX/MIN additionally run row-then-column and column-row-column under the same single init (``REDUCE_ORDER``,
+``ReduceOrder``), so a column reduce that follows a row reduce is covered too. That order breaks if the row
+path writes the replay slots holding the column path's window, or if a column path trusts the SFPSWAP
+direction its init wrote: the manual column paths (UInt16, signed Int32, every format under
+``DISABLE_SFPLOADMACRO``) read the opposite SFPSWAP operand from the row path and so need the opposite
+direction for the same pool type.
 """
 
 import pytest
@@ -35,6 +42,7 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
+    ReduceOrder,
     ReducePool,
     format_dict,
 )
@@ -43,14 +51,15 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
-    REDUCE_POOL_TYPE,
+    REDUCE_ORDER,
     TILE_COUNT,
     generate_input_dim,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Number of stacked 32x32 row-tiles to reduce independently. Each tile yields one multi-axis
 # reduction result, so >= 2 keeps the PCC check non-degenerate. Stays <= 4 so the whole column of
@@ -75,14 +84,32 @@ def get_multidim_pools(formats: InputOutputFormat) -> list[ReducePool]:
 
 
 # Formats exercised. Int32 is the regression target (its column path flips the SFPSWAP-direction
-# config and uses two's-complement); the others are baselines that should pass on both buggy and
-# fixed kernels and guard the shared-init chain for non-Int32 paths.
+# config and uses two's-complement); the others take the LOADMACRO column path and guard the shared-init
+# chain for it. UInt16 is absent on purpose: its row MAX/MIN in a 32-bit dest is unsupported (the Int32
+# row path does not mask the garbage high bits; see the skip in test_sfpu_reduce), so no chain that
+# includes a row pass over raw UInt16 data is well-defined. Its manual column path,
+# calculate_reduce_max_min_uint16, is still covered here after a row pass: under DISABLE_SFPLOADMACRO
+# every non-Int32 format's column MAX/MIN goes through it.
 MULTIDIM_FORMATS = [
     DataFormat.Int32,
     DataFormat.Float32,
     DataFormat.UInt32,
     DataFormat.Float16_b,
 ]
+
+
+def get_multidim_reduce_orders(pool_type: ReducePool) -> list[ReduceOrder]:
+    """Pass orders (REDUCE_ORDER in the kernel) under the single shared init. RowCol and ColRowCol are
+    MAX/MIN only -- there every order leaves the tile extreme at [0][0] -- and put a column reduce after
+    a row reduce, which is what breaks if the row path writes the replay slots holding the column path's
+    LOADMACRO window (float) or if a column path trusts the SFPSWAP direction its init wrote: the
+    manual column paths (signed Int32, and every non-Int32 format under DISABLE_SFPLOADMACRO, which
+    routes them through the UInt16 column reducer) need the opposite direction from the row path for the
+    same pool type.
+    """
+    if pool_type in (ReducePool.Max, ReducePool.Min):
+        return [ReduceOrder.ColRow, ReduceOrder.RowCol, ReduceOrder.ColRowCol]
+    return [ReduceOrder.ColRow]
 
 
 def get_multidim_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]:
@@ -109,7 +136,7 @@ _FLOAT_FORMAT_EPS = {
 }
 
 
-def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float | None:
+def get_multidim_sum_avg_atol(output_format, pool_type, input_bounds) -> float | None:
     """Absolute tolerance for the float multi-axis SUM/AVG chain.
 
     Both chains accumulate N = 32*32 terms (a column pass over 32 rows then a row pass over 32
@@ -119,7 +146,7 @@ def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float
     atol can spuriously fail even though PCC stays ~1.0; size atol to that bound (2x margin). Returns
     None for MAX/MIN and integer formats, leaving the default tolerances in place.
     """
-    if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
+    if pool_type not in (ReducePool.Sum, ReducePool.Average):
         return None
     eps = _FLOAT_FORMAT_EPS.get(output_format)
     if eps is None:
@@ -127,35 +154,37 @@ def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float
     num_terms = TILE_DIM * TILE_DIM
     max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
     sum_error = 2.0 * max_term * eps * (num_terms**0.5)
-    atol = sum_error if reduce_pool == ReducePool.Sum else sum_error / num_terms
+    atol = sum_error if pool_type == ReducePool.Sum else sum_error / num_terms
     return max(0.05, atol)
 
 
-def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
+def reduce_block(block: torch.Tensor, pool_type: ReducePool) -> torch.Tensor:
     """Reduce a 32x32 tile over both dims to a single value (the multi-axis golden)."""
     flat = block.reshape(-1)
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         return flat.max()
-    if reduce_pool == ReducePool.Sum:
+    if pool_type == ReducePool.Sum:
         return flat.sum()
-    if reduce_pool == ReducePool.Min:
+    if pool_type == ReducePool.Min:
         return flat.min()
-    if reduce_pool == ReducePool.Average:
+    if pool_type == ReducePool.Average:
         # avg-of-column-means over a full 32x32 tile equals the overall tile mean (float-only).
         return flat.mean()
-    raise ValueError(f"Unsupported multi-dim reduce pool: {reduce_pool}")
+    raise ValueError(f"Unsupported multi-dim reduce pool: {pool_type}")
 
 
 @parametrize(
     formats=[InputOutputFormat(fmt, fmt) for fmt in MULTIDIM_FORMATS],
-    reduce_pool=lambda formats: get_multidim_pools(formats),
+    pool_type=lambda formats: get_multidim_pools(formats),
+    reduce_order=lambda pool_type: get_multidim_reduce_orders(pool_type),
     num_row_tiles=ROW_TILE_COUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_bounds=lambda formats: get_multidim_input_bounds(formats),
 )
 def test_sfpu_reduce_multidim(
     formats,
-    reduce_pool,
+    pool_type,
+    reduce_order,
     num_row_tiles,
     dest_acc,
     input_bounds,
@@ -204,7 +233,7 @@ def test_sfpu_reduce_multidim(
     # Golden: reduce each 32x32 tile (32-row block) over both dims -> one value per tile.
     golden_blocks = src_A_untilized.reshape(num_row_tiles, TILE_DIM, TILE_DIM)
     golden_vec = torch.stack(
-        [reduce_block(golden_blocks[r], reduce_pool) for r in range(num_row_tiles)]
+        [reduce_block(golden_blocks[r], pool_type) for r in range(num_row_tiles)]
     ).to(format_dict[formats.output_format])
 
     configuration = TestConfig(
@@ -213,7 +242,8 @@ def test_sfpu_reduce_multidim(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
-            REDUCE_POOL_TYPE(reduce_pool),
+            MATH_OP(pool_type=pool_type),
+            REDUCE_ORDER(reduce_order),
         ],
         runtimes=[
             NUM_BLOCKS(num_blocks),
@@ -238,7 +268,7 @@ def test_sfpu_reduce_multidim(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_matrix = untilize_block(res_tensor, formats.output_format, input_dimensions)
 
     # Each tile's multi-axis result lives at its element [0][0] -> row r*32, column 0.
@@ -247,7 +277,7 @@ def test_sfpu_reduce_multidim(
     # The float SUM/AVG chains accumulate rounding error; size atol to it (PCC still guards
     # correctness). MAX/MIN and integer formats keep the default tolerances.
     reduce_atol = get_multidim_sum_avg_atol(
-        formats.output_format, reduce_pool, input_bounds
+        formats.output_format, pool_type, input_bounds
     )
 
     assert passed_test(

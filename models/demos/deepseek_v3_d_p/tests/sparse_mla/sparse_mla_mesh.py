@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Hardware-adaptive Fabric2D mesh parametrization for the sparse-MLA vs-trace diagnostics.
+Hardware-adaptive mesh parametrization for the sparse-MLA tests.
 
 The tests are written for a `mesh_device` whose shape is ``(sp_size, tp_size)``
 (``sp_axis, tp_axis = 0, 1``). Which shapes are valid depends on the box the
@@ -29,14 +29,6 @@ import os
 
 import pytest
 
-import ttnn
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    fabric2d_device_params,
-    torus_x_device_params,
-    torus_xy_device_params,
-    torus_y_device_params,
-)
-
 
 def detect_num_devices() -> int:
     """Number of TT devices, counted from /dev/tenstorrent/* without opening them.
@@ -60,17 +52,6 @@ MESH_SHAPES_BY_DEVICE_COUNT = {
 # SP shard the cache collapses to a layout the update_cache op rejects, so a
 # per-chip sequence below this is degenerate (e.g. seq256 over SP=8 → 32 tok/chip).
 KVPE_MIN_TOKENS_PER_CHIP = 64
-
-
-def skip_if_seq_too_small_for_sp(seq_len: int, mesh_device) -> None:
-    """Skip when SP-sharding `seq_len` leaves too few tokens/chip for the kvpe cache."""
-    sp = list(mesh_device.shape)[0]
-    local = seq_len // sp
-    if local < KVPE_MIN_TOKENS_PER_CHIP:
-        pytest.skip(
-            f"seq_len {seq_len} over SP={sp} → {local} tokens/chip "
-            f"(< {KVPE_MIN_TOKENS_PER_CHIP}); kvpe ND-shard cache needs ≥2 DRAM-bank chunks per shard"
-        )
 
 
 def _shape_id(shape) -> str:
@@ -103,48 +84,3 @@ def parametrize_mesh_device():
     """
     shapes, ids = supported_mesh_shapes()
     return pytest.mark.parametrize("mesh_device", shapes, ids=ids, indirect=True)
-
-
-def parametrize_mesh_and_device_params(*, worker_l1_size, torus_xy_certified=False):
-    """Pair each existing sparse-MLA mesh with its valid Fabric2D profile."""
-    params = []
-    for shape in MESH_SHAPES_BY_DEVICE_COUNT.get(detect_num_devices(), []):
-        if shape == (1, 1):
-            device_params = {"fabric_config": ttnn.FabricConfig.DISABLED}
-            marker = None
-            profile = "disabled"
-        elif shape[1] == 1 and shape[0] > 2:
-            device_params = torus_y_device_params(worker_l1_size=worker_l1_size)
-            marker = "ring"
-            profile = "torus-y"
-        elif shape[0] == 1 and shape[1] > 2:
-            device_params = torus_x_device_params(worker_l1_size=worker_l1_size)
-            marker = "ring"
-            profile = "torus-x"
-        elif shape == (8, 4) and torus_xy_certified:
-            device_params = torus_xy_device_params(worker_l1_size=worker_l1_size)
-            marker = "mesh-8x4"
-            profile = "torus-xy"
-        else:
-            device_params = fabric2d_device_params(worker_l1_size=worker_l1_size)
-            marker = f"mesh-{shape[0]}x{shape[1]}"
-            profile = "fabric2d"
-        marks = [] if marker is None else pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=marker)
-        params.append(
-            pytest.param(
-                shape,
-                device_params,
-                marks=marks,
-                id=f"{profile}-sp{shape[0]}xtp{shape[1]}",
-            )
-        )
-    if not params:
-        params.append(
-            pytest.param(
-                (2, 2),
-                fabric2d_device_params(worker_l1_size=worker_l1_size),
-                marks=pytest.mark.skip(reason=f"unsupported device count {detect_num_devices()}"),
-                id="unsupported",
-            )
-        )
-    return pytest.mark.parametrize("mesh_device,device_params", params, indirect=["mesh_device", "device_params"])

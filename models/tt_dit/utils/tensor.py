@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 import math
 import os
 import time
@@ -13,6 +14,8 @@ import torch
 from loguru import logger
 
 import ttnn
+
+from .torch_threads import cap_torch_threads_to_half_the_cpus
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -211,6 +214,17 @@ def from_torch_to_devices(
     return [from_torch(x, device=d, mesh_axes=mesh_axes, on_host=on_host) for d in devices]
 
 
+def logical_length_tensor(value: int, *, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """`value` as the replicated `[1, 1, 1, 1]` uint32 device tensor that carries a runtime row count."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
+
+
 def to_torch(
     x: ttnn.Tensor,
     /,
@@ -220,10 +234,18 @@ def to_torch(
 ) -> torch.Tensor:
     """Converts a ttnn.Tensor to a torch.Tensor.
 
-    Strips away redundant data returned by calling ttnn.to_torch on a replicated tensor. If the
-    tensor is distributed and not on device, composer_device must be provided.
+    Concatenates the shards along the sharded dimensions and reads a single replica along the
+    replicated mesh axes, so redundant copies are not transferred. When the needed shards are not
+    all local, the read falls back to a mesh composer, which does transfer the redundant copies. A
+    distributed host tensor always takes that fallback.
+
+    A host holding none of the shards raises.
+
+    If the tensor is distributed and not on device, composer_device must be provided.
+
+    mesh_axes indexes the physical device mesh, the same axes a collective's cluster_axis names.
     """
-    if x.tensor_topology().distribution_shape().mesh_size() == 1:
+    if len(x.tensor_topology().mesh_coords()) == 1:
         return ttnn.to_torch(x)
 
     if mesh_axes is None:
@@ -237,6 +259,75 @@ def to_torch(
     mesh_rank = len(list(composer_device.shape))
     mesh_axes = canonicalize_tensor_mesh_axes(mesh_axes, tensor_rank=len(x.shape), mesh_rank=mesh_rank)
 
+    output = _concat_shards(x, mesh_axes=mesh_axes)
+    if output is not None:
+        return output
+
+    return _compose(x, mesh_axes=mesh_axes, composer_device=composer_device)
+
+
+def _concat_shards(x: ttnn.Tensor, *, mesh_axes: Sequence[int | None]) -> torch.Tensor | None:
+    """Returns one replica off this host's devices, or None if it doesn't hold a whole replica.
+
+    Raises if this host holds no shards at all.
+    """
+    device = x.device()
+
+    # get_device_tensors runs an all-gather on a host tensor, so reading its shards costs the whole
+    # tensor anyway and picking a replica saves nothing. Leave those to the composer as well.
+    if device is None:
+        return None
+
+    mesh_shape = tuple(device.shape)
+    view = device.get_view()
+
+    # The mesh coordinates are device coordinates, in the order get_device_tensors returns the
+    # shards. They are the part of the topology every op preserves. Placements go stale, so the
+    # layout comes from mesh_axes instead.
+    shards = zip(x.tensor_topology().mesh_coords(), ttnn.get_device_tensors(x), strict=True)
+
+    # A map from local coordinates to the corresponding tensor.
+    local_shards = {tuple(coord): shard for coord, shard in shards if view.is_local(coord)}
+
+    # Anchor the replica on the lowest local coordinate.
+    anchor = min(local_shards, default=None)
+    if anchor is None:
+        msg = "this host holds none of the tensor's shards"
+        raise ValueError(msg)
+
+    ranges = [range(mesh_shape[ax]) if ax in mesh_axes else [anchor[ax]] for ax in range(len(mesh_shape))]
+    read_coords = list(itertools.product(*ranges))
+    if any(coord not in local_shards for coord in read_coords):
+        return None
+
+    host_shards = {coord: local_shards[coord].cpu(blocking=False) for coord in read_coords}
+    ttnn.synchronize_device(device)
+
+    placements = _invert_placements(mesh_axes, output_rank=len(mesh_shape))
+
+    def read_block(coord: tuple[int, ...]) -> torch.Tensor:
+        """Reads the block of shards below coord, concatenated along the mesh axes it spans."""
+        mesh_axis = len(coord)
+        if mesh_axis == len(mesh_shape):
+            return ttnn.to_torch(host_shards[coord])
+
+        parts = [read_block((*coord, index)) for index in ranges[mesh_axis]]
+        dim = placements[mesh_axis]
+        return parts[0] if dim is None else torch.cat(parts, dim=dim)
+
+    return read_block(())
+
+
+def _compose(
+    x: ttnn.Tensor,
+    *,
+    mesh_axes: Sequence[int | None],
+    composer_device: ttnn.MeshDevice,
+) -> torch.Tensor:
+    """Gathers the shards from all hosts with a mesh composer."""
+    # The composer concatenates along every mesh axis, so give each replicated axis a leading size-one
+    # tensor dim to concatenate along and drop the extra replicas again afterwards.
+    mesh_rank = len(list(composer_device.shape))
     replicated_mesh_axes = list(set(range(mesh_rank)) - {axis for axis in mesh_axes if axis is not None})
     mesh_axes = replicated_mesh_axes + list(mesh_axes)
 
@@ -470,6 +561,7 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+@cap_torch_threads_to_half_the_cpus()
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
@@ -763,7 +855,7 @@ def upsample(
     x: ttnn.Tensor,
     /,
     *,
-    scale_factor: int,
+    scale_factor: int | Sequence[int],
     memory_config: ttnn.MemoryConfig | None = None,
 ) -> ttnn.Tensor:
     """Wrapper around ttnn.upsample that allows for padded tensors."""
@@ -778,6 +870,35 @@ def upsample(
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     return x
+
+
+def prepare_depth_to_space_channels(t: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
+    """Reorder a weight's output-channel dim (dim 0) from ``(C, p1, p2, p3)`` grouping to ``(p1, p2, p3, C)``,
+    the packing :func:`depth_to_space_channels_last` unpacks. Out channels must be divisible by ``p1*p2*p3``.
+
+    Channels innermost is not cosmetic: with a stride factor of 2 innermost, ROW_MAJOR rounds
+    that extent up to a full 32-element face and the tensor occupies 16x its own size.
+    """
+    p1, p2, p3 = stride
+    out = t.shape[0]
+    assert out % (p1 * p2 * p3) == 0, f"out_channels {out} not divisible by {p1 * p2 * p3}"
+    rest = t.shape[1:]
+    t = t.reshape(out // (p1 * p2 * p3), p1, p2, p3, *rest)
+    t = t.permute(1, 2, 3, 0, *range(4, t.ndim))
+    return t.reshape(out, *rest)
+
+
+def depth_to_space_channels_last(x: ttnn.Tensor, stride: tuple[int, int, int]) -> ttnn.Tensor:
+    """``(B, T, H, W, p1*p2*p3*C)`` with channels packed ``(p1, p2, p3, C)`` to ``(B, T*p1, H*p2, W*p3, C)``.
+
+    ROW_MAJOR in and out; the packing is what :func:`prepare_depth_to_space_channels` produces.
+    """
+    b, t, h, w, packed = tuple(x.shape)
+    p1, p2, p3 = stride
+    c = packed // (p1 * p2 * p3)
+    x = ttnn.reshape(x, (b, t, h, w, p1, p2, p3, c))
+    x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
+    return ttnn.reshape(x, (b, t * p1, h * p2, w * p3, c))
 
 
 def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
@@ -809,18 +930,49 @@ def full(
     size: ttnn.Shape | Sequence[int],
     fill_value: float,
     *,
-    dtype: ttnn.DataType,
+    dtype: ttnn.DataType = ttnn.bfloat16,
     layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     device: ttnn.MeshDevice,
     memory_config: ttnn.MemoryConfig | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
 ) -> ttnn.Tensor:
-    """Alternative to `ttnn.full` that supports tracing."""
-    if not isinstance(size, ttnn.Shape):
-        size = ttnn.Shape(size)
+    """Alternative to `ttnn.full` that supports tracing and sharding over the mesh."""
+    size = list(size)
 
-    result = ttnn.allocate_tensor_on_device(size, dtype, layout, device, memory_config)
+    if mesh_axes is not None:
+        mesh_shape = list(device.shape)
+        mesh_axes = canonicalize_tensor_mesh_axes(mesh_axes, tensor_rank=len(size), mesh_rank=len(mesh_shape))
+        for dim, axis in enumerate(mesh_axes):
+            if axis is not None:
+                if size[dim] % mesh_shape[axis] != 0:
+                    msg = f"size {size[dim]} of dimension {dim} is not divisible by mesh axis {axis}"
+                    raise ValueError(msg)
+                size[dim] //= mesh_shape[axis]
+
+    result = ttnn.allocate_tensor_on_device(ttnn.Shape(size), dtype, layout, device, memory_config)
     ttnn.fill(result, fill_value, output_tensor=result)
     return result
+
+
+def zeros(
+    size: ttnn.Shape | Sequence[int],
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.zeros` that supports tracing and sharding over the mesh."""
+    return full(
+        size,
+        0,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+        mesh_axes=mesh_axes,
+    )
 
 
 def arange(
@@ -852,6 +1004,33 @@ def arange(
         # and the running sum is at least one step, so subtract the magnitude instead.
         return ttnn.subtract(result, -offset)
     return result + offset
+
+
+def select_row_compile_once(x: ttnn.Tensor, index: int) -> ttnn.Tensor:
+    """Selects row `index` of a `[batch, seq, embed]` tile tensor, as `[batch, 1, embed]`.
+
+    Unlike `x[:, index : index + 1]`, whose constant offset makes ttnn compile a slice program per
+    index, the offsets reach the device as tensors, so one set of programs serves every index. The
+    tile of rows holding the row is sliced out, and the row is gathered from that tile with an
+    embedding lookup; only the tile is untilized.
+    """
+    device = x.device()
+    batch_size, _, embed_size = x.shape
+    tile_height = ttnn.TILE_SIZE
+
+    # The slice splits the sequence into whole tiles, so the tile padding is made logical. This is a
+    # view; the padding rows are never selected.
+    x = ttnn.reshape(x, x.padded_shape, x.padded_shape)
+
+    # The slice rounds `starts` down to a whole tile. It takes its size from `num_devices` and never
+    # reads the values in `ends`, so `starts` is passed for both.
+    starts = ttnn.Tensor([0, index, 0], [3], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device)
+    x = ttnn.slice(x, starts, starts, slice_dim=1, num_devices=x.shape[1] // tile_height)
+
+    rows = ttnn.arange(index % tile_height, batch_size * tile_height, tile_height, dtype=ttnn.uint32, device=device)
+    rows = ttnn.reshape(rows, (batch_size, 1))
+    table = ttnn.to_layout(ttnn.reshape(x, (batch_size * tile_height, embed_size)), ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.embedding(rows, table, layout=ttnn.TILE_LAYOUT)
 
 
 _tril_cache: dict[tuple, ttnn.Tensor] = {}
@@ -963,3 +1142,12 @@ def prepare_weight_for_concatenated_input(
                 unf = torch.cat([unf, pad], dim=2)
         padded_segments.append(unf)
     return torch.cat(padded_segments, dim=2).flatten(1, 2)
+
+
+def math_fidelity_from_env(var: str, default: ttnn.MathFidelity | None = None) -> ttnn.MathFidelity | None:
+    """Env variable `var` as a ttnn.MathFidelity (LoFi, HiFi2, HiFi3 or HiFi4, any case); `default` when unset."""
+    name = os.environ.get(var, "").lower()
+    names = {"lofi": "LoFi", "hifi2": "HiFi2", "hifi3": "HiFi3", "hifi4": "HiFi4"}
+    if name and name not in names:
+        raise ValueError(f"{var} must be LoFi, HiFi2, HiFi3 or HiFi4 (got {name!r})")
+    return getattr(ttnn.MathFidelity, names[name]) if name else default

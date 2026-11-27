@@ -195,7 +195,9 @@ class default_setup(metaclass=MergeMetaclass):
         "perf_counter_data": {
             "across": "device",
             "type": "event",
-            "marker": {"risc": "BRISC"},
+            # BRISC reads the counters on tt-1xx; on Quasar DM0 reads every NEO and spills the records into
+            # the four TRISC profiler buffers of that NEO, so any TRISC of any NEO may carry them.
+            "marker": {"risc": ["BRISC"] + [f"QUASAR_NEO{neo}_TRISC{t}" for neo in range(4) for t in range(4)]},
         },
     }
 
@@ -224,6 +226,10 @@ class test_timestamped_events(default_setup):
         },
     }
     detectOps = False
+
+
+class test_active_eth_slow_dispatch(test_timestamped_events):
+    pass
 
 
 class test_multi_op(default_setup):
@@ -307,12 +313,6 @@ class test_full_buffer(default_setup):
             "type": "adjacent",
             "start": {"risc": "ANY", "zone_name": "TEST-FULL"},
             "end": {"risc": "ANY", "zone_name": "TEST-FULL"},
-        },
-        "Marker Repeat ETH": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"risc": "ERISC", "zone_name": "TEST-FULL"},
-            "end": {"risc": "ERISC", "zone_name": "TEST-FULL"},
         },
     }
     detectOps = False

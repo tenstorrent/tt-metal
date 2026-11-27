@@ -12,9 +12,7 @@
 #include <tt-metalium/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <enchantum/enchantum.hpp>
-#include <functional>
 #include <algorithm>
-#include <string>
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
@@ -24,8 +22,9 @@
 #include "impl/trace/trace_buffer.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/xy_pair.hpp>
 #include "impl/allocator/allocator.hpp"
+#include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
+#include "tt_metal/impl/allocator/allocation_request.hpp"
 
 namespace tt::tt_metal {
 
@@ -39,7 +38,9 @@ AllocatorImpl::AllocatorImpl(const AllocatorConfig& alloc_config) :
     tracking_enabled_(trace_allocation_tracking_enabled()),
     traceback_capture_enabled_(tracking_enabled_ && trace_allocation_diagnostics_enabled()),
     skip_program_cache_(trace_allocation_skip_program_cache_enabled()) {
-    if (traceback_capture_enabled_) {
+    // Aggregate allocation queries need every tracking-enabled allocator, even
+    // when traceback diagnostics are disabled.
+    if (tracking_enabled_) {
         register_traceback_allocator(this);
     }
 }
@@ -162,11 +163,7 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             "Per-core allocation requires AllocatorMode::HYBRID when opening the device");
         TT_FATAL(buffer_type == BufferType::L1, "per_core_allocation is only supported for L1 buffers");
         using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-        TT_FATAL(buffer->has_shard_spec(), "per_core_allocation requires a shard_spec with core grid");
-        const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-        bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-        auto cores = corerange_to_cores(grid, std::nullopt, row_major);
-        TT_FATAL(!cores.empty(), "per_core_allocation: shard grid resolved to zero cores");
+        const std::vector<CoreCoord> cores = allocator::per_node_allocation_nodes(buffer->impl().shard_spec_);
         DeviceAddr alloc_size = buffer->aligned_size_per_bank();
 
         std::unordered_map<CoreCoord, DeviceAddr> addrs;
@@ -205,29 +202,12 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
             // buffer may instead be scanned against just the cores it occupies.
             //
             // Either way the scan spans devices: a mesh buffer holds the same address on all of them.
-            std::vector<CoreCoord> cores_to_scan;
             const bool scope_to_own_cores =
                 experimental::range_lockstep_allocation::is_range_lockstep_allocation(*buffer);
-            // A tensor carries both specs, so the order matters: the distribution spec wins, as it
-            // does in Buffer::num_cores(). Its cores_with_data() is the set that actually gets an
-            // allocation, which the shard grid overstates when the data does not fill it.
-            if (const auto& distribution_spec = buffer->buffer_distribution_spec();
-                scope_to_own_cores && distribution_spec.has_value()) {
-                cores_to_scan = distribution_spec->cores_with_data();
-            } else if (scope_to_own_cores && buffer->has_shard_spec()) {
-                const auto& grid = buffer->shard_spec().tensor_shard_spec.grid;
-                bool row_major = buffer->shard_spec().tensor_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-                cores_to_scan = corerange_to_cores(grid, std::nullopt, row_major);
-            }
-
-            // Scanning nothing is not a safe fallback -- it would place the buffer without avoiding
-            // anything. set_range_lockstep_allocation() requires one of the two specs and Buffer
-            // carries both through, so this cannot fire, but that invariant now lives in another
-            // file and this is where it is relied on.
-            TT_FATAL(
-                !scope_to_own_cores || !cores_to_scan.empty(),
-                "range lockstep resolved to zero cores to scan; the buffer must carry a shard spec or a "
-                "distribution spec naming the cores it occupies");
+            const std::vector<CoreCoord> cores_to_scan =
+                scope_to_own_cores ? allocator::range_lockstep_allocation_nodes(
+                                         buffer->buffer_distribution_spec(), buffer->impl().shard_spec_)
+                                   : std::vector<CoreCoord>{};
 
             // PrefetcherPipe / persistent L1 regions sit outside BankManager, so lockstep must avoid
             // them too. They stay unscoped under range lockstep: they are reservations this allocator
@@ -337,7 +317,19 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     }
 
     switch (buffer_type) {
-        case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
+        case BufferType::DRAM: {
+            const DeviceAddr size = buffer->aligned_size_per_bank();
+            // Recorded even when an older hold keeps it: this capture may use it too, and the older
+            // hold hands it over on release (release_capture_hold).
+            if (capture_hold_depth_ > 0) [[unlikely]] {
+                capture_freed_dram_.emplace_back(address, address + size);
+            }
+            if (!held_dram_by_token_.empty() && this->defer_into_capture_hold(address, size)) [[unlikely]] {
+                break;
+            }
+            dram_manager_->deallocate_buffer(address);
+            break;
+        }
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
         case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
         case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
@@ -353,6 +345,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
 
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
+    // deallocate_all frees every range, the held ones included: drop the hold records with them.
+    capture_freed_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
@@ -360,6 +355,100 @@ void AllocatorImpl::deallocate_buffers() {
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
         this->record_all_deallocations();
     }
+}
+
+void AllocatorImpl::begin_capture_hold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(capture_hold_depth_ == 0, "capture hold is already open; nested trace captures cannot hold");
+    capture_hold_depth_ = 1;
+    capture_freed_dram_.clear();
+}
+
+std::uint64_t AllocatorImpl::end_capture_hold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(capture_hold_depth_ == 1, "end_capture_hold without begin_capture_hold");
+    capture_hold_depth_ = 0;
+
+    CaptureHold hold;
+    std::sort(capture_freed_dram_.begin(), capture_freed_dram_.end());
+    for (const auto& [begin, end] : capture_freed_dram_) {
+        if (!hold.freed.empty() && begin <= hold.freed.back().second) {
+            hold.freed.back().second = std::max(hold.freed.back().second, end);
+        } else {
+            hold.freed.emplace_back(begin, end);
+        }
+    }
+    capture_freed_dram_.clear();
+
+    // Reserve the free gaps of the freed ranges. The live parts are buffers allocated during capture
+    // and still held by the caller; defer_into_capture_hold keeps them when they are freed later.
+    const auto allocated = dram_manager_->get_allocated_ranges();
+    auto live = allocated.begin();
+    for (const auto& [begin, end] : hold.freed) {
+        while (live != allocated.end() && live->second <= begin) {
+            ++live;
+        }
+        DeviceAddr cursor = begin;
+        for (auto it = live; it != allocated.end() && it->first < end; ++it) {
+            if (it->first > cursor) {
+                hold.held.emplace_back(cursor, it->first - cursor);
+            }
+            cursor = std::max(cursor, it->second);
+        }
+        if (cursor < end) {
+            hold.held.emplace_back(cursor, end - cursor);
+        }
+    }
+    for (const auto& [address, size] : hold.held) {
+        dram_manager_->mark_allocated(BankManager::AllocatorDependencies::AllocatorID{0}, address, size);
+    }
+
+    const auto token = next_capture_hold_token_++;
+    held_dram_by_token_.emplace(token, std::move(hold));
+    return token;
+}
+
+bool AllocatorImpl::defer_into_capture_hold(DeviceAddr address, DeviceAddr size) {
+    const DeviceAddr end = address + size;
+    for (auto& [token, hold] : held_dram_by_token_) {
+        // First freed range ending after address; it overlaps when it begins before end.
+        auto it = std::upper_bound(
+            hold.freed.begin(), hold.freed.end(), address, [](DeviceAddr a, const auto& r) { return a < r.second; });
+        if (it != hold.freed.end() && it->first < end) {
+            hold.held.emplace_back(address, size);
+            return true;
+        }
+    }
+    return false;
+}
+
+void AllocatorImpl::release_capture_hold(std::uint64_t token) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = held_dram_by_token_.find(token);
+    if (it == held_dram_by_token_.end()) {
+        return;  // already freed by deallocate_buffers
+    }
+    CaptureHold hold = std::move(it->second);
+    held_dram_by_token_.erase(it);
+    // A range another live trace also wrote to moves to that trace's hold instead of being freed.
+    for (const auto& [address, size] : hold.held) {
+        if (!held_dram_by_token_.empty() && this->defer_into_capture_hold(address, size)) {
+            continue;
+        }
+        dram_manager_->deallocate_buffer(address);
+    }
+}
+
+std::size_t AllocatorImpl::capture_hold_bytes(std::uint64_t token) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = held_dram_by_token_.find(token);
+    std::size_t total = 0;
+    if (it != held_dram_by_token_.end()) {
+        for (const auto& [address, size] : it->second.held) {
+            total += size;
+        }
+    }
+    return total;
 }
 
 void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {
@@ -400,8 +489,7 @@ void AllocatorImpl::end_hybrid_allocation() {
 std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
     BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto state = l1_manager_->extract_state(allocator_id);
-    return state.allocated_regions;
+    return allocator::coalesce(l1_manager_->get_allocated_ranges(allocator_id));
 }
 
 void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
@@ -424,6 +512,18 @@ std::unordered_set<Buffer*> AllocatorImpl::get_allocated_buffers() const {
 size_t AllocatorImpl::get_num_allocated_buffers() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return allocated_buffers_.size();
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_dram_allocations() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return dram_manager_->get_allocated_ranges();
+}
+
+bool AllocatorImpl::is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return std::any_of(allocated_buffers_.begin(), allocated_buffers_.end(), [&](const Buffer* buffer) {
+        return buffer->unique_id() == unique_id && buffer->address() == address;
+    });
 }
 
 uint32_t AllocatorImpl::get_num_banks(const BufferType& buffer_type) const {
@@ -452,6 +552,18 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
         }
     }
     return 0;
+}
+
+// Reject reserved, misaligned and out-of-range SRAM before constructing addressed buffers.
+void AllocatorImpl::validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type) const {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "SRAM range validation requires an L1 buffer type");
+    const DeviceAddr base =
+        buffer_type == BufferType::L1 ? config_->l1_unreserved_base : config_->worker_l1_size - config_->l1_small_size;
+    const DeviceAddr end = base + get_bank_size(buffer_type);
+    TT_FATAL(address % config_->l1_alignment == 0, "SRAM address must be aligned");
+    TT_FATAL(address >= base && address <= end && size <= end - address, "SRAM range is outside allocatable L1");
 }
 
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
@@ -648,6 +760,8 @@ DeviceAddr AllocatorImpl::get_dram_deletion_high_water_mark() const {
 
 void AllocatorImpl::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
+    capture_freed_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->clear();
     l1_manager_->clear();
     l1_small_manager_->clear();
@@ -666,7 +780,7 @@ void AllocatorConfig::reset() {
 }
 
 AllocatorImpl::~AllocatorImpl() {
-    if (traceback_capture_enabled_) {
+    if (tracking_enabled_) {
         unregister_traceback_allocator(this);
     }
     this->clear_trace_allocation_state();
@@ -678,10 +792,13 @@ AllocatorImpl::~AllocatorImpl() {
         submap.clear();
     }
 
-    dram_manager_->clear();
-    l1_manager_->clear();
-    l1_small_manager_->clear();
-    trace_buffer_manager_->clear();
+    // A derived constructor may throw before the bank managers exist.
+    for (BankManager* manager :
+         {dram_manager_.get(), l1_manager_.get(), l1_small_manager_.get(), trace_buffer_manager_.get()}) {
+        if (manager != nullptr) {
+            manager->clear();
+        }
+    }
     allocated_buffers_.clear();
 }
 
@@ -713,9 +830,7 @@ AllocatorState AllocatorImpl::extract_state() const {
         }
     }
 
-    // Copy allocated buffer pointers
-    std::vector<Buffer*> all_allocated_buffers(allocated_buffers_.begin(), allocated_buffers_.end());
-    return AllocatorState(std::move(states_per_buffer_type), std::move(all_allocated_buffers));
+    return AllocatorState(std::move(states_per_buffer_type));
 }
 
 void AllocatorImpl::override_state(const AllocatorState& state) {
@@ -725,6 +840,8 @@ void AllocatorImpl::override_state(const AllocatorState& state) {
     }
 
     // Clear all buffer types
+    capture_freed_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();

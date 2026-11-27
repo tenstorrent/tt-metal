@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <array>
-#include <cstdint>
 #include <memory>
 
 #include <tt-metalium/core_coord.hpp>

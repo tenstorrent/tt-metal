@@ -121,9 +121,10 @@ def test_sigmoid_bw_sub_tile_shape(dtype, rtol, device):
 
 def test_sigmoid_bw_bfloat16_keeps_intermediates_in_float32(device):
     """s(1 - s) cancels: for x beyond about +/-6 a bfloat16 s is within an ulp of 1.0 and
-    (1 - s) keeps only a couple of significant bits. The fused kernel holds s in float32 DEST
-    (UnaryBackwardKernelSpec::force_fp32_dest_acc), which the composite could not do because it
-    had to write each intermediate back to L1 as bfloat16. This pins that gain."""
+    (1 - s) keeps only a couple of significant bits. This call runs the generated BF16 kernel
+    (SIGMOID_BW_BF16), which forms the derivative from exp(-|x|) without 1 - s; the float32-DEST
+    kernel (UnaryBackwardKernelSpec::force_fp32_dest_acc) serves the calls it does not, and
+    test_backward_sigmoid.py value-checks those. This pins that gain."""
     torch.manual_seed(0)
     shape = (1, 1, 32, 32)
     torch_input = torch.randn(shape, dtype=torch.float32) * 4.0
@@ -133,7 +134,10 @@ def test_sigmoid_bw_bfloat16_keeps_intermediates_in_float32(device):
     grad_tensor = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     output = ttnn.to_torch(ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]).float()
-    expected = _torch_sigmoid_bw(ttnn.to_torch(grad_tensor).float(), ttnn.to_torch(input_tensor).float())
+    # The exact derivative in float64: a float32 s * (1 - s) cancels for |x| beyond about 9 and is itself off by
+    # up to 35% there (x = 16.375), which a BF16 kernel within 1 ULP of the exact value would fail.
+    x64 = ttnn.to_torch(input_tensor).double()
+    expected = (ttnn.to_torch(grad_tensor).double() * torch.exp(-x64.abs()) / (1 + torch.exp(-x64.abs())) ** 2).float()
 
     relative_error = ((output - expected).abs() / expected.abs().clamp(min=1e-30)).max()
     # Composing the gradient out of bfloat16 forward ops reaches a relative error above 1.0 on
@@ -265,8 +269,8 @@ def test_sigmoid_bw_sharded(shard_inputs, device):
     assert (
         output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     ), f"expected a height-sharded result, got {output.memory_config().memory_layout}"
-    # Looser than the fused path's bar: this is the composite, which rounds each intermediate
-    # back to bfloat16 in L1, so (1 - s) loses precision the fused kernel keeps in float32 DEST.
+    # A loose bar: these sharded BF16 calls run the generated BF16 kernel, which
+    # test_backward_sigmoid.py holds within 1 ULP of torch in every layout.
     assert_with_pcc(_torch_sigmoid_bw(torch_grad, torch_input), ttnn.to_torch(output), 0.999)
 
 
@@ -336,3 +340,144 @@ def test_sigmoid_bw_rejects_mismatched_shapes(device, expect_error):
 
     with expect_error(RuntimeError, "same logical shape"):
         ttnn.sigmoid_bw(tile_b, tile_a)
+
+
+def test_sigmoid_bw_rejects_mismatched_shapes_on_warm_cache(device, expect_error):
+    """A wrongly shaped grad_output is rejected even after a valid call has warmed the cache."""
+    torch.manual_seed(0)
+
+    def tiles(hw):
+        return ttnn.from_torch(torch.randn((1, 1, hw, hw)), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    input_tensor = tiles(96)
+    ttnn.sigmoid_bw(tiles(96), input_tensor)
+    assert device.num_program_cache_entries() > 0, "the cache is not warm, so this would only test a cold miss"
+
+    with expect_error(RuntimeError, "same logical shape"):
+        ttnn.sigmoid_bw(tiles(32), input_tensor)
+
+
+def test_sigmoid_bw_program_cache_same_padded_shape(device):
+    """Inputs with the same padded shape but different logical shapes and Alignments share one cache entry. The
+    factory works only from the padded shape, so the key frees both via match_padded_shape_only +
+    relax_tensor_layout_alignment (#59915). Each output must still match torch."""
+    torch.manual_seed(0)
+    padded_shape = [1, 1, 96, 96]
+
+    # Build every operand up front: from_torch and tilize_with_val_padding dispatch device ops of
+    # their own, whose cache entries would otherwise be counted against sigmoid_bw.
+    operands = []
+    for logical_hw in (96, 40, 96):
+        torch_grad = torch.randn((1, 1, logical_hw, logical_hw), dtype=torch.float32)
+        torch_input = torch.randn((1, 1, logical_hw, logical_hw), dtype=torch.float32)
+
+        if logical_hw == padded_shape[-1]:
+            to_device = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            grad_tensor = ttnn.from_torch(torch_grad, **to_device)
+            input_tensor = ttnn.from_torch(torch_input, **to_device)
+        else:
+            to_device = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+            grad_tensor = ttnn.tilize_with_val_padding(ttnn.from_torch(torch_grad, **to_device), padded_shape, 0.0)
+            input_tensor = ttnn.tilize_with_val_padding(ttnn.from_torch(torch_input, **to_device), padded_shape, 0.0)
+
+        operands.append((logical_hw, grad_tensor, input_tensor))
+
+    start = device.num_program_cache_entries()
+    for logical_hw, grad_tensor, input_tensor in operands:
+        output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
+
+        logical = (..., slice(None, logical_hw), slice(None, logical_hw))
+        expected = _torch_sigmoid_bw(
+            ttnn.to_torch(grad_tensor).float()[logical], ttnn.to_torch(input_tensor).float()[logical]
+        )
+        torch.testing.assert_close(ttnn.to_torch(output).float()[logical], expected, rtol=8e-3, atol=1e-4)
+
+    added = device.num_program_cache_entries() - start
+    assert added == 1, f"expected 1 program cache entry shared by all three calls, got {added}"
+
+
+def test_unary_backward_program_cache_keys_each_tensor(device):
+    """With the input fixed, changing only grad_output or only the preallocated output should add a cache entry."""
+    torch.manual_seed(0)
+    shape = (1, 1, 96, 96)
+
+    def on_device(torch_tensor, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.from_torch(
+            torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+        )
+
+    # Build every operand before counting
+    input_tensor = on_device(torch.randn(shape), ttnn.bfloat16)
+    torch_grad = torch.randn(shape)
+    grads = [on_device(torch_grad, ttnn.bfloat16), on_device(torch_grad, ttnn.float32)]
+    outputs = [
+        on_device(torch.zeros(shape), ttnn.bfloat16, memory_config)
+        for memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG)
+    ]
+    torch_input = ttnn.to_torch(input_tensor).float()
+
+    # Only grad_output changes: first bfloat16 gradient, then float32 gradient.
+    start = device.num_program_cache_entries()
+    for grad_tensor in grads:
+        output = ttnn.sigmoid_bw(grad_tensor, input_tensor)[0]
+        expected = _torch_sigmoid_bw(ttnn.to_torch(grad_tensor).float(), torch_input)
+        torch.testing.assert_close(ttnn.to_torch(output).float(), expected, rtol=8e-3, atol=1e-4)
+    added = device.num_program_cache_entries() - start
+    assert added == 2, f"expected 2 cache entries when only grad_output's dtype changes, got {added}"
+
+    # Only the preallocated output changes: first DRAM, then L1
+    grad_tensor = grads[0]
+    start = device.num_program_cache_entries()
+    for output_tensor in outputs:
+        ttnn.tanh_bw(grad_tensor, input_tensor, input_grad=output_tensor)
+        expected = ttnn.to_torch(grad_tensor).float() * (1 - torch.tanh(torch_input) ** 2)
+        torch.testing.assert_close(ttnn.to_torch(output_tensor).float(), expected, rtol=8e-3, atol=1e-4)
+    added = device.num_program_cache_entries() - start
+    assert added == 2, f"expected 2 cache entries when only the output's memory config changes, got {added}"
+
+
+@pytest.mark.parametrize("program_cache", ["miss", "hit", "disabled"])
+@pytest.mark.parametrize("view_slot", ["grad_output", "input", "preallocated_output"])
+def test_unary_backward_sharded_view_different_buffer_geometry(device, program_cache, view_slot, expect_error):
+    """A sharded operand or preallocated output whose buffer distribution differs from its TensorSpec is
+    rejected on a cache miss, hit and with the program cache disabled."""
+    grid = device.compute_with_storage_grid_size()
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+            [32, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    shape = (1, 1, 32, 128)
+
+    torch.manual_seed(0)
+    torch_grad = torch.randn(shape, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    valid = {
+        "grad_output": ttnn.from_torch(torch_grad, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config),
+        "input": ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config),
+        "preallocated_output": ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=memory_config,
+        ),
+    }
+    parent = ttnn.from_torch(
+        torch.randn(1, 1, 64, 64, dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    view = ttnn.experimental.view(parent, list(shape))
+    with_view = dict(valid, **{view_slot: view})
+
+    if program_cache == "disabled":
+        device.disable_and_clear_program_cache()
+    if program_cache == "hit":
+        ttnn.tanh_bw(valid["grad_output"], valid["input"], input_grad=valid["preallocated_output"])
+    with expect_error(RuntimeError, "differs from its TensorSpec distribution"):
+        ttnn.tanh_bw(with_view["grad_output"], with_view["input"], input_grad=with_view["preallocated_output"])

@@ -13,6 +13,8 @@
 namespace ttnn::prim {
 struct TopkParams {
     uint32_t k{};
+    // Logical width of the outputs; k is the tile-aligned width the kernels write.
+    std::optional<uint32_t> output_k;
     int8_t dim{};
     bool largest{};
     bool sorted{};

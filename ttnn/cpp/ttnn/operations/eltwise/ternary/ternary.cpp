@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/ternary_device_operation.hpp"
@@ -95,6 +96,20 @@ inline bool is_integer_dtype(DataType dtype) {
            dtype == DataType::UINT8;
 }
 
+void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtype) {
+    if (tensor_dtype != DataType::INT32 && tensor_dtype != DataType::UINT32) {
+        return;
+    }
+    TT_FATAL(
+        ttnn::operations::binary::utils::scalar_fits_integer_dtype(scalar, tensor_dtype),
+        "ttnn.where with a {} tensor cannot represent the scalar {}: only a finite integer within the range of {} "
+        "survives being packed as one, and this value would be changed silently. Typecast the tensor to a "
+        "floating-point dtype first.",
+        tensor_dtype,
+        scalar,
+        tensor_dtype);
+}
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -123,6 +138,14 @@ Tensor invoke_impl(
         t_false.logical_shape());
 
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
+    if (output.has_value() && is_floating_point(t_true.dtype()) && is_floating_point(t_false.dtype()) &&
+        !is_floating_point(output->dtype())) {
+        // where selects the floating-point value bits; packing them into an integer
+        // buffer does not convert them. Convert after selection into the caller's buffer.
+        auto selected = ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
+            condition, t_true, t_false, DataType::FLOAT32, output->memory_config(), std::nullopt, sub_core_grids);
+        return ttnn::typecast(selected, output->dtype(), output->memory_config(), output, sub_core_grids);
+    }
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ternary_utils::invoke_ternary_llk<TernaryOpType::WHERE>(
         condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
@@ -136,6 +159,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_false, t_true.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
     if (typecast_needed) {
@@ -159,6 +183,7 @@ Tensor invoke_impl(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    validate_where_scalar_for_integer_tensor(scalar_true, t_false.dtype());
     Tensor condition = predicate;
     bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
     if (typecast_needed) {

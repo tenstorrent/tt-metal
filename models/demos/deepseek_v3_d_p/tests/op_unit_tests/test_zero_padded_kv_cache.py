@@ -18,26 +18,29 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache, is_tp_deduped_kv_cache
+from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
 
-# Production chunk_size_global only (chunk_local = 5120/8 = 640). At this csg a 128-pad window never
-# crosses a chip border, so every case below lands its window on a single chip; the op's multi-chip
-# path (window crossing) stays exercised by the on-device per-chip logic but is not csg-varied here.
-# (chunk_size_global, seq_len_cache, valid_global, expected_boundary_chip)  expected_chip=None => skip
+# Production chunk_size_global only (chunk_local = 5120/8 = 640 at SP=8, 1280 at SP=4). At this csg a
+# 128-pad window never crosses a chip border, so every case below lands its window on a single chip; the
+# op's multi-chip path (window crossing) stays exercised by the on-device per-chip logic but is not
+# csg-varied here.
+# (chunk_size_global, seq_len_cache, valid_global, {sp: expected_boundary_chip})  None => skip
 _CASES = [
-    (5120, 5120, 740, 1),  # chip1 slab0, single-tile partial
-    (5120, 5120, 2600, 4),  # chip4 slab0, 3-tile window
-    (5120, 5120, 4512, 7),  # chip7 slab0, row_start=0 -> 3 full tiles
-    (5120, 5120, 20, 0),  # chip0 slab0, 4-tile window
+    (5120, 5120, 740, {8: 1, 4: 0}),  # slab0, single-tile partial
+    (5120, 5120, 2600, {8: 4, 4: 2}),  # slab0, 3-tile window
+    (5120, 5120, 4512, {8: 7, 4: 3}),  # slab0, row_start=0 -> 3 full tiles
+    (5120, 5120, 20, {8: 0, 4: 0}),  # chip0 slab0, 4-tile window
     (5120, 5120, 4480, None),  # 128-aligned -> skip
-    (5120, 10240, 6668, 2),  # chip2 slab1, 4-tile window
+    (5120, 10240, 6668, {8: 2, 4: 1}),  # slab1, 4-tile window
 ]
-_IDS = [f"v{v}_chip{ch}" if ch is not None else f"v{v}_aligned" for (_c, _s, v, ch) in _CASES]
+_IDS = [f"v{v}_aligned" if ch is None else f"v{v}" for (_c, _s, v, ch) in _CASES]
 
 _FORMATS = [
     (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
@@ -46,22 +49,45 @@ _FORMATS = [
 ]
 _FORMAT_IDS = ["bfp8_tile", "bf16_rm", "fp8_rm"]
 
-# The block-cyclic cases require SP=8. Preserve both existing execution environments: the LoudBox
-# proxy uses TorusY and the production Galaxy uses TorusXY.
+# (mesh_shape, device_params, sp_axis). The LoudBox proxy uses TorusY and the production Galaxy TorusXY,
+# both SP=8 on axis 0; a 4x4 prefill stage (a Galaxy tray half) splits the cache over the axis-1 ring.
 _MESHES = [
     pytest.param(
         (8, 1),
         torus_y_device_params(),
+        0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
         id="torus-y-8x1",
     ),
     pytest.param(
         (8, 4),
         torus_xy_device_params(),
+        0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
     ),
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(),
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-x-4x4-sp1",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(),
+        1,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-xy-4x4-sp1",
+    ),
 ]
+_MESH_ARGNAMES = "mesh_device,device_params,sp_axis"
+_MESH_INDIRECT = ["mesh_device", "device_params"]
+
+
+def _sp_split_dims(sp_axis, tp_dim=None):
+    """ShardTensor2dMesh / ConcatMesh2dToTensor dims with the sequence (dim 2) on sp_axis."""
+    return tuple(2 if i == sp_axis else tp_dim for i in range(2))
 
 
 def _init_cache_filled_with_ones(
@@ -75,6 +101,7 @@ def _init_cache_filled_with_ones(
     layout,
     num_layers=1,
     num_users=1,
+    tp_axis=None,
 ):
     """Initialize a block-cyclic cache and overwrite every physical row with one."""
     mesh_shape = list(mesh_device.shape)
@@ -88,6 +115,7 @@ def _init_cache_filled_with_ones(
         num_users=num_users,
         dtype=dtype,
         layout=layout,
+        tp_axis=tp_axis,
     )
     assert cache.dtype == dtype
     assert cache.layout == layout
@@ -101,7 +129,7 @@ def _init_cache_filled_with_ones(
         dtype=ttnn.bfloat16 if dtype == ttnn.fp8_e4m3 else dtype,
         layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(2, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=_sp_split_dims(sp_axis)),
     )
     if dtype == ttnn.fp8_e4m3:
         tt_ones = ttnn.typecast(tt_ones, ttnn.fp8_e4m3)
@@ -118,22 +146,19 @@ def _init_cache_filled_with_ones(
                     num_layers=num_layers,
                     kv_actual_global=kv_actual_global,
                     cluster_axis=sp_axis,
+                    tp_axis=tp_axis,
                 )
     ttnn.synchronize_device(mesh_device)
     return cache
 
 
-def _cache_in_natural_order(cache, mesh_device, *, chunk_size_global, seq_len_cache, sp_axis):
+def _cache_in_natural_order(cache, mesh_device, *, chunk_size_global, seq_len_cache, sp_axis, tp_shard_kv=False):
     """Gather a block-cyclic mesh cache and restore natural token order."""
-    mesh_shape = list(mesh_device.shape)
-    cache_shard_order = ttnn.to_torch(
-        cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:, :1]
-    positions = blockcyclic_positions(mesh_shape[sp_axis], chunk_size_global, seq_len_cache)
+    cache_shard_order, stripes = gather_cache_natural(cache, mesh_device, tp_shard_kv, sp_axis=sp_axis)
+    positions = blockcyclic_positions(stripes, chunk_size_global, seq_len_cache)
     natural = torch.empty(cache_shard_order.shape[0], seq_len_cache, cache_shard_order.shape[-1], dtype=torch.bfloat16)
     for batch_idx in range(cache_shard_order.shape[0]):
-        natural[batch_idx, positions] = cache_shard_order[batch_idx, 0]
+        natural[batch_idx, positions] = cache_shard_order[batch_idx].to(torch.bfloat16)
     return natural
 
 
@@ -146,6 +171,7 @@ def _assert_cache_windows(
     sp_axis,
     num_layers,
     windows,
+    tp_shard_kv=False,
 ):
     """Check exact zero windows while requiring every other cache element to remain one."""
     natural = _cache_in_natural_order(
@@ -154,6 +180,7 @@ def _assert_cache_windows(
         chunk_size_global=chunk_size_global,
         seq_len_cache=seq_len_cache,
         sp_axis=sp_axis,
+        tp_shard_kv=tp_shard_kv,
     )
     expected = torch.ones_like(natural)
     for (slot_idx, layer_idx), (start, end) in windows.items():
@@ -165,26 +192,41 @@ def _assert_cache_windows(
 
 
 @pytest.mark.parametrize(
-    "mesh_device,device_params",
+    _MESH_ARGNAMES,
     [
         pytest.param(
             (2, 4),
             fabric2d_device_params(),
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
-        )
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
-    indirect=True,
+    indirect=_MESH_INDIRECT,
 )
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layout):
+def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, sp_axis, dtype, layout):
     """Cover one cross-chip window and a program-cache hit with new runtime args."""
     if dtype == ttnn.fp8_e4m3 and not is_blackhole():
         pytest.skip("FP8_E4M3 is Blackhole-only")
 
-    sp_axis = 0
-    chunk_size_global = 384  # local=192: [180,256) crosses chip0 -> chip1
+    # SP=2: local=192, [180,256) crosses chip0 -> chip1. SP=4: local=96, it crosses chip1 -> chip2.
+    chunk_size_global = 384
     seq_len_cache = 384
     head_dim = 64
     num_users = 2
@@ -205,7 +247,7 @@ def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layou
     mesh_device.enable_program_cache()
     cache_entries_before = mesh_device.num_program_cache_entries()
     windows = {
-        (0, 0): (180, 256),  # crosses chip0 -> chip1
+        (0, 0): (180, 256),  # crosses a chip border
         (1, 0): (350, 384),  # same program, different slot and valid_global
     }
     for (slot_idx, layer_idx), (valid_global, _pad_end) in windows.items():
@@ -235,19 +277,19 @@ def test_zero_padded_kv_cache_program_cache_cross_chip(mesh_device, dtype, layou
     assert mesh_device.num_program_cache_entries() == cache_entries_before + 1
 
 
-@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
+@pytest.mark.parametrize(_MESH_ARGNAMES, _MESHES, indirect=_MESH_INDIRECT)
 @pytest.mark.parametrize("dtype,layout", _FORMATS, ids=_FORMAT_IDS)
-@pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chip", _CASES, ids=_IDS)
+@pytest.mark.parametrize("chunk_size_global,seq_len_cache,valid_global,expected_chips", _CASES, ids=_IDS)
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache(
-    mesh_device, dtype, layout, chunk_size_global, seq_len_cache, valid_global, expected_chip
+    mesh_device, sp_axis, dtype, layout, chunk_size_global, seq_len_cache, valid_global, expected_chips
 ):
     if dtype == ttnn.fp8_e4m3 and not is_blackhole():
         pytest.skip("FP8_E4M3 is Blackhole-only")
 
     mesh_shape = list(mesh_device.shape)
-    sp_axis = 0
     sp = mesh_shape[sp_axis]
+    expected_chip = None if expected_chips is None else expected_chips[sp]
     head_dim = 64
 
     cache = _init_cache_filled_with_ones(
@@ -297,21 +339,20 @@ _MULTI_CASES = [
 _MULTI_IDS = [f"L{nl}_U{nu}_slot{s}_layer{ly}_v{v}" for (nl, nu, s, ly, v, _ch) in _MULTI_CASES]
 
 
-@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
+@pytest.mark.parametrize(_MESH_ARGNAMES, _MESHES, indirect=_MESH_INDIRECT)
 @pytest.mark.parametrize(
     "num_layers,num_users,slot_idx,layer_idx,valid_global,expected_chip", _MULTI_CASES, ids=_MULTI_IDS
 )
 @pytest.mark.timeout(0)
 def test_zero_padded_kv_cache_layers_users(
-    mesh_device, num_layers, num_users, slot_idx, layer_idx, valid_global, expected_chip
+    mesh_device, sp_axis, num_layers, num_users, slot_idx, layer_idx, valid_global, expected_chip
 ):
     """Seed every (user, layer) cache slot to all-ones, zero ONE slot's pad window, and assert the
     target slot's window is zeroed AND every other slot is untouched -- validating the
     batch_idx = slot_idx*num_layers + layer_idx addressing across a full 61-layer / multi-user cache."""
     mesh_shape = list(mesh_device.shape)
-    sp_axis = 0
+    tp_axis = 1 - sp_axis
     sp = mesh_shape[sp_axis]
-    tp = mesh_shape[1]
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_TOKENS
     seq_len_cache = chunk_size_global
@@ -358,9 +399,10 @@ def test_zero_padded_kv_cache_layers_users(
     natural = torch.zeros(seq_len_cache)
     other_min = 1.0
     for di, dt in enumerate(ttnn.get_device_tensors(cache)):
-        if di % tp != 0:
+        coord = divmod(di, mesh_shape[1])  # device tensors are in row-major mesh order
+        if coord[tp_axis] != 0:
             continue
-        sp_coord = di // tp
+        sp_coord = coord[sp_axis]
         t = ttnn.to_torch(dt).float()  # [num_batches, 1, seq_len_local, kvpe]
         for b in range(num_batches):
             rows = t[b, 0, :, :].mean(dim=-1)
@@ -403,17 +445,16 @@ def _make_scalar_tensor(mesh_device, value):
     )
 
 
-@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
+@pytest.mark.parametrize(_MESH_ARGNAMES, _MESHES, indirect=_MESH_INDIRECT)
 @pytest.mark.parametrize("slot_idx,valid_global", _EQUIV_CASES, ids=_EQUIV_IDS)
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid_global):
+def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, sp_axis, slot_idx, valid_global):
     """The per-element-tensor path and the scalar path must produce bit-identical caches.
 
     Builds two 1-element uint32 replicated-DRAM tensors (slot_idx, valid_global), hands them to the
     tensor-path overload (the reader/writer read element 0 of each on-device), and compares the zeroed
     cache against the same call done via the original scalar signature, per device, bit-exact."""
     mesh_shape = list(mesh_device.shape)
-    sp_axis = 0
     sp = mesh_shape[sp_axis]
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_TOKENS
@@ -467,15 +508,14 @@ def test_zero_padded_kv_cache_tensor_matches_scalar(mesh_device, slot_idx, valid
     ttnn.deallocate(tt_valid_global)
 
 
-@pytest.mark.parametrize("mesh_device,device_params", _MESHES, indirect=True)
+@pytest.mark.parametrize(_MESH_ARGNAMES, _MESHES, indirect=_MESH_INDIRECT)
 @pytest.mark.timeout(0)
-def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
+def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device, sp_axis):
     """Cache-HIT coverage of the tensor path: two successive tensor-overload calls with DIFFERENT
     1-element metadata tensors (distinct DRAM addresses) must reuse ONE cached program, and the second
     call must zero ITS OWN window -- proving override_runtime_arguments patches the metadata tensor
     addresses (common args 10/11) on the cache hit rather than reusing the first call's tensors. (The
     tensor path is TILE-only, so this uses a TILE cache.)"""
-    sp_axis = 0
     kvpe = 64
     chunk_size_global = PREFILL_CHUNK_TOKENS
     seq_len_cache = chunk_size_global
@@ -535,3 +575,110 @@ def test_zero_padded_kv_cache_tensor_program_reuse(mesh_device):
     logger.success("tensor-path program reused across chunks; second (cache-hit) call zeroed its own window")
     for t in (slot_ta, valid_ta, slot_tb, valid_tb):
         ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params,sp_axis,chunk_size_global",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(),
+            0,
+            768,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        # A 4x4 prefill stage: SP on the axis-1 ring, so the 16 stripes run down the mesh columns.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            1536,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(),
+            1,
+            1536,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("use_tensor_args", [False, True], ids=["scalar", "tensor"])
+@pytest.mark.timeout(0)
+def test_zero_padded_kv_cache_tp_deduped(mesh_device, sp_axis, chunk_size_global, use_tensor_args):
+    """TP-deduped cache: block-cyclic over sp*tp stripes of 96 rows (8 on the 2x4, 16 on the 4x4), so
+    128-aligned windows can cross one."""
+    tp_axis = 1 - sp_axis
+    mesh_shape = tuple(mesh_device.shape)
+    seq_len_cache = 2 * chunk_size_global
+    num_layers, num_users = 2, 2
+
+    cache = _init_cache_filled_with_ones(
+        mesh_device,
+        head_dim=64,
+        seq_len_cache=seq_len_cache,
+        chunk_size_global=chunk_size_global,
+        sp_axis=sp_axis,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        num_layers=num_layers,
+        num_users=num_users,
+        tp_axis=tp_axis,
+    )
+    assert is_tp_deduped_kv_cache(cache, mesh_shape)
+
+    mesh_device.enable_program_cache()
+    cache_entries_before = mesh_device.num_program_cache_entries()
+    # Stripes are 96 rows on both meshes, so each window crosses the same stripe boundary (192, 480); the
+    # last sits in the second chunk on the 2x4 and in the first on the 4x4.
+    windows = {
+        (0, 1): (180, 256),  # crosses 192: stripe 1 -> 2
+        (1, 0): (450, 512),  # crosses 480: stripe 4 -> 5
+        (1, 1): (1000, 1024),
+    }
+    for (slot_idx, layer_idx), (valid_global, _pad_end) in windows.items():
+        if use_tensor_args:
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                cache,
+                _make_scalar_tensor(mesh_device, slot_idx),
+                _make_scalar_tensor(mesh_device, valid_global),
+                layer_idx,
+                num_layers,
+                chunk_size_global,
+                sp_axis,
+                128,
+                tp_axis=tp_axis,
+            )
+        else:
+            ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                cache,
+                slot_idx,
+                layer_idx,
+                num_layers,
+                valid_global,
+                chunk_size_global,
+                sp_axis,
+                128,
+                tp_axis=tp_axis,
+            )
+    ttnn.synchronize_device(mesh_device)
+
+    assert is_tp_deduped_kv_cache(cache, mesh_shape), "the op must keep the cache's deduped topology"
+    _assert_cache_windows(
+        cache,
+        mesh_device,
+        chunk_size_global=chunk_size_global,
+        seq_len_cache=seq_len_cache,
+        sp_axis=sp_axis,
+        num_layers=num_layers,
+        windows=windows,
+        tp_shard_kv=True,
+    )
+    # layer_idx is hashed, slot and valid_global are not.
+    num_layers_used = len({layer_idx for _slot, layer_idx in windows})
+    assert mesh_device.num_program_cache_entries() == cache_entries_before + num_layers_used

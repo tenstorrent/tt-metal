@@ -27,6 +27,17 @@ Two traces exist, and they are not interchangeable:
 
 Both are causal, so a prefix of the token stream is a valid shorter run and every stream may be
 sliced to the length under test.
+
+K3.1 (retrained weights, so none of the above applies to it) has one, ``TRACE_K31``: the
+``kimi_k31_pro_10k_v2`` vLLM trace — an 8192-token prompt through the full 93-layer K3.1 model, then
+2047 sampled decode steps — with ``decoder_output_layer_{0..92}``, ``attn_output``, AttnRes block
+streams, KV and the DSA indexer streams (``indexer/indexer_k_layer_N``, ``dsa/dsa_topk_indices_layer_N``)
+for all 24 DSA layers, and routing. The tracer wrote it chunked; a one-shot converter outside the repo (its
+``converted_from`` metadata names the source and version) rewrote it into this layout, all 10239 rows: rows
+past ``n_prompt_tokens`` are the decode steps. The tracer records each layer's FFN output as
+``decoder_output``; the converter writes K3's running sum under that key instead (rebuilt from ``attn_output``
+and the FFN output, pinned in ``test_k31_golden.py``) and keeps the FFN output as
+``ffn_output/ffn_output_layer_N``, so ``decoder_output`` means the same thing in every trace here.
 """
 
 from __future__ import annotations
@@ -37,12 +48,25 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from loguru import logger
 from safetensors import safe_open
 
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
+
 # The 5-layer module-level trace and the full-model depth trace.
-GOLDEN_ROOT = Path("/mnt/models/deepseek-prefill-cache/golden")
+#
+# `model-cache/stable/`, not `model-cache/scratch/` -- the scratch tree holds a K3 copy that is
+# filenames without bytes. Get this root wrong and a *missing* directory makes `resolve_trace`
+# return None, which makes the tests skip rather than fail, so it shows up as a green run.
+GOLDEN_ROOT = Path("/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden")
 TRACE_100K = GOLDEN_ROOT / "structured_traces" / "kimi_k3_100k_vllm"
 TRACE_1M = GOLDEN_ROOT / "k3_vllm_code_debug_1M"
+# The K3.1 golden; its path lives with the adapter, which hands the same trace to the runner's PCC gate.
+TRACE_K31 = Path(KimiK31Adapter.prefill_trace_default)
+# Its 128K sibling (kimi_k31_pro_128k_v2: 126976 prompt + 4096 decoded tokens), converted for layers 0-23 only
+# (`converted_from.layers` 24 in its metadata): K3's long-context check scores those layers. Test-only; no runner
+# gate reads it.
+TRACE_K31_128K = TRACE_K31.parent / "kimi_k31_pro_128k_v2_conv2_l24"
 
 # `kv_cache/layer_N.safetensors` is the one stream whose file stem is not its tensor key; every
 # other group names the file after the key it holds.
@@ -136,11 +160,22 @@ def resolve_trace(default: Path) -> GoldenTrace | None:
 
 
 def resolve_checkpoint() -> Path | None:
-    """The Kimi-K3 checkpoint named by `$KIMI_K3_HF_MODEL` / `$KIMI_K3_CKPT`, if it has an index."""
-    for var in ("KIMI_K3_HF_MODEL", "KIMI_K3_CKPT"):
+    """The Kimi-K3 checkpoint named by `$KIMI_K3_CKPT` / `$KIMI_K3_HF_MODEL`, if it has an index.
+
+    `$KIMI_K3_CKPT` first, and the order matters: `$KIMI_K3_HF_MODEL` is the published MXFP4
+    checkpoint, whose index holds no dequantized `experts.N.w{1,2,3}` keys, so preferring it breaks
+    every caller here -- they all read tensors. The MoE gate wants the MXFP4 router and reads
+    `$KIMI_K3_HF_MODEL` directly, so it is unaffected.
+    """
+    for var in ("KIMI_K3_CKPT", "KIMI_K3_HF_MODEL"):
         value = os.getenv(var)
-        if value and (Path(value) / "model.safetensors.index.json").is_file():
+        if not value:
+            continue
+        if (Path(value) / "model.safetensors.index.json").is_file():
             return Path(value)
+        # Worth a line: falling through silently substitutes the other checkpoint, and the failure
+        # then surfaces as a missing-keys error naming that one instead of the missing index here.
+        logger.warning(f"${var}={value} has no model.safetensors.index.json; skipping it")
     return None
 
 

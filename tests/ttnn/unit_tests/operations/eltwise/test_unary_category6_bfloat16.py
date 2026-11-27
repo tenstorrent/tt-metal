@@ -2,24 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import torch
-import pytest
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc
-from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
-    generate_bfloat16_bits,
-    generate_bfloat16_bits_in_range,
-    to_tt_tensor,
-    bf16_bits_to_float,
-    bf16_quantize_rne,
-    float_to_bf16_bits,
-    SMALLEST_NORMAL_BF16,
-    MAX_BF16,
-)
-
-pytestmark = pytest.mark.use_module_device
-
 """
 Category 6: Ops with multiple/special parameters
 
@@ -58,7 +40,9 @@ Accuracy criteria
       A PCC over the whole grid is dominated by the largest-magnitude decade,
       so tanh, sigmoid_accurate and polygamma additionally get a per-element
       ULP assertion over the well-conditioned sub-range their replaced tests
-      covered.
+      covered. softplus's whole evaluated arm (beta*x <= threshold) is
+      ULP-gated too: a whole-grid PCC stays near 1.0 when its negative tail
+      is flushed to 0.
 
 Coverage that deliberately lives elsewhere (recorded here so an unrelated
 refactor of those files doesn't silently delete coverage this one relies on):
@@ -66,22 +50,19 @@ refactor of those files doesn't silently delete coverage this one relies on):
     bfloat16 row was removed in favour of the sweep here.
 
 Golden-function quirks (see ttnn/ttnn/operations/unary.py):
-  - _golden_function_selu ignores its scale/alpha kwargs and always uses the
-    paper defaults, but the kernel does honour them, so this file computes
-    its own reference (_selu_reference) to actually exercise them.
+  - _golden_function_selu used to ignore its scale/alpha kwargs (#57116). It
+    now honours them (torch.nn.functional.selu for the full-precision
+    defaults, closed form otherwise); test_selu_scale_alpha_golden and
+    test_selu_default_golden_uses_torch pin that. test_selu_op still uses its
+    own float64 reference (_selu_reference), decoupled from the golden.
   - bitcast only supports same-bit-width dtype pairs; bfloat16 -> uint16 is
     the only valid target.
 
 Real-hardware quirks. Every item below was observed running this file against
 a live wormhole_b0 chip -- each started as a failure whose exclusion band was
 read off the failing elements.
-  - hardtanh/clamp/clip bounds and threshold's `value` take the fp32->bf16
-    *truncation* path (same as `fill`), not round-to-nearest-even, so their
-    goldens are built from _to_device_bf16_scalar.
-  - the two scalars of one `threshold` call do not share a conversion:
-    `value` truncates, but `threshold`, which is compared against, rounds to
-    nearest even (_to_device_bf16_comparand). Truncating both leaves exactly
-    one element of the grid wrong.
+  - hardtanh/clamp/clip bounds and both `threshold` scalars are rounded to
+    nearest even (_to_device_bf16_comparand), as torch does.
   - a -0.0 scalar parameter comes back as +0.0: threshold(value=-0.0) and
     clamp(min=-0.0) canonicalize the sign away, consistent with the DAZ model
     elsewhere. torch keeps it, hence _canonicalize_negative_zero and the
@@ -119,6 +100,24 @@ read off the failing elements.
     the result.
 """
 
+import math
+
+import pytest
+import torch
+import ttnn
+
+from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    MAX_BF16,
+    SMALLEST_NORMAL_BF16,
+    bf16_quantize_rne,
+    generate_bfloat16_bits,
+    generate_bfloat16_bits_in_range,
+    to_tt_tensor,
+)
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+
+pytestmark = pytest.mark.use_module_device
+
 
 MAX_BF16_VAL = torch.finfo(torch.bfloat16).max
 TINY_BF16 = torch.finfo(torch.bfloat16).tiny
@@ -133,21 +132,7 @@ def _exhaustive_bf16_4d():
     return generate_bfloat16_bits(include_spl_values=False).unsqueeze(0).unsqueeze(0)
 
 
-def _to_device_bf16_scalar(value):
-    """Round-trip a scalar the kernel *writes into the output* through the
-    device's fp32->bf16 truncation (0.66 -> 0.65625, where RNE gives
-    0.66015625). Ints and None pass through. Compare _to_device_bf16_comparand.
-    """
-    if value is None or isinstance(value, bool) or not isinstance(value, float):
-        return value
-    return bf16_bits_to_float(float_to_bf16_bits(value))
-
-
 def _to_device_bf16_comparand(value):
-    """Round-trip a scalar the kernel *compares against*, which is RNE rather
-    than truncating. The difference is one element of the exhaustive grid --
-    the single bf16 value falling between the two roundings.
-    """
     if value is None or isinstance(value, bool) or not isinstance(value, float):
         return value
     return bf16_quantize_rne(value)
@@ -253,16 +238,9 @@ def _assert_bitwise_equal(result, golden, label):
 @pytest.mark.parametrize("min_val", [0.25, 0.5, 0.66, -1.0])
 @pytest.mark.parametrize("max_val", [1.0, 2.5, 3.0, 6.6])
 def test_hardtanh_op(device, min_val, max_val):
-    """output_i = clamp(x_i, min_val, max_val). Exhaustive normal bf16 sweep.
-
-    The golden is built from the truncated bf16 bounds, since the device
-    truncates rather than rounding them: min_val=0.66 would otherwise be
-    0.66015625 on the golden side against 0.65625 on the device, diverging on
-    every clamped element.
-    """
     input_tensor = _exhaustive_bf16_4d()
-    device_min_val = _to_device_bf16_scalar(min_val)
-    device_max_val = _to_device_bf16_scalar(max_val)
+    device_min_val = _to_device_bf16_comparand(min_val)
+    device_max_val = _to_device_bf16_comparand(max_val)
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.hardtanh)
@@ -339,7 +317,7 @@ def test_clamp_clip_scalar_ops(device, ttnn_op, min_val, max_val):
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(
-        input_tensor, _to_device_bf16_scalar(min_val), _to_device_bf16_scalar(max_val), device=device
+        input_tensor, _to_device_bf16_comparand(min_val), _to_device_bf16_comparand(max_val), device=device
     )
 
     tt_result = ttnn_op(tt_in, min_val, max_val)
@@ -480,16 +458,15 @@ def test_threshold_op(device, threshold_val, value):
     and relaxes itself to ULP<=1, but feeding it the bf16 scalar the device
     actually uses makes that a no-op and recovers exactness.
 
-    The two scalars take different conversion paths (`value` truncates,
-    `threshold` rounds), and `value=-0.0` comes back as +0.0; both are quirks
-    only an exhaustive sweep and a bit-pattern compare can see.
+    `value=-0.0` comes back as +0.0, a quirk only an exhaustive sweep and a
+    bit-pattern compare can see.
     """
     input_tensor = _exhaustive_bf16_4d()
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.threshold)
     golden = golden_function(
-        input_tensor, _to_device_bf16_comparand(threshold_val), _to_device_bf16_scalar(value), device=device
+        input_tensor, _to_device_bf16_comparand(threshold_val), _to_device_bf16_comparand(value), device=device
     )
 
     tt_result = ttnn.threshold(tt_in, threshold_val, value)
@@ -525,8 +502,8 @@ def test_round_op(device, decimals):
     assert_with_ulp(expected_result=golden[finite], actual_result=result[finite], ulp_threshold=1)
 
 
-# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). The attached golden
-# ignores scale/alpha, so a scale/alpha-aware reference is computed here.
+# selu(x) = scale * (x if x > 0 else alpha * (exp(x) - 1)). Computed in float64
+# here rather than via the attached golden, to stay decoupled from it.
 def _selu_reference(x, scale, alpha):
     x64 = x.to(torch.float64)
     pos = x64
@@ -561,6 +538,46 @@ def test_selu_op(device, scale, alpha):
 
     keep = ~ftz
     assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "scale, alpha",
+    [
+        (1.0507, 1.67326),  # ttnn.selu's kernel defaults (unary_nanobind.cpp); closed-form path
+        (3.0, 2.0),  # non-default: regression for #57116
+        (0.5, 0.1),
+    ],
+)
+def test_selu_scale_alpha_golden(scale, alpha):
+    # ttnn.selu's registered golden used to call torch.nn.functional.selu(input_tensor_a),
+    # which hardcodes the canonical SELU constants and silently ignores scale/alpha -- the
+    # golden was identical for every (scale, alpha) pair. Pin the golden itself (host-only,
+    # no device dependency) against the closed-form definition so a future regression back to
+    # the old torch.nn.functional.selu call fails here immediately.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.where(x >= 0, scale * x, scale * alpha * (torch.exp(x) - 1))
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    golden = golden_function(x, scale=scale, alpha=alpha)
+
+    torch.testing.assert_close(golden, expected)
+
+
+def test_selu_default_golden_uses_torch():
+    # With default (canonical) scale/alpha the golden routes through torch.nn.functional.selu.
+    torch.manual_seed(0)
+    x = torch.empty(64).uniform_(-5, 5)
+    expected = torch.nn.functional.selu(x)
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    torch.testing.assert_close(golden_function(x), expected, rtol=0, atol=0)
+    torch.testing.assert_close(
+        golden_function(x, scale=1.0507009873554804934193349852946, alpha=1.6732632423543772848170429916717),
+        expected,
+        rtol=0,
+        atol=0,
+    )
 
 
 # Above this |x|, reciprocal(x) underflows and is flushed to zero before the
@@ -755,6 +772,20 @@ def test_softplus_op(device, beta, threshold_val):
     finite = torch.isfinite(golden) & torch.isfinite(result)
     _assert_excluded_region(~finite, "softplus non-finite", max_fraction=0.05)
     assert_with_pcc(golden[finite], result[finite], pcc=0.999)
+
+    # PCC misses a flushed tail (the pass-through arm dominates). Gate t <= threshold at 1 ULP.
+    golden_bf16 = golden.to(torch.bfloat16)
+    result_bf16 = result.to(torch.bfloat16)
+    t = beta * input_tensor
+    arm = finite & (t <= threshold_val) & (t > -80.0)
+    tail = arm & (t < -5.0)
+    assert tail.any(), f"softplus(beta={beta}, threshold={threshold_val}) negative-tail window is empty"
+    # Positive beta stays in (0, inf). Negative beta is covered by the ULP check.
+    if beta > 0:
+        assert torch.all(
+            result_bf16[tail] > 0
+        ), f"softplus(beta={beta}, threshold={threshold_val}) returned 0 on the negative tail"
+    assert_with_ulp(expected_result=golden_bf16[arm], actual_result=result_bf16[arm], ulp_threshold=1)
 
 
 def test_softplus_beta_zero(device):
@@ -1038,12 +1069,12 @@ def test_scalar_param_ops_rank_coverage(device, shape):
 
     tt_in = to_tt_tensor(input_tensor, device)
 
-    min_val, max_val = _to_device_bf16_scalar(-1.0), _to_device_bf16_scalar(0.66)
+    min_val, max_val = _to_device_bf16_comparand(-1.0), _to_device_bf16_comparand(0.66)
     for ttnn_op, args, kwargs, golden_args, golden_kwargs in (
         (ttnn.hardtanh, (), {"min_val": -1.0, "max_val": 0.66}, (), {"min_val": min_val, "max_val": max_val}),
         (ttnn.clamp, (-1.0, 0.66), {}, (min_val, max_val), {}),
         (ttnn.clip, (-1.0, 0.66), {}, (min_val, max_val), {}),
-        (ttnn.threshold, (0.5, 0.66), {}, (_to_device_bf16_comparand(0.5), max_val), {}),
+        (ttnn.threshold, (0.5, 0.66), {}, (_to_device_bf16_comparand(0.5), _to_device_bf16_comparand(0.66)), {}),
     ):
         golden_function = ttnn.get_golden_function(ttnn_op)
         golden = golden_function(input_tensor, *golden_args, device=device, **golden_kwargs)

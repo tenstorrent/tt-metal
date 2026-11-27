@@ -19,8 +19,8 @@ lane pair, **cos=1 / sin=0 on the pass-through lanes 48..63**) and the rotation 
 ``x*cos + rot90(x)*sin`` over the full head with no slice -- 48 is not tile-aligned
 (48 % 32 = 16), so avoiding the slice is what makes this cheap.
 
-The permuted tables feed ``ttnn.experimental.rotary_embedding_llama`` directly, with the standard
-32x32 ``get_rot_transformation_mat``.
+The permuted tables feed the RoPE stage of ``ttnn.experimental.dit_fused_distributed_rmsnorm``
+directly, with the standard 32x32 ``get_rot_transformation_mat``.
 
 Q and K take the same permute, so ``Q K^T`` is unchanged; V is never permuted, so the
 attention output is already in the normal basis and needs no inverse permute. The

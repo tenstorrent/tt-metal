@@ -11,22 +11,32 @@ processed as chunks) on one device, and the all-gather is stood in for by reshar
 per-slice statistics onto a single core. No real multi-device execution or collective runs — only the
 on-device pre/post all-gather op path is exercised.
 """
+from tt_py_test_utils_common.distributed_layernorm_sharded import (
+    compute_post_allgather_output,
+    compute_pre_allgather_stats,
+    compute_reference_output,
+    create_input_and_weight_tensors,
+    create_output_memory_config,
+    create_tt_tensors,
+    rms_norm,
+)
+
 import ttnn
 import torch
 import pytest
 import math
 from loguru import logger
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     skip_for_wormhole_b0,
 )
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     make_sharded_norm_mem_config,
     to_poisoned_sharded,
 )
 
-from models.common.utility_functions import tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -56,173 +66,8 @@ PREFETCHER_NOC1_GRID = [
 ]
 
 
-def rms_norm(x, gamma, eps):
-    return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) * gamma
-
-
 def layer_norm(x, gamma, eps):
     return (x - x.mean(-1, keepdim=True)) * torch.rsqrt(x.var(-1, keepdim=True) + eps) * gamma
-
-
-def create_input_and_weight_tensors(input_width, num_devices, seed, mean, std):
-    torch.manual_seed(seed)
-    input_shape = (1, 1, 32, input_width * num_devices)
-    weights_shape = (1, 1, 1, input_width * num_devices)
-
-    torch_input_tensor = torch.normal(mean, std, size=input_shape, dtype=torch.bfloat16)
-    torch_weight = torch.normal(mean, std, size=weights_shape, dtype=torch.bfloat16)
-
-    torch_input_chunks = torch.chunk(torch_input_tensor, num_devices, dim=-1)
-    torch_weight_chunks = torch.chunk(torch_weight, num_devices, dim=-1)
-
-    return torch_input_tensor, torch_weight, torch_input_chunks, torch_weight_chunks
-
-
-def create_tt_tensors(
-    torch_chunk, device, df, core_grid, input_width, is_weight=False, grid_offset=ttnn.CoreCoord(0, 0)
-):
-    tt_tensor = ttnn.from_torch(
-        torch_chunk,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if is_weight else ttnn.L1_MEMORY_CONFIG,
-        dtype=df,
-    )
-
-    with device.cache_entries_counter.measure():
-        if not is_weight:
-            core_range = ttnn.CoreRange(
-                grid_offset, ttnn.CoreCoord(core_grid[0] + grid_offset.x - 1, core_grid[1] + grid_offset.y - 1)
-            )
-            tt_sharded_config = ttnn.create_sharded_memory_config(
-                shape=(32, input_width // (core_grid[0] * core_grid[1])),
-                core_grid=ttnn.CoreRangeSet(
-                    {
-                        core_range,
-                    }
-                ),
-                strategy=ttnn.ShardStrategy.WIDTH,
-                use_height_and_width_as_shard_shape=True,
-            )
-            tt_tensor = ttnn.to_memory_config(tt_tensor, memory_config=tt_sharded_config)
-
-        return tt_tensor
-
-
-def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm, residual_input_tensor=None):
-    SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[core_grid[0], core_grid[1]],
-        subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
-        block_h=1,
-        block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
-        inplace=False,
-    )
-
-    if is_rmsnorm:
-        return ttnn.rms_norm_pre_all_gather(
-            tt_input_tensor, residual_input_tensor=residual_input_tensor, program_config=SHARDED_NORM_PRGM_CFG
-        )
-    else:
-        return ttnn.layer_norm_pre_all_gather(
-            tt_input_tensor, residual_input_tensor=residual_input_tensor, program_config=SHARDED_NORM_PRGM_CFG
-        )
-
-
-def compute_post_allgather_output(
-    tt_input_tensor,
-    tt_weights,
-    tt_stats_tensor,
-    eps,
-    is_rmsnorm,
-    core_grid,
-    input_width,
-    output_df,
-    out_memory_config,
-    tt_bias=None,
-):
-    SHARDED_NORM_PRGM_CFG = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=(core_grid[0], core_grid[1]),
-        subblock_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
-        block_h=1,
-        block_w=(input_width // (core_grid[0] * core_grid[1])) // 32,
-        inplace=False,
-    )
-
-    if is_rmsnorm:
-        return ttnn.rms_norm_post_all_gather(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            bias=tt_bias,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            stats=tt_stats_tensor,
-            dtype=output_df,
-            memory_config=out_memory_config,
-        )
-    else:
-        return ttnn.layer_norm_post_all_gather(
-            tt_input_tensor,
-            epsilon=eps,
-            weight=tt_weights,
-            bias=tt_bias,
-            program_config=SHARDED_NORM_PRGM_CFG,
-            stats=tt_stats_tensor,
-            dtype=output_df,
-            memory_config=out_memory_config,
-        )
-
-
-def compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps, torch_bias=None):
-    if is_rmsnorm:
-        gamma = torch_weight
-        if gamma is None:
-            gamma = torch.ones((1, 1, 1, torch_input_tensor.shape[-1]), dtype=torch_input_tensor.dtype)
-        torch_output_tensor = rms_norm(torch_input_tensor, gamma, eps=eps)
-        if torch_bias is not None:
-            torch_output_tensor = torch_output_tensor + torch_bias
-        return torch_output_tensor
-    else:
-        weight = None if torch_weight is None else torch_weight.squeeze(0).squeeze(0).squeeze(0)
-        bias = None if torch_bias is None else torch_bias.squeeze(0).squeeze(0).squeeze(0)
-        return torch.nn.functional.layer_norm(
-            torch_input_tensor,
-            (torch_input_tensor.shape[-1],),
-            weight=weight,
-            bias=bias,
-            eps=eps,
-        )
-
-
-def create_output_memory_config(output_core_grid, input_shape):
-    if isinstance(output_core_grid, tuple):
-        output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(output_core_grid[0] - 1, output_core_grid[1] - 1)),
-            ]
-        )
-    else:
-        output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(
-                    ttnn.CoreCoord(x, y),
-                    ttnn.CoreCoord(x, y),
-                )
-                for x, y in output_core_grid
-            ]
-        )
-    padded_out_w = math.ceil(input_shape[3] / output_core_range_set.num_cores() / 32) * 32
-    output_memory_config = ttnn.create_sharded_memory_config(
-        shape=(
-            input_shape[0] * input_shape[1] * input_shape[2],
-            padded_out_w,
-        ),
-        core_grid=output_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-    return output_memory_config
 
 
 def run_pre_allgather_layernorm(
@@ -316,10 +161,18 @@ def run_pre_allgather_layernorm(
 
 
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
-@pytest.mark.parametrize("input_width", [2048])
-@pytest.mark.parametrize("num_devices", [4, 8])
-@pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
+# Seed 0, 4 devices, bf16. Both RMS and both residual.
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "input_df": [ttnn.bfloat8_b, ttnn.bfloat16],
+            "num_devices": [4, 8],
+            "input_width": [2048],
+            "seed": [0, 1234],
+        },
+        keep=lambda seed, num_devices, input_df, **_: seed == 0 and num_devices == 4 and input_df == ttnn.bfloat16,
+    )
+)
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
 @pytest.mark.parametrize("core_grid", ((8, 4),))
 @pytest.mark.parametrize(("min_pcc_ex", "max_atol_ex"), [(0.9997, 0.01)])
@@ -608,8 +461,19 @@ def test_post_allgather_layernorm_optional_affine(
     )
 
 
+SIMULATED_DISTRIBUTED_LAYERNORM_GRIDS = [
+    ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
+    ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
+    ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
+    ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
+]
+# The seed only changes the random input values. Sanity runs one seed, the other runs nightly (#62486).
+SIMULATED_DISTRIBUTED_LAYERNORM_SEEDS = [0, 1234]
+SIMULATED_DISTRIBUTED_LAYERNORM_SANITY_SEEDS = [0]
+
+
 @pytest.mark.parametrize("is_rmsnorm", [True, False])
-@pytest.mark.parametrize("seed", [0, 1234])
+@pytest.mark.parametrize("seed", SIMULATED_DISTRIBUTED_LAYERNORM_SANITY_SEEDS)
 @pytest.mark.parametrize("eps", [1e-6])
 @pytest.mark.parametrize(("min_pcc", "max_atol"), ((0.9997, 0.45),))
 @pytest.mark.parametrize("input_width", [2048])
@@ -617,15 +481,7 @@ def test_post_allgather_layernorm_optional_affine(
 @pytest.mark.parametrize("input_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize("weights_df", [ttnn.bfloat8_b, ttnn.bfloat16])
 @pytest.mark.parametrize(("mean", "std"), ([0, 1],))
-@pytest.mark.parametrize(
-    "core_grid, grid_offset, output_core_grid",
-    [
-        ((8, 4), ttnn.CoreCoord(0, 0), (8, 4)),
-        ((4, 4), ttnn.CoreCoord(1, 0), (4, 4)),
-        ((8, 2), ttnn.CoreCoord(0, 0), (8, 3)),
-        ((2, 4), ttnn.CoreCoord(0, 0), (4, 2)),
-    ],
-)
+@pytest.mark.parametrize("core_grid, grid_offset, output_core_grid", SIMULATED_DISTRIBUTED_LAYERNORM_GRIDS)
 def test_simulated_distributed_layernorm(
     device,
     input_width,
@@ -1032,3 +888,44 @@ def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w
     exclusion is verified directly by test_simulated_distributed_norm_pre_all_gather_non_tile_aligned_width.
     """
     _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
+
+
+# The fused residual add of the pre-all-gather stage writes x + r back into the input buffer. The residual is
+# read in its own dtype, which may differ from the input's.
+@pytest.mark.parametrize("is_rmsnorm", [False, True])
+@pytest.mark.parametrize(
+    "input_df, residual_df",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
+    ],
+)
+def test_pre_allgather_residual_dtype_differs_from_input(device, is_rmsnorm, input_df, residual_df):
+    input_width, core_grid = 2048, (8, 4)
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 32, input_width)
+    r = torch.randn(1, 1, 32, input_width)
+    tt_x = create_tt_tensors(x, device, input_df, core_grid, input_width)
+    tt_r = create_tt_tensors(r, device, residual_df, core_grid, input_width)
+    # Reference on the values as stored on device (bfloat8_b / bfloat16 quantize the inputs).
+    expected_sum = ttnn.to_torch(tt_x).double() + ttnn.to_torch(tt_r).double()
+
+    tt_stats = compute_pre_allgather_stats(tt_x, core_grid, input_width, is_rmsnorm, tt_r)
+    stats = ttnn.to_torch(tt_stats).double()
+    summed = ttnn.to_torch(tt_x).double()
+
+    sum_err = (summed - expected_sum).abs().max().item()
+    # Statistics against the written-back sum, so that its quantization (bfloat8_b input) is not counted twice.
+    ex2 = summed.pow(2).mean(-1, keepdim=True)
+    ex2_err = ((stats[..., :1] if is_rmsnorm else stats[..., 32:33]) - ex2).abs().max().item()
+    ex_err = 0.0 if is_rmsnorm else (stats[..., :1] - summed.mean(-1, keepdim=True)).abs().max().item()
+    assert sum_err < 0.1, f"x + r written back: max abs error {sum_err:.3e}"
+    assert ex_err < 0.01, f"E[x]: max abs error {ex_err:.3e}"
+    assert ex2_err < 0.05, f"E[x^2]: max abs error {ex2_err:.3e}"

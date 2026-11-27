@@ -17,12 +17,16 @@ void kernel_main() {
     constexpr uint32_t n = get_compile_time_arg_val(0);
     constexpr uint32_t block_size = get_compile_time_arg_val(1);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
     eltwise_chain(
         IterationShape::tiles(n).block_size(block_size),
-        CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block), Dst::D1>{},
+        CopyTile<input(cb_in, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block), Dst::D1>{
+            cb_in_obj},
         Exp<Approx::Exact, Dst::D1>{},
-        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize), Dst::D1>{});
+        PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize), Dst::D1>{cb_out_obj});
 }

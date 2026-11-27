@@ -98,3 +98,55 @@ def test_max_pool2d_with_indices_sweep(device, dtype, input_spec):
         None,  # None means auto sharding
         ceil_mode,
     )
+
+
+# Larger 32-bit index shapes (H*W > 65535) moved here from tests/ttnn/unit_tests/operations/pool/test_mpwi.py
+@pytest.mark.parametrize(
+    "input_spec",
+    [
+        [1, 32, 384, 384, 3, 3, 1, 1, 1, 1, 1, 1, False],
+        [1, 48, 350, 350, 5, 5, 1, 1, 2, 2, 1, 1, False],
+        [1, 64, 350, 350, 6, 6, 1, 1, 3, 3, 1, 1, False],
+        [3, 32, 300, 300, 7, 7, 1, 1, 3, 3, 1, 1, False],
+        [2, 48, 300, 300, 9, 9, 2, 2, 4, 4, 1, 1, False],
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
+    (
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ceil_mode,
+    ) = input_spec
+
+    run_max_pool2d_with_indices(
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        dilation_h,
+        dilation_w,
+        ttnn_dtype,
+        device,
+        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        memory_config=None,
+        run_twice=True,
+        config_tensor_in_dram=True,
+    )

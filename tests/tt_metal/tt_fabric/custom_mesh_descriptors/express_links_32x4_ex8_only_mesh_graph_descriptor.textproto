@@ -1,0 +1,14 @@
+# Full-system 32x4 BLACKHOLE torus (4 hosts, 4x1 along the 32-row axis) with ONLY the wide dim-0
+# express-link pattern -- the ex8-only counterpart of express_links_32x4_mesh_graph_descriptor.textproto.
+# device_topology [32,4] dim_types [RING,RING] -> FABRIC_2D_TORUS_XY.
+# express_links dim=0 start=0 step=8: blocks [0,7][8,15][16,23][24,31] x 4 columns = 16 express edges,
+# closing one ring over the block endpoints with runs of six leaf rows between them.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [32, 4] dim_types: [RING, RING] }
+  host_topology   { dims: [4, 1] }
+  channels { count: 2 policy: RELAXED }
+  express_links { dim_idx: 0  pattern { start: 0  step: 8 } }
+}
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

@@ -32,9 +32,8 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -44,9 +43,21 @@ from loguru import logger
 
 import ttnn
 
+from ....utils import host_buffers
 from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
-from ....utils.yuv_d2h import fast_device_to_host_yuv
+from ....utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
+from .temporal_minimax_h3 import (
+    OUTPUT_TYPES,
+    StreamingClipAssembly,
+    assemble_clip_parts,
+    blend,
+    blend_clip_frames,  # noqa: F401 -- re-exported; the stitch tests import it from here
+    clip_frames,
+    clip_num_frames,
+    concat_clip_frames,
+    split_clip,
+)
 
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_OVERLAP = 64
@@ -129,111 +140,6 @@ def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tu
     for i in range(num_tiles - 1):
         starts.append(starts[-1] + tile_size - overlaps[i])
     return starts, [tile_size] * num_tiles, overlaps
-
-
-def blend(a: torch.Tensor, b: torch.Tensor, blend_extent: int, dim: int) -> torch.Tensor:
-    """Linear cross-fade of ``a``'s tail into ``b``'s head along ``dim``."""
-    blend_extent = min(a.shape[dim], b.shape[dim], blend_extent)
-    positions = torch.arange(blend_extent, device=b.device, dtype=b.dtype)
-    shape = [1] * a.ndim
-    shape[dim] = blend_extent
-    weight_a = (1 - positions / blend_extent).view(shape)
-    weight_b = (positions / blend_extent).view(shape)
-
-    slice_a = [slice(None)] * a.ndim
-    slice_a[dim] = slice(-blend_extent, None)
-    slice_b = [slice(None)] * b.ndim
-    slice_b[dim] = slice(0, blend_extent)
-    blended = a[tuple(slice_a)] * weight_a + b[tuple(slice_b)] * weight_b
-
-    if blend_extent == b.shape[dim]:
-        return blended
-    slice_rest = [slice(None)] * b.ndim
-    slice_rest[dim] = slice(blend_extent, None)
-    return torch.cat([blended, b[tuple(slice_rest)]], dim=dim)
-
-
-OUTPUT_TYPES = ("float", "yuv420")
-"""A decoded clip is either a torch ``(1, 3, T, H, W)`` tensor or, on the YUV path, a planar
-``(T, H*3//2, W)`` uint8 array. Only the temporal assembly in :meth:`MiniMaxH3Vae._decode` touches
-both, and only along the frame axis -- these three keep that one difference in one place."""
-
-
-def clip_num_frames(clip) -> int:
-    return clip.shape[0] if isinstance(clip, np.ndarray) else clip.shape[2]
-
-
-def clip_frames(clip, start: int, stop: int):
-    return clip[start:stop] if isinstance(clip, np.ndarray) else clip[:, :, start:stop]
-
-
-def concat_clip_frames(parts: list):
-    if parts and isinstance(parts[0], np.ndarray):
-        return np.concatenate(parts, axis=0)
-    return torch.cat(parts, dim=2)
-
-
-def blend_clip_frames(a, b, extent: int):
-    """Cross-fade ``a``'s trailing frames into ``b``'s leading ones -- :func:`blend` along frames.
-
-    The planar branch blends already-quantized uint8. BT.601 is affine and 4:2:0 decimation is
-    linear, so a convex combination commutes with the conversion and the only cost is re-rounding:
-    bounded at 1 LSB, which ``test_temporal_crossfade_survives_the_yuv_conversion`` pins.
-    """
-    if not isinstance(a, np.ndarray):
-        return blend(a, b, extent, dim=-3)
-
-    extent = min(a.shape[0], b.shape[0], extent)
-    positions = np.arange(extent, dtype=np.float32).reshape(-1, *([1] * (a.ndim - 1)))
-    head = a[-extent:].astype(np.float32) * (1.0 - positions / extent) + b[:extent].astype(np.float32) * (
-        positions / extent
-    )
-    head = np.clip(np.rint(head), 0, 255).astype(np.uint8)
-    return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
-
-
-def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
-    """Temporal assembly into one preallocated buffer: seam math on overlap frames, memcpy for the rest.
-
-    ``parts`` is ``[(segment, previous_overlap_or_None), ...]`` in output order; each fills its own slab.
-    """
-    total = sum(clip_num_frames(segment) for segment, _ in parts)
-    first = parts[0][0]
-    if isinstance(first, np.ndarray):
-        out = np.empty((total, *first.shape[1:]), dtype=first.dtype)
-    else:
-        shape = list(first.shape)
-        shape[2] = total
-        out = torch.empty(shape, dtype=first.dtype)
-
-    def write(start: int, segment, previous) -> None:
-        frames = clip_num_frames(segment)
-        slab = clip_frames(out, start, start + frames)
-        extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
-        if extent:
-            head = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
-            if isinstance(out, np.ndarray):
-                slab[:extent] = head
-                np.copyto(slab[extent:], segment[extent:])
-            else:
-                slab[:, :, :extent] = head
-                slab[:, :, extent:].copy_(segment[:, :, extent:])
-        elif isinstance(out, np.ndarray):
-            np.copyto(slab, segment)
-        else:
-            slab.copy_(segment)
-
-    jobs, start = [], 0
-    for segment, previous in parts:
-        jobs.append((start, segment, previous))
-        start += clip_num_frames(segment)
-    if len(jobs) == 1:
-        write(*jobs[0])
-    else:
-        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
-            for done in [pool.submit(write, *job) for job in jobs]:
-                done.result()
-    return out
 
 
 def stitch_tiles(
@@ -334,6 +240,23 @@ def prepare_decoder_state(
     return decoder_state
 
 
+class _ClipList(list):
+    """The decoded clips in chunk order, each also passed to ``on_clip`` the moment it lands."""
+
+    def __init__(self, on_clip: Callable | None = None) -> None:
+        super().__init__()
+        self._on_clip = on_clip
+
+    def append(self, clip) -> None:
+        super().append(clip)
+        if self._on_clip is not None:
+            self._on_clip(clip)
+
+    def extend(self, clips) -> None:
+        for clip in clips:
+            self.append(clip)
+
+
 class MiniMaxH3Vae:
     """Orchestrator for the H3 visual VAE: tiling, waves, stitch; owns the leaf modules.
 
@@ -357,12 +280,12 @@ class MiniMaxH3Vae:
         pixel_norm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
         waves_per_device: int = 1,
-        stitch_exchange: str = "gather",
+        stitch_exchange: str = "strips",
     ) -> None:
         if task not in ("t2va", "ref2va"):
             raise ValueError(f"task must be 't2va' (also serves fl2va) or 'ref2va', got {task!r}")
-        if stitch_exchange not in ("gather", "neighbor"):
-            raise ValueError(f"stitch_exchange must be 'gather' or 'neighbor', got {stitch_exchange!r}")
+        if stitch_exchange not in ("gather", "strips", "neighbor"):
+            raise ValueError(f"stitch_exchange must be 'gather', 'strips' or 'neighbor', got {stitch_exchange!r}")
         self.config = config
         self.task = task
         self.mesh_device = mesh_device
@@ -375,6 +298,7 @@ class MiniMaxH3Vae:
         self.tile_overlap = tile_overlap
         self._weight_loader = weight_loader
         self._stitcher = None
+        self._yuv_pool = None
         self._blender = None
         # Blend the tile grid on device and read back the assembled canvas, instead of reading
         # overlapping tiles and blending them on host.
@@ -402,9 +326,14 @@ class MiniMaxH3Vae:
         # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
         # number with nowhere to go.
         self._profile = self._empty_profile()
+        # Latent (T, H, W) -> the uint8 clip buffer its decode assembled, for `reserve_decode_output`.
+        self._assembled_shapes: dict[tuple[int, int, int], tuple[int, ...]] = {}
         self.last_decode_profile: dict[str, float] = {}
 
         self.decoder = self._make_decoder()
+        # The stitcher / blender cache blend weights per tile geometry on device, outside any
+        # Module; evicting the decoder must take them along or they outlive it for the process.
+        self.decoder.register_eviction_hook(self._release_decode_caches)
         self.image_encoder = self._make_encoder(num_frames=1, temporal_taps=1)
         self.video_encoder = (
             self._make_encoder(num_frames=config.clip_length, temporal_taps=3) if task == "ref2va" else None
@@ -480,14 +409,32 @@ class MiniMaxH3Vae:
             raise RuntimeError(f"call load_state() before {which} use")
         return state
 
+    def _release_decode_caches(self) -> None:
+        """Drop the stitcher's ramps and the blender's geometry weights; both rebuild on the next decode."""
+        from ....layers.module import release_device_cache
+
+        if self._stitcher is not None:
+            release_device_cache(self._stitcher._ramps)
+            self._stitcher = None
+        if self._blender is not None:
+            release_device_cache(self._blender._weights)
+            self._blender = None
+
     def _ensure_loaded(self, module, subfolder: str) -> None:
         if module.is_loaded():
+            return
+        if module.is_transiently_sharded():
+            module.gather(self.ccl_manager)
             return
         state = dict(self._state_for(module))
         if self._weight_loader is not None:
             self._weight_loader(module, subfolder, state)
         else:
             module.load_torch_state_dict(state)
+
+    def load_decoder(self) -> None:
+        """Load the decoder weights onto the device now (cache hit: one tensorbin read), not on the first decode."""
+        self._ensure_loaded(self.decoder, self._decoder_subfolder())
 
     def load_state(self, state: dict[str, torch.Tensor]) -> None:
         """Prepare and retain both halves of the checkpoint for cache-miss reloads."""
@@ -507,10 +454,12 @@ class MiniMaxH3Vae:
             "unpatchify": 0.0,
             "tiling": 0.0,
             "stitch": 0.0,
+            "blend": 0.0,
             "waves": 0,
             "units": 0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
+            "readback_join": 0.0,
             "readback_each": [],
             "device_each": [],
         }
@@ -545,6 +494,9 @@ class MiniMaxH3Vae:
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
         p = dict(self._profile)
+        # Every key here times a disjoint span of this thread. `readback_join` is the host waiting
+        # on the YUV finish pool -- outside `readback`'s own span -- so leaving it out let `residual`
+        # repeat it (0.24 s each on a 5 s clip).
         accounted = sum(
             p.get(k, 0.0)
             for k in (
@@ -552,6 +504,7 @@ class MiniMaxH3Vae:
                 "upload",
                 "device",
                 "readback",
+                "readback_join",
                 "unpatchify",
                 "tiling",
                 "stitch",
@@ -563,6 +516,9 @@ class MiniMaxH3Vae:
         )
         p["residual"] = max(0.0, total - accounted)
         p["total"] = total
+        # Without `profile` nothing synchronizes, so `device` is the time spent queueing ops, not
+        # the time the device spent running them; that wait shows up in `readback_join` instead.
+        p["device_synced"] = bool(self.profile)
         self.last_decode_profile = p
         if not self.log_profile or (ttnn.using_distributed_env() and int(ttnn.distributed_context_get_rank()) != 0):
             return
@@ -573,10 +529,11 @@ class MiniMaxH3Vae:
                 f"{sorted(each)[len(each) // 2] * 1000:.0f} / max {max(each) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each)}]  on {p.get('shape')} {p.get('dtype')}"
             )
+        device_label = "device" if p["device_synced"] else "device (dispatch)"
         each_d = p.get("device_each") or []
         if each_d:
             logger.info(
-                f"    device   per wave: min {min(each_d) * 1000:.0f} / median "
+                f"    {device_label} per wave: min {min(each_d) * 1000:.0f} / median "
                 f"{sorted(each_d)[len(each_d) // 2] * 1000:.0f} / max {max(each_d) * 1000:.0f} ms  "
                 f"[{' '.join(f'{v * 1000:.0f}' for v in each_d)}]"
             )
@@ -586,10 +543,22 @@ class MiniMaxH3Vae:
             f"({self.mesh_device.get_num_devices()} devices, "
             f"{units / waves if waves else 0:.1f} units/wave)"
         )
-        for name in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual"):
+        for name in (
+            "device",
+            "readback",
+            "readback_join",
+            "stitch",
+            "unpatchify",
+            "tiling",
+            "upload",
+            "host_prep",
+            "blend",
+            "residual",
+        ):
             share = 100 * p[name] / total if total else 0.0
             per_wave = f"  {p[name] / waves * 1000:6.0f} ms/wave" if waves and name in ("device", "readback") else ""
-            logger.info(f"    {name:<12} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
+            label = device_label if name == "device" else name
+            logger.info(f"    {label:<17} {p[name]:6.2f} s  ({share:4.1f} %){per_wave}")
         logger.info(f"    readback volume {p['readback_mb'] / 1000:.2f} GB")
 
     def _run_encoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
@@ -900,12 +869,60 @@ class MiniMaxH3Vae:
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _decode_clips_device_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_device_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip: Callable | None = None
+    ) -> list:
         if self.stitch_exchange == "neighbor":
-            return self._decode_clips_neighbor_stitched(chunk_latents, output_type)
-        return self._decode_clips_gather_stitched(chunk_latents, output_type)
+            return self._decode_clips_neighbor_stitched(chunk_latents, output_type, on_clip)
+        if self.stitch_exchange == "strips":
+            reason = self._strips_unserved(chunk_latents[0].shape[-2], chunk_latents[0].shape[-1], output_type)
+            if reason is None:
+                return self._decode_clips_strip_stitched(chunk_latents, output_type, on_clip)
+            if not getattr(self, "_warned_strips_fallback", False):
+                self._warned_strips_fallback = True
+                logger.warning(f"strips stitch: {reason}; using the gather stitch")
+        return self._decode_clips_gather_stitched(chunk_latents, output_type, on_clip)
 
-    def _decode_clips_gather_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _strips_unserved(self, latent_h: int, latent_w: int, output_type: str) -> str | None:
+        """Why strips cannot serve, or None."""
+        (y_starts, y_lengths, _), (x_starts, x_lengths, _) = self._decode_tile_grid(latent_h, latent_w)
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        if grid_rows > mesh_rows or grid_cols > mesh_cols:
+            return f"the {grid_rows}x{grid_cols} tile grid does not fit the {mesh_rows}x{mesh_cols} mesh"
+        canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
+        if canvas_h % mesh_rows or canvas_w % mesh_cols:
+            return f"the {canvas_h}x{canvas_w} canvas does not split over the {mesh_rows}x{mesh_cols} mesh"
+        if output_type != "yuv420" and ttnn.using_distributed_env() and self.ccl_manager is None:
+            return "the float readback needs a CCLManager on a multi-host mesh"
+        return None
+
+    def _unpatchify(self, decoded: ttnn.Tensor, num_frames: int, height: int, width: int) -> ttnn.Tensor:
+        """Tokens to `(1, C, T*pt, H*p, W*p)` ROW_MAJOR pixels."""
+        from .stitch_device_minimax_h3 import unpatchify_device
+        from .unpatchify_minimax_h3 import unpatchify_tiled
+
+        dims = dict(
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            out_channels=self.config.out_channels,
+            patch_size=self.config.spatial_compression_ratio,
+            patch_size_t=self.config.temporal_compression_ratio,
+        )
+        if decoded.dtype == ttnn.float32 and width == 16:
+            return unpatchify_tiled(decoded, **dims)
+        if not getattr(self, "_warned_unpatchify_fallback", False):
+            self._warned_unpatchify_fallback = True
+            logger.warning(
+                f"the unpatchify program needs fp32 tokens 16 patches wide (got {decoded.dtype}, width {width}); "
+                "using the permute chain"
+            )
+        return unpatchify_device(ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT), **dims)
+
+    def _decode_clips_gather_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip: Callable | None = None
+    ) -> list:
         """Temporal chunks decoded and stitched entirely on device, packed into full waves.
 
         The win over the host path is transfer volume, not compute. That path reads back
@@ -922,7 +939,7 @@ class MiniMaxH3Vae:
         place, which the seam gate catches loudly -- but only because something finally reads them.
         """
         from .decoder_minimax_h3 import unpatchify  # noqa: F401  (host fallback parity)
-        from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
+        from .stitch_device_minimax_h3 import DeviceTileStitcher
 
         (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
             chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
@@ -946,7 +963,8 @@ class MiniMaxH3Vae:
             self._stitcher = DeviceTileStitcher(self.mesh_device)
             self._stitcher.bind_ramps(TILE_BLEND_EXTENTS, self.tile_size)
 
-        canvases = []
+        canvases = _ClipList(on_clip)
+        pending: list = []
         for group_start in range(0, len(chunk_latents), chunks_per_wave):
             group = chunk_latents[group_start : group_start + chunks_per_wave]
 
@@ -986,16 +1004,7 @@ class MiniMaxH3Vae:
             # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
             # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
             # keeps every step after it on a fast path, `mesh_partition` included.
-            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-            pixels = unpatchify_device(
-                decoded,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-            )
+            pixels = self._unpatchify(decoded, num_frames, height, width)
             gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
             ttnn.deallocate(pixels)
             gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
@@ -1026,29 +1035,260 @@ class MiniMaxH3Vae:
                 canvas_shape = tuple(canvas.shape)
                 canvas_dtype = str(canvas.dtype)
                 if output_type == "yuv420":
-                    out = self._read_canvas_yuv(canvas)
-                    read_bytes = out.size
+                    finish = self._read_canvas_yuv(canvas)
+                    ttnn.deallocate(canvas)
+                    frames, canvas_h, canvas_w = canvas_shape[-3], canvas_shape[-2], canvas_shape[-1]
+                    read_bytes = frames * canvas_h * canvas_w * 3 // 2
+                    pending.append(self._yuv_finish_pool.submit(finish))
                 else:
                     out = local_device_to_torch(canvas).float()
+                    ttnn.deallocate(canvas)
                     read_bytes = out.numel() * out.element_size()
-                ttnn.deallocate(canvas)
+                    canvases.append(out)
                 elapsed = time.perf_counter() - mark
                 profile["readback"] += elapsed
                 profile["readback_each"].append(elapsed)
                 profile["shape"] = canvas_shape
                 profile["dtype"] = canvas_dtype
                 profile["readback_mb"] += read_bytes / 1e6
-                canvases.append(out)
+                if len(pending) > 1:
+                    mark = time.perf_counter()
+                    canvases.append(pending.pop(0).result())
+                    profile["readback_join"] += time.perf_counter() - mark
             ttnn.deallocate(gathered)
+        if pending:
+            mark = time.perf_counter()
+            canvases.extend(future.result() for future in pending)
+            pending.clear()
+            profile["readback_join"] += time.perf_counter() - mark
         return canvases
 
-    def _decode_clips_neighbor_stitched(self, chunk_latents: list[torch.Tensor], output_type: str = "float") -> list:
+    def _decode_clips_strip_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip: Callable | None = None
+    ) -> list:
+        """Each device blends only the tiles it reads back."""
+        from .stitch_device_minimax_h3 import StripTileStitcher
+
+        (y_starts, y_lengths, y_overlaps), (x_starts, x_lengths, x_overlaps) = self._decode_tile_grid(
+            chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
+        )
+        grid_rows, grid_cols = len(y_lengths), len(x_lengths)
+        tiles_per_chunk = grid_rows * grid_cols
+
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        wave_size = self.mesh_device.get_num_devices()
+        assert grid_rows <= mesh_rows and grid_cols <= mesh_cols, (
+            f"the strip stitch needs the {grid_rows}x{grid_cols} grid to fit the "
+            f"{mesh_rows}x{mesh_cols} mesh with rows and columns aligned"
+        )
+        chunks_per_wave = mesh_cols // grid_cols
+        canvas_h, canvas_w = y_starts[-1] + y_lengths[-1], x_starts[-1] + x_lengths[-1]
+        assert canvas_h % mesh_rows == 0, f"canvas height {canvas_h} does not split over {mesh_rows} mesh rows"
+        assert canvas_w % mesh_cols == 0, f"canvas width {canvas_w} does not split over {mesh_cols} mesh columns"
+        if output_type != "yuv420" and ttnn.using_distributed_env():
+            assert (
+                self.ccl_manager is not None
+            ), "the strip stitch's float readback needs a CCLManager on a multi-host mesh"
+        edge_width = max(x_overlaps) if x_overlaps else 0
+
+        if self._stitcher is None or not isinstance(self._stitcher, StripTileStitcher):
+            self._stitcher = StripTileStitcher(self.mesh_device)
+        stitcher = self._stitcher
+        decoder = self.decoder
+        profile = self._profile
+
+        dense = chunks_per_wave == 1 and mesh_cols == grid_cols + 1
+        waves: list[dict] = []
+        if dense:
+            run = grid_cols + 1
+            full_runs = len(chunk_latents) // run
+            for g in range(full_runs):
+                for w in range(grid_cols):
+                    waves.append(
+                        {"mains": [g * run + w], "extra": (g * run + grid_cols, w), "flush": w == grid_cols - 1}
+                    )
+            for k in range(full_runs * run, len(chunk_latents)):
+                waves.append({"mains": [k], "extra": None, "flush": False})
+        else:
+            for i in range(0, len(chunk_latents), chunks_per_wave):
+                waves.append(
+                    {
+                        "mains": list(range(i, min(i + chunks_per_wave, len(chunk_latents)))),
+                        "extra": None,
+                        "flush": False,
+                    }
+                )
+        extra_tiles: dict[int, list[torch.Tensor]] = {}
+
+        def prepare_host(wave):
+            mark = time.perf_counter()
+            units_by_chunk = [self._latent_tiles(chunk_latents[k]) for k in wave["mains"]]
+            extra_units = None
+            if wave["extra"] is not None:
+                e, _ = wave["extra"]
+                if e not in extra_tiles:
+                    extra_tiles[e] = self._latent_tiles(chunk_latents[e])
+                extra_units = extra_tiles[e]
+            profile["tiling"] += time.perf_counter() - mark
+
+            _, _, num_frames, height, width = units_by_chunk[0][0].shape
+            assert decoder.latent_shape == (
+                num_frames,
+                height,
+                width,
+            ), f"unit shape {(num_frames, height, width)} != decoder {decoder.latent_shape}"
+
+            mark = time.perf_counter()
+            slots: list[torch.Tensor | None] = [None] * wave_size
+            for k, units in enumerate(units_by_chunk):
+                assert len(units) == tiles_per_chunk
+                for index, unit in enumerate(units):
+                    r, c = divmod(index, grid_cols)
+                    slots[r * mesh_cols + k * grid_cols + c] = unit
+            if extra_units is not None:
+                _, w = wave["extra"]
+                for r in range(grid_rows):
+                    slots[r * mesh_cols + grid_cols] = extra_units[r * grid_cols + w]
+            filler = units_by_chunk[0][0]
+            wave = [
+                (unit if unit is not None else filler)
+                .permute(0, 2, 3, 4, 1)
+                .reshape(1, num_frames * height * width, -1)
+                for unit in slots
+            ]
+            batch = torch.cat(wave, dim=0)
+            profile["host_prep"] += time.perf_counter() - mark
+            n_units = sum(len(units) for units in units_by_chunk) + (grid_rows if extra_units is not None else 0)
+            return n_units, (num_frames, height, width), batch
+
+        def upload(batch):
+            mark = time.perf_counter()
+            tokens = ttnn.from_torch(
+                batch,
+                dtype=ttnn.bfloat16,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            )
+            profile["upload"] += time.perf_counter() - mark
+            return tokens
+
+        def stage(wave):
+            n_units, shape, batch = prepare_host(wave)
+            return n_units, shape, upload(batch)
+
+        canvases = _ClipList(on_clip)
+        pending: list = []
+        held_strips: list = []
+        held_edges: list = []
+
+        def entry(stack, index):
+            starts = [0] * len(stack.shape)
+            stops = list(stack.shape)
+            starts[0], stops[0] = index, index + 1
+            return ttnn.slice(stack, starts, stops)
+
+        def row_stage(strips_t, edges_t, first):
+            mark = time.perf_counter()
+            canvas_rows = stitcher.row(strips_t, edges_t, first, grid_cols, x_overlaps)
+            if self.profile:
+                ttnn.synchronize_device(self.mesh_device)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["device_each"].append(elapsed)
+            return canvas_rows
+
+        def readback(canvas_rows, dtype_name):
+            mark = time.perf_counter()
+            rows_shape = tuple(canvas_rows.shape)
+            canvas_shape = (*rows_shape[:-2], canvas_h, rows_shape[-1])
+            if output_type == "yuv420":
+                finish = self._read_canvas_yuv(canvas_rows, rows_partitioned=True)
+                ttnn.deallocate(canvas_rows)
+                read_bytes = canvas_shape[-3] * canvas_shape[-2] * canvas_shape[-1] * 3 // 2
+                pending.append(self._yuv_finish_pool.submit(finish))
+            else:
+                patch = ttnn.mesh_partition(canvas_rows, dim=-1, cluster_axis=1)
+                out = fast_device_to_host(patch, self.mesh_device, [3, 4], ccl_manager=self.ccl_manager).float()
+                ttnn.deallocate(patch)
+                ttnn.deallocate(canvas_rows)
+                read_bytes = out.numel() * out.element_size()
+                canvases.append(out)
+            elapsed = time.perf_counter() - mark
+            profile["readback"] += elapsed
+            profile["readback_each"].append(elapsed)
+            profile["shape"] = canvas_shape
+            profile["dtype"] = dtype_name
+            profile["readback_mb"] += read_bytes / 1e6
+            if len(pending) > 1:
+                mark = time.perf_counter()
+                canvases.append(pending.pop(0).result())
+                profile["readback_join"] += time.perf_counter() - mark
+
+        staged = stage(waves[0])
+        for wave_index, wave in enumerate(waves):
+            n_units, (num_frames, height, width), tokens = staged
+            staged = None
+
+            mark = time.perf_counter()
+            decoded = decoder(tokens)
+            decoded = ttnn.typecast(decoded, ttnn.float32)
+            pixels = self._unpatchify(decoded, num_frames, height, width)
+            column = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            strip, edge = stitcher.column(column, grid_rows, y_overlaps, edge_width)
+            ttnn.deallocate(column)
+            strip = ttnn.mesh_partition(strip, dim=-2, cluster_axis=0)
+            strips = ttnn.all_gather(strip, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+            ttnn.deallocate(strip)
+            edges = None
+            if edge is not None:
+                edge = ttnn.mesh_partition(edge, dim=-2, cluster_axis=0)
+                edges = ttnn.all_gather(edge, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
+                ttnn.deallocate(edge)
+            elapsed = time.perf_counter() - mark
+            profile["device"] += elapsed
+            profile["waves"] += 1
+            profile["units"] += n_units
+
+            if wave_index + 1 < len(waves):
+                staged = stage(waves[wave_index + 1])
+
+            for k in range(len(wave["mains"])):
+                readback(row_stage(strips, edges, k * grid_cols), str(pixels.dtype))
+            if wave["extra"] is not None:
+                held_strips.append(entry(strips, grid_cols))
+                if edges is not None:
+                    held_edges.append(entry(edges, grid_cols))
+            ttnn.deallocate(strips)
+            if edges is not None:
+                ttnn.deallocate(edges)
+            if wave["flush"]:
+                strips_e = ttnn.concat(held_strips, dim=0)
+                edges_e = ttnn.concat(held_edges, dim=0) if held_edges else None
+                for kept in held_strips + held_edges:
+                    ttnn.deallocate(kept)
+                held_strips, held_edges = [], []
+                canvas_rows = row_stage(strips_e, edges_e, 0)
+                ttnn.deallocate(strips_e)
+                if edges_e is not None:
+                    ttnn.deallocate(edges_e)
+                readback(canvas_rows, str(pixels.dtype))
+        if pending:
+            mark = time.perf_counter()
+            canvases.extend(future.result() for future in pending)
+            pending.clear()
+            profile["readback_join"] += time.perf_counter() - mark
+        return canvases
+
+    def _decode_clips_neighbor_stitched(
+        self, chunk_latents: list[torch.Tensor], output_type: str = "float", on_clip: Callable | None = None
+    ) -> list:
         """The gather-free device stitch: halo strips instead of an all-gather, blend in place.
 
         Tiles are placed grid-aligned -- ``(chunk k, r, c)`` on device ``(r, k * grid_cols + c)`` -- so a
         tile's up/left neighbours are its mesh-axis neighbours; the host only applies the reference trims.
         """
-        from .stitch_device_minimax_h3 import NeighborTileBlender, unpatchify_device
+        from .stitch_device_minimax_h3 import NeighborTileBlender
 
         assert self.ccl_manager is not None, "the neighbour exchange needs a CCLManager"
 
@@ -1071,7 +1311,7 @@ class MiniMaxH3Vae:
         decoder = self.decoder
         profile = self._profile
 
-        canvases = []
+        canvases = _ClipList(on_clip)
         for group_start in range(0, len(chunk_latents), chunks_per_wave):
             group = chunk_latents[group_start : group_start + chunks_per_wave]
 
@@ -1115,16 +1355,7 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
-            decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
-            pixels = unpatchify_device(
-                decoded,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                out_channels=self.config.out_channels,
-                patch_size=self.config.spatial_compression_ratio,
-                patch_size_t=self.config.temporal_compression_ratio,
-            )
+            pixels = self._unpatchify(decoded, num_frames, height, width)
             blended = self._blender.blend_wave(
                 pixels,
                 grid_rows=grid_rows,
@@ -1251,37 +1482,47 @@ class MiniMaxH3Vae:
             out.append(flat.reshape(frames, canvas_h * 3 // 2, canvas_w))
         return out
 
-    def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
+    @property
+    def _yuv_finish_pool(self) -> ThreadPoolExecutor:
+        """One worker; frames stay ordered."""
+        if self._yuv_pool is None:
+            self._yuv_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3_yuv_finish")
+        return self._yuv_pool
+
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor, *, rows_partitioned: bool = False):
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
 
         Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
         moved to `[-1, 1]` by the `proj_out` fold and kept *after* the blend because clamping is the
-        one step in the chain that is not affine. The `mesh_partition` pair splits a canvas every
-        device already holds an identical copy of, so the DMA that follows runs across every PCIe
-        link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
-        a multi-host read.
+        one step in the chain that is not affine. `replicated_to_host_yuv` then slices each device's
+        slab straight out of a canvas every device already holds, so the DMA runs across every PCIe
+        link with no collective.
+
+        ``rows_partitioned`` is the strip stitch's case: each device already holds its
+        ``1/mesh_rows`` of the rows (of every column), so only the columns are split here, and the
+        clamp and cast run after the split, on the patch a device keeps rather than on a canvas it
+        mostly discards. Both are elementwise, so the bytes are the same either way.
         """
+        if rows_partitioned:
+            mesh_rows = tuple(self.mesh_device.shape)[0]
+            rows, width = int(canvas.shape[-2]), int(canvas.shape[-1])
+            height = rows * mesh_rows
+            canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
+            canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
+            canvas = ttnn.typecast(canvas, ttnn.bfloat16)
+            canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
+            planar = fast_device_to_host_yuv(
+                canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False, defer=True
+            )
+            return lambda: planar().reshape(-1, height * 3 // 2, width)
+
         canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
         canvas = ttnn.typecast(canvas, ttnn.bfloat16)
         canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
 
-        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
         height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
-        # `fast_device_to_host_yuv` reconstructs H and W as `per_shard * mesh_extent`, so an uneven
-        # split would silently assemble a canvas of the wrong size rather than fail.
-        assert height % mesh_rows == 0, f"canvas height {height} does not split over {mesh_rows} mesh rows"
-        assert width % mesh_cols == 0, f"canvas width {width} does not split over {mesh_cols} mesh columns"
-        assert (height // mesh_rows) % 2 == 0 and (
-            width // mesh_cols
-        ) % 2 == 0, "4:2:0 needs an even per-shard height and width"
-
-        canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
-        canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
-
-        planar = fast_device_to_host_yuv(
-            canvas, self.mesh_device, ccl_manager=self.ccl_manager, use_persistent_buffer=False
-        )
-        return planar.reshape(planar.shape[0], height * 3 // 2, width)
+        planar = replicated_to_host_yuv(canvas, self.mesh_device)
+        return lambda: planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
@@ -1338,7 +1579,13 @@ class MiniMaxH3Vae:
         rows = [decoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
         return stitch_tiles(rows, y_overlaps, x_overlaps)
 
-    def decode(self, z_BCTHW: torch.Tensor, *, output_type: str = "float"):
+    def decode(
+        self,
+        z_BCTHW: torch.Tensor,
+        *,
+        output_type: str = "float",
+        on_frames: Callable[[np.ndarray], None] | None = None,
+    ):
         """Decode a latent video, mirroring the chunking ``encode`` applied.
 
         ``output_type`` picks what crosses PCIe. ``"float"`` reads the decoder's own pixels back and
@@ -1351,6 +1598,11 @@ class MiniMaxH3Vae:
         chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.
+
+        ``on_frames`` (``"yuv420"`` only) gets the finished frames in order, as read-only views of the
+        returned array, each run the moment the clip that finishes it lands, so a consumer (an
+        encoder) can work while later chunks still decode. It runs on a background thread; the
+        decode returns once every frame went out, and an error in it fails the decode.
 
         Runs with raised torch threads (``_DECODE_TORCH_THREADS``), because a server worker pins
         torch to one thread for the denoise loop's benefit and the host still does the tile
@@ -1365,18 +1617,33 @@ class MiniMaxH3Vae:
                 raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
             if self.pixel_denorm is None:
                 raise ValueError("output_type='yuv420' needs pixel_denorm; the YUV kernel takes [-1, 1] pixels")
+        if on_frames is not None and output_type != "yuv420":
+            raise ValueError("on_frames needs output_type='yuv420'; it hands out the planar frames")
 
         threads = _DECODE_TORCH_THREADS
         previous_threads = torch.get_num_threads()
         if threads > 0 and threads != previous_threads:
             torch.set_num_threads(threads)
         try:
-            return self._decode(z_BCTHW, output_type)
+            return self._decode(z_BCTHW, output_type, on_frames)
         finally:
             torch.set_num_threads(previous_threads)
 
-    def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
+    def reserve_decode_output(self, latent_frames: int, latent_height: int, latent_width: int) -> None:
+        """Map the host buffer the clip assembly of a decode this size will take, in the background.
+
+        A fresh buffer faults in page by page, 0.2-1.9 s for the first clips after a load or length
+        switch on a box full of page cache (blx04, 11-20). The size comes from the last decode of
+        this latent shape (the load's warm-up decodes every served length); unknown sizes wait.
+        """
+        shape = self._assembled_shapes.get((int(latent_frames), int(latent_height), int(latent_width)))
+        if shape is not None:
+            host_buffers.reserve(shape)
+
+    def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float", on_frames: Callable | None = None):
         self._ensure_loaded(self.decoder, self._decoder_subfolder())
+        latent_key = tuple(int(d) for d in z_BCTHW.shape[2:])
+        self.reserve_decode_output(*latent_key)
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config
@@ -1387,6 +1654,13 @@ class MiniMaxH3Vae:
         num_tokens = z_BCTHW.shape[2] + config.token_drop
         pad_tokens = (-num_tokens) % chunk_size
         num_chunks = (num_tokens + pad_tokens) // chunk_size - int(config.token_drop > 0)
+        # The pixel frames the repeated padding latents produce, cut off the end.
+        intra_tail = config.clip_length % temporal_ratio
+        tokens_before_pad = z_BCTHW.shape[2]
+        pad_frames = sum(
+            intra_tail if intra_tail and (tokens_before_pad + k) % chunk_size == 0 else temporal_ratio
+            for k in range(pad_tokens)
+        )
         if pad_tokens > 0:
             z_BCTHW = torch.cat([z_BCTHW, z_BCTHW[:, :, -1:].repeat(1, 1, pad_tokens, 1, 1)], dim=2)
 
@@ -1397,7 +1671,25 @@ class MiniMaxH3Vae:
             z_BCTHW[:, :, i * chunk_size : i * chunk_size + chunk_size + config.token_overlap]
             for i in range(num_chunks)
         ]
-        if self.device_stitch and chunk_latents:
+        stream = None
+        if on_frames is not None and chunk_latents:
+            stream = StreamingClipAssembly(
+                num_chunks,
+                chunk_num_frames=chunk_num_frames,
+                frame_pre_padding=config.frame_pre_padding,
+                token_drop=config.token_drop,
+                frame_overlap=config.frame_overlap,
+                trim=pad_frames,
+                on_frames=on_frames,
+            )
+            try:
+                self._decode_clips_device_stitched(chunk_latents, output_type, stream.add)
+                assemble_mark = time.perf_counter()
+                result = stream.result()
+            finally:
+                stream.close()
+            self._profile["blend"] = time.perf_counter() - assemble_mark
+        elif self.device_stitch and chunk_latents:
             clips = self._decode_clips_device_stitched(chunk_latents, output_type)
         elif chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
@@ -1424,31 +1716,22 @@ class MiniMaxH3Vae:
         else:
             clips = []
 
-        assemble_mark = time.perf_counter()
-        parts, overlap = [], None
-        for i in range(num_chunks):
-            clip = clips[i]
-            for j in range(int(config.token_drop > 0) + 1):
-                frame_start = j * chunk_num_frames
-                chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
-                chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
-                if j == 0:
-                    parts.append((chunk, overlap))
-                else:
-                    overlap = chunk
-        if overlap is not None:
-            parts.append((overlap, None))
+        if stream is None:
+            assemble_mark = time.perf_counter()
+            parts, overlap = [], None
+            for i in range(num_chunks):
+                part, tail = split_clip(clips[i], chunk_num_frames, config.frame_pre_padding, config.token_drop)
+                parts.append((part, overlap))
+                overlap = tail
+            if overlap is not None:
+                parts.append((overlap, None))
 
-        result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
-        self._profile["blend"] = time.perf_counter() - assemble_mark
+            result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
+            self._profile["blend"] = time.perf_counter() - assemble_mark
+        if isinstance(result, np.ndarray) and result.dtype == np.uint8:
+            self._assembled_shapes[latent_key] = result.shape
         self._profile["concat"] = 0.0
-        if pad_tokens > 0:
-            intra_tail = config.clip_length % temporal_ratio
-            tokens_before_pad = z_BCTHW.shape[2] - pad_tokens
-            pad_frames = sum(
-                intra_tail if intra_tail and (tokens_before_pad + k) % chunk_size == 0 else temporal_ratio
-                for k in range(pad_tokens)
-            )
+        if pad_frames > 0:
             result = clip_frames(result, 0, clip_num_frames(result) - pad_frames)
         self._report_profile(time.perf_counter() - decode_started)
         return result

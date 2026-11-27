@@ -20,7 +20,8 @@ constant fill.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, fields
 
 import numpy as np
 import torch
@@ -40,7 +41,7 @@ MINIMAX_H3_MAX_PIXELS = 768 * 1344
 MINIMAX_H3_CANVAS_MULTIPLE = 32
 MINIMAX_H3_MIN_ASPECT_RATIO = 1 / 4
 MINIMAX_H3_MAX_ASPECT_RATIO = 4
-MINIMAX_H3_MIN_DURATION = 5.0
+MINIMAX_H3_MIN_DURATION = 4.0
 MINIMAX_H3_MAX_DURATION = 15.0
 
 # The video VAE encodes 17 pixel frames per chunk and drops the 3 trailing
@@ -99,6 +100,18 @@ class MiniMaxH3PackedSequence:
     num_condition_video_rows: int
     num_condition_audio_rows: int
 
+    def digest(self) -> bytes:
+        """Content hash over every field: equal digests mean equal layouts."""
+        digest = hashlib.sha256()
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if torch.is_tensor(value):
+                digest.update(repr((field.name, value.dtype, tuple(value.shape))).encode())
+                digest.update(value.contiguous().numpy())
+            else:
+                digest.update(repr((field.name, value)).encode())
+        return digest.digest()
+
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
     """Resolve a display aspect ratio into an H3 canvas ``(height, width)``.
@@ -127,15 +140,6 @@ def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int,
 
     multiple = MINIMAX_H3_CANVAS_MULTIPLE
     return max(multiple, round(height / multiple) * multiple), max(multiple, round(width / multiple) * multiple)
-
-
-def align_num_frames(num_frames: int) -> int:
-    """Snap a frame count up to the next ``17n + 5`` the video VAE can encode."""
-    if num_frames < 1:
-        raise ValueError(f"num_frames must be positive, got {num_frames}")
-    while num_frames % MINIMAX_H3_FRAMES_PER_CHUNK != MINIMAX_H3_LATENTS_PER_CHUNK:
-        num_frames += 1
-    return num_frames
 
 
 def video_latent_num_frames(num_frames: int) -> int:

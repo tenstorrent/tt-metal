@@ -12,6 +12,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/endpoints.h"
 #include "internal/firmware_common.h"
+#include "tests/tt_metal/tt_metal/test_kernels/misc/watcher_test_helpers.h"
 #include "internal/hw_thread.h"
 #include "experimental/kernel_args.h"
 
@@ -62,6 +63,10 @@ void kernel_main() {
 #endif
 
     bool use_inline_dw_write = static_cast<bool>(get_arg(args::use_inline_dw_write));
+    // Address the destination as DRAM bank 0 instead of by coordinates (the ATT maps have no coordinate
+    // window for DRAM tiles, so a coordinate operand would trap in the address backend before the
+    // sanitizer sees it).
+    bool use_dram_bank_dst = static_cast<bool>(get_arg(args::use_dram_bank_dst));
     bool bad_linked_transaction = static_cast<bool>(get_arg(args::bad_linked_transaction));
     std::uint32_t l1_overflow_addr = get_arg(args::l1_overflow_addr);
     std::uint32_t eth_src_overflow_addr = get_arg(args::eth_src_overflow_addr);
@@ -75,19 +80,22 @@ void kernel_main() {
     bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
     bool use_inline_dw_write_with_state = static_cast<bool>(get_arg(args::use_inline_dw_write_with_state));
     std::uint32_t invalid_txn_id = get_arg(args::invalid_txn_id);
+    bool raw_local_noc_read = static_cast<bool>(get_arg(args::raw_local_noc_read));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
     // Dispatcher Kernel is able to finish.
     // Device::close() requires fast-dispatch kernels to finish.
-    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0]);
     // SD enabled on all archs: notify completion via RUN_MSG_DONE to mailbox. FD notify path
     // posts to a dispatcher absent under SD and wedges the NOC.
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
     go_message_in->signal = RUN_MSG_DONE;
+#elif defined(FDS_SIGNALLING)
+    // Under FDS signalling the kernel sends no early done. The watcher error ends the host's wait, and the
+    // next device open resets the dispatch engines.
 #else
-    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
-    notify_dispatch_core_done(dispatch_addr, noc_index);
+    signal_completion_before_hang();
 #endif
 
     if (invalid_txn_id) {
@@ -111,6 +119,14 @@ void kernel_main() {
             get_noc_multicast_addr(dst_noc_x, dst_noc_y, mcast_dst_end_x, mcast_dst_end_y, buffer_dst_addr);
         noc_semaphore_inc_multicast(dst_multicast_noc_addr, 1, 1);
         noc_async_atomic_barrier();
+        return;
+    }
+
+    if (raw_local_noc_read) {
+        // The legacy API passes the local address to the NoC as is; Noc::async_read maps the uncached alias
+        // to the cached view.
+        noc_async_read(get_noc_addr(src_noc_x, src_noc_y, buffer_src_addr), local_buffer_addr, buffer_size);
+        noc_async_read_barrier();
         return;
     }
 
@@ -144,7 +160,11 @@ void kernel_main() {
     }
 
     UnicastEndpoint dst_unicast_endpoint;
-    if (use_inline_dw_write) {
+    if (use_inline_dw_write && use_dram_bank_dst) {
+        // Just write something to trigger the watcher assertion. Result data doesn't matter.
+        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+        noc.inline_dw_write(dram_bank, local_buffer[0], {.bank_id = 0, .addr = buffer_dst_addr});
+    } else if (use_inline_dw_write) {
         noc.inline_dw_write(
             dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
     } else if (use_write_with_state == 1) {

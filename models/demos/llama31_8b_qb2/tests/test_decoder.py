@@ -11,7 +11,7 @@ from transformers import AutoConfig
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaRotaryEmbedding
 
 import ttnn
-from models.common.modules.tt_ccl import TT_CCL
+from models.common.tt_ccl import TT_CCL
 from models.demos.llama31_8b_qb2.tt.decoder import LlamaDecoder
 from models.demos.llama31_8b_qb2.tt.model import Checkpoint, checkpoint_path
 from models.demos.llama31_8b_qb2.tt.precision import load_precision_config

@@ -56,9 +56,9 @@ void kernel_main() {
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
-    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     const UnicastEndpoint remote_ep;
 
     const DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
@@ -220,6 +220,15 @@ void kernel_main() {
         }
 
         dfb_partial_obj.pop_front(static_cast<uint16_t>(num_tiles_per_partial_result * block_h));
+
+        // Pop what the wait above acquired, under the same condition, so dfb_reduce_first_stage_obj
+        // is left balanced. This pop is deliberately not ordered against the second-stage reader's
+        // NOC gather. It is safe because the producer reserves this buffer exactly once per kernel;
+        // see the note at that reserve in compute/layernorm_sharded_pre_allgather.cpp.
+        if constexpr (is_all_to_all_worker) {
+            dfb_reduce_first_stage_obj.pop_front(
+                static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_to_read));
+        }
     };
     global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2);
     noc.async_atomic_barrier();

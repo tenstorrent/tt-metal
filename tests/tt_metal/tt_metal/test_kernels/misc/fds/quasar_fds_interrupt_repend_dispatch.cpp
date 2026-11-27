@@ -15,6 +15,7 @@
 #include <cstdint>
 #include "api/compile_time_args.h"
 
+#include "overlay/fds_signalling.hpp"
 #include "quasar_fds_common.h"
 #include "quasar_fds_interrupt.h"
 
@@ -32,7 +33,7 @@ constexpr uint32_t kThirdDelivery = fds_interrupt_status::kUnexpectedInterrupt;
 
 constexpr uint32_t kL1Address = get_named_compile_time_arg_val("l1_address");
 constexpr uint32_t kGroupId = get_named_compile_time_arg_val("group_id");
-constexpr uint32_t kWorkerMask = get_named_compile_time_arg_val("worker_mask");
+constexpr uint32_t kWorkerMask = overlay::fds_signalling::all_worker_lanes_mask;
 constexpr uint32_t kPollIterations = get_named_compile_time_arg_val("poll_iterations");
 constexpr uint32_t kSilenceIterations = get_named_compile_time_arg_val("silence_iterations");
 
@@ -66,6 +67,7 @@ void kernel_main() {
     // The first entry deliberately leaves its input standing, so it must be caused by this epoch's
     // done rather than a capture inherited from an earlier launch.
     fds_epoch::clear_dispatch_inputs(kWorkerMask);
+    fds_kernel::refresh_dispatch_group_status(kGroupId);
     overlay::FdsDispatch::fds_read_group_count(kGroupId);
     overlay::FdsDispatch::fds_config_groupid(kGroupId, kWorkerMask, kDoneThreshold);
 
@@ -82,7 +84,7 @@ void kernel_main() {
     }
 
     overlay::FdsDispatch::fds_clear_go();
-    overlay::FdsDispatch::fds_go(/*ad_enable=*/false, kGroupId);
+    overlay::FdsDispatch::fds_go(kGroupId);
 
     uint32_t result = kComplete;
     if (!fds_interrupt::wait_for_interrupt_count(status, 1, kPollIterations)) {

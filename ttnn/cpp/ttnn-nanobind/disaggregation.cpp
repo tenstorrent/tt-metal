@@ -13,6 +13,7 @@
 #include <span>
 
 #include <internal/disaggregation/kv_chunk_address_table.hpp>
+#include <internal/disaggregation/kv_chunk_table_cache.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 #include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
@@ -30,6 +31,10 @@ KvChunkAddressTable import_from_protobuf_file(const std::string& path);
 // reads a chunk over a bare tt::umd::Cluster; chip selected
 // by ASIC unique_id, noc_addr = (dram_view << 32) | local_addr.
 std::vector<uint8_t> read_dram_umd(uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes);
+std::vector<uint8_t> read_dram_umd_batch(
+    const std::vector<uint64_t>& unique_ids,
+    const std::vector<uint64_t>& noc_addrs,
+    const std::vector<uint32_t>& sizes_bytes);
 }  // namespace tt::tt_metal::internal::disaggregation
 
 namespace ttnn::disaggregation {
@@ -70,6 +75,17 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw("size_bytes", &KvCacheLocation::size_bytes, "Size of the KV cache chunk in bytes.")
         .def_rw("device_group_index", &KvCacheLocation::device_group_index, "Index into the device group table.");
 
+    // KvChunkTensorType - Cached tensor kind (maps 1:1 onto a TemporalPolicy alternative)
+    nb::enum_<KvChunkTensorType>(mod, "KvChunkTensorType", R"(
+        What kind of cached tensor a config's chunks belong to.
+        Each value corresponds to one TemporalPolicy alternative.
+    )")
+        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).")
+        .value(
+            "Snapshot",
+            KvChunkTensorType::Snapshot,
+            "None: fixed-size state keyed by the prefix_len it was snapshotted at (SSM / KDA state).");
+
     // KvChunkAddressTableConfig - Configuration struct
     nb::class_<KvChunkAddressTableConfig>(mod, "KvChunkAddressTableConfig", R"(
         Configuration for constructing a KvChunkAddressTable.
@@ -89,7 +105,19 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw(
             "chunk_size_bytes",
             &KvChunkAddressTableConfig::chunk_size_bytes,
-            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)");
+            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)")
+        .def_rw(
+            "tensor_type",
+            &KvChunkAddressTableConfig::tensor_type,
+            "Cached tensor kind for this config's chunks. Default: KvChunkTensorType.Kv");
+
+    // ChunkCompression - per-config in-memory / on-wire representation
+    nb::enum_<ChunkCompression>(mod, "ChunkCompression", R"(
+        How a config's chunk map is represented: UNROLLED (one entry per chunk) or
+        STRIDED_ROWS (per (slot, layer) row, a periodic base + stride per residue class).
+    )")
+        .value("UNROLLED", ChunkCompression::kUnrolled)
+        .value("STRIDED_ROWS", ChunkCompression::kStridedRows);
 
     // KvChunkAddressTable - Main lookup table class
     nb::class_<KvChunkAddressTable>(mod, "KvChunkAddressTable", R"(
@@ -119,6 +147,30 @@ void bind_disaggregation_api(nb::module_& mod) {
             R"(
             Construct a multi-config KvChunkAddressTable from a name->config map.
             Config ids are assigned in sorted key order; each config's name is its key.
+            )")
+        .def(
+            "__init__",
+            [](KvChunkAddressTable* self,
+               const std::map<std::string, KvChunkAddressTableConfig>& configs,
+               const std::map<std::string, ChunkCompression>& compressions) {
+                std::map<std::string, KvChunkAddressTable::NamedConfigInit> inits;
+                for (const auto& [name, cfg] : configs) {
+                    inits[name] = {.config = cfg, .compression = ChunkCompression::kUnrolled};
+                }
+                for (const auto& [name, compression] : compressions) {
+                    auto it = inits.find(name);
+                    TT_FATAL(it != inits.end(), "compression given for unknown config '{}'", name);
+                    it->second.compression = compression;
+                }
+                new (self) KvChunkAddressTable(inits);
+            },
+            nb::arg("configs"),
+            nb::arg("compressions"),
+            R"(
+            Construct a multi-config KvChunkAddressTable from a name->config map, choosing each
+            config's representation from `compressions` (name -> ChunkCompression; configs not
+            listed are UNROLLED). A STRIDED_ROWS config allocates no per-chunk grid and is
+            authored with set_strided_row().
             )")
 
         // Device group management
@@ -157,14 +209,72 @@ void bind_disaggregation_api(nb::module_& mod) {
             )")
         .def(
             "set",
-            static_cast<void (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, KvCacheLocation, const std::string&)>(
-                &KvChunkAddressTable::set),
+            static_cast<void (KvChunkAddressTable::*)(
+                uint32_t, uint32_t, uint32_t, KvCacheLocation, const std::string&)>(&KvChunkAddressTable::set),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("location"),
             nb::arg("config"),
             "Set the location for a specific (layer, position, slot, config-name).")
+        .def(
+            "set_strided_row",
+            [](KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t slot,
+               uint32_t size_bytes,
+               std::vector<uint64_t> bases,
+               std::vector<int64_t> strides,
+               const std::vector<uint32_t>& device_group_indices,
+               uint32_t config_id) {
+                std::vector<DeviceGroupIndex> groups;
+                groups.reserve(device_group_indices.size());
+                for (uint32_t g : device_group_indices) {
+                    groups.emplace_back(g);
+                }
+                table.set_strided_row(
+                    layer, slot, size_bytes, std::move(bases), std::move(strides), std::move(groups), config_id);
+            },
+            nb::arg("layer"),
+            nb::arg("slot"),
+            nb::arg("size_bytes"),
+            nb::arg("bases"),
+            nb::arg("strides"),
+            nb::arg("device_group_indices"),
+            nb::arg("config_id") = 0,
+            R"(
+            Author one (slot, layer) row of a STRIDED_ROWS config: chunk c resolves to
+            bases[c % step] + (c // step) * strides[c % step] on device group
+            device_group_indices[c % step], where step = len(bases). device_group_indices
+            takes ints or the DeviceGroupIndex objects add_device_group() returns.
+            )")
+        .def(
+            "set_strided_row",
+            [](KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t slot,
+               uint32_t size_bytes,
+               std::vector<uint64_t> bases,
+               std::vector<int64_t> strides,
+               std::vector<DeviceGroupIndex> device_group_indices,
+               uint32_t config_id) {
+                table.set_strided_row(
+                    layer,
+                    slot,
+                    size_bytes,
+                    std::move(bases),
+                    std::move(strides),
+                    std::move(device_group_indices),
+                    config_id);
+            },
+            nb::arg("layer"),
+            nb::arg("slot"),
+            nb::arg("size_bytes"),
+            nb::arg("bases"),
+            nb::arg("strides"),
+            nb::arg("device_group_indices"),
+            nb::arg("config_id") = 0,
+            "Overload of set_strided_row taking the DeviceGroupIndex objects add_device_group() returns.")
         .def(
             "set_fabric_node_host",
             &KvChunkAddressTable::set_fabric_node_host,
@@ -187,8 +297,8 @@ void bind_disaggregation_api(nb::module_& mod) {
             )")
         .def(
             "lookup",
-            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&) const>(
-                &KvChunkAddressTable::lookup),
+            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&)
+                            const>(&KvChunkAddressTable::lookup),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
@@ -277,6 +387,11 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             nb::arg("config_id") = 0,
             "Number of position chunks for a config (default 0).")
+        .def(
+            "compression",
+            &KvChunkAddressTable::compression,
+            nb::arg("config_id") = 0,
+            "Representation of a config's chunk map (ChunkCompression).")
         .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.")
 
         // Device reads
@@ -361,6 +476,30 @@ void bind_disaggregation_api(nb::module_& mod) {
         nb::arg("data"),
         "Deserialize a KvChunkAddressTable from a serialized protobuf byte string.");
 
+    mod.def(
+        "get_or_build_kv_chunk_table",
+        [](const std::string& seed, const nb::handle& key, const nb::callable& build, const std::string& out_path) {
+            nb::object dumps = nb::module_::import_("json").attr("dumps");
+            return get_or_build_kv_chunk_table(
+                default_kv_chunk_table_cache_dir(),
+                seed,
+                nb::cast<std::string>(dumps(key, nb::arg("sort_keys") = true)),
+                [&build](const std::string& path) {
+                    export_to_protobuf_file(nb::cast<const KvChunkAddressTable&>(build()), path);
+                },
+                out_path);
+        },
+        nb::arg("seed"),
+        nb::arg("key").none(),
+        nb::arg("build"),
+        nb::arg("out_path"),
+        R"(
+        Write the KV chunk table for (seed, key) to `out_path`, reusing the tt-metal cache on a hit.
+        `build()` returns the KvChunkAddressTable and runs only on a miss. `seed` is the commit of the repo
+        that owns the table layout ("" skips the cache); `key` is JSON-serializable and must cover every
+        table input, including DRAM bases and fabric node ids. Returns True on a hit.
+        )");
+
     // UMD-backed read: reads a KV chunk's DRAM bytes over a bare tt::umd::Cluster. The mechanism
     // the migration worker uses (disaggregation/migration/src/worker/device_io.cpp). The chip is
     // selected by ASIC unique_id (the caller resolves fabric_node -> unique_id from the runner's
@@ -369,7 +508,11 @@ void bind_disaggregation_api(nb::module_& mod) {
     mod.def(
         "read_dram_umd",
         [](uint64_t unique_id, uint64_t noc_addr, uint32_t size_bytes) {
-            auto buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            std::vector<uint8_t> buf;
+            {
+                nb::gil_scoped_release release;
+                buf = tt::tt_metal::internal::disaggregation::read_dram_umd(unique_id, noc_addr, size_bytes);
+            }
             return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
         },
         nb::arg("unique_id"),
@@ -380,6 +523,26 @@ void bind_disaggregation_api(nb::module_& mod) {
         server. Uses a bare tt::umd::Cluster, selecting the chip by ASIC unique_id and the DRAM
         view/offset from noc_addr = (dram_view << 32) | local_addr. Mirrors the migration worker's device_io
         read path.
+        )");
+    mod.def(
+        "read_dram_umd_batch",
+        [](const std::vector<uint64_t>& unique_ids,
+           const std::vector<uint64_t>& noc_addrs,
+           const std::vector<uint32_t>& sizes_bytes) {
+            std::vector<uint8_t> buf;
+            {
+                nb::gil_scoped_release release;
+                buf = tt::tt_metal::internal::disaggregation::read_dram_umd_batch(unique_ids, noc_addrs, sizes_bytes);
+            }
+            return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+        },
+        nb::arg("unique_ids"),
+        nb::arg("noc_addrs"),
+        nb::arg("sizes_bytes"),
+        R"(
+        read_dram_umd over many chunks in one call, returned concatenated in input order. Chunks on
+        different chips are read concurrently and the GIL is released for the whole batch, so host-side
+        work (decode, PCC) can overlap it from another Python thread.
         )");
 }
 

@@ -117,6 +117,29 @@ _FORMULATIONS: dict[DeviceKey, dict[ShapeKey, Any]] = {
         (16, 7, 1): "direct",
         (2, 43, 1): "direct",
     },
+    # Wormhole Galaxy (4x8, audio T-shard factor 8), swept 2026-09-30 on this branch's WH box with
+    # l1_small_size 16384 (the ref2va mesh; t2va opens 32768, so these rows fit both) over the MiniMax-H3
+    # audio decoder's 5 s, 10.7 s and 15 s shapes (207 / 405 / 603 latents, 14 shapes each). Full C fits and
+    # is fastest at every width (the 128/64/32 chunks are 2.5-5x slower); the MAC fallback is 1.2-14x slower.
+    # Without these rows every fresh process probed each shape, and each failed trial left a cached conv
+    # program holding L1_SMALL reader indices: on the 16 KB ref2va L1_SMALL the pool filled after ~8 clip
+    # lengths and every later conv1d fell to MAC for the life of the process.
+    ("wormhole_b0", 8, 9): {
+        (512, 12, 2): "direct",
+        (512, 7, 1): "direct",
+        (256, 12, 2): "direct",
+        (256, 7, 1): "direct",
+        (128, 12, 2): "direct",
+        (128, 7, 1): "direct",
+        (64, 12, 2): "direct",
+        (64, 7, 1): "direct",
+        (32, 12, 2): "direct",
+        (32, 7, 1): "direct",
+        (16, 12, 2): "direct",
+        (16, 7, 1): "direct",
+        (8, 12, 2): "direct",
+        (8, 7, 1): "direct",
+    },
 }
 _SLICES: dict[DeviceKey, dict[ShapeKey, tuple[int, int]]] = {
     # Same sweep; rows only where the explicit count beat conv1d's auto-slicing by >= 10 % (the long, narrow filters;

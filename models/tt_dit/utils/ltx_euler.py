@@ -45,7 +45,7 @@ class EulerTail:
         self._closed = False
         self._failed = False
 
-    def __call__(self, video_lat, audio_lat, video_velocity, audio_velocity, video_mask, audio_mask, dt):
+    def __call__(self, video_lat, audio_lat, video_velocity, audio_velocity, video_mask, audio_mask, dt, blocking=True):
         assert not self._closed and not self._failed, "release and recreate the Euler owner after cleanup/failure"
         assert isinstance(dt, float) and math.isfinite(dt) and dt < 0, "Euler dt must be finite and negative"
         args = (video_lat, audio_lat, video_velocity, audio_velocity, video_mask, audio_mask)
@@ -72,7 +72,7 @@ class EulerTail:
             tracer = Tracer(euler_tail, device=self._device, prep_run=True, clone_prep_inputs=True)
             self._tracers[dt] = tracer
         try:
-            return tracer(*args, dt=dt)
+            return tracer(*args, dt=dt, tracer_blocking_execution=blocking)
         except BaseException:
             # A partial device failure cannot be rolled back by host bookkeeping.
             self._failed = True

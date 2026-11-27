@@ -267,6 +267,7 @@ inline void clear_group_inputs(uint32_t group_id, uint32_t worker_mask) {
 // the wait is: a completion issued before the level has fallen is re-delivered immediately.
 inline void wait_count_cleared(uint32_t group_id) {
     for (uint32_t i = 0; i < kHandlerSettleIterations; i++) {
+        fds_kernel::refresh_dispatch_group_status(group_id);
         if (overlay::FdsDispatch::fds_read_group_count(group_id) == 0) {
             return;
         }
@@ -288,6 +289,7 @@ namespace neo {
 // Same read back as the dispatch-side wait, against the register this map exposes.
 inline void wait_status_cleared(uint32_t group_id) {
     for (uint32_t i = 0; i < kHandlerSettleIterations; i++) {
+        fds_kernel::refresh_worker_group_status(group_id);
         if (overlay::FdsNeo::fds_read_group_status(group_id) == 0) {
             return;
         }

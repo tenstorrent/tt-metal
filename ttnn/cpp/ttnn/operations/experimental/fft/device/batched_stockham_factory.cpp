@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <memory>
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "stockham_host.hpp"
 #include "stockham_program_spec.hpp"
@@ -17,7 +17,6 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace {
 constexpr uint32_t log2u_bs(uint32_t n) {

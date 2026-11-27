@@ -11,7 +11,8 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
-from ...utils.tensor import bf16_tensor
+from ...utils.matmul import get_matmul_config, get_matmul_core_grid
+from ...utils.tensor import bf16_tensor, to_torch
 from ...utils.test import mesh_device_config_to_string
 
 
@@ -302,3 +303,99 @@ def test_row_parallel_linear(
     )
     for i in range(tt_output.shape[0]):
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_500)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True, ids=["fabric_1d"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("input_rank", [2, 3, 4], ids=["rank2", "rank3", "rank4"])
+@pytest.mark.parametrize("use_persistent_buffer", [True, False], ids=["persistent", "own_buffer"])
+def test_row_parallel_linear_input_rank(
+    mesh_device: ttnn.MeshDevice,
+    device_params: dict,
+    input_rank: int,
+    use_persistent_buffer: bool,
+) -> None:
+    """Every rank from 2 up must survive the reduce-scatter, and survive repetition.
+
+    Three iterations rather than one because the manager alternates two cached reduce-scatter
+    buffers: a lifetime error in the persistent path only surfaces once the index cycles back, so a
+    single call cannot see it. The buffer the caller owns is the one it may deallocate.
+    """
+    tp_mesh_axis = 1
+    replicas = tuple(mesh_device.shape)[1 - tp_mesh_axis]
+    M, K, N = 128, 512, 256
+
+    torch_dtype = torch.bfloat16
+    torch_model = torch.nn.Linear(K, N, bias=True).to(dtype=torch_dtype)
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    tt_model = RowParallelLinear(
+        K, N, bias=True, mesh_device=mesh_device, mesh_axis=tp_mesh_axis, ccl_manager=ccl_manager
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    torch_input_tensor = torch.randn([1] * (input_rank - 2) + [M, K], dtype=torch_dtype)
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor).reshape(M, N)
+
+    shard_dims = [None, None]
+    shard_dims[tp_mesh_axis] = -1
+    shard_dims[1 - tp_mesh_axis] = 0
+
+    for _ in range(3):
+        tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device, mesh_axis=tp_mesh_axis, shard_dim=-1)
+        tt_output = tt_model(tt_input_tensor, use_persistent_buffer=use_persistent_buffer)
+        assert len(tt_output.shape) == input_rank, f"rank {input_rank} in, rank {len(tt_output.shape)} out"
+        composed = ttnn.to_torch(
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
+        ).reshape(replicas, M, N)
+        for i in range(replicas):
+            assert_quality(torch_output, composed[i], pcc=0.999_500)
+        if not use_persistent_buffer:
+            ttnn.deallocate(tt_output)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("layer", "in_features", "out_features"),
+    [(ColParallelLinear, 5120, 2560), (RowParallelLinear, 6400, 5120)],
+    ids=["qkv", "down"],
+)
+def test_pinned_projection(mesh_device: ttnn.MeshDevice, layer, in_features: int, out_features: int) -> None:
+    """A pinned config keeps one program on both sides of the 128-row switch to `ttnn.linear`."""
+    torch.manual_seed(0)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    torch_model = torch.nn.Linear(in_features, out_features, bias=False)
+    tt_model = layer(
+        in_features,
+        out_features,
+        bias=False,
+        mesh_device=mesh_device,
+        mesh_axis=None,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+    row_capacity = 640
+    pin = get_matmul_config(row_capacity, in_features, out_features, get_matmul_core_grid(mesh_device))
+
+    added = 0
+    # Long, short, long: a program compiled at one row count must serve a larger and a smaller one.
+    for rows in (320, 32, 64, 96, row_capacity, 128, 160):
+        x = torch.randn(1, rows, in_features)
+        tt_x = bf16_tensor(x, device=mesh_device)
+        entries = mesh_device.num_program_cache_entries()
+        actual = to_torch(tt_model.forward(tt_x, matmul_config=pin))
+        added += mesh_device.num_program_cache_entries() - entries
+        with torch.no_grad():
+            assert_quality(torch_model(x), actual, pcc=0.9999)
+    assert added == 1, f"{added} projection programs"

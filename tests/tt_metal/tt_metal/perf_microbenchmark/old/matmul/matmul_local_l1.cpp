@@ -268,7 +268,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::Program program = tt_metal::CreateProgram(*device);
         CoreCoord start_core = {0, 0};
         CoreCoord end_core = {(std::size_t)num_cores_c - 1, (std::size_t)num_cores_r - 1};
         const CoreRange all_cores(start_core, end_core);
@@ -308,7 +308,7 @@ int main(int argc, char** argv) {
             "compute_local_l1.cpp",
             all_cores,
             tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});

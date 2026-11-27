@@ -10,7 +10,7 @@
 // the three TRISCs, rendezvouses T0/T1/T2 through hardware mailboxes
 // (Unpack/Pack -> READY; Math grants CONFIGURE in T0->T1->T2 order; then
 // CONFIGURED -> CLEANUP_DONE, see llk_hw_cleanup.h start()/finish()), and
-// reprograms both cfg banks to a canonical Float16_b 32x32 / four-face / 2048B
+// reprograms cfg bank 0 to a canonical Float16_b 32x32 / four-face / 2048B
 // tile geometry, leaving cfg bank 0 selected. It deliberately poisons pack MOP /
 // strides / PAC X, so a following op must re-init pack before packing.
 //
@@ -80,7 +80,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Hardware teardown: unpack thread's canonical cleanup. Rendezvouses with
     // math/pack through the T0/T1/T2 mailboxes (see llk_hw_cleanup.h) and
-    // restores both cfg banks to canonical Float16_b geometry.
+    // restores cfg bank 0 to canonical Float16_b geometry.
     _llk_unpack_hw_cleanup_canonical_<is_fp32_dest_acc_en>();
 }
 
@@ -100,19 +100,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
+    const ckernel::TensorShape tensor_shape = ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, HW_CLEANUP_NUM_FACES);
+
     // Identity datacopy: SrcA -> Dest.
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
         is_fp32_dest_acc_en,
         BroadcastType::NONE,
         false /* is_int_fpu_en */,
-        ckernel::PackMode::Default>(HW_CLEANUP_NUM_FACES, formats.math);
+        ckernel::PackMode::Default>(tensor_shape, formats.math);
     _llk_math_pack_sync_init_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
     _llk_math_wait_for_dest_available_<HW_CLEANUP_DST_SYNC>();
     _llk_math_eltwise_unary_datacopy_wrapper_<DataCopyType::A2D, HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-        0 /* dst_index */, formats.math, formats.math, HW_CLEANUP_NUM_FACES);
+        0 /* dst_index */, formats.math, formats.math, tensor_shape);
     _llk_math_dest_section_done_<HW_CLEANUP_DST_SYNC, is_fp32_dest_acc_en>();
 
     // Hardware teardown: math thread's canonical cleanup. Math owns the

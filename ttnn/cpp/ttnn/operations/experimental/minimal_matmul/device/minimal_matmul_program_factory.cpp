@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "minimal_matmul_program_factory.hpp"
+#include "kernels/minimal_matmul_runtime_args.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -112,11 +114,52 @@ void append_accessors(
     }
 }
 
+tt::tt_metal::KernelDescriptor::Defines kernel_defines(const std::map<std::string, std::string>& defines) {
+    return {defines.begin(), defines.end()};
+}
+
+void push_cb(
+    tt::tt_metal::ProgramDescriptor& program,
+    const tt::tt_metal::CoreRange& cores,
+    uint32_t cb_id,
+    uint32_t page_size,
+    uint32_t num_pages,
+    tt::DataFormat df) {
+    program.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = page_size * num_pages,
+        .core_ranges = tt::tt_metal::CoreRangeSet(cores),
+        .format_descriptors = {tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_id),
+            .data_format = df,
+            .page_size = page_size,
+        }},
+    });
+}
+
+tt::tt_metal::KernelHandle push_dm_kernel(
+    tt::tt_metal::ProgramDescriptor& program,
+    const std::string& source,
+    const tt::tt_metal::CoreRange& cores,
+    std::vector<uint32_t> compile_args,
+    const std::map<std::string, std::string>& defines,
+    tt::tt_metal::DataMovementProcessor processor,
+    tt::tt_metal::NOC noc) {
+    const auto kernel_id = static_cast<tt::tt_metal::KernelHandle>(program.kernels.size());
+    program.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = source,
+        .core_ranges = tt::tt_metal::CoreRangeSet(cores),
+        .compile_time_args = std::move(compile_args),
+        .defines = kernel_defines(defines),
+        .config = tt::tt_metal::DataMovementConfigDescriptor{.processor = processor, .noc = noc},
+    });
+    return kernel_id;
+}
+
 }  // namespace
 
 // SHARED IMPLEMENTATION - works with vector of output tensors (exposed for minimal_matmul_split)
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_common(
-    tt::tt_metal::Program& program,
+    tt::tt_metal::ProgramDescriptor& program,
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const std::optional<const Tensor>& bias_tensor,
@@ -154,6 +197,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     bool use_bias = bias_tensor.has_value();
     bool use_fused_ternary = fused_ternary_input_a.has_value() && fused_ternary_input_b.has_value();
+    // A [..., 1, N] gate is broadcast from tile row 0 (the validator admits it only with every upper dim 1); a full
+    // gate of up to 32 rows also folds to one tile row, so the flag comes from the logical rows.
+    const uint32_t broadcast_ternary_b = use_fused_ternary && fused_ternary_input_b->logical_shape()[-2] == 1 ? 1u : 0u;
 
     /**
      * Determine dataformats, compute kernel config
@@ -334,29 +380,37 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
     auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
-    auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in0_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
-    auto in1_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
-    auto in1_valid_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, VALID);
+    const auto semaphore_cores = tt::tt_metal::CoreRangeSet(core_grid);
+    auto in0_sender_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in0_receiver_semaphore_id =
+        ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in0_valid_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, VALID);
+    auto in1_sender_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in1_receiver_semaphore_id =
+        ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, INVALID);
+    auto in1_valid_semaphore_id = ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, VALID);
 
     uint32_t in0_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(in0_cb_id, program, core_grid, in0_tile_size, in0_cb_num_tiles, in0_data_format);
+    push_cb(program, core_grid, in0_cb_id, static_cast<uint32_t>(in0_tile_size), in0_cb_num_tiles, in0_data_format);
 
     uint32_t in1_cb_id = tt::CBIndex::c_1;
-    tt::tt_metal::create_cb(in1_cb_id, program, core_grid, in1_tile_size, in1_cb_num_tiles, in1_data_format);
+    push_cb(program, core_grid, in1_cb_id, static_cast<uint32_t>(in1_tile_size), in1_cb_num_tiles, in1_data_format);
 
     uint32_t out_cb_id = tt::CBIndex::c_2;
-    tt::tt_metal::create_cb(out_cb_id, program, core_grid, out_tile_size, out_cb_num_tiles, output_data_format);
+    push_cb(program, core_grid, out_cb_id, static_cast<uint32_t>(out_tile_size), out_cb_num_tiles, output_data_format);
 
     uint32_t intermediate_cb_id = tt::CBIndex::c_3;
-    tt::tt_metal::create_cb(
-        intermediate_cb_id, program, core_grid, intermediate_tile_size, interm_cb_num_tiles, intermediate_data_format);
+    push_cb(
+        program,
+        core_grid,
+        intermediate_cb_id,
+        static_cast<uint32_t>(intermediate_tile_size),
+        interm_cb_num_tiles,
+        intermediate_data_format);
 
     if (use_bias) {
         uint32_t in2_cb_id = tt::CBIndex::c_4;
-        tt::tt_metal::create_cb(in2_cb_id, program, core_grid, in2_tile_size, in2_cb_num_tiles, in2_data_format);
+        push_cb(program, core_grid, in2_cb_id, static_cast<uint32_t>(in2_tile_size), in2_cb_num_tiles, in2_data_format);
     }
 
     // Create circular buffers for fused ternary inputs
@@ -373,8 +427,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         TT_FATAL(ternary_a_data_format == in1_data_format, "ternary_a_data_format must be equal to in1_data_format");
         uint32_t ternary_a_cb_num_tiles = out_block_num_tiles;  // Same as output block, not double buffered
 
-        tt::tt_metal::create_cb(
-            ternary_a_cb_id, program, core_grid, ternary_a_tile_size, ternary_a_cb_num_tiles, ternary_a_data_format);
+        push_cb(
+            program,
+            core_grid,
+            ternary_a_cb_id,
+            static_cast<uint32_t>(ternary_a_tile_size),
+            ternary_a_cb_num_tiles,
+            ternary_a_data_format);
 
         // Fused ternary input C - circular buffer c_6
         auto ternary_c_data_format =
@@ -382,8 +441,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto ternary_c_tile_size = tt::tile_size(ternary_c_data_format);
         uint32_t ternary_c_cb_num_tiles = N_block_tiles;  // Single row (like bias), broadcast across M
 
-        tt::tt_metal::create_cb(
-            ternary_c_cb_id, program, core_grid, ternary_c_tile_size, ternary_c_cb_num_tiles, ternary_c_data_format);
+        push_cb(
+            program,
+            core_grid,
+            ternary_c_cb_id,
+            static_cast<uint32_t>(ternary_c_tile_size),
+            ternary_c_cb_num_tiles,
+            ternary_c_data_format);
 
         log_debug(tt::LogOp, "ternary_a_cb_id: {}", ternary_a_cb_id);
         log_debug(tt::LogOp, "ternary_c_cb_id: {}", ternary_c_cb_id);
@@ -449,7 +513,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
     if (fuse_srs) {
         defines["SRS_FUSE_OP_SIGNALER"] = "1";
-        srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+        srs_fuse_signaler_sync_semaphore_id =
+            ttnn::experimental::ccl::add_semaphore_descriptor(program, semaphore_cores, 0);
         if (srs_fused_op_signaler->mm_window_blocks > 0) {
             // The RS keeps only this many M blocks of our output resident, so we write into slot
             // m % W and must wait for the RS readers to release a slot before recycling it.
@@ -479,26 +544,17 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
-    uint32_t in0_addr = input_tensor.buffer()->address();
-    uint32_t in1_addr = weight_tensor.buffer()->address();
-    uint32_t in2_addr = use_bias ? bias_tensor.value().buffer()->address() : 0;
-    // Note: Dataflow kernels can take a variable number of output tensors.
-    // They are appended as a variable-length array at the end of the runtime-args:
-    //   - for in0 output-writer cores the first output address is at index 13
-    //   - for in1 output-writer cores the first output address is at index 12
+    tt::tt_metal::Buffer* in0_buffer = input_tensor.buffer();
+    tt::tt_metal::Buffer* in1_buffer = weight_tensor.buffer();
+    tt::tt_metal::Buffer* in2_buffer = use_bias ? bias_tensor.value().buffer() : nullptr;
     // in3 is the second in0 source buffer: AG local pre-gather slice, or (fused concat) the second
     // concat half supplied via optional_input_tensor.
-    uint32_t in3_addr = (fuse_op && fused_op_signaler->read_local_slice_from_input)
-                            ? fused_op_signaler->ag_input.value().buffer()->address()
-                        : two_input_split ? optional_input_tensor.value().buffer()->address()
-                                          : 0;
-    auto in3_data_format =
-        (fuse_op && fused_op_signaler->read_local_slice_from_input)
-            ? tt::tt_metal::datatype_to_dataformat_converter(fused_op_signaler->ag_input.value().dtype())
-        : two_input_split ? tt::tt_metal::datatype_to_dataformat_converter(optional_input_tensor.value().dtype())
-                          : in1_data_format;
-
-    auto in3_tile_size = tt::tile_size(in3_data_format);
+    tt::tt_metal::Buffer* in3_buffer = (fuse_op && fused_op_signaler->read_local_slice_from_input)
+                                           ? fused_op_signaler->ag_input.value().buffer()
+                                       : two_input_split ? optional_input_tensor.value().buffer()
+                                                         : nullptr;
+    tt::tt_metal::Buffer* ternary_a_buffer = use_fused_ternary ? fused_ternary_input_a.value().buffer() : nullptr;
+    tt::tt_metal::Buffer* ternary_b_buffer = use_fused_ternary ? fused_ternary_input_b.value().buffer() : nullptr;
 
     /**
      * Create kernels
@@ -507,30 +563,44 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
-    std::vector<uint32_t> in0_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
+    // CT arg order must match dm_in0_sender.cpp / dm_in1_sender_out.cpp. The row count is not here:
+    // it is the common runtime arg the kernels derive their per-core ranges from.
+    auto dm_compile_time_args = [&](uint32_t in_tile_size,
+                                    uint32_t sender_semaphore_id,
+                                    uint32_t receiver_semaphore_id,
+                                    uint32_t valid_semaphore_id,
+                                    bool is_output_writer,
+                                    bool is_injector_core) {
+        return std::vector<uint32_t>{
+            in0_parallel_axis_cores,
+            K_tiles,
+            padded_K_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_block_tiles,
+            K_block_tiles,
+            N_block_tiles,
+            N_blocks_per_core,
+            in_tile_size,
+            out_tile_size,
+            in2_tile_size,
+            sender_semaphore_id,
+            receiver_semaphore_id,
+            valid_semaphore_id,
+            is_output_writer,
+            is_injector_core,
+            N_chunks,
+            N_tiles_per_chunk,
+        };
+    };
+
+    std::vector<uint32_t> in0_sender_compile_time_args = dm_compile_time_args(
         in0_tile_size,
-        out_tile_size,
-        in2_tile_size,
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        true,               // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
-        in3_tile_size,
-    };
+        /*is_injector_core=*/true);
     // The in0 sender's second source: AG local slice, or (fused concat) optional_input_tensor.
     std::optional<Tensor> in0_sender_in3_tensor;
     if (fuse_op && fused_op_signaler->read_local_slice_from_input) {
@@ -546,42 +616,25 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in0_sender_in3_tensor,
         fused_ternary_input_a,
         fused_ternary_input_b);
-    auto in0_sender_kernels_id = CreateKernel(
+    const auto& in0_sender_defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines
+                                     : two_input_split                                           ? in0_concat_defines
+                                                                                                 : defines;
+    auto in0_sender_kernels_id = push_dm_kernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_sender_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc,
-            .noc = in0_noc,
-            .compile_args = in0_sender_compile_time_args,
-            .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines
-                       : two_input_split                                           ? in0_concat_defines
-                                                                                   : defines});
+        std::move(in0_sender_compile_time_args),
+        in0_sender_defines,
+        in0_risc,
+        in0_noc);
 
-    std::vector<uint32_t> in0_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
+    std::vector<uint32_t> in0_receiver_compile_time_args = dm_compile_time_args(
         in0_tile_size,
-        out_tile_size,
-        in2_tile_size,
         in0_sender_semaphore_id,
         in0_receiver_semaphore_id,
         in0_valid_semaphore_id,
         in0_is_output_writer,
-        false,              // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
-        in3_tile_size,
-    };
+        /*is_injector_core=*/false);
     append_accessors(
         in0_receiver_compile_time_args,
         input_tensor,
@@ -591,36 +644,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fused_ternary_input_a,
         fused_ternary_input_b);
 
-    auto in0_receiver_kernels_id = CreateKernel(
+    auto in0_receiver_kernels_id = push_dm_kernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in0_sender.cpp",
         in0_receiver_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
+        std::move(in0_receiver_compile_time_args),
+        defines,
+        in0_risc,
+        in0_noc);
 
-    std::vector<uint32_t> in1_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
+    std::vector<uint32_t> in1_sender_compile_time_args = dm_compile_time_args(
         in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,               // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
-    };
+        /*is_injector_core=*/true);
     append_accessors(
         in1_sender_compile_time_args,
         weight_tensor,
@@ -630,36 +669,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fused_ternary_input_a,
         fused_ternary_input_b);
 
-    auto in1_sender_kernels_id = CreateKernel(
+    auto in1_sender_kernels_id = push_dm_kernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_sender_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
+        std::move(in1_sender_compile_time_args),
+        defines,
+        in1_risc,
+        in1_noc);
 
-    std::vector<uint32_t> in1_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
-        K_tiles,
-        padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
+    std::vector<uint32_t> in1_receiver_compile_time_args = dm_compile_time_args(
         in1_tile_size,
-        out_tile_size,
-        in2_tile_size,
         in1_sender_semaphore_id,
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        false,              // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
-    };
+        /*is_injector_core=*/false);
     append_accessors(
         in1_receiver_compile_time_args,
         weight_tensor,
@@ -669,19 +694,21 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fused_ternary_input_a,
         fused_ternary_input_b);
 
-    auto in1_receiver_kernels_id = CreateKernel(
+    auto in1_receiver_kernels_id = push_dm_kernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/dm_in1_sender_out.cpp",
         in1_receiver_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
+        std::move(in1_receiver_compile_time_args),
+        defines,
+        in1_risc,
+        in1_noc);
 
     std::vector<uint32_t> compute_compile_time_args = {
         K_blocks,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
+        in0_parallel_axis_cores,
         N_blocks_per_core,
         subblock_h,
         subblock_w};
@@ -699,16 +726,53 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     compute_defines.merge(compute_activation_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device->arch(), num_cores, compute_defines, ttnn::get_throttle_level(compute_kernel_config));
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_defines});
+    const auto compute_kernels_id = static_cast<tt::tt_metal::KernelHandle>(program.kernels.size());
+    program.kernels.push_back(tt::tt_metal::KernelDescriptor{
+        .kernel_source = "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels/compute.cpp",
+        .core_ranges = tt::tt_metal::CoreRangeSet(core_grid),
+        .compile_time_args = std::move(compute_compile_time_args),
+        .defines = kernel_defines(compute_defines),
+        .config =
+            tt::tt_metal::ComputeConfigDescriptor{
+                .math_fidelity = math_fidelity,
+                .fp32_dest_acc_en = fp32_dest_acc_en,
+                .math_approx_mode = math_approx_mode,
+            },
+    });
+
+    // Common runtime args (minimal_matmul_runtime_args.hpp): the row count and every buffer address.
+    // Per-call values live here so a cache hit patches one vector per kernel instead of every core.
+    auto push_buffer = [](tt::tt_metal::KernelDescriptor::RTArgList& args, tt::tt_metal::Buffer* buffer) {
+        if (buffer != nullptr) {
+            args.push_back(buffer);
+        } else {
+            args.push_back(0u);
+        }
+    };
+    auto dm_common_args = [&](tt::tt_metal::Buffer* in_buffer, tt::tt_metal::Buffer* in3) {
+        namespace Crta = minimal_matmul_common_args;
+        static_assert(
+            Crta::Dm::M_tiles == 0 && Crta::Dm::in_addr == 1 && Crta::Dm::in2_addr == 2 && Crta::Dm::in3_addr == 3 &&
+            Crta::Dm::ternary_a_addr == 4 && Crta::Dm::ternary_b_addr == 5 && Crta::Dm::out_addr == 6);
+        tt::tt_metal::KernelDescriptor::RTArgList args;
+        args.push_back(M_tiles);  // smuggled-rta-ok: runtime row count, re-applied by override_runtime_arguments
+        push_buffer(args, in_buffer);
+        push_buffer(args, in2_buffer);
+        push_buffer(args, in3);
+        push_buffer(args, ternary_a_buffer);
+        push_buffer(args, ternary_b_buffer);
+        for (const auto& output_tensor : output_tensors) {
+            args.push_back(output_tensor.buffer());
+        }
+        return args;
+    };
+    program.kernels[in0_sender_kernels_id].emplace_common_runtime_args(dm_common_args(in0_buffer, in3_buffer));
+    program.kernels[in0_receiver_kernels_id].emplace_common_runtime_args(dm_common_args(in0_buffer, in3_buffer));
+    program.kernels[in1_sender_kernels_id].emplace_common_runtime_args(dm_common_args(in1_buffer, nullptr));
+    program.kernels[in1_receiver_kernels_id].emplace_common_runtime_args(dm_common_args(in1_buffer, nullptr));
+    tt::tt_metal::KernelDescriptor::RTArgList compute_common_args;
+    compute_common_args.push_back(M_tiles);  // smuggled-rta-ok: runtime row count, re-applied on cache hit
+    program.kernels[compute_kernels_id].emplace_common_runtime_args(compute_common_args);
 
     /**
      * The receiver writer cores defer their writes in order to reduce NOC congestion.
@@ -772,13 +836,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
          * We can't yet get rid of these blocks, since the receiver cores must ack
          * all blocks that sender cores are expected to send.
          */
-        uint32_t M_start_tile = M_tiles_per_core * in0_idx;
         // Where this core's rows begin in the windowed output tensor. Blocks, not rows, are the
         // unit: every core gets mm_window_blocks whole blocks, so the strides stay uniform even
         // when M_block_tiles does not divide M_tiles_per_core.
         const uint32_t M_window_start_tile =
             fuse_srs ? in0_idx * srs_fused_op_signaler->mm_window_blocks * M_block_tiles : 0;
-        uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
@@ -789,35 +851,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
 
-        std::vector<uint32_t> in0_args = {
-            in0_addr,
-            in2_addr,
-            in3_addr,
-            is_in0_sink,
-            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
-            M_start_tile,
-            M_end_tile,
-            N_start_tile,
-            N_end_tile,
-            defer_write_k_block,
-            max_defer_write_k_block,
-        };
-        // Add ternary addresses if present (after defer_write_k_block, before output addresses)
+        tt::tt_metal::KernelDescriptor::RTArgList in0_args;
+        in0_args.push_back(static_cast<uint32_t>(is_in0_sink));
+        in0_args.push_back(static_cast<uint32_t>(in0_next_core_physical.x));  // in0_dest_noc_x
+        in0_args.push_back(static_cast<uint32_t>(in0_next_core_physical.y));  // in0_dest_noc_y
+        in0_args.push_back(static_cast<uint32_t>(in0_prev_core_physical.x));  // in0_sender_noc_x
+        in0_args.push_back(static_cast<uint32_t>(in0_prev_core_physical.y));  // in0_sender_noc_y
+        in0_args.push_back(in0_idx);
+        in0_args.push_back(N_start_tile);
+        in0_args.push_back(N_end_tile);
+        in0_args.push_back(defer_write_k_block);
+        in0_args.push_back(max_defer_write_k_block);
         if (use_fused_ternary) {
-            in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in0_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
-        }
-        // Add output addresses at the end (unified layout for both regular and split)
-        for (const auto& output_tensor : output_tensors) {
-            in0_args.push_back(output_tensor.buffer()->address());
+            in0_args.push_back(broadcast_ternary_b);
         }
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            std::vector<uint32_t> fused_args;
+            fused_op_signaler->push_matmul_fused_op_rt_args(fused_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            in0_args.append(fused_args);
         }
         if (fuse_srs) {
             in0_args.push_back(static_cast<uint32_t>(num_cores));
@@ -835,51 +886,41 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in0_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
-            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
+            in0_args.push_back(srs_fused_op_signaler->mm_progress_counters_buffer);
             // Rolling window: where this core's window starts in the (shortened) output tensor, and
             // the RS readers' credit counters that say when a window slot is free to recycle.
             if (srs_fused_op_signaler->mm_window_blocks > 0) {
                 in0_args.push_back(M_window_start_tile);
-                in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->rs_credit_counters_addr));
+                in0_args.push_back(srs_fused_op_signaler->rs_credit_counters_buffer);
                 in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_rs_readers));
             }
         }
         if (in1_idx == 0) {
             // in0 sender
-            SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
+            program.kernels[in0_sender_kernels_id].emplace_runtime_args(core, in0_args);
         } else {
             // in0 receiver
-            SetRuntimeArgs(program, in0_receiver_kernels_id, core, in0_args);
+            program.kernels[in0_receiver_kernels_id].emplace_runtime_args(core, in0_args);
         }
 
-        std::vector<uint32_t> in1_args = {
-            in1_addr,
-            in2_addr,
-            is_in1_sink,
-            (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
-            (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
-            M_start_tile,
-            M_end_tile,
-            N_start_tile,
-            N_end_tile,
-            defer_write_k_block,
-            max_defer_write_k_block,
-        };
-        // Add ternary addresses if present (after defer_write_k_block, before output addresses)
+        tt::tt_metal::KernelDescriptor::RTArgList in1_args;
+        in1_args.push_back(static_cast<uint32_t>(is_in1_sink));
+        in1_args.push_back(static_cast<uint32_t>(in1_next_core_physical.x));  // in1_dest_noc_x
+        in1_args.push_back(static_cast<uint32_t>(in1_next_core_physical.y));  // in1_dest_noc_y
+        in1_args.push_back(static_cast<uint32_t>(in1_prev_core_physical.x));  // in1_sender_noc_x
+        in1_args.push_back(static_cast<uint32_t>(in1_prev_core_physical.y));  // in1_sender_noc_y
+        in1_args.push_back(in0_idx);
+        in1_args.push_back(N_start_tile);
+        in1_args.push_back(N_end_tile);
+        in1_args.push_back(defer_write_k_block);
+        in1_args.push_back(max_defer_write_k_block);
         if (use_fused_ternary) {
-            in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
-            in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            in1_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
-        }
-        // Add output addresses at the end (unified layout for both regular and split)
-        for (const auto& output_tensor : output_tensors) {
-            in1_args.push_back(output_tensor.buffer()->address());
+            in1_args.push_back(broadcast_ternary_b);
         }
         if (fuse_op) {
-            fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            std::vector<uint32_t> fused_args;
+            fused_op_signaler->push_matmul_fused_op_rt_args(fused_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+            in1_args.append(fused_args);
         }
         if (fuse_srs) {
             in1_args.push_back(static_cast<uint32_t>(num_cores));
@@ -897,177 +938,86 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
             in1_args.push_back(1);  // mcast_signal_op_cores
             // Per-core signaling: L1 base of the RS cores' per-MM-core progress counter array
-            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->mm_progress_counters_addr));
+            in1_args.push_back(srs_fused_op_signaler->mm_progress_counters_buffer);
             // Rolling window: where this core's window starts in the (shortened) output tensor, and
             // the RS readers' credit counters that say when a window slot is free to recycle.
             if (srs_fused_op_signaler->mm_window_blocks > 0) {
                 in1_args.push_back(M_window_start_tile);
-                in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->rs_credit_counters_addr));
+                in1_args.push_back(srs_fused_op_signaler->rs_credit_counters_buffer);
                 in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_rs_readers));
             }
         }
         if (in0_idx == 0) {
             // in1 sender
-            SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
+            program.kernels[in1_sender_kernels_id].emplace_runtime_args(core, in1_args);
         } else {
             // in1 receiver
-            SetRuntimeArgs(program, in1_receiver_kernels_id, core, in1_args);
+            program.kernels[in1_receiver_kernels_id].emplace_runtime_args(core, in1_args);
         }
 
-        std::vector<uint32_t> compute_runtime_args = {
-            M_start_tile,
-            M_end_tile,
-            N_start_tile,
-            N_end_tile,
-        };
+        tt::tt_metal::KernelDescriptor::RTArgList compute_runtime_args;
+        compute_runtime_args.push_back(in0_idx);
+        compute_runtime_args.push_back(N_start_tile);
+        compute_runtime_args.push_back(N_end_tile);
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));
-            uint32_t ternary_b_M_tiles = fused_ternary_input_b.value().padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-            compute_runtime_args.push_back(ternary_b_M_tiles == 1 ? 1u : 0u);  // broadcast_ternary_b
+            compute_runtime_args.push_back(broadcast_ternary_b);
         }
-        SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
+        program.kernels[compute_kernels_id].emplace_runtime_args(core, compute_runtime_args);
     }
 
     return MinimalMatmulProgramFactory::shared_variables_t{
-        num_cores,
-        cores,
         in0_sender_kernels_id,
         in0_receiver_kernels_id,
         in1_sender_kernels_id,
         in1_receiver_kernels_id,
         compute_kernels_id,
-        transpose_core_grid,
         fuse_op && fused_op_signaler->read_local_slice_from_input,
         two_input_split};
 }
 
-// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common.
-// Works with both single and multiple output tensors.
+// Cache-hit refresh for the fused CCL programs built via minimal_matmul_factory_helper_common: every per-call
+// value (row count, buffer addresses) is a common runtime arg, so a hit patches one vector per kernel.
 void MinimalMatmulProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const MinimalMatmulParams& operation_attributes,
+    const MinimalMatmulParams& /*operation_attributes*/,
     const MinimalMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     auto& program = cached_program.program;
-    auto& override_variables = cached_program.shared_variables;
+    const auto& vars = cached_program.shared_variables;
+    namespace Crta = minimal_matmul_common_args;
 
-    auto& in0_sender_runtime_args = GetRuntimeArgs(program, override_variables.in0_sender_kernels_id);
-    auto& in0_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in0_receiver_kernels_id);
-    auto& in1_sender_runtime_args = GetRuntimeArgs(program, override_variables.in1_sender_kernels_id);
-    auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
-    auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
-
-    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4),
-    //   defer_write_k_block, max_defer_write_k_block,
-    //   [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
-    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4),
-    //   defer_write_k_block, max_defer_write_k_block,
-    //   [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
-    constexpr uint32_t in0_in0_addr_idx = 0;
-    constexpr uint32_t in0_in2_addr_idx = 1;
-    constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 15;
-
-    constexpr uint32_t in1_in0_addr_idx = 0;
-    constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
-    constexpr uint32_t in1_ternary_b_addr_idx = 14;
-
-    // Check if ternary addresses are present
-    bool has_fused_ternary =
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t M_tiles =
+        (input_tensor.physical_volume() / input_tensor.padded_shape()[-1]) / tt::constants::TILE_HEIGHT;
+    const uint32_t in0_addr = input_tensor.buffer()->address();
+    const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
+    const uint32_t in2_addr = tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor->buffer()->address() : 0;
+    const bool in3_bound =
+        tensor_args.optional_input_tensor.has_value() && (vars.read_local_slice_from_input || vars.two_input_split);
+    const uint32_t in3_addr = in3_bound ? tensor_args.optional_input_tensor->buffer()->address() : 0;
+    const bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after max_defer_write_k_block and optional ternary addresses
-    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 17 : 14;
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 16 : 13;
+    const uint32_t ternary_a_addr = has_fused_ternary ? tensor_args.fused_ternary_input_a->buffer()->address() : 0;
+    const uint32_t ternary_b_addr = has_fused_ternary ? tensor_args.fused_ternary_input_b->buffer()->address() : 0;
 
-    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
-        CoreCoord core = override_variables.cores.at(i);
-        uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
-        uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
-
-        if (in1_idx == 0) {
-            auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
-
-            in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
-            in0_sender_args[in0_in2_addr_idx] =
-                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-            in0_sender_args[in0_in3_addr_idx] = tensor_args.optional_input_tensor.has_value() &&
-                                                        (cached_program.shared_variables.read_local_slice_from_input ||
-                                                         cached_program.shared_variables.two_input_split)
-                                                    ? tensor_args.optional_input_tensor.value().buffer()->address()
-                                                    : 0;
-            // Update ternary addresses if present
-            if (has_fused_ternary) {
-                in0_sender_args[in0_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in0_sender_args[in0_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-            }
-            // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in0_sender_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
-            }
-        } else {
-            auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
-            in0_receiver_args[in0_in2_addr_idx] =
-                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-            // Update ternary addresses if present
-            if (has_fused_ternary) {
-                in0_receiver_args[in0_ternary_a_addr_idx] =
-                    tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in0_receiver_args[in0_ternary_b_addr_idx] =
-                    tensor_args.fused_ternary_input_b.value().buffer()->address();
-            }
-            // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in0_receiver_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
-            }
+    auto patch_dm = [&](tt::tt_metal::KernelHandle kernel_id, uint32_t in_addr, uint32_t in3) {
+        auto& args = GetCommonRuntimeArgs(program, kernel_id);
+        args[Crta::Dm::M_tiles] = M_tiles;
+        args[Crta::Dm::in_addr] = in_addr;
+        args[Crta::Dm::in2_addr] = in2_addr;
+        args[Crta::Dm::in3_addr] = in3;
+        args[Crta::Dm::ternary_a_addr] = ternary_a_addr;
+        args[Crta::Dm::ternary_b_addr] = ternary_b_addr;
+        for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
+            args[Crta::Dm::out_addr + out_idx] = tensor_return_value[out_idx].buffer()->address();
         }
-
-        if (in0_idx == 0) {
-            auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
-            in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
-            in1_sender_args[in1_bias_addr_idx] =
-                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-            // Update ternary addresses if present
-            if (has_fused_ternary) {
-                in1_sender_args[in1_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in1_sender_args[in1_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
-            }
-            // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in1_sender_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
-            }
-        } else {
-            auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
-            in1_receiver_args[in1_bias_addr_idx] =
-                tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
-            // Update ternary addresses if present
-            if (has_fused_ternary) {
-                in1_receiver_args[in1_ternary_a_addr_idx] =
-                    tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in1_receiver_args[in1_ternary_b_addr_idx] =
-                    tensor_args.fused_ternary_input_b.value().buffer()->address();
-            }
-            // Update N output addresses at the end
-            for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in1_receiver_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
-            }
-        }
-    }
-
-    // Update compute kernel runtime args for scalar
-    for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
-        CoreCoord core = override_variables.cores.at(i);
-        auto& compute_args = compute_runtime_args[core.x][core.y];
-
-        // Compute RT args: [M_start, M_end, N_start, N_end, [optional: scalar]]
-        // If ternary is present and scalar arg exists, update it at index 4
-        if (has_fused_ternary && operation_attributes.fused_ternary_scalar.has_value()) {
-            float scalar = operation_attributes.fused_ternary_scalar.value();
-            uint32_t scalar_as_uint = *reinterpret_cast<const uint32_t*>(&scalar);
-            compute_args[4] = scalar_as_uint;
-        }
-    }
+    };
+    patch_dm(vars.in0_sender_kernels_id, in0_addr, in3_addr);
+    patch_dm(vars.in0_receiver_kernels_id, in0_addr, in3_addr);
+    patch_dm(vars.in1_sender_kernels_id, in1_addr, 0);
+    patch_dm(vars.in1_receiver_kernels_id, in1_addr, 0);
+    GetCommonRuntimeArgs(program, vars.compute_kernels_id)[minimal_matmul_common_args::Compute::M_tiles] = M_tiles;
 }
 
 }  // namespace ttnn::experimental::prim

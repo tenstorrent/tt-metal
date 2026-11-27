@@ -43,6 +43,7 @@ void MorehGroupNormBackwardGammaBetaGradOperation::validate_tensors(
     check_tensor(beta_grad, "moreh_group_norm_backward_gamma_beta_grad", "beta_grad");
 
     // output_grad (N, C, H, W)
+    TT_FATAL(num_groups > 0, "num_groups must be greater than 0.");
     auto C = output_grad.padded_shape()[1];
     TT_FATAL(C % num_groups == 0, "output_grad_shape[1] must be divisible by num_groups.");
     // input (N, C, H, W)
@@ -178,7 +179,12 @@ moreh_group_norm_backward_gamma_beta_grad(
         are_required_outputs,
         gamma_grad_memory_config.value_or(output_grad.memory_config()),
         beta_grad_memory_config.value_or(output_grad.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            input.device()->arch(),
+            compute_kernel_config,
+            tt::tt_metal::MathFidelity::HiFi4,
+            /*default_approx_mode=*/true,
+            /*default_fp32_acc=*/true)};
     OperationType::tensor_args_t tensor_args{output_grad, input, mean, rstd, gamma_grad, beta_grad};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

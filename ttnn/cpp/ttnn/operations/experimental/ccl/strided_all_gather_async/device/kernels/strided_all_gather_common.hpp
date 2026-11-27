@@ -7,11 +7,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include <cstdint>
@@ -147,6 +147,10 @@ FORCE_INLINE uint32_t read_chunk(
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
+        // This worker has no tiles here. Later bands can still have some.
+        if (worker_tiles_in_band == 0) {
+            continue;
+        }
         uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
         uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
         uint32_t band_tile_iter = 0;
@@ -180,9 +184,10 @@ FORCE_INLINE uint32_t read_chunk(
                     read_output ? output_tensor_Wt : input_tensor_Wt,
                     input_tensor_Ht);
                 if (tile_id >= 0) {
-                    // Device 2.0 migration: legacy primitive retained, precomposed uint64_t address
+                    // Device 2.0 migration: call the accessor directly; the free get_noc_addr(id, addrgen) only
+                    // resolves to the deprecated InterleavedAddrGen overload for this TensorAccessor.
                     uint64_t noc_read_addr =
-                        get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                        (read_output ? output_tensor_addrgen : input_tensor_addrgen).get_noc_addr(tile_id);
                     noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
 
                     l1_write_addr += input_tensor_page_size;
@@ -258,8 +263,13 @@ FORCE_INLINE uint32_t write_chunk(
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
-        uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
-        uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        // Skip the packet loop when this worker has no tiles. The matmul signal below still counts the band.
+        uint32_t num_tiles_per_packet = 0;
+        uint32_t packets_in_band = 0;
+        if (worker_tiles_in_band != 0) {
+            num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
+            packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        }
         uint32_t band_tile_iter = 0;
 
         // Subchunk tracker for this band: band_h rows of injector 0, starting band_lo rows into the chunk

@@ -455,7 +455,9 @@ void bind_binary_bw_mul(
 
 
         Returns:
-            List of ttnn.Tensor: the output tensor.
+            List of ttnn.Tensor: gradients shaped as their respective operands (PyTorch parity).
+            Preallocated `input_grad`/`other_grad` must match `input_tensor_a`/`input_tensor_b` shape,
+            not `grad_tensor` — differs from the pre-#56601 grad-shape contract on broadcast.
 
         Note:
             Supported dtypes and layouts:

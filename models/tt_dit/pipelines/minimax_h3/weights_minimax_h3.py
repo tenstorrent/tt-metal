@@ -5,8 +5,9 @@
 """Resolve the MiniMax-H3 diffusers snapshot, optionally fetching it from HuggingFace.
 
 Resolution order matches the lightx2v loader (`experimental/utils/lightx2v_loader.py`): an explicit
-path first, then the HuggingFace cache, then a download -- and the download only happens when it has
-been opted into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
+path first, then the HuggingFace cache (first linked in from the local mirror, see
+`utils/hf_local_mirror.py`), then a download -- and the download only happens when it has been opted
+into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
 
 Only the diffusers partitions the caller asks for are fetched. The repo's top-level `FL2VA/` and
 `Ref2VA/` trees are self-contained original-format bundles that duplicate the root partitions and
@@ -16,9 +17,12 @@ are never read here, so skipping them takes the full 498 GB repo down to ~144 GB
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from loguru import logger
+
+from ...utils.hf_local_mirror import ensure_cached, hf_hub_cache_dir
 
 MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 
@@ -47,10 +51,6 @@ class WeightsNotFoundError(FileNotFoundError):
     """Raised when the MiniMax-H3 snapshot is not on disk and downloads are disabled."""
 
 
-def _hf_cache_root() -> Path:
-    return Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
-
-
 def _missing_partitions(directory: Path, required: tuple[str, ...]) -> list[str]:
     return [name for name in required if not (directory / name).is_dir()]
 
@@ -73,7 +73,7 @@ def _cached_snapshot(required: tuple[str, ...]) -> Path | None:
     partial snapshot (weights present, tokenizer absent) is passed over rather than returned, so the
     caller falls through to a download that completes it instead of failing later at the tokenizer.
     """
-    repo_dir = _hf_cache_root() / "hub" / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
+    repo_dir = hf_hub_cache_dir() / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
     snapshots = repo_dir / "snapshots"
     if not snapshots.is_dir():
         return None
@@ -95,7 +95,7 @@ def _download(required: tuple[str, ...]) -> Path:
     estimate = sum(_PARTITION_GB.get(name, 0.0) for name in required)
     logger.info(
         f"Downloading MiniMax-H3 partitions {list(required)} (~{estimate:.0f} GB) from "
-        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {_hf_cache_root()}"
+        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {hf_hub_cache_dir()}"
     )
     return Path(snapshot_download(repo_id=MINIMAX_H3_REPO_ID, allow_patterns=allow_patterns))
 
@@ -108,7 +108,8 @@ def resolve_weights_dir(
     """The snapshot directory holding every partition in `required_subdirs`.
 
     `weights_dir` (or `$MINIMAX_H3_MODEL_PATH`) wins when it is set; otherwise the HuggingFace cache
-    is searched and then, with `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
+    (after linking in the local mirror, if it holds the repo) is searched and then, with
+    `$TT_DIT_ALLOW_HF_DOWNLOAD=1`, fetched. Raises `WeightsNotFoundError`
     when nothing resolves and downloads are off.
 
     An explicit directory is checked for the required partitions only: it is the caller's own layout,
@@ -131,6 +132,7 @@ def resolve_weights_dir(
             raise WeightsNotFoundError(f"MiniMax-H3 snapshot at {directory} is missing {missing}")
         return directory
 
+    ensure_cached(MINIMAX_H3_REPO_ID)
     cached = _cached_snapshot(required)
     if cached is not None:
         return cached
@@ -139,7 +141,7 @@ def resolve_weights_dir(
         raise WeightsNotFoundError(
             f"MiniMax-H3 weights not found (needed partitions: {list(required) or ['<any>']}).\n"
             f"Point {MODEL_PATH_ENV} at a diffusers snapshot, or re-run with {ALLOW_DOWNLOAD_ENV}=1 "
-            f"to fetch {MINIMAX_H3_REPO_ID} into {_hf_cache_root()}."
+            f"to fetch {MINIMAX_H3_REPO_ID} into {hf_hub_cache_dir()}."
         )
 
     snapshot = _download(required)
@@ -147,3 +149,55 @@ def resolve_weights_dir(
     if missing:
         raise WeightsNotFoundError(f"downloaded MiniMax-H3 snapshot at {snapshot} is missing {missing}")
     return snapshot
+
+
+# Fallbacks for the Turbo factory's adapter arguments when the caller passes nothing.
+LORA_PATH_ENV = "MINIMAX_H3_LORA_PATH"
+LORA_STRENGTH_ENV = "MINIMAX_H3_LORA_STRENGTH"
+VIDEO_SHIFT_ENV = "MINIMAX_H3_VIDEO_SHIFT"
+AUDIO_SHIFT_ENV = "MINIMAX_H3_AUDIO_SHIFT"
+
+
+@dataclass(frozen=True)
+class AdapterSettings:
+    """Adapter settings resolved from arguments and environment.
+
+    `lora_strength` multiplies the file's `alpha / rank` (applied by the loader), so 1.0 is "as trained";
+    passing the published 0.0625 here would apply it twice.
+    """
+
+    lora_path: Path | None
+    lora_strength: float
+    video_shift: float
+    audio_shift: float
+
+
+def resolve_adapter_settings(
+    *,
+    lora_path: str | os.PathLike | None = None,
+    lora_strength: float | None = None,
+    video_shift: float | None = None,
+    audio_shift: float | None = None,
+    default_video_shift: float,
+    default_audio_shift: float,
+) -> AdapterSettings:
+    """Explicit arguments win, then the environment, then the checkpoint's defaults.
+
+    Shifts travel with the adapter: a wrong one is a valid schedule over the wrong grid, so nothing catches it.
+    """
+    env = os.environ
+    path = lora_path or env.get(LORA_PATH_ENV) or None
+    strength = float(env.get(LORA_STRENGTH_ENV, 1.0)) if lora_strength is None else float(lora_strength)
+    if strength <= 0:
+        raise ValueError(f"lora_strength must be positive, got {strength}")
+    video = float(env.get(VIDEO_SHIFT_ENV, default_video_shift)) if video_shift is None else float(video_shift)
+    audio = float(env.get(AUDIO_SHIFT_ENV, default_audio_shift)) if audio_shift is None else float(audio_shift)
+    for name, value in (("video_shift", video), ("audio_shift", audio)):
+        if value <= 0:
+            raise ValueError(f"{name} must be positive, got {value}")
+    return AdapterSettings(
+        lora_path=None if path is None else Path(path),
+        lora_strength=strength,
+        video_shift=video,
+        audio_shift=audio,
+    )

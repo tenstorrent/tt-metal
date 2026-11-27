@@ -29,6 +29,12 @@ void kernel_main() {
     DataflowBuffer dfb_one_obj(dfb::one);
     DataflowBuffer dfb_decimal_obj(dfb::decimal);
     DataflowBuffer dfb_mask_w_obj(dfb::mask_w);
+    DataflowBuffer dfb_x_obj(dfb::x);
+    DataflowBuffer dfb_xabs_obj(dfb::xabs);
+    DataflowBuffer dfb_xpow_obj(dfb::xpow);
+    DataflowBuffer dfb_logx_obj(dfb::logx);
+    DataflowBuffer dfb_exp_lxmd_obj(dfb::exp_lxmd);
+    DataflowBuffer dfb_y_obj(dfb::y);
 
     dfb_one_obj.wait_front(onetile);
     dfb_decimal_obj.wait_front(onetile);
@@ -45,7 +51,7 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::CopyTile<ckl::input(
-                    dfb::x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{},
+                    dfb::x, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, kDataFormatReconfig)>{dfb_x_obj},
                 ckl::runtime_if(
                     do_mask_w && (col_idx == Wt - 1),
                     ckl::CopyTile<
@@ -56,14 +62,23 @@ void kernel_main() {
                             ckl::InputTileMapping::Scalar,
                             kDataFormatReconfig,
                             ckl::TileAddressing::Offset),
-                        ckl::Dst::D1>{},
+                        ckl::Dst::D1>{dfb_mask_w_obj},
                     ckl::Mask<>{}),
                 ckl::Abs<>{},
                 ckl::PackTile<ckl::output(
-                    dfb::xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{});
+                    dfb::xabs, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, kDataFormatReconfig)>{
+                    dfb_xabs_obj});
 
             // |x| -> |x|^p via log(|x|) and exp(log(|x|) * decimal).
-            power_tile_to_dfb<dfb::xabs, dfb::xpow, dfb::logx, dfb::decimal, dfb::exp_lxmd, dfb::y>(p, p_is_negative);
+            power_tile_to_dfb<dfb::xabs, dfb::xpow, dfb::logx, dfb::decimal, dfb::exp_lxmd, dfb::y>(
+                dfb_xabs_obj,
+                dfb_xpow_obj,
+                dfb_logx_obj,
+                dfb_decimal_obj,
+                dfb_exp_lxmd_obj,
+                dfb_y_obj,
+                p,
+                p_is_negative);
         }
     }
 

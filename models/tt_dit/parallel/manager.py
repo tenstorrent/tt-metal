@@ -2,18 +2,35 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from contextlib import contextmanager
+
 import torch
 
 import ttnn
 
 from ..utils.tensor import local_device_to_torch
 
+# ttnn's block-float dtypes have no element_size() (it raises "datum for bfp2, bfp4, bfp8 is invalid"): each
+# element is a 8-, 4- or 2-bit mantissa plus a 1-byte exponent shared by 16, so a 32x32 tile takes
+# 1088, 576 or 320 bytes.
+_BFP_MANTISSA_BITS = {"BFLOAT8_B": 8, "BFLOAT4_B": 4, "BFLOAT2_B": 2}
+
+
+def _tensor_nbytes(t) -> int:
+    """Bytes ``t`` takes on one chip: its padded volume times its element size, block-float dtypes included."""
+    bits = _BFP_MANTISSA_BITS.get(str(t.dtype).rsplit(".", 1)[-1])
+    if bits is None:
+        return t.volume() * t.element_size()
+    volume = t.volume()
+    return volume * bits // 8 + volume // 16
+
 
 class CCLManager:
     """
     Manages parallelization of DiT model.
 
-        - stores mesh device, num links, topology
+        - stores mesh device, num links, topology (`reduce_scatter_topology` sets the reduce-scatters' own)
         - caches ping pong buffers and semaphores
         - sets up one SubDevice spanning all compute cores
     """
@@ -23,10 +40,12 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        reduce_scatter_topology=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.reduce_scatter_topology = reduce_scatter_topology or topology
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -35,6 +54,12 @@ class CCLManager:
         # Ping-pong pool of persistent stats buffers for the fused distributed-norm op,
         # keyed by the caller's shape/config key. See get_fused_norm_stats_buffer.
         self._fused_norm_stats_buffer_cache = {}
+
+        # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
+        self._strided_ag_mm_sem_cache = {}
+        self._strided_ag_mm_sem_idx = {}
+        # Single shared MM->RS progress counter array. See get_mm_progress_counters_buffer.
+        self._mm_progress_counters_buffer = None
 
         # Lazily-allocated ping-pong pool of semaphore lists for the strided all-gather-matmul op
         self._strided_ag_mm_sem_cache = {}
@@ -138,6 +163,22 @@ class CCLManager:
             dim += len(shape)
         return dim
 
+    def ping_pong_buffer_report(self):
+        """Return ``(nbytes, description)`` per cached ping-pong shape, largest first.
+
+        ``nbytes`` counts every buffer under that key on one chip; the description names the
+        collective kind, the number of buffers and the shape.
+        """
+        rows = []
+        for key, buffers in self._ping_pong_buffer_cache.items():
+            # Reduce-scatter entries hold [intermediate, output-or-None] pairs; the rest hold tensors.
+            tensors = [t for b in buffers for t in (b if isinstance(b, (list, tuple)) else [b]) if t is not None]
+            nbytes = sum(_tensor_nbytes(t) for t in tensors)
+            # Reduce-scatter keys start with the shape; the others start with a kind label.
+            kind, shape = (key[0], key[1]) if isinstance(key[0], str) else ("rs", key[0])
+            rows.append((nbytes, f"{kind} x{len(buffers)} {tuple(shape)}"))
+        return sorted(rows, reverse=True)
+
     def get_rs_ping_pong_buffer(
         self,
         shape,
@@ -178,7 +219,7 @@ class CCLManager:
             # an intermediate that is neither the tiled spec nor the contiguous staging buffer.
             # TODO: Switch over to using reduce_scatter_minimal_async_create_intermediate_buffer.
             intermediate_buffer_shape = list(shape)
-            if self.topology == ttnn.Topology.Linear:
+            if self.reduce_scatter_topology == ttnn.Topology.Linear:
                 intermediate_buffer_shape[0] *= 2
             for _ in range(2):
                 # Device-native, uninitialized allocation: these scratch ping-pong
@@ -219,7 +260,9 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
-    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True):
+    def get_ag_ping_pong_buffer(
+        self, shape, dim, mesh_axis, dtype=ttnn.bfloat16, device_synchronize=True, capacity=None, rows=None
+    ):
         """
         Get or create ping pong buffers for all gather operations.
         Caches buffers based on shape, dim, and mesh_axis.
@@ -228,13 +271,25 @@ class CCLManager:
             shape: Tensor shape tuple
             dim: Dimension for the operation
             mesh_axis: Mesh axis for parallelization
+            capacity: Rows to allocate along `dim` instead of the gathered size, so varying
+                gathered lengths up to it share one pair.
+            rows: Rows to allocate along the row dim (-2) instead of `shape`'s, so varying row
+                counts up to it share one pair; the consumer must read only `shape`'s rows.
 
         Returns:
             Current ping pong buffer (alternates between two buffers)
         """
         # Create cache key from the parameters (use different namespace than rs)
         dim = self.get_dim(dim, shape)
-        cache_key = ("ag", tuple(shape), dim, mesh_axis, dtype)
+        output_buffer_shape = list(shape)
+        output_buffer_shape[dim] = capacity or shape[dim] * self.mesh_device.shape[mesh_axis]
+        if rows is not None:
+            row_dim = len(output_buffer_shape) - 2
+            assert dim != row_dim, f"rows={rows} sizes the row dim, which is the gather dim {dim} of {tuple(shape)}"
+            assert shape[row_dim] <= rows, f"{tuple(shape)} has more rows than the pair's capacity {rows}"
+            output_buffer_shape[row_dim] = rows
+        cache_key = ("ag", tuple(output_buffer_shape), dim, mesh_axis, dtype)
+        self._check_audio_buffer(cache_key)
 
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
@@ -243,18 +298,24 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
             # Create two buffers for ping pong
             buffers = []
-            output_buffer_shape = list(shape)
-            output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
             for _ in range(2):
                 # Device-native, uninitialized allocation: the all-gather fully
                 # overwrites this buffer, so no zero-init is needed.
-                output_buffer = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape(output_buffer_shape),
-                    dtype,
-                    ttnn.TILE_LAYOUT,
-                    self.mesh_device,
-                    ttnn.DRAM_MEMORY_CONFIG,
-                )
+                try:
+                    output_buffer = ttnn.allocate_tensor_on_device(
+                        ttnn.Shape(output_buffer_shape),
+                        dtype,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh_device,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                except RuntimeError:
+                    # The caller's live tensors are still on device here, so this is the exact
+                    # picture at the failure (no-op unless MINIMAX_H3_DRAM_PROBE=1).
+                    from ..utils import dram_probe
+
+                    dram_probe.report(f"OOM allocating ag ping-pong {cache_key} ({len(buffers)} of 2 done)")
+                    raise
                 buffers.append(output_buffer)
 
             self._ping_pong_buffer_cache[cache_key] = buffers
@@ -263,10 +324,153 @@ class CCLManager:
                 ttnn.synchronize_device(self.mesh_device)
 
         # Get current buffer and alternate index
+        self._record_audio_buffer(cache_key)
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
+
+    @contextmanager
+    def audio_buffer_scope(self, prepared=None):
+        """Record an eager audio graph's buffers, or require those exact buffers for capture.
+
+        Preparation is the existing eager warm pass, never an extra collective dispatch.
+        A missing/replaced pool is rejected before a getter can synchronize or allocate.
+        Semaphore and ping-pong indices stay owned by this manager and are never reset.
+        """
+        if getattr(self, "_audio_buffer_record", None) is not None:
+            raise RuntimeError("audio buffer preparation scopes cannot nest")
+        self._audio_buffer_record = {} if prepared is None else prepared
+        self._audio_buffer_capture = prepared is not None
+        try:
+            if prepared is not None:
+                for key in prepared:
+                    self._check_audio_buffer(key)
+            yield self._audio_buffer_record
+        finally:
+            self._audio_buffer_record = None
+            self._audio_buffer_capture = False
+
+    def audio_buffers_current(self, prepared) -> bool:
+        """True while every buffer a prepared record names is still the one this manager caches.
+
+        False once a buffer was freed or replaced after the record was made (e.g. by a
+        `transient_ping_pong_buffers` scope around an untraced decode).
+        """
+        return all(self._audio_buffer_matches(key, expected) for key, expected in prepared.items())
+
+    def _audio_buffer_matches(self, key, expected):
+        current = self._ping_pong_buffer_cache.get(key, ())
+        return expected is not None and len(current) == len(expected) and all(a is b for a, b in zip(current, expected))
+
+    def _check_audio_buffer(self, key):
+        if not getattr(self, "_audio_buffer_capture", False):
+            return
+        if not self._audio_buffer_matches(key, self._audio_buffer_record.get(key)):
+            raise RuntimeError(f"audio CCL buffer {key} is not prepared; release traces and warm the decoder")
+
+    def _record_audio_buffer(self, key):
+        record = getattr(self, "_audio_buffer_record", None)
+        if record is not None and not self._audio_buffer_capture:
+            record[key] = tuple(self._ping_pong_buffer_cache[key])
+
+    @contextmanager
+    def transient_ping_pong_buffers(self):
+        """Free every ping-pong buffer first allocated inside this scope when it exits.
+
+        The cache is keyed by shape and never evicts, which is right for shapes a trace bakes --
+        but a stage whose shapes vary per request (the text conditioner's presentation-length
+        gathers) would grow the cache by a fresh pair per distinct length, permanently. Wrapping
+        that stage frees exactly the pairs it added; pairs that existed before the scope --
+        including every trace-referenced one -- are untouched. Only for UNTRACED stages: freeing
+        a buffer a live capture references corrupts its replays.
+        """
+
+        # The cache is shared by several getters whose entries differ in nesting: a flat
+        # [ping, pong] pair, or [[intermediate, output], ...] pairs where either half may be None.
+        def deallocate_entry(entry):
+            if entry is None:
+                return
+            if isinstance(entry, (list, tuple)):
+                for item in entry:
+                    deallocate_entry(item)
+            else:
+                ttnn.deallocate(entry)
+
+        before = set(self._ping_pong_buffer_cache)
+        try:
+            yield
+        finally:
+            for key in [k for k in self._ping_pong_buffer_cache if k not in before]:
+                deallocate_entry(self._ping_pong_buffer_cache.pop(key))
+                self._ping_pong_buffer_indices.pop(key, None)
+
+    def _cached_buffer_entries(self):
+        """Every device tensor the shape-keyed caches hold: the ping-pong, halo and neighbor-pad
+        pairs and the fused-norm stats pools. Semaphores and the shape-independent counter
+        buffers are not included."""
+        out = []
+
+        def flatten(entry):
+            if isinstance(entry, (list, tuple)):
+                for item in entry:
+                    flatten(item)
+            elif isinstance(entry, dict):
+                flatten(entry.get("bufs"))
+            elif entry is not None:
+                out.append(entry)
+
+        flatten(list(self._ping_pong_buffer_cache.values()))
+        flatten(list(self._fused_norm_stats_buffer_cache.values()))
+        return out
+
+    def cached_buffer_bytes(self) -> int:
+        """Bytes on one chip held by the shape-keyed buffer caches (see release_shape_buffers)."""
+        return sum(_tensor_nbytes(t) for t in self._cached_buffer_entries())
+
+    def release_shape_buffers(self) -> tuple[int, int]:
+        """Free every shape-keyed persistent buffer and empty the caches; return (tensors, bytes).
+
+        These caches never evict, so each new shape adds its set and keeps the old one. Call
+        only once every trace that baked their addresses is released (reset_for_shape does it
+        in that order). The device is synchronized first so no op in flight still uses them,
+        and the global semaphores are reset to 0 for the next capture; they, the sub-device and
+        the counter buffers stay allocated. A prepared audio record goes stale and is rebuilt
+        by the decoder's next warm pass.
+        """
+        entries = self._cached_buffer_entries()
+        if not entries:
+            return 0, 0
+        nbytes = self.cached_buffer_bytes()
+        ttnn.synchronize_device(self.mesh_device)
+        for t in entries:
+            ttnn.deallocate(t)
+        self._ping_pong_buffer_cache.clear()
+        self._ping_pong_buffer_indices.clear()
+        self._fused_norm_stats_buffer_cache.clear()
+        self.reset_global_semaphores(all_pools=True)
+        self._reset_ping_pong_indices()
+        ttnn.synchronize_device(self.mesh_device)
+        return len(entries), nbytes
+
+    def _reset_ping_pong_indices(self):
+        """Put every host-side ping-pong index back to where a new manager starts it, so the
+        next capture pairs each op with the same semaphore and buffer halves a fresh process
+        would (the semaphores themselves were just zeroed)."""
+        for name in (
+            "rs_ping_pong_idx",
+            "rs_ping_pong_idx_fused",
+            "ag_ping_pong_idx",
+            "exp_ring_ping_pong_idx",
+            "np_ping_pong_idx",
+            "np_fused_ping_pong_idx",
+            "sr_ping_pong_idx",
+            "barrier_idx",
+            "barrier_fused_idx",
+        ):
+            setattr(self, name, [0, 0])
+        for key in self._strided_ag_mm_sem_idx:
+            self._strided_ag_mm_sem_idx[key] = 0
 
     def get_rs_ping_pong_semaphore(self, mesh_axis):
         """
@@ -555,6 +759,7 @@ class CCLManager:
         input_pad_h: int = 0,
         input_pad_w: int = 0,
         padded_output: ttnn.Tensor = None,
+        topology: ttnn.Topology = None,
     ) -> ttnn.Tensor:
         """Fill and return the compact [H-top|H-bot|W-left|W-right] halo buffer via the standalone
         neighbor_pad_halo op. Pair with ttnn.experimental.conv3d(halo_buffer=...) for the two-dispatch
@@ -592,7 +797,7 @@ class CCLManager:
             np_padding_w=pw,
             np_cluster_axis=axes[0],
             np_num_links=num_links[0],
-            np_topology=self.topology,
+            np_topology=topology if topology is not None else self.topology,
             h_neighbor_semaphore=neighbor_sems[0],
             barrier_semaphore=barrier_sem,
             w_neighbor_semaphore=w_sem,
@@ -699,6 +904,7 @@ class CCLManager:
             output_shape[dims[0] - 1] += t_front_pad
 
         cache_key = ("np", tuple(output_shape), dtype)
+        self._check_audio_buffer(cache_key)
 
         if cache_key not in self._ping_pong_buffer_cache:
             if device_synchronize:
@@ -722,6 +928,7 @@ class CCLManager:
             if device_synchronize:
                 ttnn.synchronize_device(self.mesh_device)
 
+        self._record_audio_buffer(cache_key)
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
 
@@ -741,6 +948,7 @@ class CCLManager:
         num_links: list,
         logical_h: int = 0,
         t_front_pad: int = 0,
+        logical_w: int = 0,
     ) -> ttnn.Tensor:
         """
         Helper function to neighbor-pad a tensor with a persistent output buffer.
@@ -757,6 +965,7 @@ class CCLManager:
             use_persistent_buffer=True,
             logical_h=logical_h,
             t_front_pad=t_front_pad,
+            logical_w=logical_w,
         )
 
     def neighbor_pad(
@@ -774,6 +983,7 @@ class CCLManager:
         use_persistent_buffer: bool = False,
         logical_h: int = 0,
         t_front_pad: int = 0,
+        logical_w: int = 0,
     ) -> ttnn.Tensor:
         barrier_sem = self.get_barrier_semaphore(axes[0])
 
@@ -799,10 +1009,27 @@ class CCLManager:
             persistent_output_buffer=persistent_buf,
             logical_h=logical_h,
             t_front_pad=t_front_pad,
+            logical_w=logical_w,
         )
 
-    def reset_global_semaphores(self):
-        """Reset all global semaphores to 0"""
+    def reset_global_semaphores(self, all_pools: bool = False):
+        """Reset the global semaphores to 0. all_pools also zeroes the fused reduce-scatter,
+        exp-ring, barrier and strided all-gather-matmul pools, which a shape reset must clear
+        too: left with a previous shape's counts they no longer match what the next capture
+        expects (a 10 s render after a 6 s -> 10 s reset hung on the device, task #3986 leg d1)."""
+        if all_pools:
+            for pool in (
+                self.rs_ping_pong_semaphores_fused,
+                self.exp_ring_ping_pong_semaphores,
+                self.barrier_semaphores,
+            ):
+                for axis in (0, 1):
+                    for sem in pool[axis]:
+                        ttnn.reset_global_semaphore_value(sem, 0)
+            for halves in self._strided_ag_mm_sem_cache.values():
+                for sems in halves:
+                    for sem in sems:
+                        ttnn.reset_global_semaphore_value(sem, 0)
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
@@ -845,7 +1072,12 @@ class CCLManager:
         mesh_axis: int | None,
         use_hyperparams: bool,
         use_persistent_buffer: bool = False,
+        num_workers_per_link: int | None = None,
+        hyperparam_rows: int | None = None,
     ) -> ttnn.Tensor:
+        """`num_workers_per_link` pins the op's worker count (else it is picked from the output byte count).
+        `hyperparam_rows` picks the hyperparameters for that row count instead of the tensor's, so every length
+        up to it runs one program."""
         if mesh_axis is None or self.mesh_device.shape[mesh_axis] == 1:
             return tensor
 
@@ -859,7 +1091,9 @@ class CCLManager:
             tensor = ttnn.reshape(tensor, shape)
             dim += 4 - rank
 
-        params = self.get_ag_hyperparams(tensor.shape) if use_hyperparams else {}
+        params = self.get_ag_hyperparams(tensor.shape, rows=hyperparam_rows) if use_hyperparams else {}
+        if num_workers_per_link is not None:
+            params["num_workers_per_link"] = num_workers_per_link
 
         tensor = ttnn.experimental.all_gather_async(
             tensor,
@@ -886,7 +1120,7 @@ class CCLManager:
     def reduce_scatter_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None
     ) -> ttnn.Tensor:
-        self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
+        return self.reduce_scatter(tensor, dim=dim, mesh_axis=mesh_axis, use_persistent_buffer=True)
 
     def reduce_scatter(
         self,
@@ -919,7 +1153,7 @@ class CCLManager:
             multi_device_global_semaphore=self.get_rs_ping_pong_semaphore(mesh_axis),
             num_links=self.num_links,
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-            topology=self.topology,
+            topology=self.reduce_scatter_topology,
             cluster_axis=mesh_axis,
             **self.get_rs_hyperparams(tensor.shape),
         )
@@ -930,19 +1164,29 @@ class CCLManager:
 
         return tensor
 
-    def get_ag_hyperparams(self, shape):
-        if shape[2] > 512:
-            return {
+    def get_ag_hyperparams(self, shape, rows=None):
+        if (shape[2] if rows is None else rows) > 512:
+            params = {
                 "chunks_per_sync": 16,
                 "num_workers_per_link": 3,
                 "num_buffers_per_channel": 2,
             }
         else:
-            return {
+            params = {
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "num_buffers_per_channel": 2,
             }
+        # Overridable per-knob: these are a tuned starting point, not a measured optimum for every
+        # shape on this mesh, and reaching them from a sweep otherwise needs a source edit.
+        for key, env in (
+            ("chunks_per_sync", "DIFFVAE_AG_CHUNKS"),
+            ("num_workers_per_link", "DIFFVAE_AG_WORKERS"),
+            ("num_buffers_per_channel", "DIFFVAE_AG_BUFS"),
+        ):
+            if os.environ.get(env):
+                params[key] = int(os.environ[env])
+        return params
 
     def get_rs_hyperparams(self, shape):
         return {

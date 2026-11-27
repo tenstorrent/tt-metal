@@ -1,0 +1,14 @@
+# CosyVoice2 on TTNN -- what the on-device model adds to tt-metal's python_env.
+#
+# The pipeline, the demo and every test under tests/ run in tt-metal's own python_env, which already provides
+# torch, numpy, transformers (the Qwen2 text tokenizer), librosa, soundfile and huggingface_hub. The one addition:
+#
+#   inflect  -- spells out numbers in the text normalizer (tt/text.py), exactly as upstream CosyVoice2's
+#               frontend does (cosyvoice.utils.frontend_utils.spell_out_number). Pure Python; it pulls in
+#               typeguard. No torch dependency.
+#
+# The upstream frontend (ONNX speech tokenizer and speaker encoder, Whisper), the PyTorch reference and the
+# WER/SIM scorer are NOT here: they run in a separate host-only venv (requirements-reference-torch.txt, then
+# requirements-reference.txt). docs/security.md documents that boundary.
+
+inflect==7.5.0

@@ -14,11 +14,14 @@
 #include <vector>
 
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
+#include "impl/program/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -39,14 +42,14 @@ uint32_t read_word(IDevice* device, const CoreCoord& core, uint32_t addr) {
 // Slow dispatch only: the fixture skips otherwise.
 TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotRun) {
     for (const auto& mesh : devices_) {
-        IDevice* device = mesh->get_devices().at(0);
+        auto* device = mesh->impl().get_devices().at(0);
         const CoreCoord core{0, 0};
         // Nothing is allocated in this test, so the allocator's base is free scratch.
         const auto addr = static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
         std::vector<uint32_t> zero{0};
         detail::WriteToDeviceL1(device, core, addr, zero);
 
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh);
         KernelHandle kernel = CreateKernel(
             program,
             MARKER_KERNEL,
@@ -70,7 +73,8 @@ TEST_F(MeshDeviceFixture, TensixConfigureProgramWithoutLaunchInstallsButDoesNotR
         EXPECT_EQ(again.launch_kernel_config(), cfg.launch_kernel_config());
 
         // The same program, launched for real, runs.
-        detail::LaunchProgram(device, program);
+        slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/false);
+        slow_dispatch::WaitProgramDone(*device, program);
         EXPECT_EQ(read_word(device, core, addr), MARKER) << "the same program launched normally writes the marker";
     }
 }

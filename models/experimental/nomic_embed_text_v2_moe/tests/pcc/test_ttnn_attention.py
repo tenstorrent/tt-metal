@@ -26,7 +26,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe im
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     DECORRELATED_PCC,
     DENSE_LAYER,
-    TOKEN_SHAPES,
+    DENSE_SHAPES,
     from_block_layout,
     hidden_states,
     keep_mask,
@@ -39,7 +39,8 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     rotary_tables,
     to_device,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
@@ -60,21 +61,22 @@ def tt_attention(device, config, tt_config, state_dict):
     return TtNomicBertAttention(device, config, tt_config, state_dict, PREFIX)
 
 
-def interleaved_tables(device, config, seqlen, dtype=ttnn.bfloat16):
-    """The GPT-J lane pairing: repeat_interleave instead of concat when widening D//2 to D.
+def concat_widened_tables(device, config, seqlen, dtype=ttnn.bfloat16):
+    """The reference's own widening of D//2 to D, torch.cat, which is wrong for the port.
 
-    The other plausible way to widen the half-width tables, and wrong under the kernel's NeoX
-    rotate-half: the pair is not a rotation and does not preserve the per-plane norm.
+    The module's q and k come out pair-permuted for rotary_embedding_llama's adjacent pairs, which
+    take pair-interleaved tables; under concat-widened ones the pair is not a rotation and does not
+    preserve the per-plane norm.
     """
     rotary = NomicBertRotaryEmbedding(dim=config.rotary_dim, base=config.rotary_emb_base)
     rotary._update_cos_sin_cache(seqlen, device=torch.device("cpu"), dtype=torch.float32)
     return tuple(
-        to_device(torch.repeat_interleave(table, 2, dim=-1)[None, None], device, dtype=dtype)
+        to_device(torch.cat((table, table), dim=-1)[None, None], device, dtype=dtype)
         for table in (rotary._cos_cached, rotary._sin_cached)
     )
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
+@pytest.mark.parametrize("batch, seqlen", DENSE_SHAPES)
 def test_attention_unmasked(device, config, reference, tt_attention, batch, seqlen):
     """Projection, rotary, bidirectional SDPA and the output projection, with no padding."""
     x = hidden_states(batch, seqlen, config.hidden_size)
@@ -87,8 +89,8 @@ def test_attention_unmasked(device, config, reference, tt_attention, batch, seql
     assert_with_pcc(ref, from_block_layout(out), MODULE_PCC)
 
 
-@pytest.mark.parametrize("batch, seqlen", TOKEN_SHAPES)
-def test_attention_with_ragged_padding(device, config, reference, tt_attention, batch, seqlen):
+@pytest.mark.parametrize("batch, seqlen", DENSE_SHAPES)
+def test_attention_with_ragged_padding(device, config, tt_config, reference, tt_attention, batch, seqlen):
     """The same module with 25% of each row padded, compared on the kept positions.
 
     Finiteness is asserted too: the mask carries dtype-min, and saturation is how that would
@@ -101,7 +103,7 @@ def test_attention_with_ragged_padding(device, config, reference, tt_attention, 
     out = tt_attention(
         to_device(to_block_layout(x), device),
         rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
+        additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
     )
 
     with torch.no_grad():
@@ -112,13 +114,15 @@ def test_attention_with_ragged_padding(device, config, reference, tt_attention, 
 
 
 @pytest.mark.parametrize("seqlen", [37, 128])
-def test_an_all_ones_mask_is_a_no_op(device, config, tt_attention, seqlen):
+def test_an_all_ones_mask_is_a_no_op(device, config, tt_config, tt_attention, seqlen):
     """Masking nothing must change nothing, which is what pins the mask's tile padding.
 
     The mask is (B, 1, S, S) in TILE layout, so S rounds up to a multiple of 32 and the pad
     columns take whatever the conversion fills them with. 0 is additively neutral, meaning
     "attend here", so SDPA would count them in the softmax denominator: at S=37 that took the
-    output norm to 0.69x. Gated on equality rather than PCC, which barely moves.
+    output norm to 0.69x. Gated on equality rather than PCC, which barely moves. The model skips
+    an all-ones mask, but a padded batch's mask has the same padding, so this runs the model's
+    mask dtype.
     """
     batch = 2
     x = to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device)
@@ -126,7 +130,13 @@ def test_an_all_ones_mask_is_a_no_op(device, config, tt_attention, seqlen):
 
     unmasked = from_block_layout(tt_attention(x, rot_mats))
     masked = from_block_layout(
-        tt_attention(x, rot_mats, additive_attention_mask(keep_mask(batch, seqlen, seqlen), device))
+        tt_attention(
+            x,
+            rot_mats,
+            additive_attention_mask(
+                keep_mask(batch, seqlen, seqlen), device, mask_dtype=tt_config.attention_mask_dtype
+            ),
+        )
     )
 
     assert torch.equal(masked, unmasked), (
@@ -146,13 +156,13 @@ def test_rotary_at_position_zero_is_the_identity(device, config, state_dict, tt_
     x = torch.randn(1, heads, ttnn.TILE_SIZE, head_dim)
     cos, sin = rotary_tables(device, config, ttnn.TILE_SIZE)
 
-    rotated = ttnn.to_torch(attention._rotate(to_device(x, device), cos, sin)).float()
+    rotated = ttnn.to_torch(attention._rotate(to_device(x, device), cos, sin, ttnn.DRAM_MEMORY_CONFIG)).float()
 
     assert_with_pcc(x[:, :, 0], rotated[:, :, 0], 0.9999)
 
 
-def test_interleaved_rotary_tables_are_decorrelated(device, config, reference, tt_attention):
-    """Negative control for gate 2: the module must be fed concat-widened tables.
+def test_concat_widened_rotary_tables_are_decorrelated(device, config, reference, tt_attention):
+    """Negative control for gate 2: the module must be fed pair-interleaved tables.
 
     Both widenings run and return finite output, so only a comparison separates them.
     """
@@ -164,11 +174,11 @@ def test_interleaved_rotary_tables_are_decorrelated(device, config, reference, t
         ref = reference(x, attention_mask=None)
 
     correct = from_block_layout(tt_attention(x_tt, rotary_tables(device, config, seqlen)))
-    interleaved = from_block_layout(tt_attention(x_tt, interleaved_tables(device, config, seqlen)))
+    concat_widened = from_block_layout(tt_attention(x_tt, concat_widened_tables(device, config, seqlen)))
 
     # Guards against a vacuous pass: compute_pcc returns 0.0 on a broken comparison.
     assert compute_pcc(correct, ref) > MODULE_PCC
-    assert compute_pcc(interleaved, ref) < DECORRELATED_PCC
+    assert compute_pcc(concat_widened, ref) < DECORRELATED_PCC
 
 
 def test_the_module_overrides_the_causal_default(device, config, reference, tt_attention, tt_config):
@@ -192,7 +202,7 @@ def test_the_module_overrides_the_causal_default(device, config, reference, tt_a
     causal, acausal = (
         ttnn.to_torch(
             ttnn.transformer.scaled_dot_product_attention(
-                *operands, is_causal=flag, compute_kernel_config=tt_config.compute_kernel_config
+                *operands, is_causal=flag, compute_kernel_config=tt_config.compute_kernel_config(OpGroup.SDPA)
             )
         ).float()
         for flag in (True, False)

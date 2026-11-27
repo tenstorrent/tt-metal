@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include "tt_metal/test_utils/packing.hpp"
 
 namespace tt::test_utils {
@@ -116,8 +117,10 @@ inline bool check_pcc(const std::vector<float>& a, const std::vector<float>& b, 
     }
     const double pcc = (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
 
-    if (pcc < min_pcc) {
-        log_error(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
+    // NaN compares false against everything, so `pcc < min_pcc` alone would accept a NaN/Inf PCC
+    // (e.g. a device output containing an FP8 NaN byte).
+    if (!std::isfinite(pcc) || pcc < min_pcc) {
+        log_error(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {} (or not finite)", pcc, min_pcc);
         return false;
     }
     return true;

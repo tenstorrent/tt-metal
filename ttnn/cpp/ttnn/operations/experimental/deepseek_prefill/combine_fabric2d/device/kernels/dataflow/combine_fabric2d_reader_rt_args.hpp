@@ -24,6 +24,11 @@
 
 namespace cmbf2d {
 
+#ifndef KERNEL_BUILD
+#include <variant>
+#include <vector>
+#endif
+
 #ifdef KERNEL_BUILD
 inline uint32_t get_rt_arg(uint32_t idx) { return get_arg_val<uint32_t>(idx); }
 #endif
@@ -38,6 +43,7 @@ struct ReaderRtArgs {
     uint32_t dram_counts;
     uint32_t dram_region;
     uint32_t dram_expert_offsets;
+    uint32_t dram_expert_table;  // zero when there is no table
 
 private:
     friend struct ReaderRtArgManager;
@@ -50,7 +56,8 @@ private:
         dram_meta(get_rt_arg(3)),
         dram_counts(get_rt_arg(4)),
         dram_region(get_rt_arg(5)),
-        dram_expert_offsets(get_rt_arg(6)) {}
+        dram_expert_offsets(get_rt_arg(6)),
+        dram_expert_table(get_rt_arg(7)) {}
 #else
     ReaderRtArgs() = default;
 #endif
@@ -61,8 +68,14 @@ struct ReaderRtArgManager {
     explicit ReaderRtArgManager(const op::DramBuffers& dram) : dram_(dram) {}
 
     void setup_rt_args(tt::tt_metal::KernelDescriptor& kernel_desc, const tt::tt_metal::CoreCoord& core) const {
-        kernel_desc.emplace_runtime_args(
-            core, {dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets});
+        std::vector<std::variant<uint32_t, tt::tt_metal::Buffer*>> args{
+            dram_.in, dram_.out, dram_.fwd, dram_.meta, dram_.counts, dram_.region, dram_.expert_offsets};
+        if (dram_.expert_table != nullptr) {
+            args.emplace_back(dram_.expert_table);
+        } else {
+            args.emplace_back(0u);
+        }
+        kernel_desc.emplace_runtime_args(core, args);
     }
 
 private:

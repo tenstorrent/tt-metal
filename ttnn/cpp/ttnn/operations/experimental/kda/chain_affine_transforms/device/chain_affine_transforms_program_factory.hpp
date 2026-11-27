@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+
+#include <tt-metalium/tt_backend_api_types.hpp>
+
+#include "chain_affine_transforms_device_operation_types.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+
+namespace ttnn::experimental::prim {
+
+// Per-core DFBs: initial_exact, product, state and out each hold one FP32 [K, V] state block and state_exact two (it is
+// read and rewritten in one step), and the E and B rows are double-buffered so the next step's rows stream while
+// compute applies this one.
+inline constexpr uint32_t chain_affine_transforms_state_blocks = 6;
+inline constexpr uint32_t chain_affine_transforms_transform_buffers = 2;
+
+inline uint64_t chain_affine_transforms_l1_bytes(uint64_t key_tiles, uint64_t value_tiles) {
+    return (chain_affine_transforms_state_blocks * key_tiles * value_tiles * tt::tile_size(tt::DataFormat::Float32)) +
+           (chain_affine_transforms_transform_buffers * key_tiles * (key_tiles + value_tiles) *
+            tt::tile_size(tt::DataFormat::Float16_b));
+}
+
+struct ChainAffineTransformsProgramFactory {
+    // One program per tensor range; each device's sp_rank is a per-device run arg, set once at the cache miss.
+    static constexpr bool uses_per_device_run_args = true;
+    static constexpr bool fixed_per_device_run_args = true;  // sp_rank depends only on the device
+
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const ChainAffineTransformsParams&,
+        const ChainAffineTransformsInputs&,
+        std::vector<Tensor>&,
+        const ttnn::MeshCoordinateRangeSet&);
+};
+
+}  // namespace ttnn::experimental::prim

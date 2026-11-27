@@ -11,7 +11,7 @@ import torch
 import ttnn
 import math
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_allclose,
@@ -19,6 +19,14 @@ from tests.ttnn.utils_for_testing import (
     make_full_dram_core_range_set,
     resolve_dram_grid,
 )
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_blackhole_dtype_layout_params,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 pytestmark = pytest.mark.use_module_device
 
@@ -2124,16 +2132,17 @@ def test_copy_rm_legacy_2d_sharded_to_interleaved(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2167,10 +2176,11 @@ def test_copy_rm_interleaved_to_nd_sharded_large_row(
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
     [
+        # Width-sharded shards of 1.5 subblocks.
         (
-            [160, 5210112],
-            [160, 434176],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [32, 393216],
+            [32, 98304],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
     ],
 )
@@ -2207,16 +2217,17 @@ def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2606,6 +2617,97 @@ def test_copy_rm_preallocated_output(device, tensor_shape, shard_shape, grid, bu
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.assign))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.assign))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.assign))
+def test_assign_docstring_supported_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.assign docstring lists, for the input and the
+    output: into a new tensor, into ``output_tensor``, and into ``input_b`` through the second overload. The same
+    buffer type for both and different ones run different programs."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    shape = (2, 3, 50, 70)  # neither of the last two dims is a multiple of 32
+    memory_config = interleaved_memory_config(output_buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input(shape, dtype),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=interleaved_memory_config(input_buffer_type),
+    )
+    expected = ttnn.to_torch(input_tensor)
+
+    output = ttnn.assign(input_tensor, memory_config=memory_config)
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config() == memory_config
+    assert_exact(expected, ttnn.to_torch(output))
+
+    # Every value differs from the input's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(expected.dtype)
+
+    def destination():
+        return ttnn.from_torch(other_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+    output_tensor = destination()
+    output = ttnn.assign(input_tensor, memory_config=memory_config, output_tensor=output_tensor)
+    assert output.buffer_address() == output_tensor.buffer_address()
+    assert_exact(expected, ttnn.to_torch(output_tensor))
+
+    input_b = destination()
+    output = ttnn.assign(input_tensor, input_b)
+    assert output.buffer_address() == input_b.buffer_address()
+    assert_exact(expected, ttnn.to_torch(input_b))
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.assign))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.assign))
+@pytest.mark.parametrize("dtype, layout", docstring_blackhole_dtype_layout_params(ttnn.assign))
+def test_assign_docstring_blackhole_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs the dtypes the ttnn.assign docstring lists for Blackhole, for the input and the output in every
+    interleaved buffer type: into a new tensor, into ``output_tensor``, and into ``input_b`` through the second
+    overload. Values are compared after a conversion to FLOAT32 on host, which holds every FP8_E4M3 value."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    if not is_blackhole():
+        pytest.skip("the docstring lists these dtypes for Blackhole")
+
+    def read(tensor):
+        return ttnn.to_torch(ttnn.to_dtype(tensor.cpu(), ttnn.float32))
+
+    shape = (2, 3, 50, 70)
+    memory_config = interleaved_memory_config(output_buffer_type)
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        torch.randn(shape) * 8,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=interleaved_memory_config(input_buffer_type),
+    )
+    expected = read(input_tensor)
+
+    output = ttnn.assign(input_tensor, memory_config=memory_config)
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config() == memory_config
+    assert_exact(expected, read(output))
+
+    # Every value differs from the input's, so the test sees each one overwritten.
+    other_values = torch.where(expected == 1, 2, 1).to(expected.dtype)
+
+    def destination():
+        return ttnn.from_torch(other_values, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+
+    output_tensor = destination()
+    output = ttnn.assign(input_tensor, memory_config=memory_config, output_tensor=output_tensor)
+    assert output.buffer_address() == output_tensor.buffer_address()
+    assert_exact(expected, read(output_tensor))
+
+    input_b = destination()
+    output = ttnn.assign(input_tensor, input_b)
+    assert output.buffer_address() == input_b.buffer_address()
+    assert_exact(expected, read(input_b))
 
 
 # ---------------------------------------------------------------------------

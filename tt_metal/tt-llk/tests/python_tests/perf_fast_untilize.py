@@ -12,13 +12,13 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import PerfRunType
 from helpers.param_config import parametrize
-from helpers.perf.core import PerfConfig
+from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
+    NUM_GUARD_TILES,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -44,16 +44,12 @@ def test_perf_fast_untilize(
     configuration = PerfConfig(
         "sources/fast_untilize_test.cpp",
         formats,
-        run_types=[
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-        ],
+        run_types=ALL_PERF_RUN_TYPES,
         templates=[generate_input_dim(dimensions, dimensions), DEST_SYNC(dest_sync)],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),
+            NUM_GUARD_TILES(0),
         ],
         variant_stimuli=StimuliConfig(
             None,

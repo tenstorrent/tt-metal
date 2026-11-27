@@ -3,38 +3,41 @@
 
 import pytest
 from helpers.llk_params import PERF_LOOP_FACTOR_QUASAR, PERF_RUN_TYPES_QUASAR
-from helpers.param_config import parametrize
+from helpers.param_config import flat_axes, parametrize
 from quasar.test_transpose_dest_quasar import (
     PERF_TRANSPOSE_DEST_COMBINATIONS,
+    TRANSPOSE_DEST_FLAT_NAMES,
 )
 from quasar.test_transpose_dest_quasar import (
     test_transpose_dest_quasar as run_transpose_dest,
-)
-from quasar.test_transpose_dest_quasar import (
-    transpose_dest_implied_math_formats,
 )
 
 
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_dims=PERF_TRANSPOSE_DEST_COMBINATIONS,
-    implied_math_format=lambda: transpose_dest_implied_math_formats(is_perf=True),
+    **flat_axes(TRANSPOSE_DEST_FLAT_NAMES, PERF_TRANSPOSE_DEST_COMBINATIONS),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
 )
 def test_perf_transpose_dest_quasar(
     perf_report,
-    formats_dest_acc_sync_transpose_dims,
-    implied_math_format,
+    formats,
+    dest_acc,
+    dest_sync,
+    math_transpose_faces,
+    input_dimensions,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_transpose_dest(
-        formats_dest_acc_sync_transpose_dims,
-        implied_math_format,
+        formats,
+        dest_acc,
+        dest_sync,
+        math_transpose_faces,
+        input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

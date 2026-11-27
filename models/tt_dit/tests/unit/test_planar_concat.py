@@ -2,19 +2,24 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side coverage for the YUV 4:2:0 planar assembly.
+"""Coverage for the YUV 4:2:0 readback in ``yuv_d2h``.
 
 The C++/AVX2 scatter is checked byte-for-byte against a NumPy port of the torch
 fallback in ``yuv_d2h._yuv_planar_d2h``, so the two assembly paths cannot drift.
 Cases cover both source layouts, every tile-tail branch in the CHWT transpose,
-and logical crops (including one that drops a whole shard column).
+and logical crops (including one that drops a whole shard column). The last test
+reads back through ``fast_device_to_host_yuv`` on a device.
 """
 
 import numpy as np
 import pytest
+import torch
+
+import ttnn
 
 from ...utils.planar_concat import HAS_CPP_PLANAR_CONCAT, planar_concat_cpp
-from ...utils.yuv_d2h import fast_device_to_host_yuv
+from ...utils.test import mesh_device_config_to_string
+from ...utils.yuv_d2h import fast_device_to_host_yuv, replicated_to_host_yuv
 
 _SENTINEL = 0xAA
 
@@ -137,3 +142,80 @@ def test_fast_device_to_host_yuv_rejects_invalid_crop(logical_h, logical_w, expe
             logical_h=logical_h,
             logical_w=logical_w,
         )
+
+
+@pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
+def test_planar_concat_default_results_do_not_alias():
+    """Consecutive calls return distinct arrays."""
+    rng = np.random.default_rng(0xA11A5)
+    TP, SP, h_per, w_per, T = 2, 2, 32, 32, 16
+    u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+    v = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+
+    first = planar_concat_cpp(_make_shards(rng, TP * SP, h_per, w_per, T, "CHWT"), u, v, "CHWT", (TP, SP))
+    snapshot = first.copy()
+    second = planar_concat_cpp(_make_shards(rng, TP * SP, h_per, w_per, T, "CHWT"), u, v, "CHWT", (TP, SP))
+
+    assert not np.shares_memory(first, second), "the second call wrote into the first call's array"
+    assert np.array_equal(first, snapshot), "the first result changed while the second was assembled"
+    assert not np.array_equal(first, second), "the two calls got the same luma shards; the guard proves nothing"
+
+
+@pytest.mark.skipif(not HAS_CPP_PLANAR_CONCAT, reason="planar concat extension not built (models/tt_dit/utils/cpp)")
+def test_planar_concat_explicit_buffer_is_written_in_place():
+    """Returns out= in place."""
+    rng = np.random.default_rng(0xB0B)
+    TP, SP, h_per, w_per, T = 2, 2, 32, 32, 8
+    y = _make_shards(rng, TP * SP, h_per, w_per, T, "CHWT")
+    u = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+    v = _make_shards(rng, TP * SP, h_per // 2, w_per // 2, T, "CHWT")
+
+    H, W = h_per * TP, w_per * SP
+    row = H * W + 2 * (H // 2) * (W // 2)
+    buf = np.zeros((T, row), dtype=np.uint8)
+    got = planar_concat_cpp(y, u, v, "CHWT", (TP, SP), out=buf)
+
+    assert got is buf
+    assert np.array_equal(got, planar_concat_cpp(y, u, v, "CHWT", (TP, SP)))
+
+
+def test_all_contiguous_rejects_a_trimmed_padded_view():
+    """A padded shard view is non-contiguous."""
+    from ...utils.yuv_d2h import _all_contiguous
+
+    contiguous = [torch.zeros((1, 8, 8, 28), dtype=torch.uint8) for _ in range(2)]
+    padded_view = [torch.zeros((1, 8, 8, 32), dtype=torch.uint8)[:, :, :, :28] for _ in range(2)]
+    numpy_view = [np.zeros((1, 8, 8, 32), dtype=np.uint8)[:, :, :, :28] for _ in range(2)]
+
+    assert _all_contiguous(contiguous, contiguous)
+    assert not _all_contiguous(contiguous, padded_view)
+    assert not _all_contiguous(numpy_view)
+    assert _all_contiguous([np.zeros((1, 8, 8, 28), dtype=np.uint8)])
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1), (1, 2), (2, 1)], ids=mesh_device_config_to_string, indirect=True)
+@pytest.mark.parametrize("frames", [32, 33, 153])
+def test_fast_device_to_host_yuv_reads_back_any_frame_count(mesh_device: ttnn.MeshDevice, frames: int) -> None:
+    """``rgb_to_yuv``'s wide rows take at most 32 frames, and LTX reads back its whole
+    153-frame clip in one call, so the readback must switch to narrow rows above 32. Both
+    layouts write the same bytes, so the result must match ``replicated_to_host_yuv``,
+    which always uses narrow rows."""
+    height, width = 32, 64
+    generator = torch.Generator().manual_seed(0)
+    video = torch.rand(1, 3, frames, height, width, generator=generator) * 2 - 1
+    replicated = ttnn.from_torch(
+        video,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    # Mesh axis 0 splits H, axis 1 splits W, as fast_device_to_host_yuv expects.
+    sharded = ttnn.mesh_partition(replicated, dim=3, cluster_axis=0)
+    sharded = ttnn.mesh_partition(sharded, dim=4, cluster_axis=1)
+
+    actual = fast_device_to_host_yuv(sharded, mesh_device, use_persistent_buffer=False)
+    expected = replicated_to_host_yuv(replicated, mesh_device)
+
+    assert actual.shape == (frames, height * width * 3 // 2)
+    np.testing.assert_array_equal(actual, expected)

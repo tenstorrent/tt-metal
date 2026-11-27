@@ -23,7 +23,7 @@ int main() {
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // initialize source data
     constexpr uint32_t src_M = 64;

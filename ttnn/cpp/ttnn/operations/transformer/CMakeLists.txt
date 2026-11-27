@@ -21,6 +21,9 @@ file(
     sdpa_decode/device/kernels/*.hpp
     gated_delta_attn/device/kernels/*.cpp
     chunk_gated_delta_rule/device/kernels/*.cpp
+    chunk_gated_delta_rule/device/kernels/*.hpp
+    fused_recurrent_gated_delta_rule/device/kernels/*.cpp
+    fused_recurrent_gated_delta_rule/device/kernels/*.hpp
 )
 target_sources(
     ttnn_op_transformer
@@ -33,6 +36,7 @@ target_sources(
             attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
             sdpa/sdpa.hpp
+            sdpa/sparse_ring_sdpa.hpp
             sdpa/sparse_sdpa.hpp
             sdpa/sparse_sdpa_msa.hpp
             sdpa_decode/sdpa_decode.hpp

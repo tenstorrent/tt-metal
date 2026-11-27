@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
 using namespace tt::tt_metal;
@@ -20,7 +21,7 @@ namespace {
 
 void check_tiled_device(const Tensor& tensor, const char* name, std::initializer_list<DataType> dtypes) {
     TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
         "sigmoid_gated_rms_norm: {} must be an allocated device tensor",
         name);
     TT_FATAL(tensor.layout() == Layout::TILE, "sigmoid_gated_rms_norm: {} must use TILE layout", name);
@@ -37,6 +38,13 @@ void check_tiled_device(const Tensor& tensor, const char* name, std::initializer
 SigmoidGatedRmsNormOperation::program_factory_t SigmoidGatedRmsNormOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return SigmoidGatedRmsNormProgramFactory{};
+}
+
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void SigmoidGatedRmsNormOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& in) {
+    kda_factory_detail::check_allocated_on_device(
+        in.input, {{&in.input, "input"}, {&in.gate, "gate"}, {&in.weight, "weight"}}, "sigmoid_gated_rms_norm");
 }
 
 void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
@@ -65,16 +73,23 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     const auto& gate_shape = in.gate.logical_shape();
     const auto& weight_shape = in.weight.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
-    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be [B,T,H*V]");
+    TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be rank 3 [B,T,W]");
     TT_FATAL(weight_shape.rank() == 1, "sigmoid_gated_rms_norm: weight must be [V]");
     TT_FATAL(
         input_shape[0] == attrs.batch * attrs.num_heads && input_shape[1] == attrs.sequence &&
             input_shape[2] == attrs.value_dim,
         "sigmoid_gated_rms_norm: input shape does not match derived attributes");
     TT_FATAL(
+        attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
+        "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
+    const uint64_t gate_width = uint64_t{attrs.num_heads} * attrs.value_dim;
+    TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
-            gate_shape[2] == attrs.num_heads * attrs.value_dim,
-        "sigmoid_gated_rms_norm: gate must have shape [B,T,H*V]");
+            gate_shape[2] >= attrs.gate_column_offset + gate_width,
+        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold H*V = {} columns at gate_column_offset {}",
+        gate_shape,
+        gate_width,
+        attrs.gate_column_offset);
     TT_FATAL(in.weight.logical_volume() == attrs.value_dim, "sigmoid_gated_rms_norm: weight volume must equal V");
     TT_FATAL(attrs.batch > 0, "sigmoid_gated_rms_norm: batch must be positive");
     TT_FATAL(
@@ -122,7 +137,8 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    DataType output_dtype) {
+    DataType output_dtype,
+    uint32_t gate_column_offset) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
@@ -138,7 +154,8 @@ Tensor sigmoid_gated_rms_norm(
             .epsilon = epsilon,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .gate_column_offset = gate_column_offset},
         SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
     return results[0];
 }

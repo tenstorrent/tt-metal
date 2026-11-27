@@ -5,6 +5,7 @@
 import collections
 import hashlib
 import math
+import os
 from itertools import repeat
 from typing import NamedTuple
 
@@ -158,16 +159,16 @@ _BLOCKINGS = {
     (4, 8, 256, 256, (3, 3, 3), 155, 34, 30): (64, 256, 1, 16, 2),  # 4537us, 7.2x vs fallback
     (4, 8, 512, 4096, (3, 3, 3), 41, 17, 15): (128, 64, 5, 16, 2),  # 11489us, 23.5x vs fallback
     (4, 8, 512, 512, (3, 3, 3), 41, 17, 15): (64, 256, 1, 16, 2),  # 1301us, 23.2x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (64, 256, 2, 8, 4),  # 1414us, 17.3x vs fallback
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 10, 8): (128, 64, 5, 4, 8),  # T=21 winner; old one had no L1 prefetch shard
     (4, 8, 1024, 128, (3, 3, 3), 22, 10, 8): (128, 64, 3, 4, 8),  # 178us, 11.0x vs fallback
     (4, 8, 1024, 4096, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 3887us, 13.9x vs fallback
     (4, 8, 1024, 1024, (3, 3, 3), 22, 9, 8): (128, 64, 5, 4, 8),  # 1373us, 15.6x vs fallback
-    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 5, 2, 2),  # 485us, 6.9x vs fallback, partial sweep 350/500
+    (4, 8, 1024, 1024, (3, 3, 3), 22, 5, 4): (128, 64, 7, 2, 4),  # T=21 winner; old one had no L1 prefetch shard
     # Unswept at 153f: carried from the 145f winners at identical spatial shape (T +1 only);
     # without them these sites hit the worst-case fallbacks. Re-sweep to replace.
     (4, 8, 1024, 4096, (1, 3, 3), 20, 5, 4): (256, 64, 1, 4, 4),  # ups_ups — 1235us @ T=19
     (4, 8, 128, 1024, (3, 3, 3), 22, 9, 8): (64, 128, 7, 8, 4),  # ltx_s0_conv_in — 237us @ T=21
-    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us @ T=21
+    (4, 8, 128, 1024, (3, 3, 3), 22, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     # === end LTX-2.3 153f ===
     # ===================================================================
     # BH Galaxy 6U 4x32, 480p, 81 frames full-T (latent T=21)
@@ -449,10 +450,10 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (
         64,
         128,
-        12,
+        10,
         4,
         8,
-    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
+    ),  # ltx_s4_res — untimed; T_out_block 12 had no L1 prefetch shard
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -479,6 +480,27 @@ _BLOCKINGS = {
     (2, 4, 128, 128, (3, 3, 3), 147, 88, 80): (64, 128, 6, 4, 8),  # s4_res
     (2, 4, 128, 48, (3, 3, 3), 147, 88, 80): (128, 64, 6, 4, 8),  # s4_out
     # ===================================================================
+    # LTX VAE decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4), 1088x576 (1080p-portrait).
+    # Per-device (H,W) 1088x576: s0(17,5) s1(34,9) s2/s3(68,18) s4(136,36).
+    # It had no entry, so every 512/1024-ch conv (incl. both 4096-ch depth-to-space convs)
+    # fell to the (256, 32, 1, 1, 1) channel fallback: 1088x576 decoded 3x slower than 1088x1920.
+    # C_in/C_out/T blocks come from the same-channel 1080p/720p 2x4 entries above; the H/W block is
+    # re-shaped to fit inside the per-device output (product 32, or 16 where 32 does not fit) to waste
+    # the least padding. Other clip lengths reuse these through the T-relaxed lookup.
+    # 448x768 (s0(7,6) .. s4(56,48)) is left out on purpose: blockings of this kind hung the device there
+    # in the A/B (twice); it keeps the fallback (2.7 s per 121 frames) until a sweep finds safe ones.
+    # ===================================================================
+    (2, 4, 128, 1024, (3, 3, 3), 21, 17, 5): (64, 256, 1, 8, 4),  # 1088x576 s0_conv_in
+    (2, 4, 1024, 1024, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_res
+    (2, 4, 1024, 4096, (3, 3, 3), 21, 17, 5): (128, 64, 5, 8, 4),  # 1088x576 s0_up
+    (2, 4, 512, 512, (3, 3, 3), 39, 34, 9): (64, 256, 1, 8, 4),  # 1088x576 s1_res
+    (2, 4, 512, 4096, (3, 3, 3), 39, 34, 9): (128, 64, 5, 8, 4),  # 1088x576 s1_up
+    (2, 4, 512, 512, (3, 3, 3), 75, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s2_res
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_res
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 18): (64, 256, 1, 8, 4),  # 1088x576 s3_chg
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 36): (64, 128, 6, 8, 4),  # 1088x576 s4_res
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 36): (128, 64, 6, 8, 4),  # 1088x576 s4_out
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
     # ===================================================================
@@ -486,16 +508,16 @@ _BLOCKINGS = {
     (4, 8, 1024, 1024, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_res — 1974us
     (4, 8, 1024, 4096, (3, 3, 3), 21, 9, 8): (128, 64, 5, 4, 8),  # ltx_s0_up — 5448us
     (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 1, 4, 8),  # ltx_s1_res — 1912us
-    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 4, 8),  # ltx_s1_up — 16547us
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15): (128, 64, 5, 2, 16),  # ltx_s1_up — 20915us halo-only
     (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
     (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
     (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
     # This table feeds standalone conv3d (LTX VAE)
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us standalone
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 4, 8),  # ltx_s4_res — 8170us halo-only
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
-    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 3, 2, 4),  # ups_initial — 95us
+    (4, 8, 128, 1024, (3, 3, 3), 21, 5, 4): (128, 128, 1, 2, 4),  # ups_initial — untimed; T_blk 3 had no prefetch shard
     (4, 8, 1024, 1024, (3, 3, 3), 21, 5, 4): (128, 64, 7, 2, 4),  # ups_pre_res — 791us
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
@@ -527,6 +549,35 @@ _BLOCKINGS = {
     (4, 8, 1024, 128, (3, 3, 3), 3, 6, 5): (64, 32, 1, 8, 4),  # 58us was 178 (3.1x)
     (4, 8, 128, 1024, (3, 3, 3), 21, 6, 5): (64, 128, 3, 8, 4),  # 164us was 350 (2.1x)
     (4, 8, 512, 128, (3, 3, 3), 4, 22, 20): (64, 128, 1, 8, 4),  # 103us was 1090 (10.5x)
+    # LTX 576x1088 (1080p-portrait) decoder, BH Galaxy 4x8. Per-device (H,W): s0(9,3) s1(17,5)
+    # s2/s3(34,9) s4(68,18). Without entries every decoder conv took the channel fallback (warm
+    # decode 1.32 s vs 0.40 s landscape). Transplanted from the nearest same-(Cin,Cout,kernel)
+    # 4x8 entry with H_out*W_out=32 and W_out_block<=W (narrow shards); s4_res swept (halo, 2x4).
+    # Other T (chunk heads, cached-T) reuse these via the T-relaxed lookup.
+    (4, 8, 128, 1024, (3, 3, 3), 18, 9, 3): (64, 128, 3, 8, 4),  # s0_conv_in
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 9, 3): (128, 64, 5, 8, 4),  # s0_res
+    (4, 8, 1024, 4096, (3, 3, 3), 18, 9, 3): (128, 64, 7, 8, 4),  # s0_up
+    (4, 8, 1024, 128, (3, 3, 3), 18, 9, 3): (128, 64, 3, 8, 4),  # s0 (cached-T)
+    (4, 8, 512, 512, (3, 3, 3), 33, 17, 5): (64, 256, 1, 8, 4),  # s1_res
+    (4, 8, 512, 4096, (3, 3, 3), 33, 17, 5): (128, 64, 5, 8, 4),  # s1_up
+    (4, 8, 1024, 1024, (3, 3, 3), 3, 17, 5): (64, 256, 1, 8, 4),  # cached-T
+    (4, 8, 1024, 128, (3, 3, 3), 4, 17, 5): (128, 32, 2, 8, 4),  # chunk head
+    (4, 8, 512, 512, (3, 3, 3), 63, 34, 9): (64, 256, 1, 8, 4),  # s2_res
+    (4, 8, 256, 256, (3, 3, 3), 123, 34, 9): (64, 256, 1, 8, 4),  # s3_res
+    (4, 8, 256, 512, (3, 3, 3), 123, 34, 9): (64, 256, 1, 8, 4),  # s3_chg
+    (4, 8, 512, 128, (3, 3, 3), 4, 34, 9): (64, 128, 1, 8, 4),  # chunk head
+    (4, 8, 128, 128, (3, 3, 3), 123, 68, 18): (128, 64, 7, 8, 4),  # s4_res — 1765us was 5782 (sweep 137127)
+    (4, 8, 128, 48, (3, 3, 3), 123, 68, 18): (128, 64, 6, 8, 4),  # s4_out
+    # LTX 576x1088 (1080p-portrait) latent upsampler (per-device 10x4 and 5x2) and VAE encoder (68x18),
+    # BH Galaxy 4x8. Without entries these 21 convs per run took the channel fallback. Swept on 1x1
+    # (jobs 137315/137344); ups_pre_res copies the ups_post_res winner narrowed to W_out_block=2.
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 10, 4): (128, 64, 6, 4, 4),  # ups_post_res — 1064us was 16593 (15.6x)
+    (4, 8, 1024, 1024, (3, 3, 3), 18, 5, 2): (128, 64, 6, 4, 2),  # ups_pre_res — untimed copy
+    (4, 8, 1024, 4096, (1, 3, 3), 16, 5, 2): (256, 64, 1, 4, 2),  # ups_ups — 1150us was 5033 (4.4x)
+    (4, 8, 1024, 128, (3, 3, 3), 18, 10, 4): (128, 64, 6, 8, 4),  # ups_final — 168us was 1647 (9.8x); 161us winner has no prefetch shard
+    (4, 8, 128, 1024, (3, 3, 3), 18, 5, 2): (128, 128, 1, 4, 2),  # ups_initial — 110us was 190 (1.7x)
+    (4, 8, 64, 128, (3, 3, 3), 3, 68, 18): (64, 128, 1, 2, 16),  # enc_conv_in — 36us was 52 (1.4x)
+    (4, 8, 128, 64, (3, 3, 3), 3, 68, 18): (128, 64, 1, 2, 16),  # enc_down — 37us was 54 (1.5x)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
@@ -583,6 +634,118 @@ _DEFAULT_BLOCKINGS = {
     (256, 128, (1, 3, 3)): (256, 32, 1, 8, 16),
     (32, 512, (1, 3, 3)): (32, 32, 1, 8, 16),  # conv_in (z_channels 8 -> aligned 32)
     (128, 32, (1, 3, 3)): (128, 32, 1, 8, 16),  # conv_out (out_ch 2 -> aligned 32)
+}
+
+
+# Table by arch, mesh split and channels: (arch, h_factor, w_factor, C_in, C_out, kernel) -> blocking.
+# Used when no exact match exists, for convs that run at several spatial sizes. arch is "wh" or "bh".
+_SPLIT_BLOCKINGS = {
+    # Qwen-Image VAE (Wan 2.1), conv2d run as conv3d with T = 1, swept at 1024², each at the
+    # largest size the channel pair runs at. T3K: H split 4 ways, W 2 ways.
+    ("wh", 4, 2, 32, 384, (1, 3, 3)): (32, 128, 1, 4, 16),  # decoder conv_in
+    ("wh", 4, 2, 384, 384, (1, 3, 3)): (384, 96, 1, 8, 4),
+    ("wh", 4, 2, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 8),
+    ("wh", 4, 2, 192, 384, (1, 3, 3)): (192, 96, 1, 8, 4),
+    ("wh", 4, 2, 192, 192, (1, 3, 3)): (192, 96, 1, 16, 4),
+    ("wh", 4, 2, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 16),
+    ("wh", 4, 2, 96, 96, (1, 3, 3)): (96, 96, 1, 8, 8),
+    ("wh", 4, 2, 96, 3, (1, 3, 3)): (96, 32, 1, 4, 32),  # decoder conv_out
+    ("wh", 4, 2, 32, 96, (1, 3, 3)): (32, 96, 1, 16, 16),  # encoder conv_in
+    ("wh", 4, 2, 96, 192, (1, 3, 3)): (96, 96, 1, 8, 8),
+    ("wh", 4, 2, 384, 16, (1, 3, 3)): (384, 32, 1, 16, 2),  # encoder conv_out
+    # WH Galaxy: H split 4 ways, W 4 ways.
+    ("wh", 4, 4, 32, 384, (1, 3, 3)): (32, 128, 1, 2, 16),  # decoder conv_in
+    ("wh", 4, 4, 384, 384, (1, 3, 3)): (384, 96, 1, 4, 16),
+    ("wh", 4, 4, 384, 192, (1, 3, 3)): (384, 96, 1, 2, 16),
+    ("wh", 4, 4, 192, 384, (1, 3, 3)): (192, 96, 1, 8, 8),
+    ("wh", 4, 4, 192, 192, (1, 3, 3)): (192, 96, 1, 32, 4),
+    ("wh", 4, 4, 192, 96, (1, 3, 3)): (192, 96, 1, 16, 4),
+    ("wh", 4, 4, 96, 96, (1, 3, 3)): (96, 96, 1, 8, 8),
+    ("wh", 4, 4, 96, 3, (1, 3, 3)): (96, 32, 1, 8, 8),  # decoder conv_out
+    ("wh", 4, 4, 32, 96, (1, 3, 3)): (32, 96, 1, 8, 16),  # encoder conv_in
+    ("wh", 4, 4, 96, 192, (1, 3, 3)): (96, 96, 1, 4, 8),
+    ("wh", 4, 4, 384, 16, (1, 3, 3)): (192, 32, 1, 8, 4),  # encoder conv_out
+    # QB2: H split 2 ways, W 1 way.
+    ("bh", 2, 1, 32, 384, (1, 3, 3)): (32, 384, 1, 4, 8),  # decoder conv_in
+    ("bh", 2, 1, 384, 384, (1, 3, 3)): (128, 384, 1, 4, 8),
+    ("bh", 2, 1, 384, 192, (1, 3, 3)): (384, 96, 1, 16, 4),
+    ("bh", 2, 1, 192, 384, (1, 3, 3)): (192, 128, 1, 4, 16),
+    ("bh", 2, 1, 192, 192, (1, 3, 3)): (192, 96, 1, 2, 16),
+    ("bh", 2, 1, 192, 96, (1, 3, 3)): (192, 96, 1, 2, 32),
+    ("bh", 2, 1, 96, 96, (1, 3, 3)): (96, 96, 1, 2, 32),
+    ("bh", 2, 1, 96, 3, (1, 3, 3)): (96, 32, 1, 16, 16),  # decoder conv_out
+    ("bh", 2, 1, 32, 96, (1, 3, 3)): (32, 96, 1, 8, 32),  # encoder conv_in
+    ("bh", 2, 1, 96, 192, (1, 3, 3)): (96, 96, 1, 2, 32),
+    ("bh", 2, 1, 384, 16, (1, 3, 3)): (384, 32, 1, 8, 4),  # encoder conv_out
+    # BH LoudBox: H split 4 ways, W 1 way.
+    ("bh", 4, 1, 32, 384, (1, 3, 3)): (32, 384, 1, 2, 16),  # decoder conv_in
+    ("bh", 4, 1, 384, 384, (1, 3, 3)): (128, 384, 1, 8, 4),
+    ("bh", 4, 1, 384, 192, (1, 3, 3)): (384, 96, 1, 16, 2),
+    ("bh", 4, 1, 192, 384, (1, 3, 3)): (192, 128, 1, 4, 16),
+    ("bh", 4, 1, 192, 192, (1, 3, 3)): (192, 96, 1, 8, 16),
+    ("bh", 4, 1, 192, 96, (1, 3, 3)): (192, 96, 1, 8, 32),
+    ("bh", 4, 1, 96, 96, (1, 3, 3)): (96, 96, 1, 8, 32),
+    ("bh", 4, 1, 96, 3, (1, 3, 3)): (96, 32, 1, 8, 32),  # decoder conv_out
+    ("bh", 4, 1, 32, 96, (1, 3, 3)): (32, 96, 1, 8, 16),  # encoder conv_in
+    ("bh", 4, 1, 96, 192, (1, 3, 3)): (96, 96, 1, 8, 32),
+    ("bh", 4, 1, 384, 16, (1, 3, 3)): (384, 32, 1, 4, 16),  # encoder conv_out
+    # BH Galaxy: H split 4 ways, W 4 ways. Swept on the BH Galaxy's 12x10 core grid.
+    ("bh", 4, 4, 32, 384, (1, 3, 3)): (32, 128, 1, 1, 32),  # decoder conv_in
+    ("bh", 4, 4, 384, 384, (1, 3, 3)): (384, 96, 1, 8, 4),
+    ("bh", 4, 4, 384, 192, (1, 3, 3)): (384, 96, 1, 16, 2),
+    ("bh", 4, 4, 192, 384, (1, 3, 3)): (192, 128, 1, 2, 16),
+    ("bh", 4, 4, 192, 192, (1, 3, 3)): (192, 96, 1, 8, 16),
+    ("bh", 4, 4, 192, 96, (1, 3, 3)): (192, 96, 1, 16, 2),
+    ("bh", 4, 4, 96, 96, (1, 3, 3)): (96, 96, 1, 8, 32),
+    ("bh", 4, 4, 96, 3, (1, 3, 3)): (96, 32, 1, 8, 32),  # decoder conv_out
+    ("bh", 4, 4, 32, 96, (1, 3, 3)): (32, 96, 1, 8, 32),  # encoder conv_in
+    ("bh", 4, 4, 96, 192, (1, 3, 3)): (96, 96, 1, 8, 16),
+    ("bh", 4, 4, 384, 16, (1, 3, 3)): (192, 32, 1, 4, 8),  # encoder conv_out
+    # FIBO VAE (Wan 2.2), same as above. T3K: H split 2 ways, W 2 ways.
+    ("wh", 2, 2, 64, 1024, (1, 3, 3)): (64, 128, 1, 8, 8),  # decoder conv_in
+    ("wh", 2, 2, 1024, 1024, (1, 3, 3)): (256, 128, 1, 4, 32),
+    ("wh", 2, 2, 1024, 512, (1, 3, 3)): (256, 128, 1, 4, 32),
+    ("wh", 2, 2, 512, 512, (1, 3, 3)): (256, 128, 1, 32, 4),
+    ("wh", 2, 2, 512, 256, (1, 3, 3)): (256, 128, 1, 4, 32),
+    ("wh", 2, 2, 256, 256, (1, 3, 3)): (256, 128, 1, 16, 8),
+    ("wh", 2, 2, 256, 12, (1, 3, 3)): (256, 32, 1, 8, 8),  # decoder conv_out
+    ("wh", 2, 2, 32, 160, (1, 3, 3)): (32, 32, 1, 8, 32),  # encoder conv_in
+    ("wh", 2, 2, 160, 160, (1, 3, 3)): (160, 32, 1, 8, 8),
+    ("wh", 2, 2, 160, 320, (1, 3, 3)): (160, 64, 1, 4, 16),
+    ("wh", 2, 2, 320, 320, (1, 3, 3)): (320, 64, 1, 32, 2),
+    ("wh", 2, 2, 320, 640, (1, 3, 3)): (320, 128, 1, 4, 8),
+    ("wh", 2, 2, 640, 640, (1, 3, 3)): (320, 128, 1, 2, 16),
+    ("wh", 2, 2, 640, 48, (1, 3, 3)): (160, 64, 1, 4, 8),  # encoder conv_out
+    # QB2: H split 2 ways, W 1 way.
+    ("bh", 2, 1, 64, 1024, (1, 3, 3)): (64, 256, 1, 16, 2),  # decoder conv_in
+    ("bh", 2, 1, 1024, 1024, (1, 3, 3)): (256, 128, 1, 4, 32),
+    ("bh", 2, 1, 1024, 512, (1, 3, 3)): (256, 128, 1, 8, 16),
+    ("bh", 2, 1, 512, 512, (1, 3, 3)): (256, 128, 1, 4, 32),
+    ("bh", 2, 1, 512, 256, (1, 3, 3)): (256, 128, 1, 32, 4),
+    ("bh", 2, 1, 256, 256, (1, 3, 3)): (256, 128, 1, 16, 8),
+    ("bh", 2, 1, 256, 12, (1, 3, 3)): (256, 32, 1, 8, 16),  # decoder conv_out
+    ("bh", 2, 1, 32, 160, (1, 3, 3)): (32, 32, 1, 4, 32),  # encoder conv_in
+    ("bh", 2, 1, 160, 160, (1, 3, 3)): (160, 32, 1, 4, 32),
+    ("bh", 2, 1, 160, 320, (1, 3, 3)): (160, 64, 1, 2, 32),
+    ("bh", 2, 1, 320, 320, (1, 3, 3)): (320, 64, 1, 4, 16),
+    ("bh", 2, 1, 320, 640, (1, 3, 3)): (320, 128, 1, 16, 2),
+    ("bh", 2, 1, 640, 640, (1, 3, 3)): (320, 128, 1, 32, 2),
+    ("bh", 2, 1, 640, 48, (1, 3, 3)): (320, 64, 1, 4, 8),  # encoder conv_out
+    # BH Galaxy: H split 4 ways, W 4 ways. Swept on the BH Galaxy's 12x10 core grid.
+    ("bh", 4, 4, 64, 1024, (1, 3, 3)): (64, 128, 1, 2, 16),  # decoder conv_in
+    ("bh", 4, 4, 1024, 1024, (1, 3, 3)): (256, 128, 1, 2, 16),
+    ("bh", 4, 4, 1024, 512, (1, 3, 3)): (256, 128, 1, 32, 2),
+    ("bh", 4, 4, 512, 512, (1, 3, 3)): (256, 128, 1, 32, 4),
+    ("bh", 4, 4, 512, 256, (1, 3, 3)): (256, 128, 1, 16, 4),
+    ("bh", 4, 4, 256, 256, (1, 3, 3)): (256, 128, 1, 8, 4),
+    ("bh", 4, 4, 256, 12, (1, 3, 3)): (256, 32, 1, 4, 16),  # decoder conv_out
+    ("bh", 4, 4, 32, 160, (1, 3, 3)): (32, 32, 1, 2, 32),  # encoder conv_in
+    ("bh", 4, 4, 160, 160, (1, 3, 3)): (160, 32, 1, 2, 32),
+    ("bh", 4, 4, 160, 320, (1, 3, 3)): (160, 64, 1, 4, 16),
+    ("bh", 4, 4, 320, 320, (1, 3, 3)): (320, 64, 1, 16, 2),
+    ("bh", 4, 4, 320, 640, (1, 3, 3)): (160, 128, 1, 8, 4),
+    ("bh", 4, 4, 640, 640, (1, 3, 3)): (320, 128, 1, 32, 1),
+    ("bh", 4, 4, 640, 48, (1, 3, 3)): (128, 64, 1, 4, 4),  # encoder conv_out
 }
 
 
@@ -683,6 +846,15 @@ _HALO_LAST_KEYS = {
 }
 
 
+# On by default (LTX_VAE_T2_BLOCKINGS=0 turns it off): T_out_block 2 for the LTX VAE's 4x8 1080p
+# res/chg convs, swept with the halo reader. Exact (mesh, shape) keys only; it does not feed the T-relaxed lookup.
+_LTX_4X8_T2_BLOCKINGS = {
+    (4, 8, 512, 512, (3, 3, 3), 39, 17, 15): (64, 256, 2, 2, 8),  # ltx_s1_res — 2435us halo (T1 H4 W8: 2863us)
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 2, 4, 4),  # ltx_s2_res — 16319us halo (T1 H8 W4: 17343us)
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4),  # ltx_s3_res — 6372us halo (T1 H8 W4: 7481us)
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 2, 4, 4),  # ltx_s3_chg — 11904us halo (T1 H8 W4: 14469us)
+}
+
 # Lazily-built index of swept _BLOCKINGS keyed by (h_factor, w_factor, C_in, C_out, kernel, H, W),
 # dropping T -> list of (T, blocking). See _t_relaxed_blocking.
 _BLOCKINGS_BY_SPATIAL: dict | None = None
@@ -727,12 +899,31 @@ def _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_si
     return C_in_block, C_out_block, T_out_block, H_out_block, W_out_block, src_T
 
 
+def _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W):
+    """Profiling aid: ``LTX_CONV3D_BLOCKING_MESH=4,8`` looks up blockings as if on that mesh.
+
+    A smaller (sub)mesh at a lower resolution can have the same per-chip T/H/W as production
+    (e.g. 544x960 on 2x4 vs 1080p on 4x8), but the table keys on the mesh factors, so it would
+    fall back to slow default blockings. The override applies only when the overridden key has
+    an exact or T-relaxed entry; otherwise the real factors are kept. Unset means no change.
+    """
+    spec = os.environ.get("LTX_CONV3D_BLOCKING_MESH")
+    if not spec:
+        return h_factor, w_factor
+    hf, wf = (int(x) for x in spec.split(","))
+    key = (hf, wf, in_channels, out_channels, kernel_size, T, H, W)
+    if key in _BLOCKINGS or _t_relaxed_blocking(*key) is not None:
+        return hf, wf
+    return h_factor, w_factor
+
+
 def get_conv3d_config(
     in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, T=0, H=0, W=0
 ):
     """Get optimized Conv3dConfig for a conv3d layer.
 
-    Lookup chain: exact (mesh, shape, T, spatial) match -> fallback (channel, kernel) match -> default.
+    Lookup chain: exact (mesh, shape, T, spatial) match -> (arch, mesh split, channel, kernel) match ->
+    fallback (channel, kernel) match -> default.
     Pass h_factor, w_factor, T, H, W for best results. When these are not
     available the fallback table is used.
     """
@@ -754,12 +945,19 @@ def get_conv3d_config(
             compute_with_storage_grid_size=grid_size,
         )
 
+    h_factor, w_factor = _blocking_mesh_override(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     blocking_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
     channel_key = (in_channels, out_channels, kernel_size)
 
     exact = _BLOCKINGS.get(blocking_key)
+    if os.environ.get("LTX_VAE_T2_BLOCKINGS", "1") != "0":
+        exact = _LTX_4X8_T2_BLOCKINGS.get(blocking_key, exact)
+    arch = "bh" if ttnn.device.is_blackhole() else "wh"
+    split = _SPLIT_BLOCKINGS.get((arch, h_factor, w_factor, *channel_key))
     if exact is not None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = exact
+    elif split is not None:
+        C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = split
     else:
         relaxed = _t_relaxed_blocking(h_factor, w_factor, in_channels, out_channels, kernel_size, T, H, W)
         if relaxed is not None:
@@ -818,6 +1016,12 @@ def conv3d_blocking_hash(module: Module) -> str:
     if not parts:
         return ""
     return "cin" + hashlib.sha256("_".join(parts).encode()).hexdigest()[:8]
+
+
+def conv3d_configs(module: Module) -> tuple[str, ...]:
+    """The conv3d blockings of all conv3d layers. Two modules with equal blockings run any input
+    the same way and share cached weights."""
+    return tuple(repr(m.conv_config) for m in _walk_conv3d_modules(module))
 
 
 def count_convs(module: Module) -> int:

@@ -27,7 +27,7 @@ class Sfpu:
     The lifecycle called by the pipeline is:
         init() -> planned calls to calculate() -> uninit()
 
-    Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
+    Entirely skipped during UNPACK_ISOLATE and PACK_ISOLATE perf runs.
 
     To create a new SFPU:
         1. Subclass Sfpu
@@ -38,6 +38,15 @@ class Sfpu:
 
     granularity = InvocationGranularity.NONE
     input_count = 1
+
+    @staticmethod
+    def _vector_mode(operation: "L1Operation") -> str:
+        num_faces = operation.tile_shape.total_num_faces()
+        if num_faces == 1:
+            return "ckernel::VectorMode::None"
+        if num_faces == 2:
+            return "ckernel::VectorMode::R"
+        return "ckernel::VectorMode::RC"
 
     def init(
         self,

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -30,9 +31,9 @@ inline uint32_t flattened_rows_excluding_last_dim(const ttnn::Shape& shape) {
 struct operation_attributes_t {
     uint32_t k{};
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-    std::optional<CoreRangeSet> sub_core_grid;
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grid;
     tt::tt_metal::SubDeviceManagerId subdevice_manager_id;
-    CoreRangeSet resolved_worker_core_grid;
+    tt::tt_metal::CoreRangeSet resolved_worker_core_grid;
     // Restrict the search to the first `valid_length` columns of each row instead of the full last
     // dimension. Lets top-k run over the real prefix of an over-allocated row (whose tail may be stale)
     // without physically slicing the input. nullopt = search the full width. Runtime-only (hash-excluded,
@@ -40,6 +41,9 @@ struct operation_attributes_t {
     std::optional<uint32_t> valid_length;
     // Constant added to valid_length_tensor[0] on-device. Included in the program hash.
     uint32_t valid_length_offset{0};
+    // NoC the reader streams the input rows from DRAM on; the writer takes the other one. Resolved in invoke
+    // (caller's choice, else the arch's preferred DRAM-read NoC) and included in the program hash.
+    tt::tt_metal::NOC dram_read_noc{tt::tt_metal::NOC::NOC_0};
 };
 
 struct tensor_args_t {

@@ -20,7 +20,7 @@ ACT2CLS = {
     "silu": ttnn.silu,
     "mish": ttnn.mish,
     "gelu": ttnn.gelu,
-    "gelu_tanh": partial(ttnn.gelu, fast_and_approximate_mode=True),
+    "gelu_tanh": partial(ttnn.gelu, variant=ttnn.GeluVariant.Tanh),
     "relu": ttnn.relu,
 }
 
@@ -59,7 +59,6 @@ class Timesteps(Module):
 
     def forward(self, timestep: ttnn.Tensor) -> ttnn.Tensor:
         # Time projection (sinusoidal embedding)
-        assert timestep.dtype == self.dtype, f"Input timestep {timestep.dtype} and model dtype {self.dtype} must match"
         emb = self.scale * timestep * self.time_proj_factor
         c = ttnn.cos(emb)
         s = ttnn.sin(emb)
@@ -208,7 +207,7 @@ class CombinedTimestepGuidanceTextProjEmbeddings(Module):
         exponent = exponent / half_dim
         factor = torch.exp(exponent)
 
-        return ttnn.unsqueeze_to_4D(bf16_tensor(factor, device=self.mesh_device))
+        return ttnn.unsqueeze_to_4D(typed_tensor(factor, dtype=ttnn.float32, device=self.mesh_device))
 
     # In order to avoid calling `unsqueeze` in this function, we expect already unsqueezed rank two
     # `timestep` and `guidance` tensors.
@@ -643,8 +642,8 @@ class Embedding(Module):
             device=device,
         )
 
-    def forward(self, x: ttnn.Tensor, /) -> ttnn.Tensor:
-        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT)
+    def forward(self, x: ttnn.Tensor, /, *, runtime_rows: bool = False) -> ttnn.Tensor:
+        return ttnn.embedding(x, self.weight.data, layout=ttnn.TILE_LAYOUT, runtime_rows=runtime_rows)
 
 
 class LTXAdaLayerNormSingle(Module):
@@ -653,7 +652,9 @@ class LTXAdaLayerNormSingle(Module):
 
     Embeds a timestep via sinusoidal projection + MLP, then projects to
     `embedding_coefficient * embedding_dim` modulation parameters (shift/scale/gate
-    groups for self-attn, cross-attn, and feedforward).
+    groups for self-attn, cross-attn, and feedforward). `out_features` sets the modulation
+    width directly when it is not a multiple of the embedding: the LTX-2.5 DiffVAE's stage 5
+    projects its `t_emb_dim` to `7 * dim` (upstream's `AdaLNZero`).
 
     Reference: LTX-2 adaln.py AdaLayerNormSingle
     """
@@ -664,20 +665,22 @@ class LTXAdaLayerNormSingle(Module):
         embedding_coefficient: int = 6,
         mesh_device=None,
         dtype=ttnn.float32,
+        out_features: int | None = None,
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.embedding_coefficient = embedding_coefficient
+        self.out_features = out_features if out_features is not None else embedding_coefficient * embedding_dim
         self.mesh_device = mesh_device
 
         # Timestep embedding: sinusoidal(256) -> MLP(256 -> embedding_dim)
         # Use fp32 for precision in sinusoidal projection
         self.emb = _LTXTimestepEmbedding(embedding_dim, mesh_device=mesh_device, dtype=dtype)
 
-        # Project to modulation params: SiLU -> Linear(embedding_dim, coefficient * embedding_dim)
+        # Project to modulation params: SiLU -> Linear(embedding_dim, out_features)
         self.linear = Linear(
             embedding_dim,
-            embedding_coefficient * embedding_dim,
+            self.out_features,
             bias=True,
             mesh_device=mesh_device,
             dtype=dtype,
@@ -696,7 +699,7 @@ class LTXAdaLayerNormSingle(Module):
 
         Returns:
             (modulation_params, embedded_timestep) where:
-            - modulation_params: (1, 1, B, coefficient * embedding_dim)
+            - modulation_params: (1, 1, B, out_features)
             - embedded_timestep: (1, 1, B, embedding_dim)
         """
         embedded_timestep = self.emb(timestep)

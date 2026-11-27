@@ -21,6 +21,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.hf_layer_type_attention import layer_type_attention
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4.tt.ccl import CCLManager
@@ -975,18 +976,17 @@ def _inject_missing_kv_shared_attention_weights(state_dict, hf_text_config, num_
     placeholders for any omitted entries.
     """
     hidden = int(hf_text_config.hidden_size)
+    attn = layer_type_attention(hf_text_config)
     for layer_idx in range(num_layers):
         attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
         layer_type = hf_text_config.layer_types[layer_idx]
         is_sliding = layer_type == "sliding_attention"
         if is_sliding:
-            num_kv_heads = int(hf_text_config.num_key_value_heads)
-            head_dim = int(hf_text_config.head_dim)
+            num_kv_heads = int(attn.sliding_kv_heads)
+            head_dim = int(attn.sliding_head_dim)
         else:
-            num_kv_heads = int(
-                getattr(hf_text_config, "num_global_key_value_heads", None) or hf_text_config.num_key_value_heads
-            )
-            head_dim = int(getattr(hf_text_config, "global_head_dim", None) or hf_text_config.head_dim)
+            num_kv_heads = int(attn.full_kv_heads)
+            head_dim = int(attn.full_head_dim)
         kv_size = num_kv_heads * head_dim
 
         state_dict.setdefault(
@@ -1700,7 +1700,10 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
-            reset_batch=(step == 0),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
 
         # vLLM path: refresh persistent per-layer page tables + stash
@@ -1720,7 +1723,10 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,
-                reset_batch=(step == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
         finally:
             # Bridge would do this via context manager — mirror that.
@@ -1988,7 +1994,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             enable_trace=True,
             read_from_device=False,
             sampling_params=None,
-            reset_batch=(step == 0),
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
 
         pool.reserve_decode_token(req)
@@ -2004,7 +2013,10 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
                 enable_trace=True,
                 read_from_device=False,
                 sampling_params=None,
-                reset_batch=(step == 0),
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
         finally:
             if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):
