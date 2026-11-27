@@ -1,79 +1,56 @@
-# L1 Ledger: g6_to_layout
+# L1 Ledger: g6_to_layout (Phase 0, regime R1 `tilerow_colgroup_untilize`)
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions:
-`op_design.md` -> Blocking Model. Rows cover the built regime R1 (`untilize_interleaved`).
-
-Block axes (from the Blocking Model): `n` (folded leading dims), `ht` (tile-rows of an image),
-`wt` (tile-columns), `i` (row in tile), `c` (column in tile).
-
-## Buffers
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes from `op_design.md` → Blocking Model: `tile_row` (extent `block_height_tiles`, folds `n` and `ht`), `wt` (extent `block_width_tiles`), `row_in_tile` (fixed 32), `col_in_tile` (fixed 32). DEST is 16-bit (`fp32_dest_acc_en = false`); no CB passes a value through FP arithmetic.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_tiles` | `tiles_depth * block_segments * segment_width` pages of `tile_bytes_in` | `tiles_depth * block_segments * segment_width` at the steady-state peak: the block compute is untilizing plus the block the reader has landed and pushed. Capacity equals the live set; the `tiles_depth` factor is the double-buffer mechanism (read of block k+1 overlaps untilize of block k) | `{n: streams -> folded into the segment index (a block may span images), ht: spans -> block_segments, wt: spans -> segment_width, i: spans -> 32 (tile_h), c: spans -> 32 (tile_w)}` | `UInt16` — a dataflow payload whose bits must not be interpreted (MOVA2D preserves zero-exponent datums only for `UInt16` operands); 2 B per datum like bf16, so no extra bytes; `fp32_dest_acc_en` off, DEST 16-bit, no accumulation | reader | compute | whole program | none — concurrent with `cb_rows` for the whole pipelined program (the reader fills block k+1 here while the writer drains block k there); in place impossible: the untilize helper forbids `input == output` (`untilize_helpers.inl:153-154`); aliasing excluded by the pipelining |
-| `cb_rows` | `rows_depth * block_segments * segment_width` pages of `tile_bytes_rows` | `rows_depth * block_segments * segment_width` at the steady-state peak: the block the writer is draining (its pages stay until writes-flushed) plus the block compute is packing. Capacity equals the live set; `rows_depth` is the double-buffer mechanism | `{n: streams -> folded into the segment index, ht: spans -> block_segments, wt: spans -> segment_width, i: spans -> 32 rows, c: spans -> 32 columns per tile column (64 B)}` | `UInt16` — same bits leave `pack_untilize` as entered; the writer emits raw bytes into the bf16 output | compute | writer | whole program | none — concurrent with `cb_tiles` (above); the writer cannot emit rows from tile order without 32-B fragmentation (the narrow-W exception is regime R6, deferred) |
+| `cb_tiles_in` | `TILES_IN_DEPTH · block_height_tiles · block_width_tiles` (page = 2048 B) | `block_height_tiles · block_width_tiles` written by the reader while compute holds the previous block's last tile-row → peak `2 · block_height_tiles · block_width_tiles` at depth 2 | `{tile_row: spans → block_height_tiles, wt: spans → block_width_tiles, row_in_tile: spans → 32 (whole tile page), col_in_tile: spans → 32 (whole tile page), blocks: streams → TILES_IN_DEPTH}` | UInt16 (bf16 bytes as opaque 16-bit; a dataflow payload that goes through the untilize datacopy only — UInt16 is the format that keeps the MOVA2D move bit-exact, `ckernel_defs.h:19-31`) | reader | compute | whole kernel (every block) | Not shared with `cb_rows_out`: both are live for the whole kernel at once (reader fills block k+1 while the writer drains block k), and untilize cannot run in place (`untilize_helpers.inl` static_assert `input_dfb != output_dfb`). Capacity = 2× the block for the reader/compute overlap (double buffering). |
+| `cb_rows_out` | `ROWS_OUT_DEPTH · block_height_tiles · block_width_tiles` (page = 2048 B, tile-sized pages emitted by `pack_untilize`) | one block being drained by the writer + the next block being packed → peak `2 · block_height_tiles · block_width_tiles` at depth 2 | `{tile_row: spans → block_height_tiles, wt: spans → block_width_tiles (row stride block_width_tiles·64 B), row_in_tile: spans → 32, col_in_tile: spans → 32, blocks: streams → ROWS_OUT_DEPTH}` | UInt16 (same bytes, packed row-major) | compute | writer | whole kernel (every block) | Not shared with `cb_tiles_in`: concurrent lifetime (see above). Not replaceable by writing straight from `cb_tiles_in`: a row of a W > 16 block is `2·block_cols` non-contiguous 32-B face rows there, i.e. `2·block_cols` NoC writes per row instead of 1 (lamp L6 covers the W ≤ 16 case, where the row is contiguous). Capacity = 2× the block for the compute/writer overlap. |
+
+Pattern check (Rule 3): pack-into-destination is not available (the destination is a DRAM/L1 tensor written by NoC, not a CB); transform-in-place is forbidden by the helper; alias is blocked by concurrent lifetimes; fold-into-accumulator does not apply (no arithmetic). Two CBs is the minimum inventory for a compute-side reorder.
 
 ## Symbol table
 
-| Symbol | Bound | Predicate that establishes it |
-|--------|-------|-------------------------------|
-| `tile_bytes_in` | 2048 | R1 predicate: input dtype bf16 (R2 would make it 1088, `Bfp8_b`) |
-| `tile_bytes_rows` | 2048 | every TILE input converts to a bf16 ROW_MAJOR output (Output rule) |
-| `tiles_depth`, `rows_depth` | 2 each | Phase 0 constants (`Plan` fields) |
-| `segment_width` | `1 <= segment_width <= min(tensor_w_tiles, seg_width_max)`, `seg_width_max = floor(B_cb / (tiles_depth*tile_bytes_in + rows_depth*tile_bytes_rows))` (164 for a DRAM output) | plan clamp (Work Distribution) |
-| `block_segments` | `1 <= block_segments <= min(ceil(num_segments / cores_used), floor(B_cb / (segment_width * (tiles_depth*tile_bytes_in + rows_depth*tile_bytes_rows))))` | plan (Axes row `ht`) |
-| `B_cb` | `1347776 - out_l1_bank_bytes - cb_align_slack` | BB-05: the model leaves 1347776 B per core, counted before the output exists |
-| `out_l1_bank_bytes` | 0 for a DRAM output; `ceil(num_out_pages / num_l1_banks) * align(W*2, 16)` for an L1 output | output placement (`memory_config`, else the input's) |
-| `num_l1_banks` | `ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks` | device |
-| `cb_align_slack` | `2 * 64` B | one 64-B base alignment per CB (BH DRAM reads need local == NoC address mod 64) |
-
-The host refuses (RuntimeError, before any dispatch) a call whose `B_cb` is below
-`tiles_depth*tile_bytes_in + rows_depth*tile_bytes_rows` = 8192 B — only an L1 output of
-roughly 1.3 MB per bank reaches it, which no golden INPUTS case does (the largest Phase 0 L1
-output, case 2038 `(1, 32, 2560)`, is 163840 B in total).
+| Symbol | Meaning | Bound | Predicate establishing it |
+|--------|---------|-------|---------------------------|
+| `tile_bytes` | bytes of one 32×32 UInt16/bf16 tile page | 2048 | format |
+| `TILES_IN_DEPTH`, `ROWS_OUT_DEPTH` | buffer depths | 2 each (Phase 0) | module constants |
+| `L1_OP_BUDGET_BYTES` | L1 per core the model leaves to the op (BB-05) | 1347776 | spec |
+| `out_l1_bytes_per_bank` | this core's share of an L1 output | `ceil(N·H / num_l1_banks) · round_up(W·2, l1_alignment)` if the output is L1, else 0 | output placement |
+| `block_tiles_cap` | max tiles per block | `floor((L1_OP_BUDGET_BYTES − out_l1_bytes_per_bank) / ((TILES_IN_DEPTH + ROWS_OUT_DEPTH) · tile_bytes))`; 164 for a DRAM output at depth 2 | must be ≥ 1, else host `RuntimeError` (no golden shape reaches it) |
+| `col_group_width_tiles` | tiles of one column group | ≤ `tensor_tile_cols` | occupancy rule in `op_design.md` → Work Distribution |
+| `block_width_tiles` | block extent on `wt` | `≤ min(col_group_width_tiles, block_tiles_cap)` | `plan()` |
+| `core_rows_max` | most tile-rows of one column group a core holds | `≤ min(ceil(num_units / num_cores), tensor_tile_rows)` | `split_work_to_cores` |
+| `block_height_tiles` | block extent on `tile_row` | `≤ min(core_rows_max, floor(block_tiles_cap / block_width_tiles))` | `plan()` |
 
 ## Total per-core footprint
 
 ```
-F = block_segments * segment_width * (tiles_depth * tile_bytes_in + rows_depth * tile_bytes_rows)
-    + out_l1_bank_bytes                                      (L1 output only)
-  <= 1347776 - cb_align_slack
+L1_op(core) = (TILES_IN_DEPTH + ROWS_OUT_DEPTH) · block_height_tiles · block_width_tiles · tile_bytes
+            + out_l1_bytes_per_bank
+            ≤ L1_OP_BUDGET_BYTES = 1347776
 ```
 
-`F` is linear in `block_segments`, `segment_width`, `tiles_depth` and `rows_depth`; it scales
-with no op dimension except through the clamps above (a narrow tensor gets a narrow
-`segment_width`, a short assignment a small `block_segments`). The default takes `block_segments`
-at its bound, so `F` sits at the budget whenever a core owns more segments than fit.
+Both CB terms scale with `block_height_tiles · block_width_tiles` (the block knobs) and linearly with their depth knob; `out_l1_bytes_per_bank` scales with the output size and is zero for a DRAM output; nothing scales with `N`, `H` or `W` except through the bounded block knobs. Example: `[16,4096,2560]` → `4 · 2 · 80 · 2048 = 1310720` B; `[1,2048,2048,3]` → `4 · 145 · 1 · 2048 = 1187840` B; `[1,32,2560]` in L1 → `4 · 1 · 1 · 2048 + 5120 = 13312` B.
 
 ## Data-movement budget
 
+Boundary: the DRAM (or L1-bank) side of the interleaved tensors. "Live bursts" = the 32-B face rows that hold at least one logical value.
+
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` (TILE, bf16) | 1 x its live bytes at the 32-B face-row granule (a fully live tile is one 2048-B read; dead faces and tile-padding rows are never read) | each tile lands once in `cb_tiles`, is untilized once and popped; no pass re-reads it | 0 (an L1-interleaved input crosses the NoC once instead of DRAM) |
-| output (ROW_MAJOR, bf16) | 1 x `N*H*W*2` B | each row segment is written once from `cb_rows` | 0 |
+| `input_tensor` (TILE) | 1 × live bursts; dead faces and dead rows 0 | each tile belongs to exactly one block of exactly one core; live-extent reads skip faces 1/3 when `live_cols ≤ 16` and faces 2/3 (or the dead row suffix of faces 0/1) when `live_rows ≤ 16` | 0 |
+| output (ROW_MAJOR) | 1 × live bytes | each row segment is produced in exactly one block and written once; `num_col_groups` segments per row | 0 |
 
-Totals for the flagged and boundary shapes:
+Totals on the flagged cases:
 
-| Shape | Input bytes read | Output bytes written | Write transactions |
-|-------|------------------|----------------------|--------------------|
-| `(16, 4096, 2560)` | 335,544,320 | 335,544,320 | 65,536 (one per row) |
-| `(1, 2048, 2048, 3)` (p1) | 134,217,728 (faces 0 and 2 of 131072 tiles) | 25,165,824 | 4,194,304 (6 B each) |
-| `(1, 1024, 2048, 128)` (p2 = p3) | 536,870,912 | 536,870,912 | 2,097,152 (256 B each) |
-| `(1, 1024, 1024, 3)` (p4) | 33,554,432 | 6,291,456 | 1,048,576 |
-| `(1, 131072)` | 262,144 (64 B of each of 4096 tiles) | 262,144 | one per segment |
+| Case | Input read | Output written | Write transactions |
+|------|-----------|----------------|--------------------|
+| 308 `[1,2048,2048,3]` | 131072 tiles × 1024 B (faces 0, 2) = 128 MiB | 4194304 rows × 6 B = 24 MiB | 4194304 |
+| 304 `[1,1024,2048,128]` | 262144 × 2048 B = 512 MiB | 512 MiB | 2097152 (256 B each) |
+| 286 `[1,1024,1024,3]` | 32768 × 1024 B = 32 MiB | 1048576 × 6 B = 6 MiB | 1048576 |
+| 1978 `[16,4096,2560]` | 163840 × 2048 B = 320 MiB | 320 MiB | 65536 (5120 B each) |
 
-Per tier: DRAM = input live bytes + output bytes; NoC between cores = 0; L1 = each byte written
-and read once in each CB.
+Note on case 308: a face row is one 32-B DRAM burst and holds 6 live bytes, and every 6-B output row is its own transaction into its own 64-B page slot, so the burst-granular floor is 128 MiB read + 4194304 write bursts. The lead's 109.23 µs roofline counts logical bytes (24 MiB each way) and sits below that floor; the perf pass measures against the burst-granular bound.
 
-p1 against its target: the read term alone (134 MB at the 32-B granule) needs >= 262 us at the
-~512 GB/s nominal DRAM peak, so the lead's 147.46 us target (1.35 x a roofline built on 25 MB of
-logical input) is below the physical floor of any scheme that reads DRAM; the design reaches the
-granule floor and reports the gap rather than chasing it.
-
-> Cheapest-traffic split considered: tile-rows only (`num_col_chunks = 1`) — every candidate split
-> moves the same bytes per tier (input live ranges once across DRAM, output once, 0 cross-core);
-> they differ only in write transactions (`num_col_chunks` per output row). Implemented: the segment
-> split with the smallest `num_col_chunks` that balances within `balance_slack`, which IS the
-> cheapest split on every shape whose tile-rows fill the grid (all flagged performance cases); on
-> shapes with fewer tile-rows than cores it adds `num_col_chunks - 1` writes per row and 0 bytes.
-> Nothing deferred: no split moves fewer bytes.
+> Cheapest-traffic split considered: `tile_row` only (R4) — same bytes per tier as the implemented split; it differs only in write transactions on shapes with fewer tile-rows than cores, where it leaves cores idle. Implemented: `tile_row × column groups` (R1), which **is** the `tile_row`-only split whenever that split balances the grid within `COL_SPLIT_TOLERANCE`. The implemented split is the cheapest in bytes on every tier; nothing is deferred on traffic grounds.
