@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdint>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <numeric>
 #include <optional>
 #include <random>
@@ -15,22 +15,22 @@
 #include <iomanip>
 #include <sstream>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
-#include "env_lib.hpp"
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_config.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include "impl/context/metal_context.hpp"
-#include "tt_metal/api/tt-metalium/math.hpp"
+#include <tt-metalium/data_formats/data_format.hpp>
+#include "tt_metal/api/tt-metalium/utils/math.hpp"
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::distributed::test {
@@ -170,12 +170,11 @@ std::span<const ElementType> src_data(size_t num_elements) {
 
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
     const size_t num_dram_channels = mesh_device.num_dram_channels();
-    const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr available_size_per_bank = mesh_device.allocator()->get_bank_size(BufferType::DRAM);
 
     bool result{true};
     auto allocation_size_per_bank = (size + num_dram_channels - 1) / num_dram_channels;
-    result = result and allocation_size_per_bank <= dram_size_per_channel - bank_offset;
+    result = result and allocation_size_per_bank <= available_size_per_bank;
     if (not result) {
         log_info(
             tt::LogTest,
@@ -183,7 +182,7 @@ bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
             "size/bank, #banks ({:X}, {})",
             size,
             allocation_size_per_bank,
-            dram_size_per_channel - bank_offset,
+            available_size_per_bank,
             num_dram_channels);
         return result;
     }
@@ -271,13 +270,12 @@ bool validate_sharded_test_inputs(
 
     // Determine if required allocation per bank can fit
     const size_t num_dram_channels = mesh_device.num_dram_channels();
-    const size_t dram_size_per_channel = mesh_device.dram_size_per_channel();
-    const DeviceAddr bank_offset = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const DeviceAddr available_size_per_bank = mesh_device.allocator()->get_bank_size(BufferType::DRAM);
     uint32_t shard_height = tensor_shape.height() / grid_size.y;
     uint32_t shard_width = tensor_shape.width() / grid_size.x;
     size_t shard_sizeB = size_t(shard_height) * shard_width * element_sizeB;
 
-    result = result and shard_sizeB <= dram_size_per_channel - bank_offset;
+    result = result and shard_sizeB <= available_size_per_bank;
     if (not result) {
         log_info(
             tt::LogTest,
@@ -287,7 +285,7 @@ bool validate_sharded_test_inputs(
             tensor_shape,
             grid_size,
             shard_sizeB,
-            dram_size_per_channel - bank_offset,
+            available_size_per_bank,
             num_dram_channels);
         return result;
     }

@@ -30,6 +30,7 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 TtCombine2dModule, below, does the same job with the combine_fabric2d op.
 """
 
+from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -187,6 +188,7 @@ class TtCombine2dModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        forwarding_buffer: Optional[ttnn.Tensor] = None,
     ):
         """
         Initialize the fabric2d combine module.
@@ -207,6 +209,9 @@ class TtCombine2dModule(LightweightModule):
             num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
                 pair is one stream, so the op runs 2 * num_links streams per chip.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
+            forwarding_buffer: DRAM buffer the op relays tokens through, from
+                TT_CCL.get_combine_forwarding_buffer for these arguments. None leaves it to the op, which
+                allocates it at its first cache miss and keeps one per cached program.
 
         Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
         and the mesh shape, and no fp8_output, because the op has no fp8 stage on the way out.
@@ -223,6 +228,7 @@ class TtCombine2dModule(LightweightModule):
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.memory_config = memory_config
+        self.forwarding_buffer = forwarding_buffer
         # combine_fabric2d does not check that its ring is wired; the first forward does, on a device tensor.
         self._ring_checked = False
 
@@ -279,4 +285,5 @@ class TtCombine2dModule(LightweightModule):
             fwd_vc_pages=self.fwd_vc_pages,
             topology=ttnn.Topology.Ring,
             memory_config=self.memory_config,
+            forwarding_buffer=self.forwarding_buffer,
         )

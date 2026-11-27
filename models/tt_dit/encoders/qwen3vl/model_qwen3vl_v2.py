@@ -103,17 +103,6 @@ class Qwen3VlCheckpoint:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        self.load_weights(model, device=device, parallel_config=parallel_config)
-        return model
-
-    def load_weights(
-        self,
-        model: Qwen3VlEncoder,
-        *,
-        device: ttnn.MeshDevice,
-        parallel_config: EncoderParallelConfig,
-    ) -> None:
-        """Load the weights of a model built by ``build``, e.g. again after ``deallocate_weights``."""
         cache.load_model(
             model,
             get_torch_state_dict=self._load_state_dict,
@@ -124,6 +113,7 @@ class Qwen3VlCheckpoint:
             mesh_device=device,
             dtype=WEIGHT_CACHE_DTYPE,
         )
+        return model
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
         torch_model = transformers.Qwen3VLForConditionalGeneration.from_pretrained(

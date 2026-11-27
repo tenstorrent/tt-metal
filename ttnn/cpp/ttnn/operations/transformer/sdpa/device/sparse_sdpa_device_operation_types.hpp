@@ -30,6 +30,9 @@ struct SparseSDPAParams {
     bool has_scaled_kv() const { return kv_format == transformer::SparseKVFormat::SCALED_FP8; }
     // Worker cores: sub_core_grids, or all cores of the first subdevice.
     tt::tt_metal::CoreRangeSet worker_core_grid;
+    // Output placement: interleaved, in DRAM (default) or L1.
+    tt::tt_metal::MemoryConfig output_mem_config{
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 };
 
 struct SparseSDPAInputs {

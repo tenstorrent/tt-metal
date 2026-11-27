@@ -9,8 +9,10 @@
 //   Phase 1: cb_in -> cb_tile: tilize (ROW_MAJOR input) or copy (INPUT_TILE_LAYOUT: input already tiled).
 //   Phase 2: compute per-row amax over the 128-element block, clamp(>=1e-4), multiply by 1/448
 //            -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
-//   Phase 3: divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, then pack_untilize_dest straight
-//            to cb_output_e4m3 (scaled, cast to e4m3) -- fused divide+untilize, no cb_out_tile round-trip.
+//   Phase 3: divide (cb_tile * bcast_col(cb_inv_scale_tiles)) into DST, round to e4m3 precision (nearest
+//            even) in DST, then pack_untilize_dest straight to cb_output_e4m3 -- fused divide+untilize, no
+//            cb_out_tile round-trip. The packer truncates fp32 -> e4m3 toward zero, so the rounding must
+//            happen before it: truncation shrinks every magnitude by ~4% on average, a one-sided bias.
 // The writer extracts column 0 of cb_scale_tiles into the scale output [..., M, H/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -57,6 +59,34 @@ inline void calculate_ceil_power_of_two() {
 inline void ceil_power_of_two_tile(uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_ceil_power_of_two, (8 /* ITERATIONS */), idst, VectorMode::RC);
+}
+
+namespace ckernel::sfpu {
+
+// Round an fp32 value to e4m3's 3 mantissa bits, nearest even, so the truncating fp32 -> e4m3 packer
+// that follows is exact for normal e4m3 values. Same "add 0x7ffff + lsb, clear the low 20 bits" trick
+// as float32_to_bf16_rne. A device amax a hair below the true amax can leave |x/scale| just above 448,
+// which would now round to 480 (0x7F, NaN in e4m3fn), so saturate to 448 as the truncating pack did.
+template <int ITERATIONS = 8>
+inline void calculate_round_to_e4m3_rne() {
+    for (int d = 0; d < ITERATIONS; ++d) {
+        sfpi::vFloat value = sfpi::dst_reg[0];
+        sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(value);
+        bits = bits + 0x7ffffU + ((bits >> 20) & 1);
+        bits = bits & 0xfff00000U;
+        sfpi::vFloat result = sfpi::as<sfpi::vFloat>(bits);
+        v_if(sfpi::abs(result) > 448.0f) { result = sfpi::copysgn(sfpi::vFloat(448.0f), value); }
+        v_endif;
+        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg++;
+    }
+}
+
+}  // namespace ckernel::sfpu
+
+inline void round_to_e4m3_rne_tile(uint32_t idst) {
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_round_to_e4m3_rne, (8 /* ITERATIONS */), idst, VectorMode::RC);
 }
 #endif
 
@@ -210,6 +240,11 @@ void kernel_main() {
                         block_h_idx,
                         block_h_idx * block_wt + k);
                 }
+            }
+            // Round to nearest even at e4m3 precision before the truncating pack (see the header comment).
+            MATH((SFPU_UNARY_INIT(unused)));
+            for (uint32_t i = 0; i < tiles_per_block; ++i) {
+                MATH((round_to_e4m3_rne_tile(i)));
             }
             tile_regs_commit();
             tile_regs_wait();

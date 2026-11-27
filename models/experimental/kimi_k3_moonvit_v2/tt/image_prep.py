@@ -11,9 +11,9 @@ of `merge_kernel_size * patch_size` (28 px), and after normalization that black 
 patches are real tokens. Layer 2, the zero rows up to `max_patches`, is `host_prep.prepare_host_inputs`.
 
 Only RGB images are accepted; every other mode is rejected rather than converted, so transparency
-(which HF composites onto a chessboard) is never silently dropped. Images over `config.max_patches`
-are rejected before the resize, never shrunk to fit. `tests/test_image_prep.py` checks the rest bit
-for bit against the HF copy.
+(which HF composites onto a chessboard) is never silently dropped. The default `config.max_patches`
+holds the grid of every image size; with a smaller one, an image over it is rejected before the
+resize, never shrunk to fit. `tests/test_image_prep.py` checks the rest bit for bit against the HF copy.
 """
 
 from __future__ import annotations

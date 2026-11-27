@@ -11,8 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/types/core_coordinates.hpp>

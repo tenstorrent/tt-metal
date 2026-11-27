@@ -9,6 +9,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/serializable.hpp"
 
@@ -33,14 +34,12 @@ SGDComposite::SGDComposite(
 }
 
 void SGDComposite::zero_grad() {
-    for (auto& [name, tensor_ptr] : m_parameters) {
-        if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
-            tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
-        }
-    }
+    clear_gradients_to_restore();
 }
 
 void SGDComposite::step() {
+    core::cast_fp32_gradients_to_bf16(m_parameters);
+    restore_cleared_gradients_as_zeros();
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }

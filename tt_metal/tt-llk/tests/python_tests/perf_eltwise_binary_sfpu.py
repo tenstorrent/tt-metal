@@ -71,7 +71,7 @@ def test_perf_eltwise_binary_sfpu_float(
     formats,
     dest_acc,
     mathop,
-    bcast_dim,
+    broadcast_type,
     run_types,
     loop_factor,
     iterations,
@@ -82,7 +82,7 @@ def test_perf_eltwise_binary_sfpu_float(
         formats,
         dest_acc,
         mathop,
-        bcast_dim,
+        broadcast_type,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
@@ -92,7 +92,7 @@ def test_perf_eltwise_binary_sfpu_float(
 # NearestEven only. Default is already the float sweep, and a second Default row duplicates its key.
 _BF16_RNE_SWEEP = dict(
     formats=input_output_formats([DataFormat.Float16_b], same=True),
-    bcast_dim=[LlkBroadcastType.None_],
+    broadcast_type=[LlkBroadcastType.None_],
     mathop=[
         MathOperation.SfpuElwadd,
         MathOperation.SfpuElwsub,
@@ -113,7 +113,7 @@ def test_perf_eltwise_binary_sfpu_bf16_rne(
     formats,
     dest_acc,
     mathop,
-    bcast_dim,
+    broadcast_type,
     dst_rounding,
     run_types,
     loop_factor,
@@ -125,7 +125,7 @@ def test_perf_eltwise_binary_sfpu_bf16_rne(
         formats,
         dest_acc,
         mathop,
-        bcast_dim,
+        broadcast_type,
         dst_rounding_mode=dst_rounding,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
@@ -140,7 +140,7 @@ _SHALLOW_SWEEP = dict(
         [DataFormat.Float16_b, DataFormat.Float32],
         same=True,
     ),
-    bcast_dim=[LlkBroadcastType.None_],
+    broadcast_type=[LlkBroadcastType.None_],
     mathop=[MathOperation.SfpuElwadd, MathOperation.SfpuElwmul],
     dest_acc=DEST_ACC_MODES,
     input_dimensions=[[64, 32], [128, 32]],
@@ -157,7 +157,7 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
     formats,
     dest_acc,
     mathop,
-    bcast_dim,
+    broadcast_type,
     input_dimensions,
     run_types,
     loop_factor,
@@ -169,7 +169,7 @@ def test_perf_eltwise_binary_sfpu_float_shallow(
         formats,
         dest_acc,
         mathop,
-        bcast_dim,
+        broadcast_type,
         input_dimensions=input_dimensions,
         **_perf_kwargs(
             perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
@@ -438,6 +438,34 @@ def test_perf_eltwise_binary_sfpu_geglu_tanh(
 
 
 @pytest.mark.perf
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(
+    **_distinct_dest_acc(_func.SILU_GLU_SWEEP),
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_silu_glu(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_silu_glu(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
 @parametrize(
     **_func.INT_SWEEP,
     **_PERF_AXES,
@@ -599,7 +627,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
 def test_perf_eltwise_binary_sfpu_bcast(
     perf_report,
     formats,
-    bcast_dim,
+    sfpu_bcast_dim,
     mathop,
     dest_acc,
     run_types,
@@ -610,7 +638,7 @@ def test_perf_eltwise_binary_sfpu_bcast(
 ):
     _func.test_eltwise_binary_sfpu_bcast(
         formats,
-        bcast_dim,
+        sfpu_bcast_dim,
         mathop,
         dest_acc,
         **_perf_kwargs(

@@ -26,6 +26,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    flat_axes,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -90,7 +91,10 @@ class PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
 # Tile shape of the srcA operand: 32x32 is a full tile (num_faces=4), 16x32 a "tiny tile" (one
 # face-row, num_faces=2). Shared with the perf module so the two sweeps stay aligned.
 BCAST_COL_CUSTOM_TILE_DIMENSIONS = [[32, 32], [16, 32]]
-# Each column tile is tile_rows x 32; srcA is one row of ct_dim tiles.
+# (ct_dim, num_blocks): ct_dim column tiles per dest section, num_blocks sections. Widths up to 8
+# fit one section; (8, 4) spans four, exercising dest bank switching in the custom pipeline.
+BCAST_COL_CUSTOM_BLOCK_SHAPES = [(ct_dim, 1) for ct_dim in range(1, 9)] + [(8, 4)]
+# Each column tile is tile_rows x 32; srcA is one row of ct_dim * num_blocks tiles.
 _BCST_COL_RT_DIM = 1
 _CPP_SOURCE = "sources/eltwise_bcast_col_custom_test.cpp"
 
@@ -238,7 +242,8 @@ def _run_eltwise_bcast_col_custom(
     math_fidelity,
     broadcast_type,
     tile_dimensions,
-    input_width,
+    ct_dim,
+    num_blocks,
     *,
     is_perf=False,
     perf_report=None,
@@ -257,17 +262,17 @@ def _run_eltwise_bcast_col_custom(
 
     tile_dims = list(tile_dimensions)
     tile_rows = tile_dims[0]
-    input_dimensions_A = [tile_rows, input_width]
+    input_dimensions_A = [tile_rows, ct_dim * num_blocks * 32]
     input_dimensions_B = [tile_rows, 32]
 
     # 32x32 tile => num_faces=4, 16x32 tiny tile => num_faces=2.
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dims)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
-    ct_dim = input_dimensions_A[1] // 32
+    full_ct_dim = input_dimensions_A[1] // 32
     logger.info(
-        "Running ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
-        ct_dim,
+        "Running full_ct_dim=%d  srcA=%s  srcB=%s  num_faces=%d  face_r_dim=%d",
+        full_ct_dim,
         input_dimensions_A,
         input_dimensions_B,
         num_faces,
@@ -327,9 +332,15 @@ def _run_eltwise_bcast_col_custom(
         mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
     )
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+    # The swept (ct_dim, num_blocks) must be the split the harness derives for this width.
+    expected_split = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions_A, tile_dimensions=tile_dims
     )
+    assert tuple(expected_split) == (num_blocks, ct_dim), (
+        f"(ct_dim={ct_dim}, num_blocks={num_blocks}) does not match the derived "
+        f"(num_blocks, num_tiles_in_block)={expected_split}"
+    )
+    num_tiles_in_block = ct_dim
 
     if is_perf and perf_report is None:
         raise ValueError("perf_report must be provided when is_perf=True")
@@ -340,7 +351,7 @@ def _run_eltwise_bcast_col_custom(
         dest_acc,
         math_fidelity,
         broadcast_type,
-        ct_dim,
+        full_ct_dim,
         tile_cnt_A,
         StimuliConfig(
             src_A_tilized,
@@ -447,9 +458,7 @@ def _run_eltwise_bcast_col_custom(
     math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
     tile_dimensions=BCAST_COL_CUSTOM_TILE_DIMENSIONS,
-    # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
-    # sections, exercising destination bank switching in the custom pipeline.
-    input_width=list(range(32, 257, 32)) + [1024],
+    **flat_axes(("ct_dim", "num_blocks"), BCAST_COL_CUSTOM_BLOCK_SHAPES),
 )
 def test_eltwise_bcast_col_custom(
     formats,
@@ -458,7 +467,8 @@ def test_eltwise_bcast_col_custom(
     math_fidelity,
     broadcast_type,
     tile_dimensions,
-    input_width,
+    ct_dim,
+    num_blocks,
 ):
     _run_eltwise_bcast_col_custom(
         formats,
@@ -467,7 +477,8 @@ def test_eltwise_bcast_col_custom(
         math_fidelity,
         broadcast_type,
         tile_dimensions,
-        input_width,
+        ct_dim,
+        num_blocks,
     )
 
 

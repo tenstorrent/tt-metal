@@ -11,11 +11,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 

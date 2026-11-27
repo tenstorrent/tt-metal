@@ -147,7 +147,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
         if self._traced and not self.dynamic_load:
-            self.gemma_encoder_pair.ensure_loaded()
+            self._prepare_gemma()
             self.encode_prompts(["warmup"], use_cache=False)
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
@@ -221,7 +221,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # use_cache=False forces a real encode so the Gemma/connector kernels compile. traced-static
         # already warmed before capture (above); dynamic_load / untraced warm last.
         if self.dynamic_load or not self._traced:
-            self.gemma_encoder_pair.ensure_loaded()
+            self._prepare_gemma()
             self.encode_prompts(["warmup"], use_cache=False)
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
@@ -689,7 +689,7 @@ class LTXDistilledPipeline(LTXPipeline):
         # would reload it and evict the captured model state.
         cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
-            self.gemma_encoder_pair.ensure_loaded()
+            self._prepare_gemma()
         enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0

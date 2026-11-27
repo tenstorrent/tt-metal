@@ -106,7 +106,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
             Builds one chip's plan table for ``ttnn.experimental.sparse_kv_push`` from its top-k indices, and
             rewrites the indices to compact-buffer slots. Needs the fabric the push will run on: its payload size
             sets the packet shape the slots follow. Every chip of the mesh, at most 32, owns a share of the cache:
-            block ``b`` of ``stripe_chunk`` rows lives on chip ``b % chips`` in row-major order.
+            block ``b`` of ``stripe_chunk`` rows lives on owner ``b % chips``; the push's ``sp_axis`` maps owners to
+            chips.
 
             Args:
                 indices: The requester's top-k cache rows, per device uint32 ROW_MAJOR DRAM [1, 1, rows, topk]
@@ -148,7 +149,7 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
 
             Args:
                 input_tensor: The KVPE cache, [slots, 1, rows per chip, width] ROW_MAJOR in DRAM (interleaved or
-                    ND-sharded), sharded over its rows (dim 2) across every chip in row-major order. A row page
+                    ND-sharded), sharded over its rows (dim 2) across every chip, in the stripe order of ``sp_axis``. A row page
                     must fit in one fabric packet payload.
                 output_tensor: The requester's compact buffer, [1, 1, rows, width] ROW_MAJOR interleaved DRAM with
                     the input's dtype and row page; normally far shorter than the cache. Each owner's rows start on
@@ -181,6 +182,10 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
                 batch_slot_layer_idx: The pushed layer's slot within its user, below ``batch_slot_num_layers``.
                 core_grid: Cores for the push (default: the first sub-device's cores); it needs
                     ``num_links * 4 * 3`` of them: two senders and one fabric mux per link and torus direction.
+                sp_axis: The mesh axis the cache's blocks stripe along first (0 or 1): the chip at position ``s`` on
+                    it and ``t`` on the other axis owns blocks ``s * chips_on_other_axis + t`` (+ ``k * chips``).
+                    Axis 0 is row-major chip order. Must match how the plan's owners are ordered (block ``b`` on
+                    owner ``b % chips``).
 
             Returns:
                 ttnn.Tensor: ``output_tensor``, holding the pushed rows. Each chip's rows differ, so it is labelled
@@ -201,7 +206,8 @@ void bind_experimental_sparse_kv_push_operations(nb::module_& mod) {
         nb::arg("batch_index_tensor") = nb::none(),
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
-        nb::arg("core_grid") = nb::none());
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("sp_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push::detail

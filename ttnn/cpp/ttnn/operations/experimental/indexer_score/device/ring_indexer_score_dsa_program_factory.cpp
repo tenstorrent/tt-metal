@@ -12,15 +12,15 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>    // tt::tile_size
-#include <tt-metalium/work_split.hpp>  // corerange_to_cores
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>  // tt::tile_size
+#include <tt-metalium/utils/work_split.hpp>          // corerange_to_cores
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -725,7 +725,7 @@ operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& arg
     }
     auto resolved = args;
     auto& fused = *resolved.fused_ring;
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
     const std::array<tt::tt_fabric::Topology, 2> axis_topology{
         ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
     const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(

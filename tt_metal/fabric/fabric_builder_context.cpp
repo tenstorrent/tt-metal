@@ -61,7 +61,8 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment([[maybe_unused]
         .max_sender_counts = max_senders,
         .max_receiver_counts = max_receivers,
         .vc2_present = intermesh_vc_config_.requires_vc2,
-        .tensix_relay_present = fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM};
+        .tensix_relay_present = fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM,
+        .vc2_forwards = intermesh_vc_config_.vc2_forwards};
     return make_stream_assignment(stream_requirements(placement, plan));
 }
 
@@ -110,6 +111,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // Always have MESH routers
     bool intermesh_vc_config_active = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2 ||
+                                      intermesh_vc_config_.requires_host_rdma ||
                                       intermesh_vc_config_.intermesh_vc_disabled;
     possible_shapes.push_back(router_vc_shape(
         topology,
@@ -396,13 +398,39 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
 
     // VC2 is independent of VC1 — only requires: RT option + Blackhole + no UDM/mux + 2D topology
     // (2D topology check happens in initialize_vc2_mappings, not here)
-    if (fabric_context_.get_rtoptions().get_enable_fabric_vc2()) {
+    if (fabric_context_.get_rtoptions().get_enable_fabric_vc2() ||
+        fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
         auto arch = fabric_context_.get_hal().get_arch();
         auto tensix_config = fabric_context_.get_fabric_tensix_config();
         bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
         bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
         bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+    }
+    if (fabric_context_.get_rtoptions().get_fabric_inter_domain()) {
+        TT_FATAL(config.requires_vc2, "inter-domain fabric needs VC2: Blackhole, no UDM or mux");
+        config.vc2_forwards = !config.requires_vc1;
+        if (config.requires_vc1) {
+            log_warning(tt::LogFabric, "inter-domain on a multi-mesh fabric: VC2 doesn't span the domain (#67139)");
+        }
+    }
+
+    if (fabric_context_.get_rtoptions().get_enable_fabric_host_rdma()) {
+        TT_FATAL(
+            fabric_context_.get_hal().get_arch() == tt::ARCH::BLACKHOLE,
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on Blackhole only");
+        TT_FATAL(
+            fabric_context_.is_2D_routing_enabled(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on 2D fabrics only");
+        TT_FATAL(
+            !fabric_context_.get_rtoptions().get_fabric_graph_builder(),
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with TT_METAL_FABRIC_GRAPH_BUILDER");
+        const auto tensix_config = fabric_context_.get_fabric_tensix_config();
+        TT_FATAL(
+            tensix_config == FabricTensixConfig::DISABLED,
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is not supported with the Tensix {} extension",
+            tensix_config == FabricTensixConfig::UDM ? "UDM" : "mux");
+        config.requires_host_rdma = true;
     }
 
     // The fabric router runs neither Tensix extension (mux, UDM) with an inter-mesh VC.

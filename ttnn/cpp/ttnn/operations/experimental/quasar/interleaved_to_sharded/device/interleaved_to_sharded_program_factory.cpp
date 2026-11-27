@@ -7,15 +7,15 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -136,7 +136,12 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     }
 
     uint32_t num_input_units = num_units_per_shard;
-    uint32_t output_page_size = tt::align(output_unit_size, dst_buffer->alignment());
+    // MX tiles (1056 B for the 8-bit formats) are walked by the packer / unpacker and the tile readers at the format's
+    // tile stride, so the staging rings must be sized to that stride (L1 aligned), not padded to the 64 B DRAM page
+    // alignment.
+    const bool mx_tiles = tt::tt_metal::is_mx(input.dtype()) || tt::tt_metal::is_mx(output.dtype());
+    uint32_t output_page_size =
+        tt::align(output_unit_size, mx_tiles ? hal::get_l1_alignment() : dst_buffer->alignment());
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
@@ -147,7 +152,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     bool use_scratch = (src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned;
     uint32_t scratch_cb_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
 
-    uint32_t input_page_size = tt::align(input_unit_size, src_buffer->alignment());
+    uint32_t input_page_size = tt::align(input_unit_size, mx_tiles ? hal::get_l1_alignment() : src_buffer->alignment());
 
     bool is_tile = (input.layout() == Layout::TILE);
 
