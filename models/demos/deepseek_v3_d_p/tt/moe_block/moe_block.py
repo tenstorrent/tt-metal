@@ -77,12 +77,17 @@ class MoEBlock:
         max_tokens_per_expert: Optional[int] = None,
         layout=None,
         combine=None,
+        tail_dtype=None,
+        tail_fidelity=None,
     ):
         # (the ops' persistent words and semaphores live across calls: in L1_SMALL, where no other program's circular
         # buffers go - in plain L1 the model's programs between two MoE layers overwrote them. Open the mesh with an
         # l1_small_size that holds them: l1_small_bytes after the first call.)
         assert resources.config.persist_l1_small, "MoEBlock: create its resources with persist_l1_small=True"
         self.mesh_device, self.resources, self.dtypes = mesh_device, resources, dtypes
+        # (a latent model's W_up dtype and up-projection fidelity: bf8 / the op's HiFi2 unless the caller raises them)
+        self.tail_dtype = ttnn.bfloat8_b if tail_dtype is None else tail_dtype
+        self.tail_fidelity = tail_fidelity
         # (the mesh axes: SP on resources.config.sp_axis - 1 for the 4x4 tray-half stage - and TP on the other)
         self.sp_axis = int(resources.config.sp_axis)
         self.tp_axis = 1 - self.sp_axis
@@ -154,7 +159,7 @@ class MoEBlock:
         # (the tail of a call: its L1 grows with a row block's rows - host only, uncached)
         _fits(
             f"moe_tail ({chunk} tokens as the head's {fit.row_blocks} row blocks)",
-            lambda: moe_block_utils.plan_moe_tail(resources, dtype=ttnn.bfloat8_b, row_blocks=fit.row_blocks),
+            lambda: moe_block_utils.plan_moe_tail(resources, dtype=self.tail_dtype, row_blocks=fit.row_blocks),
         )  # (a latent model's W_up tiles)
 
     def _plan_splits(self, ask, accumulator_count, fixed_b=0):
@@ -368,6 +373,7 @@ class MoEBlock:
                 resources=self.resources,
                 w_up=weights.w_up,
                 row_blocks=head.row_blocks,
+                **({"math_fidelity": self.tail_fidelity} if self.tail_fidelity is not None else {}),
                 **span,
                 **(on_split if span else {}),
             )

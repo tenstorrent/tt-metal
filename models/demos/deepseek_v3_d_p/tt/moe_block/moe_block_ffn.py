@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import (
     gather_batches,
 )
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock, MoEBlockWeights, sp_tp, to_mesh_order
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
 from models.demos.deepseek_v3_d_p.tt.moe_impl import model_adapter, moe_block_dims, moe_block_words_slab
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
@@ -253,7 +254,7 @@ class TtMoEBlockFfn:
 
     def _block(self, chunk, forward_chunks: int = 1):
         opts = self.options
-        key = (id(self.mesh), chunk, int(forward_chunks), opts)
+        key = (id(self.mesh), chunk, int(forward_chunks), opts) + self._acc_key()
         hit = _BLOCKS.get(key)
         if hit is not None and hit[0] is not self.mesh:  # (another mesh at this id: its block goes now)
             _BLOCKS.pop(key)[1].release()
@@ -272,6 +273,13 @@ class TtMoEBlockFfn:
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
+            # (K3_ACC_* accuracy knobs, tt/kimi_k3/accuracy.py; production: the defaults)
+            if accuracy.routed_bf8(self.layer_idx):
+                dtypes.routed_weights = ttnn.bfloat8_b
+            if accuracy.bf16_weights():
+                dtypes.shared_weights = ttnn.bfloat16
+            if accuracy.fidelity():
+                dtypes.shared_fidelity = ttnn.MathFidelity.HiFi4
             t0 = time.time()
             res = moe_block_utils.MoEBlockResources(self.mesh, self.dims, cfg, dtypes)
             block = MoEBlock(
@@ -281,8 +289,10 @@ class TtMoEBlockFfn:
                 max_tokens_per_expert=max(chunk, 256),
                 # (the flat plan's own choices: the gate/up read pieces from its weight block's bytes, the sub-blocks
                 # fitted into the combine's arena)
-                layout=moe_block_utils.FlatLayoutOptions(),
+                layout=moe_block_utils.FlatLayoutOptions(x_bf16=accuracy.fidelity(), h_bf16=accuracy.fidelity()),
                 combine=_combine_config(opts),
+                tail_dtype=ttnn.bfloat16 if accuracy.bf16_weights() else None,
+                tail_fidelity=ttnn.MathFidelity.HiFi4 if accuracy.fidelity() else None,
             )
             logger.info(f"MoE block: {opts}, flat layout {block.expert_kw['layout']}")
             logger.info(
@@ -333,7 +343,7 @@ class TtMoEBlockFfn:
             E // N,
             E,
             kw["max_tokens_per_expert"],
-            weights_bf8=False,
+            weights_bf8=accuracy.routed_bf8(self.layer_idx),
             pin=1,
             layout=kw["layout"],
         ).as_dict()
@@ -360,8 +370,14 @@ class TtMoEBlockFfn:
         flat = self._routed_layout(block)
         routed = tuple(
             (k, tuple(v) if isinstance(v, (list, tuple)) else v) for k in self._ROUTED_PACKING for v in [flat.get(k)]
-        )
+        ) + (("bf8", accuracy.routed_bf8(self.layer_idx)),)  # (the weights' dtype is part of their layout)
         return head, routed
+
+    def _acc_key(self) -> tuple:
+        """What the K3_ACC_* knobs change in a block (its dtypes, fidelity, x / h formats): () in production."""
+        if not accuracy.any_on():
+            return ()
+        return (accuracy.routed_bf8(self.layer_idx), accuracy.bf16_weights(), accuracy.fidelity())
 
     def _routed(self, block, sources=None):
         """This layer's flat expert tensors (gidx, w_gu, w_d), laid out on the device from TtMoe's bfp4 cache - or from
@@ -390,10 +406,15 @@ class TtMoEBlockFfn:
                 f"MoE block gather: face maps in {time.time() - t0:.0f} s, {len(batches)} batches of {per} experts"
             )
         shapes = fw.flat_weight_shapes(Hr, I, epc, lay)
+        bf8 = accuracy.routed_bf8(self.layer_idx)
         dst = {
-            n: fw.uninitialized_bank_sharded(*shapes[n], lay["dram_banks"], ttnn.bfloat4_b, self.mesh)
+            n: fw.uninitialized_bank_sharded(
+                *shapes[n], lay["dram_banks"], ttnn.bfloat8_b if bf8 else ttnn.bfloat4_b, self.mesh
+            )
             for n in ("w_gu", "w_d")
         }
+        if sources is None and bf8:  # (K3_ACC_ROUTED_BF8: from the bf16 checkpoint, not the bfp4 TtMoe cache)
+            sources = self._checkpoint_bf8_sources
         if sources is not None:
             cache = "host weights"  # (the log's label: no TtMoe cache, no checkpoint looked up)
         else:
@@ -468,6 +489,50 @@ class TtMoEBlockFfn:
                         device=self.mesh,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                         mesh_mapper=mapper if mapper is not None else ttnn.ReplicateTensorToMesh(self.mesh),
+                    )
+                )
+                del x
+        return srcs
+
+    def _checkpoint_bf8_sources(self, experts):
+        """K3_ACC_ROUTED_BF8 (tt/kimi_k3/accuracy.py): the routed experts as bfp8 flat_gather sources (device_sources'
+        layout) read from the bf16-dequantized checkpoint (adapter.moe_block_checkpoint). Block expert b on block chip
+        b // epc is checkpoint expert block_order_perm[b] - the same placement as TtMoe's cache, so the gate rows
+        host_weights permutes still address them."""
+        import json
+
+        from safetensors import safe_open
+
+        R, C = tuple(self.mesh.shape)
+        N = R * C
+        epc = self.dims.num_experts // N
+        if not hasattr(self, "_bf8_src"):
+            ckpt = Path(self.adapter.moe_block_checkpoint())
+            wm = json.loads((ckpt / "model.safetensors.index.json").read_text())["weight_map"]
+            root = "language_model.model." if any(k.startswith("language_model.model.") for k in wm) else "model."
+            self._bf8_src = (ckpt, wm, root, block_order_perm(self.mesh, epc, self.options.sp_axis), {})
+        ckpt, wm, root, perm, handles = self._bf8_src
+
+        def get(e, w):
+            key = f"{root}layers.{self.layer_idx}.block_sparse_moe.experts.{int(e)}.{w}.weight"
+            name = wm[key]
+            if name not in handles:
+                handles[name] = safe_open(str(ckpt / name), framework="pt", device="cpu")
+            return handles[name].get_tensor(key)
+
+        chips = to_mesh_order(list(range(N)), self.mesh.shape, self.options.sp_axis)  # (device order)
+        srcs = []
+        for le in experts:
+            for w in ("w1", "w3", "w2"):  # gate, up, down ([out, in] -> [in, out])
+                x = torch.stack([get(perm[n * epc + le], w).T for n in chips]).unsqueeze(1).contiguous()
+                srcs.append(
+                    ttnn.from_torch(
+                        x,
+                        dtype=ttnn.bfloat8_b,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=self.mesh,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
                     )
                 )
                 del x
@@ -549,7 +614,11 @@ class TtMoEBlockFfn:
                 )
             if w_up is None and "latent_up" in w:
                 w_up = ttnn.experimental.moe_block.prepare_moe_tail_weights(
-                    host("latent_up"), host("latent_norm"), resources=res, row_blocks=block.row_blocks
+                    host("latent_up"),
+                    host("latent_norm"),
+                    resources=res,
+                    row_blocks=block.row_blocks,
+                    dtype=block.tail_dtype,
                 )
             del w
         self._heads[head_key], self._w_up = head, w_up
