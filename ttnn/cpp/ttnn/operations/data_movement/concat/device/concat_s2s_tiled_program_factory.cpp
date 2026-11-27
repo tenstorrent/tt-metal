@@ -146,7 +146,10 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
 
     tt::DataFormat dfb_data_format = data_format;
     uint32_t dfb_tile_size = tile_size;
-    const bool is_bf8 = inputs[0].get().dtype() == DataType::BFLOAT8_B;
+    // Block-float tiles share one exponent per face row, so transposing them through a block-float
+    // buffer re-quantises the values. Both bfp8 and bfp4 take the bf16 intermediate path.
+    const bool is_bf8 =
+        inputs[0].get().dtype() == DataType::BFLOAT8_B || inputs[0].get().dtype() == DataType::BFLOAT4_B;
     if (is_bf8) {
         dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
         dfb_tile_size = tt::tile_size(dfb_data_format);
