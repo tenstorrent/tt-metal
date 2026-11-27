@@ -123,6 +123,7 @@ def _check(
     route_unit="auto",
     q_dtype=ttnn.bfloat16,
     kv_dtype=ttnn.bfloat16,
+    pre=None,
 ):
     S = geo.shards
     q, k, v = _quantize(q, q_dtype), _quantize(k, kv_dtype), _quantize(v, kv_dtype)
@@ -134,7 +135,10 @@ def _check(
 
     tq = _upload(mesh_device, sp_axis, q, q_dtype)
     tk, tv = (_upload(mesh_device, sp_axis, x, kv_dtype) for x in (k, v))
-    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, route_unit=route_unit)
+    if pre is None:
+        pre = SolPrepass(
+            mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, route_unit=route_unit
+        )
     pre.prepare(geo, sink_tokens, scale)
 
     # ---- full pre-pass (both programs are built and launched before any check, so a compile problem shows first)
@@ -226,6 +230,37 @@ def test_sol_prepass(
     )
     # bf16 scores flip blocks near the threshold: the bar is 98.5 % agreement with the fp32 mirror on the real cells.
     assert r["agree_real"] >= 0.985, r
+
+
+@GALAXY_RING
+def test_sol_prepass_new_length_in_place(mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, reset_seeds):
+    """One pre-pass moved to other packed lengths and sinks inside its padded length: each request gets its own
+    mask from the same constant buffers and the same two programs (what a captured trace holds)."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    q, k, v = _structured_qkv(S, 1184)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    pre = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=1.0)
+    held = None
+    for logical_n, sink_tokens in ((9000, 300), (7000, 700), (9472, 0), (9000, 300)):
+        geo = SolGeometry(shards=S, rows=1184, logical_n=logical_n)
+        r = _check(
+            mesh_device,
+            sp_axis,
+            tp_axis,
+            ccl_manager,
+            geo=geo,
+            tau=1.0,
+            sink_tokens=sink_tokens,
+            q=q,
+            k=k,
+            v=v,
+            pre=pre,
+        )
+        assert r["agree_real"] >= 0.985, (logical_n, sink_tokens, r)
+        state = pre._state
+        now = [state[name] for name in ("const_or", "valid_blocks", "geo", "pool_prog", "route_prog")]
+        assert held is None or all(a is b for a, b in zip(held, now)), (logical_n, sink_tokens)
+        held = now
 
 
 @GALAXY_RING

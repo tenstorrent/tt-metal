@@ -23,7 +23,7 @@ from ....utils.tensor import bf16_tensor, math_fidelity_from_env
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 from .sol_prepass import BLOCK as SOL_BLOCK
-from .sol_prepass import SolGeometry, SolPrepass
+from .sol_prepass import SolGeometry, SolPrepass, SolRouteConstants
 
 # Ring SDPA chunk pair of the dynamic-length path per device compute grid and length class, one program each.
 # Blackhole 4x8, measured per block: (320, 384) is 5 % faster at 4736 rows/device, (256, 512) 5 % faster at 13664.
@@ -282,12 +282,13 @@ class MiniMaxH3Attention(Module):
             fp32_dest_acc_en=False,
         )
 
-        # Sol-Attn (block-sparse ring attention, opt-in per request through `set_sol_request`). The pre-pass is kept
-        # in a plain dict, not as a child Module, so the weight cache and state dict never see it.
+        # Sol-Attn (block-sparse ring attention, opt-in per request through `set_sol_request`). The pre-passes (one
+        # per padded length, keyed by rows per device) are kept in a plain dict, not as child Modules, so the weight
+        # cache and state dict never see them.
         self.sdpa_scale = 1.0 / math.sqrt(head_dim)
         # `dense_step` keeps one denoise step on the dense ring op while the request stays armed (the schedule's
         # leading dense steps); the transformer sets it per step and keys its traces by it.
-        self._sol: dict = {"prepass": None, "request": None, "dense_step": False}
+        self._sol: dict = {"prepass": {}, "on": False, "dense_step": False}
         self._sol_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
             q_chunk_size=SOL_BLOCK,
@@ -296,39 +297,45 @@ class MiniMaxH3Attention(Module):
             matmul_math_fidelity=self.sdpa_matmul_fidelity,
         )
 
-    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0) -> None:
+    def set_sol_request(
+        self, request: tuple[int, int, int] | None, *, tau: float = 1.0, constants: SolRouteConstants | None = None
+    ) -> None:
         """Route this request's ring attention through Sol-Attn, or (None) through the dense ring op.
 
         `request` is (rows per device, logical_n, sink_tokens): the padded per-device length the forward will see,
         the logical packed length and the length of the always-dense prefix (text and audio rows in front of the
-        video). The pre-pass constants are uploaded here, outside any trace; a captured trace stays valid only while
-        the request and tau stay the same, so the caller releases its traces when either changes.
+        video). `constants` is the transformer's shared set for that padded length, already set to the request (None:
+        the pre-pass keeps its own). Each padded length keeps its pre-pass, and the packed length reaches the
+        programs as data, so a captured trace stays valid across requests; only a new tau rebuilds the pre-passes,
+        and the caller releases its traces for that.
         """
         if request is None or not self.use_ring or self.dynamic_length:
-            self._sol["request"] = None
+            self._sol["on"] = False
             return
         rows, logical_n, sink_tokens = request
-        prepass = self._sol["prepass"]
-        if prepass is None or prepass.tau != float(tau):
-            if prepass is not None:
+        held = self._sol["prepass"]
+        if any(prepass.tau != float(tau) for prepass in held.values()):
+            for prepass in held.values():
                 prepass._release_state()
-            prepass = SolPrepass(
+            held.clear()
+        if rows not in held:
+            held[rows] = SolPrepass(
                 mesh_device=self.mesh_device,
                 ccl_manager=self.ccl_manager,
                 sp_axis=self.sp_mesh_axis,
                 tau=tau,
             )
-            self._sol["prepass"] = prepass
         geo = SolGeometry(shards=self.parallel_config.sequence_parallel.factor, rows=rows, logical_n=logical_n)
-        prepass.prepare(geo, sink_tokens, self.sdpa_scale)
-        prepass.reset_mask_reuse()
-        self._sol["request"] = (rows, logical_n)
+        held[rows].prepare(geo, sink_tokens, self.sdpa_scale, constants)
+        self._sol["on"] = True
 
-    def _sol_attention(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> ttnn.Tensor:
+    def _sol_attention(
+        self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, prepass: SolPrepass, logical_n: ttnn.Tensor
+    ) -> ttnn.Tensor:
         """Sol-Attn: the routing pre-pass picks the exact (Q block, K block) pairs, the sparse ring op computes them
-        and folds the rest in through the pooled K/V correction."""
-        _rows, logical_n = self._sol["request"]
-        routed = self._sol["prepass"](q_BHNE, k_BHNE, v_BHNE, scale=self.sdpa_scale)
+        and folds the rest in through the pooled K/V correction. The op reads the packed length from `logical_n` on
+        device; its integer argument is only the bound it checks, the padded length."""
+        routed = prepass(q_BHNE, k_BHNE, v_BHNE, scale=self.sdpa_scale)
         out = ttnn.transformer.sparse_ring_sdpa(
             q_BHNE,
             k_BHNE,
@@ -342,7 +349,8 @@ class MiniMaxH3Attention(Module):
             persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
                 v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
             ),
-            logical_n=logical_n,
+            logical_n=q_BHNE.shape[2] * self.parallel_config.sequence_parallel.factor,
+            logical_n_tensor=logical_n,
             program_config=self._sol_program_config,
             scale=self.sdpa_scale,
             compute_kernel_config=self.sdpa_compute_kernel_config,
@@ -688,16 +696,11 @@ class MiniMaxH3Attention(Module):
 
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
-        sol_request = self._sol["request"]
-        use_sol = (
-            self.use_ring
-            and sol_request is not None
-            and sol_request[0] == q_BHNE.shape[2]
-            and not self._sol["dense_step"]
-        )
+        sol_prepass = self._sol["prepass"].get(q_BHNE.shape[2])
+        use_sol = self.use_ring and self._sol["on"] and sol_prepass is not None and not self._sol["dense_step"]
         exp_program_config = None if use_sol else self._exp_sdpa_program_config(q_BHNE.shape[2])
         if use_sol:
-            spatial_BHNE = self._sol_attention(q_BHNE, k_BHNE, v_BHNE)
+            spatial_BHNE = self._sol_attention(q_BHNE, k_BHNE, v_BHNE, sol_prepass, logical_n)
         elif exp_program_config is not None:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 q_BHNE,

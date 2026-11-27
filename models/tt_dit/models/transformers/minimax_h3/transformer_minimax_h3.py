@@ -20,6 +20,7 @@ from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .agmm_config import AgmmMode
+from .sol_prepass import SolGeometry, SolRouteConstants
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import (
     MODALITY_NUM,
@@ -346,6 +347,7 @@ class MiniMaxH3Transformer3DModel(Module):
 
         # 4. The block stack. `_sol_dense_step`: see `set_sol_dense_step`.
         self._sol_dense_step = False
+        self._sol_constants: dict = {}  # rows per device -> SolRouteConstants, shared by the blocks
         self.transformer_blocks = ModuleList(
             [
                 MiniMaxH3TransformerBlock(
@@ -812,12 +814,25 @@ class MiniMaxH3Transformer3DModel(Module):
     def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0, dense_layers: int = 0) -> None:
         """Run the blocks' ring attention through Sol-Attn for this request shape, or (None) dense again.
 
-        The first `dense_layers` blocks stay dense. See `MiniMaxH3Attention.set_sol_request`. Captured `run_blocks`
-        traces reference the pre-pass buffers this replaces, so the caller releases them first whenever the request
-        changes.
+        The first `dense_layers` blocks stay dense. See `MiniMaxH3Attention.set_sol_request`. A new packed length or
+        sink moves the shared route constants in place, so captured `run_blocks` traces stay valid; the caller
+        releases them only when tau or `dense_layers` changes.
         """
+        constants = None if request is None else self._sol_route_constants(request)
         for index, block in enumerate(self.transformer_blocks):
-            block.attn.set_sol_request(None if index < dense_layers else request, tau=tau)
+            block.attn.set_sol_request(None if index < dense_layers else request, tau=tau, constants=constants)
+
+    def _sol_route_constants(self, request: tuple[int, int, int]) -> SolRouteConstants | None:
+        """The route constants every block shares for this padded length, set to the request."""
+        if not self.transformer_blocks[0].attn.use_ring or self.dynamic_length:
+            return None
+        rows, logical_n, sink_tokens = request
+        sequence_parallel = self.parallel_config.sequence_parallel
+        geo = SolGeometry(shards=sequence_parallel.factor, rows=rows, logical_n=logical_n)
+        if rows not in self._sol_constants:
+            self._sol_constants[rows] = SolRouteConstants(self.mesh_device, sequence_parallel.mesh_axis, geo)
+        self._sol_constants[rows].set(geo, sink_tokens)
+        return self._sol_constants[rows]
 
     def set_sol_dense_step(self, dense: bool) -> None:
         """Run the next forwards dense (True) or through the Sol-Attn request (False), leaving the request armed.

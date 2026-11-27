@@ -2,13 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sol-Attn schedule: which denoise steps and blocks stay dense. Host only, no device."""
+"""Sol-Attn schedule (which denoise steps and blocks stay dense) and the per-request route constants. Host only,
+no device."""
 
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import torch
 
+from ....models.transformers.minimax_h3 import sol_prepass
+from ....models.transformers.minimax_h3.sol_prepass import (
+    SolGeometry,
+    SolRouteConstants,
+    build_route_constants,
+    route_factors,
+)
 from ....models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.policy import SolSchedule, sol_schedule
@@ -51,13 +60,23 @@ def test_transformer_keeps_leading_layers_and_flagged_steps_dense():
 
     def attn(index):
         return SimpleNamespace(
-            _sol={"dense_step": False}, set_sol_request=lambda request, tau: seen.append((index, request, tau))
+            _sol={"dense_step": False},
+            set_sol_request=lambda request, tau, constants: seen.append((index, request, tau, constants)),
         )
 
-    model = SimpleNamespace(transformer_blocks=[SimpleNamespace(attn=attn(i)) for i in range(4)])
+    model = SimpleNamespace(
+        transformer_blocks=[SimpleNamespace(attn=attn(i)) for i in range(4)],
+        _sol_route_constants=lambda request: ("shared", request),
+    )
     request = (512, 4000, 300)
     MiniMaxH3Transformer3DModel.set_sol_request(model, request, tau=0.5, dense_layers=2)
-    assert seen == [(0, None, 0.5), (1, None, 0.5), (2, request, 0.5), (3, request, 0.5)]
+    shared = ("shared", request)  # one set of route constants for every block
+    assert seen == [
+        (0, None, 0.5, shared),
+        (1, None, 0.5, shared),
+        (2, request, 0.5, shared),
+        (3, request, 0.5, shared),
+    ]
 
     for dense in (True, False):
         MiniMaxH3Transformer3DModel.set_sol_dense_step(model, dense)
@@ -97,27 +116,43 @@ def test_pipeline_off_switch_touches_nothing(monkeypatch, env):
     transformer.set_sol_request.assert_not_called()
 
 
-def test_pipeline_sets_the_request_once_and_marks_buckets_cold(monkeypatch):
+def test_pipeline_releases_traces_only_on_a_schedule_change(monkeypatch):
     pipeline, transformer = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "0"}), Mock()
     pipeline._set_sol_attention(transformer, 76800, 73419, 843)
     assert pipeline._sol_key == (9600, 73419, 0)
     assert pipeline._sol_schedule == SolSchedule(sinks=False)
     assert _states(pipeline) == [False, False]
     transformer.set_sol_request.assert_called_once_with((9600, 73419, 0), tau=1.0, dense_layers=2)
-
-    pipeline._set_sol_attention(transformer, 76800, 73419, 843)
     pipeline._release_denoise_traces.assert_called_once()
 
-    # A new schedule on the same request is a new key: the traces go and the buckets turn cold again.
-    monkeypatch.setenv("H3_SOL_DENSE_STEPS", "1")
+    # Another prompt length, and another rung: the request moves, the traces and the warm buckets stay.
+    for state in (*pipeline._buckets.values(), pipeline._request_state):
+        state.warm = True
+    for rung, logical_n in ((76800, 71002), (115200, 110219)):
+        pipeline._set_sol_attention(transformer, rung, logical_n, 843)
+        assert pipeline._sol_key == (rung // 8, logical_n, 0)
+        transformer.set_sol_request.assert_called_with((rung // 8, logical_n, 0), tau=1.0, dense_layers=2)
+    assert _states(pipeline) == [True, True]
+    pipeline._release_denoise_traces.assert_called_once()
+
+    # A new schedule: the traces go and the buckets turn cold again.
+    monkeypatch.setenv("H3_SOL_DENSE_LAYERS", "3")
     pipeline._set_sol_attention(transformer, 76800, 73419, 843)
-    assert pipeline._sol_schedule.dense_steps == 1
+    assert pipeline._sol_schedule.dense_layers == 3
+    assert _states(pipeline) == [False, False]
     assert pipeline._release_denoise_traces.call_count == 2
 
     # Sinks on: the prefix length enters the request.
     monkeypatch.setenv("H3_SOL_SINKS", "1")
     pipeline._set_sol_attention(transformer, 76800, 73419, 843)
     assert pipeline._sol_key == (9600, 73419, 843)
+
+    # Off again: dense, and the traces captured with Sol go.
+    monkeypatch.setenv("H3_SOL_ATTN", "0")
+    pipeline._set_sol_attention(transformer, 76800, 73419, 843)
+    assert (pipeline._sol_key, pipeline._sol_schedule) == (None, None)
+    transformer.set_sol_request.assert_called_with(None)
+    assert pipeline._release_denoise_traces.call_count == 4
 
 
 @pytest.mark.parametrize(
@@ -136,3 +171,112 @@ def test_warmup_runs_one_step_past_the_dense_steps(monkeypatch, env, steps):
     pipeline._run_forced(76800, "a prompt", {"num_frames": 158})
     assert calls == [{"num_inference_steps": steps, "num_frames": 158}]
     assert pipeline._force_bucket is None
+
+
+_RULE = {"band": 1, "force_first_block": True, "dense_prefix_queries": True}
+
+
+def _mask(hit, const_or, valid_blocks):
+    """The route kernel's block mask for a score that passes (hit 1) or misses (hit 0) everywhere."""
+    return ((hit + const_or) > 0.5).float() * valid_blocks
+
+
+def _reference_masks(geo, sink_tokens, rule=_RULE):
+    c = build_route_constants(geo, sink_tokens=sink_tokens, scale=0.125, **rule)
+    return [_mask(hit, c["const_or"], c["valid_blocks"]) for hit in (0.0, 1.0)], c["n_valid_blocks"]
+
+
+@pytest.mark.parametrize(
+    "shards, rows, logical_n, sink_tokens",
+    [
+        (8, 9600, 73419, 843),  # 6 s rung
+        (8, 9600, 73419, 0),
+        (8, 9600, 76800, 843),  # no padding
+        (8, 10336, 77467, 4607),  # ragged last block per shard, sink longer than a few blocks
+        (8, 6592, 51983, 559),
+        (8, 6592, 20000, 7000),  # whole shards of padding, sink past the first shard
+        (8, 14400, 110219, 843),  # 10 s rung
+        (4, 9600, 38000, 300),
+    ],
+)
+@pytest.mark.parametrize("rule", [_RULE, {"band": 0, "force_first_block": False, "dense_prefix_queries": False}])
+def test_route_factors_compose_to_the_route_constants(shards, rows, logical_n, sink_tokens, rule):
+    geo = SolGeometry(shards=shards, rows=rows, logical_n=logical_n)
+    f = route_factors(geo, sink_tokens=sink_tokens, **rule)
+    const_or = f["base"] + f["sink_cols"] + f["prefix_rows"]
+    valid_blocks = f["q_full"] * f["full_cols"]
+    masks, n_valid_blocks = _reference_masks(geo, sink_tokens, rule)
+    assert f["n_valid_blocks"] == n_valid_blocks
+    for hit, expected in zip((0.0, 1.0), masks):
+        assert torch.equal(_mask(hit, const_or, valid_blocks), expected)
+
+
+def _host_constants(monkeypatch, geo, *, trace_captured=False):
+    """SolRouteConstants with host tensors standing in for the device ones, and the names it uploads."""
+    monkeypatch.setattr(sol_prepass, "live_tracers", lambda: [SimpleNamespace(trace_captured=trace_captured)])
+    constants, uploads = SolRouteConstants(None, 1, geo), []
+
+    def upload(name, t, **_):
+        uploads.append(name)
+        if name in constants.tensors:
+            constants.tensors[name].copy_(t)
+        else:
+            constants.tensors[name] = t.clone()
+
+    def compose(op):
+        return lambda a, b, output_tensor: output_tensor.copy_(op(a, b))
+
+    constants._upload = upload
+    monkeypatch.setattr(sol_prepass.ttnn, "add", compose(torch.add))
+    monkeypatch.setattr(sol_prepass.ttnn, "multiply", compose(torch.mul))
+    return constants, uploads
+
+
+def _assert_set_to(constants, geo, sink_tokens):
+    t = constants.tensors
+    masks, n_valid_blocks = _reference_masks(geo, sink_tokens)
+    for hit, expected in zip((0.0, 1.0), masks):
+        assert torch.equal(_mask(hit, t["const_or"], t["valid_blocks"]), expected)
+    valid_tokens = [max(0, min(geo.rows, geo.logical_n - s * geo.rows)) for s in range(geo.shards)]
+    assert t["geo"][:, 0, 0, 0].tolist() == valid_tokens
+    assert set(t["geo"][:, 0, 0, 1].tolist()) == {sol_prepass._f32_bits(1.0 / n_valid_blocks)}
+
+
+def test_route_constants_move_in_place_to_a_new_length_and_sink(monkeypatch, expect_error):
+    def geo(logical_n):
+        return SolGeometry(shards=8, rows=6592, logical_n=logical_n)
+
+    constants, uploads = _host_constants(monkeypatch, geo(51983))
+    constants.set(geo(51983), 559)
+    assert {"base", "q_full", "ones", "shsel", "const_or", "valid_blocks", "geo"} <= set(uploads)
+    _assert_set_to(constants, geo(51983), 559)
+    buffers = {name: id(t) for name, t in constants.tensors.items()}
+
+    del uploads[:]
+    constants.set(geo(51983), 559)
+    assert uploads == []  # the same request costs nothing
+
+    constants.set(geo(40011), 1300)
+    assert uploads == ["geo", "full_cols", "sink_cols", "prefix_rows"]
+    _assert_set_to(constants, geo(40011), 1300)
+
+    del uploads[:]
+    constants.set(geo(40010), 1300)  # the same full blocks: only the geometry page changes
+    assert uploads == ["geo"]
+    _assert_set_to(constants, geo(40010), 1300)
+    assert {name: id(t) for name, t in constants.tensors.items()} == buffers  # no buffer was replaced
+
+    with expect_error(AssertionError, "rows=9600"):  # another padded geometry needs its own set
+        constants.set(SolGeometry(shards=8, rows=9600, logical_n=73419), 559)
+
+
+def test_route_constants_allocated_after_a_trace_are_rewritten_at_every_set(monkeypatch):
+    geo = SolGeometry(shards=8, rows=6592, logical_n=51983)
+    constants, uploads = _host_constants(monkeypatch, geo, trace_captured=True)
+    constants.set(geo, 559)
+    for tensor in constants.tensors.values():
+        tensor.fill_(7)  # a trace replay overwrote them
+    del uploads[:]
+    constants.set(geo, 559)
+    assert {"base", "q_full", "ones", "shsel", "geo", "full_cols", "sink_cols", "prefix_rows"} == set(uploads)
+    _assert_set_to(constants, geo, 559)

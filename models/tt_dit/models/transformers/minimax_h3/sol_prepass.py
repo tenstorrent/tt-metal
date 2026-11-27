@@ -32,6 +32,9 @@ index = shard * nb_pad + local index. Every tensor dimension is padded to a tile
 
 Geometry constants are built on host once per geometry (cached per mesh) together with the program descriptors;
 per call only the buffer addresses are patched (generic_op re-applies runtime args on a program-cache hit).
+The packed length is data only (const_or, valid_blocks, geo), never a compile-time arg, and the layers share one set
+of route constants per padded geometry (SolRouteConstants): a new length inside it moves that one set in place, and
+a captured trace stays valid.
 The fp32 torch mirror of this arithmetic lives next to the unit test (test_sol_prepass_minimax_h3.py).
 """
 
@@ -46,6 +49,7 @@ import torch
 import ttnn
 
 from ....layers.module import Module
+from ....utils.tracing import live_tracers
 
 LOG2E = 1.4426950408889634
 VAR_EPS = 1.0e-6
@@ -196,9 +200,22 @@ def build_route_constants(
         scale=scale,
         dense_prefix_queries=dense_prefix_queries,
     )
-    S = geo.shards
     const_or = ((c["band"] + c["sink_row"] + c["force_row"]) > 0.5).float() * c["full_row"]  # [S,1,nbp,nbg]
     valid_blocks = c["q_row"] * c["full_row"]  # [1,1,nbp,nbg]
+    ones, shsel = _route_selectors(geo.shards)
+    return {
+        "const_or": const_or,
+        "valid_blocks": valid_blocks,
+        "ones": ones,
+        "shsel": shsel,
+        "n_valid_blocks": c["n_valid_blocks"],
+        "valid_row": c["valid_row"],
+        "len_bias_row": c["len_bias_row"],
+    }
+
+
+def _route_selectors(S: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """ones [1,1,32,32] (row 0 = 1) and the shard-row selectors shsel [1,1,256,32] of the route program."""
     ones = torch.zeros(1, 1, TILE, TILE)
     ones[0, 0, 0, :] = 1.0
     # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard 4t + q at
@@ -212,15 +229,140 @@ def build_route_constants(
     for n in range(8):
         for q in range(min(4, S)):
             shsel[0, 0, n * TILE, q * 8 + n] = 1.0
+    return ones, shsel
+
+
+def route_factors(
+    geo: SolGeometry, *, band: int, sink_tokens: int, force_first_block: bool, dense_prefix_queries: bool
+) -> dict:
+    """The route constants as factors, so a new packed length or sink moves three vectors, not two matrices.
+
+    The route kernel computes mask = (hits + const_or > 0.5) * valid_blocks, so const_or = base + sink_cols +
+    prefix_rows and valid_blocks = q_full * full_cols give the mask of build_route_constants. base [S,1,nb_pad,nbg]
+    (band | forced block 0 of every shard) and q_full [1,1,nb_pad,nbg] (real Q rows) depend on the padded geometry
+    only; full_cols and sink_cols [1,1,1,nbg], prefix_rows [S,1,nb_pad,1] and n_valid_blocks on the request.
+    """
+    S, nb, nbp, nbg = geo.shards, geo.nb, geo.nb_pad, geo.n_blocks_pad
+    lengths = geo.block_lengths()  # [S, nbp]
+    shard, local = torch.arange(S)[:, None], torch.arange(nbp)[None, :]
+    real = (local < nb).expand(S, nbp)
+    index = shard * nb + local  # real block index: the band crosses shard boundaries
+    base = ((index[:, :, None] - index.reshape(-1)).abs() <= band) & real[:, :, None] & real.reshape(-1)
+    if force_first_block:
+        base[:, :, ::nbp] = True
+    in_prefix = real & (shard * geo.rows + local * geo.block < sink_tokens)
     return {
-        "const_or": const_or,
-        "valid_blocks": valid_blocks,
-        "ones": ones,
-        "shsel": shsel,
-        "n_valid_blocks": c["n_valid_blocks"],
-        "valid_row": c["valid_row"],
-        "len_bias_row": c["len_bias_row"],
+        "base": base.float()[:, None],
+        "q_full": real[:1].float().reshape(1, 1, nbp, 1).expand(1, 1, nbp, nbg).contiguous(),
+        "full_cols": (lengths >= geo.block).float().reshape(1, 1, 1, nbg),
+        "sink_cols": in_prefix.float().reshape(1, 1, 1, nbg),
+        "prefix_rows": (in_prefix & dense_prefix_queries).float().reshape(S, 1, nbp, 1),
+        "n_valid_blocks": float((lengths > 0).sum()),
     }
+
+
+# ----------------------------------------------------------------------------- device constants
+
+
+class SolRouteConstants:
+    """Device constants of the pool and route programs for one padded geometry (shards, rows per shard, block).
+
+    They are the same in every layer, so the transformer keeps one set per padded length and every layer's pre-pass
+    reads it. `set()` moves the set to a packed length and sink in place: it rewrites the geometry page and three
+    vectors and composes const_or and valid_blocks on device (route_factors), so buffers, programs and captured
+    traces stay.
+    """
+
+    def __init__(
+        self,
+        mesh_device,
+        sp_axis: int,
+        geo: SolGeometry,
+        *,
+        band: int = 1,
+        force_first_block: bool = True,
+        dense_prefix_queries: bool = True,
+    ):
+        self.mesh_device = mesh_device
+        self.sp_axis = sp_axis
+        self.padded = (geo.shards, geo.rows, geo.block)
+        self.rule = (band, force_first_block, dense_prefix_queries)
+        self.tensors: dict[str, ttnn.Tensor] = {}
+        self._request = None
+        self._vectors = None  # host copies of the uploaded full_cols, sink_cols, prefix_rows
+        # A trace replay may overwrite buffers allocated after its capture: such a set is rewritten at every set().
+        self._trusted = not any(tracer.trace_captured for tracer in live_tracers())
+
+    def _upload(self, name: str, t: torch.Tensor, *, shard: bool, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
+        """Upload a host constant; a tensor of that name is rewritten in place (same spec)."""
+        if shard:
+            mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=[None, 0] if self.sp_axis == 1 else [0, None],
+                mesh_shape=tuple(self.mesh_device.shape),
+            )
+        else:
+            mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        if name in self.tensors:
+            host = ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=mapper)
+            ttnn.copy_host_to_device_tensor(host, self.tensors[name])
+        else:
+            self.tensors[name] = ttnn.from_torch(
+                t, dtype=dtype, layout=layout, device=self.mesh_device, mesh_mapper=mapper
+            )
+
+    def set(self, geo: SolGeometry, sink_tokens: int) -> None:
+        """Move the constants to this packed length and sink; a no-op while both are unchanged."""
+        assert (geo.shards, geo.rows, geo.block) == self.padded, (geo, self.padded)
+        request = (geo.logical_n, sink_tokens)
+        if request == self._request and self._trusted:
+            return
+        band, force_first_block, dense_prefix_queries = self.rule
+        f = route_factors(
+            geo,
+            band=band,
+            sink_tokens=sink_tokens,
+            force_first_block=force_first_block,
+            dense_prefix_queries=dense_prefix_queries,
+        )
+        t = self.tensors
+        rewrite = not t or not self._trusted
+        if rewrite:
+            ones, shsel = _route_selectors(geo.shards)
+            self._upload("base", f["base"], shard=True)
+            self._upload("q_full", f["q_full"], shard=False)
+            self._upload("ones", ones, shard=False)
+            self._upload("shsel", shsel, shard=False)
+        if not t.keys() >= {"const_or", "valid_blocks"}:
+            self._upload("const_or", torch.zeros_like(f["base"]), shard=True)
+            self._upload("valid_blocks", torch.zeros_like(f["q_full"]), shard=False)
+        # geo page per device: word 0 the shard's valid tokens (pool reader), word 1 the fp32 bits of
+        # 1 / number of non-padding K blocks (route compute).
+        inv_valid_blocks = _f32_bits(1.0 / f["n_valid_blocks"])
+        geo_words = torch.tensor(
+            [
+                [[[max(0, min(geo.rows, geo.logical_n - s * geo.rows)), inv_valid_blocks] + [0] * 30]]
+                for s in range(geo.shards)
+            ],
+            dtype=torch.int32,
+        )
+        self._upload("geo", geo_words, shard=True, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        vectors = (f["full_cols"], f["sink_cols"], f["prefix_rows"])
+        if rewrite or any(not torch.equal(a, b) for a, b in zip(vectors, self._vectors)):
+            self._upload("full_cols", f["full_cols"], shard=False)
+            self._upload("sink_cols", f["sink_cols"], shard=False)
+            self._upload("prefix_rows", f["prefix_rows"], shard=True)
+            ttnn.add(t["base"], t["sink_cols"], output_tensor=t["const_or"])
+            ttnn.add(t["const_or"], t["prefix_rows"], output_tensor=t["const_or"])
+            ttnn.multiply(t["q_full"], t["full_cols"], output_tensor=t["valid_blocks"])
+            self._vectors = vectors
+        self._request = request
+
+    def release(self) -> None:
+        for t in self.tensors.values():
+            ttnn.deallocate(t)
+        self.tensors = {}
+        self._request = None
 
 
 # ----------------------------------------------------------------------------- device pre-pass
@@ -229,9 +371,9 @@ def build_route_constants(
 class SolPrepass(Module):
     """Device-side routing pre-pass: pool program, two pooled all-gathers, route program.
 
-    No weights. The constants of a geometry are built on host and uploaded by `prepare()`; the attention module
-    creates one instance per layer and per request (the logical sequence length is set per request), so that is
-    one upload per layer and request.
+    No weights. `prepare()` binds the route constants of a geometry (SolRouteConstants); the attention module keeps
+    one instance per layer and per padded length (rows per device). A new packed length or sink inside that padded
+    length keeps buffers and programs.
     """
 
     def __init__(
@@ -282,71 +424,58 @@ class SolPrepass(Module):
         self._reuse_left = 0  # calls the held route may still serve
         self.last_mask_reused = False  # whether the last call reused the held mask (diagnostics)
         self._state: dict | None = None
-        self._key = None
         # Kept fraction of the real (Q block, K block) cells (report_density=True; host readback, off in production).
         self.last_density: float | None = None
 
     # ------------------------------------------------------------------ constants / descriptors
 
-    def _upload(self, t: torch.Tensor, *, shard: bool, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
-        shape = tuple(self.mesh_device.shape)
-        if shard:
-            mapper = ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=[None, 0] if self.sp_axis == 1 else [0, None], mesh_shape=shape
-            )
-        else:
-            mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-        return ttnn.from_torch(t, dtype=dtype, layout=layout, device=self.mesh_device, mesh_mapper=mapper)
+    def prepare(
+        self, geo: SolGeometry, sink_tokens: int, scale: float, constants: SolRouteConstants | None = None
+    ) -> None:
+        """Bind the route constants of a geometry.
 
-    def prepare(self, geo: SolGeometry, sink_tokens: int, scale: float) -> None:
-        """Build and upload the constants of a geometry; a no-op while geometry, sink and scale are unchanged."""
-        key = (geo, sink_tokens, scale)
-        if key == self._key:
-            return
-        self._release_state()
-        c = build_route_constants(
-            geo,
-            band=self.band,
-            sink_tokens=sink_tokens,
-            force_first_block=self.force_first_block,
-            scale=scale,
-            dense_prefix_queries=self.dense_prefix_queries,
-        )
-        self._state = {
-            "scale": scale,
-            "n_valid_blocks": c["n_valid_blocks"],
-            "const_or": self._upload(c["const_or"], shard=True),
-            "valid_blocks": self._upload(c["valid_blocks"], shard=False),
-            "ones": self._upload(c["ones"], shard=False),
-            "shsel": self._upload(c["shsel"], shard=False),
-            "geo": self._upload(
-                torch.tensor(
-                    [[[[max(0, min(geo.rows, geo.logical_n - s * geo.rows))] + [0] * 31]] for s in range(geo.shards)],
-                    dtype=torch.int32,
-                ),
-                shard=True,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            "pool_prog": None,
-            "route_prog": None,
-            "pool_outs": None,
-        }
+        `constants`: the set the layers share, which its owner has set to this request; None keeps a private set and
+        sets it here. Programs and pool outputs are kept while the constants and the scale stay the same, so a new
+        packed length or sink inside a padded geometry changes no address a captured trace holds.
+        """
+        st = self._state
+        own = constants is None
+        if own:
+            keep = st is not None and st["own"] and st["scale"] == scale
+            keep = keep and st["constants"].padded == (geo.shards, geo.rows, geo.block)
+            constants = (
+                st["constants"]
+                if keep
+                else SolRouteConstants(
+                    self.mesh_device,
+                    self.sp_axis,
+                    geo,
+                    band=self.band,
+                    force_first_block=self.force_first_block,
+                    dense_prefix_queries=self.dense_prefix_queries,
+                )
+            )
+        assert constants.rule == (self.band, self.force_first_block, self.dense_prefix_queries), constants.rule
+        if st is None or st["constants"] is not constants or st["scale"] != scale:
+            self._release_state()
+            self._state = {"constants": constants, "own": own, "scale": scale}
+            self._state.update(pool_prog=None, route_prog=None, pool_outs=None)
+        if own:
+            constants.set(geo, sink_tokens)
+        self._state.update(constants.tensors)
         self.geo = geo
-        self._key = key
-        self.reset_mask_reuse()  # a held mask belongs to the previous geometry
+        self.reset_mask_reuse()  # a held mask belongs to the previous request
 
     def _release_state(self) -> None:
-        """Free the uploaded constants and the persistent pool outputs of the current geometry."""
+        """Free the persistent pool outputs of the current geometry, and its constants when they are private."""
         st = self._state
         if st is None:
             return
-        for name in ("const_or", "valid_blocks", "ones", "shsel", "geo"):
-            ttnn.deallocate(st[name])
+        if st["own"]:
+            st["constants"].release()
         for t in st["pool_outs"] or []:
             ttnn.deallocate(t)
         self._state = None
-        self._key = None
 
     def reset_mask_reuse(self) -> None:
         """Drop the held mask: the next call routes afresh (call at the start of every generation)."""
@@ -494,7 +623,7 @@ class SolPrepass(Module):
             head_dim_tiles,  # 3 HEAD_DIM_TILES
             _f32_bits(self.tau),  # 4 TAU
             _f32_bits(VAR_EPS / (log2_scale * log2_scale)),  # 5 VARIANCE_EPSILON
-            _f32_bits(1.0 / st["n_valid_blocks"]),  # 6 INV_NUM_VALID_BLOCKS
+            0,  # 6 unused: 1 / valid K blocks is read at run time from the geo page (word 1)
             grid_x,  # 7 GRID_X
             grid_y,  # 8 GRID_Y
             num_units,  # 9 NUM_UNITS
@@ -505,7 +634,7 @@ class SolPrepass(Module):
         acc_out = list(ttnn.TensorAccessorArgs(mask).get_compile_time_args())
         # (head, shard) units read only their shard's pooled K and exchange partial moments between the num_shards
         # cores of a head (sol_route_reader.cpp): the reader needs every logical core's NoC coordinates (common runtime
-        # args 6..) and a semaphore; cb 23 receives the peers' partial moments (gather tiles), 24 ships this unit's and
+        # args 7..) and a semaphore; cb 23 receives the peers' partial moments (gather tiles), 24 ships this unit's and
         # 29 holds the shard-row selectors. The head's pooled Q is read from DRAM by its shard-0 core and shipped to the
         # other num_shards - 1 cores over the NoC (reader semaphore 1).
         core_xy = self._core_noc_xy(grid_x, grid_y) if units_per_shard else []
@@ -537,14 +666,16 @@ class SolPrepass(Module):
         else:  # 22: the writer's ring of row buffers
             cbs.append(self._cb(22, SCRATCH_PAGES, cores, page_size=block_row_bytes, dtype=ttnn.uint32))
             total += SCRATCH_PAGES * block_row_bytes
+        cbs.append(self._cb(3, 1, cores, page_size=128, dtype=ttnn.uint32))  # 3: the geo page
+        total += 128
         if total > L1_CB_BUDGET:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
-        acc_extra = list(ttnn.TensorAccessorArgs(st["shsel"]).get_compile_time_args())
+        acc_extra = [a for t in (st["shsel"], st["geo"]) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         reader = self._kernel(
             "sol_route_reader.cpp",
             cores,
             ct + acc_in + acc_extra + [units_per_shard],  # last arg: pooled Q shared over the head's cores
-            [0] * 6 + core_xy,
+            [0] * 7 + core_xy,
             ttnn.ReaderConfigDescriptor(),
         )
         writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [0], ttnn.WriterConfigDescriptor())
@@ -580,11 +711,10 @@ class SolPrepass(Module):
             st["route_prog"] = self._route_program(q_bar, kc, mask)
         prog = st["route_prog"]
         ins = [q_bar, kc, st["const_or"], st["valid_blocks"], st["ones"]]
-        prog.kernels[0].common_runtime_args = (
-            [t.buffer_address() for t in ins] + [st["shsel"].buffer_address()] + st["route_core_xy"]
-        )
+        ins += [st["shsel"], st["geo"]]
+        prog.kernels[0].common_runtime_args = [t.buffer_address() for t in ins] + st["route_core_xy"]
         prog.kernels[1].common_runtime_args = [mask.buffer_address()]
-        ttnn.generic_op([*ins, st["shsel"], mask], prog)
+        ttnn.generic_op([*ins, mask], prog)
         return mask
 
     def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:

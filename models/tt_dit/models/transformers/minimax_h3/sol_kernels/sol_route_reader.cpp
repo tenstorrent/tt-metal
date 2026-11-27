@@ -6,7 +6,8 @@
 //
 // Feeds the compute kernel. Per unit: the head's pooled K tiles (this shard's only with (head, shard) units), the
 // head's pooled Q tiles, then per (Q-block tile, shard) the always-keep tiles and the valid-block tiles. Once per
-// core, after the first unit's data: the ones tile and (with (head, shard) units) the shard selector tiles.
+// core, after the first unit's data: the ones tile, the geometry page and (with (head, shard) units) the shard
+// selector tiles.
 //
 // (head, shard) units: a core only has its shard's K, so the head's cores exchange partial moments. Compute hands
 // this kernel 8 reduced rows (cb_local_moments); they are written into the gather tiles (cb_gathered_moments) at this
@@ -15,8 +16,8 @@
 // the other cores (semaphore 1).
 //
 // Compile-time args: 0..10 as sol_route_compute.cpp (names explained there), then TensorAccessorArgs of q_pooled,
-// k_pooled, const_or, valid_blocks, ones, shard_select (host name shsel), then Q_SHARED.
-// Common runtime args: 0..5 the buffer addresses in that order, 6.. the NoC coordinates of every logical core
+// k_pooled, const_or, valid_blocks, ones, shard_select (host name shsel), geo, then Q_SHARED.
+// Common runtime args: 0..6 the buffer addresses in that order, 7.. the NoC coordinates of every logical core
 // (x | y << 8). Semaphores: 0 moment exchange, 1 Q hand-off.
 
 #include <cstdint>
@@ -29,12 +30,14 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_const_or = 6, cb_valid_blocks = 7,
+constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_geo = 3, cb_const_or = 6, cb_valid_blocks = 7,
                    cb_gathered_moments = 23, cb_local_moments = 24, cb_shard_select = 29;
 constexpr uint32_t PARTIAL_MOMENT_TILES = 8;  // HEAD_DIM_TILES sum tiles + HEAD_DIM_TILES sum-of-squares tiles
 constexpr uint32_t SHARD_SELECT_TILES = 8;
 
 constexpr uint32_t TILE_BYTES = 2048;
+constexpr uint32_t GEO_BYTES = 128;  // one row-major uint32 page of 32 words
+constexpr uint32_t CORE_XY_ARG = 7;  // first common runtime arg that holds a core's NoC coordinates
 }  // namespace
 
 void kernel_main() {
@@ -58,7 +61,8 @@ void kernel_main() {
     constexpr auto ones_args = TensorAccessorArgs<valid_blocks_args.next_compile_time_args_offset()>();
     constexpr auto shard_select_args = TensorAccessorArgs<ones_args.next_compile_time_args_offset()>();
     // Q_SHARED: the shard-0 core reads the head's Q and sends it to the other cores (semaphore 1).
-    constexpr uint32_t Q_SHARED = get_compile_time_arg_val(shard_select_args.next_compile_time_args_offset());
+    constexpr auto geo_args = TensorAccessorArgs<shard_select_args.next_compile_time_args_offset()>();
+    constexpr uint32_t Q_SHARED = get_compile_time_arg_val(geo_args.next_compile_time_args_offset());
 
     // This core's units, [core_index * NUM_UNITS / NUM_CORES, (core_index + 1) * NUM_UNITS / NUM_CORES).
     constexpr uint32_t NUM_CORES = GRID_X * GRID_Y;
@@ -85,6 +89,7 @@ void kernel_main() {
     const auto valid_blocks = TensorAccessor(valid_blocks_args, get_common_arg_val<uint32_t>(3));
     const auto ones = TensorAccessor(ones_args, get_common_arg_val<uint32_t>(4));
     const auto shard_select = TensorAccessor(shard_select_args, get_common_arg_val<uint32_t>(5));
+    const auto geo = TensorAccessor(geo_args, get_common_arg_val<uint32_t>(6));
 
     Noc noc;
     auto read_pages = [&](auto& accessor, uint32_t cb_id, uint32_t first_page, uint32_t count) {
@@ -164,7 +169,7 @@ void kernel_main() {
                 const UnicastEndpoint remote;             // below waits for the writes and bumps semaphore 1
                 for (uint32_t peer_shard = 1; peer_shard < NUM_SHARDS; ++peer_shard) {
                     const uint32_t peer_noc_xy =
-                        get_common_arg_val<uint32_t>(6 + core_of_unit(head * NUM_SHARDS + peer_shard));
+                        get_common_arg_val<uint32_t>(CORE_XY_ARG + core_of_unit(head * NUM_SHARDS + peer_shard));
                     noc.async_write(
                         CoreLocalMem<uint32_t>(q_addr),
                         remote,
@@ -179,6 +184,12 @@ void kernel_main() {
         // Per-core constants, read once.
         if (unit == unit_start) {
             read_pages(ones, cb_ones, 0, 1);
+            // The geometry page of this device: word 1 carries 1 / number of non-padding K blocks for compute.
+            CircularBuffer geo_cb(cb_geo);
+            geo_cb.reserve_back(1);
+            noc.async_read(geo, geo_cb, GEO_BYTES, {.page_id = 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            geo_cb.push_back(1);
             if constexpr (UNITS_PER_SHARD) {
                 read_pages(shard_select, cb_shard_select, 0, SHARD_SELECT_TILES);
             }
@@ -213,8 +224,8 @@ void kernel_main() {
                     peer_noc_xy[peer_shard] = 0;
                     continue;
                 }
-                peer_noc_xy[peer_shard] =
-                    get_common_arg_val<uint32_t>(6 + core_of_unit(head * NUM_SHARDS + peer_shard));  // the peer's core
+                peer_noc_xy[peer_shard] = get_common_arg_val<uint32_t>(
+                    CORE_XY_ARG + core_of_unit(head * NUM_SHARDS + peer_shard));  // the peer's core
                 const uint32_t peer_x = peer_noc_xy[peer_shard] & 0xFF, peer_y = (peer_noc_xy[peer_shard] >> 8) & 0xFF;
                 for (uint32_t run : {left_run, right_run}) {
                     noc.async_write(

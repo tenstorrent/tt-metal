@@ -3433,31 +3433,33 @@ class MiniMaxH3Pipeline:
 
         The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
-        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The sparse op compiles
-        `logical_n` into its kernels, so each new packed length pays a compile, and the pre-pass buffers change
-        with it: a change of request or schedule releases the denoise traces and marks every bucket cold, so the
-        gen runs eager and recaptures.
+        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The packed length and the sink
+        reach the Sol programs as data and each rung keeps its own Sol state, so a new prompt length costs an
+        in-place update of the route constants: no compile, and the denoise traces stay. Only a change of schedule
+        releases them and marks every bucket cold, so the gen runs eager and recaptures.
         """
-        sol = None
         schedule = self._requested_sol_schedule()
+        if schedule is None and self._sol_schedule is None:
+            return
+        sol = None
         if schedule is not None:
             sol = (rung // self.sp_factor, logical_n, sink_tokens if schedule.sinks else 0)
-        if (sol, schedule) == (self._sol_key, self._sol_schedule):
-            return
-        self._release_denoise_traces()
-        for state in (*self._buckets.values(), self._request_state):
-            state.warm = False
+        if schedule != self._sol_schedule:
+            self._release_denoise_traces()
+            for state in (*self._buckets.values(), self._request_state):
+                state.warm = False
         if sol is None:
             transformer.set_sol_request(None)
         else:
             transformer.set_sol_request(sol, tau=schedule.tau, dense_layers=schedule.dense_layers)
+        if (sol, schedule) != (self._sol_key, self._sol_schedule):
+            self._log(
+                "attention: dense ring"
+                if sol is None
+                else f"attention: Sol-Attn (tau {schedule.tau}, dense steps {schedule.dense_steps}, dense layers "
+                f"{schedule.dense_layers}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+            )
         self._sol_key, self._sol_schedule = sol, schedule
-        self._log(
-            "attention: dense ring"
-            if sol is None
-            else f"attention: Sol-Attn (tau {schedule.tau}, dense steps {schedule.dense_steps}, dense layers "
-            f"{schedule.dense_layers}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
-        )
 
     def _denoise(
         self,

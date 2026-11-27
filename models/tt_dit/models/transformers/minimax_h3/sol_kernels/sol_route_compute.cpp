@@ -27,13 +27,14 @@
 //    3 HEAD_DIM_TILES          head dim / 32
 //    4 TAU                     selection threshold in standard deviations (fp32 bits)
 //    5 VARIANCE_EPSILON        added to the variance term before the sqrt (fp32 bits)
-//    6 INV_NUM_VALID_BLOCKS    1 / number of non-padding K blocks (fp32 bits)
+//    6 (unused)                1 / number of non-padding K blocks is read at run time, see cb_geo
 //    7 GRID_X, 8 GRID_Y        core grid
 //    9 NUM_UNITS               total units of work
 //   10 UNITS_PER_SHARD         unit kind, see above
 
 #include <cstdint>
 
+#include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -50,7 +51,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 namespace {
-constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_const_or = 6, cb_valid_blocks = 7,
+constexpr uint32_t cb_k_pooled = 0, cb_q_pooled = 1, cb_ones = 2, cb_geo = 3, cb_const_or = 6, cb_valid_blocks = 7,
                    cb_partial_moments = 8, cb_moments = 9, cb_q_squared = 10, cb_threshold_col = 11, cb_threshold = 12,
                    cb_block_hits = 13, cb_block_mask = 14, cb_mask_out = 16, cb_variance = 20, cb_gathered_moments = 23,
                    cb_local_moments = 24, cb_shard_select = 29;
@@ -72,7 +73,6 @@ void kernel_main() {
     constexpr uint32_t HEAD_DIM_TILES = get_compile_time_arg_val(3);
     constexpr uint32_t TAU = get_compile_time_arg_val(4);
     constexpr uint32_t VARIANCE_EPSILON = get_compile_time_arg_val(5);
-    constexpr uint32_t INV_NUM_VALID_BLOCKS = get_compile_time_arg_val(6);
     constexpr uint32_t GRID_X = get_compile_time_arg_val(7);
     constexpr uint32_t GRID_Y = get_compile_time_arg_val(8);
     constexpr uint32_t NUM_UNITS = get_compile_time_arg_val(9);
@@ -100,7 +100,7 @@ void kernel_main() {
         valid_blocks(cb_valid_blocks), partial_moments(cb_partial_moments), moments(cb_moments),
         q_squared(cb_q_squared), threshold_col(cb_threshold_col), threshold(cb_threshold), block_hits(cb_block_hits),
         block_mask(cb_block_mask), mask_out(cb_mask_out), variance(cb_variance), gathered_moments(cb_gathered_moments),
-        local_moments(cb_local_moments), shard_select(cb_shard_select);
+        local_moments(cb_local_moments), shard_select(cb_shard_select), geo(cb_geo);
     constexpr uint32_t GATHER_TILES = (NUM_SHARDS + 3) / 4;  // 4 shards x 8 moment rows per tile
 
     for (uint32_t unit = unit_start; unit < unit_start + unit_count; ++unit) {
@@ -165,6 +165,10 @@ void kernel_main() {
         if constexpr (UNITS_PER_SHARD) {
             shard_select.wait_front(SHARD_SELECT_TILES);
         }
+        // The geometry page (uint32): word 1 is 1 / number of non-padding K blocks as fp32 bits. It is data, not a
+        // compile-time arg, so one program and one captured trace serve every packed length of a bucket.
+        geo.wait_front(1);
+        const uint32_t inv_num_valid_blocks = read_tile_value(cb_geo, 0, 1);
 
         // ---- CL: (head, shard) units: column sums of this shard's partial tiles, for the reader to exchange.
         if constexpr (UNITS_PER_SHARD) {
@@ -206,7 +210,7 @@ void kernel_main() {
             }
             binop_with_scalar_tile_init();
             for (uint32_t i = 0; i < DST_BATCH_TILES; ++i) {
-                mul_unary_tile(i, INV_NUM_VALID_BLOCKS);
+                mul_unary_tile(i, inv_num_valid_blocks);
             }
             tile_regs_commit();
             tile_regs_wait();
