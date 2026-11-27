@@ -16,17 +16,17 @@ import numpy as np
 import pytest
 
 import ttml
-from bf16_ulp import assert_within_bf16_ulp
+from bf16_ulp import assert_each_within_bf16_ulp, assert_within_bf16_ulp
 from tensor_helpers import as_stored, sigmoid, to_device, to_host
 
 pytestmark = pytest.mark.requires_device
 
-# Observed worst case is 1.24 ULP over every shape below, so this leaves ~2x headroom.
+# Forward: observed worst case is 1.24 ULP over every shape below, so this leaves ~2x headroom.
 MAX_ULP = 2.5
-# Per-element ULP is unbounded where the oracle vanishes: silu'(gate) -> 0 for negative gate
-# drives dgate's per-element error to ~164 on a correct kernel, while its p99 stays near 6.
 MAX_ULP_P99 = 2.5
-MAX_ULP_P99_DGATE = 10.0
+# Backward: both gradients are rounded to bf16 once from fp32, so every element is within 1 ULP (measured
+# 0.53), including dgate around the zero of silu'(gate) at gate ~ -1.28.
+MAX_ULP_BACKWARD = 1.0
 
 # (batch, S, I). I/32 of 1..4 covers every block size get_block_size(Wt, 4) can pick; I=512
 # adds a row spanning many blocks; (2, 2048, 128) is the only case with batch > 1; 131 tile-rows
@@ -65,8 +65,8 @@ def assert_forward(got, gate, up, label):
 
 def assert_backward(got, gate, up, dh, inner, label):
     dgate, dup = reference_backward(as_stored(gate), as_stored(up), as_stored(dh))
-    assert_within_bf16_ulp(got[..., :inner], dgate, f"{label} dgate", MAX_ULP, MAX_ULP_P99_DGATE)
-    assert_within_bf16_ulp(got[..., inner:], dup, f"{label} dup", MAX_ULP, MAX_ULP_P99)
+    assert_each_within_bf16_ulp(got[..., :inner], dgate, f"{label} dgate", MAX_ULP_BACKWARD)
+    assert_each_within_bf16_ulp(got[..., inner:], dup, f"{label} dup", MAX_ULP_BACKWARD)
 
 
 class TestForward:

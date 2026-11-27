@@ -37,18 +37,19 @@ namespace {
 using ::testing::HasSubstr;
 using ::testing::ThrowsMessage;
 using ttml::test_utils::device_with_empty_program_cache;
+using ttml::test_utils::expect_each_within_bf16_ulp;
 using ttml::test_utils::expect_new_buffers;
 using ttml::test_utils::expect_unchanged;
 using ttml::test_utils::expect_within_bf16_ulp;
 using ttml::test_utils::two_core_group_units;
 using ttml::test_utils::zeros_on_device;
 
-// Bounds of the python suite, whose observed worst case is 1.24 ULP. Per-element ULP is unbounded where
-// the oracle vanishes: silu'(gate) -> 0 for negative gate drives dgate's per-element error to ~164 on a
-// correct kernel while its p99 stays near 6.
+// Forward: the bounds of the python suite, whose observed worst case is 1.24 ULP.
 constexpr double kMaxUlp = 2.5;
 constexpr double kMaxUlpP99 = 2.5;
-constexpr double kMaxUlpP99DGate = 10.0;
+// Backward: both gradients are rounded to bf16 once from fp32, so every element is within 1 ULP (measured
+// 0.53), including dgate around the zero of silu'(gate) at gate ~ -1.28.
+constexpr double kMaxUlpBackward = 1.0;
 
 xt::xarray<double> sigmoid(const xt::xarray<double>& x) {
     return 1.0 / (1.0 + xt::exp(-x));
@@ -118,8 +119,8 @@ void expect_backward_matches_reference(
 
     const auto got = ttml::core::to_xtensor(dL_dpacked);
     ASSERT_EQ(got.shape(), in.packed_stored.shape()) << label;
-    expect_within_bf16_ulp(first_half(got), expected_dgate, label + " dgate", kMaxUlp, kMaxUlpP99DGate);
-    expect_within_bf16_ulp(second_half(got), expected_dup, label + " dup", kMaxUlp, kMaxUlpP99);
+    expect_each_within_bf16_ulp(first_half(got), expected_dgate, label + " dgate", kMaxUlpBackward);
+    expect_each_within_bf16_ulp(second_half(got), expected_dup, label + " dup", kMaxUlpBackward);
 }
 
 void check_forward(uint32_t batch, uint32_t seq, uint32_t inner) {

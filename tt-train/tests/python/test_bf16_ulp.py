@@ -10,7 +10,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 
-from bf16_ulp import assert_within_bf16_ulp, bf16_spacing, bf16_ulp_error
+from bf16_ulp import assert_each_within_bf16_ulp, assert_within_bf16_ulp, bf16_spacing, bf16_ulp_error
 
 BF16_MAX = float((2.0 - 2.0**-7) * 2.0**127)
 BF16_MIN_SUBNORMAL = 2.0**-133
@@ -188,6 +188,22 @@ class TestAssertWithinBf16Ulp:
         noisy = truth + np.random.default_rng(1).uniform(-1, 1, truth.shape) * float(bf16_spacing(np.abs(truth).max()))
         assert bf16_ulp_error(noisy, truth)[1] > ulp_limit
         assert_within_bf16_ulp(noisy, truth, "peak only", max_ulp=ulp_limit)
+
+
+class TestAssertEachWithinBf16Ulp:
+    def test_accepts_bf16_rounding_of_every_element(self):
+        truth = np.random.default_rng(0).uniform(-4.0, 4.0, (64, 64))
+        assert_each_within_bf16_ulp(as_bf16(truth).astype(np.float64), truth, "rounded", max_ulp=0.5)
+
+    def test_rejects_one_element_off_where_the_oracle_is_small(self, expect_error):
+        """The peak and p99 numbers both miss one bad element far below the peak; this check does not."""
+        truth = np.random.default_rng(0).uniform(1.0, 4.0, (64, 64))
+        truth[0, 0] = 1e-3
+        got = as_bf16(truth).astype(np.float64)
+        got[0, 0] = 2e-3
+        assert_within_bf16_ulp(got, truth, "peak and p99", max_ulp=1.0, max_ulp_p99=1.0)
+        with expect_error(AssertionError, r"lbl: [\d.]+ bf16 ULP \(limit 1.0\) at element 0 "):
+            assert_each_within_bf16_ulp(got, truth, "lbl", max_ulp=1.0)
 
 
 class TestMetricSensitivity:

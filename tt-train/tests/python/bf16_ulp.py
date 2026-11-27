@@ -69,3 +69,21 @@ def assert_within_bf16_ulp(
     detail = f"{label}: ulp={ulp:.2f} (limit {max_ulp}), ulp_p99={ulp_p99:.2f} (limit {max_ulp_p99})"
     if not (ulp <= max_ulp and ulp_p99 <= max_ulp_p99):
         raise AssertionError(detail)
+
+
+def assert_each_within_bf16_ulp(got, expected, label: str, max_ulp: float) -> None:
+    """Assert every element of ``got`` is within ``max_ulp`` bf16 ULP of ``expected``, each in ULP at its own
+    ``expected`` value. A correctly rounded bf16 result is within 0.5.
+    """
+    got, expected = np.asarray(got, np.float64), np.asarray(expected, np.float64)
+    if got.shape != expected.shape:
+        raise AssertionError(f"{label}: shape {got.shape} != {expected.shape}")
+    if not np.isfinite(got).all():
+        raise AssertionError(f"{label}: non-finite output")
+    ulp = np.abs(got - expected) / bf16_spacing(expected)
+    worst = int(np.argmax(ulp))
+    if not ulp.flat[worst] <= max_ulp:
+        raise AssertionError(
+            f"{label}: {ulp.flat[worst]:.2f} bf16 ULP (limit {max_ulp}) at element {worst} "
+            f"(got {got.flat[worst]}, expected {expected.flat[worst]})"
+        )
