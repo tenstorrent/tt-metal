@@ -20,12 +20,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr bool IS_SWAPPED_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) && (POOL_TYPE != ckernel::PoolType::MAX);
 
-// Swapped 4-face REDUCE_ROW posts one SrcA/SrcB handoff per tile; every other path posts one per data face.
+// Every reduce path posts one SrcA/SrcB handoff per tile.
 // Must match _llk_unpack_AB_reduce_mop_config_: the isolate-mode dvalid mocks are sized from it.
-inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& tensor_shape)
+inline std::uint32_t reduce_src_dvalids_per_tile(const ckernel::TensorShape& /*tensor_shape*/)
 {
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
-    return (IS_SWAPPED_REDUCE_ROW && num_faces == ckernel::MAX_NUM_FACES) ? 1 : num_faces;
+    return 1;
 }
 
 #ifdef LLK_TRISC_UNPACK

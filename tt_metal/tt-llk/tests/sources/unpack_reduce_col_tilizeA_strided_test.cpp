@@ -75,7 +75,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Both architectures set one SrcA and one SrcB dvalid per face.
-            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_unpack_stream_set_valid<true /*set_a*/, true /*set_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT);
         }
         else
         {
@@ -113,7 +113,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const int num_faces_c_dim_A         = params.num_faces_c_dim_A;
 #endif
     TEST_TENSOR_SHAPE(tensor_shape, TEST_FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, num_faces_c_dim_A);
-    const std::uint32_t num_faces = tensor_shape.total_num_faces();
 
     {
         START_PERF_MEASURE("INIT")
@@ -129,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces);
+            _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT);
         }
         else
         {
