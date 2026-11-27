@@ -310,3 +310,47 @@ def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
     assert len(tt_outputs) == len(reference_outputs_torch)
     for test, ref in zip(tt_outputs, reference_outputs_torch):
         assert_with_pcc(ttnn.to_torch(test), ref)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+def test_moe_routing_remap_fewer_non_zeros_than_non_zero_weight_size(mesh_device):
+    """Regression test: fewer active experts than non_zero_weight_size must not read/write OOB L1."""
+    mesh_shape = tuple(mesh_device.shape)
+    non_zero_size = 8
+    expert_parallel_size = 4
+    cluster_axis = 1
+    num_cluster_experts = 32
+
+    # First run full non-zero input to populate L1 buffers.
+    full_weights = _gen_input_routing_weights(non_zero_size=non_zero_size, num_cluster_experts=num_cluster_experts)
+    tt_full = ttnn.from_torch(
+        full_weights,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.moe_routing_remap(tt_full, non_zero_size, expert_parallel_size, cluster_axis)
+
+    # Now run with only 5 active experts (< non_zero_size=8), twice (initial + cache hit).
+    partial_weights = torch.zeros((1, num_cluster_experts), dtype=torch.bfloat16)
+    for idx in [0, 3, 7, 14, 25]:
+        partial_weights[0, idx] = 0.25 + 0.1 * idx
+
+    reference_outputs_torch = _get_reference_outputs(
+        partial_weights, non_zero_size, expert_parallel_size, cluster_axis, mesh_shape
+    )
+
+    for _ in range(2):
+        tt_partial = ttnn.from_torch(
+            partial_weights,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_output = ttnn.moe_routing_remap(tt_partial, non_zero_size, expert_parallel_size, cluster_axis)
+        tt_outputs = ttnn.get_device_tensors(tt_output)
+        assert len(tt_outputs) == len(reference_outputs_torch)
+        for test, ref in zip(tt_outputs, reference_outputs_torch):
+            assert_equal(ttnn.to_torch(test), ref)
