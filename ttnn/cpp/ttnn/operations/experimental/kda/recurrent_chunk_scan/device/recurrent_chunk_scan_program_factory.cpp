@@ -351,7 +351,8 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"Kt", Kt},
              {"Vt", Vt},
              {"summary", static_cast<uint32_t>(summary)},
-             {"emit_outputs", static_cast<uint32_t>(emit)}},
+             {"emit_outputs", static_cast<uint32_t>(emit)},
+             {"round_tf32", static_cast<uint32_t>(attrs.round_fp32_operands)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group", "value_block"}},
         .hw_config = std::move(compute_hw),
     };

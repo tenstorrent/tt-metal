@@ -274,7 +274,8 @@ std::vector<Tensor> recurrent_chunk_scan(
     bool tail,
     bool init,
     bool emit_outputs,
-    const std::optional<MemoryConfig>& emit_mem_config) {
+    const std::optional<MemoryConfig>& emit_mem_config,
+    bool round_fp32_operands) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -294,7 +295,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .emit_mem_config = emit_mem_config,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .round_fp32_operands = round_fp32_operands},
         RecurrentChunkScanInputs{
             .v_beta = v_beta,
             .kd = kd,

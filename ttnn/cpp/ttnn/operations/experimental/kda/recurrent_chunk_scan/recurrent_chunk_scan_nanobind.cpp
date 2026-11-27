@@ -192,6 +192,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
                 emitted terms. Height-sharded, a shard holds one block (``C`` is its height over
                 64); otherwise ``C = N``. Defaults to ``memory_config``.
+            round_fp32_operands (bool, optional): Round the FLOAT32 products later matmuls read and the
+                matmuls' view of the state to TF32 nearest-even instead of the unpacker's truncation.
+                Defaults to False.
 
         Returns:
             ttnn.Tensor: BFLOAT16 TILE tensor ``[S, B*H*G, K, K+V]`` with ``S = 2`` when
@@ -225,8 +228,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             bool tail,
             bool init,
             bool emit_outputs,
-            const std::optional<ttnn::MemoryConfig>& emit_memory_config)
-            -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
+            const std::optional<ttnn::MemoryConfig>& emit_memory_config,
+            bool round_fp32_operands) -> std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> {
             auto outputs = ttnn::experimental::kda::summarize_chunk_recurrence(
                 v_beta,
                 kd,
@@ -244,7 +247,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 tail,
                 init,
                 emit_outputs,
-                emit_memory_config);
+                emit_memory_config,
+                round_fp32_operands);
             if (emit_outputs) {
                 return outputs;
             }
@@ -269,7 +273,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("tail") = false,
         nb::arg("init") = true,
         nb::arg("emit_outputs") = false,
-        nb::arg("emit_memory_config") = nb::none());
+        nb::arg("emit_memory_config") = nb::none(),
+        nb::arg("round_fp32_operands") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

@@ -350,6 +350,8 @@ def _scan_sp_chunks(
         compute_kernel_config=compute_config.preparation,
         emit_outputs=True,
         emit_memory_config=affine_relay.terms_memory_config,
+        # The relay's TF32 rounding of FP32 FPU operands covers the summary's too (K3_ACC_KDA_ROUND).
+        **({"round_fp32_operands": True} if affine_relay.round_fp32_operands else {}),
     )
     # The summary is the chunk terms' last reader: free their L1 before the relay.
     for tensor in grouped.as_kernel_args():

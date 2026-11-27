@@ -21,10 +21,13 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/copy_exact.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/identity_complement.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/tf32_round.hpp"
 
 enum class ElementwiseOperation { ADD, SUBTRACT };
 
-template <uint32_t Mt, uint32_t Kt, uint32_t Nt>
+// With Round, each product is rounded to TF32 nearest-even before it is packed (every consumer reads it through a
+// source register, which would truncate it).
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, bool Round = false>
 FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
@@ -37,11 +40,17 @@ FORCE_INLINE void matrix_multiply(DataflowBuffer& a, DataflowBuffer& b, Dataflow
     matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
         for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
+            if constexpr (Round) {
+                if (row_start != 0 || column_start != 0) {
+                    matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
+                }
+            }
             tile_regs_acquire();
             for (uint32_t k = 0; k < Kt; ++k) {
                 const uint32_t b_index = k * Nt + column_start;
                 matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, false, subblock_columns, subblock_rows, Kt);
             }
+            kda_round_tf32_tiles<Round>(0, subblock_rows * subblock_columns);
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t row = 0; row < subblock_rows; ++row) {
@@ -65,7 +74,8 @@ template <
     uint32_t Kt,
     uint32_t Nt,
     uint32_t OperandTiles,
-    EltwiseBinaryType Op = EltwiseBinaryType::ELWSUB>
+    EltwiseBinaryType Op = EltwiseBinaryType::ELWSUB,
+    bool Round = false>
 FORCE_INLINE void combine_matrix_product(
     DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& operand, DataflowBuffer& output) {
     constexpr uint32_t dst_tiles =
@@ -101,7 +111,9 @@ FORCE_INLINE void combine_matrix_product(
             }
             // The operand unpacks to srcA; any BF16 output mask leaves it in a different format than the state. The
             // product moves from DST to srcB in srcB's format, kept FP32 (state_ring's, under every mask) so a BF16
-            // matmul input does not round it.
+            // matmul input does not round it. The move keeps srcB's TF32 bits: with Round the product is rounded to
+            // them first.
+            kda_round_tf32_tiles<Round>(0, group_rows * group_columns);
             reconfig_data_format_srca(operand_id);
             reconfig_data_format_srcb(dfb::state_ring);
             if constexpr (Op == EltwiseBinaryType::ELWADD) {
@@ -120,6 +132,7 @@ FORCE_INLINE void combine_matrix_product(
                     }
                 }
             }
+            kda_round_tf32_tiles<Round>(0, group_rows * group_columns);  // (the next group re-inits the matmul)
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t row = 0; row < group_rows; ++row) {
@@ -220,6 +233,39 @@ FORCE_INLINE void reseed_state(DataflowBuffer& seed, DataflowBuffer& ring, Dataf
     kda::copy_exact<Tiles, Seed, Ring, Carry>(seed, ring, carry);
 }
 
+// The ring (the matmuls' view of the state) rewritten as the exact carry rounded to TF32 nearest-even, so the
+// matmuls' source registers read it rounded rather than truncated. The carry stays exact, and the next update
+// accumulates its change onto both as before; the ring is rewritten again after it.
+template <uint32_t Tiles>
+FORCE_INLINE void refresh_ring(DataflowBuffer& ring, DataflowBuffer& carry) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t ring_id = ring.get_id();
+    const uint32_t carry_id = carry.get_id();
+    ring.wait_front(Tiles);
+    carry.wait_front(Tiles);
+    ring.pop_front(Tiles);
+    ring.reserve_back(Tiles);
+    reconfig_data_format_srca(carry_id);
+    pack_reconfig_data_format(ring_id);
+    for (uint32_t first = 0; first < Tiles; first += dst_tiles) {
+        const uint32_t count = first + dst_tiles <= Tiles ? dst_tiles : Tiles - first;
+        tile_regs_acquire();
+        copy_init(carry_id);
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            copy_tile(carry_id, first + tile, tile);
+        }
+        kda_round_tf32_tiles<true>(0, count);
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            pack_tile(tile, ring_id, first + tile);
+        }
+        tile_regs_release();
+    }
+    ring.push_back(Tiles);
+}
+
 // S_{n+1} = S_n + (final_decay * S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Only the
 // change final_decay * S_n + k_dec_t @ U_n is formed in DST, from source-register operands (S_n is read through source
 // A for the decay term, truncated toward zero), and the packer adds it onto the FP32 state in L1, in place in both the
@@ -305,7 +351,9 @@ FORCE_INLINE void update_state(
 // With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
 // FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
 // segment's E and B also leave in FP32.
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
+// With Round, every FP32 product a later matmul or binary op reads, and the state ring, are rounded to TF32
+// nearest-even before the source registers read them.
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs, bool Round>
 FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uint32_t value_block) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -344,23 +392,27 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
         k_decay_transposed.wait_front(key_chunk_tiles);
         final_decay.wait_front(Kt);
         state_ring.wait_front(key_pair_tiles);
-        combine_matrix_product<Ct, Kt, pair_columns, Vt>(kd, state_ring, v_beta, value_new);  // v_beta - kd S
+        combine_matrix_product<Ct, Kt, pair_columns, Vt, EltwiseBinaryType::ELWSUB, Round>(
+            kd, state_ring, v_beta, value_new);  // v_beta - kd S
         if constexpr (EmitOutputs) {
             // Reads the incoming state, so before the in-place update below.
             q_decay.wait_front(chunk_key_tiles);
-            matrix_multiply<Ct, Kt, pair_columns>(q_decay, state_ring, query_projection);  // q_decay S
+            matrix_multiply<Ct, Kt, pair_columns, Round>(q_decay, state_ring, query_projection);  // q_decay S
         }
         value_new.wait_front(Ct * pair_columns);
-        matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
+        matrix_multiply<Ct, Ct, pair_columns, Round>(t_inv, value_new, scratch);  // v_new
         scratch.wait_front(Ct * pair_columns);
         value_new.pop_front(Ct * pair_columns);
         update_state<Ct, Kt, pair_columns>(
             state_ring, state_carry, k_decay_transposed, final_decay, scratch);  // S += dl S + k_dec_t v_new
+        if constexpr (Round) {
+            refresh_ring<key_pair_tiles>(state_ring, state_carry);
+        }
         if constexpr (EmitOutputs) {
             // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
             intra.wait_front(chunk_chunk_tiles);
             query_projection.wait_front(chunk_pair_tiles);
-            combine_matrix_product<Ct, Ct, pair_columns, chunk_pair_tiles, EltwiseBinaryType::ELWADD>(
+            combine_matrix_product<Ct, Ct, pair_columns, chunk_pair_tiles, EltwiseBinaryType::ELWADD, Round>(
                 intra, scratch, query_projection, chunk_base);
             query_projection.pop_front(chunk_pair_tiles);
             intra.pop_front(chunk_chunk_tiles);
@@ -398,7 +450,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uin
     state_carry.pop_front(key_pair_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool Round>
 FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
@@ -441,10 +493,10 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         state_ring.wait_front(key_value_tiles);
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
-        combine_matrix_product<Ct, Kt, Vt, chunk_value_tiles>(
+        combine_matrix_product<Ct, Kt, Vt, chunk_value_tiles, EltwiseBinaryType::ELWSUB, Round>(
             kd, state_ring, v_beta, output_intermediate);  // v_beta - kd S
         q_decay.wait_front(chunk_key_tiles);
-        matrix_multiply<Ct, Kt, Vt>(q_decay, state_ring, query_projection);  // q_decay S
+        matrix_multiply<Ct, Kt, Vt, Round>(q_decay, state_ring, query_projection);  // q_decay S
         kd.pop_front(chunk_key_tiles);
         q_decay.pop_front(chunk_key_tiles);
 
@@ -452,7 +504,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         output_intermediate.wait_front(chunk_value_tiles);
         v_beta.pop_front(chunk_value_tiles);
         t_inv.wait_front(chunk_chunk_tiles);
-        matrix_multiply<Ct, Ct, Vt>(t_inv, output_intermediate, value_new);
+        matrix_multiply<Ct, Ct, Vt, Round>(t_inv, output_intermediate, value_new);
         value_new.wait_front(chunk_value_tiles);
         t_inv.pop_front(chunk_chunk_tiles);
         output_intermediate.pop_front(chunk_value_tiles);
@@ -463,8 +515,11 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         final_decay.wait_front(Kt);
         update_state<Ct, Kt, Vt>(
             state_ring, state_carry, k_decay_transposed, final_decay, value_new);  // S += dl S + k_dec_t v_new
+        if constexpr (Round) {
+            refresh_ring<key_value_tiles>(state_ring, state_carry);
+        }
         intra.wait_front(chunk_chunk_tiles);
-        matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
+        matrix_multiply<Ct, Ct, Vt, Round>(intra, value_new, scratch);  // intra v_new
         k_decay_transposed.pop_front(key_chunk_tiles);
         final_decay.pop_front(Kt);
         intra.pop_front(chunk_chunk_tiles);
@@ -485,7 +540,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     kda::copy_exact<key_value_tiles, dfb::state_carry, dfb::final_state>(state_carry, final_state);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs, uint32_t round_tf32>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
 
@@ -501,8 +556,8 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(valid_chunks, reset_chunk, value_block);
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0, round_tf32 != 0>(valid_chunks, reset_chunk, value_block);
     } else {
-        compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+        compute_recurrent<Ct, Kt, Vt, round_tf32 != 0>(valid_chunks, reset_chunk);
     }
 }

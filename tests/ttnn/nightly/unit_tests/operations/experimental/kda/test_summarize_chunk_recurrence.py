@@ -661,6 +661,66 @@ def test_summarize_chunk_recurrence_emitted_outputs_reconstruct_scan(
     assert_accurate(b, packed_host[:, :, dim:], name="packed head B", nrmse_threshold=0.004)
 
 
+def _round_tf32(tensor: torch.Tensor) -> torch.Tensor:
+    """FP32 values rounded to TF32 (10 mantissa bits), nearest-even, as the device's SFPU rounding does."""
+    bits = tensor.float().contiguous().view(torch.int32).to(torch.int64)
+    bits = (bits + 0xFFF + ((bits >> 13) & 1)) & ~0x1FFF
+    return bits.to(torch.int32).view(torch.float32)
+
+
+def _terms_oracle(protocol: Sequence[torch.Tensor], entry: torch.Tensor) -> torch.Tensor:
+    """Each chunk's output from entry state `entry`, in float64: [BH, N * 32, V]."""
+    v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv = (tensor.double() for tensor in protocol)
+    state = entry.double().clone()
+    outputs = []
+    for chunk in range(v_beta.shape[1]):
+        value_new = torch.matmul(t_inv[:, chunk], v_beta[:, chunk] - torch.matmul(kd[:, chunk], state))
+        outputs.append(torch.matmul(q_decay[:, chunk], state) + torch.matmul(intra[:, chunk], value_new))
+        state = state + (state * final_decay[:, chunk] + torch.matmul(k_dec_t[:, chunk], value_new))
+    return torch.cat(outputs, dim=1)
+
+
+def test_summarize_chunk_recurrence_round_fp32_operands(zero_actual_start, device: ttnn.Device) -> None:
+    """round_fp32_operands rounds every FP32 product a later source register reads, and the matmuls' view of the
+    state, to TF32 nearest-even. With inputs already on the TF32 grid (so reading them loses nothing), the emitted
+    terms land on that grid, and the bias the unpacker's truncation leaves (each truncated operand loses about
+    2^-11 ln 2 of its value) mostly goes."""
+    batch_heads, num_chunks, dim = 4, 4, 128
+    host_inputs = tuple(_round_tf32(tensor) for tensor in host_protocol(batch_heads, num_chunks, dim, dim, seed=813))
+    zero_entry = torch.zeros(batch_heads, dim, dim)
+    identity_entry = torch.eye(dim).expand(batch_heads, -1, -1).clone()
+    expected = {"F(0)": _terms_oracle(host_inputs, zero_entry), "F(I)": _terms_oracle(host_inputs, identity_entry)}
+    inputs = device_protocol(host_inputs, device)
+
+    def emitted_terms(**kwargs) -> dict[str, torch.Tensor]:
+        _, terms, _, _ = ttnn.experimental.kda.summarize_chunk_recurrence(
+            *inputs, actual_start=zero_actual_start, emit_outputs=True, **kwargs
+        )
+        zero, identity = ttnn.to_torch(terms).reshape(batch_heads, 2, num_chunks * CHUNK_SIZE, dim).unbind(1)
+        return {"F(0)": zero.contiguous(), "F(I)": identity.contiguous()}
+
+    default = emitted_terms()
+    truncated = emitted_terms(round_fp32_operands=False)
+    rounded = emitted_terms(round_fp32_operands=True)
+    for name, reference in expected.items():
+        assert_bit_identical(default[name], truncated[name], name=f"{name}, default vs round_fp32_operands=False")
+        low_bits = rounded[name].view(torch.int32) & 0x1FFF
+        assert int(torch.count_nonzero(low_bits)) == 0, f"{name}: rounded terms must lie on the TF32 grid"
+
+        def bias_and_error(got: torch.Tensor) -> tuple[float, float]:
+            got = got.double()
+            slope = float((got * reference).sum() / (reference * reference).sum())
+            nrmse = float((got - reference).norm() / reference.norm())
+            return slope - 1.0, nrmse
+
+        bias_off, error_off = bias_and_error(truncated[name])
+        bias_on, error_on = bias_and_error(rounded[name])
+        logger.info(f"{name}: bias {bias_off:+.3e} -> {bias_on:+.3e}, nrmse {error_off:.3e} -> {error_on:.3e}")
+        # (The truncation bias's sign is not fixed: a truncated state also weakens the decay term.)
+        assert abs(bias_on) <= max(0.25 * abs(bias_off), 2e-6), f"{name}: rounding should remove most of the bias"
+        assert error_on < error_off, f"{name}: rounding should reduce the error"
+
+
 @pytest.mark.parametrize("host_index", range(7))
 def test_summarize_chunk_recurrence_rejects_host_protocol_inputs(
     zero_actual_start, device: ttnn.Device, expect_error: Callable, host_index: int

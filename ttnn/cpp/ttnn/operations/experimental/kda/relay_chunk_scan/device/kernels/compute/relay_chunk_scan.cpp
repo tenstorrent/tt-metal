@@ -56,8 +56,9 @@ constexpr uint32_t cb_gin1 = get_compile_time_arg_val(20);
 constexpr uint32_t gate_kb = get_compile_time_arg_val(21);
 constexpr uint32_t gate_blocks = get_compile_time_arg_val(22);
 constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_time_arg_val(23));
-// Round the gated norm's fp32 FPU operands (x and 1 / rms) to TF32 nearest-even before they are packed: the FPU
-// reads them through SrcA / SrcB, which would truncate them (tf32_round.hpp).
+// Round the correction's fp32 FPU operands (FI - F0, x, x^2, 1 / rms and an FP32 result, which o_proj reads) to TF32
+// nearest-even before they are packed: the FPU reads them through SrcA / SrcB, which would truncate them
+// (tf32_round.hpp).
 constexpr bool round_tf32 = get_compile_time_arg_val(24);
 constexpr uint32_t state_tiles = kt * kt;
 // A chunk row of the outputs is formed in one DST pass (the op checks K against the DST).
@@ -78,10 +79,19 @@ void subtract(uint32_t first, uint32_t tiles) {
         ckl::InputTileMapping::Block,
         ckl::DataFormatReconfig::Enabled,
         ckl::TileAddressing::Offset);
-    ckl::eltwise_chain(
-        ckl::IterationShape::tiles(tiles).block_size(kt),
-        ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, term_rows, term_rows>{terms, terms, fi_offset + first, first},
-        ckl::PackTile<ckl::output(cb_diff, ckl::ReservePolicy::None, ckl::PushPolicy::None)>{diff});
+    constexpr auto diff_rows = ckl::output(cb_diff, ckl::ReservePolicy::None, ckl::PushPolicy::None);
+    if constexpr (round_tf32) {  // (the differences feed the products with the seed)
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(tiles).block_size(kt),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, term_rows, term_rows>{terms, terms, fi_offset + first, first},
+            kda::RoundTf32<>{},
+            ckl::PackTile<diff_rows>{diff});
+    } else {
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(tiles).block_size(kt),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Sub, term_rows, term_rows>{terms, terms, fi_offset + first, first},
+            ckl::PackTile<diff_rows>{diff});
+    }
 }
 
 // The norm weight's row 0 broadcast down every row, for the elementwise product with each output row.
@@ -134,10 +144,18 @@ void normalize() {
     DataflowBuffer square(cb_square);
     DataflowBuffer scaler(cb_scaler);
     DataflowBuffer inv_rms(cb_inv_rms);
-    ckl::square<
-        ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
-        ckl::output(cb_square, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(kt).block_size(kt), out, square);
+    constexpr auto out_row =
+        ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+    constexpr auto square_row = ckl::output(cb_square, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
+    if constexpr (round_tf32) {  // (the squares feed the row mean)
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(kt).block_size(kt),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, out_row, out_row>{out, out},
+            kda::RoundTf32<>{},
+            ckl::PackTile<square_row>{square});
+    } else {
+        ckl::square<out_row, square_row>(ckl::IterationShape::tiles(kt).block_size(kt), out, square);
+    }
     // The row means land in column 0, all the column broadcast reads: epsilon and rsqrt on that column only.
     ckl::reduce<
         PoolType::AVG,
@@ -162,21 +180,33 @@ void normalize() {
                 kda_round_tf32_tile(dst, VectorMode::C);
             }
         });
-    // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32.
+    // Per pass: x / rms on the FPU, then times g beside it on the SFPU, in FP32. With round_tf32 the result is rounded
+    // too: an FP32 output feeds o_proj's source register.
     DataflowBuffer gate_factor(cb_gate_factor);
     DataflowBuffer norm(cb_norm);
-    ckl::eltwise_chain(
-        ckl::IterationShape::tiles(kt).block_size(kt),
-        ckl::BinaryFpu<
-            ckl::BinaryFpuOp::Mul,
-            ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block),
-            ckl::input(cb_inv_rms, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{
-            out, inv_rms},
-        ckl::CopyTile<
-            ckl::input(cb_gate_factor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-            ckl::Dst::D1>{gate_factor},
-        ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-        ckl::PackTile<ckl::output(cb_norm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{norm});
+    constexpr auto out_rows =
+        ckl::input(cb_out, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
+    constexpr auto inv_rms_column =
+        ckl::input(cb_inv_rms, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd);
+    constexpr auto gate_rows =
+        ckl::input(cb_gate_factor, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
+    constexpr auto norm_rows = ckl::output(cb_norm, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
+    if constexpr (round_tf32 && fp32_output) {
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(kt).block_size(kt),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, out_rows, inv_rms_column>{out, inv_rms},
+            ckl::CopyTile<gate_rows, ckl::Dst::D1>{gate_factor},
+            ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+            kda::RoundTf32<>{},
+            ckl::PackTile<norm_rows>{norm});
+    } else {
+        ckl::eltwise_chain(
+            ckl::IterationShape::tiles(kt).block_size(kt),
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, out_rows, inv_rms_column>{out, inv_rms},
+            ckl::CopyTile<gate_rows, ckl::Dst::D1>{gate_factor},
+            ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+            ckl::PackTile<norm_rows>{norm});
+    }
 }
 
 // Chunk outputs x = F0_c + (FI_c - F0_c) @ seed for this core's chunks [begin, end), a row at a time once the whole
