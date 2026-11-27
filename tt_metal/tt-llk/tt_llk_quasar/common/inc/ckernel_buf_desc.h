@@ -34,13 +34,14 @@ enum class L1AccessMode : std::uint8_t
 // One fixed BFD id per TDMA engine, inside the owning thread's partition of the table; LLK-internal.
 // Correctness needs TTSync TRACK_GLOBAL_CFG enabled (on at reset, see set_ttsync_enables): it makes a
 // BD re-program wait for in-flight UNPACR/PACR using that entry.
-//   unpack: UNP0=0, UNP1=1 | pack: PACK0=16 | SFPU thread: PACK1=24, UNP2_SLICE0/1=25/26 (one engine, UNPACR2)
+//   unpack: UNP0=0, UNP1=1 | pack: PACK0=16 | SFPU thread: PACK1=24, UNP2_SLICE0/1/2=25/26/27 (one engine, UNPACR2)
 constexpr std::uint8_t BFD_ID_UNP0        = 0;
 constexpr std::uint8_t BFD_ID_UNP1        = 1;
 constexpr std::uint8_t BFD_ID_PACK0       = 16;
 constexpr std::uint8_t BFD_ID_PACK1       = 24;
 constexpr std::uint8_t BFD_ID_UNP2_SLICE0 = 25;
 constexpr std::uint8_t BFD_ID_UNP2_SLICE1 = 26;
+constexpr std::uint8_t BFD_ID_UNP2_SLICE2 = 27;
 
 // Points to the config space
 std::uint32_t volatile* const cfg = reinterpret_cast<std::uint32_t volatile*>(TENSIX_CFG_BASE);
@@ -133,9 +134,9 @@ inline void program_bfd(const TensorShape& tensor_shape, const std::uint32_t l1_
     // Cross-thread table writes are not ordered by TTSync, so each thread may only write its own partition.
     static_assert(
         (ckernel::TRISC_ID == 0 && BFD_ID <= BFD_ID_UNP1) || (ckernel::TRISC_ID == 2 && BFD_ID == BFD_ID_PACK0) ||
-            (ckernel::TRISC_ID == 3 && BFD_ID >= BFD_ID_PACK1 && BFD_ID <= BFD_ID_UNP2_SLICE1),
+            (ckernel::TRISC_ID == 3 && BFD_ID >= BFD_ID_PACK1 && BFD_ID <= BFD_ID_UNP2_SLICE2),
         "BFD id not owned by the compiling thread (math owns none)");
-    const auto buf_desc = construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format);
+    const auto buf_desc       = construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format);
     bd_table[BFD_ID].words[0] = buf_desc.words[0];
     bd_table[BFD_ID].words[1] = buf_desc.words[1];
     bd_table[BFD_ID].words[2] = buf_desc.words[2];
