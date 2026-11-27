@@ -246,6 +246,15 @@ int main(int,char** argv) {
  // An unknown wrapper never results in an unsafe persistent skip.
  failed.gpp="/usr/bin/c++";assert(run_prewarm({failed},out.string()+"/","",7,"",false)==0);
  assert(summary[0]==1 && summary[2]==1 && summary[3]==0);
+ // Preprocessed capture recipes have self-contained sources and no includes.
+ {
+  auto preprocessed=req; preprocessed.kernel_name="preprocessed";
+  fs::path ii=root/"preprocessed.ii"; std::ofstream(ii)<<"int preprocessed = 1;\n";
+  preprocessed.targets[0].srcs={ii}; preprocessed.targets[0].includes.clear();
+  preprocessed.targets[0].defines.clear();
+  auto replay=[&](){return run_prewarm({preprocessed},out.string()+"/","",7,root.string()+"/",false);};
+  assert(replay()==1);
+ }
  // Source identity follows the root includes even when the compiler is installed elsewhere.
  req.gpp="/usr/bin/c++"; req.targets[0].srcs={src}; req.targets[0].defines.clear();
  std::ofstream(src)<<"int probe = 1;\n";
@@ -624,9 +633,7 @@ class PrewarmFailureTests(unittest.TestCase):
         parser = dependencies[
             dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
         ]
-        harness = (
-            INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
-        )
+        harness = INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
         with tempfile.TemporaryDirectory(prefix="prewarm-integration-") as work:
             path = Path(work)
             (path / "test.cpp").write_text(harness)
