@@ -97,14 +97,18 @@ struct zero_comp_traits {
 };
 
 /**
+ * @brief Whether COMP_MODE's predicate is the strict-negative one (ltz, and gtez as its complement).
+ */
+template <SfpuType COMP_MODE>
+inline constexpr bool _zero_comp_tests_negative_() {
+    return COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_equal_zero;
+}
+
+/**
  * @brief Lanes of @c v that receive the written (non-default) result for COMP_MODE, tested against zero.
  *
- * Two tests, both reading identically across every format (Quasar loads signed integers as
- * sign-magnitude and floats as IEEE, both with the sign in bit 31): the magnitude @c setsgn(v,0)
- * (sign bit cleared, so ±0 -> 0) and the sign via a native @c v<0 / @c v>=0 compare (the bit-31
- * test). Clearing the sign makes the magnitude-zero test hold for both +0 (0x00000000) and -0
- * (0x80000000), so -0 counts as zero, matching IEEE (-0.0 == 0); "negative" is @c v<0 &&
- * magnitude-nonzero, excluding -0.
+ * Every format has its sign in bit 31, so zero is the two words +0 and -0. The sign modes are integer
+ * compares of the raw word, where -0 (0x80000000) is INT32_MIN, below every negative element.
  *
  * gtez/ltez return their strict complement (ltz/gtz) predicate; the loop defaults those lanes' result
  * to 1 and writes 0 here (see @ref _zero_comp_writes_zero_).
@@ -112,34 +116,40 @@ struct zero_comp_traits {
  * @note Do NOT use @c abs(vInt) for the magnitude — that is two's-complement abs and leaves
  *       sign-magnitude -0 (0x80000000) unchanged (nonzero), breaking eqz(-0). Clearing the sign bit
  *       (SFPSETSGN with sign=0) is the correct, format-agnostic primitive.
+ * @note The compares must stay integer ones (@c vInt operands): a float compare would misread an Int32
+ *       whose magnitude has a NaN bit pattern. A float NaN is therefore signed like any other element;
+ *       tt-metal#55273 tracks returning 0 for it.
  *
  * @tparam COMP_MODE: Comparison-to-zero mode, values =
  *         <equal_zero/not_equal_zero/less_than_zero/greater_than_zero/greater_than_equal_zero/less_than_equal_zero>
+ * @param v: The element's raw word.
+ * @param neg_zero: The word 0x80000000 in every lane; read only by the strict-negative modes
+ *        (see @ref _zero_comp_tests_negative_).
  */
 template <SfpuType COMP_MODE>
-inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v) {
+inline __attribute__((always_inline)) sfpi::vBool _zero_comp_pred_(sfpi::vInt v, [[maybe_unused]] sfpi::vInt neg_zero) {
     static_assert(
         COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
             COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
             COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
         "_zero_comp_pred_: COMP_MODE must be one of the six comparison-to-zero SfpuType modes "
         "(equal_zero/not_equal_zero/less_than_zero/greater_than_zero/less_than_equal_zero/greater_than_equal_zero)");
-    // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
-    // reinterprets are free (no instruction).
-    const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
 
-    if constexpr (COMP_MODE == SfpuType::equal_zero) {
-        return mag == 0;  // ±0
-    } else if constexpr (COMP_MODE == SfpuType::not_equal_zero) {
-        return mag != 0;
-    } else if constexpr (COMP_MODE == SfpuType::less_than_zero) {
-        return (v < 0) && (mag != 0);  // sign set and nonzero -> excludes -0.0
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_zero) {
-        return (v >= 0) && (mag != 0);  // sign clear and nonzero
-    } else if constexpr (COMP_MODE == SfpuType::greater_than_equal_zero) {
-        return (v < 0) && (mag != 0);   // strict-negative (ltz) lanes; loop defaults 1 and writes 0 here -> gtez
-    } else {                            // less_than_equal_zero
-        return (v >= 0) && (mag != 0);  // strict-positive (gtz) lanes; loop defaults 1 and writes 0 here -> ltez
+    if constexpr (COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero) {
+        // Clear bit 31 (sign) -> magnitude (±0 -> 0) in a single SFPSETSGN; the vInt<->vSMag
+        // reinterprets are free (no instruction).
+        const sfpi::vSMag mag = sfpi::setsgn(sfpi::as<sfpi::vSMag>(v), 0);
+        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+            return mag == 0;  // ±0
+        } else {
+            return mag != 0;
+        }
+    } else if constexpr (_zero_comp_tests_negative_<COMP_MODE>()) {
+        // ltz lanes; for gtez the loop defaults 1 and writes 0 here.
+        return (v < 0) && (v > neg_zero);
+    } else {
+        // gtz lanes; for ltez the loop defaults 1 and writes 0 here.
+        return v > 0;
     }
 }
 
@@ -212,12 +222,19 @@ inline void calculate_zero_comp() {
     const typename traits::result_t default_result = writes_zero ? traits::one() : traits::zero();
     const typename traits::result_t taken_result = writes_zero ? traits::zero() : traits::one();
 
+    // -0 as a raw word, one SFPLOADI per call; the modes that do not read it leave it at 0, which
+    // emits nothing.
+    const sfpi::vInt neg_zero =
+        _zero_comp_tests_negative_<COMP_MODE>() ? sfpi::as<sfpi::vInt>(sfpi::vFloat(-0.0f)) : sfpi::vInt(0);
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         const sfpi::vInt bits = traits::load();
 
+        // TODO(tt-metal#67405): gtz/lez can store sfpi::mask(bits > 0) & one once ttsim models the
+        // mask form of SFPGT/SFPLE.
         traits::template store<false /*INCR*/>(default_result);
-        v_if(_zero_comp_pred_<COMP_MODE>(bits)) { traits::store(taken_result); }
+        v_if(_zero_comp_pred_<COMP_MODE>(bits, neg_zero)) { traits::store(taken_result); }
         v_endif;
     }
 }

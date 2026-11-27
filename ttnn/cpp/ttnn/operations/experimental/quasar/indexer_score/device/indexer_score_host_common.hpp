@@ -89,8 +89,8 @@ inline void append_multicast_axes(Args& args, const std::vector<std::vector<Core
 // (e.g. the multi-turn rotated prefill). Chunk-aligned (offset == 0, boundary_chip == 0) reduces to linear.
 // No block_cyclic -> plain linear. The classic both-axes case (SP axis unset,
 // block_cyclic_chunk_local == tp*Sq) keeps the prior linear+straddle form; fused full-mesh is the exception and
-// uses rotation-exact SP ownership. Shared by create_at (device_index from the coordinate) and override (stored
-// device_index).
+// uses rotation-exact SP ownership. Shared by the program builders (device_index from the coordinate) and the
+// cache-hit overrides (device_index re-derived from the coordinate, or stored by the fused factory).
 using DeviceCausalGeometry = CausalGeometryTiles;
 
 // Unpack and validate host attributes before calling the shared causal-geometry implementation.

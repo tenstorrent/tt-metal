@@ -627,7 +627,7 @@ Tensor untilize_with_unpadding(
 }
 
 tt::DataFormat get_untilize_with_unpadding_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
-    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    const tt::DataFormat format = tt::tt_metal::cb_dataformat_for(dtype);
     // Quasar rejects UInt16 as a DFB format. The untilize kernels only move the 16-bit values, so Int16 holds
     // them bit for bit.
     if (arch == tt::ARCH::QUASAR && format == tt::DataFormat::UInt16) {

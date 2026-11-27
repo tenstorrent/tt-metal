@@ -57,8 +57,11 @@ class TestShellWrappersAgree(unittest.TestCase):
         # run_diag_docker.sh adds the journal mounts and the BMC credentials
         # only for these (and pre_reboot, the old name of pre_bmc_reboot).
         self.assertEqual(
-            {name for name, tier in TIERS.items() if tier.sys_triage}, {"full", "pre_bmc_reboot", "post_bmc_reboot"}
+            {name for name, tier in TIERS.items() if tier.sys_triage},
+            {"flash", "full", "pre_bmc_reboot", "post_bmc_reboot"},
         )
+        text = (SUITE_DIR / "run_diag_docker.sh").read_text()
+        self.assertIn("flash|full|pre_bmc_reboot|pre_reboot|post_bmc_reboot)", text)
 
     def test_docker_qsfp_tiers(self):
         # run_diag_docker.sh sets WANT_QSFP, which installs the syseng package and

@@ -35,6 +35,10 @@ void bind_typecast(nb::module_& mod) {
         Note:
             A second overload accepts an explicit ``(input_dtype, output_dtype)`` pair to reinterpret the input's
             declared dtype before casting.
+
+            MX formats (``ttnn.MX_DTYPES``: ``ttnn.mxfp8_e4m3``, ``ttnn.mxfp8_e5m2``, ``ttnn.mxfp6_e2m3``, ``ttnn.mxfp6_e3m2``, ``ttnn.mxfp4``, ``ttnn.mxint8``, ``ttnn.mxint4``, ``ttnn.mxint2``) exist in TILE layout only. An MX tensor can be cast
+            to or from bfloat16, float32 or another MX format; casts between an MX format and an integer or fp8 type
+            are rejected (cast through bfloat16 first).
         )doc";
 
     ttnn::bind_function<"typecast", "ttnn.experimental.quasar.">(

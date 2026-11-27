@@ -139,8 +139,10 @@ tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-a
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT
 tt_metal/api/tt-metalium/experimental/command_list.hpp @cfjchu @aliuTT @tt-asaigal @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/dispatch_telemetry.hpp @tt-asaigal @tt-aho @tenstorrent/metalium-runtime-performance
+tt_metal/api/tt-metalium/experimental/kernel_config_buffer.hpp @sohaibnadeemTT @cfjchu @tenstorrent/metalium-runtime-performance
 tt_metal/api/tt-metalium/experimental/udm/ @yugaoTT @SeanNijjar
 tt_metal/api/internal/disaggregation/ @SeanNijjar @ubcheema # disaggregation internal APIs (moved from experimental in #48638)
+tt_metal/api/internal/fabric/ @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT # fabric internal APIs
 tt_metal/common/ @abhullar-tt @tt-aho @tt-asaigal @cfjchu
 tt_metal/common/**/CMakeLists.txt @abhullar-tt @tt-aho @tt-asaigal @cfjchu @tenstorrent/metalium-developers-infra
 tt_metal/common/broadcast_ring.hpp @yusufbashiTT @mo-tenstorrent @abhullar-tt @tt-aho @tt-asaigal @cfjchu
@@ -346,7 +348,8 @@ tests/tt_metal/tt_metal/test_kernels/device_print @tenstorrent/metalium-develope
 tests/tt_metal/tt_metal/test_kernels/sfpi/ @nathan-TT @kstevensTT
 
 # misc tests
-tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic
+tests/didt/ @rtawfik01 @ttmtrajkovic @ctr-nradojevicTT @mbezuljTT @pavlepopovic @smohammadiTT @tcolacoTT @ianastasijevicTT @nmilicevicTT
+tt_py_test_utils_common/op_test_base.py @mbezuljTT @pavlepopovic @smohammadiTT @tcolacoTT @ianastasijevicTT @nmilicevicTT @ctr-nradojevicTT @tenstorrent/metalium-developers-infra
 
 # Deployment tests
 tests/tt_metal/tt_metal/deployment/ @gsarabandoTT @tt-mnijjar @mgajewskiTT @ctr-nradojevicTT
@@ -446,8 +449,8 @@ ttnn/cpp/ttnn/operations/experimental/deepseek/ @tenstorrent/cse-developer-ttnn
 ttnn/cpp/ttnn/operations/experimental/deepseek/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/diagnostics/ @nmilicevicTT @avelickovTT @pavlepopovic @ianastasijevicTT @mbezuljTT @smohammadiTT @tcolacoTT @ctr-nradojevicTT
 ttnn/cpp/ttnn/operations/experimental/experimental_nanobind.cpp @mbezuljTT @ppetrovicTT @pavlepopovic @tenstorrent/metalium-developers-ops-leads
-ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
-ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/fused_msda/ @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
+ttnn/cpp/ttnn/operations/experimental/fused_msda/**/CMakeLists.txt @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/gdn/ @tenstorrent/metalium-developers-gdn
 ttnn/cpp/ttnn/operations/experimental/gdn/**/CMakeLists.txt @tenstorrent/metalium-developers-gdn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/gemma4/ @svuckovicTT @amilovanovicTT @sdjordjevicTT @kmabeeTT
@@ -468,12 +471,10 @@ ttnn/cpp/ttnn/operations/experimental/matmul_decode/ @tenstorrent/cse-developer-
 ttnn/cpp/ttnn/operations/experimental/matmul_decode/**/CMakeLists.txt @tenstorrent/cse-developer-ttnn @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/ @cglagovichTT @jonathansuTT
 ttnn/cpp/ttnn/operations/experimental/minimal_matmul/**/CMakeLists.txt @cglagovichTT @jonathansuTT @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/ @ctr-mmicic @ctr-ikasic @ctr-mdukic
-ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/**/CMakeLists.txt @ctr-mmicic @ctr-ikasic @ctr-mdukic @tenstorrent/metalium-developers-infra
+ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/ @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
+ttnn/cpp/ttnn/operations/experimental/modulated_deform_conv2d/**/CMakeLists.txt @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/moe_block/ @tenstorrent/metalium-developers-ds-prefill
 ttnn/cpp/ttnn/operations/experimental/moe_block/**/CMakeLists.txt @tenstorrent/metalium-developers-ds-prefill @tenstorrent/metalium-developers-infra
-ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
-ttnn/cpp/ttnn/operations/experimental/nomic_embed_text_v2_moe/**/CMakeLists.txt @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/padded_slice/ @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement
 ttnn/cpp/ttnn/operations/experimental/padded_slice/**/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models
@@ -497,6 +498,8 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tens
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
+ttnn/cpp/ttnn/operations/experimental/untilize_and_split_heads/ @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
+ttnn/cpp/ttnn/operations/experimental/untilize_and_split_heads/**/CMakeLists.txt @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/normalization/ @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn/operations/normalization/**/CMakeLists.txt @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-infra
 ttnn/cpp/ttnn/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -585,13 +588,13 @@ tests/ttnn/**/operations/pool/ @tenstorrent/metalium-developers-convolutions
 /tests/ttnn/notebook_tests/ @tenstorrent/metalium-developers-external-experience
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise
 tests/ttnn/nightly/unit_tests/operations/experimental/deepseek_prefill/ @tenstorrent/metalium-developers-ds-prefill
-tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
-tests/ttnn/**/operations/experimental/test_modulated_deform_conv2d*.py @ctr-mmicic @ctr-ikasic @ctr-mdukic
+tests/ttnn/**/operations/experimental/test_fused_msda*.py @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
+tests/ttnn/**/operations/experimental/test_modulated_deform_conv2d*.py @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
+tests/ttnn/**/operations/experimental/test_untilize_and_split_heads*.py @ctr-mmicicTT @ctr-ikasicTT @ctr-mdukicTT
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/ @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/nightly/unit_tests/operations/experimental/indexer_score/ @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/experimental/gdn/ @tenstorrent/metalium-developers-gdn
 tests/ttnn/nightly/unit_tests/operations/experimental/kda/ @tenstorrent/metalium-developers-sdpa
-tests/ttnn/nightly/unit_tests/operations/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_rgb_to_yuv.py @cglagovichTT @jonathansuTT
 tests/ttnn/nightly/unit_tests/operations/experimental/test_topk_large_indices.py @tenstorrent/metalium-developers-sdpa
 tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce
@@ -713,8 +716,8 @@ tests/ttnn/unit_tests/test_comparison_funcs.py @tenstorrent/metalium-developers-
 tests/ttnn/unit_tests/test_comp_pcc_fix.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 # Op bindings outside the op folders.
-ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-eltwise
+ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT @tenstorrent/metalium-developers-eltwise
 # Bindings and tests for device and host streaming.
 ttnn/cpp/ttnn-nanobind/*_stream_service.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/hd_socket.* @nsextonTT
@@ -760,8 +763,8 @@ tests/ttnn/distributed/test_socket_perf.py @tenstorrent/metalium-developers-meta
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
-tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
+ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
+tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
 # The TTNN profiler code itself, and its multi-host smoke test with that test's configs: owned by the profiler's owners.
 ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
@@ -839,7 +842,6 @@ models/experimental/bevformer/ @mbezuljTT @njovanovicTT @ctr-ikasicTT @ctr-mduki
 models/experimental/exaone45_vl @changh95 @tenstorrent/metalium-models-maintainers
 models/experimental/kimi_k3_moonvit_v2/ @grechsteinerTT @sjameelTT @tenstorrent/metalium-models-maintainers
 models/experimental/llama32_1b_quasar @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
-/models/experimental/nomic_embed_text_v2_moe/ @avelickovTT @kgrujcic-tt @mbezuljTT @tenstorrent/metalium-models-maintainers
 models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-models-maintainers
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @tenstorrent/metalium-models-maintainers
 models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/metalium-models-maintainers

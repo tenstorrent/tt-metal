@@ -650,14 +650,17 @@ void add_activation_defines(
     std::map<std::string, std::string>& defines,
     ttsl::Span<const unary::EltwiseUnaryWithParam> activations,
     std::string_view operand,
-    std::optional<DataType> dtype) {
+    std::optional<DataType> dtype,
+    unary::utils::RuntimeScalars* runtime_scalars) {
     defines[fmt::format("PROCESS_{}_ACTIVATIONS(i)", operand)] = std::accumulate(
         activations.begin(),
         activations.end(),
         std::string{},
         [&](std::string&& process, const unary::EltwiseUnaryWithParam& a) {
             const auto& [op_init, op_func] = std::visit(
-                [&](auto params) { return unary::utils::get_op_init_and_func(a.type(), params, "i", dtype); },
+                [&](auto params) {
+                    return unary::utils::get_op_init_and_func(a.type(), params, "i", dtype, runtime_scalars);
+                },
                 a.get_params());
             process += op_init;
             process += op_func;

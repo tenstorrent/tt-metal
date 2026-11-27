@@ -75,7 +75,7 @@ Wrapper options:
   -h, --help             This text
 
 Syseng package (tt-bh-glx-cluster-debug and sys-triage, needed by the QSFP and
-sys-triage phases; flash runs neither, so it is never installed for it):
+sys-triage phases):
       --gh-token TOKEN   GitHub token with read access to the private release.
                          Forwarded to the container as GH_TOKEN via a 0600
                          --env-file, so it never appears in the process list.
@@ -89,7 +89,7 @@ sys-triage phases; flash runs neither, so it is never installed for it):
                          Release tag (default: ${DEFAULT_DIAG_PKG_VERSION});
                          empty string skips the install
 
-BMC credentials (needed by the sys-triage phase, which runs on full,
+BMC credentials (needed by the sys-triage phase, which runs on flash, full,
 pre_bmc_reboot and post_bmc_reboot only and reports SKIP without all three).
 Forwarded to the container as BMC_IP / BMC_USER / BMC_PASSWORD via the same
 0600 --env-file as the token, never on a command line:
@@ -237,16 +237,17 @@ while (( $# )); do
     esac
 done
 
-# The sys-triage phase runs on full, pre_bmc_reboot (old name pre_reboot) and
-# post_bmc_reboot only. Every other tier gets exactly the container it got
-# before the phase existed: no extra mounts or packages.
+# The sys-triage phase runs on flash, full, pre_bmc_reboot (old name
+# pre_reboot) and post_bmc_reboot only. Every other tier gets exactly the
+# container it got before the phase existed: no extra mounts or packages.
 WANT_SYS_TRIAGE=false
 case "${TIER}" in
-    full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
+    flash|full|pre_bmc_reboot|pre_reboot|post_bmc_reboot) ${SKIP_SYS_TRIAGE} || WANT_SYS_TRIAGE=true ;;
 esac
 
-# flash runs no QSFP tests, so it needs neither the syseng package nor the
-# stub and BMC API credentials its collector reads.
+# flash runs no QSFP tests, so it needs neither the stub nor the BMC API
+# credentials the QSFP collector reads, and the syseng package only for
+# sys-triage.
 WANT_QSFP=false
 [[ ${TIER} != flash ]] && ! ${SKIP_QSFP} && WANT_QSFP=true
 

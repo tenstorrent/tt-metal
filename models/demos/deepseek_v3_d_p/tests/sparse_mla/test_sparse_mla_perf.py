@@ -56,23 +56,20 @@ from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
-# process per model). Traced is the mean of the runs; untraced is the fastest run. LoudBox, Galaxy and Galaxy 4x4: CI
-# hosts; Galaxy and Galaxy 4x4 then scaled by the q-in-L1 change's measured speedup (3 interleaved runs each of main and
-# the change on one Galaxy; ratios under 1% left unapplied), LoudBox by Galaxy's (same 160 q rows per chip, not
-# measured). Then re-centred on CI runs after that change: each value is the mean over runs of that run's measurement
-# (fastest untraced sample, traced replay). Galaxy 8x4 K3.1 warm and GLM-5.3: 2-3 runs; Galaxy 4x4 K3.1 warm and
-# LoudBox K3.1: 1 run; deltas under 1% left as is. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled
-# Galaxy (3 runs), unscaled. Galaxy 8x4 GLM-5.3: re-measured with the stage cases on a CI host (1 run).
+# process per model). Each value is the mean over runs of that run's measurement: the fastest untraced sample, the
+# traced replay. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy. Galaxy 4x4 GLM-5.3
+# no-indexer long: re-centred once the sparse KV push ran on its TORUS_X fabric (the shared layer had gathered the
+# whole prefix).
 _TARGETS_MS = {
     "Galaxy": {
-        "kimi_k3_1": (2.93, 2.63, 6.47, 6.18),
-        "glm_5_3": (3.13, 2.70, 6.73, 6.32),
-        "glm_5_3-no_indexer": (2.29, 1.97, 2.36, 2.05),
+        "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
+        "glm_5_3": (3.06, 2.55, 6.61, 6.21),
+        "glm_5_3-no_indexer": (2.24, 1.83, 2.26, 1.89),
     },
     "Galaxy 4x4": {
-        "kimi_k3_1": (3.21, 3.05, 7.21, 6.98),
-        "glm_5_3": (2.91, 2.69, 6.81, 6.53),
-        "glm_5_3-no_indexer": (2.29, 2.23, 4.72, 4.56),
+        "kimi_k3_1": (3.12, 2.92, 7.05, 6.80),
+        "glm_5_3": (2.85, 2.54, 6.69, 6.35),
+        "glm_5_3-no_indexer": (2.17, 2.10, 2.34, 2.30),
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
@@ -80,9 +77,9 @@ _TARGETS_MS = {
         "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
     },
     "LoudBox": {
-        "kimi_k3_1": (2.65, 2.51, 3.87, 3.71),
-        "glm_5_3": (2.36, 2.20, 3.62, 3.46),
-        "glm_5_3-no_indexer": (1.97, 1.92, 2.71, 2.67),
+        "kimi_k3_1": (2.58, 2.41, 3.78, 3.60),
+        "glm_5_3": (2.34, 2.07, 3.47, 3.21),
+        "glm_5_3-no_indexer": (1.87, 1.77, 2.56, 2.50),
     },
 }
 PERF_TARGETS_MS = {
