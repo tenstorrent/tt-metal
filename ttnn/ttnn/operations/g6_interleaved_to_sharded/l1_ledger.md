@@ -40,14 +40,14 @@ No term scales with an op knob: `block_rows`/`block_cols` select pages inside th
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (input, DRAM interleaved) | 1 (partial pages for the last tile row of each image) | Owner-fetch: each page is read once, by the core that owns its shard. A trimmed page moves 2 spans of `trim_span_bytes` (rows 0..1 of faces 0 and 1 at the 64 B DRAM read granularity); an interior-row page moves whole | 0 |
+| x (input, DRAM interleaved) | 1 (partial pages for the last tile row of each image) | Owner-fetch: each page is read once, by the core that owns its shard. A trimmed page moves one span `[0, face1_offset_bytes + trim_span_bytes)` by default (`LAST_ROW_FORM = "one_span"`), or 2 spans of `trim_span_bytes` (`"two_spans"`: rows 0..1 of faces 0 and 1 at the 64 B DRAM read granularity); an interior-row page moves whole | 0 |
 | y (output, L1 sharded) | 0 | Lives in L1. The DRAM read response lands at its shard address on its owner | 0 |
 
 Totals per tier:
 
 | Shape | DRAM bytes read | Logical bytes | Cross-core NoC bytes | Core-local L1 bytes written |
 |-------|-----------------|---------------|----------------------|-----------------------------|
-| p1 (1, 5120) → 32 width shards | 160 × 128 = 20480 | 10240 | 0 | 20480 |
-| p2 (1, 1, 1, 128) → 1 height shard | 4 × 128 = 512 | 256 | 0 | 512 |
+| p1 (1, 5120) → 32 width shards | default one_span: 160 × 576 = 92160; two_spans: 160 × 128 = 20480 | 10240 | 0 | as DRAM bytes read |
+| p2 (1, 1, 1, 128) → 1 height shard | default one_span: 4 × 576 = 2304; two_spans: 4 × 128 = 512 | 256 | 0 | as DRAM bytes read |
 
-> Cheapest-traffic split considered: owner-fetch with trimmed last-row pages — 20480 B of DRAM and 0 cross-core bytes on p1 (whole pages: 327680 B; single 576 B span: 92160 B; reader-and-forward: + one NoC write per forwarded page). Implemented: owner-fetch with trimmed last-row pages. **The implemented split is the cheapest.** Nothing is deferred on traffic grounds; `reader_and_forward` is deferred on occupancy grounds only (see the regime table in `op_design.md`).
+> Cheapest-traffic split considered: owner-fetch with trimmed last-row pages — 20480 B of DRAM and 0 cross-core bytes on p1 (whole pages: 327680 B; single 576 B span: 92160 B; reader-and-forward: + one NoC write per forwarded page). Implemented: owner-fetch with trimmed last-row pages; the split (which core reads which page) is the cheapest. **The default transfer form is not the fewest bytes:** `one_span` moves 4.5× the bytes of `two_spans` with half the DRAM transactions, and measured faster on p1 (Blackhole, 5-call medians of device kernel duration, both with the two-reader split: 1047 ns vs 1114 ns; one reader: 1099 ns vs 1284 ns). With all 32 owners reading the 8 banks at once, the drain grows with the transaction count, not the bytes, at these sizes. `two_spans` stays a live value of the `LAST_ROW_FORM` knob. Nothing is deferred on traffic grounds; `reader_and_forward` is deferred on occupancy grounds only (see the regime table in `op_design.md`).

@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Every value of the partial_tile_transfer, reads_in_flight, reader_split and reader_processor knobs
-is bit exact on the Phase 0 placements.
+"""Every value of the LAST_ROW_FORM, READER_WEIGHTS, READER_PROCESSOR and READER_NOC knobs
+(perf lamps L1-L3 of op_design.md) is bit exact on the Phase 0 placements.
 
-One op call per case, so a --profile run of this file gives one CSV row per knob value, in
-parametrize order, for A/B measurement.
+flux58: every tile row is a last row (trimmed). h33_width: row 0 interior (whole pages),
+row 1 trimmed. NaN in the input's tile padding must not reach the logical values.
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ from ttnn.operations.g6_interleaved_to_sharded import g6_interleaved_to_sharded_
 H33_WIDTH = copy.deepcopy(FLUX_58)
 H33_WIDTH["shape"] = [33, 5120]
 H33_WIDTH["out_memory"]["shard_shape"] = [64, 160]
+
+SCENARIOS = pytest.mark.parametrize("scenario", [FLUX_58, H33_WIDTH], ids=["flux58", "h33_width"])
 
 
 def _run_exact(scenario, device):
@@ -56,30 +58,32 @@ def _run_exact(scenario, device):
     )
 
 
-@pytest.mark.parametrize("scenario", [FLUX_58, H33_WIDTH], ids=["flux58", "h33_width"])
-@pytest.mark.parametrize("transfer", ["valid_rows", "valid_rows_span", "whole_page"])
-def test_partial_tile_transfer(scenario, transfer, device, monkeypatch):
-    monkeypatch.setattr(descriptor, "PARTIAL_TILE_TRANSFER", transfer)
+@SCENARIOS
+@pytest.mark.parametrize("form", descriptor.LAST_ROW_FORMS)
+def test_last_row_form(scenario, form, device, monkeypatch):
+    monkeypatch.setattr(descriptor, "LAST_ROW_FORM", form)
     _run_exact(scenario, device)
 
 
-# 1: a barrier after every read. 3: a barrier inside a page's segment pair on flux58 (2 reads per page).
-@pytest.mark.parametrize("scenario", [FLUX_58, H33_WIDTH], ids=["flux58", "h33_width"])
-@pytest.mark.parametrize("reads_in_flight", [1, 3])
-def test_reads_in_flight(scenario, reads_in_flight, device, monkeypatch):
-    monkeypatch.setattr(descriptor, "READS_IN_FLIGHT", reads_in_flight)
+@SCENARIOS
+@pytest.mark.parametrize("form", ["two_spans", "one_span"])
+@pytest.mark.parametrize("weights", [(1,), (1, 1), (3, 1)], ids=["1reader", "split1:1", "split3:1"])
+def test_reader_weights(scenario, form, weights, device, monkeypatch):
+    monkeypatch.setattr(descriptor, "READER_WEIGHTS", weights)
+    monkeypatch.setattr(descriptor, "LAST_ROW_FORM", form)
     _run_exact(scenario, device)
 
 
-@pytest.mark.parametrize("scenario", [FLUX_58, H33_WIDTH], ids=["flux58", "h33_width"])
-@pytest.mark.parametrize("transfer", ["valid_rows", "valid_rows_span"])
-def test_reader_split(scenario, transfer, device, monkeypatch):
-    monkeypatch.setattr(descriptor, "READER_SPLIT", 2)
-    monkeypatch.setattr(descriptor, "PARTIAL_TILE_TRANSFER", transfer)
-    _run_exact(scenario, device)
-
-
-@pytest.mark.parametrize("reader_processor", ["brisc_noc0", "brisc_noc1"])
-def test_reader_processor(reader_processor, device, monkeypatch):
-    monkeypatch.setattr(descriptor, "READER_PROCESSOR", reader_processor)
+@pytest.mark.parametrize(
+    "processor,noc",
+    [
+        (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_1),
+        (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_0),
+        (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
+    ],
+    ids=["ncrisc_noc1", "brisc_noc0", "brisc_noc1"],
+)
+def test_reader_placement(processor, noc, device, monkeypatch):
+    monkeypatch.setattr(descriptor, "READER_PROCESSOR", processor)
+    monkeypatch.setattr(descriptor, "READER_NOC", noc)
     _run_exact(H33_WIDTH, device)

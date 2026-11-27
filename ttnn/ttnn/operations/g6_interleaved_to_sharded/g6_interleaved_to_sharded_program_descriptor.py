@@ -22,12 +22,29 @@ import ttnn
 
 READER_KERNEL = Path(__file__).parent / "kernels" / "g6_interleaved_to_sharded_reader.cpp"
 
-# Knobs. Each one is part of the descriptor cache key.
-# Perf lamp L1: False moves every last-row page whole instead of its two trimmed face spans.
-TRIM_LAST_ROW = True
-# Perf lamp L3: the reader's RISC and NoC.
+# Knobs. Each one is part of the descriptor cache key. Defaults are the fastest measured on
+# p1 (FLUX 58, Blackhole, 5-call medians of device kernel duration): one_span + (1, 1) 1047 ns,
+# one_span + (1,) 1099 ns, two_spans + (1,) 1284 ns, whole_page + (1,) 1727 ns.
+#
+# Perf lamp L1, the transfer form of a last-row page when the trim predicate holds:
+#   "two_spans"  [0, trim) and [face1, face1 + trim): the fewest DRAM bytes, twice the reads
+#   "one_span"   [0, face1 + trim): one read, 4.5x the bytes. Faster: with 32 cores reading
+#                8 banks at once, the drain grows with the number of DRAM transactions
+#                rather than with their bytes at these sizes
+#   "whole_page" the whole page, as every interior-row page
+LAST_ROW_FORMS = ("two_spans", "one_span", "whole_page")
+LAST_ROW_FORM = "one_span"
+# Perf lamp L2: one weight per reader kernel on each core (one or two readers). Reader j
+# takes the block's columns [ceil(n*W_j/W), ceil(n*W_{j+1}/W)), W_j the sum of the weights
+# before j, so a remainder column goes to the first reader. The second reader runs on the
+# other data-movement RISC and the other NoC.
+# The larger share goes to NOC0: on p1's cores a NOC1 read drains slower than a NOC0 read.
+READER_WEIGHTS: tuple[int, ...] = (1, 1)
+# Perf lamp L3: the first reader's RISC and NoC.
 READER_PROCESSOR = ttnn.DataMovementProcessor.RISCV_1
 READER_NOC = ttnn.NOC.NOC_0
+# Measurement only: preprocessor defines added to the reader (e.g. G6I2S_ABLATE_READS).
+READER_DEFINES: tuple[tuple[str, str], ...] = ()
 
 # Runtime-arg layout shared with the reader kernel.
 COMMON_ARG_INPUT_ADDR = 0
@@ -69,6 +86,7 @@ class Plan:
     page_size: int
     face1_offset_bytes: int
     trim_span_bytes: int
+    trim_single_span: bool
     cores: tuple[CoreBlock, ...]
 
     @property
@@ -104,8 +122,10 @@ def _trim_span_bytes(input_tensor, last_row_valid_rows: int) -> int:
     """
     tile = input_tensor.tile
     face_h, face_w = (int(d) for d in tile.face_shape)
+    if LAST_ROW_FORM not in LAST_ROW_FORMS:
+        raise ValueError(f"LAST_ROW_FORM must be one of {LAST_ROW_FORMS}, got {LAST_ROW_FORM!r}")
     trimmable = (
-        TRIM_LAST_ROW
+        LAST_ROW_FORM != "whole_page"
         and [int(d) for d in tile.tile_shape] == _STANDARD_TILE_SHAPE
         and [face_h, face_w] == _STANDARD_FACE_SHAPE
         and not tile.transpose_within_face
@@ -166,6 +186,7 @@ def derive_plan(input_tensor, memory_config) -> Plan:
         page_size=input_tensor.buffer_aligned_page_size(),
         face1_offset_bytes=face1_offset_bytes,
         trim_span_bytes=_trim_span_bytes(input_tensor, last_row_valid_rows),
+        trim_single_span=LAST_ROW_FORM == "one_span",
         cores=tuple(cores),
     )
 
@@ -174,8 +195,13 @@ def describe(plan: Plan) -> dict:
     return {
         "regime": "owner_fetch",
         "last_row_form": plan.last_row_form,
+        "last_row_transfer": LAST_ROW_FORM if plan.trim_span_bytes > 0 else "whole_page",
         "trim_span_bytes": plan.trim_span_bytes,
         "num_shards": plan.num_shards,
+        "readers": [
+            {"processor": str(config.processor), "noc": str(config.noc), "weight": weight}
+            for config, weight in zip(_reader_configs(), READER_WEIGHTS)
+        ],
         "cores": [
             {
                 "core": block.core,
@@ -189,6 +215,21 @@ def describe(plan: Plan) -> dict:
     }
 
 
+def _reader_configs() -> list[ttnn.DataMovementConfigDescriptor]:
+    if len(READER_WEIGHTS) not in (1, 2) or any(w <= 0 for w in READER_WEIGHTS):
+        raise ValueError(f"READER_WEIGHTS must hold one or two positive weights, got {READER_WEIGHTS}")
+    configs = [ttnn.DataMovementConfigDescriptor(processor=READER_PROCESSOR, noc=READER_NOC)]
+    if len(READER_WEIGHTS) == 2:
+        other_processor = (
+            ttnn.DataMovementProcessor.RISCV_0
+            if READER_PROCESSOR == ttnn.DataMovementProcessor.RISCV_1
+            else ttnn.DataMovementProcessor.RISCV_1
+        )
+        other_noc = ttnn.NOC.NOC_1 if READER_NOC == ttnn.NOC.NOC_0 else ttnn.NOC.NOC_0
+        configs.append(ttnn.DataMovementConfigDescriptor(processor=other_processor, noc=other_noc))
+    return configs
+
+
 def _build(input_tensor, memory_config) -> ttnn.ProgramDescriptor:
     plan = derive_plan(input_tensor, memory_config)
 
@@ -199,24 +240,42 @@ def _build(input_tensor, memory_config) -> ttnn.ProgramDescriptor:
         plan.page_size,
         plan.trim_span_bytes,
         plan.face1_offset_bytes,
+        int(plan.trim_single_span),
     ]
     compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    runtime_args = ttnn.RuntimeArgs()
-    for block in plan.cores:
-        x, y = block.core
-        runtime_args[x][y] = [block.block_row_start, block.block_rows, block.block_col_start, block.block_cols]
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source=str(READER_KERNEL),
-        core_ranges=memory_config.shard_spec.grid,
-        compile_time_args=compile_time_args,
-        runtime_args=runtime_args,
-        # Patched with the live addresses on every call.
-        common_runtime_args=[0, 0],
-        config=ttnn.DataMovementConfigDescriptor(processor=READER_PROCESSOR, noc=READER_NOC),
-    )
-    return ttnn.ProgramDescriptor(kernels=[reader], semaphores=[], cbs=[])
+    configs = _reader_configs()
+    total_weight = sum(READER_WEIGHTS)
+    cumulative_weights = [sum(READER_WEIGHTS[:j]) for j in range(len(READER_WEIGHTS) + 1)]
+    kernels = []
+    for j, config in enumerate(configs):
+        runtime_args = ttnn.RuntimeArgs()
+        for block in plan.cores:
+            # A block starts at shard-local page 0, so reader j's columns start at shard-local
+            # page col_lo.
+            col_lo = -(-block.block_cols * cumulative_weights[j] // total_weight)
+            col_hi = -(-block.block_cols * cumulative_weights[j + 1] // total_weight)
+            x, y = block.core
+            runtime_args[x][y] = [
+                block.block_row_start,
+                block.block_rows,
+                block.block_col_start + col_lo,
+                col_hi - col_lo,
+                col_lo,
+            ]
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(READER_KERNEL),
+                core_ranges=memory_config.shard_spec.grid,
+                compile_time_args=compile_time_args,
+                defines=list(READER_DEFINES),
+                runtime_args=runtime_args,
+                # Patched with the live addresses on every call.
+                common_runtime_args=[0, 0],
+                config=config,
+            )
+        )
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
 
 
 def _grid_key(grid) -> tuple:
@@ -246,9 +305,11 @@ def cache_key(input_tensor, memory_config) -> tuple:
         tuple(int(d) for d in shard_spec.shape),
         shard_spec.orientation,
         ttnn.get_dram_alignment(),
-        TRIM_LAST_ROW,
+        LAST_ROW_FORM,
+        READER_WEIGHTS,
         READER_PROCESSOR,
         READER_NOC,
+        READER_DEFINES,
     )
 
 
@@ -277,6 +338,7 @@ def get_program_descriptor(input_tensor, output_tensor, memory_config) -> ttnn.P
     common_args = [0, 0]
     common_args[COMMON_ARG_INPUT_ADDR] = input_tensor.buffer_address()
     common_args[COMMON_ARG_OUTPUT_SHARD_BASE_ADDR] = output_shard_base_addr
-    kernels[0].common_runtime_args = common_args
+    for kernel in kernels:
+        kernel.common_runtime_args = common_args
     descriptor.kernels = kernels
     return descriptor

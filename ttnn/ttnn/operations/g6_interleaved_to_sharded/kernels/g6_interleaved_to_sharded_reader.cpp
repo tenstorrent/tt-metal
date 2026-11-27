@@ -15,9 +15,19 @@
 
 namespace {
 
+// G6I2S_ABLATE_READS (measurement only) drops the NoC reads and keeps the loop, the address
+// generation and the barrier: the kernel's sync-only floor.
+template <uint32_t max_bytes>
+FORCE_INLINE void read_span(uint64_t src_noc_addr, uint32_t dst_l1_addr, uint32_t size) {
+#ifndef G6I2S_ABLATE_READS
+    noc_async_read<max_bytes>(src_noc_addr, dst_l1_addr, size);
+#endif
+}
+
 // Issues every span read of the block back to back, with no barrier or handshake between pages.
-// A page in the last tile row of an image moves only its top face rows (faces 0 and 1, rows
-// [0, trim_span_bytes / row_bytes)) when trim_span_bytes != 0; every other page moves whole.
+// When trim_span_bytes != 0, a page in the last tile row of an image moves only the first
+// trim_span_bytes of faces 0 and 1 (its logical rows): two spans, or with trim_single_span one
+// span from the page start through the end of face 1's span. Every other page moves whole.
 template <
     uint32_t tensor_cols_tiles,
     uint32_t tiles_h_per_image,
@@ -25,16 +35,17 @@ template <
     uint32_t page_size,
     uint32_t trim_span_bytes,
     uint32_t face1_offset_bytes,
+    bool trim_single_span,
     typename Accessor>
 FORCE_INLINE void fetch_shard_block(
     const Accessor& input,
-    uint32_t output_shard_base_addr,
+    uint32_t block_dst_addr,
     uint32_t block_row_start,
     uint32_t block_rows,
     uint32_t block_col_start,
     uint32_t block_cols) {
     constexpr uint32_t shard_row_stride_bytes = shard_cols_tiles * page_size;
-    uint32_t row_dst = output_shard_base_addr;
+    uint32_t row_dst = block_dst_addr;
     for (uint32_t r = 0; r < block_rows; ++r) {
         const uint32_t tensor_row = block_row_start + r;
         uint32_t page_id = tensor_row * tensor_cols_tiles + block_col_start;
@@ -45,13 +56,18 @@ FORCE_INLINE void fetch_shard_block(
         }
         if (trimmed) {
             for (uint32_t c = 0; c < block_cols; ++c, ++page_id, dst += page_size) {
-                noc_async_read<trim_span_bytes>(input.get_noc_addr(page_id), dst, trim_span_bytes);
-                noc_async_read<trim_span_bytes>(
-                    input.get_noc_addr(page_id, face1_offset_bytes), dst + face1_offset_bytes, trim_span_bytes);
+                if constexpr (trim_single_span) {
+                    constexpr uint32_t span_bytes = face1_offset_bytes + trim_span_bytes;
+                    read_span<span_bytes>(input.get_noc_addr(page_id), dst, span_bytes);
+                } else {
+                    read_span<trim_span_bytes>(input.get_noc_addr(page_id), dst, trim_span_bytes);
+                    read_span<trim_span_bytes>(
+                        input.get_noc_addr(page_id, face1_offset_bytes), dst + face1_offset_bytes, trim_span_bytes);
+                }
             }
         } else {
             for (uint32_t c = 0; c < block_cols; ++c, ++page_id, dst += page_size) {
-                noc_async_read<page_size>(input.get_noc_addr(page_id), dst, page_size);
+                read_span<page_size>(input.get_noc_addr(page_id), dst, page_size);
             }
         }
         // The nominal shard stride, not block_cols: a ragged last shard keeps the shard's row pitch.
@@ -68,7 +84,8 @@ void kernel_main() {
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
     constexpr uint32_t trim_span_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t face1_offset_bytes = get_compile_time_arg_val(5);
-    constexpr auto input_args = TensorAccessorArgs<6>();
+    constexpr bool trim_single_span = get_compile_time_arg_val(6) != 0;
+    constexpr auto input_args = TensorAccessorArgs<7>();
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t output_shard_base_addr = get_common_arg_val<uint32_t>(1);
@@ -77,6 +94,7 @@ void kernel_main() {
     const uint32_t block_rows = get_arg_val<uint32_t>(1);
     const uint32_t block_col_start = get_arg_val<uint32_t>(2);
     const uint32_t block_cols = get_arg_val<uint32_t>(3);
+    const uint32_t block_local_start_page = get_arg_val<uint32_t>(4);
 
     // The whole resident shard is the block: one block on an owner core, none on a core of the
     // grid past the last shard.
@@ -96,8 +114,14 @@ void kernel_main() {
                 shard_cols_tiles,
                 page_size,
                 trim_span_bytes,
-                face1_offset_bytes>(
-                input, output_shard_base_addr, block_row_start, block_rows, block_col_start, block_cols);
+                face1_offset_bytes,
+                trim_single_span>(
+                input,
+                output_shard_base_addr + block_local_start_page * page_size,
+                block_row_start,
+                block_rows,
+                block_col_start,
+                block_cols);
         }
         {
             // The kernel's last NoC action: nothing may be in flight when the next program starts.

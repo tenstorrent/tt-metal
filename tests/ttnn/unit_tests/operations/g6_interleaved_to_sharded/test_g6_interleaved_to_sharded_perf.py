@@ -4,16 +4,14 @@
 """Perf bench for g6_interleaved_to_sharded on the PERF FOCUS case (FLUX 58, p1).
 
 Measurement only: run under `scripts/run_safe_pytest.sh --profile --no-py-zones`. Every test makes
-exactly one op call and no readback, so the profiler CSV holds one GenericOp row per test, in
-parametrize order. Correctness of each knob value is graded by test_g6_interleaved_to_sharded_knobs.py.
+REPEATS op calls of one variant and no readback, so the profiler CSV holds REPEATS GenericOp rows
+per test, in parametrize order. The launch stagger across the 32 cores is noisy; compare medians. Correctness of each knob value is graded by test_g6_interleaved_to_sharded_knobs.py.
 
-The "ablate_reads" variant compiles the reader with I2S_ABLATE_READS: the NoC reads are dropped and
-the launch, argument loading and the barrier stay, which gives the sync-only floor of the kernel.
+"ablate_reads" compiles the reader with G6I2S_ABLATE_READS: the NoC reads are dropped and the
+launch, argument loading, address generation and barrier stay, which gives the sync-only floor.
 """
 
 from __future__ import annotations
-
-import sys
 
 import pytest
 import torch
@@ -28,39 +26,32 @@ from eval.golden_tests.g6_interleaved_to_sharded.helpers import (
 from ttnn.operations.g6_interleaved_to_sharded import g6_interleaved_to_sharded
 from ttnn.operations.g6_interleaved_to_sharded import g6_interleaved_to_sharded_program_descriptor as descriptor
 
-op_module = sys.modules["ttnn.operations.g6_interleaved_to_sharded.g6_interleaved_to_sharded"]
+_ABLATE = (("G6I2S_ABLATE_READS", "1"),)
+REPEATS = 5
+
+_TWO_SPANS = {"LAST_ROW_FORM": "two_spans"}
+_ONE_SPAN = {"LAST_ROW_FORM": "one_span"}
+_ONE_READER = {"READER_WEIGHTS": (1,)}
 
 VARIANTS = {
     "default": {},
-    "valid_rows": {"PARTIAL_TILE_TRANSFER": "valid_rows"},
-    "valid_rows_span": {"PARTIAL_TILE_TRANSFER": "valid_rows_span"},
-    "whole_page": {"PARTIAL_TILE_TRANSFER": "whole_page"},
-    "ablate_reads": {"_ablate_reads": True},
-    "brisc_noc0": {"READER_PROCESSOR": "brisc_noc0"},
-    "brisc_noc1": {"READER_PROCESSOR": "brisc_noc1"},
-    "split2": {"READER_SPLIT": 2},
-    "split2-ablate_reads": {"READER_SPLIT": 2, "_ablate_reads": True},
+    "two_spans-1reader": {**_TWO_SPANS, **_ONE_READER},
+    "one_span-1reader": {**_ONE_SPAN, **_ONE_READER},
+    "whole_page-1reader": {"LAST_ROW_FORM": "whole_page", **_ONE_READER},
+    "one_span-1reader-noc1": {**_ONE_SPAN, **_ONE_READER, "READER_NOC": ttnn.NOC.NOC_1},
+    "two_spans-split1:1": {**_TWO_SPANS, "READER_WEIGHTS": (1, 1)},
+    "one_span-split1:1": {**_ONE_SPAN, "READER_WEIGHTS": (1, 1)},
+    "one_span-split3:1": {**_ONE_SPAN, "READER_WEIGHTS": (3, 1)},
+    "one_span-split1:1-noc1first": {**_ONE_SPAN, "READER_WEIGHTS": (1, 1), "READER_NOC": ttnn.NOC.NOC_1},
+    "ablate-1reader": {**_ONE_READER, "READER_DEFINES": _ABLATE},
+    "ablate-split1:1": {"READER_WEIGHTS": (1, 1), "READER_DEFINES": _ABLATE},
 }
 
 
 @pytest.mark.parametrize("variant", list(VARIANTS))
 def test_perf_flux58(variant, device, monkeypatch):
-    knobs = dict(VARIANTS[variant])
-    ablate = knobs.pop("_ablate_reads", False)
-    for name, value in knobs.items():
+    for name, value in VARIANTS[variant].items():
         monkeypatch.setattr(descriptor, name, value)
-    # A fresh program per variant: the cache key does not carry the ablation define.
-    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
-    if ablate:
-        build = op_module.create_program_descriptor
-
-        def build_ablated(*args, **kwargs):
-            program = build(*args, **kwargs)
-            for kernel in program.kernels:
-                kernel.defines = [("I2S_ABLATE_READS", "1")]
-            return program
-
-        monkeypatch.setattr(op_module, "create_program_descriptor", build_ablated)
 
     torch.manual_seed(0)
     torch_input = make_torch_input(FLUX_58["shape"], FLUX_58["dtype"])
@@ -71,6 +62,9 @@ def test_perf_flux58(variant, device, monkeypatch):
         layout=FLUX_58["layout"],
         memory_config=build_memory_config(FLUX_58["in_memory"], device),
     )
-    output = g6_interleaved_to_sharded(ttnn_input, build_memory_config(FLUX_58["out_memory"], device))
-    ttnn.synchronize_device(device)
-    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    output_config = build_memory_config(FLUX_58["out_memory"], device)
+    for _ in range(REPEATS):
+        output = g6_interleaved_to_sharded(ttnn_input, output_config)
+        ttnn.synchronize_device(device)
+        assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        output.deallocate()
