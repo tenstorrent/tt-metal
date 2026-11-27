@@ -1,2 +1,2 @@
-supported=False
-reason=ttnn.graph up_front_* API absent (ttnn import/probe failed)
+supported=True
+reason=ok
