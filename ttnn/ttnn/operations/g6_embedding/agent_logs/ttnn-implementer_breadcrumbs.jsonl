@@ -17,3 +17,4 @@
 {"event":"test_run","result":"pass","mode":"dev+prod","detail":"16/16 acceptance tests incl. special bit patterns; whole_row + column_blocked regimes","ts":"2026-11-27T08:13:04-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 16/16 in --dev and production mode; fresh implementation written over pre-existing working-tree files without reading them","ts":"2026-11-27T08:44:19-05:00"}
 {"event":"fix_applied","detail":"perf: writer bank rotation knob; read_noc_split plan knob (odd rows on NoC1, DM_DYNAMIC_NOC) for segments<=256B on >=16 cores; zone build + core role dump. Ablation: p1 DRAM-bound (reads-only 408us, writes-only 544us), q64 request-rate-bound (half grid flat).","ts":"2026-11-27T09:08:59-05:00"}
+{"event":"test_run","result":"pass","detail":"16/16 acceptance tests pass in --dev and plain mode; Phase 0 design: index-driven gather, UInt16 tilize, whole_row + column_blocked regimes","ts":"2026-11-27T09:32:08-05:00"}
