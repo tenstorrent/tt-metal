@@ -22,6 +22,7 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import model_fabric_payload
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.perf_cases import (
     BOX,
     GATE_CASES,
@@ -34,7 +35,6 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.test_sparse_mla_perf import (
     _time_traced,
     _time_untraced,
 )
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import model_fabric_payload
 from models.demos.deepseek_v3_d_p.tt.mla import mla as mla_module
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
@@ -248,3 +248,139 @@ def test_early_q_block_ab(request, mesh_device, device_params, variant, case_nam
     assert not errors, f"paths failed: {errors}"
     for mode, value in pcc.items():
         assert value >= OUT_PCC, f"{mode}: fused block output differs from the chain's (min per-device PCC {value:.6f})"
+
+
+# ============================================================================
+# Host time per op (untraced): how long each call of the chain and of the fused path takes to return on the host,
+# device synchronized before and after every call so no queue back-pressure is counted. Median and min over N calls
+# after warm-up (program cache hits).
+# ============================================================================
+HOST_N = int(os.environ.get("EARLY_Q_HOST_N", 50))
+HOST_WARM = 5
+
+
+def _host_us(mesh_device, fn, setup=lambda: (), n=HOST_N):
+    import statistics
+
+    ts = []
+    for i in range(HOST_WARM + n):
+        args = setup()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        out = fn(*args)
+        t1 = time.perf_counter()
+        ttnn.synchronize_device(mesh_device)
+        if i >= HOST_WARM:
+            ts.append((t1 - t0) * 1e6)
+        for t in out if isinstance(out, (tuple, list)) else (out,):
+            ttnn.deallocate(t)
+        for t in args:
+            ttnn.deallocate(t)
+    return {"median_us": statistics.median(ts), "min_us": min(ts)}
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, variant, case_name",
+    [p for p in gate_params() if not GATE_CASES.get(p.values[3], (None, True))[1]],
+    indirect=["mesh_device", "device_params", "variant"],
+)
+@pytest.mark.parametrize("scenario", ["warm"])
+def test_early_q_host_ops(request, mesh_device, device_params, variant, case_name, config_only, scenario):
+    chunk = BOX.chunk
+    cache = BOX.cache_tokens(SCENARIO_CACHE_TOKENS[scenario])
+    case = build_sparse_perf_case(
+        mesh_device,
+        variant,
+        config_only,
+        cache=cache,
+        chunk=chunk,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        sp_axis=BOX.sp_axis,
+    )
+    mla = case.mla
+    assert mla._early_q_reshard
+    sp = tuple(mesh_device.shape)[BOX.sp_axis]
+    seq_len_local = chunk // sp
+    q_in = _block_input(case, mesh_device, chunk)
+    a2a_kw = dict(num_links=mla.ccl_num_links, memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=mla.tp_axis)
+    lin_kw = mla._early_q_wkv_b1_kwargs(seq_len_local)
+    cfg = ttnn.ComputeConfigDescriptor()
+    cfg.math_fidelity = ttnn.MathFidelity.HiFi2
+    cfg.fp32_dest_acc_en = False
+    cfg.math_approx_mode = False
+    a2amm_kw = dict(
+        cluster_axis=mla.tp_axis,
+        topology=ttnn.Topology.Ring,
+        num_links=mla.ccl_num_links,
+        memory_config=lin_kw["memory_config"],
+        compute_kernel_config=cfg,
+    )
+    split_kw = dict(split_head_dim=mla.qk_nope_head_dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    clone_q = lambda: (ttnn.clone(q_in),)
+
+    # Persistent intermediates for the per-op timings.
+    q_seq = ttnn.experimental.all_to_all_async_generic(ttnn.clone(q_in), in_dim=3, out_dim=2, **a2a_kw)
+    nope_seq, rope_seq_c = ttnn.experimental.nlp_create_q_heads_split(q_seq, num_heads=mla.num_heads, **split_kw)
+    nope_l, rope_l = ttnn.experimental.nlp_create_q_heads_split(
+        q_in, num_heads=mla.num_heads // mla.tp_factor, **split_kw
+    )
+    scratch = ttnn.all_to_all_matmul_scratch_tensor(nope_l, mla.wkv_b1_weight, **a2amm_kw)
+
+    def stem(path):
+        def fn(q):
+            _set_path(path)
+            try:
+                return mla._q_stem_seq_sharded(q, case.rope, cache, seq_len_local, None)
+            finally:
+                _set_path("chain")
+
+        return fn
+
+    rows = {
+        "chain/all_to_all_async_generic(q)": _host_us(
+            mesh_device, lambda: ttnn.experimental.all_to_all_async_generic(q_in, in_dim=3, out_dim=2, **a2a_kw)
+        ),
+        "chain/nlp_create_q_heads_split(H)": _host_us(
+            mesh_device, lambda: ttnn.experimental.nlp_create_q_heads_split(q_seq, num_heads=mla.num_heads, **split_kw)
+        ),
+        "chain/linear(wkv_b1)": _host_us(mesh_device, lambda: ttnn.linear(nope_seq, mla.wkv_b1_weight, **lin_kw)),
+        "fused/nlp_create_q_heads_split(H/tp)": _host_us(
+            mesh_device,
+            lambda: ttnn.experimental.nlp_create_q_heads_split(
+                q_in, num_heads=mla.num_heads // mla.tp_factor, **split_kw
+            ),
+        ),
+        "fused/all_to_all_matmul": _host_us(
+            mesh_device, lambda: ttnn.all_to_all_matmul(nope_l, mla.wkv_b1_weight, **a2amm_kw)
+        ),
+        "fused/all_to_all_matmul(scratch given)": _host_us(
+            mesh_device,
+            lambda: ttnn.all_to_all_matmul(nope_l, mla.wkv_b1_weight, scratch_tensor=scratch, **a2amm_kw),
+        ),
+        "fused/all_to_all_matmul_scratch_tensor only": _host_us(
+            mesh_device, lambda: ttnn.all_to_all_matmul_scratch_tensor(nope_l, mla.wkv_b1_weight, **a2amm_kw)
+        ),
+        "fused/all_to_all_async_generic(rope)": _host_us(
+            mesh_device, lambda: ttnn.experimental.all_to_all_async_generic(rope_l, in_dim=1, out_dim=2, **a2a_kw)
+        ),
+        "ref/clone(q)": _host_us(mesh_device, lambda: ttnn.clone(q_in)),
+        "stem/chain": _host_us(mesh_device, stem("chain"), setup=clone_q),
+        "stem/fused": _host_us(mesh_device, stem("fused"), setup=clone_q),
+    }
+    result = {
+        "kind": "host_ops",
+        "case": case_name,
+        "box": BOX.name,
+        "mesh": f"{BOX.mesh[0]}x{BOX.mesh[1]}",
+        "fused_impl": "native",
+        "n": HOST_N,
+        "host_us": rows,
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    with open(OUT_DIR / "results.jsonl", "a") as fh:
+        fh.write(json.dumps(result) + "\n")
+    print(f"EARLY_Q_HOST {case_name} {BOX.name}")
+    for k, v in rows.items():
+        print(f"EARLY_Q_HOST   {k:48s} median {v['median_us']:9.1f} us   min {v['min_us']:9.1f} us")

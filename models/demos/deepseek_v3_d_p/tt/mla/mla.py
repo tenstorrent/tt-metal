@@ -45,6 +45,10 @@ from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_du
 MLA_EARLY_Q_FUSED_A2AMM = os.environ.get("MLA_EARLY_Q_FUSED_A2AMM", "") not in ("", "0", "false")
 # Which fused op: "native" (C++ ttnn.all_to_all_matmul) or "generic" (the Python generic_op version).
 MLA_A2AMM_IMPL = os.environ.get("MLA_A2AMM_IMPL", "native")
+# Native op only: keep its L1 scratch across calls (one per mesh and shape, shared by all layers) instead of the
+# op allocating it per call. MLA_A2AMM_PERSISTENT_SCRATCH=0 restores the per-call allocation.
+MLA_A2AMM_PERSISTENT_SCRATCH = os.environ.get("MLA_A2AMM_PERSISTENT_SCRATCH", "1") != "0"
+_A2AMM_SCRATCH = {}
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
@@ -1698,7 +1702,9 @@ class ttMLA:
         else:
             from ttnn.operations.all_to_all_matmul import all_to_all_matmul
 
-            assert all_to_all_matmul is not None, "this build has no C++ ttnn.all_to_all_matmul (MLA_A2AMM_IMPL=generic)"
+            assert (
+                all_to_all_matmul is not None
+            ), "this build has no C++ ttnn.all_to_all_matmul (MLA_A2AMM_IMPL=generic)"
 
         nope, rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
@@ -1713,15 +1719,31 @@ class ttMLA:
         compute_config.math_fidelity = ttnn.MathFidelity.HiFi2
         compute_config.fp32_dest_acc_en = False
         compute_config.math_approx_mode = False
-        prefix = all_to_all_matmul(
-            nope,
-            self.wkv_b1_weight,
+        a2amm_kwargs = dict(
             cluster_axis=self.tp_axis,
             topology=ttnn.Topology.Ring,
             num_links=self.ccl_num_links,
             memory_config=mm_memory_config,
             compute_kernel_config=compute_config,
         )
+        if MLA_A2AMM_IMPL != "generic" and MLA_A2AMM_PERSISTENT_SCRATCH:
+            # The op's L1 landing scratch, allocated once per (mesh, shape) and shared by every layer: without it the
+            # op allocates (and frees) it on every call, ~70 us of host time per call (LoudBox 1x4, measured).
+            # Calls run one after another on each chip, so sharing it across layers is safe.
+            key = (
+                self.mesh_device.id(),
+                tuple(nope.shape),
+                nope.dtype,
+                tuple(self.wkv_b1_weight.shape),
+                self.tp_axis,
+                self.ccl_num_links,
+            )
+            scratch = _A2AMM_SCRATCH.get(key)
+            if scratch is None:
+                scratch = ttnn.all_to_all_matmul_scratch_tensor(nope, self.wkv_b1_weight, **a2amm_kwargs)
+                _A2AMM_SCRATCH[key] = scratch
+            a2amm_kwargs["scratch_tensor"] = scratch
+        prefix = all_to_all_matmul(nope, self.wkv_b1_weight, **a2amm_kwargs)
         ttnn.deallocate(nope)
         rope_seq = ttnn.experimental.all_to_all_async_generic(
             rope,
