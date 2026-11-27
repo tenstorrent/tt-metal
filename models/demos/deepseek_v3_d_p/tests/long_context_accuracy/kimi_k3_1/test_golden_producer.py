@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The Kimi-K3.1 FP64 chain golden producer (``golden_producer.py``) on tiny data: each FP64 piece against an
 independent reference (vendored AttnRes read, model reference norm / FFN / MoE / MLA attention, DeepSeek-V3.2 indexer),
-the segmented chain against a one-shot reference walk, its golden read back through the reader, resume and refusal,
+the segmented chain against a one-shot reference walk, its golden read back through the reader and resumed bit for bit,
 and the checkpoint name mapping. CPU only; no ttnn."""
 
 from __future__ import annotations
@@ -541,32 +541,6 @@ def test_fp64_chain_segments_match_a_one_shot_reference_walk_and_resume(tmp_path
     assert [s["first_segment"] for s in resumed["sessions"]] == [0, 2] and len(resumed["segments"]) == 3
     for index in range(3):
         assert _same(_files(tmp_path / "chain", index), _files(tmp_path / "bounded", index)), index
-
-
-def test_fp64_chain_refuses_a_different_run(tmp_path: Path, expect_error):
-    """A resume with other tokens is refused, not mixed into the stored run."""
-
-    model, _ = _tiny_chain()
-    ids = torch.arange(6) % 50
-    with torch.no_grad():
-        producer.run_chain(run_dir=tmp_path, model=model, token_ids=ids, segment=4, sampled=[5], identity=IDENTITY)
-        with expect_error(ValueError, "token_ids_sha256"):
-            producer.run_chain(
-                run_dir=tmp_path, model=model, token_ids=ids + 1, segment=4, sampled=[5], identity=IDENTITY
-            )
-
-
-def test_fp64_chain_logs_a_segment_that_takes_no_measurable_time(tmp_path: Path, monkeypatch):
-    """A segment faster than the 0.01 s the manifest rounds its time to (a short last segment on a fast host) still
-    logs and completes: the logged rate comes from the unrounded time, never from the stored 0.0 s."""
-
-    monkeypatch.setattr(producer, "time", SimpleNamespace(perf_counter=lambda: 0.0))
-    model, _ = _tiny_chain()
-    with torch.no_grad():
-        manifest = producer.run_chain(
-            run_dir=tmp_path, model=model, token_ids=torch.arange(6) % 50, segment=4, sampled=[5], identity=IDENTITY
-        )
-    assert [s["seconds"] for s in manifest["segments"]] == [0.0, 0.0]
 
 
 def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):

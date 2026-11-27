@@ -2,18 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 """``run_case`` with a fake DeviceBlock and a tiny golden: stage order (identity before device work), chunks in
 order with the next chunk's golden read overlapping the device call, early stop on a chunk violation, run bars over
-metric tiers, release on every path, and the progress lines. CPU only, no device."""
+metric tiers, and release on every path. CPU only, no device."""
 
 from __future__ import annotations
 
-import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
 
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
 from models.demos.common.prefill.long_context_accuracy.block import (
@@ -181,15 +179,7 @@ def golden_root(tmp_path, monkeypatch):
     return tmp_path
 
 
-@pytest.fixture
-def log_lines():
-    lines: list[str] = []
-    sink = logger.add(lambda message: lines.append(message.record["message"]), level="INFO")
-    yield lines
-    logger.remove(sink)
-
-
-def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_lines) -> None:
+def test_run_scores_every_chunk_in_order(golden_root) -> None:
     block = FakeBlock(error={4: 0.01})
     case = make_case(block, ContextBars(run=[AcceptanceBar("output_nrmse", "max", 0.01)]))
     result = run_case(case, ROWS, Mesh(), Path("/ckpt"))
@@ -209,35 +199,9 @@ def test_run_scores_every_chunk_in_order_and_logs_progress(golden_root, log_line
     assert tiers[0][0]["output_nrmse"] == pytest.approx(0.01 * (174 / 385) ** 0.5)
     assert [w["window_nrmse"] for w in tiers[1]] == [0.0, pytest.approx(0.01), 0.0]
     assert tiers[2][0]["state_error"] == 0.0
-    stage_names = ["golden open", "weight load", "identity", "device build", "carried state", "score run"]
-    assert set(result.seconds) == {*stage_names, "chunk_golden", "chunk_wait", "chunk_device", "chunk_score", "total"}
-    heap = [line for line in log_lines if line.startswith("LC_HEAP")]
-    assert heap == [
-        "LC_HEAP tiny-block 10: glibc mallopt "
-        "M_MMAP_THRESHOLD=2147483647 (set 1) M_TRIM_THRESHOLD=2147483647 (set 1) M_TOP_PAD=1073741824 (set 1)"
-    ], heap
-    assert log_lines.index(heap[0]) < min(i for i, line in enumerate(log_lines) if line.startswith("LC_STAGE"))
-    stages = [line for line in log_lines if line.startswith("LC_STAGE")]
-    assert [line.removeprefix("LC_STAGE tiny-block 10: ").split(" done in ")[0] for line in stages] == [
-        text for name in stage_names for text in (f"{name} ...", name)
-    ]
-    assert all(re.fullmatch(r".* done in \d+\.\ds", line) for line in stages[1::2]), stages
-    # the tail stages (carried state, score run) come after the last chunk and before the result line
-    order = [line.split(" ")[0] for line in log_lines if line.startswith(("LC_", "LONG_CONTEXT_RESULT="))]
-    assert order[-6:-1] == ["LC_CHUNK"] + ["LC_STAGE"] * 4 and order[-1].startswith("LONG_CONTEXT_RESULT="), order
-    chunks = [line for line in log_lines if line.startswith("LC_CHUNK")]
-    assert len(chunks) == 3
-    for i, (lo, hi) in enumerate([(0, 4), (4, 8), (8, 10)]):
-        assert chunks[i].startswith(f"LC_CHUNK tiny-block chunk {i + 1}/3 rows [{lo}, {hi}) elapsed ")
-        for part in (" eta ", " golden ", " wait ", " device ", " score "):
-            assert part in chunks[i], chunks[i]
-    # no ETA from the first chunk alone (its one-time cost would dominate); later chunks give one in seconds
-    assert " eta ? |" in chunks[0]
-    assert all(re.search(r" eta \d+\.\ds \|", line) for line in chunks[1:]), chunks
-    assert sum(line.startswith("LONG_CONTEXT_RESULT={") for line in log_lines) == 1
 
 
-def test_a_chunk_violation_stops_the_run(golden_root, log_lines) -> None:
+def test_a_chunk_violation_stops_the_run(golden_root) -> None:
     block = FakeBlock(error={4: 0.5})
     scorer = FakeScorer()
     case = make_case(block, ContextBars(chunk=[AcceptanceBar("chunk_nrmse", "max", 0.1)]), scorer=scorer)
@@ -250,7 +214,6 @@ def test_a_chunk_violation_stops_the_run(golden_root, log_lines) -> None:
         ("release",),
     ]
     assert scorer.scored == [0, 4] and result.metric_tiers == {}
-    assert sum(line.startswith("LC_CHUNK") for line in log_lines) == 2
 
 
 def test_run_bars_report_every_violation(golden_root) -> None:

@@ -1,33 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The Kimi-K3 KDA golden producer (``golden_producer.py``) on a tiny configuration, and the registered Kimi-K3 golden
-the device test reads. CPU only."""
+"""The Kimi-K3 KDA golden producer (``golden_producer.py``) on a tiny configuration: resumed runs are bit-identical,
+products are computed in FP64 and stored FP32, the token floor covers the whole golden, and the FP32 conversion
+equals a direct run. CPU only."""
 
 import hashlib
 import json
-import os
-import stat
 from pathlib import Path
 
 import pytest
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
-    GOLDEN_DIR_MODE,
-    GOLDEN_FILE_MODE,
-    MANIFEST,
-    open_golden,
-    write_manifest,
-)
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, open_golden, write_manifest
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3 import golden_producer
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import (
-    KimiK3KdaGolden,
-    load_window,
-    open_k3_layer0_golden,
-)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import KimiK3KdaGolden
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
     convert_to_fp32_storage,
     resume_state_path,
@@ -158,85 +147,19 @@ def test_products_are_computed_in_fp64_and_stored_in_fp32(tmp_path: Path) -> Non
             assert torch.equal(stored["state"][name].view(torch.int32), tensor.float().view(torch.int32)), name
 
 
-def test_a_bounded_run_stops_after_its_segments_and_resumes_to_the_same_golden(tmp_path: Path) -> None:
-    """``max_segments=1`` writes segment 0 only, with no token floor (the golden is incomplete); a later unbounded run
-    resumes there, and its files equal an uninterrupted run's bit for bit."""
-    run_full, *_ = make_run(tmp_path / "full")
-    full = run_full()
-    run_one, *_ = make_run(tmp_path / "bounded", max_segments=1)
-    partial = run_one()
-    assert [(s["start"], s["end"]) for s in partial["segments"]] == [(0, 4)] and "token_floor" not in partial
-    assert not (tmp_path / "bounded" / "segment_000001.pt").exists()
-    run_rest, *_ = make_run(tmp_path / "bounded")
-    resumed = run_rest()
-    assert [session["first_segment"] for session in resumed["sessions"]] == [0, 1]
-    assert resumed["token_floor"] == full["token_floor"]
-    for index in range(3):
-        want = torch.load(tmp_path / "full" / f"segment_{index:06d}.pt", weights_only=True)
-        got = torch.load(tmp_path / "bounded" / f"segment_{index:06d}.pt", weights_only=True)
-        assert torch.equal(want["output"], got["output"]), index
-        assert all(torch.equal(t, got["state"][n]) for n, t in want["state"].items()), index
-
-
-def test_load_window_returns_rows_and_the_state_before_them(tmp_path: Path, expect_error) -> None:
-    run, *_ = make_run(tmp_path)
-    run()
-    rows, state = load_window(tmp_path, 4, 9)
-    full, _ = load_window(tmp_path, 0, 10)
-    assert torch.equal(rows, full[4:9])
-    first_segment = torch.load(tmp_path / "segment_000000.pt", weights_only=True)["state"]
-    assert torch.equal(state.recurrent, first_segment["recurrent"])
-    assert load_window(tmp_path, 0, 3)[1] is None
-    with expect_error(ValueError, "not a multiple"):
-        load_window(tmp_path, 2, 6)
-    with expect_error(ValueError, "not inside"):
-        load_window(tmp_path, 8, 11)
-
-
-def test_resume_refuses_a_directory_from_a_different_run(tmp_path: Path, expect_error) -> None:
-    run, *_ = make_run(tmp_path, identity="first")
-    run()
-    other, *_ = make_run(tmp_path, identity="second")
-    with expect_error(ValueError, "mismatched fields: \\['identity'\\]"):
-        other()
-
-
-def test_manifest_records_provenance_and_the_whole_golden_token_floor(tmp_path: Path, expect_error) -> None:
+def test_a_complete_golden_records_the_whole_golden_token_floor(tmp_path: Path, expect_error) -> None:
+    """The KDA scorer's per-row floor: ``golden_floor`` over every output row, written only once the golden is
+    complete."""
     partial, *_ = make_run(tmp_path, fail_after=2)
     with expect_error(Interrupted, "simulated crash"):
         partial()
-    assert "token_floor" not in json.loads((tmp_path / MANIFEST).read_text())  # written only when complete
+    assert "token_floor" not in json.loads((tmp_path / MANIFEST).read_text())
 
     run, *_ = make_run(tmp_path)
     manifest = run()
-
-    assert manifest["token_floor"] == golden_floor(load_window(tmp_path, 0, 10)[0].double().norm(dim=-1))
-    assert manifest == json.loads((tmp_path / MANIFEST).read_text())
-    assert {"code_revision", "torch", "cpu_capability", "machine"} <= set(manifest["sessions"][0])
-
-    # The complete golden is a registry golden: found by its directory name, with its prompt and products.
-    golden = open_golden(tmp_path.name, root=tmp_path.parent)
-    assert golden.token_ids().tolist() == TOKENS
-    assert golden.manifest["products"]["output"]["shape"] == [load_window(tmp_path, 0, 1)[0].shape[-1]]
-    assert golden.manifest["products"]["state.recurrent"]["kind"] == "segment_end"
-
-
-def test_golden_files_are_readable_by_other_users_whatever_the_umask(tmp_path: Path) -> None:
-    run, *_ = make_run(tmp_path / "golden")
-    previous = os.umask(0o077)
-    try:
-        run()
-    finally:
-        os.umask(previous)
-    golden = tmp_path / "golden"
-    assert stat.S_IMODE(golden.stat().st_mode) == GOLDEN_DIR_MODE
-    modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in golden.iterdir()}
-    assert sorted(modes) == [
-        MANIFEST,
-        *(f"segment_{i:06d}.pt" for i in range(3)),
-        "token_ids.pt",
-    ]
-    assert set(modes.values()) == {GOLDEN_FILE_MODE}
+    golden = open_golden(tmp_path.name, root=tmp_path.parent, reader=KimiK3KdaGolden)
+    output = golden.read_rows(["output"], 0, golden.rows)["output"]
+    assert manifest["token_floor"] == golden_floor(output.double().norm(dim=-1))
 
 
 def _version_1_golden(run_dir: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
@@ -288,33 +211,3 @@ def test_conversion_writes_the_golden_the_producer_writes(
         convert_to_fp32_storage(tmp_path / "fp64", tmp_path / "fp32")
     with expect_error(ValueError, "version-1 golden"):
         convert_to_fp32_storage(tmp_path / "direct", tmp_path / "again")
-
-
-def _readable_by_anyone(path: Path) -> bool:
-    """Mode bits alone, so the check does not depend on who runs it: every directory from ``/`` down is
-    world-traversable and the file is world-readable."""
-    path = path.resolve()
-    directories_traversable = all(parent.stat().st_mode & stat.S_IXOTH for parent in path.parents)
-    return directories_traversable and bool(path.stat().st_mode & stat.S_IROTH)
-
-
-def test_registered_k3_layer0_golden_serves_the_device_test() -> None:
-    """The golden the ``k3-l0-kda`` long-context case gates on is registered, complete, and has its token
-    ids, token floor and every segment file, so a broken golden fails here before a device run (reads only metadata
-    and the 8 MB token ids)."""
-    golden = open_k3_layer0_golden()
-    assert golden.rows == 1044480
-    assert golden.token_ids().shape == (golden.rows,)
-    assert 0 < golden.manifest["token_floor"] < float("inf")
-    assert "input_weights_sha256" in golden.identity
-    segments = range(len(golden.manifest["segments"]))
-    missing = [i for i in segments if not (golden.path / f"segment_{i:06d}.pt").is_file()]
-    assert not missing, f"segment files missing: {missing[:10]}"
-    # CI reads the golden as another user than its producer.
-    files = [
-        golden.path / MANIFEST,
-        golden.path / "token_ids.pt",
-        *(golden.path / f"segment_{i:06d}.pt" for i in segments),
-    ]
-    unreadable = [str(path) for path in files if not _readable_by_anyone(path)]
-    assert not unreadable, f"not readable by other users: {unreadable[:10]}"

@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3.1 long-context accuracy cases (``block.LongContextCase``) against the FP64 chain golden ``k31-l0-3-fp64-1m``
-(reader ``golden.KimiK31ChainGolden``), run by ``test_long_context_accuracy.py`` and checked against the golden by
-``test_cases_match_goldens.py``: MoE layers 1 and 2 (``moe_case``) and DSA layer 3 (``DSA_CASE``).
+(reader ``golden.KimiK31ChainGolden``), run by ``test_long_context_accuracy.py``: MoE layers 1 and 2 (``moe_case``) and
+DSA layer 3 (``DSA_CASE``).
 
 Every case runs its production device Block (``blocks.py``) on one 4x4 K3.1 stage (``K31_PLACEMENT``, a Galaxy tray
 half) in the stage's ``K31_CHUNK``-row chunks, teacher-fed from the chain's products. Identity: the digest of the

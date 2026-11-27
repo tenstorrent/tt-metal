@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3 long-context accuracy cases (``block.LongContextCase``), run by ``test_long_context_accuracy.py`` and checked
-against their goldens by ``test_cases_match_goldens.py``.
+"""Kimi-K3 long-context accuracy cases (``block.LongContextCase``), run by ``test_long_context_accuracy.py``.
 
 ``KDA_LAYER0``: the KDA layer of ``model.layers.0`` (device Block ``blocks.KimiK3KdaBlock``, scorer
 ``common/prefill/long_context_accuracy/kda/scorer.KdaScorer``) on a full Galaxy (SP8 x TP4, the 2D fabric KDA tests

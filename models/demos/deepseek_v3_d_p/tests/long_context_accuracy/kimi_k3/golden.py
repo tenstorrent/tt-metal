@@ -19,16 +19,9 @@ from pathlib import Path
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
-    MANIFEST,
-    Fp64Golden,
-    MappedFile,
-    open_golden,
-    read_slices,
-)
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import MANIFEST, Fp64Golden, MappedFile, read_slices
 from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
-    K3_LAYER0_GOLDEN,
     PRODUCER,
     PRODUCER_VERSION,
     segment_path,
@@ -68,18 +61,6 @@ class KimiK3KdaGolden(Fp64Golden):
     def _segment_end(self, names: list[str], index: int) -> dict[str, torch.Tensor]:
         state = _state(self.path, index)
         return {n: state[n.removeprefix(STATE_PREFIX)] for n in names}
-
-
-def open_k3_layer0_golden(root: Path | None = None) -> KimiK3KdaGolden:
-    """The registered Kimi-K3 ``layers.0`` golden, checked to be this producer's, on the first-layer input."""
-    from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT
-
-    golden = open_golden(K3_LAYER0_GOLDEN, root, reader=KimiK3KdaGolden)
-    golden.require(
-        identity={"model": "Kimi-K3", "layer": "model.layers.0", "input": FIRST_LAYER_INPUT},
-        products=["output", "state.recurrent"],
-    )
-    return golden
 
 
 def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAReferenceState | None]:

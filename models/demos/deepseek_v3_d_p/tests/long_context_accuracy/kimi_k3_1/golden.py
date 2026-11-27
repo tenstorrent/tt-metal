@@ -35,12 +35,7 @@ from pathlib import Path
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
-    Fp64Golden,
-    MappedFile,
-    open_golden,
-    read_slices,
-)
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden, MappedFile, read_slices
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden_producer import (
     DSA_LAYER,
@@ -101,14 +96,6 @@ class KimiK31ChainGolden(Fp64Golden):
             keep = data["sampled_rows"] < end
             parts.append({k: data[k][keep] for k in SAMPLED})
         return {k: torch.cat([p[k] for p in parts]) for k in SAMPLED}
-
-
-def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> KimiK31ChainGolden:
-    """The registered K3.1 FP64 chain ``golden_id``, checked to be ``fp64_chain`` version ``PRODUCER_VERSION`` of
-    ``MODEL``. Raises the registry's ``GoldenError``s (missing, incomplete, malformed, mismatched)."""
-    golden = open_golden(golden_id, root, reader=KimiK31ChainGolden)
-    golden.require(identity={"model": MODEL})
-    return golden
 
 
 def layer_weight_names(checkpoint: Path, layer: int) -> list[str]:
