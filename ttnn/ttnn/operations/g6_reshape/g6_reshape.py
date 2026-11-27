@@ -41,7 +41,7 @@ INPUT_TAGGERS = {
 }
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32],
     "layout": [ttnn.TILE_LAYOUT],
 }
 
@@ -207,14 +207,16 @@ def _max_copies(trs, s_bound):
     return 2 * trs * s_bound
 
 
-def _slot_bytes(trs, s_bound, face_row_bytes, dram_align):
-    """Unrounded (staging slot, image slot, plan) bytes of one mover for a block of `trs` TRS. Staging
-    holds each source face-row plus up to `dram_align` of phase pad for the run it opens."""
+def _slot_bytes(atoms, atom_rows, s_bound, face_row_bytes, dram_align):
+    """Unrounded (staging slot, image slot, plan) bytes of one mover for a block of `atoms` atoms. Staging
+    holds each source face-row plus up to `dram_align` of phase pad for the run it opens. An atom never
+    straddles an output tile, so the tile table needs at most one entry per atom."""
+    trs = atoms * atom_rows
     max_copies = _max_copies(trs, s_bound)
     return (
         max_copies * (face_row_bytes + dram_align),
         2 * trs * face_row_bytes,
-        max_copies * COPY_ENTRY_BYTES + trs * TILE_ENTRY_BYTES,
+        max_copies * COPY_ENTRY_BYTES + atoms * TILE_ENTRY_BYTES,
     )
 
 
@@ -254,9 +256,9 @@ def _make_plan(in_shape, out_shape, elem, grid, dram_align):
             begin += share
             max_mover_atoms = max(max_mover_atoms, share)
 
-    # Unrounded footprint is linear in trs, so one TRS gives the BB-05 cap on block_atoms.
-    bytes_per_trs = _core_bytes(*_slot_bytes(1, s_bound, face_row_bytes, dram_align))
-    l1_cap_atoms = L1_OP_BUDGET // (atom_rows * bytes_per_trs)
+    # Unrounded footprint is linear in atoms, so one atom gives the BB-05 cap on block_atoms.
+    bytes_per_atom = _core_bytes(*_slot_bytes(1, atom_rows, s_bound, face_row_bytes, dram_align))
+    l1_cap_atoms = L1_OP_BUDGET // bytes_per_atom
     if l1_cap_atoms < 1:
         raise ValueError(f"g6_reshape: one atom needs more than {L1_OP_BUDGET} B of L1 per core")
     block_atoms = min(max_mover_atoms, l1_cap_atoms)
@@ -267,7 +269,7 @@ def _make_plan(in_shape, out_shape, elem, grid, dram_align):
         trs = block_atoms * atom_rows
         max_copies = _max_copies(trs, s_bound)
         stage_slot, image_slot, plan_bytes = (
-            _round_up(b, CB_ALIGN) for b in _slot_bytes(trs, s_bound, face_row_bytes, dram_align)
+            _round_up(b, CB_ALIGN) for b in _slot_bytes(block_atoms, atom_rows, s_bound, face_row_bytes, dram_align)
         )
         total = _core_bytes(stage_slot, image_slot, plan_bytes)
         if total <= L1_OP_BUDGET or block_atoms == 1:

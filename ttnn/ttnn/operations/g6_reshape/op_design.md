@@ -7,7 +7,7 @@
 | Classification | data_movement (no arithmetic, no compute kernel) |
 | Goal | `torch.reshape` on the logical values, laid out again in the input's own layout under the new shape, bit-exact, as ONE generic_op dispatch that reads each logical input value from the input tensor and writes it to the output tensor (no DRAM or host staging). |
 | Math | `out[j] = x[i]` whenever `lin(j; e) = lin(i; d)`, `lin(i; d) = Σ_k i_k · Π_{l>k} d_l`; one `-1` in `shape` resolved as `N / Π(other entries)`. |
-| Phase 0 scope | `dtype = bfloat16`, `layout = TILE_LAYOUT`, DRAM interleaved, every rank 1..4 on both sides, any last two dims |
+| Phase 0 scope | `dtype = bfloat16`, `layout = TILE_LAYOUT`, DRAM interleaved, every rank 1..4 on both sides, any last two dims. `float32` TILE is also claimed at Phase 0: the same kernel at `e = 4` (see `verification_report.md`) |
 | References | Spec (task prompt); `eval/golden_tests/g6_reshape/feature_spec.py` (TARGET, INPUTS, LOOSE_CASES); `eval/golden_tests/g6_reshape/helpers.py` (oracle, exact gate, `TOLERANCES = ("exact", None)`); `.claude/references/blocking-model.md`; `.claude/references/l1-footprint-discipline.md`; `.claude/references/ttnn-cb-memory-fundamentals.md`; catalog `ttnn/ttnn/operations/examples/master.md` (entries cited in Dataflow Strategy); `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:375-380` (NoC alignment) |
 
 ### Notation (used everywhere below)
@@ -246,7 +246,7 @@ All six are private scratch of one mover: the same kernel instance is the only p
 |---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
 | `cb_src_stage_m0` | 0 | `stage_bytes` | 1 | `stage_depth · 2T·S·(F + A)`: spans the block's input face-rows (≤ `S` per output face-row) + ≤ `A` phase pad per run | input dtype | mover 0 (NoC reads) | mover 0 (RISC-V loads) | gather → permute of each block |
 | `cb_dst_image_m0` | 1 | `image_bytes` | 1 | `image_depth · 2T·F`: spans the block's output face-rows, compacted | input dtype | mover 0 (RISC-V stores) | mover 0 (NoC writes) | permute → write flush of each block |
-| `cb_move_plan_m0` | 2 | `plan_bytes` | 1 | `16·S·T + 16·T`: ≤ `2T·S` copy entries × 8 B + ≤ `T` tile entries × 16 B | UInt32 | mover 0 | mover 0 | gather → store of each block |
+| `cb_move_plan_m0` | 2 | `plan_bytes` | 1 | `16·S·T + 16·block_atoms`: ≤ `2T·S` copy entries × 8 B + ≤ `block_atoms` tile entries × 16 B (an atom never straddles an output tile) | UInt32 | mover 0 | mover 0 | gather → store of each block |
 | `cb_src_stage_m1` | 3 | `stage_bytes` | 1 | as m0 | input dtype | mover 1 | mover 1 | as m0 |
 | `cb_dst_image_m1` | 4 | `image_bytes` | 1 | as m0 | input dtype | mover 1 | mover 1 | as m0 |
 | `cb_move_plan_m1` | 5 | `plan_bytes` | 1 | as m0 | UInt32 | mover 1 | mover 1 | as m0 |

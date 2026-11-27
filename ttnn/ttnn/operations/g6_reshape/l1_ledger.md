@@ -22,7 +22,7 @@ block per mover at a few KB per core.
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_src_stage_m0` | 1 page of `stage_depth · align_up(2T·S·(F + A), 64)` B | the block's distinct source face-rows (`≤ 2T·S`, exactly `2T` in `tile_face_row`) + per-run phase pad `< A` | `{out_atom: spans → T, half: spans → 2, face_row_elem: spans → F, movers: one per mover}`; input preimage enters through `S` | input dtype (dataflow-only payload; never through DEST; no `fp32_dest_acc_en` exists) | mover 0 (NoC reads) | mover 0 (CPU loads) | `gather_block` → end of `permute_block`, every block | cannot share with `cb_dst_image_m0`: both live during `permute_block` (read one, write the other); cannot share with `cb_move_plan_m0`: plan is written during the same walk that issues reads into staging. Capacity > live set by the phase pad (DRAM read congruence) and by the `S` bound (element-run worst case) |
 | `cb_dst_image_m0` | 1 page of `image_depth · align_up(2T·F, 64)` B | the block's output face-rows, exactly `2T·F` (less where `trs_halves = 1`) | `{out_atom: spans → T, half: spans → 2, face_row_elem: spans → F, movers: one per mover}` | input dtype (dataflow-only) | mover 0 (CPU stores) | mover 0 (NoC writes) | `permute_block` → `writes_flushed` at the next block's `permute_block` | cannot alias staging (concurrent in `permute_block`); cannot alias the plan (tile table read by `store_block` while the image is being written out); capacity = live set |
-| `cb_move_plan_m0` | 1 page of `align_up(16·S·T + 16·T, 64)` B | copy entries (`2T` in `tile_face_row`, `≤ 2T·S` element-run) × 8 B + tile entries (`≤ T`) × 16 B | `{out_atom: spans → T, half: spans → 2 (one entry per face-row), face_row_elem: streams (one entry per piece, not per element), movers: one per mover}` | UInt32 (raw words) | mover 0 | mover 0 | `gather_block` → `store_block`, every block | cannot share with staging (written while reads land) or image (tile table consumed while the image is written out); capacity > live set only by the `S` bound in `tile_face_row` (S = 1 there, so equal) |
+| `cb_move_plan_m0` | 1 page of `align_up(16·S·T + 16·block_atoms, 64)` B | copy entries (`2T` in `tile_face_row`, `≤ 2T·S` element-run) × 8 B + tile entries (`≤ block_atoms`: an atom never straddles an output tile, so each tile entry holds ≥ 1 whole atom of the block) × 16 B | `{out_atom: spans → T, half: spans → 2 (one entry per face-row), face_row_elem: streams (one entry per piece, not per element), movers: one per mover}` | UInt32 (raw words) | mover 0 | mover 0 | `gather_block` → `store_block`, every block | cannot share with staging (written while reads land) or image (tile table consumed while the image is written out); capacity > live set only by the `S` bound in element-run (S = 1 in `tile_face_row`, so equal) and by ragged atoms |
 | `cb_src_stage_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | cannot share with any m0 buffer: the two movers run concurrently on disjoint atom ranges |
 | `cb_dst_image_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | as above (concurrent with mover 0) |
 | `cb_move_plan_m1` | as m0 | as m0 | as m0 | as m0 | mover 1 | mover 1 | as m0 | as above (concurrent with mover 0) |
@@ -31,21 +31,21 @@ block per mover at a few KB per core.
 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
-| `e` | 2 (bf16, Phase 0); 4 (fp32 / int32 / uint32, refinements) | SUPPORTED dtype |
+| `e` | 2 (bf16) or 4 (fp32), Phase 0; 4 (int32 / uint32, Refinement 1) | SUPPORTED dtype |
 | `F = 16·e` | 32 or 64 B | `e` |
 | `A` | 64 B on Blackhole (32 on Wormhole) | `ttnn.get_dram_alignment()` (HAL) |
 | `atom_rows = max(1, A/F)` | 1..2 | `A`, `F` |
 | `S` | 1 if `W_in % 16 == 0 and W_out % 16 == 0`; 3 if `W_in ≥ 16`; `ceil(15/W_in) + 1 ≤ 16` otherwise | regime predicate + `W_in` |
-| `block_atoms` | `min(max atoms over movers, floor(1347776 / (movers_per_core · atom_rows · bytes_per_trs)), MAX_BLOCK_ATOMS)`, then lowered one atom at a time until the `align_up`-rounded total fits | BB-05 cap (host); `MAX_BLOCK_ATOMS` knob (default none = coarsest fit) |
+| `block_atoms` | `min(max atoms over movers, floor(1347776 / (movers_per_core · bytes_per_atom)), MAX_BLOCK_ATOMS)`, then lowered one atom at a time until the `align_up`-rounded total fits | BB-05 cap (host); `MAX_BLOCK_ATOMS` knob (default none = coarsest fit) |
 | `T = block_atoms · atom_rows` | as above × `atom_rows` | `block_atoms` |
 | `stage_depth`, `image_depth` | 1 (Phase 0) | host knobs `STAGE_DEPTH`, `IMAGE_DEPTH` |
 | `movers_per_core` | 2 (Phase 0) | host knob `MOVERS_PER_CORE` (1..2) |
 
 ### Footprint
 
-`bytes_per_trs = stage_depth·2·S·(F + A) + image_depth·2·F + 16·S + 16` (per mover)
+`bytes_per_atom = atom_rows·(stage_depth·2·S·(F + A) + image_depth·2·F + 16·S) + 16` (per mover)
 
-`L1 per core = movers_per_core · (stage_depth · align_up(2T·S·(F+A), 64) + image_depth · align_up(2T·F, 64) + align_up(16·S·T + 16·T, 64))` ≈ `movers_per_core · T · bytes_per_trs`
+`L1 per core = movers_per_core · (stage_depth · align_up(2T·S·(F+A), 64) + image_depth · align_up(2T·F, 64) + align_up(16·S·T + 16·block_atoms, 64))` ≈ `movers_per_core · block_atoms · bytes_per_atom`
 
 One host helper (`_slot_bytes`) produces the three per-mover terms; the BB-05 cap, the CB sizes and
 `describe_plan()["l1_bytes_per_core"]` all derive from it.
@@ -54,12 +54,11 @@ One host helper (`_slot_bytes`) produces the three per-mover terms; the BB-05 ca
 |------|-------------|
 | staging `2T·S·(F+A)` | `block_atoms`, `S` (regime / `W_in`), `stage_depth` |
 | image `2T·F` | `block_atoms`, dtype, `image_depth` |
-| plan `16·S·T + 16·T` | `block_atoms`, `S` |
+| plan `16·S·T + 16·block_atoms` | `block_atoms`, `S` |
 | `× movers_per_core` | mover knob |
 
-Worked values: `tile_face_row` bf16 on Blackhole (`S=1, F=32, A=64`): `bytes_per_trs = 192 + 64 + 32 = 288` → `576·T` B per core; the cap allows `T ≤ 2339`. Element-run fp32 with `W_in < 16` (`S=16, F=64`): `bytes_per_trs = 4096 + 128 + 272 = 4496` → cap `T ≤ 149`. Production bf16 maximum: the largest `G` is 2304 atoms (`(1,1,16,4608)→(16,1,4608)`), so `T ≤ 2·ceil(ceil(2304/P)/2)`; at `P ≥ 64` that is `T ≤ 36` → ≤ 21 KB per core, two orders of magnitude under 1347776. Measured
-(graph-capture L1 peak, 110-core Blackhole grid): `(1,1,16,4608)→(16,1,4608)` 12672 B (`T = 22`, `576·22`),
-`(16,1,5120)→(1,1,16,5120)` 6912 B (`T = 12`) — the formula exactly.
+Worked values: `tile_face_row` bf16 on Blackhole (`S=1, F=32, A=64, atom_rows=2`): `bytes_per_atom = 2·(192 + 64 + 16) + 16 = 560` per mover → 1120 B per atom per core; the cap allows `block_atoms ≤ 1203`. Element-run fp32 with `W_in < 16` (`S=16, F=64, atom_rows=1`): `bytes_per_atom = 4096 + 128 + 256 + 16 = 4496` → cap `block_atoms ≤ 149`. Production bf16 maximum: the largest `G` is 2304 atoms (`(1,1,16,4608)→(16,1,4608)`), ≤ 11 atoms per mover at `P = 110` → 12416 B per core, two orders of magnitude under 1347776.
+Host plan values (110-core Blackhole grid; checked against the golden run's graph-capture L1 peak, see `verification_report.md`): `(1,1,16,4608)→(16,1,4608)` 12416 B (`block_atoms = 11, T = 22`), `(16,1,5120)→(1,1,16,5120)` 6784 B (`block_atoms = 6, T = 12`), `(1,16,6,256)→(1,1,16,1536)` 2304 B, `(16,1,64)→(1,1,16,64)` 1152 B.
 
 ## Data-movement budget
 

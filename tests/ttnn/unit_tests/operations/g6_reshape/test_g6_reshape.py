@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_reshape, Phase 0: bfloat16, TILE_LAYOUT, DRAM interleaved.
+"""Acceptance test for g6_reshape, Phase 0: bfloat16 and float32, TILE_LAYOUT, DRAM interleaved.
 
 g6_reshape moves values and never computes on them, so every check is bit-exact
 (the golden suite's TOLERANCES are ("exact", None) for every dtype).
@@ -46,8 +46,23 @@ ELEMENT_RUN_CASES = [
     ((1, 512), (1, 1, 512, 1)),
 ]
 
-# bfloat16 NaN, infinities, -0.0, a denormal and a large finite value.
+# The FLUX float32 production cases: one valid row of each input tile becomes one valid column of an
+# output tile. None of the last dims is a multiple of 16 on both sides, so all run the element-run regime.
+FLOAT32_CASES = [
+    ((1, 512), (1, 1, 512, 1)),
+    ((1, 256), (1, 1, 256, 1)),
+    ((1, 196), (1, 1, 196, 1)),
+    ((1, 185), (1, 1, 185, 1)),
+    ((1, 207), (1, 1, 207, 1)),
+]
+
+# NaN, infinities, -0.0, denormals and a large finite value; -1e-45 is a float32-only denormal.
 _BF16_SPECIALS = [float("nan"), float("inf"), float("-inf"), -0.0, 9.18e-41, 3.0e38]
+_F32_SPECIALS = [float("nan"), float("inf"), float("-inf"), -0.0, 1e-40, -1e-45, 3.0e38]
+
+_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+_TTNN_DTYPE = {v: k for k, v in _TORCH_DTYPE.items()}
+_BITS_DTYPE = {torch.bfloat16: torch.int16, torch.float32: torch.int32}
 
 
 def _case_id(case):
@@ -55,15 +70,15 @@ def _case_id(case):
     return "x".join(map(str, src)) + "-to-" + "x".join(map(str, dst))
 
 
-def _random_input(shape):
+def _random_input(shape, dtype=ttnn.bfloat16):
     torch.manual_seed(42)
-    return torch.randn(shape).to(torch.bfloat16)
+    return torch.randn(shape).to(_TORCH_DTYPE[dtype])
 
 
 def _to_device(torch_tensor, device):
     return ttnn.from_torch(
         torch_tensor,
-        dtype=ttnn.bfloat16,
+        dtype=_TTNN_DTYPE[torch_tensor.dtype],
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -72,18 +87,18 @@ def _to_device(torch_tensor, device):
 
 
 def _bits(t):
-    return t.contiguous().view(torch.int16)
+    return t.contiguous().view(_BITS_DTYPE[t.dtype])
 
 
 def _check_exact(ttnn_output, expected):
     assert tuple(ttnn_output.shape) == tuple(expected.shape)
-    assert ttnn_output.dtype == ttnn.bfloat16
+    assert ttnn_output.dtype == _TTNN_DTYPE[expected.dtype]
     assert ttnn_output.layout == ttnn.TILE_LAYOUT
     memory_config = ttnn_output.memory_config()
     assert memory_config.buffer_type == ttnn.BufferType.DRAM
     assert memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
     got = ttnn.to_torch(ttnn_output)
-    assert got.dtype == torch.bfloat16
+    assert got.dtype == expected.dtype
     assert tuple(got.shape) == tuple(expected.shape)
     mismatch = _bits(got) != _bits(expected)
     assert not mismatch.any(), f"{int(mismatch.sum())} of {mismatch.numel()} values differ"
@@ -120,6 +135,26 @@ def test_element_run_cases(case, device):
     torch_input = _random_input(src)
     _run_and_check(torch_input, list(dst), device)
     _check_plan(torch_input, list(dst), device, "tile_element_run")
+
+
+# NaN poison in the input tile padding: every FLUX input tile holds one valid row of 31 padding rows.
+@pytest.mark.parametrize("case", FLOAT32_CASES, ids=_case_id)
+def test_float32_cases(case, device):
+    src, dst = case
+    torch_input = _random_input(src, ttnn.float32)
+    _run_and_check(torch_input, list(dst), device, poison=float("nan"))
+    _check_plan(torch_input, list(dst), device, "tile_element_run")
+
+
+def test_float32_special_values(device):
+    src, dst = (1, 512), [1, 1, 512, 1]
+    flat = _random_input(src, ttnn.float32).reshape(-1)
+    # An odd mantissa bit everywhere: a path through a narrower or rounding format changes it.
+    flat = (flat.view(torch.int32) | 1).view(torch.float32).clone()
+    stride = flat.numel() // len(_F32_SPECIALS)
+    for i, value in enumerate(_F32_SPECIALS):
+        flat[i * stride] = value
+    _run_and_check(flat.reshape(src), dst, device)
 
 
 def test_tuple_shape(device):
@@ -234,17 +269,23 @@ KNOB_SETTINGS = {
 }
 
 
+# float32 has one-row atoms (64-B face-rows fill a DRAM word), so its block boundaries fall on every row.
 @pytest.mark.parametrize("knobs", KNOB_SETTINGS.values(), ids=KNOB_SETTINGS.keys())
 @pytest.mark.parametrize(
-    "case",
-    [((16, 1, 5120), (1, 1, 16, 5120)), ((1, 16, 6, 256), (1, 1, 16, 1536)), ((1, 185), (1, 1, 185, 1))],
-    ids=_case_id,
+    "case, dtype",
+    [
+        (((16, 1, 5120), (1, 1, 16, 5120)), ttnn.bfloat16),
+        (((1, 16, 6, 256), (1, 1, 16, 1536)), ttnn.bfloat16),
+        (((1, 185), (1, 1, 185, 1)), ttnn.bfloat16),
+        (((1, 185), (1, 1, 185, 1)), ttnn.float32),
+    ],
+    ids=["16x1x5120-bf16", "1x16x6x256-bf16", "1x185-bf16", "1x185-fp32"],
 )
-def test_block_knobs(case, knobs, device, monkeypatch):
+def test_block_knobs(case, dtype, knobs, device, monkeypatch):
     for name, value in knobs.items():
         monkeypatch.setattr(_op_module, name, value)
     src, dst = case
-    torch_input = _random_input(src)
+    torch_input = _random_input(src, dtype)
     plan = describe_plan(_to_device(torch_input, device), list(dst))
     assert plan["max_blocks_per_mover"] > 1
     assert plan["l1_bytes_per_core"] <= L1_OP_BUDGET
