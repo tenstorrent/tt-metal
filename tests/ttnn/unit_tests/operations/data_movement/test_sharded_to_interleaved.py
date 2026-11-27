@@ -234,7 +234,7 @@ def _convertible_input(shape, input_dtype, output_dtype):
     +-(1 + k / 64): they share one exponent and fit the 6 fraction bits a BFLOAT8_B value with its block's exponent
     has."""
     if ttnn.bfloat8_b not in (input_dtype, output_dtype):
-        return full_range_input(shape, ttnn.bfloat16, nan=False).float()
+        return full_range_input(shape, ttnn.bfloat16, nan=False, negative_zero=False).float()
     torch.manual_seed(0)
     magnitude = 1 + torch.randint(0, 64, shape) / 64
     return torch.where(torch.randint(0, 2, shape, dtype=torch.bool), -magnitude, magnitude)
@@ -337,7 +337,7 @@ def test_sharded_to_interleaved_docstring_blackhole_inputs(
 def test_sharded_to_interleaved_docstring_output_dtype(input_dtype, output_dtype, output_buffer_type, device):
     """Converts a HEIGHT_SHARDED TILE input between every two dtypes the ttnn.sharded_to_interleaved output_dtype line
     names, into every interleaved output the docstring lists. The input values are exact in both dtypes, so the output
-    keeps them. Zeros are compared by value."""
+    keeps them."""
     check_readable(input_dtype, output_dtype, output_buffer_type)
     input_tensor = ttnn.from_torch(
         _convertible_input(_S2I_SHAPE, input_dtype, output_dtype),
@@ -352,4 +352,4 @@ def test_sharded_to_interleaved_docstring_output_dtype(input_dtype, output_dtype
     assert output.dtype == output_dtype
     assert output.layout == ttnn.TILE_LAYOUT
     assert output.memory_config() == memory_config
-    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output), signed_zeros=False)
+    assert_exact(ttnn.to_torch(input_tensor), ttnn.to_torch(output))
