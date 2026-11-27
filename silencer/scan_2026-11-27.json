@@ -1,0 +1,1 @@
+{"note":"2026-11-27: Phase A nothing pending. Scanned models-t2-e2e-tests run 45932472998 job 140291173508 (Qwen3-32B bh_quietbox_2, last 5000 lines): top is CCL L1-semaphore fallback warn 8x (covered by open PR #62446), rest <=4x tracked. No new target; noop.","date":"2026-11-27"}
