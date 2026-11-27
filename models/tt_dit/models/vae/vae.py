@@ -596,6 +596,42 @@ class VaeAttention(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._ctx = ctx
+        self._num_channels = num_channels
+
+    def warm_sdpa(self) -> None:
+        """Run the attention's SDPA once at each of its two programs.
+
+        With runtime_seq_len the SDPA serves every token count from one program, except that its Q circular buffer
+        is doubled once a core gets more than one Q chunk, which takes a second program. A model warmed at a size on
+        one side of that would build the other at the first size on the far side; this builds both, with one K
+        chunk."""
+        grid = self._sdpa_program_config.compute_with_storage_grid_size
+        q_chunk = self._sdpa_program_config.q_chunk_size
+        k_chunk = self._sdpa_program_config.k_chunk_size
+        for q_rows in (q_chunk, grid.x * grid.y * q_chunk + 1):
+
+            def upload(rows: int) -> ttnn.Tensor:
+                return ttnn.from_torch(
+                    torch.zeros(1, 1, rows, self._num_channels),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self._ctx.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self._ctx.device),
+                )
+
+            q, k, v = upload(q_rows), upload(k_chunk), upload(k_chunk)
+            out = ttnn.transformer.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=False,
+                program_config=self._sdpa_program_config,
+                compute_kernel_config=self._sdpa_compute_kernel_config,
+                runtime_seq_len=True,
+            )
+            for t in (out, q, k, v):
+                ttnn.deallocate(t)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "to_out.0", "to_out")

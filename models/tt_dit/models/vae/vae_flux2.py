@@ -156,6 +156,9 @@ class Flux2VaeDecoder(Module):
             warm_fixed_slice_flatten(ctx.device, [*channel_counts, out_channels])
         # So does the mid block's token gather where the token rows per chip are not whole tiles.
         warm_token_gather(ctx, channel_counts[0])
+        # And the attention's SDPA at both of its programs.
+        for attention in self.mid_block.attentions:
+            attention.warm_sdpa()
 
     def _conv_levels(self) -> list[list[Module]]:
         """The modules holding the convs at each resolution, from the latent's to the image's: each up block's
@@ -349,6 +352,9 @@ class Flux2VaeEncoder(Module):
                     configure_conv2d(module, fixed_slice_hw=self.fixed_slice_hw_per_level[level])
             warm_fixed_slice_flatten(ctx.device, [*channel_counts, z_channels])
         warm_token_gather(ctx, channel_counts[-1])
+        # And the attention's SDPA at both of its programs.
+        for attention in self.mid_block.attentions:
+            attention.warm_sdpa()
 
     def _conv_levels(self) -> list[list[Module]]:
         """The modules holding the convs at each resolution, from the image's to the latent's: each down block's
