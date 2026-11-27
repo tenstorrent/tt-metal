@@ -178,7 +178,7 @@ def describe_plan(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -
     cores = []
     for core_plan in plan.cores:
         blocks = [
-            {"riscv": riscv, "block": (b.origin_row, b.origin_col, b.rows, b.cols)}
+            {"riscv": riscv, "block": (b.origin_row, b.origin_col, b.rows, b.cols), "start": (b.start_row, b.start_col)}
             for riscv, riscv_blocks in enumerate(core_plan.blocks_per_riscv)
             for b in riscv_blocks
         ]
@@ -193,6 +193,7 @@ def describe_plan(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -
     return {
         "regime": plan.regime,
         "num_writer_riscs": plan.num_writer_riscs,
+        "rotate_write_order": plan.rotate_write_order,
         "tensor_tiles": (plan.tensor_tile_rows, plan.tensor_tile_cols),
         "shard_tiles": (plan.shard_tile_rows, plan.shard_tile_cols),
         "num_shards": plan.num_shards,
