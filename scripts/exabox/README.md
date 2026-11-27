@@ -19,7 +19,7 @@ setting can be overridden from the environment.
 | Variable | Default | Meaning |
 |---|---|---|
 | `XRUN_DATA` | `/data/$USER` | per-user dir on the shared filesystem: `logs/`, `tmp/`, `.ccache/`, `evaldb/`, `evalruns/`, `buildhome/` |
-| `XRUN_REPO` | the checkout these scripts live in | repo to build and run in; must be on the shared filesystem |
+| `XRUN_REPO` | the checkout these scripts live in (always; `XRUN_REPO_OVERRIDE=<path>` picks another) | repo to build and run in; must be on the shared filesystem. An inherited value is ignored, so an eval clone builds and tests itself |
 | `NODE_JOB` | found by `on-node` | the reservation job to run steps in |
 | `XRUN_RESERVATION_NAME` | unset | find the reservation by job name instead (when you hold several jobs) |
 | `XRUN_BUILD_PARTITION` | `cpu_only` | partition for builds |

@@ -2,14 +2,15 @@
 # from the environment; nothing here names a user or a machine.
 #
 # XRUN_DATA        per-user directory on the shared filesystem (logs, tmp, ccache, eval DB, build HOME)
-# XRUN_REPO        the tt-metal checkout to build and run in (default: the one these scripts live in);
-#                  it must be on the shared filesystem so build and device nodes see the same path
+# XRUN_REPO        the tt-metal checkout to build and run in: always the one these scripts live in, so a clone
+#                  (an eval run's) builds and tests itself even when a parent shell exported another checkout's
+#                  XRUN_REPO; XRUN_REPO_OVERRIDE=<path> picks another. It must be on the shared filesystem.
 # NODE_JOB         the reservation job (a running Slurm job of yours on a device node) to run steps in;
 #                  default: found by on-node (XRUN_RESERVATION_NAME, else your only running device job)
 # XRUN_BUILD_PARTITION / XRUN_BUILD_EXCLUDE / XRUN_TOOLCHAIN   where and how build-metal builds
 _xrun_here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 export XRUN_DATA="${XRUN_DATA:-/data/$USER}"
-export XRUN_REPO="${XRUN_REPO:-$(git -C "$_xrun_here" rev-parse --show-toplevel 2>/dev/null)}"
+export XRUN_REPO="${XRUN_REPO_OVERRIDE:-$(git -C "$_xrun_here" rev-parse --show-toplevel 2>/dev/null)}"
 export XRUN_LOGS="${XRUN_LOGS:-$XRUN_DATA/logs}"
 export XRUN_BUILD_PARTITION="${XRUN_BUILD_PARTITION:-cpu_only}"
 export XRUN_BUILD_EXCLUDE="${XRUN_BUILD_EXCLUDE:-}"      # comma-separated build nodes to avoid (e.g. full /tmp)
