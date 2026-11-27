@@ -4,9 +4,9 @@
 
 #include "softmax_device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/tile.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/data_formats/tile.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -61,8 +61,9 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!a.is_sharded(), "Quasar softmax does not support sharded input.");
     TT_FATAL(!operation_attributes.output_mem_config.is_sharded(), "Quasar softmax does not support sharded output.");
     TT_FATAL(
-        a.dtype() == DataType::BFLOAT16,
-        "Quasar softmax: input must be BFLOAT16 (no BFLOAT8_B on Quasar; FLOAT32 not implemented), got: {}",
+        a.dtype() == DataType::BFLOAT16 || is_mx(a.dtype()),
+        "Quasar softmax: input must be BFLOAT16 or an MX format (no BFLOAT8_B on Quasar; FLOAT32 not implemented), "
+        "got: {}",
         a.dtype());
     TT_FATAL(
         a.tensor_spec().tile() == Tile{},

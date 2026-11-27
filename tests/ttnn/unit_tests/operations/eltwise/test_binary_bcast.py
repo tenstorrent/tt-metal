@@ -5064,6 +5064,39 @@ def test_binary_specless_sharded_output_zero_volume(device, shape, layout):
 
 
 @pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b: ttnn.add(a, b),
+        lambda a, b: ttnn.add(
+            a, b, memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+        ),
+        lambda a, b: ttnn.relu(a),
+        lambda a, b: ttnn.typecast(a, ttnn.float32),
+    ],
+    ids=["add", "add_height_sharded", "relu", "typecast"],
+)
+def test_zero_volume_op_skips_launch(device, op):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    shape = (1, 1, 0, 64)
+    a = ttnn.from_torch(torch.empty(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.empty(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    entries_before = device.num_program_cache_entries()
+    result = op(a, b)
+    assert device.num_program_cache_entries() == entries_before, "zero-volume op must not build or launch a program"
+    assert ttnn.to_torch(result).numel() == 0
+
+
+@pytest.mark.parametrize("out_shape", [(1, 1, 0, 32), (1, 1, 32, 0), (1, 0, 32, 32)])
+def test_zero_volume_output_tensor_still_validated(device, out_shape, expect_error):
+    a = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    c = ttnn.from_torch(torch.empty(out_shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not match the broadcasted output shape"):
+        ttnn.add(a, b, output_tensor=c)
+
+
+@pytest.mark.parametrize(
     "shape, layout",
     [
         ((1, 1, 32, 0), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
@@ -5196,3 +5229,40 @@ def test_binary_sharded_row_major_with_sub_core_grids(device):
     out = ttnn.add(a, b, sub_core_grids=grid)
 
     assert_with_pcc(torch_a + torch_b, ttnn.to_torch(out), 0.9999)
+
+
+@pytest.mark.parametrize("shape", [(1, 1, 64, 96), (2, 3, 96, 160)])
+@pytest.mark.parametrize(
+    "ttnn_op, full_dtype, row_side",
+    [
+        (ttnn.logaddexp, ttnn.bfloat16, "b"),
+        (ttnn.logaddexp, ttnn.bfloat16, "a"),
+        (ttnn.logaddexp2, ttnn.bfloat16, "b"),
+        (ttnn.ldexp, ttnn.bfloat16, "b"),
+        (ttnn.add, ttnn.float32, "b"),
+    ],
+    ids=["logaddexp_row_b", "logaddexp_row_a", "logaddexp2_row_b", "ldexp_row_b", "add_fp32_bf16_row_b"],
+)
+def test_binary_bf16_row_bcast_software_fill(ttnn_op, full_dtype, row_side, shape, device):
+    """A bfloat16 row operand that does not take the LLK broadcast (exp-family ops, mixed dtypes) is
+    replicated in the reader by fill_tile_with_first_row_bfloat16. The result must be bit-identical to
+    the same op run on the operand expanded on the host."""
+    torch.manual_seed(0)
+    row_shape = shape[:-2] + (1, shape[-1])
+    full_pt = torch.empty(shape).uniform_(-4, 4)
+    row_pt = torch.empty(row_shape).uniform_(-4, 4)
+
+    def to_device(t, dtype):
+        return ttnn.from_torch(
+            t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    full_tt = to_device(full_pt, full_dtype)
+
+    def run(row_operand):
+        args = (row_operand, full_tt) if row_side == "a" else (full_tt, row_operand)
+        return ttnn.to_torch(ttnn_op(*args))
+
+    broadcast = run(to_device(row_pt, ttnn.bfloat16))
+    materialized = run(to_device(row_pt.expand(shape).contiguous(), ttnn.bfloat16))
+    assert torch.equal(broadcast, materialized)

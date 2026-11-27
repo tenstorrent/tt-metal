@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <ostream>
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 
 #include <tt-metalium/experimental/distributed_tensor/topology/distributed_tensor_configs.hpp>
 #include <tt_stl/small_vector.hpp>

@@ -146,6 +146,68 @@ def gate_mesh_axes(config) -> tuple[int, int]:
     return sp_axis, tp_axis
 
 
+def padding_config_tensor(mesh_device, padding_config: list, *, sp_axis: int) -> ttnn.Tensor:
+    """[sp, 2] (local_real_tokens, pad_side) rows -> the MoE padding config device tensor, one row per SP shard
+    (sharded over mesh axis ``sp_axis``, replicated over TP)."""
+    return ttnn.from_torch(
+        torch.tensor(padding_config, dtype=torch.int32),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=mesh_shard_dims(0, sp_axis), mesh_shape=mesh_device.shape),
+    )
+
+
+def real_row_mask_host(row_mask: tuple, n_activated_experts: int) -> torch.Tensor:
+    """[sp * rows, n_activated_experts] 0/1 from packed_real_row_mask's per-chip row flags, laid out as the gate's top-k
+    indices are (one row per token, one column per pick), SP chips stacked on dim 0."""
+    flags = torch.tensor(row_mask, dtype=torch.int32).reshape(-1, 1)
+    return flags.expand(-1, n_activated_experts).contiguous()
+
+
+@dataclass
+class PackedPadding:
+    """A packed forward's MoE padding, shared by every MoE layer of the forward.
+
+    ``config``: the [sp, 2] padding config from packed_real_rows. The gate's top-k and the dispatch read one leading
+    real-row count per chip from it, so it masks the pad rows after a chip's last real row; None when there are none.
+    ``row_mask``: packed_real_row_mask, for the pad rows ``config`` cannot mask: a partial chunk's, ahead of a
+    non-empty chunk. The first MoE layer builds ``real_rows`` from it (TtMoEGatePrefill.real_rows_tensor), and every
+    layer's gate turns those rows' top-k ids into the sentinel (TtMoEGatePrefill.mask_pad_rows), which
+    masked_bincount, dispatch and combine skip as they skip ``config``'s pad rows. None when ``config`` masks every
+    pad row (eager). A traced forward always masks: the runtime keeps one persistent PackedPadding and refreshes
+    ``config`` and ``real_rows`` in place before every replay."""
+
+    config: Optional[ttnn.Tensor] = None
+    row_mask: Optional[tuple] = None
+    real_rows: Optional[ttnn.Tensor] = None
+
+    def deallocate(self) -> None:
+        for t in (self.config, self.real_rows):
+            if t is not None:
+                ttnn.deallocate(t)
+        self.config = self.real_rows = None
+
+
+def packed_padding(mesh_device, chunks, sp: int, chunk_local: int, *, sp_axis: int) -> Optional[PackedPadding]:
+    """An eager packed forward's PackedPadding, built once for every MoE layer of the forward; None when every row is
+    real. The caller owns it (PackedPadding.deallocate).
+
+    A partial chunk ahead of a full one leaves every chip's last row real, so packed_real_rows counts every row and
+    only the row mask has pad rows to mask: the config is still built then (all rows counted), as the traced forward's
+    always is."""
+    from models.demos.minimax_m3.tt.packed_rows import packed_real_row_mask, packed_real_rows, packed_routed_pad_rows
+
+    real_rows = packed_real_rows(chunks, sp, chunk_local)
+    rows_per_chip = len(chunks) * chunk_local
+    routed = packed_routed_pad_rows(chunks, sp, chunk_local)
+    if not routed and all(r == rows_per_chip for r in real_rows):
+        return None
+    config = padding_config_tensor(mesh_device, [[r, 0] for r in real_rows], sp_axis=sp_axis)
+    return PackedPadding(config, packed_real_row_mask(chunks, sp, chunk_local) if routed else None)
+
+
 @dataclass
 class TtMoEGateConfig:
     # gate_params
@@ -1099,20 +1161,13 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        config_tensor = ttnn.from_torch(
-            torch.tensor(padding_config, dtype=torch.int32),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=mesh_shard_dims(0, self.sp_axis),
-                mesh_shape=self.mesh_device.shape,
-            ),
-        )
+        config_tensor = self._padding_config_tensor(padding_config)
         self._padding_config_cache[cache_key] = config_tensor
         return config_tensor
+
+    def _padding_config_tensor(self, padding_config: list) -> ttnn.Tensor:
+        """[sp, 2] (local_real_tokens, pad_side) rows -> the device tensor, one row per SP shard."""
+        return padding_config_tensor(self.mesh_device, padding_config, sp_axis=self.sp_axis)
 
     def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
         """Trace-safe twin of build_padding_config: derive the per-device
@@ -1331,6 +1386,51 @@ class TtMoEGatePrefill(LightweightModule):
         for t in (real, is_real, indices):
             ttnn.deallocate(t)
         return out
+
+    def real_rows_tensor(self, row_mask: tuple) -> ttnn.Tensor:
+        """packed_real_row_mask on device for mask_pad_rows: uint16 tiles shaped like this gate's top-k indices on every
+        chip (sharded over the SP axis, replicated over TP). from_torch: not inside a trace capture."""
+        return ttnn.from_torch(
+            real_row_mask_host(row_mask, self.config.n_activated_experts),
+            device=self.mesh_device,
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
+        )
+
+    def mask_pad_rows(self, indices: ttnn.Tensor, real_rows: ttnn.Tensor) -> ttnn.Tensor:
+        """Set the top-k ids of every row ``real_rows`` flags 0 to the n_routed_experts sentinel, as the top-k does for
+        the padding config's trailing pad rows, so masked_bincount, dispatch and combine skip them: a packed forward's
+        pad rows ahead of a later chunk's real rows (PackedPadding.real_rows). Returns new indices and frees the old.
+
+        The sentinel tile is built on the first call per shape, so that must be warm-up, before any trace capture
+        (from_torch is illegal inside a capture)."""
+        assert tuple(real_rows.shape) == tuple(
+            indices.shape
+        ), f"real-row mask {tuple(real_rows.shape)} does not match the top-k indices {tuple(indices.shape)}"
+        key = ("sentinel", tuple(indices.shape))
+        if key not in self._row_masks:
+            self._row_masks[key] = ttnn.from_torch(
+                torch.full(tuple(indices.shape), self.config.n_routed_experts, dtype=torch.int32),
+                device=self.mesh_device,
+                dtype=indices.dtype,
+                layout=indices.layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        # Through DRAM, then back into the indices' memory config once they are freed: an L1 result allocated
+        # while they are alive lands below them and shifts later L1 buffers into ops' static circular buffers.
+        memory_config = indices.memory_config()
+        out = ttnn.where(real_rows, indices, self._row_masks[key], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(indices)
+        if memory_config.buffer_type == ttnn.BufferType.DRAM:
+            return out
+        moved = ttnn.to_memory_config(out, memory_config)
+        ttnn.deallocate(out)
+        return moved
 
     def _host_gpt_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """GPT-OSS routing on host. Returns (indices, scores).

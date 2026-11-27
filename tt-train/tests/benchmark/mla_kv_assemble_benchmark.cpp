@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tuple>
 #include <vector>
 

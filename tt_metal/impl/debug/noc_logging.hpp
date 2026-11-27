@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/device_types.hpp>
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include "impl/context/metal_env_impl.hpp"
 
 namespace tt {

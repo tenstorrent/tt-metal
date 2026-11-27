@@ -339,7 +339,7 @@ ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
 /**
  * Initialize supplied-index packing after copying the score and index operands.
  * Call topk_xl_pack_supplied_indices before restoring TopK state as described there.
- * This programs ADDR_MOD_0 for advancing stores; reinitialize datacopy before copying again.
+ * The store advances through the ADDR_MOD_6 dest += 2 invariant that hw_configure establishes.
  *
  * Return value: None
  */
@@ -442,7 +442,8 @@ ALWI void topk_xl_add_lsb_indices_rt(std::uint32_t idst, std::uint32_t chunk_id)
  *
  * With TOPK_XL_BLAZE_COMPAT, the caller must drain prior SFPU work and restore
  * ADDR_MOD_7 to zero advance after MATH hands the section to PACK, then run this
- * init before removing values. The default init also programs ADDR_MOD_7.
+ * init before removing values. The default path relies on pack hw_configure having set ADDR_MOD_7 to zero
+ * advance.
  */
 ALWI void topk_xl_remove_msb_values_init() { PACK((llk_math_eltwise_unary_sfpu_topk_xl_remove_msb_values_init())); }
 

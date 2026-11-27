@@ -14,7 +14,7 @@
 #include <mutex>
 #include <utility>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include "profiler.hpp"
 

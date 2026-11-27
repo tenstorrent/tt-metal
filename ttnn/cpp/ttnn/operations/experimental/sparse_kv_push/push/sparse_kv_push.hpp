@@ -32,7 +32,10 @@ Tensor sparse_kv_push(
     const std::optional<Tensor>& batch_index_tensor = std::nullopt,
     uint32_t batch_slot_num_layers = 1,
     uint32_t batch_slot_layer_idx = 0,
-    const std::optional<CoreRangeSet>& core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& core_grid = std::nullopt,
+    // The mesh axis the cache's blocks stripe along first: the chip at position s on it and t on the other axis owns
+    // blocks s * (chips on the other axis) + t, + k * chips. Axis 0 is row-major chip order.
+    uint32_t sp_axis = 0);
 
 // Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh: a 2D
 // torus fabric, at least 3 chips on each mesh axis and at most 32 in all, and a cache geometry the plan table and the

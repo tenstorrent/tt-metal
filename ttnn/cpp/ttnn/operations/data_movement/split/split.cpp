@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 namespace ttnn {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "allocator_state.hpp"
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"

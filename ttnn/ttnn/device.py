@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import functools
 from typing import Optional, List
 
 import ttnn
@@ -41,7 +42,13 @@ class DispatchCoreConfig(_DispatchCoreConfig):
         super().__init__(resolved_config.type, resolved_config.axis)
 
 
-open_device = ttnn._ttnn.device.open_device
+@functools.wraps(ttnn._ttnn.device.open_device)
+def open_device(*args, **kwargs):
+    # Fetch the matmul config model if it was turned on but isn't there yet (ttnn/ttnn/matmul_model/__init__.py)
+    ttnn.matmul_model.download_if_enabled()
+    return ttnn._ttnn.device.open_device(*args, **kwargs)
+
+
 init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
 
 

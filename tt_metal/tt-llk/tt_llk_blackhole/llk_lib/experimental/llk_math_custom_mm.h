@@ -25,7 +25,7 @@ using namespace ckernel::math;
 // rt_dim: 1
 // ct_dim: any integer from 1 to 34, as long as the ct_dim output tiles fit in the DEST sync region
 //         (custom_mm_tile_rows of the CustomMmDestLayout each)
-// kt_dim: any integer from 1 to 256 (inclusive)
+// kt_dim: any integer of 1 or more
 // fidelity: LoFi only
 // throttle: not supported
 
@@ -101,21 +101,6 @@ inline void custom_mm_configure_addrmod()
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_5); // Move SrcB to 32 in preparation for finalization ELWADD
-
-    addr_mod_t {
-        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        .srcb = {.incr = 16, .clr = 0, .cr = 0},
-        .dest = {.incr = 16, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
-
-    addr_mod_t {
-        .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 0, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 0},
-    }
-        .set(ADDR_MOD_7); // NOP, has to be ADDR_MOD_7 to match with address mods configured in silu
-                          // for fusing matmul and activation
 }
 
 // Narrow in1: each MVMUL steps to the next k-face in SrcA and SrcB, accumulating onto the same output rows (+8 if
@@ -162,7 +147,7 @@ inline void custom_mm_configure_narrow_mop(const std::uint32_t operandB_face_r_d
         });
 
     // The single top MVMUL from the replay buffer, then the end of tile or block MVMULs as in custom_mm_configure_mop
-    const std::uint32_t mvmul_base      = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 1 /*length*/);
+    const std::uint32_t mvmul_base      = TT_OP_REPLAY(ckernel::math::replay_buf_offset + 0, 1 /*length*/, 0, 0);
     const std::uint32_t mvmul_end_tile  = TT_OP_MVMUL(p_setrwc::CLR_A, 0 /*instr_mod19*/, ADDR_MOD_2, 0 /*dst*/);
     const std::uint32_t mvmul_end_block = TT_OP_MVMUL(p_setrwc::CLR_AB, 0 /*instr_mod19*/, ADDR_MOD_3, 0 /*dst*/);
 
@@ -219,7 +204,7 @@ inline void custom_mm_configure_mop(const std::uint32_t operandB_face_r_dim, con
         });
 
     // Top 3 MVMUL instructions from the replay buffer
-    const std::uint32_t mvmul_base = lltt::replay_insn(ckernel::math::replay_buf_offset + 0, 3);
+    const std::uint32_t mvmul_base = TT_OP_REPLAY(ckernel::math::replay_buf_offset + 0, 3, 0, 0);
     // F1 @ F3 => 16 (24 if split_acc) (clear only SrcA as SrcB is reused)
     const std::uint32_t mvmul_end_tile = TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
     // F1 @ F3 => 16 (24 if split_acc) (clear both SrcA and SrcB as this is the end if the block)
@@ -284,7 +269,7 @@ inline void _llk_math_custom_mm_init_(
  *                  same tiles.
  * @param operandB_face_r_dim: Face row count of in0 (SrcB), one of {1, 2, 4, 8}.
  * @param dst_index: First DEST output tile, counted in custom_mm_tile_rows of the layout.
- * @param kt_dim: Number of k-tiles to accumulate, 1 to 256.
+ * @param kt_dim: Number of k-tiles to accumulate, 1 or more.
  * @param ct_dim: Number of output column tiles; must match the init, whose MOP bakes it in.
  * @param in1_num_faces: Faces in an in1 tile, 4 or 2; must match the init.
  * @note Call @ref _llk_math_custom_mm_init_ first, and again after any other math op (a copy init leaves the Src
@@ -304,7 +289,7 @@ inline void _llk_math_custom_mm_(
         math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
         "custom_mm: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
         "this call left it at keep, so denormal Src operands would not be flushed");
-    LLK_ASSERT(kt_dim >= 1 && kt_dim <= CUSTOM_MM_MAX_KT_DIM, "custom_mm: kt_dim must be 1 to 256");
+    LLK_ASSERT(kt_dim >= 1, "custom_mm: kt_dim must be at least 1");
     LLK_ASSERT(custom_mm_legal_in1_num_faces(in1_num_faces), "custom_mm: in1 must have 4 faces, or 2 for a [32, 16] tile");
 
     const std::uint32_t replay_buf_len = custom_mm_replay_buf_len(operandB_face_r_dim, in1_num_faces);
@@ -321,14 +306,24 @@ inline void _llk_math_custom_mm_(
 
     if constexpr (finalize)
     {
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 16, .clr = 0, .cr = 0},
+            .dest = {.incr = 16, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_6); // Move to next face in all three regs, used for final accumulation
+
         // Run the full replay ct_dim - 1 times as it has the full finalization sequence for cases where SrcB is reused
         for (std::uint32_t i = 0; i < ct_dim - 1; i++)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len);
+            TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len, 0, 0);
         }
         // Run the full replay - the last ELWADD as it differs on the last ct_dim iteration and is issued directly after
-        lltt::replay(ckernel::math::replay_buf_offset, replay_buf_len - 1);
+        TT_REPLAY(ckernel::math::replay_buf_offset, replay_buf_len - 1, 0, 0);
         TTI_ELWADD(3, 1, p_elwise::SRCB_NO_BCAST, ADDR_MOD_3, 0);
+
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
     }
     else
     {

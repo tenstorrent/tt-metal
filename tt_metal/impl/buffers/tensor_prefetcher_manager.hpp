@@ -20,12 +20,12 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_trace_id.hpp>
 
 #include "tt_metal/common/scoped_timer.hpp"
 #include "impl/buffers/tensor_prefetcher_fifo.hpp"

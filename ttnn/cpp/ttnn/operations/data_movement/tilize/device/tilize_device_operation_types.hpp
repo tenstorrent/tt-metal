@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "tt-metalium/kernel_types.hpp"
-#include <tt-metalium/tile.hpp>
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include <tt-metalium/data_formats/tile.hpp>
 
 namespace ttnn::prim {
 
