@@ -394,7 +394,18 @@ def needs_determinism(task: dict, units: list[tuple[str, str]]) -> bool:
     cmd = " && ".join(c for _, c in units)
     if not task.get("device") or DETERMINISM_TEST.search(cmd) or "run_safe_pytest.sh" not in cmd:
         return False
-    return bool(MODEL_LEVEL_TEST.search(cmd)) or task.get("step") in MODEL_LEVEL_STEPS
+    if MODEL_LEVEL_TEST.search(cmd):
+        return True
+    # F309 (owner 2026-11-27, the C++ port series: op-level checks only): a perf task gated only (ab_mode: none) whose
+    # gate runs no model test (no shared-model run: core/batch) is an op-level task, not a model-level one
+    if task.get("ab_mode") == "none" and all(
+        batch.layer_class(a) == "none"
+        for _, c in units
+        for r in batch.parse_all(batch.launch_form(c)[0]) or []
+        for a in r["args"]
+    ):  # (a shared test marked BATCH_LAYERS = "none" uses the held mesh only: no model)
+        return False
+    return task.get("step") in MODEL_LEVEL_STEPS
 
 
 def with_determinism(task: dict, units: list[tuple[str, str]]) -> list[tuple[str, str]]:
