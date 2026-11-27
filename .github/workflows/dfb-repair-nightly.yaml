@@ -46,7 +46,7 @@ permissions:
 
 env:
   DFB_BRANCH_PREFIX: dfb-repair-bot
-  MAX_PRS: 2
+  MAX_PRS: 3
 
 jobs:
   mode:
@@ -226,6 +226,7 @@ jobs:
     permissions:
       contents: read
       copilot-requests: write
+      pull-requests: read # the loop looks up the open PR of a fix branch
     env:
       MODE: ${{ needs.mode.outputs.mode }}
       IMAGE: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
@@ -528,7 +529,7 @@ jobs:
               {
                 printf -- '- %s: GitHub did not let the bot open the PR.\n' "$gid"
                 printf -- '  - Open it as a draft: %s\n' "$link"
-                printf -- '  - Or drop the fix: delete its branch with the bin icon here: %s\n' "$drop"
+                printf -- '  - Or delete its branch (bin icon), and the next run has the AI try again: %s\n' "$drop"
               } >> "$GITHUB_STEP_SUMMARY"
               echo "::warning::$gid: GitHub did not let the bot open the PR. Open it: $link or delete the branch: $drop"
             fi

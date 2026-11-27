@@ -155,8 +155,9 @@ failed). Failing tests alone keep it green; they are listed in the summary.
 - **Limits:** attempts per group and per night, a per-attempt time limit, a nightly deadline (in CI fitted to the
   job's time limit), and at most 3 PRs a night. Stray processes are found by an environment marker and killed.
 - **No repeats and no duplicate PRs.** A group that was handed off, or that has a fix on disk, waits `rehandoff_days`.
-  A group with a bot branch on origin (from any night, found with `git ls-remote`) is not proposed again; when its
-  branch is deleted while the tests still fail, it waits for a human. A group that comes back after its fix was
+  A group with a bot branch on origin (from any night, found with `git ls-remote`) is not proposed again: the summary
+  points to the branch's open PR, or else to the branch with links to open a PR from it or to delete it. When its
+  branch is deleted while the tests still fail, the agent tries again. A group that comes back after its fix was
   merged starts fresh. People can take a group over or ask for a fresh try (`handled/` and `retry/` markers, or in CI
   the `DFB_REPAIR_HANDLED` variable and the `retry` input).
 

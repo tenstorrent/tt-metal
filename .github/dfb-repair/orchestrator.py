@@ -39,6 +39,8 @@ import tempfile
 import threading
 import time
 import traceback
+import urllib.parse
+import urllib.request
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1075,6 +1077,52 @@ class Loop:
             return None
         return [line.split("refs/heads/", 1)[1] for line in out.splitlines() if "refs/heads/" in line]
 
+    def open_pr(self, branch: str) -> str | None:
+        """The URL of the open PR made from this branch: "" when there is none, None when GitHub could not be asked.
+        A read of public data. Calls without a token share a small hourly limit per network address, so the call first
+        uses COPILOT_GITHUB_TOKEN when there is one (in CI it is the job's own token, which may read pull requests),
+        and then goes without a token."""
+        repo = self.cfg["pr"]["repo"]
+        query = urllib.parse.urlencode({"state": "open", "per_page": 5, "head": f"{repo.split('/')[0]}:{branch}"})
+        token = os.environ.get("COPILOT_GITHUB_TOKEN", "")
+        error = None
+        for auth in ([f"Bearer {token}"] if token else []) + [""]:
+            headers = {"Accept": "application/vnd.github+json", "User-Agent": "dfb-repair-loop"}
+            if auth:
+                headers["Authorization"] = auth
+            req = urllib.request.Request(f"https://api.github.com/repos/{repo}/pulls?{query}", headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    pulls = json.load(r)
+                if not isinstance(pulls, list):
+                    raise ValueError(f"unexpected answer: {str(pulls)[:200]}")
+                for p in pulls:  # only a PR whose head really is this branch of this repository
+                    head = p.get("head") or {}
+                    if head.get("ref") == branch and (head.get("repo") or {}).get("full_name") == repo:
+                        return str(p["html_url"])
+                if pulls:  # the filter was not applied: the answer says nothing about this branch
+                    raise ValueError("the answer lists the PRs of other branches")
+                return ""
+            except (OSError, ValueError, KeyError, TypeError, IndexError) as e:
+                error = e
+        self.log(f"could not ask GitHub for the open PR of {branch}: {error}")
+        return None
+
+    def proposal_status(self, branch: str) -> str:
+        """The status of a group whose fix branch is on origin: its open PR, or else the branch with the links to open
+        a PR from it or to delete it (the next run then gives the group to the agent again)."""
+        pr = self.open_pr(branch)
+        if pr:
+            return f"fix proposed in an open PR: {pr}"
+        repo, base = self.cfg["pr"]["repo"], self.cfg["target"].get("base", "main")
+        links = (
+            f"open a draft PR from it: https://github.com/{repo}/compare/{base}...{branch}?expand=1 or delete the "
+            f"branch, and the next run has the agent try again: https://github.com/{repo}/branches/all?query={branch}"
+        )
+        if pr is None:
+            return f"waiting for a human: fix branch {branch} (GitHub did not say whether it has an open PR); {links}"
+        return f"waiting for a human: fix branch {branch} has no open PR; {links}"
+
     def prior_state_for(self, gid: str, kind: str, tests, signature: str) -> tuple[str, dict]:
         """(gid, state) of this group on earlier nights: the same id, or else an open group that is not failing tonight,
         has the same kind of check in the same file, and shares at least half its tests (a moved or reworded check). A
@@ -1121,12 +1169,14 @@ class Loop:
         return patch.is_file() and self.git("apply", "--check", "-R", str(patch), check=False)[0] == 0
 
     def retire(self, gid: str, st: dict, why: str) -> None:
-        """Forget a group's earlier fix, PR and handoff; its bot branches stay on record so they are not taken for a
-        new proposal."""
+        """Forget a group's earlier fix, PR and handoff. Its bot branches that are still on origin stay on record so
+        they are not taken for a new proposal; a branch that is gone is not recorded, so a new fix may reuse its name
+        (the same day gives the same name)."""
         retired = list(st.get("retired_branches") or [])
-        retired += [b for b in (st.get("pr_branch"), st.get("queued_branch")) if b and b not in retired]
         found = self.remote_fix_branches(gid) or []
-        retired += [b for b in found if b not in retired]
+        for b in (st.get("pr_branch"), st.get("queued_branch"), *found):
+            if b and b not in retired and (b in found or self.remote_branch_state(b) is not False):
+                retired.append(b)
         for k in STATE_FIX_KEYS + ("resolved_at", "superseded_by"):
             st.pop(k, None)
         st["retired_branches"] = retired
@@ -1194,38 +1244,34 @@ class Loop:
                     g.gid, own, "the group came back after its earlier fix was merged or long after it " "went away"
                 )
             st = self.effective_state(g)
-            branch = st.get("pr_branch") or st.get("queued_branch")
-            if branch:
-                there = self.remote_branch_state(branch)
-                if there is None:
-                    g.status = "not attempted: origin could not be asked whether the earlier fix branch still exists"
-                    continue
-                if there or st.get("pr_branch"):
-                    g.held = True
-                    if there and not st.get("pr_branch"):
-                        g.promote = branch  # queued for CI's publish job and pushed since: now it is the PR branch
-                    link = st.get("pr_url") or branch
-                    if there and "/compare/" in link:
-                        g.status = f"fix branch pushed, but the bot opened no PR: {link}"
-                    elif there:
-                        g.status = f"fix already proposed: {link}"
-                    else:  # a person deleted the branch, usually after closing the PR: do not propose it again
-                        g.status = (
-                            f"waiting for a human: the fix branch {branch} is gone from origin (deleted after its "
-                            f"PR was closed or merged) and the tests still fail; mkdir -p {retry_dir} && touch "
-                            f"{retry_dir / g.gid} lets the bot try again"
-                        )
-                    continue
-                # queued on an earlier night but never pushed: verified and queued again below
             retired = set(groups.get(g.gid, {}).get("retired_branches") or [])
             found = self.remote_fix_branches(g.gid)
             if found is None:
                 g.status = "not attempted: origin could not be asked whether a fix branch already exists"
                 continue
-            found = [b for b in found if b not in retired]
-            if found:
-                g.status, g.held, g.promote = f"fix already proposed: branch {found[0]} is on origin", True, found[0]
+            found = sorted((b for b in found if b not in retired), reverse=True)  # the newest date first
+            branch = st.get("pr_branch") or st.get("queued_branch")  # also one named after an earlier id of the group
+            if branch and branch not in found and branch not in retired:
+                there = self.remote_branch_state(branch)
+                if there is None:
+                    g.status = "not attempted: origin could not be asked whether the earlier fix branch still exists"
+                    continue
+                if there:
+                    found.insert(0, branch)
+            if found:  # its fix is on origin: point to that branch, or to its open PR, and never push a second one
+                g.held, g.promote = True, found[0]
+                g.status = self.proposal_status(found[0])
                 continue
+            if branch:  # its fix branch was deleted and the tests still fail: the agent tries again
+                self.retire(
+                    g.gid,
+                    groups.setdefault(
+                        g.gid,
+                        {"first_seen": utc_now().isoformat(timespec="seconds"), "times_seen": 0, "attempts_total": 0},
+                    ),
+                    f"its fix branch {branch} was deleted",
+                )
+                st = {}  # nothing of the earlier fix applies any more, also when it came from an earlier id
             fix_dir = Path(st.get("fix_dir") or "/nonexistent")
             if st.get("fixed_at") and (fix_dir / "patch.diff").exists():
                 if self.mode == "pr" and st.get("fix_verified") and not st.get("pr_branch") and not self.no_publish:
@@ -2297,7 +2343,10 @@ class Loop:
                 st.update(pr_branch=g.fix["branch"], pr_url=g.fix.get("url", ""))
             if g.fix.get("queued") and not dry:
                 st["queued_branch"] = g.fix["queued"]
-            if g.promote and not st.get("pr_branch"):
+            for b in (g.fix.get("branch"), g.fix.get("queued")):  # tonight's branch is not an old, ignored one
+                if b and not dry and b in (st.get("retired_branches") or []):
+                    st["retired_branches"].remove(b)
+            if g.promote:  # the fix branch found on origin tonight
                 st["pr_branch"] = g.promote
         if self.classified:  # only a run that judged every test can say a group went away
             current = {g.gid for g in self.groups}
