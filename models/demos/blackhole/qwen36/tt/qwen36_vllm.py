@@ -672,6 +672,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # A verify submitted over the unread one before it builds its rows on the device (spec_chain): greedy rows, and
         # on a device-sampled step sampled rows, which draw with the seeds of the positions the device computes. Row i
         # continues the unread verify's row slot_remap[i], so a row the runner moved keeps chaining.
+        # With supports_spec_device_mask a chained verify may also defer its sampling: decode_forward(spec_predecessor=
+        # ..., defer_device_sampling=True, sampling_params=...) enqueues the chain program and the verify, every live
+        # row then draws, and sample_deferred_decode applies the step's token mask before the draws.
         "supports_chained_spec_verify": True,
         # A prefill may run while one verify it returned unread awaits its read and propose: prefill_forward first
         # settles what that propose needs from the device (MTPBlockEngine.prefill_over_pending).
@@ -680,13 +683,24 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         # of its id and the top-20 ids and logprobs (spec_logprobs, from the verify's own logits on the device).
         "supports_spec_device_logprobs": True,
         # A sampled row with top-k off and top_p < 1 draws its nucleus on the device when the nucleus lies inside the
-        # sampler's top-32, and is drawn again on the host from the step's logits otherwise (spec_top_p).
+        # sampler's top-32, and is drawn again on the host from the step's logits otherwise (spec_top_p); on a
+        # token-masked verify both read the logits after the row's mask and penalties.
         "supports_spec_device_top_p": True,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": True,
         "spec_ids_are_sampled": True,
         "max_device_top_k": SAMPLER_TOP_K,
-        # The verify sampler applies no penalties and no grammar mask: such a step is sampled on the host.
+        # An argmax_ids verify of a device-sampled step may defer its sampling (decode_forward(defer_device_sampling=
+        # True)); sample_deferred_decode then draws every row a token mask constrains (the grammar bitmask with
+        # allowed_token_ids, bad_words and a pending min_tokens) from the masked distribution, a greedy row the masked
+        # argmax (spec_mask).
+        "supports_spec_device_mask": True,
+        # A verify, and so an ordinary decode, applies presence, frequency and repetition penalties to every column it
+        # draws or argmaxes, from device counts the engine keeps per state slot (spec_penalties); on a token-masked
+        # verify after the mask, so a greedy row with both takes the float32 argmax of its masked penalized logits. A
+        # prefill's first token is sampled on the host when its row has a penalty. An ordinary decode applies no
+        # grammar mask: a structured row is sampled on the host there.
+        "supports_spec_device_penalties": True,
         "supports_device_penalties": False,
         "supports_device_grammar": False,
         # vllm-tt-plugin adds these to its ttnn.set_fabric_config arguments before it opens the mesh. No "config" key:
@@ -903,7 +917,10 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 f"Qwen36MTPContractForCausalLM stages every input from the host: reload_inputs="
                 f"{kwargs.get('reload_inputs')}, reload_page_table={kwargs.get('reload_page_table')}"
             )
+        defer_sampling = bool(kwargs.pop("defer_device_sampling", False))
         if "spec_mode" not in kwargs:
+            if defer_sampling:
+                raise ValueError("an ordinary decode samples now: deferred sampling is for an argmax_ids verify")
             return self._decode_narrow(tokens, start_pos, page_table, kwargs, remap, mamba_state)
         defer = not kwargs.get("read_from_device", True)
         num_valid_drafts = kwargs.pop("num_valid_drafts")
@@ -919,6 +936,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                 raise ValueError(f"spec_predecessor must be a VerifyOutput, got {type(predecessor).__name__}")
             predecessor = predecessor.argmax_ids
         eng = self._ensure_ready()
+        if defer_sampling and not defer:
+            raise ValueError("a verify with deferred sampling is read later: read_from_device must be False")
         res = eng.decode_forward(
             tokens,
             start_pos,
@@ -931,8 +950,13 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             sampling=kwargs.get("sampling_params"),
             defer=defer,
             predecessor=predecessor,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
             logprobs=logprobs,
+            defer_sampling=defer_sampling,
         )
+        if defer_sampling:
+            return res  # spec_engine.DeferredVerify, the payload sample_deferred_decode takes
         logits = res.logits if spec_mode == "logits" else None
         if logprobs and not defer:
             # The engine returns a verify with logprobs unread; the runner asked for host ids.
@@ -950,6 +974,19 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         from vllm_tt_plugin.spec_decode import SpecLogprobs
 
         return ids, SpecLogprobs(*payload)
+
+    def sample_deferred_decode(self, payload, sampling_params=None, grammar_bitmask=None, num_valid_drafts=None):
+        """Finish a verify submitted with ``defer_device_sampling`` (vllm-tt-plugin ``supports_spec_device_mask``):
+        ``sampling_params`` are the step's device sampling parameters, ``grammar_bitmask`` the token mask int32
+        [B, 1+K, ceil(V/32)] (None: no row constrained), ``num_valid_drafts`` [B] the drafts the walk may accept (at
+        most the submitted ones). Returns the verify's unread VerifyOutput, as decode_forward(read_from_device=False)
+        returns it (MTPBlockEngine.sample_deferred)."""
+        from vllm_tt_plugin.spec_decode import VerifyOutput
+
+        pending = self._engine().sample_deferred(
+            payload, sampling=sampling_params, mask=grammar_bitmask, num_valid_drafts=num_valid_drafts
+        )
+        return VerifyOutput(spec_mode="argmax_ids", argmax_ids=pending, hidden=None)
 
     def read_decode_output(self, tt_out, async_read=False, **kwargs):
         """A deferred verify's ids (PendingVerify): with ``async_read``, the handle and its read event, which
@@ -978,8 +1015,9 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         ``accepted_counts`` (a previous multi-token commit) is checked; the start state is start_blocks.
         Host-sampled step: returns host float logits [B, 1, V], and the runner samples ``tt_out[rows, -1, :]``.
         Device-sampled step (``sampling_params``): returns the tokens [B, 1] int32, column 0's device draw for a
-        sampled row and its argmax otherwise; with logprobs enabled, also the sampled tokens' raw logprobs and ranks
-        from the step's logits (``sampled_token_logprobs``)."""
+        sampled row and its argmax otherwise, both after the row's penalties (``prompt_tokens``, ``output_tokens``;
+        spec_penalties); with logprobs enabled, also the sampled tokens' raw logprobs and ranks from the step's logits
+        (``sampled_token_logprobs``), read before the penalties."""
         nv, ac = kwargs.get("num_valid_drafts"), kwargs.get("accepted_counts")
         B = int(tokens.shape[0])
         if nv is not None and bool(torch.as_tensor(nv).any()):
@@ -1008,6 +1046,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
             mamba_state=mamba_state,
             sampling=sampling,
             one_enqueue=False,
+            prompt_tokens=kwargs.get("prompt_tokens"),
+            output_tokens=kwargs.get("output_tokens"),
         )
         if sampling is None:
             return res.logits[:, :1].float()
