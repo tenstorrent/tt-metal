@@ -1,0 +1,37 @@
+{
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose0-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose1-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose2-207-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose3-256-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose4-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "fill_values": "[0.3333333333333333, -0.0, 1e-40, inf, -inf, nan]"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose5-1-alignment=w_non_aligned-dtype=INT32-layout=ROW_MAJOR]": {
+    "fill_values": "[16777217, -2147483648]"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose6-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "values": "[1.0, 1.0, 0.1, 1.0]",
+    "trace": true
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose7-512-alignment=h_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "alias": true
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose8-207-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "alias": true
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose9-196-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE]": {
+    "refuse": "[True, 1e+39]"
+  },
+  "eval/golden_tests/g6_fill/test_golden.py::test_op_loose[loose10-1-alignment=w_non_aligned-dtype=INT32-layout=ROW_MAJOR]": {
+    "refuse": "[1.5, 2147483648]"
+  }
+}
