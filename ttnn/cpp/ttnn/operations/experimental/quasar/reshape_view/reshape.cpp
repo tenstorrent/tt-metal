@@ -9,7 +9,7 @@
 #include <variant>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 
@@ -382,6 +382,14 @@ ttnn::Tensor reshape_tiled(
     bool explicit_memory_config,
     const bool skip_padding_fill,
     const bool pad_value_explicit) {
+    TT_FATAL(
+        !tt::tt_metal::is_mx(tensor.dtype()),
+        "Quasar reshape of MX tensors ({}) supports only metadata-only views (unchanged last dim and a "
+        "tile-aligned or unchanged second-to-last dim); reshapes that change the tile structure copy sub-tile "
+        "face rows and need an MX-aware kernel. Got {} -> {}.",
+        tensor.dtype(),
+        tensor.logical_shape(),
+        logical_shape);
     // fill_implicit_tile_padding takes float; integer pad is not bit-exact for all dtypes/values.
     const float fill_value = detail::pad_value_as_float(pad_value, tensor.dtype());
     // squeeze input tensor and requested shape to 3D

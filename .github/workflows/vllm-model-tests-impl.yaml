@@ -437,6 +437,7 @@ jobs:
           echo $! > ${FILE_SERVER_PID}
 
       - name: ⏰ Wait for server to be ready
+        timeout-minutes: ${{ matrix.test-group.server-timeout }}
         run: |
           echo "Waiting for server..."
 

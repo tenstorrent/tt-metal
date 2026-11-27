@@ -283,6 +283,28 @@ class TestSparseVsDenseMoE:
         out_s = ttnn.to_torch(out_sparse.get_value()).float()
         assert_with_pcc(out_d, out_s, pcc=0.99)
 
+    def test_shared_expert_on_ep_axis_of_size_one(self, fresh_device_mesh):
+        """An "ep" axis of size 1 is EP size 1 too, so the shared MLP must stay local.
+
+        Sharded on that axis, DeepSeekMLP would add a broadcast and an all_reduce,
+        and all_reduce refuses a one-device mesh.
+        """
+        with fresh_device_mesh((1, 1), ("dp", "ep"), what="an 'ep' axis of size 1"):
+            cfg = _Cfg(n_shared_experts=1)
+            dense = MoE(cfg)
+            sparse = SparseMoEEP(cfg, axis_name="ep")
+            assert sparse.ep_size == 1
+            _copy_moe_weights(dense, sparse)
+
+            out_dense = dense(_make_input(B=2, S=32, dim=cfg.dim))
+            out_sparse = sparse(_make_input(B=2, S=32, dim=cfg.dim))
+            out_d = ttnn.to_torch(out_dense.get_value()).float()
+            out_s = ttnn.to_torch(out_sparse.get_value()).float()
+            # The mesh is released on exit, which needs every device tensor gone.
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+            del dense, sparse, out_dense, out_sparse
+        assert_with_pcc(out_d, out_s, pcc=0.99)
+
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

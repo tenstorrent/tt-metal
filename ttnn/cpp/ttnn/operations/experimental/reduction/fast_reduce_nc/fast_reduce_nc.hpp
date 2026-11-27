@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::experimental::reduction {
 

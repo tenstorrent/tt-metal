@@ -652,7 +652,10 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     return decoder_layer
 
 
-@parametrize_mesh_with_fabric([(1, 1), (1, 8), (4, 8)])
+# (1x4 not on a Galaxy: a 1x4 ring submesh does not come up there and breaks the session's fabric, test_factory.py)
+@parametrize_mesh_with_fabric(
+    [shape for shape in [(1, 1), (1, 4), (1, 8), (4, 8)] if shape != (1, 4) or ttnn.get_num_devices() <= 8]
+)
 @parametrize_batch_seq(
     [
         (1, 1),  # decode
@@ -735,6 +738,11 @@ def test_decoder(
 
     assert batch_size == 1 or seq_len == 1, "Only single user prefill or single token decode is supported"
     is_decode = seq_len == 1
+    if is_decode and mesh_shape == (1, 4):
+        # 1x4 runs here for the prefill cases (the prefill gate's unit stage). Its decode layers are the fused batch-1
+        # path and the batched dense batch-32 path (tests/unit/test_fused_decode.py, the demos); this generic-layer
+        # setup (tokens_per_device=32) selects the dense batch-32 experts and feeds them one token.
+        pytest.skip("1x4 decode is covered by test_fused_decode.py and the 1x4 demos")
     mode = "decode" if is_decode else "prefill"
 
     setup = TestFactory.setup_test(mesh_device, use_real_weights=False)

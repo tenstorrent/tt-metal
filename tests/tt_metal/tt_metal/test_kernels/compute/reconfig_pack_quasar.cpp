@@ -34,17 +34,19 @@ void kernel_main() {
     out2.reserve_back(1);
 
     // OP[0]: d0×d1 (Float16_b); OP[1]: d2×d3 (Float32); OP[2]: d4×d5 (Float16_b).
-    // Unpack reconfig + matmul init between ops (same as reconfig_unpack_quasar).
+    // Unpack reconfig + matmul init between ops (same as reconfig_unpack_quasar). The full matmul_init
+    // matters: the math fidelity schedule depends on the source formats, so an unpack-only init leaves
+    // the Float32 op on the single phase picked for Float16_b.
     tile_regs_acquire();
 
     matmul_tiles(d0.get_id(), d1.get_id(), 0, 0, 0);
 
     reconfig_data_format(d0.get_id(), d2.get_id(), d1.get_id(), d3.get_id());
-    UNPACK((llk_unpack_AB_matmul_init(d2.get_id(), d3.get_id())));
+    matmul_init(d2.get_id(), d3.get_id());
     matmul_tiles(d2.get_id(), d3.get_id(), 0, 0, 1);
 
     reconfig_data_format(d2.get_id(), d4.get_id(), d3.get_id(), d5.get_id());
-    UNPACK((llk_unpack_AB_matmul_init(d4.get_id(), d5.get_id())));
+    matmul_init(d4.get_id(), d5.get_id());
     matmul_tiles(d4.get_id(), d5.get_id(), 0, 0, 2);
 
     tile_regs_commit();

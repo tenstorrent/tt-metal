@@ -7,8 +7,8 @@
 
 #include <unordered_map>
 
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operation.hpp"
