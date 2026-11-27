@@ -32,6 +32,7 @@ namespace ckernel {
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
+#ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
@@ -40,12 +41,25 @@ ALWI void rsub_tile(uint32_t idst, uint32_t scalar) {
         idst,
         VectorMode::RC,
         scalar));
+#else
+    MATH((llk::sfpu::BinopScalar::execute<
+          llk::sfpu::BinopScalarMode::Rsub,
+          is_fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b,
+          DST_SYNC_MODE,
+          DEFAULT_TENSOR_SHAPE>(idst, idst, scalar)));
+#endif
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(unused));
+#else
+    MATH((llk::sfpu::BinopScalar::init()));
+#endif
+}
 
 // clang-format off
 /**
@@ -63,6 +77,7 @@ ALWI void rsub_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
  */
 // clang-format on
 ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
+#ifdef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -71,11 +86,22 @@ ALWI void rsub_unary_int32_tile(uint32_t idst, uint32_t scalar) {
         idst,
         VectorMode::RC,
         scalar));
+#else
+    MATH((llk::sfpu::BinopScalar::
+              execute<llk::sfpu::BinopScalarMode::Rsub, DataFormat::Int32, DST_SYNC_MODE, DEFAULT_TENSOR_SHAPE>(
+                  idst, idst, scalar)));
+#endif
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void rsub_unary_int32_tile_init() { MATH(SFPU_UNARY_INIT(unused)); }
+ALWI void rsub_unary_int32_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(unused));
+#else
+    MATH((llk::sfpu::BinopScalar::init()));
+#endif
+}
 
 }  // namespace ckernel
