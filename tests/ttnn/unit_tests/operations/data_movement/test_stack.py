@@ -342,14 +342,14 @@ def test_stack_docstring_supported_inputs(dtype, layout, buffer_type, device):
         if dtype in outer_dim_only_dtypes and new_dim > rank - 2:
             continue
         # A new last dim, or a new second-to-last dim of TILE inputs, runs compute kernels that hold BFLOAT16 zeros by
-        # value. There BFLOAT16 inputs leave out NaN, as the docstring requires, and zeros are compared by value.
+        # value. There BFLOAT16 inputs leave out NaN, as the docstring requires, and -0.0 as well.
         compute_bfloat16 = dtype == ttnn.bfloat16 and (
             new_dim == rank or (layout == ttnn.TILE_LAYOUT and new_dim == rank - 1)
         )
         # preserve_nan_values keeps full_range_input's NaN in the inputs: a BFLOAT16 input built on device can lose it.
         inputs = [
             ttnn.from_torch(
-                full_range_input(shape, dtype, seed=seed, nan=not compute_bfloat16),
+                full_range_input(shape, dtype, seed=seed, nan=not compute_bfloat16, negative_zero=not compute_bfloat16),
                 dtype=dtype,
                 layout=layout,
                 device=device,
@@ -367,4 +367,4 @@ def test_stack_docstring_supported_inputs(dtype, layout, buffer_type, device):
         assert output.layout == layout, case
         assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, case
         assert output.memory_config().buffer_type in output_buffer_types, case
-        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not compute_bfloat16)
+        assert_exact(expected, ttnn.to_torch(output))
