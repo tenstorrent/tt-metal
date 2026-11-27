@@ -403,3 +403,261 @@ def test_producer_scores_the_k31_index_cache_against_the_trace(tmp_path, monkeyp
 
     assert mins == pytest.approx({"kvpe": 1.0, "index": 1.0}, abs=1e-4)
     assert sorted(layer for config, layer in reads if config == 1) == mla
+
+
+# ---- Kimi-K3.1 + DFlash2: the MLA drafter's latent cache is the fifth config, on layers 93..97 ---------------
+# What tt-blaze's decode ring publishes for the same cache, hard-coded (nothing is imported from tt-blaze):
+#   * names and order ("00" KV, "01" indexer K, "02" KDA S, "03" KDA conv, then "dflash_latent"), the drafter on
+#     table layers 93..97 of a 98-layer axis: blaze/models/kimi_k3/dflash_ring.py `kv_migration_spec`,
+#     blaze/models/dflash/kv_migration.py `combine_target_drafter_specs`, pinned by
+#     tests/blaze/infra/test_reload_k31_dflash_kv_table.py (`names`, `DRAFT_LAYERS`, `published.num_layers == 98`);
+#   * a default (Kv) config of 32-token chunks, 576 wide in bf8 tiles = 18 x 1088 B:
+#     blaze/models/dflash/kv_migration.py `dflash_mla_migration_spec` (TILE, BF8_TILE_BYTES), pinned by
+#     tests/blaze/migration/test_dflash_mla_kv_migration_spec.py (LATENT, PREFILL_CHUNK_BYTES, 19584);
+#   * the migrated range of a drafter layer, [floor32(max(0, P - 1024)), P):
+#     blaze/models/dflash/kv_migration.py `latent_context_range`.
+# Decode keeps position p at physical row p + 32 of a paged cache and names all 8 devices as replicas of one
+# address; prefill keeps it at position p of a block-cyclic cache, one device per chunk under KV dedup. The KV
+# Manager pairs the two by config name, layer, position and chunk size only, so those are what is pinned here.
+_DECODE_CONFIG_NAMES = ("00", "01", "02", "03", "dflash_latent")
+_DECODE_DRAFT_LAYERS = (93, 94, 95, 96, 97)
+_DECODE_LATENT_WIDTH = 576
+_DECODE_LATENT_CHUNK_TOKENS = 32
+_DECODE_LATENT_CHUNK_BYTES = 19584
+_DECODE_DRAFT_WINDOW = 1024
+# RadixArk/Kimi-K3.1-Dflash2-Preview config.json, the keys `drafter_context_window` reads.
+_K31_DFLASH2_WINDOW_CONFIG = {
+    "use_sliding_window": True,
+    "sliding_window": 1024,
+    "num_hidden_layers": 5,
+    "layer_types": ["sliding_attention"] * 5,
+}
+_DFLASH_SEQ_LEN = 2 * 5120
+_DFLASH_USERS = 2
+_NUM_BANKS = 8
+
+
+def _k31_dflash2_runtime(first, count, *, dflash=True, num_users=1):
+    from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import kimi_k31_dflash2_mla_config
+
+    runtime = _runtime(first, count, num_users=num_users, dflash=dflash, model="kimi_k3_1")
+    runtime.drafter = SimpleNamespace(config=kimi_k31_dflash2_mla_config())
+    # Only the KV tail allocates the latent cache.
+    runtime._dflash_latent_cache = _tensor(0x6000, ()) if first + count == KimiK3Config.NUM_LAYERS else None
+    return runtime
+
+
+def test_kimi_k3_1_dflash2_latent_stage_follows_the_four_model_stages():
+    """Every rank emits the four K3.1 stages and then ONE drafter stage (the per-stage allgather is collective);
+    only the tail's is real, on the rows its five layer completions are numbered by."""
+    from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
+
+    for first, count in SPLITS:
+        stages = _k31_dflash2_runtime(first, count).kv_migration_stages(_caches(first, count, index=True))
+        plain = _runtime(first, count, model="kimi_k3_1").kv_migration_stages(_caches(first, count, index=True))
+        assert len(stages) == 5 and stages[:4] == plain  # the model's stages are untouched by the drafter
+        latent = stages[4]
+        if first + count == KimiK3Config.NUM_LAYERS:
+            assert (latent.base_addr, latent.first_layer, latent.count) == (0x6000, 93, 5)
+        else:
+            assert (latent.base_addr, latent.first_layer, latent.count) == (0, 0, 0)
+    layout = layer_completion_layout(SPLITS, 3, extra_layers=5)
+    records = range(layout.rank_first_record, layout.rank_first_record + layout.rank_record_count)
+    assert tuple(records[-5:]) == _DECODE_DRAFT_LAYERS
+
+
+def _k31_four_rank_table(tmp_path, monkeypatch, *, dflash: bool) -> str:
+    """The table rank 0 publishes for Kimi-K3.1 on four galaxies (SPLITS), KV-deduped as it is served, with or
+    without the DFlash2 drafter. Host-only: the populate walks run over the gathered stage layouts."""
+    from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
+
+    monkeypatch.setattr(kv_chunk_table, "is_tp_deduped_kv_cache", lambda *_: True)
+    monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: 0)
+    rows, cols = _MESH
+    per_rank = []
+    for first, count in SPLITS:
+        runtime = _k31_dflash2_runtime(first, count, dflash=dflash, num_users=_DFLASH_USERS)
+        per_rank.append(runtime.kv_migration_stages(_caches(first, count, num_users=_DFLASH_USERS, index=True)))
+    layouts = [
+        [
+            {
+                "rank": rank,
+                "first_layer": stages[i].first_layer,
+                "count": stages[i].count,
+                "base_addr": stages[i].base_addr,
+                "num_banks": _NUM_BANKS,
+                "host_tag": 0xABC0000 + rank,
+                "fnids": [
+                    [ttnn.FabricNodeId(ttnn.MeshId(rank), r * cols + c) for c in range(cols)] for r in range(rows)
+                ],
+            }
+            for rank, stages in enumerate(per_rank)
+        ]
+        for i in range(len(per_rank[0]))
+    ]
+    first, count = SPLITS[0]
+    runtime = _k31_dflash2_runtime(first, count, dflash=dflash, num_users=_DFLASH_USERS)
+    runtime.mesh_device = None
+    runtime.config.__dict__.update(
+        max_seq_len=_DFLASH_SEQ_LEN, mesh_shape=_MESH, sp_axis=0, tp_axis=1, chunk_size=5120, tp_shard_kv=True
+    )
+    caches = _caches(first, count, num_users=_DFLASH_USERS, index=True)
+    caches.kvpe.storage.__dict__.update(_KVPE_STORAGE["kimi_k3_1"])
+    caches.index.__dict__.update(shape=(1, 1, 32, 128), dtype=ttnn.bfloat8_b)
+    caches.kda_states = None
+    name = "k31_dflash2.pb" if dflash else "k31_plain.pb"
+    return runtime.build_kv_chunk_table(caches, str(tmp_path / name), stage_layouts=layouts)
+
+
+def _config_fields(cfg):
+    return (
+        cfg.num_layers,
+        cfg.max_sequence_length,
+        cfg.num_slots,
+        cfg.chunk_n_tokens,
+        cfg.chunk_size_bytes,
+        cfg.tensor_type,
+    )
+
+
+def test_kimi_k3_1_dflash2_table_publishes_the_latent_cache_as_decode_expects(tmp_path, monkeypatch):
+    """Five configs, the drafter's last, with the name, order, chunk, width, layer rows and position origin of
+    tt-blaze's decode spec (see the constants above); the four model configs are those of a drafter-off run."""
+    disagg = ttnn.experimental.disaggregation
+    table = disagg.import_from_protobuf_file(_k31_four_rank_table(tmp_path, monkeypatch, dflash=True))
+    plain = disagg.import_from_protobuf_file(_k31_four_rank_table(tmp_path, monkeypatch, dflash=False))
+
+    assert table.num_configs() == len(_DECODE_CONFIG_NAMES) == 5
+    assert [table.config_id_of(name) for name in _DECODE_CONFIG_NAMES] == [0, 1, 2, 3, 4]
+    assert [table.config_name(i) for i in range(5)] == list(_DECODE_CONFIG_NAMES)
+
+    # Drafter off: the four-config table that migrates today. Drafter on: the same four, field for field and
+    # address for address.
+    assert plain.num_configs() == 4 and [plain.config_name(i) for i in range(4)] == list(_DECODE_CONFIG_NAMES[:4])
+    for config_id in range(4):
+        cfg = table.config(config_id)
+        assert _config_fields(cfg) == _config_fields(plain.config(config_id))
+        for layer in range(cfg.num_layers):
+            for slot in range(_DFLASH_USERS):
+                for pos in range(0, cfg.max_sequence_length, cfg.chunk_n_tokens * 7):
+                    ours, theirs = table.lookup(layer, pos, slot, config_id), plain.lookup(layer, pos, slot, config_id)
+                    assert (ours.noc_addr, ours.size_bytes) == (theirs.noc_addr, theirs.size_bytes)
+                    if ours.size_bytes:
+                        assert [str(f) for f in table.get_device_group(ours.device_group_index).fabric_node_ids] == [
+                            str(f) for f in plain.get_device_group(theirs.device_group_index).fabric_node_ids
+                        ]
+
+    latent_id = table.config_id_of("dflash_latent")
+    cfg = table.config(latent_id)
+    assert cfg.tensor_type == disagg.KvChunkTensorType.Kv  # a token cache, not a Snapshot
+    assert cfg.chunk_n_tokens == _DECODE_LATENT_CHUNK_TOKENS
+    assert cfg.chunk_size_bytes == _DECODE_LATENT_CHUNK_BYTES == (_DECODE_LATENT_WIDTH // 32) * 1088
+    assert cfg.num_layers == _DECODE_DRAFT_LAYERS[-1] + 1 == 98
+    assert (cfg.max_sequence_length, cfg.num_slots) == (_DFLASH_SEQ_LEN, _DFLASH_USERS)
+
+    populated = {layer for layer in range(cfg.num_layers) if table.lookup(layer, 0, 0, latent_id).size_bytes}
+    assert populated == set(_DECODE_DRAFT_LAYERS)
+
+    # Position origin and ownership. Position p of a 5120-token chunk sits on SP row (p % 5120) // 640 and, KV
+    # deduped, on TP column of the 160-token quarter it falls in: exactly one chip of the tail rank (mesh 3).
+    # On that chip the walk is slot -> draft layer -> chunk -> 32-token page, round-robin over the DRAM banks,
+    # so position 0 of slot 0 on layer 93 is the cache's first page.
+    rows, cols = _MESH
+    chunks_per_seq = _DFLASH_SEQ_LEN // 5120
+    pages_per_chip_chunk = 5120 // rows // cols // 32
+    for slot in range(_DFLASH_USERS):
+        for local, layer in enumerate(_DECODE_DRAFT_LAYERS):
+            for pos in range(0, _DFLASH_SEQ_LEN, 32):
+                loc = table.lookup(layer, pos, slot, latent_id)
+                assert loc.size_bytes == _DECODE_LATENT_CHUNK_BYTES, (layer, pos, slot)
+                in_chunk = pos % 5120
+                row, col, page = in_chunk // 640, (in_chunk % 640) // 160, (in_chunk % 160) // 32
+                group = table.get_device_group(loc.device_group_index).fabric_node_ids
+                assert [str(f) for f in group] == [str(ttnn.FabricNodeId(ttnn.MeshId(3), row * cols + col))]
+                n = ((slot * 5 + local) * chunks_per_seq + pos // 5120) * pages_per_chip_chunk + page
+                bank, offset = n % _NUM_BANKS, (n // _NUM_BANKS) * _DECODE_LATENT_CHUNK_BYTES
+                assert loc.noc_addr == (bank << 32) | (0x6000 + offset), (layer, pos, slot)
+    first = table.lookup(93, 0, 0, latent_id)
+    assert first.noc_addr == 0x6000
+
+
+def _window_checkpoint(tmp_path, monkeypatch, config=_K31_DFLASH2_WINDOW_CONFIG):
+    import json
+
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    monkeypatch.setenv("DFLASH_HF_MODEL", str(tmp_path))
+
+
+def test_drafter_rows_migrate_the_window_decode_reads(tmp_path, monkeypatch):
+    """Table layers 93..97 are the drafter's: a token cache, never the KDA window a non-MLA model layer has.
+    With DFlash2's checkpoint named, the last 1024 positions before P from a 32-token boundary (tt-blaze
+    `latent_context_range`); with no window known (no checkpoint named, or a full-history drafter), [0, P)."""
+    adapter = get_adapter("kimi_k3_1")
+    monkeypatch.delenv("DFLASH_HF_MODEL", raising=False)
+    for layer in _DECODE_DRAFT_LAYERS:
+        assert adapter.layer_position_range(layer, 5120) == (0, 5120)
+    _window_checkpoint(tmp_path, monkeypatch)
+    for layer in _DECODE_DRAFT_LAYERS:
+        assert adapter.layer_position_range(layer, 5120) == (5120 - _DECODE_DRAFT_WINDOW, 5120)
+        assert adapter.layer_position_range(layer, 700) == (0, 700)  # shorter than the window
+        assert adapter.layer_position_range(layer, 1024) == (0, 1024)
+        assert adapter.layer_position_range(layer, 1100) == (64, 1100)  # floor32(1100 - 1024 = 76)
+        assert adapter.layer_position_range(layer, 10_245) == (9216, 10_245)  # floor32(9221)
+    # The model's own layers do not move.
+    assert adapter.layer_position_range(92, 5120) == (0, 5120) and adapter.layer_position_range(0, 5120) == (0, 36_864)
+    # One full-history layer needs every position.
+    _window_checkpoint(tmp_path, monkeypatch, {**_K31_DFLASH2_WINDOW_CONFIG, "layer_types": ["full_attention"] * 5})
+    assert adapter.layer_position_range(93, 5120) == (0, 5120)
+    _window_checkpoint(tmp_path, monkeypatch, {**_K31_DFLASH2_WINDOW_CONFIG, "use_sliding_window": False})
+    assert adapter.layer_position_range(93, 5120) == (0, 5120)
+
+
+def test_driver_issues_one_more_run_for_the_drafter_layers(tmp_path, monkeypatch):
+    """The driver reads the drafter's extent off the published table (98 layers, not NUM_LAYERS' 93) and POSTs
+    the model's 46 runs unchanged plus ONE for table layers [93, 98) over the drafter's window: 47 at P = 5120.
+    Without a window the drafter's [0, P) equals layers 91..92's, so it joins their run: 46 calls, the last one
+    [91, 98)."""
+    from models.demos.common.prefill.runners import prefill_producer
+    from models.demos.common.prefill.runners.migration_driver import MigrationDriver, _layer_runs
+
+    adapter = get_adapter("kimi_k3_1")
+    table = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _k31_four_rank_table(tmp_path, monkeypatch, dflash=True)
+    )
+    monkeypatch.setattr(prefill_producer, "ADAPTER", adapter)
+    monkeypatch.setattr(prefill_producer, "NUM_LAYERS", 93)
+    monkeypatch.setattr(prefill_producer, "NUM_ACK_LAYERS", 93)
+    monkeypatch.setattr(prefill_producer, "MTP_DECODE_LEVELS", 0)
+    # The feed waits for the drafter's five layer completions too.
+    assert prefill_producer._completion_layers_per_chunk(table) == 98
+
+    def issued(kv_table, real_len):
+        driver = MigrationDriver.__new__(MigrationDriver)
+        driver.__dict__.update(
+            num_layers=93, layers=None, kvm_url="http://kvm", client=None, dest_endpoint_id=2, src_endpoint_id=1
+        )
+        calls = []
+        monkeypatch.setattr(driver, "_wait_kvm_healthy", lambda: None, raising=False)
+        monkeypatch.setattr(driver, "_post_kvm_migrate", lambda **kw: calls.append(kw), raising=False)
+        assert driver._issue([(0, 1, real_len)], kv_table=kv_table) == 1
+        return [(c["layer_begin"], c["layer_end"], c["pos_begin"], c["pos_end"]) for c in calls]
+
+    monkeypatch.delenv("DFLASH_HF_MODEL", raising=False)
+    model_runs = _layer_runs(range(93), 5120, adapter.layer_position_range)
+    assert len(model_runs) == 46 and model_runs[-1] == (91, 93, 0, 5120)
+
+    _window_checkpoint(tmp_path, monkeypatch)
+    calls = issued(table, 5120)
+    assert len(calls) == 47
+    assert calls[:46] == model_runs
+    assert calls[46] == (93, 98, 5120 - _DECODE_DRAFT_WINDOW, 5120)
+
+    monkeypatch.delenv("DFLASH_HF_MODEL")
+    calls = issued(table, 5120)
+    assert len(calls) == 46 and calls[:45] == model_runs[:45] and calls[45] == (91, 98, 0, 5120)
+
+    # A drafter-off table: the 46 runs of today, nothing past layer 92.
+    plain = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _k31_four_rank_table(tmp_path, monkeypatch, dflash=False)
+    )
+    assert issued(plain, 5120) == model_runs

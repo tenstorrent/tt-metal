@@ -15,7 +15,7 @@ scaled-FP8 kvpe and bf8 indexer key cache.
 
 What this class overrides is identity and artifacts: K3.1's weights are all retrained, so nothing
 recorded against the K3 checkpoint (TTNN cache, golden traces, DFlash drafter, MLA reference) is valid
-for it. Every DSA layer owns its indexer, so no top-k selection crosses a pipeline split and
+for it. Its own drafter is DFlash2 (MLA), attached with ``PREFILL_DFLASH=1 DFLASH_HF_MODEL=<checkpoint>``. Every DSA layer owns its indexer, so no top-k selection crosses a pipeline split and
 ``passes_indexer_indices`` keeps the base default (False).
 
 Select it with ``PREFILL_MODEL=kimi_k3_1``.
@@ -47,8 +47,16 @@ class KimiK31Adapter(KimiK3Adapter):
     kda_golden_default = None
     mla_trace_defaults = ()
 
-    # Kimi-K3-DSpark was trained against K3, not K3.1.
-    supports_dflash = False
+    # RadixArk/Kimi-K3.1-Dflash2-Preview (DFlash2, MLA): five draft layers reading six taps, 7/23/51/67/83/91, of
+    # K3.1's attn_res stream -- the read `TtKimiK3Block` hands `attn_input_tap` (tap t at layer t+1's attention
+    # input, `TtKimiK3Runtime._dflash_tap_layer`). The runtime picks the MLA drafter from the checkpoint's
+    # config.json and publishes its one 576-wide latent cache as table config "dflash_latent", after the four
+    # model configs, on layers 93..97.
+    #
+    # Opt-in twice over: PREFILL_DFLASH=1 AND a checkpoint in DFLASH_HF_MODEL. No default checkpoint, on purpose:
+    # K3's (Kimi-K3-DSpark) was trained against K3 and would build against K3.1 without complaint (93 x 7168
+    # both), and the preview drafter sits in a personal scratch directory. No golden either: none is recorded.
+    supports_dflash = True
     # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
     l1_small_size = KimiK31Config.L1_SMALL_SIZE
     dflash_model_default = ""

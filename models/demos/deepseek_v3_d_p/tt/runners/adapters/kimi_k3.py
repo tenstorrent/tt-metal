@@ -31,6 +31,7 @@ is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit 
 from __future__ import annotations
 
 import functools
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -67,8 +68,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # DFLASH_HF_MODEL (or dflash_checkpoint_path) at its checkpoint and the runtime picks the MLA drafter from
     # its config.json (DFlashDrafterConfig.hf_attention_mode), writing one 576-wide latent cache that migrates
     # as the "dflash_latent" table config. Its golden is a latent_cache.safetensors (dflash_kv_validation) set
-    # via PREFILL_DFLASH_GOLDEN_KV_DIR. Not the default: no DFlash2 checkpoint or golden is staged yet, and the
-    # DSpark golden below is what CI checks. Swap both defaults together once they are.
+    # via PREFILL_DFLASH_GOLDEN_KV_DIR. Not the default: no K3 DFlash2 checkpoint or golden is staged yet, and
+    # the DSpark golden below is what CI checks. Swap both defaults together once they are. (Kimi-K3.1's
+    # DFlash2 is released and has its own taps: see KimiK31Adapter.)
     supports_dflash = True
     # The drafter partial is one more handoff plane (TtKimiK3Runtime._pack_activation), not a 2H width.
     dflash_partial_separate_plane = True
@@ -340,9 +342,30 @@ class KimiK3Adapter(MLAPrefillAdapter):
             return self.model_config.INDEX_HEAD_DIM
         return None
 
+    @property
+    def _dflash_context_window(self):
+        """Tokens of committed context the attached drafter's layers attend, or None for full history (and
+        when no drafter checkpoint is named in this process: `DFLASH_HF_MODEL`, else the adapter's default).
+        Read per call: it is one small JSON, asked a handful of times per migration."""
+        from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import drafter_context_window
+
+        path = os.environ.get("DFLASH_HF_MODEL") or self.dflash_model_default
+        return drafter_context_window(path) if path else None
+
     def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
         """MLA layers migrate the request's tokens; a KDA layer migrates its whole state, the one window
-        `[0, W)` its Snapshot configs span, whatever the prompt length."""
+        `[0, W)` its Snapshot configs span, whatever the prompt length.
+
+        Rows past the model's layers are the drafter's context caches (93..97, see `_dflash_stages`): token
+        caches written over `[0, real_len)`. A drafter whose layers all slide (DFlash2: 1024 tokens) reads
+        nothing below `real_len - window` once decode resumes at `real_len`, so only that window moves,
+        rounded down to a 32-token chunk -- the range tt-blaze's decode spec names for these layers
+        (`blaze/models/dflash/kv_migration.py:latent_context_range`). Full history otherwise."""
+        if layer_idx >= KimiK3Config.NUM_LAYERS:
+            window = self._dflash_context_window
+            if window is None:
+                return 0, real_len
+            return max(0, real_len - window) // 32 * 32, real_len
         if layer_idx in KimiK3Config.mla_layer_ids():
             return 0, real_len
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_geometry import kimi_k3_kda_geometry

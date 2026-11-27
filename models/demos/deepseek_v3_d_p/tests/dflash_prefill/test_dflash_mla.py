@@ -24,7 +24,10 @@ from models.demos.deepseek_v3_d_p.reference.dflash_prefill.mla_latent import (
     synthetic_prefill_state_dict,
 )
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import kimi_k3_dflash2_mla_config
+from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import (
+    kimi_k3_dflash2_mla_config,
+    kimi_k31_dflash2_mla_config,
+)
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_kv_validation import read_slot_dflash_latent
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_mla_drafter import TtDFlashMlaDrafter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -100,8 +103,51 @@ def _check(expected, actual, tag):
 def test_dflash_mla_latent_pcc(
     mesh_device, device_params, num_links, tp_shard_kv, n_chunks, first_chunk, slot_idx, num_users
 ):
+    _latent_pcc(
+        mesh_device,
+        device_params,
+        num_links,
+        kimi_k3_dflash2_mla_config(),
+        tp_shard_kv=tp_shard_kv,
+        n_chunks=n_chunks,
+        first_chunk=first_chunk,
+        slot_idx=slot_idx,
+        num_users=num_users,
+    )
+
+
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_dflash_mla_latent_pcc_kimi_k3_1(mesh_device, device_params, num_links):
+    """Kimi-K3.1's DFlash2 geometry (RadixArk/Kimi-K3.1-Dflash2-Preview): SIX taps into five layers, on the
+    layout K3.1 serves (KV-deduped latent cache), two chunks into slot 1 of 2. Synthetic weights."""
+    _latent_pcc(
+        mesh_device,
+        device_params,
+        num_links,
+        kimi_k31_dflash2_mla_config(),
+        tp_shard_kv=True,
+        n_chunks=2,
+        first_chunk=0,
+        slot_idx=1,
+        num_users=2,
+    )
+
+
+def _latent_pcc(mesh_device, device_params, num_links, cfg, *, tp_shard_kv, n_chunks, first_chunk, slot_idx, num_users):
     topology = per_axis_topology(device_params["fabric_config"])[1]
-    cfg = kimi_k3_dflash2_mla_config()
     sd = synthetic_prefill_state_dict(cfg)
     ctx_len = n_chunks * CHUNK_GLOBAL
 

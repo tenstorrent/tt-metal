@@ -68,7 +68,9 @@ def test_kimi_k3_1_inherits_no_k3_artifact(attr):
 
 
 def test_kimi_k3_1_flags():
-    assert not K31.supports_dflash  # Kimi-K3-DSpark targets K3
+    # DFlash2 for K3.1 attaches, but only with a checkpoint named in DFLASH_HF_MODEL: K3's DSpark default is not inherited.
+    assert K31.supports_dflash and K31.dflash_model_default == "" and K31.dflash_golden_default == ""
+    assert K31.dflash_partial_separate_plane  # the partial rides the AttnRes handoff as one more plane, as on K3
     assert not K31.passes_indexer_indices  # every DSA layer runs its own indexer
     assert K31.reference_attention_cls is None  # no K3.1 CPU reference; K3's MLA has no indexer
 

@@ -75,10 +75,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
     def _dflash_tap_layer(self, target_layer_idx: int) -> int:
         """DSpark taps target t at layer t+1's attention input, so tap 23 belongs to the rank starting at 24.
 
-        DFlash2 (MLA, taps 19/37/66/78/90) uses the same site. ASSUMED, not verified: both drafters were
-        trained on hiddens captured the same way (the serving engine's aux-hidden capture at the input of layer
-        t+1), and under AttnRes that input is exactly the read before attn_norm. A wrong site shows up as a
-        uniformly low drafter PCC at every layer, with c_kv and k_pe equally bad."""
+        DFlash2 (MLA) uses the same site. For Kimi-K3.1's (taps 7/23/51/67/83/91) the checkpoint says so:
+        `dflash_config.aux_hidden_stream` is `attn_res`, which SGLang captures after layer t as layer t+1's
+        AttnRes read, the softmax mix before `attn_norm` (tt-blaze `tests/blaze/dflash/
+        generate_k31_mla_trace.py` replays it that way to build decode's goldens). Tap 91 is therefore layer
+        92's read: the last layer, on the tail rank, and before its attention, so a `kv_only` last layer still
+        fires it. For K3's DFlash2 (taps 19/37/66/78/90) the site is assumed, not verified. A wrong site shows
+        up as a uniformly low drafter PCC at every layer, with c_kv and k_pe equally bad."""
         return target_layer_idx + 1
 
     @property

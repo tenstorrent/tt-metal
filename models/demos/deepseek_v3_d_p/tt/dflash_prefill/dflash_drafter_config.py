@@ -9,19 +9,23 @@ Two attention modes:
 * ``"gqa"`` (default): Kimi-K2.6/K2.7-DFlash and RadixArk's Kimi-K3-DSpark. Values are from the HF
   checkout ``Kimi-K2.6-DFlash/config.json`` (architecture ``DFlashDraftModel``, a Qwen3-style GQA model).
   Prefill writes separate K and V caches per kv-head. See issue #49586.
-* ``"mla"``: ``lightseekorg/kimi-k3-dflash2`` (``DFlash2DraftModel``, ``attention_mode: mla``) and
-  Inferact's ``Kimi-K3-DSpark`` (``K3DSparkModel``), the two drafters tt-blaze decodes with MLA
-  (``blaze/models/dflash/k3_mla_blaze_config.py``). Prefill writes ONE latent cache row per token,
-  ``[kv_a_layernorm(c_kv) | rope(k_pe)]`` (512 + 64 = 576), which serves as both K and V.
+* ``"mla"``: ``lightseekorg/kimi-k3-dflash2`` and ``RadixArk/Kimi-K3.1-Dflash2-Preview``
+  (``DFlash2DraftModel``, ``attention_mode: mla``) and Inferact's ``Kimi-K3-DSpark`` (``K3DSparkModel``),
+  the drafters tt-blaze decodes with MLA (``blaze/models/dflash/k3_mla_blaze_config.py``). Prefill writes
+  ONE latent cache row per token, ``[kv_a_layernorm(c_kv) | rope(k_pe)]`` (512 + 64 = 576), which serves as
+  both K and V.
 
 Every default here is checkpoint-specific (dims, target-layer taps, rope) — do NOT reuse for another
 drafter without re-deriving from its own ``config.json``. :func:`kimi_k3_dflash2_mla_config` is the
-K3 DFlash2 preset (tests, and the fallback for keys an MLA checkpoint config omits).
+K3 DFlash2 preset (tests, and the fallback for keys an MLA checkpoint config omits);
+:func:`kimi_k31_dflash2_mla_config` is the Kimi-K3.1 one, as its released ``config.json`` reads.
 """
 
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass, replace
 
 ATTENTION_MODES = ("gqa", "mla")
@@ -160,10 +164,13 @@ class DFlashDrafterConfig:
 
     @classmethod
     def _from_hf_config_mla(cls, c) -> "DFlashDrafterConfig":
-        """MLA drafter (K3 DFlash2 / Inferact DSpark). NOT yet checked against a real ``config.json``: keys
-        are read where TorchSpec's configs put them, and the K3 DFlash2 preset fills anything absent EXCEPT
-        ``num_target_layers``, which stays fail-closed (None) so the runtime's verifier cross-check rejects
-        a checkpoint that does not declare its target."""
+        """MLA drafter (K3 / K3.1 DFlash2, Inferact DSpark). Checked against the released
+        ``RadixArk/Kimi-K3.1-Dflash2-Preview/config.json`` (see :func:`kimi_k31_dflash2_mla_config`): the taps,
+        block and mask token sit under ``dflash_config``, the MLA widths and ``num_target_layers`` at the top
+        level, and YaRN under ``rope_scaling`` / ``rope_parameters`` (``rope_theta`` inside either, or at the
+        top level). The K3 DFlash2 preset fills anything absent EXCEPT ``num_target_layers``, which stays
+        fail-closed (None) so the runtime's verifier cross-check rejects a checkpoint that does not declare
+        its target."""
         rs = dict(getattr(c, "rope_scaling", None) or getattr(c, "rope_parameters", None) or {})
         dfc = dict(getattr(c, "dflash_config", None) or {})
         d = kimi_k3_dflash2_mla_config()
@@ -238,3 +245,41 @@ def kimi_k3_dflash2_mla_config(**overrides) -> DFlashDrafterConfig:
         qk_rope_head_dim=64,
     )
     return replace(cfg, **overrides) if overrides else cfg
+
+
+def kimi_k31_dflash2_mla_config(**overrides) -> DFlashDrafterConfig:
+    """``RadixArk/Kimi-K3.1-Dflash2-Preview`` exactly as its ``config.json`` parses (and as tt-blaze describes
+    it: ``kimi_k31_dflash2_mla.model_config.json``, ``k3_mla_blaze_config.DFLASH2_MLA_TARGET_LAYER_IDS``): five
+    MLA layers with 96 heads reading SIX taps, 7/23/51/67/83/91 of the 93-layer Kimi-K3.1 on its ``attn_res``
+    stream, block 5, YaRN theta 50000 / factor 32 / original 32768 / mscale 1. The tap count is the fc's input
+    width (6 x 7168) and is independent of the draft depth."""
+    cfg = kimi_k3_dflash2_mla_config(
+        num_attention_heads=96,
+        block_size=5,
+        mask_token_id=163824,
+        target_layer_ids=(7, 23, 51, 67, 83, 91),
+    )
+    return replace(cfg, **overrides) if overrides else cfg
+
+
+def drafter_context_window(path: str) -> int | None:
+    """The committed-context window every draft layer attends, in tokens, read from a drafter checkpoint's
+    ``config.json``; None when the drafter keeps full history, or when ``path`` holds no readable config.
+
+    Decode reads no context position below ``resume - window`` once it resumes (tt-blaze
+    ``blaze/models/dflash/kv_migration.py:latent_context_range``), so a migration may move that window alone.
+    Only a drafter whose layers ALL slide qualifies (DFlash2 for Kimi-K3.1: ``use_sliding_window``, every
+    ``layer_types`` entry ``sliding_attention``, ``sliding_window`` 1024): one full-history layer needs every
+    position. ttnn-free and transformers-free, so the device-less migration driver can call it."""
+    try:
+        with open(os.path.join(path, "config.json")) as f:
+            c = json.load(f)
+    except (OSError, ValueError):
+        return None
+    window = c.get("sliding_window")
+    layer_types = c.get("layer_types") or []
+    if not c.get("use_sliding_window") or not window or not layer_types:
+        return None
+    if len(layer_types) != c.get("num_hidden_layers") or any(t != "sliding_attention" for t in layer_types):
+        return None
+    return int(window)
