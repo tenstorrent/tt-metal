@@ -56,12 +56,14 @@ uint32_t pack_nbw(const SlotWork& s) {
 
 }  // namespace
 
-ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
+namespace {
+
+// The program of the chip at `coord`.
+ProgramDescriptor build_chip_program(
     const AllToAllMatmulParams& attrs,
     const AllToAllMatmulInputs& tensor_args,
     Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(mesh_dispatch_coordinate.has_value(), "all_to_all_matmul: one program per mesh coordinate");
+    const ttnn::MeshCoordinate& coord) {
     TT_FATAL(tensor_args.scratch.has_value(), "all_to_all_matmul: the landing scratch_tensor is required");
     TT_FATAL(
         cb::RETILE_STAGE < hal::get_num_dataflow_buffers(),
@@ -73,7 +75,6 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     const Tensor& weight = tensor_args.weight;
     const Tensor& scratch = *tensor_args.scratch;
     auto* mesh_device = input.device();
-    const auto& coord = *mesh_dispatch_coordinate;
 
     const MeshTopology& topology = mesh_topology(mesh_device, attrs.cluster_axis, attrs.num_links);
     const PlanInputs inputs = plan_inputs_of(attrs, topology, input, weight);
@@ -110,7 +111,7 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
         in_tile_shape));
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * plan.batch_chunks * plan.packet_bytes,
-        .core_ranges = chip.port_cores,
+        .core_ranges = plan.all_port_cores,  // every chip's port cores: the merged program's buffers are shared
         .format_descriptors = {CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(cb::PORT_CHUNKS),
             .data_format = datatype_to_dataformat_converter(input.dtype()),
@@ -118,7 +119,7 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     });
     if (plan.retile) {
         // One descriptor per core set (the compute and port cores do not form one rectangle).
-        for (const CoreRangeSet* crs : {&plan.active_cores, &chip.port_cores}) {
+        for (const CoreRangeSet* crs : {&plan.active_cores, &plan.all_port_cores}) {
             desc.cbs.push_back(
                 plain_cb(cb::RETILE_STAGE, plan.stage_tiles * in_tile, *crs, input.dtype(), in_tile, in_tile_shape));
         }
@@ -374,44 +375,35 @@ ProgramDescriptor AllToAllMatmulProgramFactory::create_descriptor(
     return desc;
 }
 
-void AllToAllMatmulProgramFactory::override_runtime_arguments(
-    Program& program,
-    const AllToAllMatmulParams& /*attrs*/,
+}  // namespace
+
+WorkloadDescriptor AllToAllMatmulProgramFactory::create_workload_descriptor(
+    const AllToAllMatmulParams& attrs,
     const AllToAllMatmulInputs& tensor_args,
     Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
-    // The key pins every per-core arg (slot work, entries, routes, semaphore addresses, slot offsets) and every
-    // compile-time arg. A hit rewrites the common tensor-address slots and the landing CB, only where they moved.
-    const auto in_addr = tensor_args.input.buffer()->address();
-    const auto w_addr = tensor_args.weight.buffer()->address();
-    const auto out_addr = output.buffer()->address();
-    Buffer* scratch_buffer = tensor_args.scratch->buffer();
-    const auto landing_addr = scratch_buffer->address();
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    WorkloadDescriptor workload;
+    workload.programs.reserve(tensor_coords.coords().size());
+    for (const auto& coord : tensor_coords.coords()) {
+        workload.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord), build_chip_program(attrs, tensor_args, output, coord)});
+    }
+    return workload;
+}
 
-    auto& reader = GetCommonRuntimeArgs(program, kernel_index::READER);
-    const bool landing_moved = reader[reader_common::LANDING_ADDR] != landing_addr;
-    if (reader[reader_common::IN_ADDR] != in_addr) {
-        reader[reader_common::IN_ADDR] = in_addr;
-    }
-    if (reader[reader_common::W_ADDR] != w_addr) {
-        reader[reader_common::W_ADDR] = w_addr;
-    }
-    auto& writer = GetCommonRuntimeArgs(program, kernel_index::WRITER);
-    if (writer[writer_common::OUT_ADDR] != out_addr) {
-        writer[writer_common::OUT_ADDR] = out_addr;
-    }
-    auto& port_reader = GetCommonRuntimeArgs(program, kernel_index::PORT_READER);
-    if (port_reader[port_reader_common::IN_ADDR] != in_addr) {
-        port_reader[port_reader_common::IN_ADDR] = in_addr;
-    }
-    if (landing_moved) {
-        for (const auto& circular_buffer : program.circular_buffers()) {
-            if (circular_buffer->globally_allocated() && circular_buffer->buffer_indices().contains(cb::A_LANDED)) {
-                UpdateDynamicCircularBufferAddress(program, circular_buffer->id(), *scratch_buffer);
-            }
+std::optional<std::vector<uint32_t>> AllToAllMatmulProgramFactory::idle_runtime_args(
+    size_t kernel_index, const CoreCoord& /*core*/) {
+    switch (kernel_index) {
+        case kernel_index::PORT_READER: {
+            std::vector<uint32_t> args(port_reader_rt::ENTRIES_BASE, 0u);  // N_ENTRIES = 0
+            return args;
         }
-        GetCommonRuntimeArgs(program, kernel_index::PORT_SENDER)[port_sender_common::LANDING_ADDR] = landing_addr;
-        reader[reader_common::LANDING_ADDR] = landing_addr;
+        case kernel_index::PORT_SENDER: {
+            // HAS_CONN = 0 returns before anything else; the zero ready and sub counts keep the layout whole.
+            std::vector<uint32_t> args(port_sender_rt::DESTS_BASE + 2, 0u);
+            return args;
+        }
+        default: return std::nullopt;  // the compute cores are the same on every chip
     }
 }
 
