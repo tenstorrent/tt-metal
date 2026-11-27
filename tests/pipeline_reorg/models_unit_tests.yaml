@@ -2540,3 +2540,24 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: unit
+
+- name: QB2 TTOP smoke test
+  cmd: |
+    # 1. The runner reaches the worker on the QB2
+    mpirun -np 1 --bind-to none --tag-output hostname
+    # 2. /ci is shared: runner writes, worker reads it and writes back, runner reads that
+    echo "from-runner" > "$PIPELINE_DIR/smoke.txt"
+    mpirun -np 1 --bind-to none --tag-output -x PIPELINE_DIR \
+      bash -c 'cat "$PIPELINE_DIR/smoke.txt" && echo from-worker > "$PIPELINE_DIR/smoke-worker.txt"'
+    grep -q from-worker "$PIPELINE_DIR/smoke-worker.txt"
+    # 3. The QB2's devices open
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" \
+      python3 -m pytest -rs --timeout 300 tests/ttnn/unit_tests/base_functionality/test_device.py
+  model: qb2-ttop-smoke
+  skus:
+    bh_qb2:
+      timeout: 20
+      tier: 1
+  owner_id: U0B6STC9GJW # Yiyi Wu
+  team: models
+  budget_type: unit

@@ -208,6 +208,13 @@ skus:
     runs_on:
       - exabox-multihost-ci-sc16
 
+  # QB2 via TTOP (Exabox k8s, multihost-ci chart size "qb2"); not the bare-metal
+  # BH-Quietbox-2 runners, which are bh_quietbox_2.
+  # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
+  bh_qb2:
+    runs_on:
+      - exabox-multihost-ci-qb2
+
   cpu_medium:
     runs_on:
       - tt-ubuntu-2204-medium-stable
