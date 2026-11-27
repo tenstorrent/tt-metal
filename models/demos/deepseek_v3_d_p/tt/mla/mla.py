@@ -625,6 +625,14 @@ class ttMLA:
             )
             self.hifi2_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
             self.hifi3_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+        # K3_ACC_MLA_FP32: fp32 DEST at HiFi4 for every matmul / norm (the tuned subblocks clipped to <= 4 tiles:
+        # _acc_pc), HiFi4 for the fused matmul + reduce-scatter ops, fp32 kv_a partials.
+        self._acc_mla_fp32 = accuracy.mla_fp32()
+        self._mmrs_kwargs = accuracy.mmrs_kwargs(mesh_device.arch())
+        if self._acc_mla_fp32:
+            self.default_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi2_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi3_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
 
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x - 1,
@@ -678,7 +686,8 @@ class ttMLA:
             self._kv_stem_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                 name="kv_stem",
                 shape=[1, self.tp_factor, self.active_seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim],
-                dtype=ttnn.bfloat16,
+                # (K3_ACC_MLA_FP32: kv_a's TP partials stay fp32 to the reduction)
+                dtype=ttnn.float32 if accuracy.mla_fp32() else ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
 
@@ -1128,10 +1137,26 @@ class ttMLA:
             }
         return {
             "memory_config": cfg["out_mem_config"],
-            "program_config": cfg["program_config"],
+            "program_config": self._acc_pc(cfg["program_config"]),
             "dtype": self._out_dtype(cfg["out_dtype"]),
             "compute_kernel_config": self._tuned_compute_kernel_config(cfg),
         }
+
+    @staticmethod
+    def _to_bf16(t: ttnn.Tensor, memory_config) -> ttnn.Tensor:
+        if t.dtype == ttnn.bfloat16:
+            return t
+        out = ttnn.typecast(t, ttnn.bfloat16, memory_config=memory_config)
+        ttnn.deallocate(t)
+        return out
+
+    def _acc_pc(self, pc):
+        """A matmul program config, its subblock clipped to fp32 DEST under K3_ACC_MLA_FP32."""
+        if getattr(self, "_acc_mla_fp32", False):
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+            return accuracy.fp32_dest_program_config(pc)
+        return pc
 
     def _out_dtype(self, dtype):
         """A projection's output dtype: bf16 instead of bf8 under K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py)."""
@@ -1161,7 +1186,7 @@ class ttMLA:
         return {
             # L1 up to DeepSeek-V3.2's TP=2 640-row case (40 MiB, measured), DRAM beyond.
             "memory_config": ttnn.L1_MEMORY_CONFIG if out_bytes <= 40 << 20 else ttnn.DRAM_MEMORY_CONFIG,
-            "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            "program_config": self._acc_pc(ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                 # The batched default's K block: bf16 partials accumulate in L1, so the blocking sets the rounding.
                 in0_block_w=max(w for w in range(1, 5) if k_tiles % w == 0),
@@ -1169,7 +1194,7 @@ class ttMLA:
                 out_subblock_w=max(w for w in range(1, 9) if n_tiles % w == 0),
                 per_core_M=max(m for m in range(1, 11) if m_tiles % m == 0),
                 per_core_N=n_tiles,
-            ),
+            )),
             "dtype": ttnn.bfloat16,
             "compute_kernel_config": self.default_compute_kernel_config,
         }
@@ -1207,7 +1232,7 @@ class ttMLA:
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "dtype": self._out_dtype(self.MM_DEFAULT_DTYPES[weight_name]),
             "compute_kernel_config": self.default_compute_kernel_config,
-            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            "program_config": self._acc_pc(ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -1217,7 +1242,7 @@ class ttMLA:
                 fuse_batch=False,
                 fused_activation=None,
                 mcast_in0=False,
-            ),
+            )),
         }
 
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
@@ -1435,6 +1460,7 @@ class ttMLA:
                 scatter_dim=-1,
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
+                **self._mmrs_kwargs,
             )
             if self._q_distnorm:
                 qr = self._q_a_latent_distnorm(qr, seq_len_local)
@@ -1477,6 +1503,7 @@ class ttMLA:
             scatter_dim=-2,
             topology=self.tp_ccl_topology,
             num_links=self.ccl_num_links,
+            **self._mmrs_kwargs,
         )
 
     def _gather_tp_rows(self, qr_local: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1842,6 +1869,8 @@ class ttMLA:
         # or falling back to the legacy all-gather.
         if self.tp_factor > 1:
             kv_mm_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            if self._acc_mla_fp32:  # (fp32 TP partials: gathered and reduced in fp32)
+                kv_mm_kwargs["dtype"] = ttnn.float32
         return ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
@@ -1890,7 +1919,7 @@ class ttMLA:
                 tt_kv,
                 dim=1,
                 split_output_width=self.kv_lora_rank,
-                memory_config=kv_mem,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self._acc_mla_fp32 else kv_mem,
                 compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
             # tt_kv aliases model-owned gather scratch; keep that buffer alive.
@@ -1914,6 +1943,9 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
+        if self._acc_mla_fp32:  # (the fp32 reduction's outputs: rounded once to the cache's bf16)
+            tt_kv_nope = self._to_bf16(tt_kv_nope, latent_mem)
+            tt_kv_rope = self._to_bf16(tt_kv_rope, kv_mem)
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
         if return_kv_intermediates:
@@ -2158,6 +2190,7 @@ class ttMLA:
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
                 use_column_major_ccl=True,
+                **self._mmrs_kwargs,
             )
         return ttnn.linear(
             v_out,

@@ -21,6 +21,10 @@ They are read from the environment each time a module asks, so set them before t
                              score matmul and key LayerNorm; the MoE head's
                              shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
                              MoE combine without its 2^-14 snap of every routed term (fp32 sums)
+    K3_ACC_MLA_FP32          MLA (and DSA indexer) accumulation in fp32 everywhere: ttMLA's default compute config with
+                             fp32 DEST at HiFi4 (tuned matmul subblocks clipped to <= 4 tiles), the fused matmul +
+                             reduce-scatter ops (q_a, o_proj, indexer wk / weights_proj; fp32 already) at HiFi4 instead
+                             of HiFi2, and kv_a's TP partials in fp32 through the gather and the reduction
 
 The weight-dtype knobs change the TTNN cache file names (as_tensor encodes the dtype), so a layer built with them
 needs a writable weight cache (it is built from the checkpoint the first time); the production cache is never
@@ -39,6 +43,7 @@ _ON = {
     "BF16_WEIGHTS": "1",
     "KV": "bf16",
     "FIDELITY": "1",
+    "MLA_FP32": "1",
 }
 
 
@@ -85,6 +90,32 @@ def fidelity() -> bool:
 def math_fidelity(production: ttnn.MathFidelity) -> ttnn.MathFidelity:
     """HiFi4 under K3_ACC_FIDELITY, else the production fidelity."""
     return ttnn.MathFidelity.HiFi4 if fidelity() else production
+
+
+def mla_fp32() -> bool:
+    """K3_ACC_MLA_FP32: fp32 accumulation (and HiFi4) throughout ttMLA and the DSA indexer."""
+    return bool(knob("MLA_FP32"))
+
+
+def fp32_dest_program_config(pc):
+    """A matmul program config whose output subblock fits fp32 DEST (h * w <= 4 tiles): a copy with the subblock
+    shrunk to divisors of the original (so it still divides the output block), or pc itself when it fits / is None."""
+    h, w = getattr(pc, "out_subblock_h", None), getattr(pc, "out_subblock_w", None)
+    if pc is None or h is None or w is None or h * w <= 4:
+        return pc
+    best = max(((a, b) for a in range(1, h + 1) if h % a == 0 for b in range(1, w + 1) if w % b == 0 and a * b <= 4),
+               key=lambda ab: (ab[0] * ab[1], ab[1]))
+    out = type(pc).from_json(pc.to_json())
+    out.out_subblock_h, out.out_subblock_w = best
+    return out
+
+
+def mmrs_kwargs(arch) -> dict:
+    """matmul_reduce_scatter_prefill's compute_kernel_config under K3_ACC_MLA_FP32 (HiFi4; the op keeps fp32 DEST and
+    fp32 partial sums itself), else nothing (its HiFi2 default)."""
+    if not mla_fp32():
+        return {}
+    return {"compute_kernel_config": ttnn.init_device_compute_kernel_config(arch, math_fidelity=ttnn.MathFidelity.HiFi4)}
 
 
 def kv_bf16() -> bool:
