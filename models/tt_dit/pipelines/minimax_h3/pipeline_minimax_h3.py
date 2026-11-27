@@ -1902,6 +1902,10 @@ class MiniMaxH3Pipeline(PipelineAPIMixin):
                 "mesh_shape": tuple(self.mesh_device.shape),
                 "mesh_device": self.mesh_device,
                 "get_torch_state_dict": lambda: load_minimax_h3_vision_state_dict(self.weights_dir / "text_encoder"),
+                # Converted from the checkpoint and never written, as before the residency manager: the CI cache
+                # mount is read-only, and a cache written from a mock cluster would not hold the weights.
+                # A complete cache, if one exists, is still read.
+                "create_cache": False,
             },
         )
         if self._audio_encoder is not None:
