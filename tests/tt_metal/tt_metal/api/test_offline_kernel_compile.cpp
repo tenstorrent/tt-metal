@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <fcntl.h>
+#include <spawn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -83,22 +84,28 @@ constexpr const char* kShutdownTeardownEnv = "TT_METAL_PREWARM_TEST_TEARDOWN";
 
 pid_t spawn_test_subprocess(
     const std::string& filter, const std::vector<std::pair<std::string, std::string>>& environment) {
-    const pid_t pid = ::fork();
-    if (pid == 0) {
-        for (const auto& [name, value] : environment) {
-            if (::setenv(name.c_str(), value.c_str(), /*overwrite=*/1) != 0) {
-                std::_Exit(120);
-            }
+    std::vector<std::string> child_environment;
+    for (char** entry = environ; *entry != nullptr; ++entry) {
+        const std::string value(*entry);
+        const std::string name = value.substr(0, value.find('='));
+        if (name == "TT_METAL_KERNEL_MANIFEST_WRITE" || name == "TT_METAL_KERNEL_PREWARM_MANIFEST" ||
+            std::any_of(environment.begin(), environment.end(), [&](const auto& item) { return item.first == name; })) {
+            continue;
         }
-        ::unsetenv("TT_METAL_KERNEL_MANIFEST_WRITE");
-        ::unsetenv("TT_METAL_KERNEL_PREWARM_MANIFEST");
-
-        const std::string filter_arg = "--gtest_filter=" + filter;
-        char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
-        ::execv("/proc/self/exe", args);
-        std::_Exit(121);
+        child_environment.push_back(value);
     }
-    return pid;
+    for (const auto& [name, value] : environment) {
+        child_environment.push_back(name + "=" + value);
+    }
+    std::vector<char*> envp;
+    for (auto& entry : child_environment) {
+        envp.push_back(entry.data());
+    }
+    envp.push_back(nullptr);
+    const std::string filter_arg = "--gtest_filter=" + filter;
+    char* const args[] = {const_cast<char*>("/proc/self/exe"), const_cast<char*>(filter_arg.c_str()), nullptr};
+    pid_t pid = -1;
+    return ::posix_spawn(&pid, "/proc/self/exe", nullptr, nullptr, args, envp.data()) == 0 ? pid : -1;
 }
 
 int run_test_subprocess(
@@ -541,7 +548,7 @@ TEST(KernelPrewarmShutdownTest, ActiveBatchJoinsBeforeLazyBuildDependenciesTeard
             {"TT_METAL_KERNEL_PREWARM", "1"},
             {"TT_METAL_CACHE", tree.path_.string()},
         });
-    ASSERT_GT(writer_pid, 0) << "fork failed";
+    ASSERT_GT(writer_pid, 0) << "manifest spawn failed";
     ScopedShutdownChild writer(writer_pid);
     ASSERT_TRUE(writer.wait_for_exit(std::chrono::seconds(10))) << "manifest writer timed out";
     ASSERT_NO_FATAL_FAILURE(expect_subprocess_success(writer.status));
@@ -558,7 +565,7 @@ TEST(KernelPrewarmShutdownTest, ActiveBatchJoinsBeforeLazyBuildDependenciesTeard
             {kShutdownReleaseEnv, release.string()},
             {kShutdownTeardownEnv, teardown.string()},
         });
-    ASSERT_GT(pid, 0) << "fork failed";
+    ASSERT_GT(pid, 0) << "shutdown spawn failed";
     ScopedShutdownChild child(pid);
     ASSERT_TRUE(wait_for_file(active)) << "timed out waiting for " << active;
     const auto teardown_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
