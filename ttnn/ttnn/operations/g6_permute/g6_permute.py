@@ -4,9 +4,10 @@
 
 """g6_permute: torch.permute(x, dims) as one device program (registry model).
 
-Regimes, selected on the host by (layout, canonical dims):
+Regimes, selected on the host by (layout, canonical dims), each in DRAM or L1 (interleaved):
 - rows_tile_scatter: TILE bfloat16 rank 4, dims (0, 2, 1, 3);
-- blocks_rm_gather: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3).
+- blocks_rm_gather: ROW_MAJOR bfloat16 rank 6, dims (0, 1, 4, 2, 5, 3);
+- nhwc_tile_bfp8_transpose: TILE bfloat8_b rank 4, dims (0, 3, 1, 2).
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from . import g6_permute_blocks_rm_gather as blocks_rm_gather
+from . import g6_permute_nhwc_tile_bfp8 as nhwc_tile_bfp8_transpose
 from . import g6_permute_program_descriptor as rows_tile_scatter
 from .g6_permute_blocks_rm_gather import BlocksPlan
+from .g6_permute_nhwc_tile_bfp8 import NhwcPlan
 from .g6_permute_program_descriptor import (
     READER_KERNEL_INDEX,
     TILE_ROWS,
@@ -99,14 +102,14 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "buffer": ["dram"],
+    "buffer": ["dram", "l1"],
     "rank": [4, 6],
     # rows_tile_scatter keeps W, so padding columns land in output padding columns at every alignment;
     # ROW_MAJOR pages carry no padding.
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
-    "dims": [(0, 2, 1, 3), (0, 1, 4, 2, 5, 3)],
+    "dims": [(0, 2, 1, 3), (0, 1, 4, 2, 5, 3), (0, 3, 1, 2)],
 }
 
 
@@ -114,10 +117,17 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-# Each regime serves one layout: these cells have no regime and no production case.
+# Each regime serves one (layout, dtype) per dims value: these cells have no regime and no production case.
 EXCLUSIONS = [
     {"layout": ttnn.TILE_LAYOUT, "dims": (0, 1, 4, 2, 5, 3)},
     {"layout": ttnn.ROW_MAJOR_LAYOUT, "dims": (0, 2, 1, 3)},
+    {"dtype": ttnn.bfloat8_b, "dims": (0, 2, 1, 3)},
+    {"dtype": ttnn.bfloat8_b, "dims": (0, 1, 4, 2, 5, 3)},
+    {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "dims": (0, 3, 1, 2)},
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "dims": (0, 3, 1, 2)},
+    # Input padding rows (W not a multiple of 32) become padding columns inside output bfloat8_b
+    # groups, where a garbage value would raise the group's shared exponent.
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 
@@ -172,6 +182,7 @@ def validate(input_tensor, dims):
 _REGIMES = {
     (ttnn.TILE_LAYOUT, (0, 2, 1, 3)): rows_tile_scatter,
     (ttnn.ROW_MAJOR_LAYOUT, blocks_rm_gather.DIMS): blocks_rm_gather,
+    (ttnn.TILE_LAYOUT, nhwc_tile_bfp8_transpose.DIMS): nhwc_tile_bfp8_transpose,
 }
 
 
@@ -205,7 +216,7 @@ def _cache_key(input_tensor, canonical_dims):
     )
 
 
-def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan | BlocksPlan:
+def g6_permute_plan(input_tensor: ttnn.Tensor, dims) -> Plan | BlocksPlan | NhwcPlan:
     """Report the plan a call selects (regime, active cores, block extent, blocks per core group,
     per-core roles) without dispatching."""
     axes = validate(input_tensor, dims)
