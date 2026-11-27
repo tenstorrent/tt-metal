@@ -87,12 +87,12 @@ def kda_tiers(
     window_nrmse = ratio_nrmse(
         torch.stack([e2[s : s + WINDOW].sum() for s in window_starts]),
         torch.stack([yy[s : s + WINDOW].sum() for s in window_starts]),
-    ).numpy()
+    )
     token_nrmse = floored_nrmse(e2, yy, floor).numpy()
 
     s = state_sums
-    head = ratio_nrmse(s[..., 0], s[..., 1]).numpy()  # [snapshots, heads]
-    pooled = ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1)).numpy()
+    head = ratio_nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
+    pooled = ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
     final_gain = s[-1, :, 2] / s[-1, :, 1]
     heads = list(range(s.shape[1]))
     head_gain = _tail("state_head_gain_final", np.abs(final_gain - 1), heads)

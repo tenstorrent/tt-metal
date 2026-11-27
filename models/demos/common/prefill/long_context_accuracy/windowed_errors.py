@@ -23,6 +23,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
 import torch
 
 # Columns of ``row_sums``, with x the device (actual) and y the golden (expected) values of one row: the row's means,
@@ -58,11 +59,13 @@ def row_sums(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
     )
 
 
-def ratio_nrmse(e2: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:
+def ratio_nrmse(e2: torch.Tensor | np.ndarray, yy: torch.Tensor | np.ndarray) -> np.ndarray:
     """Elementwise NRMSE ``sqrt(Σe² / Σyy)`` of summed squared errors ``e2`` and summed golden squares ``yy``: 0 for
-    no error (also on an all-zero golden), inf for any error on an all-zero golden, NaN for NaN input."""
-    e2, yy = torch.as_tensor(e2, dtype=torch.float64), torch.as_tensor(yy, dtype=torch.float64)
-    return torch.where(e2 == 0, torch.zeros_like(e2), (e2 / yy).sqrt())
+    no error (also on an all-zero golden), inf for any error on an all-zero golden, NaN for NaN input. FP64 numpy:
+    its sqrt is correctly rounded, torch's CPU FP64 sqrt is not (1 ulp off on about 1% of values)."""
+    e2, yy = np.asarray(e2, dtype=np.float64), np.asarray(yy, dtype=np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return np.where(e2 == 0, 0.0, np.sqrt(e2 / yy))
 
 
 def nrmse(sums: torch.Tensor) -> float:

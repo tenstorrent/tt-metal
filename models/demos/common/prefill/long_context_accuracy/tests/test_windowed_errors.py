@@ -175,3 +175,13 @@ def test_ratio_nrmse_edge_cases() -> None:
         torch.tensor([0.0, 1.0, 0.0, 4.0, 1.0], dtype=torch.float64),
     ).tolist()
     assert got[:4] == [0.0, 0.0, math.inf, 0.5] and math.isnan(got[4])
+
+
+def test_ratio_nrmse_is_correctly_rounded() -> None:
+    """Every value equals Python's correctly rounded ``math.sqrt(e2 / yy)`` (torch's CPU FP64 sqrt is 1 ulp off on
+    about 1% of values, which moved DSA per-window cache NRMSEs at 1M)."""
+    e2 = torch.rand(4096, dtype=torch.float64, generator=torch.Generator().manual_seed(0)) * 1e3
+    yy = torch.rand(4096, dtype=torch.float64, generator=torch.Generator().manual_seed(1)) * 1e6 + 1
+    want = [math.sqrt(a / b) for a, b in zip(e2.tolist(), yy.tolist())]
+    assert ratio_nrmse(e2, yy).tolist() == want
+    assert [nrmse(row_sums(torch.tensor([[0.0, 0.0]]), torch.tensor([[a, 0.0]]))) for a in (3.0, 7.0)] == [math.inf] * 2
