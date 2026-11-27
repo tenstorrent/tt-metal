@@ -1,78 +1,65 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_embedding writer (BRISC / NoC1): store_tiles_block.
+// g6_embedding writer (BRISC, NoC1): store_block — whole tile pages of a block.
 //
-// Drains one tile row (block_width_tiles tiles of one unit) per cb_out_tiles handshake and writes the
-// tiles as whole result pages: tile id tile_row * tensor_d_tiles + piece * block_width_tiles + c.
+// Raw NoC writes instead of dataflow_kernel_lib::write_sticks_after_untilize: that helper writes
+// row-major sticks; the result here is tile pages, and kernel_lib has no tile-page writer.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_out_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t block_width_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t block_height_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t tensor_tile_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t tensor_d_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(5);
-    constexpr bool stagger_writes = get_compile_time_arg_val(6) != 0;
-    constexpr auto output_args = TensorAccessorArgs<7>();
+    constexpr uint32_t block_col_tiles = get_arg(args::block_col_tiles);
+    constexpr uint32_t col_blocks_per_row = get_arg(args::col_blocks_per_row);
+    constexpr uint32_t block_tile_rows = get_arg(args::block_tile_rows);
+    constexpr uint32_t tensor_tile_rows = get_arg(args::tensor_tile_rows);
+    constexpr uint32_t tensor_col_tiles = get_arg(args::tensor_col_tiles);
+    const uint32_t first_block = get_arg(args::first_block);
+    const uint32_t num_blocks = get_arg(args::num_blocks);
 
-    const uint32_t unit_start = get_arg_val<uint32_t>(0);
-    const uint32_t core_units = get_arg_val<uint32_t>(1);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(2);
-    const uint32_t core_linear_idx = get_arg_val<uint32_t>(3);
+    Noc noc;
+    DataflowBuffer output_tiles(dfb::output_tiles);
+    const auto output_accessor = TensorAccessor(tensor::output);
+    const uint32_t tile_bytes = output_tiles.get_tile_size();
 
-    const auto output = TensorAccessor(output_args, get_common_arg_val<uint32_t>(0));
+    uint32_t group = first_block / col_blocks_per_row;
+    uint32_t col_block = first_block - group * col_blocks_per_row;
 
-    // Cores writing the same tile columns at the same time start on different columns, so their
-    // first writes go to different DRAM banks.
-    const uint32_t start_column = stagger_writes ? core_linear_idx % block_width_tiles : 0;
+    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
+        DeviceZoneScopedN("store_block");
+        const uint32_t first_row = group * block_tile_rows;
+        const uint32_t remaining = tensor_tile_rows - first_row;
+        const uint32_t rows = remaining < block_tile_rows ? remaining : block_tile_rows;
+        const uint32_t pages = rows * block_col_tiles;
 
-    uint32_t tile_row = unit_start % tensor_tile_rows;
-    uint32_t piece = unit_start / tensor_tile_rows;
-    uint32_t units_left = core_units;
-
-    for (uint32_t block = 0; block < num_blocks; ++block) {
-        const uint32_t n_units = units_left < block_height_tiles ? units_left : block_height_tiles;
-        units_left -= n_units;
-        // Tile rows past n_units are the phantom rows of a ragged last block: popped, never written.
-        for (uint32_t unit = 0; unit < block_height_tiles; ++unit) {
-            {
-                DeviceZoneScopedN("TILE-WAIT");
-                cb_wait_front(cb_out_tiles, block_width_tiles);
+        output_tiles.wait_front(pages);
+        for (uint32_t j = 0; j < rows; ++j) {
+            // Output tile (g, k) is page g * tensor_col_tiles + k, g counting per-image tile-rows.
+            const uint32_t first_page = (first_row + j) * tensor_col_tiles + col_block * block_col_tiles;
+            for (uint32_t t = 0; t < block_col_tiles; ++t) {
+                noc.async_write(
+                    output_tiles,
+                    output_accessor,
+                    tile_bytes,
+                    {.offset_bytes = (j * block_col_tiles + t) * tile_bytes},
+                    {.page_id = first_page + t});
             }
-            if (unit < n_units) {
-                const uint32_t l1_base = get_read_ptr(cb_out_tiles);
-                const uint32_t first_tile = tile_row * tensor_d_tiles + piece * block_width_tiles;
-                {
-                    DeviceZoneScopedN("TILE-WRITE");
-                    uint32_t column = start_column;
-                    for (uint32_t c = 0; c < block_width_tiles; ++c) {
-                        noc_async_write(
-                            l1_base + column * tile_bytes, output.get_noc_addr(first_tile + column), tile_bytes);
-                        if (++column == block_width_tiles) {
-                            column = 0;
-                        }
-                    }
-                }
-                {
-                    // The slot is reusable once the data has left L1; acks are collected once at the end.
-                    DeviceZoneScopedN("WRITE-FLUSH");
-                    noc_async_writes_flushed();
-                }
-                if (++tile_row == tensor_tile_rows) {
-                    tile_row = 0;
-                    ++piece;
-                }
-            }
-            cb_pop_front(cb_out_tiles, block_width_tiles);
+        }
+        // The slots are handed back to compute only once the NoC has read them out of L1.
+        noc.async_writes_flushed();
+        output_tiles.pop_front(pages);
+
+        if (++col_block == col_blocks_per_row) {
+            col_block = 0;
+            ++group;
         }
     }
-
-    DeviceZoneScopedN("WRITE-BARRIER");
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

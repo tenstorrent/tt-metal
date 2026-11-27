@@ -5,3 +5,8 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T04:01:07-05:00"}
 {"event":"integrity_note","detail":"HEAD 8d373f2 working tree holds the boundary commit 9016a62 g6_embedding implementation; deleting op file, descriptor, kernels, __init__ unread and rewriting from the updated design","ts":"2026-11-27T04:01:07-05:00"}
 {"event":"test_run","mode":"dev+prod","result":"72/72 pass","note":"first compile failed: DeviceZoneScopedN needs api/debug/kernel_profiler.hpp in compute; LD_PRELOAD mpix stub needed on this host","ts":"2026-11-27T04:09:51-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T04:11:00-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T05:23:00-05:00"}
+{"event":"implementation","detail":"ProgramSpec host (cached per shape key, tensors bound per call); reader index prefetch + index-driven segment gather into UInt16 gathered_rows; one UInt16 tilize helper call per core; writer whole-tile stores with flush-before-pop","ts":"2026-11-27T06:29:31-05:00"}
+{"event":"test_run","mode":"dev","result":"pass","detail":"test_g6_embedding.py 16/16, watcher clean","ts":"2026-11-27T06:29:31-05:00"}
+{"event":"test_run","mode":"production","result":"pass","detail":"test_g6_embedding.py 16/16","ts":"2026-11-27T06:29:31-05:00"}
