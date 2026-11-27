@@ -10,7 +10,9 @@ the GPTQ tools' pipeline output (tt-blaze `tools/k31_gptq/pipeline.py --out`), r
     <dir>/layer_LL/carriers.safetensors       bf16 carriers on their grid, HF [out, in], keyed by checkpoint name
     <dir>/layer_LL/carriers_alt.safetensors   "<...>.b_proj.weight:joint": KDA b_proj on prefill's block grouping
     <dir>/layer_LL/carriers_folded.safetensors  routed_expert_up_proj with routed_expert_norm folded in (on the grid)
-    <dir>/layer_LL/experts/shard_*.safetensors  routed experts w1 / w3 / w2 (bf4 grid), by checkpoint name
+    <dir>/layer_LL/experts/shard_*.safetensors  routed experts w1 / w3 / w2 (bf4 grid), by checkpoint name: a bf16
+                                carrier (HF [out, in]) or packed bf4 (`<key>:exp` uint8 [in, out/16], the canonical block
+                                exponent, + `<key>:bf4` uint8 [in, out/2], value 2j in the low nibble, sign << 3 | m)
 
 Keys may carry any root ("language_model.model.", "model."): a tensor is matched by `layers.L.<rest>`.
 
@@ -90,6 +92,15 @@ def active():
         if root:
             OVERRIDE = WeightOverride(Path(root))
     return OVERRIDE
+
+
+def unpack_bf4(exp: torch.Tensor, codes: torch.Tensor) -> torch.Tensor:
+    """Packed bf4 (the GPTQ tools' pack.py) -> float32 [K, N]: value = (-1)^s m 2^(e - 129) per 16-value block of N."""
+    c = torch.stack([codes & 0xF, codes >> 4], -1).reshape(codes.shape[0], -1)
+    mag = (c & 0x7).to(torch.float64)
+    shift = exp.to(torch.int64).repeat_interleave(16, dim=-1)[..., : c.shape[-1]] - 129
+    v = mag * torch.pow(torch.tensor(2.0, dtype=torch.float64), shift.to(torch.float64))
+    return torch.where((c >> 3) != 0, -v, v).to(torch.float32)
 
 
 def split_key(key: str):
@@ -174,6 +185,16 @@ class WeightOverride:
                                 continue
                             folded.add(rel)
                         got[rel] = h.get_tensor(k)
+            # Decode-space GPTQ output (the tools' default) keeps the decode-folded tensors ONLY in carriers_folded; the
+            # default mode would load the checkpoint's for them (stock weights): refuse.
+            path = d / "carriers_folded.safetensors"
+            if not self.folded and path.is_file():
+                with safe_open(str(path), framework="pt", device="cpu") as h:
+                    only = sorted(split_key(k)[1] for k in h.keys() if split_key(k)[1] not in got)
+                assert not only, (
+                    f"layer {layer}: {only} are only in carriers_folded (decode-space GPTQ): "
+                    f"set K3_WEIGHT_OVERRIDE_FOLDED=1 to load them"
+                )
             # A folded consumer already holds its norm, which prefill applies again: give each fully folded norm ones.
             for norm, consumers in FOLD_GROUPS.items():
                 have = [c for c in consumers if c in folded]
@@ -231,7 +252,10 @@ class WeightOverride:
                     for k in h.keys():
                         parts = split_key(k)
                         assert parts and parts[0] == layer, f"{path}: key {k} is not layer {layer}'s"
-                        got[parts[1]] = path
+                        rel = parts[1]
+                        if rel.endswith((":exp", ":bf4")):  # (packed bf4: the two arrays of one expert matrix)
+                            rel = rel.rsplit(":", 1)[0]
+                        got[rel] = path
             self._experts[layer] = got
             if got:
                 logger.warning(f"K3_WEIGHT_OVERRIDE: layer {layer}: {len(got)} routed expert tensors")
@@ -252,7 +276,9 @@ class WeightOverride:
             with safe_open(str(path), framework="pt", device="cpu") as h:
                 for k in h.keys():
                     if k.endswith(f"layers.{layer}.{rel}"):
-                        return h.get_tensor(k)
+                        return h.get_tensor(k)  # (a bf16 carrier, HF [out, in])
+                    if k.endswith(f"layers.{layer}.{rel}:exp"):  # (packed: logical [in, out] -> HF [out, in])
+                        return unpack_bf4(h.get_tensor(k), h.get_tensor(k[: -len(":exp")] + ":bf4")).T
             return None
         return self.dense(layer).get(rel)
 
