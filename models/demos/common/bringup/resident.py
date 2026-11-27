@@ -74,7 +74,11 @@ def alive(pid) -> bool:
         os.kill(int(pid), 0)
     except (OSError, TypeError, ValueError):
         return False
-    return True
+    try:  # F310: a zombie (exited, not yet reaped by its parent, e.g. the orchestrator that started it) is not alive
+        with open(f"/proc/{int(pid)}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
 
 
 def state_dir(spec) -> Path:

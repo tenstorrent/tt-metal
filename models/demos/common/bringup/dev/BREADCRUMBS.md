@@ -3004,3 +3004,12 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   run is stamped, batched or run; the off side's stamp changes, so only it re-measures. Selftest:
   test_cpu_perf_task.py::test_an_ab_side_overrides_an_inline_switch_of_the_gate. test_perf_ab.py: 16 failed / 34 passed
   with and without the change (the pre-existing failures, open item).
+
+## F310 (2026-11-27, DeepSeek-V4.1 NC.1): a zombie resident runner does not hold the device
+- Seen: NC.1's gate ran its determinism unit on the resident runner (the orchestrator started the supervisor), then a
+  direct safe-runner unit asked the runner to yield. The supervisor exited ("yielded") but its parent, the long-lived
+  orchestrator, never reaped it: a zombie. resident.alive() used kill(pid, 0), true for a zombie, so
+  run_safe_pytest.sh's yield waited its full hour (38 min seen) with the device idle.
+- Fix: resident.alive() reads /proc/<pid>/stat and treats state Z as not alive. Selftest:
+  test_resident_gate.py::test_a_zombie_runner_is_not_alive. (The orchestrator not reaping its children is the root;
+  alive() is the check every waiter uses, so it is fixed there.)

@@ -452,3 +452,20 @@ def test_one_load_counts_two_chunks_as_two_loads(call_hooks, monkeypatch):
     assert len(err) == 1 and "one per chunk" in err[0] and "5120" in err[0]
     same = [("t#a", f"BRINGUP_CHUNK=5120 {PROFILE}"), ("t#b", PROFILE)]  # unset = the spec's 5120: one load
     assert B.one_load_errors(same, {}, "5120") == []
+
+
+def test_a_zombie_runner_is_not_alive():
+    """F310: an exited, unreaped runner (a zombie: its parent, the orchestrator, never waited on it) does not hold the
+    device: the safe runner's yield waited an hour on one (DeepSeek-V4.1 NC.1)."""
+    import subprocess
+    import time
+
+    p = subprocess.Popen(["true"])
+    for _ in range(100):
+        with open(f"/proc/{p.pid}/stat") as f:
+            if f.read().rsplit(")", 1)[1].split()[0] == "Z":
+                break
+        time.sleep(0.01)
+    assert not resident.alive(p.pid)
+    p.wait()
+    assert resident.alive(os.getpid())
