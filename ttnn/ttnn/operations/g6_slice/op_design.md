@@ -4,37 +4,62 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | data_movement (no compute kernel, no arithmetic: a page gather with sub-tile relocation) |
-| Goal | Copy the elements of `x` selected by per-dim begin/end/step into a new tensor of `x`'s dtype, layout and placement, bit for bit, in one device program that reads only the selected pages of `x`. |
-| Math | `out[i_0..i_{r-1}] = x[b_0 + s_0*i_0, …, b_{r-1} + s_{r-1}*i_{r-1}]`, `M_d = ceil((e_d - b_d)/s_d)`, `b_d = clamp(starts[d] (+N_d if <0), 0, N_d)`, `e_d = clamp(ends[d] (+N_d if <0), b_d, N_d)`. Device-tensor form: `out = x.narrow(sd, floor(starts[sd]/32)*32, N_sd/num_devices)`. |
-| References | `eval/golden_tests/g6_slice/feature_spec.py` (TARGET/INPUTS/INVALID/LOOSE_CASES), `eval/golden_tests/g6_slice/helpers.py` (oracle, `TOLERANCES` = exact for bf16), `.claude/references/blocking-model.md`, `.claude/references/l1-footprint-discipline.md`, `.claude/references/ttnn-cb-memory-fundamentals.md`, catalog `ttnn/ttnn/operations/examples/{double_buffer,trid_double_issue,tile_reorder,noc_placement,bank_stagger,width_split,read_coalescing}`, `tt_metal/hw/inc/api/dataflow/dataflow_api.h`, `tt_metal/hw/inc/api/tensor/tensor_accessor.h`, `ttnn/cpp/ttnn/kernel_lib/{tile_column_dataflow.hpp,local_copy_helpers_dataflow.hpp}`, `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:375-380` (NoC alignment), `tt_metal/impl/program/program.cpp:2504-2508` (CBs allocated at DRAM alignment) |
-
-### Catalog entries that set knobs
-
-| Entry | Knob it informs | What it says for this op |
-|-------|-----------------|--------------------------|
-| `double_buffer` | block_pages ≥ 4, buffer_depth 2 | one barrier per block, CB = depth × block; no gain once DRAM-bound (every large Phase 0 case is) |
-| `trid_double_issue` | barrier granularity (perf lamp) | at a large CB the one-block loop is within 3 % of the best; trids buy L1, not peak bandwidth |
-| `tile_reorder` | R1/R3 store transfer shape | whole-page writes beat sub-tile face writes on a DRAM-bound move |
-| `noc_placement` | core assignment | `split_work_to_cores(..., row_wise=True)`; reads NoC0 (reader), writes NoC1 (writer) |
-| `width_split` | why the split is over the flat output-page index | a tile-row split strands one-row outputs (1940-page single-row case) on one core |
-| `bank_stagger` | perf lamp | lock-step bank collisions when every core's range starts on the same bank |
-| `read_coalescing` | refinement (sharded) only | coalescing is invalid across interleaved pages; applies to the width-sharded shard copy |
+| Classification | data_movement (pure copy: no compute kernel, no arithmetic, no format conversion) |
+| Goal | Copy the elements of `x` selected by per-dim begin/end/step into a new tensor with `x`'s dtype, layout and placement, in **one** device program that reads only the bytes holding selected elements and writes only `out`. |
+| Math | `out[i_0..i_{r-1}] = x[b_0 + s_0*i_0, ..., b_{r-1} + s_{r-1}*i_{r-1}]`, `M_d = ceil((e_d - b_d)/s_d)`, `b_d = clamp(starts[d] (+N_d if < 0), 0, N_d)`, `e_d = clamp(ends[d] (+N_d if < 0), b_d, N_d)`. Device-tensor form: `out = x[..., r0 : r0 + L, ...]` on dim `sd`, `r0 = floor(starts[sd]/32)*32`, `L = N_sd / num_devices`. |
+| Precision | Bit copy. Every byte of `out` that is a logical element is a byte of `x`, moved by the NoC (or, for a W begin inside a tile, by RISC-V integer loads/stores). No byte passes through unpack/DEST/pack. NaN/inf/denormals/integers > 2^24 are preserved by construction. |
+| References | `eval/golden_tests/g6_slice/feature_spec.py` (TARGET/INPUTS/INVALID), `eval/golden_tests/g6_slice/helpers.py` (oracle, grading = bitwise for bf16), `.claude/references/blocking-model.md`, `.claude/references/l1-footprint-discipline.md`, `.claude/references/noc-alignment-in-tt-metal.md`, `ttnn/ttnn/operations/examples/master.md` (entries cited under *Catalog evidence*), `ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp`, `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp`, `tt_metal/hw/inc/api/dataflow/dataflow_api.h`, `tt_metal/hw/inc/api/tensor/tensor_accessor.h` |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes | rank 2–4, on device | — | buffer address RT; dtype/page size CT |
-| `starts` | `list[int]` (len r) or `ttnn.Tensor` uint32 ROW_MAJOR DRAM `(r,)` | yes | any int; negative counts from the end; clamped to `[0, N_d]` | — | host list → normalized begins as RT args; tensor → buffer address RT (refinement) |
-| `ends` | same form as `starts` | yes | clamped to `[b_d, N_d]`; a tensor is never read | — | host only (→ `M`, passed as RT extents) |
-| `steps` | `list[int]` (len r) | no | each ≥ 1; only all-1 supported (`step_mode` "unit_step") | `None` (all 1) | host only |
-| `slice_dim` | `int` | device form only | `[-r, r-1]`, canonicalized to `slice_dim + r` before any check | `None` | RT (refinement) |
-| `num_devices` | `int` | device form only | divides `N_slice_dim` | `None` | host (`L = N_sd/num_devices` → RT) |
+| `input_tensor` (x) | `ttnn.Tensor` | yes | rank 2–4; on device | — | tensor (accessor CT args; buffer address RT) |
+| `starts` | `list[int]` of length r, or `ttnn.Tensor` uint32 ROW_MAJOR DRAM shape (r,) | yes | any int (normalized PyTorch-style) | — | host list → derived offsets are **RT**; tensor → read on device (never on host) |
+| `ends` | same form as `starts` | yes | any int (clamped); tensor form: never read | — | host only |
+| `steps` | `list[int]` of length r, or `None` | no | each ≥ 1; Phase 0 supports all-1 only | `None` = all 1 | host only (gates `step_mode`) |
+| `slice_dim` (kw) | `int` | device form only | `[-r, r-1]`, canonicalized to `slice_dim + r` before any check | `None` | CT (selects the page stride the runtime begin is applied to) |
+| `num_devices` (kw) | `int` | device form only | divides `N_sd` | `None` | CT (via output shape) |
 
-Regime flags (`row_offset != 0`, `col_offset != 0`), `sources_per_output`, `block_pages`, `buffer_depth`, the device-begin switch and the element type are CT (they change the kernel text or the CB layout); every begin value, extent, stride and per-core range is RT. A new begin of the same shape class therefore hits the program cache (`generic_op` hashes CT args, defines and RT-arg *counts*, not RT values: `ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:83-101`).
+There is no `memory_config`, `dtype` or `compute_kernel_config` parameter: `out` takes `x.dtype`, `x.layout`, `x.memory_config()`.
 
-Entry-point validation (before tagging; raises `ValueError`): `len(starts|ends|steps) != r`; any step < 1; any `M_d == 0`; `slice_dim` without `num_devices` or the reverse, either with list begins, `steps` with tensor begins, `slice_dim ∉ [-r, r-1]`; starts/ends tensors not uint32 of shape `(r,)`; `N_sd % num_devices != 0`. Then the taggers build the axes cell and `validate()` gates SUPPORTED (`UnsupportedAxisValue`) and EXCLUSIONS (`ExcludedCell`). A step > 1 tags `step_mode = "strided"` (not in TARGET) and is refused with `UnsupportedAxisValue`. Every `ValueError` and every support refusal message starts with `g6_slice:` (the acceptance test matches on it through the `expect_error` fixture).
+### Derived quantities (host, single source each)
+
+All kernels see the op as **rank 4**: shape, begins and output shape are left-padded with size-1 / begin-0 dims (`N4`, `b4`, `M4`). Tile counts are per image and use `ceil`.
+
+| Symbol | Definition | CT/RT | Consumers |
+|--------|------------|-------|-----------|
+| `tensor_in_ht_tiles`, `tensor_in_wt_tiles` | `ceil(N4[2]/32)`, `ceil(N4[3]/32)` | CT | reader (input page ids) |
+| `tensor_out_ht_tiles`, `tensor_out_wt_tiles` | `ceil(M4[2]/32)`, `ceil(M4[3]/32)` | CT | reader, writer (walk carries) |
+| `N4[1]`, `M4[1]` | input / output extent of `lead1` | CT | reader (input stride), walk carry |
+| `rows_last_tile_row` | `M4[2] - 32*(tensor_out_ht_tiles - 1)` ∈ [1, 32] | CT | reader, writer (row class of the last tile row of each image) |
+| `total_out_pages` | `M4[0]*M4[1]*tensor_out_ht_tiles*tensor_out_wt_tiles` | host | split |
+| `lead_begin0`, `lead_begin1` | `b4[0]`, `b4[1]` | **RT** | reader |
+| `first_input_tile_row` (q) | `b4[2] // 32` | **RT** | reader |
+| `row_offset_in_tile` (off) | `b4[2] % 32` | **RT** | reader, writer |
+| `first_input_tile_col` | `b4[3] // 32` | **RT** | reader |
+| `col_offset_in_tile` (c) | `b4[3] % 32` | **RT** | reader |
+| `core_start_page`, `core_pages` | from `split_work_to_cores` | **RT** (per core) | reader, writer |
+| `core_start_coord` | `(o0, o1, th, tw)` of `core_start_page`, decomposed **on host** (no device division) | **RT** (per core) | reader, writer |
+| `ROW_RUNS`, `W_SHIFT` | regime flags (see *Regimes*) | CT (compile out unused paths, BB-04/BB-18/RB-038) | reader, writer |
+| `block_pages`, `cb_depth`, `page_bytes`, `face_row_bytes` | *Blocking Model*; `page_bytes = x.buffer_page_size()` (tile size of x's dtype), `face_row_bytes = page_bytes / 64` for 16/32-bit dtypes | CT | reader, writer, CB sizes |
+
+Begins are **RT**, regime flags and shapes are **CT**: the generic-op program hash covers CT args, defines, core ranges and CB sizes but only the *count* of RT args (`ttnn/cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp:83-103`), and RT values are overridden on every hit. So the 47 single-row slices of `(1,1,256,256)` (cases 191–235) or the 16 batch-index slices of `(16,6,4096,256)` share one compiled program each.
+
+### Host contract
+
+| Item | Requirement |
+|------|-------------|
+| Entry point order | `validate()` is the first line. Inside `validate()`: **(1)** structural checks raise `ValueError` — wrong rank (not 2–4), `starts`/`ends`/`steps` length ≠ r, a step < 1, mixed forms (one tensor, one list), `slice_dim` xor `num_devices`, either given with list begins, `steps` given with tensor begins, `slice_dim` outside `[-r, r-1]`, begin tensors not uint32 shape (r,), `num_devices` not dividing `N_sd`, any `M_d == 0`. **(2)** build the scenario dict (same keys as `feature_spec.py`), apply `INPUT_TAGGERS` in declaration order. **(3)** SUPPORTED per axis → `UnsupportedAxisValue`. **(4)** EXCLUSIONS (empty) → `ExcludedCell`. Structural errors therefore never surface as a support refusal. |
+| `INPUT_TAGGERS` | `tag_dtype` → `scenario["dtype"]`; `tag_layout` → `scenario["layout"]`; `tag_memory_config` → `scenario["memory"]`; `tag_alignment` → with `b` the normalized begins and `M = scenario["out_shape"]`: `"w_non_aligned"` if `b[-1] % 32 or M[-1] % 32`, else `"h_non_aligned"` if `b[-2] % 32 or M[-2] % 32`, else `"tile_aligned"`; device form: `b ≡ 0`, read `M` only; `tag_rank` → `len(shape)`; `tag_begins_source` → `scenario["begins_source"]`; `tag_step_mode` → `"unit_step"` iff `steps is None` or all 1, else `"strided"`. Taggers read only the scenario dict (they are also driven by `eval/golden_tests/g6_slice/axes.py`). |
+| `SUPPORTED` (Phase 0) | dtype `[bfloat16]`, layout `[TILE_LAYOUT]`, memory_config `["dram_interleaved"]`, alignment `["tile_aligned","w_non_aligned","h_non_aligned"]`, rank `[2,3,4]`, begins_source `["host_list"]`, step_mode `["unit_step"]`. `EXCLUSIONS = []`. `"h_non_aligned"` is never excluded in any phase. |
+| One dispatch | Exactly one `ttnn.generic_op([x, out], descriptor)` (device form: `[x, starts_tensor, out]`). No other ttnn op touches `x` or `out` (no `to_layout`, `tilize`, `untilize`, `pad`, `slice`, `reshape`, `typecast`, memory conversion). `out` is allocated with `ttnn.allocate_tensor_on_device(ttnn.Shape(M), x.dtype, x.layout, device, x.memory_config())`. |
+| Plan cache (BB-07) | The built `ProgramDescriptor` is cached in a module dict keyed by `(shape, padded_shape, dtype, layout, memory_config, b4, M4, device id, grid, effective BLOCK_PAGES_CAP, CB_DEPTH, MAX_CORES, slice_dim, num_devices)`. A hit rewrites only the RT slots that hold buffer addresses (x, out, starts tensor); nothing else is rebuilt. |
+| Knob module constants | In `ttnn/ttnn/operations/g6_slice/g6_slice.py`: `BLOCK_PAGES_CAP = None` (None → derived from the L1 budget), `CB_DEPTH = 2`, `MAX_CORES = None` (None → full `compute_with_storage_grid_size()`), `L1_BUDGET_BYTES = 1347776`. Read at call time (not captured at import) so a test can override them. |
+| Plan report (BB-08, BB-21) | `describe_plan(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None) -> dict`, importable from `ttnn.operations.g6_slice`, runs the same validation and planning without dispatch and returns at least `{"regime", "num_cores", "block_pages", "cb_depth", "num_blocks_max", "l1_bytes_per_core", "core_roles"}`; `regime` ∈ `{"page_copy", "row_runs", "col_realign"}` in Phase 0; `core_roles` maps every used core to `"reader+writer"`. |
+| Zones (BB-21) | Zone build only (no change to the plain build): reader zones `G6_FETCH_ISSUE`, `G6_READ_BARRIER`, `G6_CB_RESERVE`, `G6_COL_REALIGN`; writer zones `G6_CB_WAIT`, `G6_WRITE_ISSUE`, `G6_WRITE_FLUSH`, `G6_WRITE_BARRIER`. |
+| Trace (BB-16) | Nothing on the call path allocates besides `out`, nothing is compiled after the first eager call of a signature; the begin of the device form is read by the kernel, so replay with a new begin needs no host work. |
+| Completion (BB-03) | Writer ends with `noc_async_write_barrier()`; reader's last block ends with a read barrier before its last push. |
 
 ## Tensors
 
@@ -42,280 +67,262 @@ Entry-point validation (before tagging; raises `ValueError`): `len(starts|ends|s
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | rank 2–4, any dims (no alignment requirement on any dim) |
-| Dtype | bfloat16 (Phase 0); TARGET adds float32, int32, uint32, bfloat8_b, bfloat4_b |
-| Layout | TILE (Phase 0); TARGET adds ROW_MAJOR |
-| Memory | DRAM interleaved (Phase 0); TARGET adds L1 interleaved, L1 width-sharded |
+| Shape | `(N_0, ..., N_{r-1})`, r ∈ {2,3,4}; no alignment requirement on any dim (TILE pages are padded per image) |
+| Dtype | Phase 0: bfloat16. TARGET: + float32, int32, uint32, bfloat8_b, bfloat4_b |
+| Layout | Phase 0: TILE. TARGET: + ROW_MAJOR |
+| Memory | Phase 0: DRAM interleaved. TARGET: + L1 interleaved, L1 width-sharded |
 
 ### Output
 
 | Property | Value |
 |----------|-------|
-| Shape | `(M_0, …, M_{r-1})` (device form: `M_sd = N_sd/num_devices`, other dims whole) |
-| Dtype | `input_tensor.dtype` |
-| Layout | `input_tensor.layout` |
-| Memory | `input_tensor.memory_config()` (same buffer type; width-sharded: same shard spec, grid, shape, orientation) |
-
-Allocation: `ttnn.allocate_tensor_on_device(ttnn.Shape(M), x.dtype, x.layout, device, x.memory_config())`; `generic_op([x, (starts_tensor,) out], descriptor)` — exactly one dispatch.
-
-### Canonical index space (used by every section below)
-
-The op folds rank to 4 with leading unit dims: dims `(D0, D1, H, W)`; rank 3 → `D0 = 1`, rank 2 → `D0 = D1 = 1`.
-
-| Symbol | Definition |
-|--------|-----------|
-| `in_h_tiles`, `in_w_tiles` | `ceil(N_H/32)`, `ceil(N_W/32)` — per image (= `padded_shape[-2]/32`, `padded_shape[-1]/32`) |
-| `out_h_tiles`, `out_w_tiles` | `ceil(M_H/32)`, `ceil(M_W/32)` — per image |
-| `total_out_pages` | `M_D0 · M_D1 · out_h_tiles · out_w_tiles` |
-| `hb, row_offset` | `b_H // 32`, `b_H % 32` |
-| `wb, col_offset` | `b_W // 32`, `b_W % 32` |
-| out page `p` | row-major `(o0, o1, i, j)`, `j` fastest |
-| source page `A(p)` | `((b_D0+o0)·N_D1 + b_D1+o1)·in_h_tiles·in_w_tiles + (hb+i)·in_w_tiles + (wb+j)`; below `B = A + in_w_tiles`, right `R = A + 1`, below-right `A + in_w_tiles + 1` |
-| `valid_rows(i)`, `valid_cols(j)` | `min(32, M_H − 32 i)`, `min(32, M_W − 32 j)` |
-| `needs_below(i)` | `row_offset > 0 ∧ valid_rows(i) > 32 − row_offset` |
-| `needs_right(j)` | `col_offset > 0 ∧ valid_cols(j) > 32 − col_offset` |
-| `e, FR, FB` | element bytes (bf16: 2); face-row bytes `16·e`; face bytes `16·FR` |
-| `row_byte(r, c)` | `(2·[r ≥ 16] + c)·FB + (r mod 16)·FR` — byte offset of row `r`, column half `c`, inside one tile page |
-
-Every logical output element maps to a logical input element (`b_d + i_d < N_d`), so input padding can only land in output padding; output positions beyond `M` may hold anything and are not written where the regime has no reason to write them.
+| Shape | `(M_0, ..., M_{r-1})` (device form: `N` with `N_sd` replaced by `L`) |
+| Dtype | `x.dtype` |
+| Layout | `x.layout`; TILE positions beyond the logical shape are not part of the result and may hold anything (the row-run writer leaves them unwritten) |
+| Memory | `x.memory_config()`; width-sharded: same shard spec (grid, shard shape, orientation), out fills the first `ceil(M_w/shard_w)` shards in orientation order |
 
 ## Blocking Model
 
-The first design section. Everything below it is downstream of these decisions.
-Semantics: `.claude/references/blocking-model.md`.
+Semantics: `.claude/references/blocking-model.md`. This op has one operand, no reduction and no reuse: **every axis is independent**, every selected byte is used exactly once, and the whole design question is which pages each core moves, in what transfer shape, and how many per handshake.
 
 ### Axes
 
-Every output element is one input element; nothing spans any axis, so every axis is **independent**. The four tensor axes fold honestly into one flattened output-page axis: the op treats every output page identically (a gather keyed on its own index), output pages are contiguous in `out`, and the input's non-contiguity buys nothing on interleaved storage (consecutive page ids live in different banks; every page is its own NoC transaction). The block is therefore an interval of that axis.
-
 | Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
 |------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `D0` (dim r−4; 1 below rank 4) | independent — each output element copies one input element | folded into `block_pages` (the block interval covers it) | whole extent inside the interval | `plan_blocks()` | via `out_page` ranges | knob-turn |
-| `D1` (dim r−3; 1 below rank 3) | independent — same | folded into `block_pages` | whole extent inside the interval | `plan_blocks()` | via `out_page` ranges | knob-turn |
-| `H` (tile rows, dim r−2) | independent; under `row_offset > 0` an output tile's footprint is a 2-tile stencil (`A`, `B`) that overlaps its neighbour's — a halo, not a combine | folded into `block_pages`; halo factor `1 + needs_below_any` | whole extent inside the interval; halo factor 1 for every production case | `plan_blocks()` | via `out_page` ranges | knob-turn |
-| `W` (tile cols, dim r−1) | independent; under `col_offset > 0` the stencil gains the right tile (`R`) — a halo | folded into `block_pages`; halo factor `1 + needs_right_any` | whole extent inside the interval | `plan_blocks()` | via `out_page` ranges | knob-turn |
-| `out_page` (fold of the four, row-major) | independent | `block_pages` | `ceil(pages_per_core / ceil(pages_per_core / block_pages_cap))`; p1 at 110 cores: 2533 pages → 8 blocks of 317 | `plan_blocks()` host function → one CT arg; CB capacity, kernel trip counts derived | `split_work_to_cores(grid, total_out_pages, row_wise=True)` over the full `device.compute_with_storage_grid_size()` grid: contiguous ranges, ±1 page balance | knob-turn |
-| `stencil` (source slots per output page) | not a data axis — footprint factor of the halos above | `sources_per_output = (1 + needs_right_any)(1 + needs_below_any)` | 1 for every production case | `plan_blocks()` → CT | per page | — |
+| `lead0` (dim r−4; extent 1 when r < 4) | independent — output index i reads input index `b4[0]+i`, no value spans the axis | `block_pages` (folded: contiguous in output page order, identical per-page work) | covered by the `block_pages` run | `_plan()` (fold is structural) | inside the contiguous page ranges | knob-turn |
+| `lead1` (dim r−3; extent 1 when r < 3) | independent — same | `block_pages` (folded) | covered by the run | `_plan()` | inside the page ranges | knob-turn |
+| `h` = output tile rows (dim r−2), `tensor_out_ht_tiles` per image | independent — each output row is one input row; a shifted output tile reads two input tiles but no value spans tiles | `block_pages` (folded) | covered by the run | `_plan()` | inside the page ranges | knob-turn |
+| `w` = output tile columns (dim r−1), `tensor_out_wt_tiles` | independent — each output column is one input column | `block_pages` (folded) | covered by the run | `_plan()` | inside the page ranges | knob-turn |
+| **`out_page`** = fold of `lead0·lead1·h·w` in output page order | independent | **`block_pages`** | `min(core_pages_max, block_pages_cap)` — the coarsest block that fits the L1 budget, or the whole per-core assignment | `BLOCK_PAGES_CAP` (None → `block_pages_cap = floor((L1_budget − fixed_bytes) / (slots_per_page × page_bytes))`, see *Mechanism caps*) → `_plan()` → CT arg; CB capacities derived from it | contiguous ranges `[core_start_page, core_start_page + core_pages)` over the **full grid** via `split_work_to_cores(grid, total_out_pages, row_wise=True)`; grid = `MAX_CORES` knob | knob-turn |
+| stage data: fetched staging page (content of `cb_slice_pages`) | independent — one staging page per output page | `block_pages` (same axis) | same | same | same core as its output page | knob-turn |
+| stage data: right-column staging page (`col_realign` only) | independent — one per output page | `block_pages` (same axis) | same | same | same core | knob-turn |
+| stage data: device-form begin (refinement) | **reuse-shared by construction** — every core needs the same `starts[sd]`, it does not vary along `out_page` | none (one 4-B value) | 1 | — | replicated: each core reads it itself (no designated core; the broadcast row is `rejected`, see *Regimes*) | knob-turn |
+| intra-tile rows / columns | not a block axis — per-page transfer geometry (`row_offset_in_tile`, `rows_this_tile_row`, `col_offset_in_tile`) | none: a block always covers whole tiles | 32 × 32 | — | follows the page | — |
 
-`needs_below_any = row_offset > 0 ∧ M_H > 32 − row_offset`; `needs_right_any = col_offset > 0 ∧ M_W > 32 − col_offset`.
+Why the fold is honest: in every regime one output page is produced from a fixed, per-page computable set of input bytes, and output pages are contiguous in `(lead0, lead1, h, w)` order. Interleaved pages live on different DRAM banks, so no 2-D block shape can coalesce transfers that a 1-D run cannot; the block's only job is to amortize the per-handshake costs below, and a 1-D run does that with ±1-page balance and no rectangle factorization.
 
-Knob definitions (single source: `plan_blocks()` on the host; kernels receive `block_pages`, `sources_per_output`, `buffer_depth` as CT args and derive `num_blocks_this_core = ceil(num_pages_this_core / block_pages)`, `last_block_extent` themselves):
+**Operand-reuse check** (split = `out_page` ranges): `x` varies along `out_page` (each core reads disjoint input bytes) → not reuse-shared. The device-form `starts` tensor does not vary → reuse-shared by construction → its broadcast row is in the regime table (`rejected`, 4-B payload).
 
-| Knob | Expression |
-|------|-----------|
-| `pages_per_core` | `units_per_core_group_1` of `split_work_to_cores` (= `ceil(total_out_pages / num_cores)`) |
-| `block_pages_cap` | `floor((L1_OP_BUDGET − fixed_bytes) / (MAX_BUFFER_DEPTH·sources_per_output·in_page_bytes + assembled_per_output·out_page_bytes))`, `L1_OP_BUDGET = 1347776`, `MAX_BUFFER_DEPTH = 2`, `assembled_per_output = (1 + needs_below_any)` in element_shift else 0, `fixed_bytes` = 0 in Phase 0 |
-| `num_blocks_max` | `ceil(pages_per_core / block_pages_cap)` |
-| `block_pages` | `ceil(pages_per_core / num_blocks_max)` — the coarsest block that fits, equalized so the last block is not a sliver (same block count as the coarsest choice) |
-| `buffer_depth` | `1` if `num_blocks_max == 1` (nothing to prefetch) else `MAX_BUFFER_DEPTH` |
-
-Phase 0 caps (bf16, 2048-B pages): page_copy / row_shift (S = 1): **329**; row_shift (S = 2): 164; element_shift (S = 2, no below): 131; element_shift (S = 4): 65.
+**Stall-shadow check.** Stages that wait: (a) reader on its read barrier — independent work: issuing the next block's reads, which `cb_depth = 2` already allows and the trid lamp extends; (b) writer on `cb_wait_front` — it has no other work; (c) reader on `cb_reserve_back` — no other work; (d) device form, reader on the `starts` read — every `x` read depends on the begin, so nothing can fill it (one DRAM round trip per call). No algebraic reorder exists (no arithmetic); no floating-point order is involved.
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_staged_tiles` | `buffer_depth` | 1 when a core's whole assignment is one block, else 2 | reader fills block k+1 while the writer drains block k (read and write streams on different NoCs overlap) |
-| `cb_assembled_tiles` (element_shift only) | fixed 1 block | 1 | none needed: the writer composes and drains it itself; one flush per block frees it |
-| `cb_begin_index` (device form, refinement) | fixed 1 | 1 | read once per launch |
+| `cb_slice_pages` | `cb_depth` (`CB_DEPTH`) | 2 | reader fetches block k+1 (NoC0) while the writer stores block k (NoC1) — catalog `double_buffer` |
+| `cb_right_col_tile` | none (fixed 1 block) | 1 | consumed by the reader itself between the block's barrier and its push; a second slot would sit idle (same thread) |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| BB-05 L1 budget (1347776 B incl. an L1 `out`'s share) | `block_pages` | `block_pages ≤ block_pages_cap` (expression above) | launch fails only inside the model, or CBs overlap the model's L1 tensors |
-| CB ring wrap (`ttnn-cb-memory-fundamentals.md` "CB Ring-Wrap Invariant") | push/pop quantum | every push and pop is the nominal `sources_per_output·block_pages` (staged) / `assembled_per_output·block_pages` (assembled), the ragged last block included; only the NoC transfers narrow | pointer walks past `fifo_limit` on the third block of a 2-deep ring → silent corruption of neighbouring L1 |
-| NoC address congruence: DRAM read L1≡src mod 64 (BH) / 32 (WH); DRAM write and L1↔L1 mod 16 (`noc_parameters.h:375-380`, sanitizer `sanitize.h:746`) | sub-page transfer offsets | sub-page reads land at the source's own in-page offset inside a page-sized slot (CB bases are DRAM-aligned, `program.cpp:2504-2508`; tile pages are multiples of 64 B), so every read is congruent; the row shift is applied on the **write** side, whose congruence is 16 B and face rows are `FR = 32 B` (bf16) / 64 B (4-byte types) | an odd `row_offset` read straight into its shifted position is 32 B off mod 64 on Blackhole → dropped/garbled bytes, watcher error under `--dev` |
-| Face-row granularity of the NoC row shift | dtypes for row_shift's NoC segments | `FR % 16 == 0` (bf16, fp32, int32, uint32); block floats (1-byte exponent per face row, 8-B bfp4 mantissa rows) route row shifts through the element_shift composer (refinement) | exponent bytes moved at 16-B granularity carry neighbours' exponents → wrong values |
-| Shared exponent of block floats | `col_offset` for bfloat8_b / bfloat4_b | `col_offset % 16 == 0` (face-granular shift keeps each 16-element exponent group whole); other offsets refused (refinement) | a split group would need requantization — not a copy |
-| uint32 page ids / RT args | pages of `x` | largest INPUTS input is 557056 pages ≪ 2³² | — |
-| Device-form begin (refinement) | begin on dim `sd` | tile dims: `t0 = min(idx/32, in_tiles_sd − out_tiles_sd)`; leading dims: `min(floor(idx/32)·32, N_sd − L)` | an out-of-contract begin reads outside `x` |
+| L1 budget BB-05 (1347776 B/core, minus L1 `out` bytes the core holds) | `block_pages` | `block_pages_cap = floor((L1_budget − fixed_bytes) / (slots_per_page × page_bytes))`, `L1_budget = min(L1_BUDGET_BYTES, ttnn.device.get_max_worker_l1_unreserved_size())`, `fixed_bytes = out_l1_bytes_per_core + 64 × num_cbs`, `slots_per_page = cb_depth` (`+1` in `col_realign`); bf16: `floor(1347712 / 4096) = 329` | launch refused, or a clash with the model's L1 that only the model shows |
+| Core assignment | `block_pages` | `≤ core_pages_max = ceil(total_out_pages / num_cores)` | idle L1 (not wrong) |
+| DRAM read alignment (BH 64 B, WH 32 B; `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:379`): L1 dst ≡ NoC src (mod 64) | placement of every read run | every run lands at its **natural in-tile byte offset** in a page whose base ≡ 0 mod 64: CBs are allocated at DRAM alignment (`tt_metal/impl/program/program.cpp:2505-2509`) and every tile size (2048, 4096, 1088, 576) is a multiple of 64 | silent corruption (watcher: sanitize error) |
+| DRAM write alignment (BH 16 B): src ≡ dst (mod 16) | writer run offsets | writer runs are whole face-rows: `face_row_bytes` = 32 B (bf16) / 64 B (32-bit) — both ends multiples of 32 | silent corruption |
+| Element granularity of a W begin inside a tile | `col_offset_in_tile` ≠ 0 | not expressible as NoC runs (needs `(c·elem_bytes) % 16 == 0`); realigned by RISC-V column copies (`copy_tile_column`) after the read barrier (which invalidates the L1 cache, `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1927-1932`) | wrong columns |
+| Block-format shared exponents (refinement) | row/col runs for bfloat8_b/bfloat4_b | one exponent byte per face-row: `page_copy` only until `block_format_runs` is built | wrong values |
+| CB ring wrap | per-handshake page count | every push/pop is the nominal `block_pages`; a ragged last block narrows only its NoC work (capacity = `cb_depth × block_pages` closes the ring) | pointer desync → hang |
+| Page-id width | all ids are uint32 | largest golden input: `16·128·272 = 557056` pages | — |
+| `NOC_MAX_BURST_SIZE` | single transfer size | `noc_async_read/write` split internally; pages ≤ 4096 B | — |
 
 ### Regimes
 
+Domain counts are over the 868 Phase 0 production cases (bf16, TILE, DRAM interleaved, host list).
+
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| **page_copy** (R1) | built | TILE ∧ interleaved ∧ (`begins_source == device_tensor` ∨ (`row_offset == 0` ∧ `col_offset == 0`)) | `block_pages` out pages, 1 staged page each | **minimum** against DRAM: each selected `x` page crosses once, each `out` page once, 0 cross-core. Domain: 791 of 868 Phase 0 cases incl. all 8 flagged perf cases (p1 703: 278528 pages, 570.4 MB read + 570.4 MB written) | one read barrier per block (each exposes one DRAM round trip with an empty read pipe), one reserve/push/wait/pop per block per kernel, one write flush per block; p1 pays 8 of each per core instead of 2533 |
-| **row_shift** (R2) | built | TILE ∧ interleaved ∧ host_list ∧ `row_offset != 0` ∧ `col_offset == 0` ∧ `FR % 16 == 0` | `block_pages` out pages × `1 + needs_below_any` staged slots | `x`: one covering sub-page read per needed source page (`[row_byte(r0,0), row_byte(r1,1)+FR)`); production (all 77 cases have `M_H = 1`): 544 B/page vs. 64 B of selected data (+480 B: one transaction covers both column halves instead of two). `out`: only valid rows written (`valid_rows·2·FR` per page) = minimum. Multi-row selections re-read interior pages as `B` of tile i and `A` of tile i+1 (≤ 2×, rule case only) | as page_copy, plus one flush per block for the ≤ 8 segment writes per page |
-| **element_shift** (R3) | built | TILE ∧ interleaved ∧ host_list ∧ `col_offset != 0` (any `row_offset`) | `block_pages` out pages × `sources_per_output` staged slots + `(1 + needs_below_any)` assembled pages each | `x`: `sources_per_output` whole pages per out page (≤ 4× minimum: a page shared by up to 4 output pages is re-staged per output page); `out`: whole pages once (rows_offset 0) or valid-row segments (row_offset > 0). No production TILE case (0 of 1310); built because SUPPORTED `w_non_aligned` admits any `b_W` | barrier/handshake/flush per block as page_copy; the column copy is per element and is not amortized |
-| row_shift_window (R2w) | deferred: no production row_shift case ever reads a `B` page (all 77 select one row), so the ≤ 2× re-read it removes is paid by the rule case only | row_shift ∧ `needs_below_any` | an `H`-run of out pages of one `(o0,o1,j)` column, `B` of page i kept as `A` of page i+1 | removes the interior re-read → minimum | — |
-| element_shift_reuse (R3r) | deferred: no TILE production case has `col_offset != 0` | element_shift | a `W`-run inside one tile row; right page of `j` kept as left page of `j+1` | `x` read ≈ once (+1 page per run) | — |
-| device_begin (R1-dev) | deferred: `begins_source` "device_tensor" is outside the Phase 0 SUPPORTED rectangle (2 production cases); reachable because page_copy takes the dim-`sd` begin only as a base offset of `A(p)`, which a kernel-start load supplies in place of an RT arg | `begins_source == device_tensor` (always page_copy: the begin is a whole tile) | as page_copy | as page_copy + one `align_up(4r, DRAM_ALIGNMENT)` read of `starts` per core | as page_copy |
-| begin_broadcast | rejected: superseded by R1-dev's per-core read — the payload is `4r ≤ 16` B (one 64-B transaction per core); a multicast puts a semaphore rendezvous on every core's critical path to save that one read | device form | — | — | — |
-| shard_copy (RS) | deferred: `l1_width_sharded` is outside Phase 0; knob-turn (it cuts `W`, an independent axis): core-assignment and block are pinned by `out`'s shard spec (block = the whole output shard, 8 pages in production), `out`'s CB is backed on `out`'s shard (zero-copy), each out shard reads from `x`'s shard(s) — a self-aimed local read when `b_W % shard_w == 0` and the shard is on the same core (production: `b_W = 0`), a remote NoC read otherwise | `memory_config == l1_width_sharded` | whole output shard | each out shard byte crosses L1→L1 once, no DRAM | one transfer per shard (shard rows are contiguous: `read_coalescing`) |
-| l1_interleaved placement | deferred: outside Phase 0; knob-turn — R1/R2/R3 unchanged, `TensorAccessor` resolves L1 banks, `fixed_bytes += ceil(total_out_pages / num_l1_banks)·out_page_bytes` | `memory_config == l1_interleaved` | as R1–R3 | as R1–R3 with L1 instead of DRAM | as R1–R3 |
-| stick_gather (RM) | deferred: ROW_MAJOR is outside Phase 0; reachable on the same flat page split — an RM page is a stick: out stick ← bytes `[b_W·e, (b_W+M_W)·e)` of input stick, read from the 64-B-aligned floor of that range into a slot at the congruent offset, written from `slot + (b_W·e mod 64)`; a RISC-V realign of < 16 B only when `b_W·e % 16 != 0` (no production case) | `layout == ROW_MAJOR` | `block_sticks` out sticks | each selected stick segment once (≤ 63 B extra per stick for alignment) | as page_copy |
-| block-float row shift | deferred: no production block-float case has `b_H % 32 != 0` or `b_W % 32 != 0` (all 6 are page_copy) | bfloat8_b/bfloat4_b ∧ (`row_offset != 0` ∨ `col_offset != 0`) | as element_shift | as element_shift (exponent bytes moved with their face rows) | as element_shift |
-| whole_row_read | rejected: forbidden ("MUST NOT read x whole or whole tile rows of it") and 2× the DRAM bytes of p1/p2; superseded by page_copy | — | — | 2× | — |
-| program_chain (untilize → slice → tilize) | rejected: BB-01 and the contract (one program) | — | — | ≥ 3× | — |
-| compute_copy (unpack→DEST→pack) | rejected: `copy` (`kernel_lib/eltwise/api/convenience.hpp:109-113`) is tile→tile at the same element positions — it cannot shift rows or columns — and routes values through a format path (int32/uint32 > 2²⁴, NaN payloads, denormals) | — | — | +L1 round trip | — |
-| direct_shifted_read | rejected: superseded by row_shift — reading face rows straight into their shifted output position breaks the 64-B read congruence on Blackhole for odd `row_offset` | — | — | — | — |
-| strided | rejected: `step_mode` "strided" is not in TARGET (no production step ≠ 1); refused with `UnsupportedAxisValue` | any step > 1 | — | — | — |
+| `page_copy` | **built** — 670 cases (2.81 M output pages) | TILE ∧ host_list ∧ `off == 0` ∧ `c == 0` ∧ `M4[2] % 32 == 0`. CT: `ROW_RUNS=0, W_SHIFT=0` | `block_pages` whole tiles | Minimum named against DRAM: each selected input page crosses once (one 2-KB read), each output page once. Above logical bytes only when `M4[3] % 32 ≠ 0` (the last tile column carries ≤ 31 unselected columns into output padding); unavoidable at page granularity. | Per block, intended once: 1 `cb_reserve_back` + 1 `cb_push_back` + 1 read barrier (reader), 1 `cb_wait_front` + 1 `noc_async_writes_flushed` + 1 `cb_pop_front` (writer), one fill/drain bubble. p1 (703): 2143 pages/core at 130 cores → 7 blocks of 329. |
+| `row_runs` | **built** — 198 cases (163730 pages), incl. all 77 begins inside a tile and the "two_tiles" rule case | TILE ∧ host_list ∧ `c == 0` ∧ (`off ≠ 0` ∨ `M4[2] % 32 ≠ 0`). CT: `ROW_RUNS=1, W_SHIFT=0` | `block_pages` whole tiles; per page ≤ 8 read runs + ≤ 8 write runs of whole face-rows | **Below** the page minimum: each logical row-slice (whole tile width, face-row granular) crosses DRAM once on read and once on write; unselected rows never move. A tile with `rv` logical rows moves `rv × 64` B each way (bf16) instead of 2048 — 32× fewer bytes for the single-row cases (e.g. `(1,1,16,62080)` row 15: 124 KB vs 4 MB). Full tile rows with `off == 0` are one 2-KB run (= `page_copy`). | Same per-block costs as `page_copy`. Run lists depend only on `(off, rv)` → derived once per kernel per row class (≤ 2 classes: `rv = 32`, `rv = rows_last_tile_row`), never per page. |
+| `col_realign` | **built** (correctness path) — 0 production cases (every production TILE begin on the last dim is a multiple of 32); required because `"w_non_aligned"` is SUPPORTED with no EXCLUSIONS and a begin may lie anywhere inside a tile | TILE ∧ host_list ∧ `c ≠ 0`. CT: `W_SHIFT=1`, `ROW_RUNS=1` | `block_pages` tiles + `block_pages` right-column tiles | x: each output tile reads its left input tile column (face halves holding cols `[c,32)`) and, only when its logical columns reach past `32−c`, its right one (halves holding `[0,c)`) → ≤ 2× the selected bytes; out: logical rows only. | + one shared barrier for the block's left and right fetches; the realign pass (32 column copies per page, RISC-V stores) scales with pages, not amortized. |
+| `device_begin_copy` | **deferred** — `begins_source "device_tensor"` is TARGET − SUPPORTED. Reachable without restructuring: it is `page_copy`'s walk with one runtime additive input-page offset `begin_page_offset = min(floor(idx/32), floor((N_sd − L)/32)) × page_stride_sd` (`page_stride` = 1 tile for sd = r−1, `tensor_in_wt_tiles` for sd = r−2, the product of later page extents for a leading dim; a leading-dim begin is `r0 = floor(idx/32)*32` elements), computed by a reader prologue that reads the `starts` page into `cb_slice_pages` slot 0 before the first fetch | `begins_source == device_tensor` | as `page_copy` (partial last tile row copied whole; extra rows land in output padding) | as `page_copy` + one 64-B DRAM read of `starts` per core per call; `ends` never read. The clamp keeps every read inside `x` for any stored value. | as `page_copy` |
+| `stick_copy` | **deferred** — ROW_MAJOR is TARGET − SUPPORTED. Reachable: same `out_page` axis (pages = sticks), same reader→`cb_slice_pages`→writer topology; only the page geometry changes | layout ROW_MAJOR | `block_pages` sticks; per stick one read of `M4[3]·es` bytes at byte `b4[3]·es` of the input stick, landing at the same offset mod 64 in an aligned slot; RISC realign when `(b4[3]·es) % 16 ≠ 0` | minimum: each selected stick byte once each way | same handshakes; sticks are 20 B–17 KB, so handshake amortization weighs more than for tiles |
+| `shard_gather` | **deferred** — `l1_width_sharded` is TARGET − SUPPORTED. The caller's shard spec pins core-assignment (the output shard owners: 34 of 36 cores in the model) and the per-core extent; block = the whole output shard (8 tiles). Reachable: `fetch_block` with an L1 source (local or remote input shard via the sharded accessor), and the writer's DRAM runs replaced by in-place local run copies into a CB backed on `out` (`ttnn.cb_descriptor_from_sharded_tensor`, zero copy; never re-read over the NoC) | memory_config == l1_width_sharded | one block = whole output shard | x: each selected byte crosses the NoC once, 0 hops when local (model: `b4[3] = 0`, every output shard is the same core's input shard); out: never crosses | one block per core: one handshake, one barrier |
+| `block_format_runs` | **deferred** — bfloat8_b/bfloat4_b are TARGET − SUPPORTED and all 6 production block-format cases are `page_copy` (a knob-turn: page_bytes 1088/576). Shifted or partial rows need a byte-granular exponent realign step (new block op, no scheme change) | dtype ∈ {bf8_b, bf4_b} ∧ (`off ≠ 0` ∨ `M4[2] % 32 ≠ 0` ∨ `c ≠ 0`) | as `row_runs` | as `row_runs` | as `row_runs` |
+| `col_realign_sliding` | **deferred** — successor of `col_realign`; no production TILE case has `c ≠ 0`, so its ≤ 2× read touches no production case. Reachable: keep output tile `tw`'s right-column page as `tw+1`'s left (same CBs, same walk) | `c ≠ 0` | as `col_realign` | x: 1× (each input tile column read once) | as `col_realign` |
+| `whole_tile_bounce` | **rejected** — superseded by `row_runs` | `off ≠ 0` | read both whole input tiles, rotate in L1, write a whole page | x: 2 pages per output tile; 32× the logical bytes for single-row cases | — |
+| `tile_row_read_drop` | **rejected** — forbidden (reads whole tile rows to drop columns); doubles x bytes on p1 | — | — | 2× x on p1 | — |
+| `program_chain` | **rejected** — forbidden (BB-01/BB-02): untilize/slice/tilize/pad around a copy | — | — | ≥ 3 DRAM round trips | — |
+| `compute_path_copy` | **rejected** — superseded by the DMA-only copy: an unpack→DEST→pack hop adds a TRISC stage and a format path (DEST conversion alters int32 > 2^24, may canonicalize NaN/denormals) for zero benefit | — | — | same bytes + L1 round trip | — |
+| `begin_broadcast` | **rejected** — superseded by the per-core `starts` read: 4-B payload; a semaphore rendezvous costs more than the 64-B read it saves and adds a designated-core stage | device form | — | saves 64 B × cores | — |
+| `dependent_split_combine` | **rejected** — no axis is dependent; there is nothing to combine | — | — | — | — |
+| `resident_fast_path` | **rejected** — no byte is re-read, so residency saves nothing | — | — | — | — |
+| `single_core` | **rejected** — forbidden; one core cannot draw the DRAM bandwidth p1 needs | — | — | — | — |
 
-**Regime-selection function** (host, exact; exported as `g6_slice_plan(...)["regime"]`):
+Regime-selection function (host, after normalization and 4-D padding; host-list TILE form):
 
 ```
-if begins_source == "device_tensor":        regime = "page_copy"
-elif b_W % 32 != 0:                         regime = "element_shift"
-elif b_H % 32 != 0:                         regime = "row_shift"
-else:                                       regime = "page_copy"
+off = b4[2] % 32 ; c = b4[3] % 32
+regime = "col_realign" if c != 0 else ("page_copy" if off == 0 and M4[2] % 32 == 0 else "row_runs")
 ```
-(`b` normalized: negatives + `N_d`, clamped.) Regime-pinned tests: page_copy (production 1478, 182, 1484, 621, 588, 701), row_shift (587, 1183, rule `two_tiles`), element_shift (two rule-shape cases). The predicate depends only on the call's begins, never on the grid, so no regime is grid-dependent.
+
+Regime-pinned tests are required (the acceptance test asserts `describe_plan(...)["regime"]` per case). The selection depends only on begins and output shape — never on the grid.
 
 ### Traffic ranking
 
-Counted per tensor and tier for the flagged p1 (703, page_copy) and in general.
+Every split moves the same bytes (each selected byte crosses DRAM once each way, no cross-core traffic); the ranking is therefore decided by transfer shape, balance and occupancy, in that order.
 
-| Rank | Candidate split | `x` DRAM crossings | `out` DRAM crossings | Cross-core | Verdict |
-|------|-----------------|--------------------|----------------------|------------|---------|
-| 1 | **S1**: contiguous ranges of the flat output-page index over `min(total_out_pages, G)` cores | each selected page once (p1: 570.4 MB) | once (570.4 MB) | 0 | **chosen** |
-| 1= | S2: split by output tile rows only | same | same | 0 | tie on bytes; strands one-row outputs (1183: 1940 pages in one tile row → 1 core; `width_split`) |
-| 1= | S3: split by output tile columns only | same | same | 0 | tie on bytes; strands one-column outputs (730/731: `out_w_tiles = 1`) |
-| 1= | S4: contiguous ranges of input pages, reading only the selected ones | same | same | 0 | tie on bytes; unselected ranges leave cores idle (p1: half the cores) |
-| 5 | S5: contiguous input ranges read whole, unselected pages dropped in L1 | `x` whole (p1: 2× = 1140.9 MB) | once | 0 | rejected (forbidden; +570 MB) |
-| — | split a dependent axis + cross-core combine | — | — | — | none exists: no output element depends on more than one input element |
-| — | halo forwarding of a shared source page to the neighbouring core instead of a DRAM re-read (row_shift / element_shift) | −1 page per core boundary | — | +1 page L1→L1 per boundary | not built: in-core reuse (R2w/R3r) removes the bulk first, and no production case reads a shared page at all |
-
-S1 moves the minimum; the tiebreak against S2–S4 is occupancy and balance (±1 page). **Operand-reuse check**: `x` varies along `out_page` (every core reads different pages) — not reuse-shared. The device-form `starts` tensor does not vary along any split → reuse-shared by construction → its broadcast is the `begin_broadcast` row (rejected, 16-B payload).
-
-**Stall-shadow check**:
-
-| Stage that waits | Waits on | Work scheduled into the window |
-|------------------|----------|--------------------------------|
-| writer `wait` on `cb_staged_tiles` | reader's block reads | nothing of its own; at depth 2 the reader's next block is already in flight |
-| reader read barrier per block | DRAM round trip of its block | the next block's issue could run here — trid perf lamp (no algebraic permission needed: pure copy) |
-| reader `reserve` on `cb_staged_tiles` | writer draining block k−1 | none needed: depth 2 |
-| reader prologue in the device form (refinement) | the `starts` read | nothing: every source page depends on the begin when `sd` is a tile dim; the writer's setup is independent and already concurrent |
-
-No reorder changes floating-point order: there is no arithmetic.
+| Candidate split | x DRAM crossings | out DRAM crossings | Cross-core traffic | Occupancy / balance | Verdict |
+|-----------------|------------------|--------------------|--------------------|---------------------|---------|
+| A. contiguous **output-page ranges** (`out_page`) | 1× selected | 1× | none | full grid whenever `total_out_pages ≥ cores`; ±1 page | **chosen** |
+| B. `lead0·lead1` only | 1× | 1× | none | ≤ `M4[0]·M4[1]` cores (1 for every `(1, H, W)` case) | ties on bytes, loses occupancy |
+| C. tile rows only | 1× | 1× | none | ≤ rows of tiles (1 for the `(1,1,1,62080)` outputs) | ties, loses occupancy (catalog `width_split`) |
+| D. tile columns only | 1× | 1× | none | ≤ `tensor_out_wt_tiles` | ties, loses occupancy |
+| E. 2-D rectangles (h × w) | 1× | 1× | none | full, imbalanced unless factorizable | ties; A balances without factorization |
+| F. input-page ownership (a core writes every output row its input tiles feed) | 1× | 1×, but a shifted output page written by two cores (two partial writes) | none | full | ties on bytes, doubles write transactions, splits page ownership |
+| G. split a dependent axis + combine | — | — | — | — | N/A: no dependent axis |
 
 ### Block schedule
 
+Logical schedule per core (reader and writer are separate asynchronous kernels; block k+1's fetch overlaps block k's store):
+
 ```cpp
-// reader: optional prologue (device form, refinement): load_begin();  -> begin offset on dim sd
+// device form only (refinement): read_begin();  once per core, before block 0
 for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-    stage_sources_block(block_idx);    // reader: x -> cb_staged_tiles
-    assemble_columns_block(block_idx); // writer, element_shift only: cb_staged_tiles -> cb_assembled_tiles
-    store_block(block_idx);            // writer: cb_staged_tiles | cb_assembled_tiles -> out
+    fetch_block(block_idx);            // reader: DRAM x -> cb_slice_pages (+ cb_right_col_tile), natural in-tile offsets
+    realign_columns_block(block_idx);  // reader, col_realign only: in place on the block's cb_slice_pages pages
+    store_block(block_idx);            // writer: cb_slice_pages -> DRAM out, row-rotated runs
 }
-// writer epilogue: noc_async_write_barrier() (BB-03)
 ```
 
-| Operation | Block shape | Acts | Resident across it | Intended frequency of fixed costs |
-|-----------|-------------|------|--------------------|-----------------------------------|
-| `load_begin` (refinement) | 1 page of `starts` | read `starts[sd]`, round down to a tile, clamp | begin offset, for the whole launch | once per launch |
-| `stage_sources_block` | `block_pages` out pages × `sources_per_output` slots | page_copy: one whole-page read per out page; row_shift: one covering sub-page read per needed source page (`A`, and `B` iff `needs_below(i)`), placed at the source's own in-page offset; element_shift: one whole-page read per needed stencil page; unneeded slots left unread | nothing (slots are released by the writer) | 1 reserve + 1 read barrier + 1 push per block |
-| `assemble_columns_block` (element_shift) | `block_pages` out pages × `(1 + needs_below_any)` assembled pages | for each assembled page (top = from `A`/`R`, bottom = from `B`/below-right): for every valid output column `x < valid_cols(j)`, copy source column `(x + col_offset) mod 32` of the left (`x + col_offset < 32`) or right page into column `x` (all 32 rows) | the staged block | 1 wait on staged + 1 reserve/push/wait on assembled per block |
-| `store_block` | `block_pages` out pages | row_offset == 0: one whole-page write per out page (staged page in page_copy, top assembled page in element_shift); row_offset > 0: segment writes (below) | — | 1 write flush + 1 pop per block (+1 pop of assembled in element_shift) |
+| Block operation | Block shape | Resident across it | Intended frequency of fixed costs |
+|-----------------|-------------|--------------------|-----------------------------------|
+| `fetch_block` | `block_pages` output pages (last block: `last_block_pages`) | the other `cb_slice_pages` slot (being stored) | 1 reserve + 1 read barrier per block (+ 1 push when not `col_realign`); run lists per kernel; reads for all pages of the block issued back to back before the barrier |
+| `realign_columns_block` | `block_pages` pages, 32 column copies each | the block's slot + `cb_right_col_tile` | once per block, after `fetch_block`'s barrier; then 1 push |
+| `store_block` | `block_pages` pages | the other slot (being fetched) | 1 wait + 1 `noc_async_writes_flushed` + 1 pop per block; one `noc_async_write_barrier` per kernel (end) |
+| `read_begin` (refinement) | 1 page of `starts` | — | once per kernel |
 
-**Row-shift segment plan** (row_shift and element_shift with `row_offset > 0`): output row `y < valid_rows(i)` comes from source row `s = y + row_offset` of the top source (`s < 32`) or row `s − 32` of the bottom source. Runs of consecutive `y` break at `y = 16` (destination face) and where `s` reaches 16, 32 or 48 (source face/page). For each run `[y0, y1)` and column half `c ∈ {0, 1}`: one `noc_async_write_page(out_page, out_accessor, slot + row_byte(s0 mod 32, c), (y1−y0)·FR, row_byte(y0, c))`. At most 4 runs → at most 8 writes per page; for the production case (`valid_rows = 1`) exactly 2 writes of `FR` bytes. Covering read range for source rows `[r0, r1]` of one page: `[row_byte(r0, 0), row_byte(r1, 1) + FR)`.
+What `fetch_block` does per output page `(o0, o1, th, tw)` (`rv = 32`, or `rows_last_tile_row` for `th = tensor_out_ht_tiles − 1`; `nu = min(32 − off, rv)`; `nl = rv − nu`):
+
+| Source | Input page | Rows read (natural positions in the staging page) |
+|--------|-----------|---------------------------------------------------|
+| upper tile | `((lead_begin0+o0)·N4[1] + lead_begin1+o1)·tensor_in_ht_tiles·tensor_in_wt_tiles + (q+th)·tensor_in_wt_tiles + (first_input_tile_col + tw)` | `[off, off + nu)` |
+| lower tile (only if `nl > 0`) | upper + `tensor_in_wt_tiles` | `[0, nl)` |
+| `col_realign`: right column (only if the page's logical columns `min(32, M4[3] − 32·tw)` exceed `32 − c`) | the same rows of input page + 1, into `cb_right_col_tile` | same row bands |
+
+The two bands are complementary row sets, so one staging page holds both without collision; staging row `s` holds output row `(s − off) mod 32`. A row band maps to ≤ 4 contiguous byte runs (rows `[r0, r1)` ∩ `[0,16)` in faces 0/1, ∩ `[16,32)` in faces 2/3; a band covering a whole half tile merges its two faces into one 1024-B run; a whole tile is one 2048-B run). `store_block` writes output rows `[0, rv)` from staging rows `(i + off) mod 32`, split wherever the source or destination crosses a 16-row face boundary or the 32-row wrap: ≤ 8 runs per page (two column halves × ≤ 4 pieces, merged when both sides are whole half tiles). `realign_columns_block` (`col_realign`) rewrites each page in place, ascending `j = 0..31`: column `j` ← staging column `j + c` when `j + c < 32`, else `cb_right_col_tile` column `j + c − 32`; ascending order is safe because column `j + c ≥ j` is read before it is overwritten.
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| Overlap | the coarsest block (up to 329 pages) makes every core with ≤ 329 pages a single block at depth 1 — read all, then write all (851 of 868 Phase 0 cases at 110 cores); at ≤ 8 blocks per core the first fill and last drain are each ≥ 1/8 of the work. Harmless while DRAM-bound (all large cases), possibly not for mid-size cases | `block_pages ∈ {8, 16, 32}` × `buffer_depth ∈ {2, 3, 4}` on p1 (703), 733 and 588 (6144 pages, single block per core) |
-| Grid synchronization | at 110 cores, 601 of 868 Phase 0 cases have ≤ 8 pages per core (722 have ≤ 16); per-core launch and RT-arg cost may exceed the work | `num_cores ∈ {min(total, G), ceil(total/8), ceil(total/32)}` on 182, 621, 587 |
-| Barrier granularity (stall shadow) | one read barrier per block drains the read pipe | trid double issue (`local_copy_helpers_dataflow.hpp:147,158`), T = 2–3 blocks in flight, at `block_pages` 16–32, iso-L1 vs. the default |
-| Bank stagger | contiguous per-core ranges whose length is a multiple of the 8 DRAM banks start every core on the same bank in lock step | rotate each core's walk to start at page `core_idx % num_dram_banks` of its range and wrap (`bank_stagger`), p1/p2/p4 |
-| row_shift read granularity | one covering read (544 B) per page vs. two 32-B face-row reads | two reads per page on 1183 (1940 pages) |
-| row_shift store for full tiles | ≤ 8 segment writes per page when `valid_rows = 32` (rule case only); `tile_reorder` favours whole pages | compose in L1 with self-aimed reads, one whole-page write |
-| element_shift with `col_offset % 16 == 0` | per-column RISC-V copies when whole faces could move | 4 face-granular self-aimed NoC reads per page (`local_copy_helpers_dataflow.hpp:57`) |
+| Overlap — single-block cores | With `core_pages ≤ block_pages_cap` (every case under ~43 k pages on 130 cores) a core reads its whole assignment, then writes it: no read/write overlap inside the core. Irrelevant when the grid is DRAM-bound, visible when latency-bound. | `block_pages = ceil(core_pages / 4)` with `cb_depth` 2 and 4, on 179 (6144 pages) and 1112 (40960 pages) |
+| Overlap — L1-filling block on p1 | 329-page blocks make each read barrier wait on 329 transactions; the reader cannot issue during it | `block_pages ∈ {32, 64, 128}` × `cb_depth ∈ {2, 4}` on 703 |
+| Trid issue | The per-block read barrier drains the reader's queue (catalog `trid_double_issue`: 1.11–1.63× on BH single core) | trid-tagged double issue (`set_read_trid` / `async_read_barrier_with_trid`) on 703 |
+| Bank stagger | Cores whose `core_start_page` coincide mod the DRAM bank count start on the same bank (catalog `bank_stagger`: 1.0–1.07× on interleaved sources) | rotate each core's walk start within its range on 703 and 730 |
+| Grid synchronization | Outputs with ≤ ~2 × grid pages put 1 page on each of up to 130 cores; launch/per-core fixed cost may dominate | `num_cores = ceil(total_out_pages / 4)` on 213 (8 pages) and 1946 (160 pages) |
+| Shifted full rows | For `off ≠ 0, rv = 32` the writer issues 8 face-run writes per page (catalog `tile_reorder`: whole-page writes beat face writes when DRAM-bound) — only the "two_tiles" rule case in Phase 0 | local L1 rotate (self-aimed NoC run copies, `local_copy_helpers_dataflow.hpp`) + one 2-KB page write |
+| Partial rows near 32 | For `off == 0` and `rv ≥ 16` row runs save < 2× bytes for 2–3× the transactions | whole-page copy when `rv ≥ 16` (cases 1463/1478, `rv = 31`) |
+| Left half only | The last tile column of a 12-wide output (730, 731) carries 20 unselected columns; its right face half need not move | runs restricted to face column half 0 when `min(32, M4[3] − 32·tw) ≤ 16` (half the bytes, 2 × 512-B runs per page) |
+
+### Catalog evidence
+
+| Catalog entry | Knob it informed |
+|---------------|------------------|
+| `noc_placement` | `split_work_to_cores(..., row_wise=True)`; reader on NCRISC/NoC0, writer on BRISC/NoC1 (descriptor defaults) |
+| `double_buffer` | batch a whole block of reads per barrier (never read-one/barrier); `cb_depth = 2`; no further gain once the grid is DRAM-bound |
+| `trid_double_issue` | trid lamp; "a large CB with the trivial one-block loop is within 3% of best" supports the coarse default |
+| `tile_reorder` | whole-page transfers wherever the page is whole (`page_copy`, full rows with `off == 0`); the shifted-full-rows lamp |
+| `width_split` | the flattened split fills the grid for one-tile-row outputs (`(1,1,1,62080)`) |
+| `bank_stagger` | bank-stagger lamp |
+| `split_reader` | not applied: only pays when a data-movement RISC-V is measured issue-bound |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| `x` DRAM → `cb_staged_tiles` (page_copy, element_shift) | whole tile pages, `x`'s storage format | reader (NCRISC, NoC0): `noc_async_read_page(page, x_accessor, slot)` per needed page, one barrier per block | no conversion anywhere |
-| `x` DRAM → `cb_staged_tiles` (row_shift) | covering byte range of one page at its own in-page offset | reader: `noc_async_read(x_accessor.get_noc_addr(page, lo), slot + lo, hi − lo)` | congruent by construction |
-| `cb_staged_tiles` → `cb_assembled_tiles` (element_shift) | element columns | writer (BRISC): `copy_tile_column<cb_staged_tiles, T>` RISC-V loads/stores | T = `uint16_t` (bf16) |
-| staged/assembled → `out` DRAM | whole page (row_offset 0) or face-row runs | writer (NoC1): `noc_async_write_page(page, out_accessor, src, size, offset)`; one `noc_async_writes_flushed` per block; `noc_async_write_barrier` at exit | output padding is not written by row-shift stores |
-| `starts` DRAM → `cb_begin_index` (refinement) | `4r` B uint32 stick | reader prologue, every core | never read on host, never in RT/CT args |
-| width-sharded (refinement) | shard pages | `out` CB backed on `out`'s shard (`ttnn.cb_descriptor_from_sharded_tensor`); local self-aimed read from `x`'s shard, remote NoC read only when the source shard lives on another core | no DRAM; no `TensorAccessor` re-read of a core's own shard |
+| DRAM x → reader | x's tile pages (bf16, 2048 B) | `noc_async_read` of byte runs at `accessor.get_noc_addr(page_id, run_offset)` on NoC0 | runs land at their natural in-tile offset (DRAM read alignment) |
+| reader → writer | staging page = output page with rows rotated by `off` (identity when `off == 0`) | `cb_slice_pages`, `block_pages` per handshake, `cb_depth` slots | `col_realign`: realigned in place before the push |
+| writer → DRAM out | output tile pages | `noc_async_write` of face-row runs at `out_accessor.get_noc_addr(page_id, run_offset)` on NoC1 | only logical rows written; `noc_async_writes_flushed` before each pop, `noc_async_write_barrier` at the end |
+| (device form) DRAM starts → reader | uint32 page of `starts` | one `noc_async_read` into `cb_slice_pages` slot 0, before the first fetch | value kept in a register; slot then reused for data |
 
-TARGET placement values as regimes: `dram_interleaved` → page_copy/row_shift/element_shift (built); `l1_interleaved` → same kernels, L1-bank accessor, budget minus `out`'s share (knob-turn); `l1_width_sharded` → shard_copy (knob-turn: cuts `W`, independent). Layout `ROW_MAJOR` → stick_gather. `begins_source` `device_tensor` → device_begin. Dtypes float32/int32/uint32 → page size 4096, `FR = 64`, `T = uint32_t` (knob-turn); bfloat8_b/bfloat4_b → page_copy as is (pages 1088/576 B, multiples of 64), shifts via the block-float row-shift row.
+No compute kernel exists; there is no Tensix-to-Tensix traffic in any built or deferred interleaved regime. `shard_gather` reads remote input shards with plain NoC reads (no semaphores: the input is static for the program's duration).
+
+### TARGET axes as regimes
+
+| TARGET value | Phase 0 | Regime | Cost class | What changes |
+|--------------|---------|--------|------------|--------------|
+| dtype bfloat16 | built | `page_copy` / `row_runs` / `col_realign` | — | — |
+| dtype float32, int32, uint32 | refinement | same three | knob-turn | `page_bytes` 4096, `face_row_bytes` 64, `copy_tile_column<…, uint32_t>`; no conversion anywhere |
+| dtype bfloat8_b, bfloat4_b | refinement | `page_copy` (all production cases) / `block_format_runs` | knob-turn / new block op | page 1088 / 576 B; exponent realign for shifted or partial rows |
+| layout ROW_MAJOR | refinement | `stick_copy` | regime addition on the same scheme (same axis, topology, CB) | page = stick; byte-offset reads |
+| memory_config l1_interleaved | refinement | same three | knob-turn (placement) | buffer type; `out_l1_bytes_per_core = ceil(total_out_pages / num_l1_banks) × aligned_page_bytes` enters the L1 budget |
+| memory_config l1_width_sharded | refinement | `shard_gather` | knob-turn class (the caller cut the independent `w` axis; no combine), placement change | CB on `out`'s shard; core set = output shard owners (≤ 2 rectangles in the model grid) |
+| begins_source device_tensor | refinement | `device_begin_copy` | knob-turn | reader prologue + runtime page offset; `slice_dim` canonicalized (`+r` if negative) before checks |
+| alignment tile_aligned / w_non_aligned / h_non_aligned | built | all | — | `h_non_aligned` never excluded |
+| rank 2 / 3 / 4 | built | 4-D padding | — | — |
+| step_mode unit_step | built | — | — | `"strided"` is not in TARGET; refused by `validate()` |
+
+### Structural impossibilities
+
+None beyond `feature_spec.py`'s INVALID (block formats in ROW_MAJOR).
 
 ## Work Distribution
 
 | Field | Value |
 |-------|-------|
-| Work unit | one output page; the block is `block_pages` consecutive output pages |
-| Grid | `device.compute_with_storage_grid_size()` (RT parameter; never a constant) |
-| Per-core work | `split_work_to_cores(grid, total_out_pages, row_wise=True)` → group 1: `pages_per_core` pages, group 2: `pages_per_core − 1`; core `k` (row-major order) owns `[start_page_k, start_page_k + num_pages_k)`; one kernel per role over `all_cores` (≤ 2 rectangles: full rows + one partial row, BB-17) |
-| Remainder | `total_out_pages` uses per-image `ceil` tile counts; a core's last block has `last_block_extent = num_pages_k − (num_blocks_this_core − 1)·block_pages` real pages but pushes/pops the nominal count |
-| Plan report (BB-08) | `g6_slice_plan(input_tensor, starts, ends, steps=None, *, slice_dim=None, num_devices=None) -> dict` with keys `regime`, `row_offset`, `col_offset`, `sources_per_output`, `num_cores`, `pages_per_core`, `block_pages`, `buffer_depth` — same function the entry point uses to build the descriptor |
-
-The reader walks its pages with an `(o0, o1, i, j)` counter (no per-page division) and derives `A(p)` incrementally; `needs_below(i)` / `needs_right(j)` and `valid_rows(i)` / `valid_cols(j)` change only at tile-row / tile-column boundaries.
-
-RT args per core (both kernels): `start_page`, `num_pages`; geometry (shared values): `M_D1, out_h_tiles, out_w_tiles, N_D1, in_h_tiles, in_w_tiles, b_D0, b_D1, hb, wb, row_offset, col_offset, M_H, M_W`; buffer addresses. CT: `block_pages`, `sources_per_output`, `buffer_depth`, page sizes, `TensorAccessorArgs` (scalar CT args first, accessor args last), defines `G6_ROW_SHIFT`, `G6_COL_SHIFT` (and `G6_DEVICE_BEGIN` in refinement) so each program carries only its regime's code (BB-18, RB-038).
+| Work unit | a block of `block_pages` consecutive output pages |
+| Grid | full `device.compute_with_storage_grid_size()` (110–130 Tensix on Blackhole), or `MAX_CORES` when set |
+| Per-core work | `split_work_to_cores(grid, total_out_pages, row_wise=True)` → group 1 cores get `core_pages_max`, group 2 one fewer; cores in row-major order so the used set is ≤ 2 rectangles (BB-17); one reader and one writer kernel over the union, per-core RT args carry `core_start_page`, `core_pages`, `core_start_coord` |
+| Blocks per core | `num_blocks_this_core = ceil(core_pages / block_pages)`; `last_block_pages = core_pages − (num_blocks_this_core − 1)·block_pages`; push/pop counts stay nominal (`block_pages`) |
+| Remainder | alignment-aware: `total_out_pages = M4[0]·M4[1]·ceil(M4[2]/32)·ceil(M4[3]/32)` — tile padding per image, never `floor(batch·H/32)`; the per-page row class uses `rows_last_tile_row` on the last tile row of every image |
+| Walk | incremental `(o0, o1, th, tw)` with carries `tw → th → o1 → o0`, started from the host-decomposed `core_start_coord`; input page ids incremental from the same counters |
+| Regime selection | the function in *Regimes*; regime-pinned tests required |
 
 ## Circular Buffers
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
-|---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
-| `cb_staged_tiles` | 0 | `x.buffer_page_size()` (2048 bf16) | `buffer_depth · sources_per_output · block_pages` | spans `out_page` (→ `block_pages`) and the stencil (→ `sources_per_output`); streams over blocks | `x.dtype` | reader | writer | whole launch |
-| `cb_assembled_tiles` | 1 | `out.buffer_page_size()` | `(1 + needs_below_any) · block_pages` | element_shift only; spans `out_page` and the vertical stencil | `x.dtype` | writer | writer | element_shift launches |
-| `cb_begin_index` | 2 | `round_up(4r, get_dram_alignment())` | 1 | device form only (refinement); constant | uint32 | reader | reader | reader prologue |
-
-Push count == wait count: reader pushes `sources_per_output·block_pages` per block, writer waits/pops the same; writer reserves/pushes and waits/pops `(1 + needs_below_any)·block_pages` on `cb_assembled_tiles` per block. Full ledger: `l1_ledger.md`.
+|---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
+| `cb_slice_pages` | 0 | `page_bytes` (= `x.buffer_page_size()`; bf16 2048) | `cb_depth × block_pages` | spans `out_page` (`block_pages` per slot, `cb_depth` slots); `lead0/lead1/h/w` folded into `out_page` | x's dtype | reader | writer | whole program |
+| `cb_right_col_tile` | 1 (allocated only when `W_SHIFT`) | `page_bytes` | `block_pages` | spans `out_page` (one right-column tile per page of the block in flight); single block | x's dtype | reader | reader (private scratch, no handshake) | `col_realign` programs; between a block's fetch and its realign |
 
 ## Block Operation Realization
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
-| 0 | `load_begin` (refinement) | 1 page | raw dataflow | — (DRAM `starts`) | `cb_begin_index`, 1 | value held in a register for the launch; CB not pushed |
-| 1 | `stage_sources_block` | `block_pages × sources_per_output` | raw dataflow | — (DRAM `x`) | `cb_staged_tiles`, `sources_per_output·block_pages` pushed | unread slots hold stale bytes and are never consumed |
-| 2 | `assemble_columns_block` (element_shift) | `block_pages × (1 + needs_below_any)` | `copy_tile_column` | `cb_staged_tiles`, `sources_per_output·block_pages`, waited (not popped) | `cb_assembled_tiles`, `(1+needs_below_any)·block_pages` | staged block still held until `store_block` pops it |
-| 3 | `store_block` | `block_pages` | raw dataflow | `cb_staged_tiles` (page_copy, row_shift) or `cb_assembled_tiles` (element_shift) | — (DRAM `out`) | both CBs popped after one flush |
+| 1 | `fetch_block` | `block_pages` pages | no — raw NoC (see API Mapping) | — (DRAM `x`) | `cb_slice_pages`, `block_pages` reserved; `col_realign`: + `cb_right_col_tile`, `block_pages` | pushed `block_pages` (not `col_realign`); reserved and filled (`col_realign`) |
+| 2 | `realign_columns_block` (`col_realign` only) | `block_pages` pages × 32 columns | yes — `copy_tile_column` | `cb_slice_pages` (reserved slot, filled) + `cb_right_col_tile` | `cb_slice_pages`, same slot, in place | pushed `block_pages` |
+| 3 | `store_block` | `block_pages` pages | no — raw NoC | `cb_slice_pages`, wait `block_pages` | — (DRAM `out`) | popped `block_pages` after `noc_async_writes_flushed` |
 
 ## API Mapping
 
 | Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
 |-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
-| host split | host | `ttnn.split_work_to_cores` | `ttnn/cpp/ttnn-nanobind/operations/core.cpp:470-476` | `(grid, total_out_pages, row_wise=True)` | — | — | `num_cores` (core-assignment) |
-| host accessor | host | `ttnn.TensorAccessorArgs(t).get_compile_time_args()` | `.claude/references/generic_op_template/template_op_program_descriptor.py` (step 4) | `x`, `out` | — | — | — |
-| `stage_sources_block` | raw_api | `cb_reserve_back` / `get_write_ptr` / `cb_push_back` | `dataflow_api.h:406`, `:325`, `:208` | `cb_staged_tiles`, `sources_per_output·block_pages` | — | `cb_staged_tiles` | `block_pages`, `sources_per_output` |
-| `stage_sources_block` (whole page) | raw_api | `noc_async_read_page(id, accessor, dst)` | `dataflow_api.h:1243` | page id `A(p)` (+`R`, `B`, below-right) | — | `cb_staged_tiles` | — |
-| `stage_sources_block` (row_shift sub-page) | raw_api | `TensorAccessor::get_noc_addr(page, offset)` + `noc_async_read(src, dst, size)` | `tensor_accessor.h:165`, `dataflow_api.h:547` | `offset = lo`, `dst = slot + lo`, `size = hi − lo` | — | `cb_staged_tiles` | — |
-| `stage_sources_block` | raw_api | `noc_async_read_barrier` | `dataflow_api.h:1921` | once per block | — | — | `block_pages` sets its frequency |
-| `assemble_columns_block` | helper | `dataflow_kernel_lib::copy_tile_column<dfb_id, T>(src_addr, src_col, dst_addr, dst_col)` | `ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp:91-102` | `dfb_id = cb_staged_tiles` (32×32 tile shape), `T = uint16_t` (bf16) | `cb_staged_tiles` | `cb_assembled_tiles` | — |
-| `store_block` | raw_api | `cb_wait_front` / `get_read_ptr` / `cb_pop_front` | `dataflow_api.h:479`, `:346`, `:260` | nominal counts | `cb_staged_tiles` / `cb_assembled_tiles` | — | `block_pages` |
-| `store_block` | raw_api | `noc_async_write_page(id, accessor, src, size, offset)` | `dataflow_api.h:1418` | whole page: `size = 0` (page size); segments: `size = run·FR`, `offset = row_byte(y0, c)` | staged/assembled | — | — |
-| `store_block` | raw_api | `noc_async_writes_flushed`; `noc_async_write_barrier` (exit) | `dataflow_api.h:1980`, `:1951` | once per block; once per launch | — | — | `block_pages` sets flush frequency |
-| `load_begin` (refinement) | raw_api | `noc_async_read_page` + `noc_async_read_barrier` | `dataflow_api.h:1243`, `:1921` | `starts` accessor, page 0 | — | `cb_begin_index` | — |
+| `fetch_block` | raw_api | `cb_reserve_back` / `get_write_ptr` / `cb_push_back` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:406` / `:325` / `:208` | `(cb_slice_pages, block_pages)` | — | `cb_slice_pages` | `block_pages` |
+| `fetch_block` | raw_api | `TensorAccessor::get_noc_addr(page_id, offset)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:165` | input page id, run offset within the page | — | — | — |
+| `fetch_block` | raw_api | `noc_async_read(src_noc_addr, dst_l1_addr, size)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:547` | one call per run (whole page = one run) | — | `cb_slice_pages` / `cb_right_col_tile` | — |
+| `fetch_block` | raw_api | `noc_async_read_barrier()` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1921` | once per block | — | — | frequency set by `block_pages` |
+| `realign_columns_block` | helper | `dataflow_kernel_lib::copy_tile_column<dfb_id, T>(src_addr, src_col, dst_addr, dst_col)` | `ttnn/cpp/ttnn/kernel_lib/tile_column_dataflow.hpp:92` | `dfb_id = cb_slice_pages` (tile shape), `T = uint16_t` (bf16) / `uint32_t` (32-bit); src = same page or `cb_right_col_tile` page | `cb_slice_pages`, `cb_right_col_tile` | `cb_slice_pages` (in place) | none (per-column traversal inside the block op) |
+| `store_block` | raw_api | `cb_wait_front` / `get_read_ptr` / `cb_pop_front` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:479` / `:346` / `:260` | `(cb_slice_pages, block_pages)` | `cb_slice_pages` | — | `block_pages` |
+| `store_block` | raw_api | `noc_async_write(src_l1_addr, dst_noc_addr, size)` + `TensorAccessor::get_noc_addr` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:876`, `tensor_accessor.h:165` | one call per run | `cb_slice_pages` | — | — |
+| `store_block` | raw_api | `noc_async_writes_flushed()` / `noc_async_write_barrier()` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1980` / `:1951` | flushed once per block before the pop; barrier once at kernel end | — | — | frequency set by `block_pages` |
+| trid lamp (not Phase 0) | helper | `dataflow_kernel_lib::set_read_trid` / `async_read_barrier_with_trid` | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:147` / `:158` | trid per block | — | — | — |
+| host | — | `ttnn.split_work_to_cores`, `ttnn.TensorAccessorArgs`, `ttnn.CBDescriptor`, `ttnn.KernelDescriptor` (`ReaderConfigDescriptor` / `WriterConfigDescriptor`), `ttnn.generic_op`, `ttnn.allocate_tensor_on_device` | `.claude/references/ttnn-python-utility-bindings.md`, `.claude/references/generic_op_template/` | — | — | — | — |
 
-**Helpers considered and rejected** (every `raw_api` row above):
+**Helpers considered and rejected (raw_api rows).** No compute phase exists, so the compute helper table (tilize/untilize/reduce/eltwise/matmul) has nothing to cover and there is no `compute_kernel_hw_startup` call (no compute kernel). Dataflow helpers in `ttnn/cpp/ttnn/kernel_lib/` checked:
 
-| Candidate | File:Line | Why it cannot express the shape |
-|-----------|-----------|--------------------------------|
-| `compute_kernel_lib::copy` (CopyTile→PackTile) | `kernel_lib/eltwise/api/convenience.hpp:109-113` | tile→tile at identical element positions: no row or column relocation; adds an unpack→DEST→pack format path to a pure DRAM copy (int32/uint32 > 2²⁴, NaN payloads); the op has no compute phase |
-| `tilize` / `untilize` helpers | `kernel_lib/tilize_helpers.hpp`, `kernel_lib/untilize_helpers.hpp:152-163` | layout conversion is forbidden by the contract and not needed: the shift is a byte relocation |
-| `local_copy_helpers_dataflow` (`local_addr`, `set_read_state`, `read_with_state`) | `kernel_lib/local_copy_helpers_dataflow.hpp:57,74-95` | self-aimed L1→L1 reads only (`local_addr` builds a source on this core); the DRAM gather and the DRAM-side segment writes are not self-aimed. Used by the shard_copy refinement and the face-granular lamp |
-| `copy_tile_column` for row_shift | `kernel_lib/tile_column_dataflow.hpp:91-102` | copies row `r` to row `r` (`dst[offset] = src[offset]`, one `offset` for both): it has no source-row offset, so it cannot express a row shift. The row shift is done on the NoC write side instead (no RISC-V copy); closing the gap would need a `src_row_offset` parameter and two source tiles |
-| `mcast` (`McastArgs`) | `kernel_lib/mcast/` | no operand is shared across cores in Phase 0; the only reuse-shared operand (`starts`, refinement) is 16 B — see `begin_broadcast` (rejected) |
+| Candidate | File:Line | Why it cannot express `fetch_block` / `store_block` |
+|-----------|-----------|------------------------------------------------------|
+| `set_read_state` / `read_with_state` / `local_addr` | `local_copy_helpers_dataflow.hpp:74`, `:95`, `:57` | self-aimed L1→L1 reads only (`local_addr` builds a source at `my_x/my_y`), and `read_with_state` bakes one transfer size into the NoC state; the fetch reads DRAM pages of other banks with per-run sizes |
+| `read_sticks_for_tilize` / `write_sticks_after_untilize` | `tilize_helpers_dataflow.hpp:88`, `:130` | ROW_MAJOR sticks from one contiguous page range packed in tilize stride, pushing tile-height groups; Phase 0 moves tile pages, and the slice's stick sequence (refinement) jumps between images and needs no tile grouping |
+| `fill_tile_column` / `copy_tile_column` | `tile_column_dataflow.hpp:70`, `:92` | RISC-V stores within L1; used for `realign_columns_block`, cannot move DRAM bytes |
+| `Mcast` / `McastArgs` | `ttnn/cpp/ttnn/kernel_lib/mcast/` | no operand is multicast (the only shared operand, `starts`, is a 4-B read per core) |
 
-No compute kernel, so `compute_kernel_hw_startup()` does not apply; there is no reduce scaler.
-
-## Structural impossibilities
-
-- bfloat8_b / bfloat4_b with `b_W % 16 != 0`: the selected columns would split a 16-element shared-exponent group; a bit-exact copy is impossible without requantization (computation). No production case has it. Candidate for INVALID or an EXCLUSIONS entry on a dedicated tagger value when block floats enter SUPPORTED — fold in via another `/golden-tests` run; `alignment` itself must stay as is (`h_non_aligned` may never be split off).
+The gap that would let a helper own `fetch_block`/`store_block`: a "page-run gather" helper taking a TensorAccessor, a page-id sequence and a ≤ 8-entry run list, issuing the runs into a CB block and returning after one barrier.
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| Odd `row_offset` on Blackhole | a face row read into its shifted slot is 32 B off mod 64 (DRAM read congruence) | reads always land at the source's own in-page offset; the shift happens on writes (16-B congruence, `FR` = 32 B) |
-| Ring wrap with ragged last block | 701 runs 4 blocks on a 2-deep ring; a short final push leaves the pointer off `fifo_limit` | nominal pushes/pops always; only NoC transfers narrow to `last_block_extent` |
-| Output padding of row_shift / element_shift pages | only valid rows/columns are written; padding holds stale DRAM/L1 bytes | allowed by contract; do not add zero fills (extra writes, no reader). Graded on the logical shape |
-| Input padding reaching a logical position | an unaligned `N_H`/`N_W` image has padded last tiles | every logical output position maps to a logical input position (`b_d + i_d < N_d`); padding only lands in output padding |
-| Per-image tile padding | `floor(D0·D1·H/32)` miscounts pages when `H % 32 != 0` (3844, 31, 33, 16 in INPUTS) | page ids use per-image `in_h_tiles = ceil(N_H/32)` and the folded `(D0, D1)` strides |
-| `needs_below` / `needs_right` source existence | a `B`/`R` page id past `x` | read only when the page holds a selected element; then it exists |
-| Begin values in CT args | a new begin would rebuild the program (cache miss) and under the device form break trace replay | begins and extents are RT; only the regime flags and sizes are CT; acceptance test asserts no new cache entry for a new begin |
-| Host rebuild on repeat calls (BB-07) | `generic_op` needs a descriptor per call (new `out` address) | memoize the descriptor per call signature (shape, dtype, layout, memory config, normalized begins/ends, form) and patch only buffer addresses |
-| Kernel size (BB-04/BB-18) | three regimes and the device read in one source | `G6_ROW_SHIFT`, `G6_COL_SHIFT`, `G6_DEVICE_BEGIN` compile the unused paths out |
-| BB-03 | `noc_async_writes_flushed` does not wait for acks | writer ends with `noc_async_write_barrier`; reader ends after its last barrier |
-| Profiling zones (BB-21) | time outside a zone reads as waiting | one `DeviceZoneScopedN` per block operation and per blocking wait (`wait_staged`, `reserve_staged`, `read_barrier`, `write_flush`); a role dump of `(core → reader/writer, pages)` from `g6_slice_plan` |
-| `copy_tile_column` template id | it reads the tile shape of `dfb_id` | pass `cb_staged_tiles` (32×32 tiles) |
-| Validation order | taggers need well-formed lists | ValueError checks run first inside `validate()`, then taggers, SUPPORTED, EXCLUSIONS; `h_non_aligned` stays in SUPPORTED and in no EXCLUSIONS entry |
-| Width-sharded `out` (refinement) | `out` (8704 wide) uses 34 of 36 shards of `x`'s spec | allocate `out` with `x.memory_config()` unchanged; kernels run on the 34 cores that hold output shards |
-| L1 `out` (refinement) | `out`'s share counts against 1347776 B | `fixed_bytes` term in `block_pages_cap` |
+| Lower tile read past `x` | Row 4095 of `(16,4096,1280)` (case 587) is the last row of the last tile; there is no lower tile | lower band read only when `nl > 0`; `rv` clipped by `rows_last_tile_row`; never read a tile for rows it does not supply |
+| Rows past `N_{r-2}` in a partial input tile | `(1,1,16,62080)` has one 16-row tile; rows 16..31 are input padding | only rows `< M4[2]` of the output (hence `< N4[2]` of the input) are read or written |
+| Mod-64 DRAM read alignment | 32-B face-row runs at odd row offsets (`off` odd, e.g. 1390 `off = 1`) | runs always land at their natural in-tile offset; the writer — whose alignment is mod 16 — applies the rotation |
+| Writer pops before writes leave L1 | the reader overwrites a slot still being written → nondeterministic output (BB-06) | `noc_async_writes_flushed()` before every `cb_pop_front` |
+| In-flight writes at program end | the next program in the model starts immediately (BB-03) | writer ends with `noc_async_write_barrier()` |
+| Realign reads stale L1 | RISC-V loads after NoC writes into L1 | realign runs strictly after `noc_async_read_barrier()` (which invalidates the L1 cache); stores become visible before the push |
+| Ragged last block | `core_pages` not a multiple of `block_pages` | push/pop nominal `block_pages`; only the NoC work narrows (ring closes at `cb_depth × block_pages`) |
+| Begins baked into CT args | one compile per distinct begin (dozens of programs; BB-07 cost on the first call of each) | begins are RT; only regime flags and shapes are CT; plan cache keyed on the full signature |
+| Large CB vs co-resident L1 | `block_pages_cap` fills the BB-05 budget (~1.35 MB at depth 2 for bf16) | the budget is `min(L1_BUDGET_BYTES, get_max_worker_l1_unreserved_size())` minus L1-`out` bytes; a CB/L1-buffer clash at launch is fixed in the budget term, never with a literal |
+| `copy_tile_column` element type | bf16 needs 16-bit moves; a 32-bit `T` swaps column pairs | `T` derived from `page_bytes` (2048 → `uint16_t`, 4096 → `uint32_t`) |
+| Validation order | a malformed device-form call must raise `ValueError`, not the Phase 0 refusal | structural checks precede tagging and the SUPPORTED gate |
+| Negative / out-of-range begins | PyTorch semantics: `-33` on N=64 → 31, end `10**6` → N | normalize on host before tagging, regime selection and planning |
