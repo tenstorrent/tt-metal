@@ -44,3 +44,14 @@ Both CB terms scale with `block_tiles · effective_depth`; `out_l1_bytes_per_ban
 Totals per tier: buffer tier = `tensor_tiles · (in_page_bytes + out_page_bytes)` (e.g. P39: 8192 × 3136 B ≈ 25.7 MB, L1 banks; Q2185: 2048 × 6144 B ≈ 12.6 MB, DRAM); cross-core NoC = 0; core-local L1 = one write + one read of each page per CB.
 
 > Cheapest-traffic split considered: flat contiguous `tile` ranges across the full grid — every candidate split (row-only, column-only, bank-affine) moves the same bytes, and no split adds a combine. Implemented: the same split. The implemented split is the cheapest; bank-affine assignment is a perf lamp (fewer NoC hops, same bytes), not a traffic delta.
+
+## Implementation notes (ttnn-implementer, Phase 0)
+
+- CB inventory and sizing implemented exactly as above (`cb_pages = effective_depth · block_tiles`, both CBs).
+- Ragged-tail synchronization: the eltwise chain caps a `PerBlockSize`/`FullBlock` block at the DEST
+  capacity, so `convert_block` is one chain call per block with Upfront wait / AtEnd pop and Upfront
+  reserve / AtEnd push over the block's **actual** extent. Reader, compute and writer therefore all
+  reserve/push/wait/pop the actual extent of a ragged last block (ValidTiles semantics) instead of the
+  nominal `block_tiles`. Capacity is unchanged; the tail block starts at offset 0 or `block_tiles`
+  of the ring, so it is always contiguous.
+- Data-movement budget unchanged: input ×1, output ×1, no cross-core traffic.
