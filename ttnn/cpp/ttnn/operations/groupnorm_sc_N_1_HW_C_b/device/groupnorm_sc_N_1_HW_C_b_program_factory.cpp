@@ -7,12 +7,14 @@
 #include <bit>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
@@ -20,6 +22,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+#include "groupnorm_sc_N_1_HW_C_b_planner.hpp"
 #include "kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -103,35 +106,12 @@ uint32_t gn_swapped(const planner::Plan& plan, const planner::CoreWork& wk) {
 
 Buffer* gn_opt_buffer(const std::optional<Tensor>& t) { return t.has_value() ? t->buffer() : nullptr; }
 
-}  // namespace
-
-KernelLayout kernel_layout(const planner::Plan& plan) {
-    std::array<bool, 2> reader{};
-    std::array<std::array<bool, 2>, 2> writer{};
-    std::array<bool, 2> compute{};
-    for (const auto& wk : plan.work) {
-        const uint32_t sw = gn_swapped(plan, wk);
-        reader[sw] = true;
-        writer[wk.is_root][sw] = true;
-        compute[wk.is_root] = true;
-    }
-    KernelLayout layout;
-    for (bool r : reader) {
-        layout.num_readers += r ? 1 : 0;
-    }
-    for (const auto& role : writer) {
-        for (bool w : role) {
-            layout.num_writers += w ? 1 : 0;
-        }
-    }
-    for (bool c : compute) {
-        layout.num_computes += c ? 1 : 0;
-    }
-    return layout;
-}
-
-ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
-    const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCbInputs& tensors, Tensor& output) {
+// The program of a cache miss, and the kernel layout its descriptor follows.
+ProgramDescriptor gn_descriptor(
+    const GroupnormScN1HwCbParams& attrs,
+    const GroupnormScN1HwCbInputs& tensors,
+    Tensor& output,
+    KernelLayout& layout) {
     TT_FATAL(
         gargs::cb::MAX_ID < hal::get_num_dataflow_buffers(),
         "groupnorm_sc_N_1_HW_C_b: circular-buffer id {} exceeds the {} circular buffers of this architecture",
@@ -141,7 +121,9 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     const auto& gamma = tensors.gamma;
     const auto& beta = tensors.beta;
     auto* device = input.device();
-    const planner::Plan& plan = planner::solve_plan(planner::plan_inputs(attrs, tensors));
+    const planner::PlanInputs inputs = planner::plan_inputs(attrs, tensors);
+    const planner::Plan& plan = planner::solve_plan(inputs);
+    const std::vector<planner::CoreWork> work = planner::build_work(inputs, plan);
 
     const uint32_t W = plan.W;
     const uint32_t T = plan.T;
@@ -176,7 +158,7 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     const uint32_t vc_last = plan.vc_last != 0 ? plan.vc_last : map_period;
 
     const CoreRangeSet cores = sharded ? input.memory_config().shard_spec()->grid
-                                       : gn_used_cores(static_cast<uint32_t>(plan.work.size()), plan.grid_x);
+                                       : gn_used_cores(static_cast<uint32_t>(work.size()), plan.grid_x);
 
     ProgramDescriptor desc;
 
@@ -341,7 +323,7 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     std::array<KernelDescriptor, 2> computes;  // [is_root]
     std::array<std::vector<CoreCoord>, 2> compute_cores;
 
-    for (const auto& wk : plan.work) {
+    for (const auto& wk : work) {
         const CoreCoord core(wk.core_x, wk.core_y);
         const uint32_t sw = gn_swapped(plan, wk);
         const uint32_t b_core = tt::div_up(wk.rows_core, h);
@@ -506,6 +488,9 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     TT_FATAL(mcast_first_id.has_value(), "groupnorm_sc_N_1_HW_C_b: no free semaphore id for the stats multicast");
     mcast.attach(desc, "mcast", writer_refs, *mcast_first_id);
 
+    layout.num_readers = static_cast<uint32_t>(reader_kernels.size());
+    layout.num_writers = static_cast<uint32_t>(writer_kernels.size());
+    layout.num_computes = static_cast<uint32_t>(compute_kernels.size());
     for (auto& k : reader_kernels) {
         desc.kernels.push_back(std::move(k));
     }
@@ -515,75 +500,119 @@ ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
     for (auto& k : compute_kernels) {
         desc.kernels.push_back(std::move(k));
     }
-    const KernelLayout layout = kernel_layout(plan);
     TT_FATAL(
         desc.kernels.size() == layout.num_readers + layout.num_writers + layout.num_computes,
-        "groupnorm_sc_N_1_HW_C_b: kernel count out of sync with kernel_layout");
+        "groupnorm_sc_N_1_HW_C_b: kernel count out of sync with the kernel layout");
     return desc;
 }
 
-void GroupnormScN1HwCbProgramFactory::override_runtime_arguments(
-    Program& program,
+}  // namespace
+
+ProgramDescriptor GroupnormScN1HwCbProgramFactory::create_descriptor(
+    const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCbInputs& tensors, Tensor& output) {
+    KernelLayout layout;
+    return gn_descriptor(attrs, tensors, output, layout);
+}
+
+GroupnormScN1HwCbMeshWorkloadFactory::cached_mesh_workload_t GroupnormScN1HwCbMeshWorkloadFactory::create_mesh_workload(
+    const GroupnormScN1HwCbParams& attrs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const GroupnormScN1HwCbInputs& tensors,
+    Tensor& output) {
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    for (const auto& range : tensor_coords.ranges()) {
+        shared_variables_t sv;
+        const ProgramDescriptor desc = gn_descriptor(attrs, tensors, output, sv.layout);
+        Program program{desc};
+        // The shard-backed CBs, found once by CB index: a hit re-points them by handle.
+        for (const auto& circular_buffer : program.circular_buffers()) {
+            if (!circular_buffer->globally_allocated()) {
+                continue;
+            }
+            const auto& indices = circular_buffer->buffer_indices();
+            const bool backs_input = indices.contains(gargs::cb::INPUT_RM) || indices.contains(gargs::cb::INPUT_TILES);
+            sv.shard_cbs.push_back(ShardCb{.handle = circular_buffer->id(), .backs_input = backs_input});
+        }
+        workload.add_program(range, std::move(program));
+        shared.emplace(range, std::move(sv));
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared)};
+}
+
+void GroupnormScN1HwCbMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
     const GroupnormScN1HwCbParams& attrs,
     const GroupnormScN1HwCbInputs& tensors,
-    Tensor& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    Tensor& output) {
     // The key (compute_program_hash) pins every per-core arg except the tensor addresses (reader IN / GAMMA / BETA /
     // OUT, writer OUT) and compute EPS_BITS (eps is left out of the key); these, and the shard-backed CBs, are
-    // rewritten here. The kernel indices follow from the plan's group counts, which the key fixes.
-    const planner::Plan& plan = planner::solve_plan(planner::plan_inputs(attrs, tensors));
-    const KernelLayout layout = kernel_layout(plan);
+    // rewritten here, in a program whose record differs from the call. The kernel indices come from the layout the
+    // miss recorded.
+    Buffer* const in_buffer = tensors.input.buffer();
+    Buffer* const out_buffer = output.buffer();
+    const GroupnormScN1HwCbHitValues call{
+        .in_addr = in_buffer->address(),
+        .gamma_addr = tensors.gamma.has_value() ? tensors.gamma->buffer()->address() : 0u,
+        .beta_addr = tensors.beta.has_value() ? tensors.beta->buffer()->address() : 0u,
+        .out_addr = out_buffer->address(),
+        .eps_bits = std::bit_cast<uint32_t>(attrs.eps)};
 
-    const uint32_t in_addr = tensors.input.buffer()->address();
-    const uint32_t gamma_addr = tensors.gamma.has_value() ? tensors.gamma->buffer()->address() : 0u;
-    const uint32_t beta_addr = tensors.beta.has_value() ? tensors.beta->buffer()->address() : 0u;
-    const uint32_t out_addr = output.buffer()->address();
-    const uint32_t eps_bits = std::bit_cast<uint32_t>(attrs.eps);
-
-    for (uint32_t k = 0; k < layout.num_readers; ++k) {
-        auto& grid = GetRuntimeArgs(program, k);
-        for (auto& column : grid) {
-            for (auto& args : column) {
-                if (args.size() == 0) {
-                    continue;
-                }
-                args[gargs::reader_rt::IN_ADDR] = in_addr;
-                args[gargs::reader_rt::GAMMA_ADDR] = gamma_addr;
-                args[gargs::reader_rt::BETA_ADDR] = beta_addr;
-                args[gargs::reader_rt::OUT_ADDR] = out_addr;
-            }
-        }
-    }
-    for (uint32_t k = layout.first_writer(); k < layout.first_compute(); ++k) {
-        auto& grid = GetRuntimeArgs(program, k);
-        for (auto& column : grid) {
-            for (auto& args : column) {
-                if (args.size() != 0) {
-                    args[gargs::writer_rt::OUT_ADDR] = out_addr;
-                }
-            }
-        }
-    }
-    for (uint32_t k = layout.first_compute(); k < layout.first_compute() + layout.num_computes; ++k) {
-        auto& grid = GetRuntimeArgs(program, k);
-        for (auto& column : grid) {
-            for (auto& args : column) {
-                if (args.size() != 0) {
-                    args[gargs::compute_rt::EPS_BITS] = eps_bits;
-                }
-            }
-        }
-    }
-
-    // Shard-backed CBs, found by CB index; re-pointed on every hit.
-    for (const auto& circular_buffer : program.circular_buffers()) {
-        if (!circular_buffer->globally_allocated()) {
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        shared_variables_t& sv = cached_workload.shared_variables.at(range);
+        if (sv.applied == call) {
             continue;
         }
-        const auto& indices = circular_buffer->buffer_indices();
-        const bool is_input = indices.contains(gargs::cb::INPUT_RM) || indices.contains(gargs::cb::INPUT_TILES);
-        Buffer* backing = is_input ? tensors.input.buffer() : output.buffer();
-        UpdateDynamicCircularBufferAddress(program, circular_buffer->id(), *backing);
+        // Cleared before the first write and set after the last, so a hit that stops part-way leaves no record.
+        const std::optional<GroupnormScN1HwCbHitValues> previous = std::exchange(sv.applied, std::nullopt);
+        const KernelLayout& layout = sv.layout;
+
+        for (uint32_t k = 0; k < layout.num_readers; ++k) {
+            auto& grid = GetRuntimeArgs(program, k);
+            for (auto& column : grid) {
+                for (auto& args : column) {
+                    if (args.size() == 0) {
+                        continue;
+                    }
+                    args[gargs::reader_rt::IN_ADDR] = call.in_addr;
+                    args[gargs::reader_rt::GAMMA_ADDR] = call.gamma_addr;
+                    args[gargs::reader_rt::BETA_ADDR] = call.beta_addr;
+                    args[gargs::reader_rt::OUT_ADDR] = call.out_addr;
+                }
+            }
+        }
+        for (uint32_t k = layout.first_writer(); k < layout.first_compute(); ++k) {
+            auto& grid = GetRuntimeArgs(program, k);
+            for (auto& column : grid) {
+                for (auto& args : column) {
+                    if (args.size() != 0) {
+                        args[gargs::writer_rt::OUT_ADDR] = call.out_addr;
+                    }
+                }
+            }
+        }
+        for (uint32_t k = layout.first_compute(); k < layout.first_compute() + layout.num_computes; ++k) {
+            auto& grid = GetRuntimeArgs(program, k);
+            for (auto& column : grid) {
+                for (auto& args : column) {
+                    if (args.size() != 0) {
+                        args[gargs::compute_rt::EPS_BITS] = call.eps_bits;
+                    }
+                }
+            }
+        }
+
+        // A shard-backed CB is re-pointed only when its tensor moved since the last completed hit (always after the
+        // miss, which leaves no record).
+        const bool in_moved = !previous.has_value() || previous->in_addr != call.in_addr;
+        const bool out_moved = !previous.has_value() || previous->out_addr != call.out_addr;
+        for (const ShardCb& shard_cb : sv.shard_cbs) {
+            if (shard_cb.backs_input ? in_moved : out_moved) {
+                UpdateDynamicCircularBufferAddress(
+                    program, shard_cb.handle, shard_cb.backs_input ? *in_buffer : *out_buffer);
+            }
+        }
+        sv.applied = call;
     }
 }
 

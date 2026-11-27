@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <numeric>
@@ -348,7 +349,6 @@ Plan plan_interleaved(const PlanInputs& in) {
     plan.R = static_cast<uint32_t>(R);
     plan.rows_core_max = static_cast<uint32_t>(best->rows_core_max);
     plan.B_max = static_cast<uint32_t>(B_max);
-    plan.K_max = K_max;
     plan.K_alloc = static_cast<uint32_t>(K_alloc);
     plan.stream = stream;
     plan.is_rm = in.is_rm;
@@ -361,7 +361,6 @@ Plan plan_interleaved(const PlanInputs& in) {
     plan.col_mask = vc_last < W * kTileDim;
     plan.out_writer_chunks = static_cast<uint32_t>(out_writer_chunks);
     plan.fmt = in.fmt;
-    plan.work = distribute(best->U, P, best->cpi, Ht, in.grid_x);
     return plan;
 }
 
@@ -369,76 +368,55 @@ struct Segment {
     int64_t img, a, b;
 };
 
-struct RmPieces {
-    std::vector<uint32_t> ops;
-    std::vector<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> staged;
+// The block-sharded geometry (Python _plan_sharded up to its band check), with its refusals in the Python's order.
+// Scalars only: a row's or a column's values are member functions, so the scalar solve builds no per-core data.
+struct ShardGeometry {
+    int64_t N = 0, HW = 0, C = 0, Cg = 0, NHW = 0;
+    int64_t sh = 0, sw = 0, x0 = 0, y0 = 0, gx = 0, gy = 0;
+    int64_t k = 1, W = 0, tr = 0;
+    bool split_cols = false;
+    int64_t cl_cols = 0, lanes_max = 0, bh = 0, unit_cores = 0, R = 0;
+    int64_t rows_nominal = 0, cap = 0;
+
+    int64_t vrows(int64_t y) const { return std::min(sh, NHW - (y * sh)); }
+    int64_t vcols(int64_t x) const { return std::min(sw, C - (x * sw)); }
+    // (first image, image count) of the band holding shard row y.
+    std::pair<int64_t, int64_t> band_images(int64_t y) const {
+        const int64_t yb = y - (y % bh);
+        const int64_t first = (yb * sh) / HW;
+        const int64_t last = (std::min((yb + bh) * sh, NHW) - 1) / HW;
+        return {first, last - first + 1};
+    }
+    // Calls fn(segment) for each image's part of shard row y, in order (Python segments).
+    template <typename Fn>
+    void for_each_segment(int64_t y, Fn&& fn) const {
+        const int64_t r0 = y * sh, r1 = (y * sh) + vrows(y);
+        for (int64_t n = r0 / HW; n * HW < r1; ++n) {
+            fn(Segment{n, std::max(n * HW, r0) - r0, std::min((n + 1) * HW, r1) - r0});
+        }
+    }
+    int64_t num_segments(int64_t y) const {
+        int64_t n = 0;
+        for_each_segment(y, [&n](const Segment& /*segment*/) { ++n; });
+        return n;
+    }
 };
 
-// Python _rm_core_ops.
-RmPieces rm_core_ops(const std::vector<Segment>& segs, int64_t tr, int64_t h) {
-    struct Item {
-        size_t si;
-        int64_t t;
-        std::optional<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> trip;
-    };
-    std::vector<Item> items;
-    for (size_t si = 0; si < segs.size(); ++si) {
-        const int64_t a = segs[si].a, b = segs[si].b;
-        int64_t t = a / tr;
-        while (t * tr < b) {
-            const int64_t lo = t * tr, hi = (t * tr) + tr;
-            if (a <= lo && hi <= b) {
-                items.push_back({si, t, std::nullopt});
-            } else {
-                const int64_t st = std::max(a, lo);
-                items.push_back(
-                    {si,
-                     t,
-                     std::array<uint32_t, gn_sc_args::STAGED_WORDS>{
-                         static_cast<uint32_t>(st),
-                         static_cast<uint32_t>(st - lo),
-                         static_cast<uint32_t>(std::min(b, hi) - st)}});
-            }
-            ++t;
-        }
-    }
-    int64_t max_full = -1;
-    for (const auto& it : items) {
-        if (!it.trip.has_value()) {
-            max_full = std::max(max_full, it.t);
-        }
-    }
-    RmPieces out;
-    int64_t run = 0;
-    for (size_t i = 0; i < items.size(); ++i) {
-        const auto& it = items[i];
-        const Item* nxt = i + 1 < items.size() ? &items[i + 1] : nullptr;
-        const bool seg_last = nxt == nullptr || nxt->si != it.si;
-        if (!it.trip.has_value()) {
-            ++run;
-            if (run == h || seg_last || nxt->trip.has_value()) {
-                out.ops.push_back(static_cast<uint32_t>(run) | (seg_last ? gn_sc_args::OP_SEG_END : 0u));
-                run = 0;
-            }
-            continue;
-        }
-        out.ops.push_back(1u | gn_sc_args::OP_STAGED | (seg_last ? gn_sc_args::OP_SEG_END : 0u));
-        out.staged.push_back(*it.trip);
-        if ((nxt == nullptr || nxt->t != it.t) && it.t < max_full) {
-            out.ops.push_back(gn_sc_args::OP_SKIP);
-        }
-    }
-    return out;
-}
-
-Plan plan_sharded(const PlanInputs& in) {
-    const int64_t N = in.N, HW = in.HW, C = in.C, G = in.G;
-    TT_FATAL(G >= 1 && C % G == 0, "groupnorm_sc_N_1_HW_C_b: num_groups={} must divide C={}", G, C);
-    const int64_t Cg = C / G;
-    const int64_t sh = in.sh, sw = in.sw;
-    const int64_t x0 = in.x0, y0 = in.y0, gx = in.gx, gy = in.gy;
-    const bool is_rm = in.is_rm;
-    const Formats& fmt = in.fmt;
+ShardGeometry shard_geometry(const PlanInputs& in) {
+    ShardGeometry g;
+    g.N = in.N;
+    g.HW = in.HW;
+    g.C = in.C;
+    const int64_t G = in.G;
+    TT_FATAL(G >= 1 && g.C % G == 0, "groupnorm_sc_N_1_HW_C_b: num_groups={} must divide C={}", G, g.C);
+    g.Cg = g.C / G;
+    g.sh = in.sh;
+    g.sw = in.sw;
+    g.x0 = in.x0;
+    g.y0 = in.y0;
+    g.gx = in.gx;
+    g.gy = in.gy;
+    const int64_t sh = g.sh, sw = g.sw, gx = g.gx, gy = g.gy, HW = g.HW;
 
     if (!in.shard_in_l1) {
         refuse_sharded("only L1 shards are supported");
@@ -446,36 +424,36 @@ Plan plan_sharded(const PlanInputs& in) {
     if (!in.shard_row_major || static_cast<int64_t>(in.shard_grid_num_cores) != gx * gy) {
         refuse_sharded("the shard grid must be one ROW_MAJOR rectangle");
     }
-    const int64_t NHW = N * HW;
-    std::vector<int64_t> vrows(gy), vcols(gx);
+    g.NHW = g.N * HW;
+    int64_t min_rows = std::numeric_limits<int64_t>::max();
+    int64_t min_cols = std::numeric_limits<int64_t>::max();
     for (int64_t y = 0; y < gy; ++y) {
-        vrows[y] = std::min(sh, NHW - (y * sh));
+        min_rows = std::min(min_rows, g.vrows(y));
     }
     for (int64_t x = 0; x < gx; ++x) {
-        vcols[x] = std::min(sw, C - (x * sw));
+        min_cols = std::min(min_cols, g.vcols(x));
     }
-    if (*std::min_element(vrows.begin(), vrows.end()) <= 0 || *std::min_element(vcols.begin(), vcols.end()) <= 0) {
+    if (min_rows <= 0 || min_cols <= 0) {
         refuse_sharded(fmt::format("shard {}x{} on a {}x{} grid leaves a core without data", sh, sw, gx, gy));
     }
-    int64_t k = 1, W = 0;
-    if (is_rm) {
+    if (in.is_rm) {
         const int64_t L = std::lcm(sw, kTileDim);
-        k = L / sw;
-        W = L / kTileDim;
+        g.k = L / sw;
+        g.W = L / kTileDim;
     } else {
         if (HW % kTileDim != 0) {
             refuse_sharded(fmt::format("TILE images of {} rows are not whole tile rows", HW));
         }
-        k = 1;
-        W = sw / kTileDim;
+        g.k = 1;
+        g.W = sw / kTileDim;
     }
-    const int64_t tr = kTileDim * k;
+    g.tr = kTileDim * g.k;
 
-    const bool split_cols = sw % Cg == 0;
-    const int64_t cl_cols = split_cols ? 1 : gx;
-    const int64_t lanes_max = split_cols ? sw / Cg : G;
-    if (lanes_max > kMaxGroupLanes) {
-        refuse_sharded(fmt::format("{} groups per statistic unit exceed one tile row of group lanes", lanes_max));
+    g.split_cols = sw % g.Cg == 0;
+    g.cl_cols = g.split_cols ? 1 : gx;
+    g.lanes_max = g.split_cols ? sw / g.Cg : G;
+    if (g.lanes_max > kMaxGroupLanes) {
+        refuse_sharded(fmt::format("{} groups per statistic unit exceed one tile row of group lanes", g.lanes_max));
     }
     std::vector<int64_t> band_starts{0};
     for (int64_t y = 1; y < gy; ++y) {
@@ -483,57 +461,114 @@ Plan plan_sharded(const PlanInputs& in) {
             band_starts.push_back(y);
         }
     }
-    const int64_t bh = band_starts.size() > 1 ? band_starts[1] : gy;
+    g.bh = band_starts.size() > 1 ? band_starts[1] : gy;
     for (size_t i = 0; i < band_starts.size(); ++i) {
         const int64_t end = i + 1 < band_starts.size() ? band_starts[i + 1] : gy;
-        if (end - band_starts[i] != bh) {
+        if (end - band_starts[i] != g.bh) {
             refuse_sharded(fmt::format("image bands of unequal height (shard height {}, HW={})", sh, HW));
         }
     }
-    const int64_t unit_cores = bh * cl_cols;
-    const int64_t R = ceil_div(unit_cores, kTileDim);
+    g.unit_cores = g.bh * g.cl_cols;
+    g.R = ceil_div(g.unit_cores, kTileDim);
+    g.rows_nominal = ceil_div(sh, g.tr);
+    g.cap = !in.chunk_tiles_target.has_value() ? g.rows_nominal : std::max<int64_t>(1, *in.chunk_tiles_target) / g.W;
+    return g;
+}
 
-    auto band_images = [&](int64_t y) {
-        const int64_t yb = y - (y % bh);
-        const int64_t first = (yb * sh) / HW;
-        const int64_t last = (std::min((yb + bh) * sh, NHW) - 1) / HW;
-        return std::pair<int64_t, int64_t>{first, last - first + 1};
-    };
-    auto segments = [&](int64_t y) {
-        const int64_t r0 = y * sh, r1 = (y * sh) + vrows[y];
-        std::vector<Segment> segs;
-        int64_t n = r0 / HW;
-        while (n * HW < r1) {
-            segs.push_back({n, std::max(n * HW, r0) - r0, std::min((n + 1) * HW, r1) - r0});
-            ++n;
+// (shard stick, position in its tile row, sticks) of one staged row.
+using StagedRow = std::array<uint32_t, gn_sc_args::STAGED_WORDS>;
+
+// One (segment, tile row) of a shard row (Python _rm_core_ops' items): whole, or staged.
+struct RmItem {
+    int64_t si = 0, t = 0;
+    bool staged = false;
+    StagedRow trip{};
+};
+
+template <typename Visit>
+void for_each_rm_item(const ShardGeometry& g, int64_t y, Visit&& visit) {
+    const int64_t tr = g.tr;
+    int64_t si = 0;
+    g.for_each_segment(y, [&](const Segment& s) {
+        for (int64_t t = s.a / tr; t * tr < s.b; ++t) {
+            const int64_t lo = t * tr, hi = (t * tr) + tr;
+            const bool whole = s.a <= lo && hi <= s.b;
+            RmItem it{.si = si, .t = t, .staged = !whole};
+            if (it.staged) {
+                const int64_t st = std::max(s.a, lo);
+                const int64_t end = std::min(s.b, hi);
+                it.trip = {static_cast<uint32_t>(st), static_cast<uint32_t>(st - lo), static_cast<uint32_t>(end - st)};
+            }
+            visit(it);
         }
-        return segs;
+        ++si;
+    });
+}
+
+// Python _rm_core_ops for shard row y and chunk height h: emit_op(word) per op word, emit_staged(trip) per staged
+// row, in order. The items stream through with one item of lookahead, so counting them stores nothing.
+template <typename EmitOp, typename EmitStaged>
+void rm_core_ops(const ShardGeometry& g, int64_t y, int64_t h, EmitOp&& emit_op, EmitStaged&& emit_staged) {
+    int64_t max_full = -1;
+    for_each_rm_item(g, y, [&max_full](const RmItem& it) {
+        if (!it.staged) {
+            max_full = std::max(max_full, it.t);
+        }
+    });
+    int64_t run = 0;
+    auto step = [&](const RmItem& it, const RmItem* nxt) {
+        const bool seg_last = nxt == nullptr || nxt->si != it.si;
+        if (!it.staged) {
+            ++run;
+            if (run == h || seg_last || nxt->staged) {
+                emit_op(static_cast<uint32_t>(run) | (seg_last ? gn_sc_args::OP_SEG_END : 0u));
+                run = 0;
+            }
+            return;
+        }
+        emit_op(1u | gn_sc_args::OP_STAGED | (seg_last ? gn_sc_args::OP_SEG_END : 0u));
+        emit_staged(it.trip);
+        if ((nxt == nullptr || nxt->t != it.t) && it.t < max_full) {
+            emit_op(gn_sc_args::OP_SKIP);
+        }
     };
+    std::optional<RmItem> pending;
+    for_each_rm_item(g, y, [&](const RmItem& it) {
+        if (pending.has_value()) {
+            step(*pending, &it);
+        }
+        pending = it;
+    });
+    if (pending.has_value()) {
+        step(*pending, nullptr);
+    }
+}
+
+Plan plan_sharded(const PlanInputs& in) {
+    const ShardGeometry g = shard_geometry(in);
+    const int64_t N = g.N, HW = g.HW, C = g.C, Cg = g.Cg;
+    const int64_t sw = g.sw, gx = g.gx, gy = g.gy;
+    const int64_t W = g.W, tr = g.tr, R = g.R;
+    const bool is_rm = in.is_rm;
+    const Formats& fmt = in.fmt;
 
     int64_t NU = 0;
-    std::vector<std::vector<Segment>> seg_rows;
     int64_t NSEG = 0;
     for (int64_t y = 0; y < gy; ++y) {
-        NU = std::max(NU, band_images(y).second);
-        seg_rows.push_back(segments(y));
-        NSEG = std::max<int64_t>(NSEG, static_cast<int64_t>(seg_rows.back().size()));
+        NU = std::max(NU, g.band_images(y).second);
+        NSEG = std::max(NSEG, g.num_segments(y));
     }
     bool simple = NSEG == 1;
-    for (const int64_t v : vrows) {
-        simple = simple && v % tr == 0;
+    for (int64_t y = 0; y < gy; ++y) {
+        simple = simple && g.vrows(y) % tr == 0;
     }
 
     // The Python subtracted the out-of-place output shard, which it allocated after reading the budget. Here the
     // output is allocated before plan_inputs reads the budget, so the budget already excludes it.
     const int64_t l1_budget = in.l1_budget;
 
-    const int64_t rows_nominal = ceil_div(sh, tr);
-    std::vector<int64_t> rows_full(gy);
-    for (int64_t y = 0; y < gy; ++y) {
-        rows_full[y] = vrows[y] / tr;
-    }
-    const int64_t cap =
-        !in.chunk_tiles_target.has_value() ? rows_nominal : std::max<int64_t>(1, *in.chunk_tiles_target) / W;
+    const int64_t rows_nominal = g.rows_nominal;
+    const int64_t cap = g.cap;
     auto fp_common = [&](int64_t T) {
         Footprint fp;
         fp.W = W;
@@ -546,30 +581,30 @@ Plan plan_sharded(const PlanInputs& in) {
         fp.sharded = true;
         fp.NU = NU;
         fp.NSEG = NSEG;
-        fp.pilot_cols = cl_cols;
+        fp.pilot_cols = g.cl_cols;
         fp.fmt = fmt;
         return fp;
     };
-    const bool col_mask = is_rm && vcols.back() < sw;
+    const bool col_mask = is_rm && g.vcols(gx - 1) < sw;
 
-    std::vector<RmPieces> rm_pieces;
-    std::vector<int64_t> ring_rows;
+    // RM: each shard row's ring rows and staged rows, counted from its op words without storing them.
     int64_t h_ops = 0, fp_ops = 0, stage_pages = 0, max_ring_rows = 0;
     if (is_rm) {
         h_ops = std::min(cap, rows_nominal);
         int64_t n_staged = 0;
         for (int64_t y = 0; y < gy; ++y) {
-            rm_pieces.push_back(rm_core_ops(seg_rows[y], tr, h_ops));
             int64_t rr = 0;
-            for (const uint32_t op : rm_pieces.back().ops) {
+            int64_t staged_rows = 0;
+            auto count_rows = [&rr](uint32_t op) {
                 if ((op & gn_sc_args::OP_SKIP) == 0) {
                     rr += op & gn_sc_args::OP_ROWS;
                 }
-            }
-            ring_rows.push_back(rr);
-            n_staged = std::max<int64_t>(n_staged, static_cast<int64_t>(rm_pieces.back().staged.size()));
+            };
+            auto count_staged = [&staged_rows](const StagedRow& /*trip*/) { ++staged_rows; };
+            rm_core_ops(g, y, h_ops, count_rows, count_staged);
+            max_ring_rows = std::max(max_ring_rows, rr);
+            n_staged = std::max(n_staged, staged_rows);
         }
-        max_ring_rows = *std::max_element(ring_rows.begin(), ring_rows.end());
         stage_pages = n_staged != 0 ? (n_staged + 1) * W : 0;
         Footprint fp = fp_common(h_ops * W);
         fp.K_alloc = 0;
@@ -579,7 +614,7 @@ Plan plan_sharded(const PlanInputs& in) {
         fp_ops = footprint_bytes(fp);
     }
 
-    int64_t rows_core = 0, h = 0, T = 0, B = 0, K_max = 0, K_alloc = 0, footprint = 0;
+    int64_t rows_core = 0, h = 0, T = 0, B = 0, K_alloc = 0, footprint = 0;
     bool ops_path = false;
     if (!is_rm) {
         rows_core = rows_nominal;
@@ -593,7 +628,7 @@ Plan plan_sharded(const PlanInputs& in) {
         TT_FATAL(h > 0, "groupnorm_sc_N_1_HW_C_b: no chunk height divides {} tile rows under cap {}", rows_core, cap);
         T = h * W;
         B = rows_core / h;
-        K_max = K_alloc = B;
+        K_alloc = B;
         stage_pages = 0;
         Footprint fp = fp_common(T);
         fp.K_alloc = K_alloc;
@@ -616,7 +651,6 @@ Plan plan_sharded(const PlanInputs& in) {
             refuse_sharded(
                 fmt::format("the static CBs ({} B) exceed the L1 left beside the shards ({} B)", f_fixed, l1_budget));
         }
-        K_max = K_part;
         K_alloc =
             std::min(!in.max_resident_chunks.has_value() ? K_part : std::max<int64_t>(0, *in.max_resident_chunks), B);
         fp.K_alloc = K_alloc;
@@ -635,7 +669,7 @@ Plan plan_sharded(const PlanInputs& in) {
         TT_FATAL(h > 0, "groupnorm_sc_N_1_HW_C_b: chunk height 0 (chunk_tiles_target below the slice width)");
         T = h * W;
         B = ceil_div(rows_core, h);
-        K_max = K_alloc = B;
+        K_alloc = B;
         footprint = fp_ops;
         ops_path = true;
         const int64_t h_l = largest_divisor_at_most(rows_core, std::min(cap, rows_core));
@@ -647,7 +681,6 @@ Plan plan_sharded(const PlanInputs& in) {
             fp.K_alloc = 0;
             fp.stream = true;
             const int64_t K_part = floor_div(l1_budget - footprint_bytes(fp), in_tile(fmt) * T);
-            K_max = K_part;
             K_alloc = std::max<int64_t>(0, std::min<int64_t>(*in.max_resident_chunks, K_part));
             stage_pages = 0;
             fp.K_alloc = K_alloc;
@@ -674,16 +707,15 @@ Plan plan_sharded(const PlanInputs& in) {
     plan.S = static_cast<uint32_t>(gx);
     plan.gx = static_cast<uint32_t>(gx);
     plan.W = static_cast<uint32_t>(W);
-    plan.G_core = static_cast<uint32_t>(lanes_max);
+    plan.G_core = static_cast<uint32_t>(g.lanes_max);
     plan.U = static_cast<uint32_t>(N * gx);
     plan.P = static_cast<uint32_t>(gx * gy);
-    plan.cpi = static_cast<uint32_t>(unit_cores);
+    plan.cpi = static_cast<uint32_t>(g.unit_cores);
     plan.h = static_cast<uint32_t>(h);
     plan.T = static_cast<uint32_t>(T);
     plan.R = static_cast<uint32_t>(R);
     plan.rows_core_max = static_cast<uint32_t>(rows_core);
     plan.B_max = static_cast<uint32_t>(B);
-    plan.K_max = K_max;
     plan.K_alloc = static_cast<uint32_t>(K_alloc);
     plan.stream = B > K_alloc;
     plan.is_rm = is_rm;
@@ -703,22 +735,37 @@ Plan plan_sharded(const PlanInputs& in) {
     plan.ops_path = ops_path;
     plan.stage_pages = static_cast<uint32_t>(ops_path ? stage_pages : 0);
     plan.col_mask = col_mask;
-    plan.mcast_row_major = !split_cols;
+    plan.mcast_row_major = !g.split_cols;
     plan.ring_pages = static_cast<uint32_t>(is_rm && ops_path ? max_ring_rows * W : 0);
-    plan.pilot_cols = static_cast<uint32_t>(cl_cols);
+    plan.pilot_cols = static_cast<uint32_t>(g.cl_cols);
     plan.fmt = fmt;
+    return plan;
+}
 
-    plan.work.reserve(static_cast<size_t>(gx * gy));
+// The sharded per-core work (the tail of Python _plan_sharded): grid rows, then columns.
+std::vector<CoreWork> sharded_work(const PlanInputs& in) {
+    const ShardGeometry g = shard_geometry(in);
+    const int64_t HW = g.HW, Cg = g.Cg, sh = g.sh, sw = g.sw;
+    const int64_t x0 = g.x0, y0 = g.y0, gx = g.gx, gy = g.gy, W = g.W;
+    const int64_t cl_cols = g.cl_cols;
+    const bool split_cols = g.split_cols;
+    const bool is_rm = in.is_rm;
+    const int64_t h_ops = std::min(g.cap, g.rows_nominal);
+
+    std::vector<CoreWork> work;
+    work.reserve(static_cast<size_t>(gx * gy));
     for (int64_t y = 0; y < gy; ++y) {
-        const int64_t yb = y - (y % bh);
-        const auto [n_first, n_img] = band_images(y);
-        const auto& segs = seg_rows[y];
+        const int64_t yb = y - (y % g.bh);
+        const auto [n_first, n_img] = g.band_images(y);
+        const int64_t img0 = (y * sh) / HW;  // the image of the row's first segment
+        const int64_t n_seg = g.num_segments(y);
         std::vector<uint32_t> ops;
-        std::vector<std::array<uint32_t, gn_sc_args::STAGED_WORDS>> staged;
+        std::vector<StagedRow> staged;
         int64_t rm_credit_pages = 0;
         if (is_rm) {
-            ops = rm_pieces[y].ops;
-            staged = rm_pieces[y].staged;
+            auto add_op = [&ops](uint32_t op) { ops.push_back(op); };
+            auto add_staged = [&staged](const StagedRow& trip) { staged.push_back(trip); };
+            rm_core_ops(g, y, h_ops, add_op, add_staged);
             int64_t full_rows = 0, skips = 0;
             for (const uint32_t op : ops) {
                 if ((op & (gn_sc_args::OP_STAGED | gn_sc_args::OP_SKIP)) == 0) {
@@ -730,9 +777,9 @@ Plan plan_sharded(const PlanInputs& in) {
             }
             rm_credit_pages = (full_rows + skips) * W;
         } else {
-            for (const auto& s : segs) {
+            g.for_each_segment(y, [&ops](const Segment& s) {
                 ops.push_back(static_cast<uint32_t>((s.b - s.a) / kTileDim) | gn_sc_args::OP_SEG_END);
-            }
+            });
         }
         for (int64_t x = 0; x < gx; ++x) {
             const int64_t cx0 = split_cols ? x : 0;
@@ -740,39 +787,39 @@ Plan plan_sharded(const PlanInputs& in) {
             const int64_t g_lo = (cx0 * sw) / Cg;
             int64_t last_ch = cx0 * sw;
             for (int64_t c = cx0; c < cx0 + cl_cols; ++c) {
-                last_ch += vcols[c];
+                last_ch += g.vcols(c);
             }
             const int64_t slot = split_cols ? (y - yb) : ((y - yb) * gx) + x;
             CoreWork w;
             w.core_x = static_cast<uint32_t>(x0 + x);
             w.core_y = static_cast<uint32_t>(y0 + y);
-            w.unit_start = static_cast<uint32_t>((segs[0].img * gx) + x);
+            w.unit_start = static_cast<uint32_t>((img0 * gx) + x);
             w.num_blocks = 1;
             w.row_start = 0;
-            w.rows_core = static_cast<uint32_t>(rows_full[y]);
+            w.rows_core = static_cast<uint32_t>(g.vrows(y) / g.tr);
             w.is_root = slot == 0 ? 1 : 0;
             w.slot = static_cast<uint32_t>(slot);
             w.root_x = static_cast<uint32_t>(x0 + cx0);
             w.root_y = static_cast<uint32_t>(y0 + yb);
             w.xs = static_cast<uint32_t>(xs);
-            w.vc = static_cast<uint32_t>(vcols[x]);
+            w.vc = static_cast<uint32_t>(g.vcols(x));
             w.l0 = static_cast<uint32_t>((xs / Cg) - g_lo);
             w.off0 = static_cast<uint32_t>(xs % Cg);
             w.g_unit = static_cast<uint32_t>(ceil_div(last_ch, Cg) - g_lo);
             w.n_img = static_cast<uint32_t>(n_img);
-            w.n_seg = static_cast<uint32_t>(segs.size());
-            w.seg_img0 = static_cast<uint32_t>(segs[0].img - n_first);
+            w.n_seg = static_cast<uint32_t>(n_seg);
+            w.seg_img0 = static_cast<uint32_t>(img0 - n_first);
             w.ops = ops;
             w.staged = staged;
             w.rm_credit_pages = static_cast<uint32_t>(rm_credit_pages);
             for (int64_t c = cx0; c < cx0 + cl_cols; ++c) {
                 w.pilot_cols.push_back(static_cast<uint32_t>(x0 + c));
             }
-            w.w_valid = static_cast<uint32_t>(is_rm ? W : vcols[x] / kTileDim);
-            plan.work.push_back(std::move(w));
+            w.w_valid = static_cast<uint32_t>(is_rm ? W : g.vcols(x) / kTileDim);
+            work.push_back(std::move(w));
         }
     }
-    return plan;
+    return work;
 }
 
 struct PlanInputsHash {
@@ -876,13 +923,19 @@ const Plan& solve_plan(const PlanInputs& inputs) {
     return ref;
 }
 
+std::vector<CoreWork> build_work(const PlanInputs& inputs, const Plan& plan) {
+    if (inputs.sharded) {
+        return sharded_work(inputs);
+    }
+    return distribute(plan.U, plan.P, plan.cpi, plan.Ht, plan.grid_x);
+}
+
 ttsl::hash::hash_t plan_hash(const Plan& p) {
     return ttsl::hash::hash_objects(
         0,
         std::array<uint32_t, 22>{
             p.N, p.HW,     p.C, p.G, p.Ht,  p.Wt, p.Cg, p.span_tiles, p.gps,           p.S,     p.gx,
             p.W, p.G_core, p.U, p.P, p.cpi, p.h,  p.T,  p.R,          p.rows_core_max, p.B_max, p.K_alloc},
-        p.K_max,
         std::array<bool, 9>{
             p.stream,
             p.is_rm,

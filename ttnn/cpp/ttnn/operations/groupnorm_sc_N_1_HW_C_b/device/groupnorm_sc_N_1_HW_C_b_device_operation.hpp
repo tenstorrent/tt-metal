@@ -14,16 +14,16 @@
 
 namespace ttnn::operations::groupnorm_sc_N_1_HW_C_b {
 
-// Call order per launch: create_output_tensors, compute_program_hash (solves the memoized plan; the planner gate,
-// PlanNotImplemented), then on a hit
+// Call order per launch: create_output_tensors, compute_program_hash (the memoized scalar plan, no per-core work; the
+// planner gate, PlanNotImplemented), then on a hit
 // validate_on_program_cache_hit + the factory's override_runtime_arguments, on a miss
-// validate_on_program_cache_miss + create_descriptor.
+// validate_on_program_cache_miss + create_mesh_workload (create_descriptor per range).
 struct GroupnormScN1HwCbDeviceOperation {
     using operation_attributes_t = GroupnormScN1HwCbParams;
     using tensor_args_t = GroupnormScN1HwCbInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<GroupnormScN1HwCbProgramFactory>;
+    using program_factory_t = std::variant<GroupnormScN1HwCbMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

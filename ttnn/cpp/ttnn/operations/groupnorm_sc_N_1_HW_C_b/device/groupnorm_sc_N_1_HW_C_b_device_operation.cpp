@@ -237,7 +237,7 @@ void check_support(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCb
 
 GroupnormScN1HwCbDeviceOperation::program_factory_t GroupnormScN1HwCbDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
-    return GroupnormScN1HwCbProgramFactory{};
+    return GroupnormScN1HwCbMeshWorkloadFactory{};
 }
 
 void GroupnormScN1HwCbDeviceOperation::validate_on_program_cache_miss(
@@ -254,9 +254,10 @@ void GroupnormScN1HwCbDeviceOperation::validate_on_program_cache_hit(
 ttsl::hash::hash_t GroupnormScN1HwCbDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // eps is left out: it is a runtime scalar (compute EPS_BITS) that the factory's override_runtime_arguments
-    // re-applies on every hit. Everything structural is in: the tuning, the tensor specs, affine presence and the
-    // solved plan (which holds the L1 budget only through the geometry it fixes). The output spec follows from the
-    // input spec and in_place; a preallocated output must match it.
+    // re-applies on a hit that changes it. Everything structural is in: the tuning, the tensor specs, affine presence
+    // and the solved plan (which holds the L1 budget only through the geometry it fixes). The output spec follows from
+    // the input spec and in_place; a preallocated output must match it. The plan is the memoized scalar solve: the
+    // per-core work split is built only on a miss (create_descriptor).
     const planner::Plan& plan = planner::solve_plan(planner::plan_inputs(attrs, tensor_args));
     std::optional<TensorSpec> gamma_spec;
     std::optional<TensorSpec> beta_spec;
