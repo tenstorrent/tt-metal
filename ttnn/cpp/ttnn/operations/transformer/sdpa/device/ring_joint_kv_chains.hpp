@@ -21,7 +21,7 @@
 
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"

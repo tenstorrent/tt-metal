@@ -6,7 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -474,6 +474,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
+    ttnn::verify_numerical_configuration(input_tensor_q.device()->arch(), compute_kernel_config);
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 

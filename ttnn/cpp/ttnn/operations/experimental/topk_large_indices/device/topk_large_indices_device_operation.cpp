@@ -4,7 +4,7 @@
 
 #include "topk_large_indices_device_operation.hpp"
 
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <algorithm>
 #include <limits>

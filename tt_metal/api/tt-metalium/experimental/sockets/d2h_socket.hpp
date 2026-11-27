@@ -11,12 +11,12 @@
 #include <string>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <memory>
 #include <span>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/mesh/mesh_config.hpp>
 #include <vector>
 
 namespace tt::umd {

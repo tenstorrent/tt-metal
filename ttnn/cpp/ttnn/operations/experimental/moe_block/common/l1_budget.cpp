@@ -6,10 +6,10 @@
 
 #include <algorithm>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "moe_block_resources.hpp"
 

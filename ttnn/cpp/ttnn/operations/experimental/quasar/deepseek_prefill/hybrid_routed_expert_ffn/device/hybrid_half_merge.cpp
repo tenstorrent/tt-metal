@@ -15,9 +15,9 @@
 
 #include <fmt/format.h>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "kernels/hybrid_rt_table.hpp"
 #include "ttnn/operations/experimental/quasar/deepseek_prefill/moe_fused_swiglu/device/moe_fused_swiglu_geometry.hpp"
 

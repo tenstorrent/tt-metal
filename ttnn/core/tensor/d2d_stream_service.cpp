@@ -32,25 +32,25 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_config.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <internal/service/service_core_manager.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt-umd/pcie/pci_device.hpp>
 
@@ -1091,6 +1091,9 @@ struct D2DStreamServiceSender::Impl {
     // Per-coord service-core L1 words (service cores differ per device).
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<tt::tt_metal::distributed::MeshCoordinate, DeviceAddr> termination_addrs;
+    // Built on first use by get_sender_coord_table; shared, so Impl stays movable.
+    std::shared_ptr<tt::tt_metal::StreamSenderCoordTableCache> sender_coord_table_cache =
+        std::make_shared<tt::tt_metal::StreamSenderCoordTableCache>();
     // Fabric-link lease. share_fabric_links mirrors Config; when true the kernel
     // holds no fabric connection until granted a turn. link_grant is a single per-
     // coord service-core L1 word forming a strict host<->kernel ping-pong:
@@ -1354,6 +1357,19 @@ DeviceAddr D2DStreamServiceSender::get_metadata_addr(const tt::tt_metal::distrib
         "D2DStreamServiceSender::get_metadata_addr: no metadata buffer at coord {}",
         coord);
     return it->second;
+}
+
+std::shared_ptr<const tt::tt_metal::StreamSenderCoordTable> D2DStreamServiceSender::get_sender_coord_table() const {
+    const auto& shape = impl_->mesh_device->shape();
+    TT_FATAL(shape.dims() == 2, "D2DStreamServiceSender::get_sender_coord_table: expects a 2D mesh");
+    return impl_->sender_coord_table_cache->get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
+        const tt::tt_metal::distributed::MeshCoordinate coord(row, col);
+        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
+        table.service_cores.push_back(get_service_core(coord));
+        if (impl_->metadata_size_bytes > 0) {
+            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
+        }
+    });
 }
 
 tt::tt_metal::StreamOutputCounters D2DStreamServiceSender::get_output_counters(

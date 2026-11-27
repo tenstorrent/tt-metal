@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -157,6 +157,7 @@ struct FabricEriscDatamoverConfig {
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
     std::size_t handshake_addr = 0;
+    std::size_t inter_domain_ctrl_address = 0;
     std::size_t edm_channel_ack_addr = 0;
     std::size_t termination_signal_address = 0;  // pad extra bytes to match old EDM so handshake logic will still work
     std::size_t edm_local_sync_address = 0;
@@ -271,8 +272,14 @@ struct FabricEriscDatamoverConfig {
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
     std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
-    // emd vcs
-    std::size_t edm_noc_vc = 0;
+    // The router's pair of EDM NoC VCs: forwards to the next router go out on one, writes to its own chip on the other.
+    std::size_t edm_noc_vc_forward = 0;
+    std::size_t edm_noc_vc_local_write = 0;
+    // Sets the pair from the forward VC: local writes take the next EDM VC, wrapping around.
+    void set_edm_noc_vcs(std::size_t forward_vc) {
+        edm_noc_vc_forward = forward_vc;
+        edm_noc_vc_local_write = DEFAULT_NOC_VC + ((forward_vc - DEFAULT_NOC_VC + 1) % NUM_EDM_NOC_VCS);
+    }
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
@@ -349,6 +356,8 @@ struct RouterGraphInputs {
     RouterChannelLayout layout;       // this router's channels
     std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
     std::vector<bool> serviced;       // a channel, or a slot stock services anyway
+    bool inter_domain = false;
+    bool on_domain_edge = false;
 };
 
 /*
@@ -566,6 +575,8 @@ public:
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_sender_channels_per_vc_ = std::nullopt;
     std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc_ = std::nullopt;
     std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info_ = std::nullopt;
+    bool inter_domain_ = false;
+    bool on_domain_edge_ = false;
 
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;

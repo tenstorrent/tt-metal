@@ -66,6 +66,9 @@ private:
     void link_peers() {
         for (auto& router : g_.routers) {
             const auto& p = router.port;
+            if (p.capability == EdgeCapability::INTERDOMAIN) {
+                continue;
+            }
             std::optional<RouterIndex> match;
             if (p.capability != EdgeCapability::INTERMESH) {
                 const auto it = by_key_.find(RouterKey{p.peer, facing_back(p.direction), p.plane});
@@ -92,7 +95,9 @@ private:
             if (!rules_.carries(port, vc)) {
                 continue;
             }
-            add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Receiver});
+            if (rules_.has_receiver(port, vc)) {
+                add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Receiver});
+            }
             if (rules_.has_worker(port, vc)) {
                 add_channel(LogicalChannel{.router = r, .vc = vc, .kind = ChannelKind::Sender, .injection = true});
             }
@@ -133,15 +138,19 @@ private:
     }
 
     void add_eth_edges(uint32_t vc) {
-        for (const auto& router : g_.routers) {
-            const auto rx = g_.receiver(*router.peer, vc);
+        for (RouterIndex r = 0; r < g_.routers.size(); ++r) {
+            const auto peer = g_.routers[r].peer;
+            // a perimeter router's senders reach the peer's VC2 receiver, known at connect: its own stands in
+            const bool perimeter = g_.routers[r].port.capability == EdgeCapability::INTERDOMAIN;
+            const auto rx = g_.receiver(peer.value_or(r), perimeter ? 2 : vc);
             if (!rx) {
                 continue;
             }
-            for (ChannelIndex c : router.channels) {
+            for (ChannelIndex c : g_.routers[r].channels) {
                 const auto& ch = g_.channels[c];
                 if (ch.kind == ChannelKind::Sender && ch.vc == vc) {
-                    g_.edges.push_back(LogicalEdge{.from = c, .to = *rx, .transport = Transport::Eth});
+                    g_.edges.push_back(
+                        LogicalEdge{.from = c, .to = *rx, .transport = peer ? Transport::Eth : Transport::Dynamic});
                 }
             }
         }
@@ -162,7 +171,7 @@ private:
             while (members.size() <= g_.routers.size()) {
                 const auto& far = g_.routers[*g_.routers[at].peer].port;
                 const auto next = by_key_.find(RouterKey{far.node, s.direction, s.plane});
-                if (next == by_key_.end()) {
+                if (next == by_key_.end() || !g_.routers[next->second].peer) {
                     break;
                 }
                 if (next->second == start) {

@@ -8,19 +8,19 @@
 #include <cstdint>
 #include <unordered_map>
 #include <random>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
-#include "env_lib.hpp"
-#include <tt-metalium/math.hpp>
+#include "common/env_lib.hpp"
+#include <tt-metalium/utils/math.hpp>
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"

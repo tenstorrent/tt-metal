@@ -18,9 +18,9 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include <nanobind/stl/vector.h>
 

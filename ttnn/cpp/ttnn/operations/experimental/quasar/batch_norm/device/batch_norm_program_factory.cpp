@@ -8,8 +8,8 @@
 #include <bit>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -113,7 +113,9 @@ ttnn::device_operation::ProgramArtifacts BatchNormProgramFactory::create_program
     const tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
     const tt::DataFormat param_df = datatype_to_dataformat_converter(mean.dtype());
-    const tt::DataFormat stats_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : in_df;
+    // Intermediates never use an MX format (the unpacker expands MX to Float16_b): non-fp32 stats are Float16_b.
+    // The mean / var / weight / bias parameters stay BFLOAT16 (validated). UNVERIFIED on device.
+    const tt::DataFormat stats_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat eps_df = tt::DataFormat::Float16_b;  // generate_bcast_unary_scalar writes bf16
     const auto& tile = input.tensor_spec().tile();
     auto tile_bytes = [&](tt::DataFormat df) { return tile.get_tile_size(df); };

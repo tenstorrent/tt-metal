@@ -24,7 +24,7 @@
 #include "dispatch_fabric2d_kernel_interface.hpp"
 
 #ifndef KERNEL_BUILD
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "../../dispatch_fabric2d_untilize.hpp"
 #endif
