@@ -4,9 +4,12 @@
 
 #include "common/device_fixture.hpp"
 
+#include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <random>
 #include <vector>
 
 #include <tt-metalium/data_formats/bfloat16.hpp>
@@ -38,11 +41,17 @@ uint32_t make_relu_config(PackReluMode mode, float threshold = 0.0f) {
 
 // Run a pack relu test using the same infrastructure as test_direct.cpp's quasar path:
 // direct_reader_unary.cpp → eltwise_copy.cpp (with PACK_RELU) → direct_writer_unary.cpp
+// fp32_dest: Float32 tiles copied into a 32-bit DEST through UNP_DEST, so only the packer ReLU changes values.
 void run_pack_relu_test(
-    distributed::MeshDevice& mesh_device, uint32_t relu_config, const std::function<float(float)>& golden_fn) {
+    distributed::MeshDevice& mesh_device,
+    uint32_t relu_config,
+    const std::function<float(float)>& golden_fn,
+    bool fp32_dest = false,
+    float threshold = 0.0f) {
     const NodeCoord node{0, 0};
+    const tt::DataFormat data_format = fp32_dest ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
-    uint32_t single_tile_size = 2 * 1024;
+    uint32_t single_tile_size = fp32_dest ? 4 * 1024 : 2 * 1024;
     uint32_t num_tiles = 1;
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
 
@@ -67,14 +76,20 @@ void run_pack_relu_test(
         .unique_id = INPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float16_b,
+        .data_format_metadata = data_format,
     };
     DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = single_tile_size,
         .num_entries = 2,
-        .data_format_metadata = tt::DataFormat::Float16_b,
+        .data_format_metadata = data_format,
     };
+
+    ComputeHardwareConfig compute_hw_config{};
+    if (fp32_dest) {
+        compute_hw_config.enable_32_bit_dest = true;
+        compute_hw_config.unpack_modes = {{INPUT_DFB, UnpackMode::UnpackToDest}};
+    }
 
     KernelSpec reader_spec{
         .unique_id = READER,
@@ -120,7 +135,7 @@ void run_pack_relu_test(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .runtime_arg_schema = {.runtime_arg_names = {"relu_config"}},
-        .hw_config = ComputeHardwareConfig{},
+        .hw_config = compute_hw_config,
     };
 
     WorkUnitSpec wu{
@@ -138,8 +153,22 @@ void run_pack_relu_test(
 
     Program program(mesh_device, spec);
 
-    // Stimulus: random bfloat16 in [-1, 1]
-    std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
+    // Stimulus: random bfloat16 (or fp32 kept 1/64 clear of the threshold) in [-1, 1]
+    std::vector<uint32_t> src_vec;
+    if (fp32_dest) {
+        std::mt19937 rng(0xCAFE);
+        std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+        src_vec.resize(dram_buffer_size / sizeof(uint32_t));
+        for (auto& word : src_vec) {
+            float v = dist(rng);
+            while (std::fabs(v - threshold) < 1.0f / 64.0f) {
+                v = dist(rng);
+            }
+            word = std::bit_cast<uint32_t>(v);
+        }
+    } else {
+        src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 1.0f, 0xCAFE);
+    }
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, /*blocking=*/true);
 
@@ -180,15 +209,6 @@ void run_pack_relu_test(
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
-    // Build golden
-    std::vector<uint32_t> golden(src_vec.size());
-    for (size_t i = 0; i < src_vec.size(); ++i) {
-        auto [lo_bf, hi_bf] = unpack_two_bfloat16_from_uint32(src_vec[i]);
-        float lo_f = golden_fn(static_cast<float>(lo_bf));
-        float hi_f = golden_fn(static_cast<float>(hi_bf));
-        golden[i] = pack_two_bfloat16_into_uint32({bfloat16(lo_f), bfloat16(hi_f)});
-    }
-
     auto comparison_function = [](float a, float b) {
         const float atol = 0.02f;
         const float rtol = 0.05f;
@@ -198,7 +218,27 @@ void run_pack_relu_test(
     };
 
     int argfail = -1;
-    bool pass = packed_uint32_t_vector_comparison(result_vec, golden, comparison_function, &argfail);
+    bool pass = false;
+    if (fp32_dest) {
+        ASSERT_EQ(result_vec.size(), src_vec.size());
+        for (size_t i = 0; i < src_vec.size() && argfail < 0; ++i) {
+            const float expected = golden_fn(std::bit_cast<float>(src_vec[i]));
+            if (!comparison_function(std::bit_cast<float>(result_vec[i]), expected)) {
+                argfail = static_cast<int>(i);
+            }
+        }
+        pass = argfail < 0;
+    } else {
+        // Build golden
+        std::vector<uint32_t> golden(src_vec.size());
+        for (size_t i = 0; i < src_vec.size(); ++i) {
+            auto [lo_bf, hi_bf] = unpack_two_bfloat16_from_uint32(src_vec[i]);
+            float lo_f = golden_fn(static_cast<float>(lo_bf));
+            float hi_f = golden_fn(static_cast<float>(hi_bf));
+            golden[i] = pack_two_bfloat16_into_uint32({bfloat16(lo_f), bfloat16(hi_f)});
+        }
+        pass = packed_uint32_t_vector_comparison(result_vec, golden, comparison_function, &argfail);
+    }
     EXPECT_TRUE(pass) << "Failure position=" << argfail;
 }
 
@@ -224,4 +264,33 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThreshold) {
         this->device(), make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold), [threshold](float x) {
             return x < 0.0f ? 0.0f : std::min(x, threshold);
         });
+}
+
+// The same modes on a 32-bit DEST, where the bf16 threshold sits in the high half-word of RELU_THRESHOLD.
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluZeroFp32Dest) {
+    run_pack_relu_test(
+        this->device(),
+        make_relu_config(PackReluMode::ZERO_RELU),
+        [](float x) { return std::max(0.0f, x); },
+        /*fp32_dest=*/true);
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMinThresholdFp32Dest) {
+    const float threshold = 0.25f;
+    run_pack_relu_test(
+        this->device(),
+        make_relu_config(PackReluMode::MIN_THRESHOLD_RELU, threshold),
+        [threshold](float x) { return x <= threshold ? 0.0f : x; },
+        /*fp32_dest=*/true,
+        threshold);
+}
+
+TEST_F(QuasarMeshDeviceSingleCardFixture, PackReluMaxThresholdFp32Dest) {
+    const float threshold = 0.5f;
+    run_pack_relu_test(
+        this->device(),
+        make_relu_config(PackReluMode::MAX_THRESHOLD_RELU, threshold),
+        [threshold](float x) { return x < 0.0f ? 0.0f : std::min(x, threshold); },
+        /*fp32_dest=*/true,
+        threshold);
 }
