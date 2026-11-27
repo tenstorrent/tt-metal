@@ -486,6 +486,21 @@ class WrapperContracts(unittest.TestCase):
 
 
 class AdapterContracts(unittest.TestCase):
+    def test_trace_keys_delegate_for_default_and_enabled_modes(self):
+        tree = ast.parse((ROOT / "models/tt_dit/models/audio_vae/vocoder_ltx.py").read_text())
+        vocoder = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "Vocoder")
+        method = next(node for node in vocoder.body if isinstance(node, ast.FunctionDef) and node.name == "c12_trace_key")
+        ns = {"__package__": "models.tt_dit.models.audio_vae"}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "vocoder", "exec"), ns)
+        shape = [1, 128, 24]
+        for attributes in ({}, {"c12_identity": None}, *({"c12_identity": c12.Cell(m).identity()} for m in "ABCD")):
+            with self.subTest(attributes=attributes), patch.dict(sys.modules, {"models.tt_dit.utils.c12": c12}):
+                identity = attributes.get("c12_identity")
+                expected = c12.trace_key(shape, identity)
+                with patch.object(c12, "trace_key", wraps=c12.trace_key) as shared:
+                    self.assertEqual(ns["c12_trace_key"](NS(**attributes), shape), expected)
+                    shared.assert_called_once_with(shape, identity)
+
     def test_mode_selection_uses_shared_parser_before_configuration(self):
         tree = ast.parse((ROOT / "models/tt_dit/models/audio_vae/audio_decoder_ltx.py").read_text())
         adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef))
