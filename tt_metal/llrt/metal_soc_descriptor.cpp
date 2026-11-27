@@ -372,7 +372,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
         this->dram_view_size = std::min(this->dram_view_size, *dram_view_size_limit);
     }
     const size_t num_dram_views_in_descriptor = device_descriptor_yaml["dram_views"].size();
-    this->dram_core_size = num_dram_views_in_descriptor * this->dram_view_size;
+    this->dram_core_size = 0;
     this->dram_view_channels.clear();
     this->dram_view_eth_cores.clear();
     this->dram_view_worker_cores.clear();
@@ -396,6 +396,7 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
             break;
         }
         size_t address_offset = dram_view["address_offset"].as<size_t>();
+        this->dram_core_size = std::max(this->dram_core_size, address_offset + this->dram_view_size);
 
         TT_FATAL(
             dram_view[eth_endpoint_key] && dram_view[worker_endpoint_key],
