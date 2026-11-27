@@ -76,7 +76,9 @@ SPLIT_WRAP_WEIGHT = 1.0
 # How each out block's tiles are shared between its issuers.
 #   "rows":     contiguous row ranges, the first issuers take the ceiling share.
 #   "balanced": two issuers, one row range each; the row cut and which issuer takes the top
-#               part minimize the later issuer's modeled issue time (ISSUER_COST).
+#               part minimize the later issuer's modeled issue time (ISSUER_COST). Measured
+#               slower on P with stateful reads (most P cores wait on links, not on issue)
+#               and on I0/I3 (uneven 16-tile runs).
 #   "runs":     two issuers; one cut in row-major (row, piece column) order that balances
 #               runs + start lag. The cut may fall inside a row, so an issuer reads up to two
 #               rectangles (segments on one NoC). Measured slower: the cut adds a piece to both.
@@ -95,11 +97,22 @@ ISSUER_COST = {"piece": 95.0, "run": 40.0, "packet": 40.0, "in_row": 50.0, "lag"
 #   "stagger":    rotate the piece-column walk by (block row + block column), so cores
 #                 that share a source start on different source cores.
 #   "local_last": rotate the walks so the piece this core holds itself comes last.
+# Both rotations measure slower on P than "natural"; extra same-NoC segments alone cost nothing.
 PIECE_ORDER = "natural"
 
 # Per piece, program the source core and run size once and issue each row with three
-# register writes (one-packet state API). Applies when a shard row fits one NoC packet.
-STATEFUL_READS = False
+# register writes (one-packet state API). Compiled in only for placement pairs with per-row
+# runs whose shard row fits one NoC packet; others build the plain kernel.
+STATEFUL_READS = True
+
+# Issue each issuer's first run right after the accessor is built, before the walk's own
+# set-up (~200 cycles on Blackhole); the host names it in O(1) per-core args.
+#   "off":        the walk issues every run.
+#   "on":         every issuer; measured slower on P (8 runs per issuer: the early read only
+#                 adds an address resolution to an issue-bound RISC).
+#   "single_run": only when every issuer reads exactly one run, which then is all of its work
+#                 and the walk is skipped (I0/I3/I5: one 16-tile run per issuer).
+EARLY_FIRST_RUN = "single_run"
 
 # Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
 # one address serves every core).
@@ -303,6 +316,43 @@ def order_rects(rects, order, role, in_p):
         else:
             raise ValueError(f"g6_reshard: unknown PIECE_ORDER {order!r}")
     return out
+
+
+def _merged(piece_width, in_p, out_p):
+    return in_p.block_width_tiles == out_p.block_width_tiles and piece_width == in_p.block_width_tiles
+
+
+def has_row_runs(plan, in_p, out_p):
+    """Whether any piece of the plan is read row by row (not merged into one run)."""
+    return any(
+        not _merged(piece_width, in_p, out_p)
+        for role in plan["roles"]
+        for issuer in role["issuers"]
+        for r0, r1, c0, c1, _ in issuer["segments"]
+        for _, _, _, piece_width in iter_pieces(r0, r1, c0, c1, in_p.block_height_tiles, in_p.block_width_tiles)
+    )
+
+
+def early_first_run(plan):
+    """Whether the kernel issues each issuer's first run before its walk (see EARLY_FIRST_RUN)."""
+    if EARLY_FIRST_RUN not in ("off", "on", "single_run"):
+        raise ValueError(f"g6_reshard: unknown EARLY_FIRST_RUN {EARLY_FIRST_RUN!r}")
+    if EARLY_FIRST_RUN == "single_run":
+        return all(issuer["runs"] <= 1 for role in plan["roles"] for issuer in role["issuers"])
+    return EARLY_FIRST_RUN == "on"
+
+
+def first_run_args(role, segments, in_p, out_p, page_bytes):
+    """(page id, out offset in bytes, bytes, NoC) of the kernel walk's first run; bytes 0 if none."""
+    for r0, r1, c0, c1, noc in segments:
+        if r0 >= r1:
+            continue
+        ri, ci = r0 // in_p.block_height_tiles, c0 // in_p.block_width_tiles
+        width = min(c1, (ci + 1) * in_p.block_width_tiles) - c0
+        rows = min(r1, (ri + 1) * in_p.block_height_tiles) - r0 if _merged(width, in_p, out_p) else 1
+        offset = (r0 - role["block_rows"][0]) * out_p.block_width_tiles + (c0 - role["block_cols"][0])
+        return [r0 * out_p.tensor_width_tiles + c0, offset * page_bytes, rows * width * page_bytes, noc]
+    return [0, 0, 0, 0]
 
 
 def _wrap_free(noc, src, dst):
@@ -668,6 +718,7 @@ def describe_plan(input_tensor, memory_config):
         "issuer_split": ISSUER_SPLIT,
         "piece_order": PIECE_ORDER,
         "stateful_reads": STATEFUL_READS,
+        "early_first_run": EARLY_FIRST_RUN,
         "kernel_range": out_p.kernel_range(),
         "roles": roles,
     }
@@ -699,6 +750,7 @@ def _cache_key(input_tensor, memory_config):
         tuple(sorted((k, v if isinstance(v, float) else tuple(v)) for k, v in ISSUER_COST.items())),
         PIECE_ORDER,
         STATEFUL_READS,
+        EARLY_FIRST_RUN,
     )
 
 
@@ -714,6 +766,7 @@ def _build(input_tensor, output_tensor, memory_config):
 
     core_ranges = ttnn.CoreRangeSet([plan["kernel_range"]])
 
+    early = early_first_run(plan)
     max_segments = max(1, max(len(issuer["segments"]) for role in plan["roles"] for issuer in role["issuers"]))
     compile_time_args = [
         in_p.block_height_tiles,
@@ -722,7 +775,8 @@ def _build(input_tensor, output_tensor, memory_config):
         out_p.tensor_width_tiles,
         aligned_page_bytes,
         max_segments,
-        int(STATEFUL_READS),
+        int(STATEFUL_READS and has_row_runs(plan, in_p, out_p)),
+        int(early),
     ]
     compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -748,9 +802,15 @@ def _build(input_tensor, output_tensor, memory_config):
             segments = role["issuers"][issuer]["segments"]
             # Unused segment slots carry an empty row range.
             padding = [(0, 0, 0, 0, segments[0][4] if segments else default_noc)] * (max_segments - len(segments))
-            runtime_args[x][y] = [role["block_rows"][0], role["block_cols"][0]] + [
-                arg for segment in segments + padding for arg in segment
-            ]
+            first_run = first_run_args(role, segments, in_p, out_p, aligned_page_bytes)
+            if early and role["issuers"][issuer]["runs"] == 1:
+                # The early run is all of this issuer's work: no walk.
+                walk = [(0, 0, 0, 0, first_run[3])] * max_segments
+            else:
+                walk = segments + padding
+            runtime_args[x][y] = (
+                [role["block_rows"][0], role["block_cols"][0]] + first_run + [arg for seg in walk for arg in seg]
+            )
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(ISSUER_KERNEL),

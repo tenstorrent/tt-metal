@@ -60,7 +60,7 @@ Lower P's busiest-link load and measure it. The `noc_placement` entry of `ttnn/t
 - Bottleneck now: NoC1 link transfer at 48 tiles, plus the ~300-cycle per-issuer fixed cost, plus ~450 ns of dispatch-side launch skew.
 - Next to try: give the model a term for request injection behind passing response packets, so cross-NoC splits are priced right; or interleave per-run NoCs inside an issuer. Both need calibration runs outside this refinement's scope, and Refinement 2's ordering levers change which links are busy when, so they are best tuned together.
 
-### [ ] Refinement 2 — Trim P's per-issuer fixed cost and co-tune issue order
+### [x] Refinement 2 — Trim P's per-issuer fixed cost and co-tune issue order
 
 **Type**: perf
 
@@ -80,3 +80,13 @@ Each lever is a compile-time or host switch, so several can be measured in one p
 **Verifier notes**: these levers are cheap and can be measured independently of each other. They run after Refinement 1 because rotation and split shape change which links are busy at which moment, so their best setting depends on the NoC assignment Refinement 1 lands. This is a soft order, not a hard dependency: if Refinement 1 ends in a measured null result, tune these on the current loop. The ~500-cycle cross-core launch skew is dispatch-side and is not a target here.
 
 **Done when**: Tracy `DEVICE KERNEL DURATION` on P improves beyond noise (> 3%) over the Refinement 1 result on a fresh kernel cache, and golden `device_kernel_ns` for P moves the same way. The golden suite stays green and `test_g6_reshard.py` passes in plain and `--dev` mode. No regression on the guard set I0 / I3 / I5 / O1, as in Refinement 1.
+
+**Outcome**:
+- Measured (Tracy `DEVICE KERNEL DURATION`, fresh kernel cache, same-session medians of 3): P 1533 → 1408 ns (−8.2%). Four other sessions gave −6.9% to −9.4%. Golden `device_kernel_ns` for P in a same-session control: 1829 → 1718 / 1768 (test_op) and 1831 → 1737 / 1779 (loose). Guard set: I0 −1%, I3 −1.9%, I5 0%, O1 −1.4%. Everything is bit-exact.
+- What won: per-piece one-packet state reads (`STATEFUL_READS`, 3 NIU stores per row instead of 6). P's critical path was BRISC's issue loop at ~60–100 cycles per read. I0/I3/I5 also issue their single run before the walk (`EARLY_FIRST_RUN="single_run"`), measured at −1% to −5% there.
+- What lost, kept as live non-default knobs:
+  - Run-granular split and modeled-balanced split: +2–10% on P, +10–22% on I0/I3.
+  - `stagger` and `local_last` piece orders: +4–10% on P. A same-NoC two-segment ablation measured equal, so the order is what loses, not the segments.
+  - Early first run on every issuer: +5% on P.
+- Bottleneck now: 53 of 64 P cores finish issuing >350 cycles before their data lands, and end times cluster at ~1750 cycles whatever the launch time. P is link-bound on NoC1's westward row links, fed below saturation, plus ~450 ns of dispatch-side launch skew. The late-launched west cores remain issue-bound (~250 cycles of setup before the first read).
+- Next to try: link-aware NoC/route assignment priced with the request-injection term Refinement 1 named, now that issue cost has dropped and cross-NoC switches may pay. Not tried here: it is a NoC-assignment change (Refinement 1's lever) that needs new calibration, and the cut shape still measured +8–18% with stateful reads.

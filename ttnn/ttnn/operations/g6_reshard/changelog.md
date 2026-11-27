@@ -41,3 +41,55 @@
 - Golden test progress: the slice that was run passed 4/4: P test_op, P loose, O1 test_op, and the I0 placements_one_process loose case, which covers the I3/P/O1/P/I5 cache keys. The full suite is the harness's run.
 - Issues encountered: the tree's default before this refinement was `split`/`cut`, which regressed I5 (+20%) and did not beat `balanced` on P. Launch skew (~600–750 cycles, dispatch side) moves single-call P numbers by ±4%, so every decision used 5-call medians. The device log reports physical NoC columns (2 harvested Tensix columns), while the model uses translated ones. Column order is the same in both, so modeled link maxima are unchanged.
 - Tests added: no new test file. `test_g6_reshard_noc_policy_perf.py` gained `G6_PERF_REPEATS` / `G6_PERF_PLACEMENTS` / `G6_PERF_SETTINGS` and three settings: `split_issuer2_halved` (same-NoC segment ablation), `split_issuer2_w2` and `split_cut2_w2`.
+
+## Refinement 2 — Trim P's per-issuer fixed cost and co-tune issue order
+- Date: 2026-11-27
+- What was done:
+  - Attributed P's issuer timeline first, using a zoned probe copy of the kernel (`probes/make_zoned_kernel.py`) and per-core Tracy timelines.
+    - Each `noc_async_read` costs ~60–100 cycles to issue, even on I0's idle NoC. It is ~25 instructions, six of them NIU register stores, plus a command-buffer poll.
+    - Each piece adds ~95 cycles. Setup before the first read is ~250 cycles.
+    - BRISC starts 86–152 cycles after NCRISC on every core.
+    - In dynamic NoC mode each RISC's read barrier waits on the NIU's shared response counter. So both issuers of a core end together, at BRISC's last read + ~300 cycles.
+    - Before this refinement, P's critical path was BRISC's issue loop.
+  - **Shipped `STATEFUL_READS` (default on).**
+    - Per piece, `noc_async_read_one_packet_set_state` once, then `noc_async_read_one_packet_with_state` per row: 3 register stores instead of 6.
+    - Compiled in only for placement pairs that have per-row runs whose shard row fits one packet (the ≤ 15-tile cap). I0/I3/I5 (merged 16-tile runs) build the plain kernel, byte-identical to before.
+    - A 4-row piece now issues in ~180 cycles instead of ~330.
+  - **Shipped `EARLY_FIRST_RUN="single_run"`.**
+    - The walk's first run (page id, out offset, bytes, NoC: 4 O(1) per-core args) is issued right after the accessor is built, and the walk then skips it.
+    - Enabled only when every issuer reads exactly one run. That run is then all of the issuer's work, and the walk is dropped.
+    - `"on"` (every issuer) is a live knob. It measured +5–6% on P: an extra address resolution on an issue-bound RISC.
+  - **Built, measured and parked as live non-default knobs**, all correct (bit-exact on all five placements):
+    - `ISSUER_SPLIT="runs"` (mid-row cut with a start lag): P +2–10%; the cut adds a piece to both issuers.
+    - `ISSUER_SPLIT="balanced"` (modeled row cut, and which RISC takes which half, `ISSUER_COST`): P +3% over stateful, I0 +22%, I3 +10%.
+    - `PIECE_ORDER="stagger"` (bank_stagger): P +4–7%.
+    - `PIECE_ORDER="local_last"`: P +6–10%.
+    - Ablation: two same-NoC segments per issuer cost nothing (P 1409 = 1409). So the order itself is what loses, not segment overhead; the natural top-left start is fastest.
+  - Kernel: explicit block-column origin arg, a NoC bitmask for barriers (any segment count), the stateful branch and the early-run branch. Host: issuers are lists of rectangles (segments); three new knobs plus the cost model are in the cache key.
+  - Reused: the segment encoding, the NoC search and the kernel walk. Added: the knobs above, `has_row_runs` / `first_run_args` / `early_first_run`, `issuer_rects` / `order_rects`.
+  - No CB, L1 or data-movement-budget change: same runs, same bytes.
+- Perf (Blackhole, 1350 MHz, Tracy `DEVICE KERNEL DURATION`, medians of 3):
+  - Fresh kernel cache, same session. `plain` is the Refinement 1 issue path; `default` is the new defaults:
+
+    | case | plain (ns) | default (ns) | change |
+    |---|---|---|---|
+    | P | 1533 | 1408 | −8.2% |
+    | I0 | 913 | 904 | −1% |
+    | I3 | 2241 | 2199 | −1.9% |
+    | I5 | 1653 | 1651 | 0% |
+    | O1 | 2593 | 2558 | −1.4% |
+
+  - Stateful alone on P in four other sessions: −7.1%, −6.9%, −9.0%, −9.4%.
+  - `single_run` on the I cases in one session: I0 −5%, I3 −2.7%, I5 −2.8%. In the fresh-cache session it was within noise.
+  - Golden `device_kernel_ns`, same-session control → new (two runs): P test_op 1829 → 1718 / 1768; P loose 1831 → 1737 / 1779; O1 3184 → 2994 / 2828; I0 998 → 913 / 930.
+  - Refinement 1 recorded P at 1532 (Tracy) and 1782 / 1821 (golden).
+- Bottleneck now: 53 of 64 P cores finish issuing >350 cycles before their last data lands, and end times cluster at ~1750 cycles regardless of launch time (71–529 cycles). P is link-bound on NoC1's westward row links (Refinement 1's busiest link: 48 tiles ≈ 816 cycles, fed below saturation), plus ~450 ns of dispatch launch skew. The late-launched west cores are still issue-bound.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0) on P, I0, I3, I5, O1. Every acceptance, A/B and golden call asserts exact equality.
+- Golden test progress: the slice that was run passed 7/7: test_op P/I0/I3/I5/O1, P loose, and I0 placements_one_process (cache keys for I3/P/O1/P/I5). The full suite is the harness's run.
+- Issues encountered:
+  - The first `runs` split applied BRISC's lag to an empty issuer and handed I0's whole block to one RISC (+22%); fixed.
+  - I3 measured +2% with the stateful branch compiled in but never taken, so the switch is path-gated on host.
+  - The zoned probe's markers cost ~18 cycles each, and the compiler moves address math across them. Per-piece numbers from it are approximate.
+- Tests added:
+  - `test_g6_reshard_noc_policy_perf.py` gained 18 settings: `default`, `plain`, `stateful`, `runs_lag1-3`, `stagger`, `local_last`, `balanced`, `st_*` combinations, `early`, `st_early*`, `st_single`, `st_halved`, `zoned`, `zoned_stateful`. All are bit-exact (150/150).
+  - `probes/make_zoned_kernel.py` + `probes/kernels/reader_zoned.cpp` (timing probe).
