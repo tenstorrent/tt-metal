@@ -246,6 +246,55 @@ int main(int,char** argv) {
  // An unknown wrapper never results in an unsafe persistent skip.
  failed.gpp="/usr/bin/c++";assert(run_prewarm({failed},out.string()+"/","",7,"",false)==0);
  assert(summary[0]==1 && summary[2]==1 && summary[3]==0);
+ // Preprocessed capture recipes have self-contained sources and no includes.
+ {
+  auto preprocessed=req; preprocessed.kernel_name="preprocessed";
+  fs::path ii=root/"preprocessed.ii"; std::ofstream(ii)<<"int preprocessed = 1;\n";
+  preprocessed.targets[0].srcs={ii}; preprocessed.targets[0].includes.clear();
+  preprocessed.targets[0].defines.clear();
+  auto replay=[&](){return run_prewarm({preprocessed},out.string()+"/","",7,root.string()+"/",false);};
+  assert(replay()==1);
+  fs::path ccache=root/"ccache";
+  std::ofstream(ccache)<<"#!/bin/sh\nshift\nexec \"$@\"\n";
+  fs::permissions(ccache,fs::perms::owner_all);
+  const std::string saved_path=getenv("PATH");
+  setenv("PATH",(root.string()+":"+saved_path).c_str(),1);
+  preprocessed.gpp="ccache sloppiness=pch_defines,time_macros "+compiler.string();
+  assert(replay()==1); setenv("PATH",saved_path.c_str(),1);
+  for(const auto& foreign : std::vector<std::string>{root.string()+"-sibling/bin/g++",
+       root.string()+"/../other/bin/g++", "/usr/bin/c++ "+compiler.string(),
+       "ccache sloppiness=pch_defines,time_macros /usr/bin/c++"}) {
+   preprocessed.gpp=foreign; assert(replay()==0 && summary[8]==1);
+  }
+ }
+ // Source identity follows the root includes even when the compiler is installed elsewhere.
+ req.gpp="/usr/bin/c++"; req.targets[0].srcs={src}; req.targets[0].defines.clear();
+ std::ofstream(src)<<"int probe = 1;\n";
+ auto includes=[&](const fs::path& tree){return "-I. -I.. -I"+tree.string()+"/";};
+ req.targets[0].includes=includes(root); req.kernel_name="external";
+ auto own_tree=[&](){return run_prewarm({req},out.string()+"/","",7,root.string()+"/",false);};
+ assert(own_tree()==1);
+ std::ofstream(src)<<"static_assert(false, \"edited body\");\n";
+ assert(own_tree()==0 && summary[2]==1);
+ std::ofstream(src)<<"int probe = 2;\n";
+ assert(own_tree()==1);
+ // A matching commit or compiler cannot make a foreign include tree safe to replay.
+ const std::string commit(40,'c'); req.tree_commit=commit;
+ setenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT",commit.c_str(),1);
+ for(const auto& foreign : std::vector<std::string>{root.string()+"-sibling", root.string()+"/../other", "/other/tree"}) {
+  req.targets[0].includes=includes(foreign)+" "+includes(root);
+  assert(own_tree()==0 && summary[8]==1);
+ }
+ req.gpp=compiler; req.targets[0].includes=includes("/other/tree");
+ assert(own_tree()==0 && summary[8]==1);
+ req.gpp="/usr/bin/c++"; req.targets[0].includes=includes(root);
+ auto foreign_target=req.targets[0]; foreign_target.includes=includes("/other/tree");
+ req.targets.push_back(foreign_target); assert(own_tree()==0 && summary[8]==1);
+ req.targets.pop_back(); req.tree_commit=std::string(40,'d');
+ assert(own_tree()==0);
+ unsetenv("TT_METAL_KERNEL_PREWARM_TREE_COMMIT"); req.tree_commit.clear();
+ req.targets[0].includes=""; assert(own_tree()==0);
+ req.targets[0].includes=includes(root); assert(own_tree()==1);
  std::cout<<"integration: stale arguments reproduced; unchanged skip, actual source/header/shadow/recipe/toolchain invalidation, explicit retry, success and exact summary counts passed\n";
 }
 """
@@ -411,11 +460,12 @@ void wait_for_prewarm() {}
 """
 
 OFFLINE_MAIN = r"""
-const std::string C(40, 'c'), D(40, 'd'), TREE = "batch";  // gpp "batch" / "batch-stale" contain the tree path
+const std::string C(40, 'c'), D(40, 'd'), TREE = "batch";
 fs::path root;
 jit_server::CompileRequest req(uint64_t bk, const std::string& name, const std::string& commit, bool good = true) {
  jit_server::CompileRequest r; r.build_key = bk; r.kernel_name = name; r.gpp = good ? "batch" : "batch-stale";
- r.tree_commit = commit; jit_build::TargetRecipe t; t.target_name = "first"; r.targets = {t}; return r;
+ r.tree_commit = commit; jit_build::TargetRecipe t; t.target_name = "first";
+ t.includes = "-I. -I.. -I" + TREE; r.targets = {t}; return r;
 }
 // key 7: the live key, captured by commit C, plus the same kernels as an older commit D left them (stale
 // recipes), plus one recipe of another source tree. key 8: an old key without commits. key 9: stamped, all D.
@@ -423,7 +473,7 @@ std::vector<jit_server::CompileRequest> mixed_manifest() {
  std::vector<jit_server::CompileRequest> m;
  for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), C));
  for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), D, false));
- auto foreign = req(7, "f0", C); foreign.gpp = "/other/tree/g++"; m.push_back(foreign);
+ auto foreign = req(7, "f0", C); foreign.targets[0].includes = "-I. -I.. -I/other/tree"; m.push_back(foreign);
  for (int i = 10; i < 12; ++i) m.push_back(req(8, "k" + std::to_string(i), ""));
  for (int i = 20; i < 22; ++i) m.push_back(req(9, "k" + std::to_string(i), D, false));
  return m;
@@ -713,13 +763,19 @@ class PrewarmFailureTests(unittest.TestCase):
         """Offline live-stamp filter, the per-entry commit filter and the real device-open path, host-only."""
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
         stamp_helpers = source[
-            source.index("std::string default_manifest_path(") : source.index("// Build one target from a portable recipe")
+            source.index("std::string default_manifest_path(") : source.index(
+                "// Build one target from a portable recipe"
+            )
         ]
         production = source[
             source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")
         ]
-        open_path = source[source.index("void maybe_launch_prewarm(") : source.index("std::size_t prewarm_manifest_offline(")]
-        offline = source[source.index("std::size_t prewarm_manifest_offline(") : source.index("void wait_for_prewarm()")]
+        open_path = source[
+            source.index("void maybe_launch_prewarm(") : source.index("std::size_t prewarm_manifest_offline(")
+        ]
+        offline = source[
+            source.index("std::size_t prewarm_manifest_offline(") : source.index("void wait_for_prewarm()")
+        ]
         dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
         parser = dependencies[
             dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
@@ -769,11 +825,20 @@ class PrewarmFailureTests(unittest.TestCase):
         """The real append_manifest_entry and read_manifest carry treeCommit (needs a capnp build tree)."""
         build = Path(os.environ.get("TT_METAL_CAPNP_BUILD_DIR", "/home/smarton/tt-metal-ltx-rt/build_Release"))
         capnp_dir = build / "_deps/capnproto-build/c++/src"
-        needed = [build / "bin/capnp", build / "bin/capnpc-c++", capnp_dir / "capnp/libcapnp.a", capnp_dir / "capnp/libcapnp-rpc.a", capnp_dir / "kj/libkj.a", capnp_dir / "kj/libkj-async.a"]
+        needed = [
+            build / "bin/capnp",
+            build / "bin/capnpc-c++",
+            capnp_dir / "capnp/libcapnp.a",
+            capnp_dir / "capnp/libcapnp-rpc.a",
+            capnp_dir / "kj/libkj.a",
+            capnp_dir / "kj/libkj-async.a",
+        ]
         if not all(f.exists() for f in needed):
             self.skipTest("no built capnp (set TT_METAL_CAPNP_BUILD_DIR to a tt-metal build tree)")
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
-        manifest_state = source[source.index("std::mutex g_manifest_mutex;") : source.index("// Prewarm orchestration.")]
+        manifest_state = source[
+            source.index("std::mutex g_manifest_mutex;") : source.index("// Prewarm orchestration.")
+        ]
         append = source[source.index("void append_manifest_entry(") : source.index("void maybe_launch_prewarm(")]
         harness = r"""
 #include <fcntl.h>
@@ -796,7 +861,7 @@ namespace {
 """
         harness += manifest_state + "}\n"
         harness += (
-            'const char* manifest_write_path() { return g_capture_path.empty() ? nullptr : g_capture_path.c_str(); }\n'
+            "const char* manifest_write_path() { return g_capture_path.empty() ? nullptr : g_capture_path.c_str(); }\n"
             + append
             + r"""
 void run(const char* path) {
@@ -823,18 +888,45 @@ int main(int, char** argv) { tt::tt_metal::kernel_prewarm::run(argv[1]); return 
             schema.mkdir(parents=True)
             (schema / "rpc.capnp").write_text((ROOT / "tt_metal/impl/jit_server/rpc.capnp").read_text())
             subprocess.run(
-                [str(build / "bin/capnp"), "compile", f"-I{build}/include", f"-o{build}/bin/capnpc-c++:{path}/gen",
-                 "--src-prefix", str(path / "gen"), str(schema / "rpc.capnp")],
-                check=True, timeout=60, cwd=path / "gen",
+                [
+                    str(build / "bin/capnp"),
+                    "compile",
+                    f"-I{build}/include",
+                    f"-o{build}/bin/capnpc-c++:{path}/gen",
+                    "--src-prefix",
+                    str(path / "gen"),
+                    str(schema / "rpc.capnp"),
+                ],
+                check=True,
+                timeout=60,
+                cwd=path / "gen",
             )
             (path / "test.cpp").write_text(harness)
             subprocess.run(
-                ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(path / "gen"),
-                 "-I", str(ROOT / "tt_metal"), "-I", str(build / "include"), str(path / "test.cpp"),
-                 str(schema / "rpc.capnp.c++"), str(capnp_dir / "capnp/libcapnp-rpc.a"), str(capnp_dir / "capnp/libcapnp.a"),
-                 str(capnp_dir / "kj/libkj-async.a"), str(capnp_dir / "kj/libkj.a"),
-                 "-o", str(path / "test")],
-                check=True, timeout=300,
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(path / "gen"),
+                    "-I",
+                    str(ROOT / "tt_metal"),
+                    "-I",
+                    str(build / "include"),
+                    str(path / "test.cpp"),
+                    str(schema / "rpc.capnp.c++"),
+                    str(capnp_dir / "capnp/libcapnp-rpc.a"),
+                    str(capnp_dir / "capnp/libcapnp.a"),
+                    str(capnp_dir / "kj/libkj-async.a"),
+                    str(capnp_dir / "kj/libkj.a"),
+                    "-o",
+                    str(path / "test"),
+                ],
+                check=True,
+                timeout=300,
             )
             subprocess.run([str(path / "test"), str(path / "kernel_prewarm.manifest")], check=True, timeout=30)
 
