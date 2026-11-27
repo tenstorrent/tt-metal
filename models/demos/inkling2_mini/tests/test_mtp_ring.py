@@ -28,36 +28,55 @@ def drafters():
     ttnn.close_device(dev)
 
 
+def _window(d, p):
+    """Rows p-1024 .. p-1 of each local layer's K and V as the draft at p reads them (it writes p .. p+7)."""
+    q = p + BLOCK - 1
+    out = []
+    for j, c in enumerate(d.k_cache + d.v_cache):
+        i = j % N_LAYERS
+        if i not in LOCAL:
+            continue
+        c = ttnn.to_torch(c).float()[0]
+        top = (q if q < RING else q % RING + RING) if d.ring[i] else q
+        out.append(c[:, max(0, top - WINDOW - BLOCK + 1) : top - BLOCK + 1].clone())
+    return out
+
+
+def _check(ring, full, p, what):
+    a, b = _window(ring, p), _window(full, p)
+    for j, (x, y) in enumerate(zip(a, b)):
+        assert x.shape == y.shape and torch.equal(x, y), (what, p, j)
+    toks = []
+    for d in (ring, full):
+        d.set_draft_pos(p)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(torch.tensor([[1000 + p]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
+        )
+        toks.append(ttnn.to_torch(d.draft(d.anchor)).reshape(-1).tolist())
+    assert toks[0] == toks[1], (what, p, toks)
+
+
+def test_ring_last_chunk_pad(drafters):
+    """A prompt's last chunk with pad rows (n < t, as the prefill's rounded last pass): the ring keeps the real
+    positions of the window (the pad rows once overwrote their slots)."""
+    ring, full = drafters
+    dev, ntap = ring.device, len(TAP_LP) + 1
+    torch.manual_seed(3)
+    for s, t, n in ((0, 2048, None), (2048, 1024, 700)):
+        taps = torch.randn(ntap, t, HIDDEN)
+        for d in (ring, full):
+            d.commit_chunk([ttnn.from_torch(x.view(1, 1, t, HIDDEN), device=dev, dtype=ttnn.bfloat16,
+                                            layout=ttnn.TILE_LAYOUT) for x in taps], s, n)  # fmt: skip
+    _check(ring, full, 2048 + 704, "last chunk")  # (700 real rows, rounded up to 32)
+
+
 def test_ring_equals_full(drafters):
     ring, full = drafters
     dev, ntap = ring.device, len(TAP_LP) + 1
     put = lambda t, **kw: ttnn.from_torch(t, device=dev, **kw)  # noqa: E731
 
-    def window(d, p):
-        """Rows p-1024 .. p-1 of each local layer's K and V as the draft at p reads them (it writes p .. p+7)."""
-        q = p + BLOCK - 1
-        out = []
-        for j, c in enumerate(d.k_cache + d.v_cache):
-            i = j % N_LAYERS
-            if i not in LOCAL:
-                continue
-            c = ttnn.to_torch(c).float()[0]
-            top = (q if q < RING else q % RING + RING) if d.ring[i] else q
-            out.append(c[:, max(0, top - WINDOW - BLOCK + 1) : top - BLOCK + 1].clone())
-        return out
-
     def check(p, what):
-        a, b = window(ring, p), window(full, p)
-        for j, (x, y) in enumerate(zip(a, b)):
-            assert x.shape == y.shape and torch.equal(x, y), (what, p, j)
-        toks = []
-        for d in (ring, full):
-            d.set_draft_pos(p)
-            ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(torch.tensor([[1000 + p]], dtype=torch.int32), dtype=ttnn.uint32), d.anchor
-            )
-            toks.append(ttnn.to_torch(d.draft(d.anchor)).reshape(-1).tolist())
-        assert toks[0] == toks[1], (what, p, toks)
+        _check(ring, full, p, what)
 
     torch.manual_seed(7)
     # the chunked prefill's feed, then drafts on the first lap and after a wrap

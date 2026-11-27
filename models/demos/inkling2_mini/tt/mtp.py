@@ -462,13 +462,16 @@ class DSparkDrafter:
 
             k = self._rope(norm(heads(0), f"l{i}.k_norm_ctx"), cos, sin)
             v = heads(NKV * D)
-            # (source row, cache row, rows): a ring layer takes the chunk's last RING positions, in runs that
-            # do not wrap, each to its two rows
+            # (source row, cache row, rows): a ring layer takes the chunk's last RING positions up to the real
+            # rows rounded up to 32 (a last chunk's pad rows past that would overwrite the slots of positions still
+            # in the window: up to 127 before, more with Inkling2Prefill.pad_last), in runs that do not wrap,
+            # each to its two rows
             runs, r = [(0, s, t)], self.ring[i]
             if r:
-                runs, a = [], max(s, s + t - r)
-                while a < s + t:
-                    b = min(s + t, (a // r + 1) * r)
+                e = s + (t if n is None else -(-n // 32) * 32)
+                runs, a = [], max(s, e - r)
+                while a < e:
+                    b = min(e, (a // r + 1) * r)
                     runs += [(a - s, a % r + o, b - a) for o in (0, r)]
                     a = b
             for cache, x in ((self.k_cache[i], k), (self.v_cache[i], v)):
