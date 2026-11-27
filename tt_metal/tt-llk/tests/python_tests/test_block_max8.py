@@ -21,6 +21,8 @@ VALID_COUNTS = [0, 1, 7, 8, 9, 15, 16, 17, 511, 512, 513, 1023, 1024]
 # Empty, full, and representative partial-mask paths; functional keeps every boundary.
 PERF_VALID_COUNTS = [0, 8, 513, 1024]
 PATTERNS = ["random", "winners", "fractional", "negative_zero"]
+PERF_SFPU_PATTERNS = ["random", "negative_zero"]
+PERF_FPU_PATTERNS = PERF_SFPU_PATTERNS + ["denormal"]
 # Host markers that block_max8_fpu_test.cpp replaces in DST with BF16 denormals.
 DENORMAL_MARKERS = {0.375: 0x007F, -0.375: -0x7FFF}
 

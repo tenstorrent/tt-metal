@@ -6,7 +6,8 @@ import pytest
 from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_block_max8 import (
     DST_INDICES,
-    PATTERNS,
+    PERF_FPU_PATTERNS,
+    PERF_SFPU_PATTERNS,
     PERF_VALID_COUNTS,
     _run_block_max8,
 )
@@ -19,7 +20,7 @@ LOOP_FACTOR = 32
 @blackhole_only
 @pytest.mark.parametrize("dst_index", DST_INDICES)
 @pytest.mark.parametrize("valid", PERF_VALID_COUNTS)
-@pytest.mark.parametrize("pattern", PATTERNS)
+@pytest.mark.parametrize("pattern", PERF_SFPU_PATTERNS)
 @pytest.mark.parametrize("run_types", [ALL_PERF_RUN_TYPES])
 @pytest.mark.parametrize("loop_factor", [LOOP_FACTOR])
 @pytest.mark.parametrize("is_perf", [True])
@@ -43,7 +44,7 @@ def test_perf_block_max8(
 @blackhole_only
 @pytest.mark.parametrize("dst_index", DST_INDICES)
 @pytest.mark.parametrize("valid", PERF_VALID_COUNTS)
-@pytest.mark.parametrize("pattern", PATTERNS + ["denormal"])
+@pytest.mark.parametrize("pattern", PERF_FPU_PATTERNS)
 @pytest.mark.parametrize("fpu_calls", [1, 3])
 @pytest.mark.parametrize("run_types", [ALL_PERF_RUN_TYPES])
 @pytest.mark.parametrize("loop_factor", [LOOP_FACTOR])
