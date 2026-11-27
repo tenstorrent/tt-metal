@@ -156,14 +156,24 @@ def validate(input_tensor, memory_config):
             raise ExcludedCell(f"g6_sharded_to_interleaved: unsupported combination (refinement candidate): {exc}")
 
     if memory_config.buffer_type == ttnn.BufferType.L1:
-        num_banks = _num_l1_banks(input_tensor.device())
-        page_bytes = ttnn.round_up(input_tensor.buffer_page_size(), ttnn.get_l1_alignment())
-        per_bank = -(-input_tensor.buffer_num_pages() // num_banks) * page_bytes
-        if per_bank > L1_BUDGET_BYTES_PER_CORE:
-            raise RuntimeError(
-                f"g6_sharded_to_interleaved: L1 output needs {per_bank} B per bank, "
-                f"above the {L1_BUDGET_BYTES_PER_CORE} B the model leaves per core"
-            )
+        _check_l1_output_budget(input_tensor)
+
+
+def l1_output_bytes_per_bank(input_tensor) -> int:
+    """Bytes one L1 bank holds of an interleaved output with the input's pages."""
+    num_banks = _num_l1_banks(input_tensor.device())
+    alignment = ttnn.get_l1_alignment()
+    page_bytes = -(-input_tensor.buffer_page_size() // alignment) * alignment
+    return -(-input_tensor.buffer_num_pages() // num_banks) * page_bytes
+
+
+def _check_l1_output_budget(input_tensor):
+    per_bank = l1_output_bytes_per_bank(input_tensor)
+    if per_bank > L1_BUDGET_BYTES_PER_CORE:
+        raise RuntimeError(
+            f"g6_sharded_to_interleaved: L1 output needs {per_bank} B per bank, "
+            f"above the {L1_BUDGET_BYTES_PER_CORE} B the model leaves per core"
+        )
 
 
 # ---------------------------------------------------------------------------
