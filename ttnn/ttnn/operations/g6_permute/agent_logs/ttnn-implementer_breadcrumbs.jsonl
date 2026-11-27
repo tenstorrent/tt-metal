@@ -26,3 +26,9 @@
 {"event":"hypothesis","what":"nhwc_tile_bfp8_transpose realization","detail":"per group of 32 input tiles: transpose_tile (bf8 unpack) into DEST 8 at a time, pack_untilize_dest<1,1>(8 rows) to bf16 RM -> [32 h x 1024 (c,w)] block; tilize<32> helper gathers output tile c=[h][w] (row exchange done by tilize unpacker) and packs bf8_b (shared exponent = group max). No dataflow row exchange needed.","ts":"2026-11-27T08:20:03-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T09:04:20-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T09:04:20-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T09:29:54-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T09:30:04-05:00"}
+{"event":"test_run","scope":"interrupted R2 work as found: test_g6_permute_nhwc_bfp8.py 25/25; golden slice 14 passed 3 xfailed (PANOPTIC_53, L2, L15, L16, L18 pass); unit net 60/60; test_regression 7/7","result":"pass","ts":"2026-11-27T09:31:41-05:00"}
+{"event":"hypothesis","detail":"p3 zones: read 1.4/3.1us (L1/DRAM) then compute 5.5us then write 1.1us, serial: compute waits for all 32 tiles. Chunked reader push + cumulative per-DEST-batch wait should hide most of the read","ts":"2026-11-27T09:31:41-05:00"}
+{"event":"fix_applied","what":"READ_CHUNK_TILES=8 host knob (CT arg 8 of reader): per-chunk reserve/read/barrier/push; compute cb_wait_front(base+dest_tiles) per batch, pop 32 at group end","ts":"2026-11-27T09:31:41-05:00"}
+{"event":"test_run","mode":"prod+profile","scope":"p3 L1/DRAM","result":"pass","device_kernel_ns":{"L1":{"whole_group":8942,"chunk8":8157},"DRAM":{"whole_group":11494,"chunk8":10259}},"precision":"pcc 0.999989 rel_rms 4.73e-3 vs permuted input","ts":"2026-11-27T09:31:41-05:00"}

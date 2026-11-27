@@ -1,6 +1,6 @@
 # L1 Ledger: g6_permute
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model. Built regimes: `rows_tile_scatter` (Phase 0), `blocks_rm_gather` (Refinement 1).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model. Built regimes: `rows_tile_scatter` (Phase 0), `blocks_rm_gather` (Refinement 1), `nhwc_tile_bfp8_transpose` (Refinement 2). Every regime runs with buffer `"dram"` or `"l1"`; with `"l1"` the output's own pages on a core (`out_l1_bytes_per_core`) are subtracted from `L1_OP_BUDGET_BYTES` before the block or depth is sized.
 
 ## CB ledger (`rows_tile_scatter`)
 
@@ -89,3 +89,37 @@ FLUX_74 (75 units per core, one block): 307200 + 19200 = 326400 B. FLUX_73 (19 u
 | FLUX_74 `[1,64,128,32,2,2]` | 524288 × 4 B | 32768 × 64 B | 2 MiB | 524288 × 64 B = 32 MiB |
 
 Core-local: every value moves once by RISC-V loads and stores (the gather). The read side is bound by the count of DRAM requests, not their bytes (`changelog.md`, Refinement 1).
+
+
+## CB ledger (`nhwc_tile_bfp8_transpose`)
+
+Group `(n, ht, wt, ct)`: 32 input tiles `(n, h, wt, ct)` → 32 output tiles `(n, c, ht, wt)`. `in_page_bytes = out_page_bytes = 1088` (bfloat8_b 32×32), `row_page_bytes = 2048` (32 rows of 32 bfloat16).
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_input_tiles` | `group_depth · 32` pages of `in_page_bytes` | the group being transposed plus, with `group_depth = 2`, the next group being read | `{h: spans → 32 per group · group_depth (pushed in chunks of read_chunk_tiles); w, c: spans → the whole tile; n, ht, wt, ct: folded into the group}` | Bfp8_b (input dtype) | reader | compute (transpose) | whole program | Cannot alias `cb_row_block`: the transpose reads one while it packs the other. Cannot be read in place by the tilize: tilize needs bfloat16 rows, and these are bfloat8_b tiles |
+| `cb_row_block` | 32 pages of `row_page_bytes` | one group: page `h` = transposed input tile `h` untilized, i.e. row `h` of a `[32, 32·32]` row-major block | `{h: spans → 32 (one page per h); c: spans → 32 (64 B row chunks of a page); w: spans → 32 values per chunk}` | Float16_b — an intermediate with 16-bit DEST (`fp32_dest_acc_en = False`); bfloat8_b values are exact in bfloat16 | compute (pack untilize) | compute (tilize) | whole program | The row exchange itself: the tilize reads 32-column chunk `c` of every row to build output tile `c`. Cannot alias `cb_input_tiles` or `cb_output_tiles`: each is live with it in one of the two passes. Cannot be Bfp8_b: an untilized row is not a block-float page |
+| `cb_output_tiles` | `group_depth · 32` pages of `out_page_bytes` | the group being written plus, with `group_depth = 2`, the next group being tilized | `{c: spans → 32 per group · group_depth (only c_live slots are written); h, w: spans → the whole tile}` | Bfp8_b (output dtype); the packer sets each 16-value group's exponent to its largest | compute (tilize + pack) | writer | whole program | The writer's NoC source. Cannot be the output tensor: output tiles `c` of one group live in 32 different banks |
+
+### Symbol table (`nhwc_tile_bfp8_transpose`)
+
+| Symbol | Bound | Established by |
+|--------|-------|----------------|
+| `GROUP_TILES` | 32 | the tilize width of the row exchange (one output tile per input-tile column) |
+| `group_depth` | `min(GROUP_DEPTH = 2, groups_per_core_g1)`, lowered to 1 if two groups exceed the budget | host plan, single source |
+| `read_chunk_tiles` | `READ_CHUNK_TILES = 8` (divisor of 32) | host constant; the DEST batch of the transpose is 8 tiles (16-bit half-sync) |
+| footprint | `32 · (2 · group_depth · in_page_bytes + row_page_bytes)` | `_footprint()` |
+
+### Total per-core footprint (`nhwc_tile_bfp8_transpose`)
+
+`32 · (2 · group_depth · 1088 + 2048) + out_l1_bytes_per_core ≤ L1_OP_BUDGET_BYTES`; `RuntimeError` when one group does not fit.
+Panoptic p3 `[1,128,256,32]` in L1 (32 groups, one per core, `group_depth = 1`): 135168 B of CBs + 10 × 1088 = 10880 B of output pages = 146048 B. Several groups per core (`group_depth = 2`): 204800 B of CBs.
+
+## Data-movement budget (`nhwc_tile_bfp8_transpose`)
+
+| Tensor | DRAM / L1-bank crossings | Why that many | Cross-core traffic added |
+|--------|--------------------------|---------------|--------------------------|
+| `x` | 1, one 1088 B read per live input tile | each group belongs to one core; its 32 tiles are read once | 0 |
+| `out` | 1, one 1088 B write per live output tile | each output tile is packed once, by the group that owns all 32 of its rows | 0 |
+
+p3: 1024 tile reads and 1024 tile writes, 1114112 B each way; no core-local NoC copies (the row exchange is the compute tilize of `cb_row_block`).

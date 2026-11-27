@@ -41,3 +41,37 @@
 - Golden test progress: FLUX_73, FLUX_74, loose L0 and L1 pass (were `xfail_expected`); Qwen representatives still pass. Slice: 10 passed, 3 xfailed (Panoptic ROW_MAJOR in L1, `buffer='l1'` not yet in SUPPORTED).
 - Issues encountered: the first gather used `volatile` halfword accesses, ~13 cycles per value. That made the gather tail 9% of L0, and the build was 2% slower than stock. The word gather with plain loads and stores fenced by compiler barriers cut the tail to 55 µs.
 - Tests added: `test_g6_permute_blocks_rm.py` (21 cases: production shapes, 9 other cell shapes, special values, negative dims, plan report, excluded cells, program reuse, forced multi-block plans), `test_g6_permute_blocks_rm_debug.py` (grid-scaling experiment on FLUX_74, run under `--profile`).
+
+## Refinement 2 — bfloat8_b TILE NHWC→NCHW (Panoptic p3), plus L1 placement for every regime
+- Date: 2026-11-27
+- What was done:
+  - SUPPORTED gains dtype `bfloat8_b`, buffer `"l1"` and dims `(0, 3, 1, 2)`. EXCLUSIONS gains the four cells with no regime: `{bfloat8_b, (0,2,1,3)}`, `{bfloat8_b, (0,1,4,2,5,3)}`, `{bfloat16, TILE, (0,3,1,2)}`, `{ROW_MAJOR, (0,3,1,2)}` (the last one is Refinement 4's). The non-aligned bfloat8_b cells are not excluded: the regime handles them (below).
+  - New regime `nhwc_tile_bfp8_transpose` (`g6_permute_nhwc_tile_bfp8.py`, `kernels/g6_permute_nhwc_bfp8_{reader,compute,writer}.cpp`, shared `g6_permute_nhwc_bfp8_common.hpp`), the op's first compute kernel, selected on the host by `(TILE, (0,3,1,2))`. Work unit = group `(n, ht, wt, ct)`, split over the full grid (`split_units`, `row_wise=True`). Per group:
+    1. reader: 32 input tiles `(n, h, wt, ct)` into `cb_input_tiles` (Bfp8_b), pushed in chunks of `READ_CHUNK_TILES = 8`, one barrier per chunk;
+    2. compute: `transpose_block` into DEST, 8 tiles per batch (cumulative wait, so each batch starts when its slots land), `pack_untilize_dest` in bfloat16 to `cb_row_block`, page `h` = row `h` of a `[32, 32·32]` block;
+    3. compute: the tilize helper (32 tiles wide) builds output tile `c` from column chunk `c` of every row and packs bfloat8_b; the packer sets each 16-value group's exponent to its largest value. This tilize is the design's core-local row exchange, so no dataflow copies exist;
+    4. writer: the `c_live` output tiles, one flush per group, one write barrier at the end.
+  - Raw LLK only for step 2 (`transpose_block` + `pack_untilize_dest`): kernel_lib has no transpose helper, and the untilize helper's unpack init has no transpose. Recorded at the kernel head.
+  - Non-aligned shapes: H not a multiple of 32 leaves the trailing slots unread; they reach only output padding rows, each a bfloat8_b group of its own. W not a multiple of 32 puts input padding rows into live output groups, so the reader zeroes their mantissas (`noc.async_write_zeros`); a zero mantissa never raises a shared exponent. C not a multiple of 32 skips the empty output tiles.
+  - `group_depth = min(GROUP_DEPTH = 2, groups per core)`, lowered when two groups exceed the budget. `RuntimeError` (BB-05) when one group plus the output's L1 pages exceeds 1347776 B. `knob_key` covers `GROUP_DEPTH` and `READ_CHUNK_TILES`. `g6_permute_plan` returns an `NhwcPlan`.
+  - Buffer `"l1"` on `rows_tile_scatter` and `blocks_rm_gather`: a knob-turn, as designed. The accessors address L1 banks, and `block_cap` subtracts the output's own L1 pages per core.
+- Accuracy achieved: Panoptic p3 `[1,128,256,32]` randn, L1 and DRAM: PCC=0.999989, relative RMS=4.73e-3 against the permuted bfloat8_b input; PCC=0.999978, relative RMS=6.72e-3 against the host bfloat8_b rendering, 95.4 % of values identical to it. The device packer rounds differently from the host, which the one-step gate accepts. Every value is within one step `2^(E−133)` on p3 (randn, `w_scaled`, `bf8_odd_grid` with the shared-exponent check) and on 7 other shapes: H tail, C tail, W tail with poisoned padding (1e4, inf, −3e4), N = 2, 256 groups. A group of tiny values (`randn · 2^-124`, bfloat16 denormals after unpack) also passes.
+- Device kernel time, Panoptic p3 (Blackhole, 32 active cores, one group per core, one fresh-cache run each):
+
+  | Placement | Whole-group push | `READ_CHUNK_TILES = 8` (shipped) | Change |
+  |-----------|------------------|----------------------------------|--------|
+  | L1 (production) | 8942 ns | **8157 ns** | −8.8 % |
+  | DRAM | 11494 ns | **10259 ns** | −10.7 % |
+
+  Zones with the whole-group push (L1 / DRAM): read 1.4 / 3.1 µs, then compute 5.5 µs, then write 1.1 µs, all serial. The chunked push overlaps most of the read with the transposes.
+- Finding (for the perf rounds): p3 is compute-bound on 32 of 110 cores. A group is 32 input tiles, and p3 has only 32 groups. Each core runs 64 tile passes (32 transpose + untilize, then a 32-tile tilize + bfloat8_b pack), about 116 cycles per tile. Two levers were left untried here because each changes the scheme:
+  - Split a group into its two face-row halves. One core takes input tiles `h` 0–15, another `h` 16–31, so p3 runs on 64 cores. Each half writes faces 0/1 or faces 2/3 of every output tile (32 B exponents + 512 B mantissas, 16 B-aligned). This halves the transposes per core. The tilize still covers 32 tiles, unless the helper's `total_input_pages` row count makes the half-empty tiles cheaper.
+  - Let the writer start before the whole group is tilized. Today it waits for all 32 output tiles, a 1.1 µs tail. The tilize helper needs contiguous rows, so a sub-block tilize needs `cb_row_block` split by `c` chunk.
+- Golden test progress: slice of 17 (PANOPTIC_53, loose L2, L15, L16, L18, FLUX_73, FLUX_74, L0, L1, Qwen 303 and its loose variants): 14 passed, 3 xfailed. The 3 xfails are the ROW_MAJOR Panoptic cells (`PANOPTIC_44`, L3, L17), excluded until Refinement 4. Expected full suite: 29 / 32 passing, 3 `xfail_expected`. `test_regression.py`: 7 / 7.
+- Issues encountered: this regime's first attempt was interrupted before its commit. Its uncommitted kernels and tests were reviewed, re-run and kept. `run_safe_pytest.sh` and `tt-probe.sh` still need `LD_PRELOAD=<mpix_stub>` on this host (ULFM OpenMPI is missing). Under `--profile`, a `-k` filter with spaces is split into separate arguments; pass node ids instead.
+- Tests added: `test_g6_permute_nhwc_bfp8.py` (31 cases):
+  - Panoptic p3 in L1 and in DRAM, its adversarial groups, and a precision record;
+  - 7 other shapes of the cell, W-poisoned odd-grid shared exponent, and a tiny-exponent group;
+  - negative dims, the plan report, the excluded cells, and program reuse;
+  - forced `GROUP_DEPTH` 1/3 and forced `READ_CHUNK_TILES` 1/32;
+  - Qwen 303, `[2,34,47,96]`, FLUX_73 and an odd-J FLUX shape in L1, bit-exact.

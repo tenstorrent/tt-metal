@@ -52,7 +52,7 @@ This moves golden FLUX_73 `[1,32,64,32,2,2]`, FLUX_74 `[1,64,128,32,2,2]` and lo
 
 **Done when**: FLUX_73 and FLUX_74 (golden and loose L0, L1) pass bit-exact; `verify_supported` loud categories are all 0; every Phase 0 cell still passes; L0's `device_kernel_ns` is recorded in the changelog.
 
-### [ ] Refinement 2 — bfloat8_b TILE NHWC→NCHW (Panoptic p3), plus L1 placement for every regime
+### [x] Refinement 2 — bfloat8_b TILE NHWC→NCHW (Panoptic p3), plus L1 placement for every regime
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"l1"` to `SUPPORTED["buffer"]` and `(0, 3, 1, 2)` to `SUPPORTED["dims"]`. Build regime `nhwc_tile_bfp8_transpose` (`op_design.md` → Regimes). Per group `(n, ht, wt)`, 32 input tiles become 32 output tiles:
 1. unpack bfloat8_b → `transpose_wh` → pack bfloat16 (exact);
