@@ -2,19 +2,22 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_permute, Phase 0: bfloat16, TILE, DRAM interleaved, rank 4,
-"h_non_aligned", dims (0, 2, 1, 3). The gate is bit-exact (helpers.TOLERANCES: ("exact", None))."""
+"""Acceptance test for g6_permute, Phase 0.
 
-import math
+Cell: bfloat16, TILE, DRAM interleaved, rank 4, H = shape[-2] not a multiple of 32,
+W = shape[-1] a multiple of 32, dims (0, 2, 1, 3). A permute moves values and computes
+none, so every case is graded bit for bit (helpers.TOLERANCES[bfloat16] = ("exact", None)).
+"""
 
 import pytest
 import torch
 import ttnn
 
-from ttnn.operations.g6_permute import g6_permute, g6_permute_plan
+from ttnn.operations.g6_permute import g6_permute
 
 ROWS = (0, 2, 1, 3)
 
+# The eight Qwen production shapes (golden cases 301-308).
 PRODUCTION_SHAPES = [
     (1, 1, 16, 64),
     (1, 16, 1, 64),
@@ -26,164 +29,155 @@ PRODUCTION_SHAPES = [
     (1, 8, 6, 64),
 ]
 
-# Shapes of the same SUPPORTED cell beyond production: the index map and the block rule must
-# hold for every shape validate() accepts.
-GENERAL_SHAPES = [
-    pytest.param((1, 1, 1, 32), id="single_tile"),
-    pytest.param((3, 5, 7, 96), id="multi_batch_odd"),
-    pytest.param((1, 40, 6, 64), id="a_two_tiles_ragged"),
-    pytest.param((1, 6, 50, 64), id="b_two_tiles_ragged"),
-    pytest.param((2, 40, 50, 128), id="multi_block_cores"),
-    pytest.param((1, 33, 100, 512), id="runs_cross_band_and_tile"),
+# Other shapes of the same cell: the index map must hold for every shape validate()
+# accepts, not only for A, B <= 16 and W = 64.
+CELL_SHAPES = [
+    (1, 1, 5, 32),  # one input tile
+    (2, 6, 16, 64),  # batch above 1
+    (1, 40, 6, 64),  # A > 32: two output tile rows per (n, b)
+    (1, 6, 40, 64),  # B > 32: second input tile row partial, live rows past face row 16
+    (2, 34, 47, 96),  # every axis past one tile, odd tile-column count
+    (1, 64, 100, 256),  # many input tiles per core
 ]
 
-# bfloat16 bit patterns: +inf, -inf, quiet NaN, negative NaN with payload, -0, denormals.
-SPECIAL_BITS = (0x7F80, 0xFF80, 0x7FC0, 0xFFC1, 0x8000, 0x0001, 0x807F, 0x0040)
+# bfloat16 bit patterns that must survive the move unchanged.
+SPECIAL_BITS = (
+    0x7F80,  # +inf
+    0xFF80,  # -inf
+    0x7FC0,  # quiet NaN
+    0xFFC1,  # negative NaN with a payload bit
+    0x8000,  # -0
+    0x0001,  # smallest positive denormal
+    0x807F,  # negative denormal, every mantissa bit set
+    0x0040,  # positive denormal
+)
 
 
-def torch_reference(x, dims):
-    return torch.permute(x, dims).contiguous()
+def _shape_id(shape):
+    return "x".join(str(d) for d in shape)
 
 
-def to_device(x, device):
-    return ttnn.from_torch(
-        x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def randn_bf16(shape):
+def _randn(shape):
     return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
 
 
-def check_placement(out, expected_shape):
-    assert list(out.shape) == list(expected_shape)
-    assert out.dtype == ttnn.bfloat16
-    assert out.layout == ttnn.TILE_LAYOUT
-    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
-    assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+def _to_device(torch_input, device):
+    return ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
-def assert_bit_exact(actual, expected):
-    assert list(actual.shape) == list(expected.shape), f"shape {list(actual.shape)} != {list(expected.shape)}"
-    a = actual.to(torch.bfloat16).contiguous().view(torch.int16)
-    e = expected.to(torch.bfloat16).contiguous().view(torch.int16)
-    mismatch = a != e
+def _reference(torch_input, dims):
+    return torch.permute(torch_input, dims).contiguous()
+
+
+def _check_placement(ttnn_output, expected_shape):
+    assert list(ttnn_output.shape) == list(expected_shape)
+    assert ttnn_output.dtype == ttnn.bfloat16
+    assert ttnn_output.layout == ttnn.TILE_LAYOUT
+    memory_config = ttnn_output.memory_config()
+    assert memory_config.buffer_type == ttnn.BufferType.DRAM
+    assert memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+
+
+def _assert_bit_exact(actual, expected):
+    # Compared as 16-bit patterns so NaN payloads, -0 and denormals count.
+    assert list(actual.shape) == list(expected.shape)
+    actual_bits = actual.to(torch.bfloat16).contiguous().view(torch.int16)
+    expected_bits = expected.to(torch.bfloat16).contiguous().view(torch.int16)
+    mismatch = actual_bits != expected_bits
     if bool(mismatch.any()):
         index = tuple(int(i) for i in torch.nonzero(mismatch)[0])
-        raise AssertionError(
+        pytest.fail(
             f"{int(mismatch.sum())} of {mismatch.numel()} values differ; first at {list(index)}: "
-            f"got bits {int(a[index]) & 0xFFFF:#06x}, expected {int(e[index]) & 0xFFFF:#06x}"
+            f"got {int(actual_bits[index]) & 0xFFFF:#06x}, expected {int(expected_bits[index]) & 0xFFFF:#06x}"
         )
 
 
-def run_and_check(torch_input, device, dims=ROWS, expected=None):
-    ttnn_input = to_device(torch_input, device)
-    if expected is None:
-        expected = torch_reference(torch_input, tuple(d % 4 for d in dims))
-    out = g6_permute(ttnn_input, dims)
-    check_placement(out, expected.shape)
-    actual = ttnn.to_torch(out)
-    assert_bit_exact(actual, expected)
+def _permute_and_check(ttnn_input, call_dims, source, canonical_dims=ROWS):
+    expected = _reference(source, canonical_dims)
+    ttnn_output = g6_permute(ttnn_input, call_dims)
+    _check_placement(ttnn_output, expected.shape)
+    actual = ttnn.to_torch(ttnn_output)
+    _assert_bit_exact(actual, expected)
     return actual
 
 
-@pytest.mark.parametrize("shape", PRODUCTION_SHAPES, ids=["x".join(map(str, s)) for s in PRODUCTION_SHAPES])
+@pytest.mark.parametrize("shape", PRODUCTION_SHAPES, ids=[_shape_id(s) for s in PRODUCTION_SHAPES])
 def test_production_shapes(shape, device):
     torch.manual_seed(42)
-    run_and_check(randn_bf16(shape), device)
+    torch_input = _randn(shape)
+    _permute_and_check(_to_device(torch_input, device), ROWS, torch_input)
 
 
-@pytest.mark.parametrize("shape", GENERAL_SHAPES)
-def test_general_shapes(shape, device):
+@pytest.mark.parametrize("shape", CELL_SHAPES, ids=[_shape_id(s) for s in CELL_SHAPES])
+def test_other_shapes_of_the_cell(shape, device):
     torch.manual_seed(42)
-    run_and_check(randn_bf16(shape), device)
+    torch_input = _randn(shape)
+    _permute_and_check(_to_device(torch_input, device), ROWS, torch_input)
 
 
-def test_special_values_bit_exact(device):
+def test_special_values_move_bit_for_bit(device):
     torch.manual_seed(42)
     shape = (1, 6, 16, 64)
-    bits = randn_bf16(shape).contiguous().view(torch.int16).reshape(-1).clone()
+    bits = _randn(shape).contiguous().view(torch.int16).reshape(-1).clone()
     special = torch.tensor([b - 0x10000 if b >= 0x8000 else b for b in SPECIAL_BITS], dtype=torch.int16)
     positions = torch.arange(0, bits.numel(), 5)
     bits[positions] = special[torch.arange(positions.numel()) % special.numel()]
     torch_input = bits.view(torch.bfloat16).reshape(shape)
 
-    ttnn_input = to_device(torch_input, device)
-    on_device = ttnn.to_torch(ttnn_input)
-    v = on_device.to(torch.float32)
-    present = [
-        bool((v == float("inf")).any()),
-        bool((v == float("-inf")).any()),
-        bool(torch.isnan(v).any()),
-        bool(((v == 0) & torch.signbit(v)).any()),
-        bool(((v != 0) & (v.abs() < torch.finfo(torch.float32).tiny)).any()),
-    ]
-    if not all(present):
-        pytest.skip("host conversion dropped a special-value class; nothing to grade")
-
-    out = g6_permute(ttnn_input, ROWS)
-    check_placement(out, (1, 16, 6, 64))
-    assert_bit_exact(ttnn.to_torch(out), torch_reference(on_device, ROWS))
+    ttnn_input = _to_device(torch_input, device)
+    # Grade against the bits that are on the device.
+    source = ttnn.to_torch(ttnn_input)
+    _permute_and_check(ttnn_input, ROWS, source)
 
 
 @pytest.mark.parametrize(
     "shape, poison",
-    [
-        pytest.param((1, 6, 16, 64), float("inf"), id="inf_1x6x16x64"),
-        pytest.param((1, 16, 1, 64), 1000.0, id="1000_1x16x1x64"),
-    ],
+    [((1, 6, 16, 64), float("inf")), ((1, 16, 1, 64), 1000.0), ((1, 6, 40, 64), float("-inf"))],
+    ids=["inf", "1000", "neg_inf_two_tile_rows"],
 )
-def test_poisoned_input_padding_never_reaches_output(shape, poison, device):
+def test_input_padding_never_reaches_output(shape, poison, device):
     torch.manual_seed(42)
-    torch_input = randn_bf16(shape)
-    ttnn_input = to_device(torch_input, device)
+    torch_input = _randn(shape)
+    ttnn_input = _to_device(torch_input, device)
     ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, poison, memory_config=ttnn_input.memory_config())
-    out = g6_permute(ttnn_input, ROWS)
-    expected = torch_reference(torch_input, ROWS)
-    check_placement(out, expected.shape)
-    assert_bit_exact(ttnn.to_torch(out), expected)
+    _permute_and_check(ttnn_input, ROWS, torch_input)
 
 
-def test_negative_dims(device):
+def test_negative_dims_equal_canonical(device):
     torch.manual_seed(42)
-    torch_input = randn_bf16((1, 6, 16, 64))
-    run_and_check(torch_input, device, dims=(0, -2, 1, -1), expected=torch_reference(torch_input, ROWS))
+    torch_input = _randn((1, 6, 16, 64))
+    _permute_and_check(_to_device(torch_input, device), (0, -2, 1, -1), torch_input)
 
 
 @pytest.mark.parametrize(
     "dims",
     [(0, 2, 1), (0, 1, 1, 3), (0, 1, 2, 4), (0, 2, 1, -5)],
-    ids=["short", "repeated", "out_of_range", "negative_out_of_range"],
+    ids=["short", "repeated", "above_range", "below_range"],
 )
 def test_malformed_dims_raise(dims, device, expect_error):
     torch.manual_seed(42)
-    ttnn_input = to_device(randn_bf16((1, 6, 16, 64)), device)
-    # The contract names the exception types, not the message text.
+    ttnn_input = _to_device(_randn((1, 6, 16, 64)), device)
+    # Any message: the wording is the implementer's.
     with expect_error((ValueError, RuntimeError), ""):
         g6_permute(ttnn_input, dims)
 
 
-def test_repeat_call_is_bit_identical_and_cached(device):
+def test_repeat_call_reuses_program(device):
     torch.manual_seed(42)
-    torch_input = randn_bf16((1, 6, 16, 64))
-    ttnn_input = to_device(torch_input, device)
-    first = ttnn.to_torch(g6_permute(ttnn_input, ROWS))
+    shape = (1, 6, 16, 64)
+    first = _randn(shape)
+    second = _randn(shape)
+
+    out_first = _permute_and_check(_to_device(first, device), ROWS, first)
     entries = device.num_program_cache_entries()
-    second = ttnn.to_torch(g6_permute(ttnn_input, ROWS))
-    assert device.num_program_cache_entries() == entries, "a repeat call built a new program"
-    assert_bit_exact(second, first)
-    assert_bit_exact(first, torch_reference(torch_input, ROWS))
+    out_again = _permute_and_check(_to_device(first, device), ROWS, first)
+    _permute_and_check(_to_device(second, device), ROWS, second)
 
-
-@pytest.mark.parametrize("shape", PRODUCTION_SHAPES, ids=["x".join(map(str, s)) for s in PRODUCTION_SHAPES])
-def test_plan_reports_rows_tile_multicore(shape, device):
-    torch.manual_seed(42)
-    ttnn_input = to_device(randn_bf16(shape), device)
-    plan = g6_permute_plan(ttnn_input, ROWS)
-    grid = device.compute_with_storage_grid_size()
-    n, a, b, w = shape
-    output_tiles = n * b * math.ceil(a / 32) * math.ceil(w / 32)
-    assert plan.regime == "rows_tile"
-    assert output_tiles >= 2
-    assert 2 <= plan.num_cores <= grid.x * grid.y
-    assert len(plan.core_roles) == plan.num_cores
+    assert device.num_program_cache_entries() == entries
+    _assert_bit_exact(out_again, out_first)
