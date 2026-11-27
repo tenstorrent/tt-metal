@@ -24,7 +24,7 @@ Pure list bookkeeping — sentinel strings, no tensors and no device.
 import pytest
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import query_weight_names
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, _block_sites
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, _block_sites, attn_res_planes
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import _cache_artifact_names, walk_sites
 
 
@@ -68,6 +68,27 @@ def test_boundary_read_is_the_last_site_of_the_inherited_group(num_layers, bound
     # Exactly one site of the outgoing group is owed by the next rank, and it is pre[boundary].
     assert inherited_group[-1] == f"pre{boundary}"
     assert second[0] == f"pre{boundary}"
+
+
+@pytest.mark.parametrize("boundary", range(1, 93))
+def test_inherited_groups_are_the_undivided_groups(boundary):
+    """A rank starting at ANY layer batches its reads exactly as the undivided walk groups them.
+
+    Its first group is the tail of the undivided group holding `pre[boundary]` (the owed site alone on a block
+    edge, the rest of the block's sites inside one), and every later group is the undivided walk's. That is what
+    lets `TtAttnResWalk` batch the first group over the inherited set and then seal on the global layer index.
+    """
+    num_layers = 93
+    pre, post, q_out = _queries(num_layers)
+    undivided = _block_sites(num_layers, pre, post, q_out, BLOCK_SIZE)
+    home = next(i for i, group in enumerate(undivided) if f"pre{boundary}" in group)
+    tail = undivided[home][undivided[home].index(f"pre{boundary}") :]
+
+    split = _block_sites(
+        num_layers - boundary, pre[boundary:], post[boundary:], q_out, BLOCK_SIZE, first_layer_idx=boundary
+    )
+
+    assert split == [tail, *undivided[home + 1 :]]
 
 
 def test_first_pre_issued_defaults_to_skipping_pre0():
@@ -125,10 +146,13 @@ def test_two_ranks_ask_for_disjoint_windows():
 
 
 def _planes(boundary, block=BLOCK_SIZE):
-    return 1 + boundary // block
+    return attn_res_planes(boundary, block)
 
 
-@pytest.mark.parametrize("boundary, expected", [(0, 1), (12, 2), (24, 3), (36, 4), (60, 6), (72, 7)])
+@pytest.mark.parametrize(
+    "boundary, expected",
+    [(0, 1), (1, 2), (11, 2), (12, 2), (13, 3), (24, 3), (30, 4), (36, 4), (60, 6), (72, 7), (93, 9)],
+)
 def test_plane_count_is_one_live_stream_plus_the_sealed_snapshots(boundary, expected):
     assert _planes(boundary) == expected
 
@@ -137,12 +161,12 @@ def test_adapter_and_runtime_agree_on_plane_count():
     """The adapter's formula and the runtime's must be the same function of the boundary."""
     from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 
-    for boundary in (0, 12, 24, 36, 60, 72, 84):
-        adapter_side = 1 + boundary // KimiK3Config.ATTN_RES_BLOCK_SIZE
+    for boundary in range(94):
+        adapter_side = attn_res_planes(boundary, KimiK3Config.ATTN_RES_BLOCK_SIZE)
         assert adapter_side == _planes(boundary)
 
 
-@pytest.mark.parametrize("split", [(12, 12), (36, 36), (24, 24), (12, 24), (30, 30)])
+@pytest.mark.parametrize("split", [(12, 12), (36, 36), (24, 24), (12, 24), (30, 30), (7, 5), (13, 1)])
 def test_a_ranks_outbound_is_the_next_ranks_inbound(split):
     """The property the socket rendezvous enforces, checked here where it is cheap.
 
@@ -157,7 +181,7 @@ def test_a_ranks_outbound_is_the_next_ranks_inbound(split):
     expects = _planes(rank1_first)  # rank 1's inbound
 
     assert sends == expects
-    assert sends == 1 + rank1_first // BLOCK_SIZE
+    assert sends == 1 + -(-rank1_first // BLOCK_SIZE)
 
 
 def test_planes_grow_by_one_per_completed_block():

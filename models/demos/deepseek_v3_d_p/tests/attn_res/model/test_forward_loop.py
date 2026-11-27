@@ -21,6 +21,7 @@ rather than the schedule agreeing with itself.
 import functools
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -73,7 +74,9 @@ class _StandInBlock(object):
         ttnn.deallocate(post_attention)
 
 
-def _transformer_forward(op, embeddings, queries, blocks, block_size=BLOCK_SIZE, hook=None, inherited=None, last=True):
+def _transformer_forward(
+    op, embeddings, queries, blocks, block_size=BLOCK_SIZE, hook=None, inherited=None, last=True, first_layer_idx=0
+):
     """`TtPrefillTransformer.forward`'s layer loop, with the residual on AttnRes.
 
     The walk is per forward pass and `op` is not: a model holds one `TtAttnRes` for its
@@ -84,7 +87,16 @@ def _transformer_forward(op, embeddings, queries, blocks, block_size=BLOCK_SIZE,
     """
     q_pre, q_post, q_out = queries
     walk = TtAttnResWalk(
-        op, embeddings, q_pre, q_post, q_out, len(blocks), block_size=block_size, inherited_block_residual=inherited
+        op,
+        embeddings,
+        q_pre,
+        q_post,
+        q_out,
+        len(blocks),
+        block_size=block_size,
+        inherited_block_residual=inherited,
+        first_layer_idx=first_layer_idx,
+        exact_boundary=True,
     )
 
     for layer_idx, block in enumerate(blocks):
@@ -195,7 +207,9 @@ SPLIT_LAYERS = SPLIT_BOUNDARY + BLOCK_SIZE
 
 @pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
 @pytest.mark.timeout(1800)
-def test_split_loop_matches_reference(mesh_device, device_params, sp_axis):
+# A block edge, the layer after one (a one-layer partial block crosses), and mid-block.
+@pytest.mark.parametrize("boundary", [SPLIT_BOUNDARY, SPLIT_BOUNDARY + 1, SPLIT_BOUNDARY + 6])
+def test_split_loop_matches_reference(mesh_device, device_params, sp_axis, boundary):
     """Two pipeline ranks, the second opening on what the first hands over, against the undivided oracle.
 
     The second rank opens owing the read that straddles the boundary, and takes it from the
@@ -203,7 +217,6 @@ def test_split_loop_matches_reference(mesh_device, device_params, sp_axis):
     the same read the undivided walk takes before its seal, so the split must not move the
     result.
     """
-    boundary = SPLIT_BOUNDARY
     op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
     num_tokens = PER_CHIP_TOKENS * op.sp_factor
     hidden_states, (q_pre, q_post, q_out) = _host_case(num_tokens)
@@ -224,9 +237,19 @@ def test_split_loop_matches_reference(mesh_device, device_params, sp_axis):
         (tt_pre[boundary:], tt_post[boundary:], tt_out),
         stand_ins(SPLIT_LAYERS - boundary),
         inherited=sealed,
+        first_layer_idx=boundary,
     )
     got = compose(op, device_out)
     ttnn.deallocate(device_out)
+
+    # The split walk issues the undivided walk's reductions, so it must match the undivided DEVICE walk bit for bit.
+    undivided_out = _transformer_forward(
+        op, place(op, hidden_states.unsqueeze(0).unsqueeze(0)), (tt_pre, tt_post, tt_out), stand_ins(SPLIT_LAYERS)
+    )
+    undivided = compose(op, undivided_out)
+    ttnn.deallocate(undivided_out)
+    differ = int((got.view(torch.int16) != undivided.view(torch.int16)).sum())
+    assert differ == 0, f"split at layer {boundary}: {differ} elements differ from the undivided walk"
 
     want = _reference(num_tokens, SPLIT_LAYERS)
     pcc = assert_accurate(want, got, name=f"split at layer {boundary}", pcc_threshold=PCC_GATE)
