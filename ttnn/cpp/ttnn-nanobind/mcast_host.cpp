@@ -13,10 +13,10 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 

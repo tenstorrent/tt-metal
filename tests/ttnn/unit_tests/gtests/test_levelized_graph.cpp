@@ -5,9 +5,9 @@
 #include <nlohmann/json.hpp>
 #include <string>
 
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include "gtest/gtest.h"
-#include <tt-metalium/shape.hpp>
+#include <tt-metalium/vocabulary/shape.hpp>
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/levelized_graph.hpp"

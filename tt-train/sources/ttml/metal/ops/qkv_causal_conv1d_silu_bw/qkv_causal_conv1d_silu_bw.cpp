@@ -5,8 +5,8 @@
 #include "qkv_causal_conv1d_silu_bw.hpp"
 
 #include <algorithm>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 #include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
 #include <ttnn/operations/data_movement/slice/slice.hpp>

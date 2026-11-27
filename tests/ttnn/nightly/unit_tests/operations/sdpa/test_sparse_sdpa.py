@@ -483,12 +483,13 @@ def test_sparse_sdpa_attention_sink_determinism(device, H, S, TOPK, dim, kc):
     assert device.num_program_cache_entries() == entries, "Repeated sink calls must reuse the cached program"
 
 
-# Blackhole BF16 baselines measured 2026-09-12: median of five warmed device executions.
+# Blackhole BF16 baselines measured 2026-09-12: median of five warmed device executions. Re-measured 2026-11-25 after
+# the one-block Q/output staging (median of three runs' values on one Galaxy chip).
 # Keys are (H, S, TOPK, dim, kc), matching ATTENTION_SINK_SHAPES.
 _ATTENTION_SINK_EXPECTED_MS = {
-    (128, 4, 128, 64, 32): 0.028223,
-    (64, 640, 640, 512, 128): 1.270069,
-    (128, 640, 1152, 512, 128): 2.547384,
+    (128, 4, 128, 64, 32): 0.029771,
+    (64, 640, 640, 512, 128): 1.204539,
+    (128, 640, 1152, 512, 128): 2.354705,
 }
 
 

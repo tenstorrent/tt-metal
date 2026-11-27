@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_utils.hpp"
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <algorithm>
 #include <numeric>
@@ -415,6 +415,205 @@ namespace {
 // uint32_t entries are plain values.
 using RuntimeArgList = std::vector<std::variant<uint32_t, Buffer*>>;
 
+// Dtype of operand b in the compute kernel. When b is a scalar, it is packed as bfloat16 for block-float input
+// types (BFLOAT8_B, BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype. An 8-bit
+// int tensor takes its scalar as an INT32 tile, writing 16/32-bit elements and reading it as a full lane next to
+// the zero-extended byte. Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
+DataType compute_b_dtype(
+    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& a,
+    const std::optional<Tensor>& b) {
+    if (b.has_value()) {
+        return b->dtype();
+    }
+    if (operation_attributes.is_quant_op) {
+        return DataType::FLOAT32;
+    }
+    if (CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype())) {
+        return DataType::INT32;
+    }
+    return (operation_attributes.is_sfpu && !is_block_float(a.dtype())) ? a.dtype() : DataType::BFLOAT16;
+}
+
+// The UInt8 packer takes the low byte of an integer in DST, so a float or wider integer result is
+// first converted by an SFPU typecast, which needs a 32-bit DST.
+bool is_uint8_out_typecast(bool is_quant_op, DataType a_dtype, DataType c_dtype) {
+    return c_dtype == DataType::UINT8 && !is_quant_op &&
+           (a_dtype == DataType::FLOAT32 || a_dtype == DataType::BFLOAT16 || a_dtype == DataType::BFLOAT8_B ||
+            a_dtype == DataType::BFLOAT4_B || a_dtype == DataType::INT32 || a_dtype == DataType::UINT32);
+}
+
+// Number of compute runtime args ahead of the activations' runtime scalars.
+size_t base_compute_args_len(BinaryOpType op_type) {
+    return (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
+}
+
+unary::utils::RuntimeScalars make_activation_runtime_scalars(BinaryOpType op_type) {
+    return {
+        .arg_format = "get_arg_val<uint32_t>({})",
+        .first_index = static_cast<uint32_t>(base_compute_args_len(op_type))};
+}
+
+// The unary ops the compute kernel applies to each physical operand and to the result: the caller's activations
+// plus those the op decomposes into.
+struct ComputeActivations {
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs;
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs;
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> post;
+    std::optional<DataType> post_dtype;
+};
+
+ComputeActivations get_compute_activations(
+    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
+    const OpConfig& op_config,
+    DataType a_dtype,
+    DataType b_dtype,
+    DataType c_dtype) {
+    const auto op_type = operation_attributes.binary_op_type;
+    const bool int8_sub = CMAKE_UNIQUE_NAMESPACE::is_int8_sub(op_type, a_dtype);
+    ComputeActivations activations{
+        .lhs = operation_attributes.lhs_activations,
+        .rhs = operation_attributes.rhs_activations,
+        .post = operation_attributes.post_activations,
+        // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant
+        // to be used.
+        .post_dtype = int8_sub ? std::optional<DataType>{DataType::INT32} : operation_attributes.input_dtype,
+    };
+    auto& lhs_activations = activations.lhs;
+    auto& rhs_activations = activations.rhs;
+    auto& post_activations = activations.post;
+
+    // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
+    // operands are swapped relative to the physical CBs. The caller's per-operand
+    // activation lists and the op-derived preprocess steps are both stated against the
+    // mathematical operands, so both follow the same inversion: math LHS lands on c_1,
+    // math RHS on c_0.
+    //
+    // This is the single point where "lhs" changes meaning. Above it -- scalar_is_lhs,
+    // lhs_activations, OpConfig::process_lhs -- lhs is the mathematical operand. Below it,
+    // and in the kernels, LHS is physical CB c_0. A caller that rewrites operands into
+    // slots must leave the activation lists in mathematical order and let this inversion
+    // map them; inverting them there as well cancels out and lands operand-b activations
+    // on the scalar.
+    const bool scalar_first = operation_attributes.scalar_is_lhs;
+    if (scalar_first) {
+        std::swap(lhs_activations, rhs_activations);
+    }
+
+    const auto& process_c0 = scalar_first ? op_config.process_rhs : op_config.process_lhs;
+    const auto& process_c1 = scalar_first ? op_config.process_lhs : op_config.process_rhs;
+
+    if (process_c0.has_value()) {
+        lhs_activations.push_back(*process_c0);
+    }
+
+    if (process_c1.has_value()) {
+        rhs_activations.push_back(*process_c1);
+    }
+
+    // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
+    // intermediate CB is Float16_b (due to op_has_exp), but LHS has no
+    // activation and stays in its original block-float format (BFLOAT8_B /
+    // BFLOAT4_B).  The resulting data-format mismatch between the two FPU
+    // binary operands produces incorrect results.  Adding a typecast for
+    // LHS forces it through a Float16_b intermediate CB so both operands
+    // use the same format.
+    // Note: LOGADDEXP / LOGADDEXP2 are not affected because they process
+    // both sides (EXP/EXP2), so lhs_activations is never empty for them.
+    if (!operation_attributes.is_sfpu && lhs_activations.empty() && !rhs_activations.empty() &&
+        op_type == BinaryOpType::LDEXP && (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
+        lhs_activations.push_back({
+            unary::UnaryOpType::TYPECAST,
+            {static_cast<int>(a_dtype), static_cast<int>(DataType::BFLOAT16)},
+        });
+    }
+
+    if (op_config.postprocess.has_value()) {
+        post_activations.insert(post_activations.begin(), *op_config.postprocess);
+    }
+
+    // Subtract runs in an int32 lane and a negative result is not packed as its low byte. The UInt8
+    // packer returns 255 for every lane below -1. Since Torch wraps modulo 256 instead, we mask
+    // the lane to its low byte before the pack.
+    // A caller's post activations must see the wrapped result and not the raw difference.
+    //   uint8: (d & 0xFF)
+    //   int8:  ((d + 128) & 0xFF) - 128, which also sign-extends the byte for relu, abs and other such ops.
+    if (int8_sub) {
+        if (!post_activations.empty()) {
+            ttsl::SmallVector<unary::EltwiseUnaryWithParam> wrap_first;
+            if (a_dtype == DataType::INT8) {
+                wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{128});
+                wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+                wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{-128});
+            } else {
+                wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+            }
+            post_activations.insert(post_activations.begin(), wrap_first.begin(), wrap_first.end());
+        }
+        post_activations.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
+    }
+
+    bool is_integer_division =
+        (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
+
+    // A caller's post activations may already cast (e.g. TYPECAST(FLOAT32, UINT8)): cast from the dtype the
+    // chain leaves, and not at all when that is already the output dtype.
+    DataType chain_dtype = a_dtype;
+    for (const auto& activation : post_activations) {
+        if (activation.type() == unary::UnaryOpType::TYPECAST) {
+            chain_dtype = unary::utils::typecast_target_dtype(activation).value_or(chain_dtype);
+        }
+    }
+    const bool uint8_out_typecast = is_uint8_out_typecast(operation_attributes.is_quant_op, a_dtype, c_dtype);
+    if (chain_dtype != c_dtype && (binary::utils::is_typecast(chain_dtype, c_dtype) || uint8_out_typecast) and
+        !operation_attributes.is_quant_op and !is_integer_division) {
+        post_activations.push_back({
+            unary::UnaryOpType::TYPECAST,
+            {static_cast<int>(chain_dtype), static_cast<int>(c_dtype)},
+        });
+    }
+    return activations;
+}
+
+// Values of the runtime scalars the compute kernel's activation defines read, in index order.
+std::vector<uint32_t> get_activation_scalar_values(
+    const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
+    const Tensor& a,
+    const std::optional<Tensor>& b,
+    const Tensor& c) {
+    const auto op_type = operation_attributes.binary_op_type;
+    const auto a_dtype = a.dtype();
+    const auto takes_runtime_scalars = [](const unary::EltwiseUnaryWithParam& op) {
+        return unary::utils::takes_runtime_scalars(op.type());
+    };
+    // Runs on every dispatch. Of the activations get_compute_activations adds, only the int8 sub wrap takes runtime
+    // scalars; create_descriptor checks this against the defines it generates.
+    if (!CMAKE_UNIQUE_NAMESPACE::is_int8_sub(op_type, a_dtype) &&
+        std::ranges::none_of(operation_attributes.lhs_activations, takes_runtime_scalars) &&
+        std::ranges::none_of(operation_attributes.rhs_activations, takes_runtime_scalars) &&
+        std::ranges::none_of(operation_attributes.post_activations, takes_runtime_scalars)) {
+        return {};
+    }
+    const auto b_dtype = compute_b_dtype(operation_attributes, a, b);
+    const auto op_config =
+        operation_attributes.is_sfpu
+            ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, operation_attributes.op_params)
+            : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, operation_attributes.op_params);
+    const auto activations = get_compute_activations(operation_attributes, op_config, a_dtype, b_dtype, c.dtype());
+    if (std::ranges::none_of(activations.lhs, takes_runtime_scalars) &&
+        std::ranges::none_of(activations.rhs, takes_runtime_scalars) &&
+        std::ranges::none_of(activations.post, takes_runtime_scalars)) {
+        return {};
+    }
+    // Generating the defines also validates the scalars, which a cache hit with new values needs.
+    auto runtime_scalars = make_activation_runtime_scalars(op_type);
+    std::map<std::string, std::string> defines;
+    add_activation_defines(defines, activations.lhs, "LHS", a_dtype, &runtime_scalars);
+    add_activation_defines(defines, activations.rhs, "RHS", b_dtype, &runtime_scalars);
+    add_activation_defines(defines, activations.post, "POST", activations.post_dtype, &runtime_scalars);
+    return std::move(runtime_scalars.values);
+}
+
 // SINGLE SOURCE OF TRUTH for binary_ng per-core runtime args.  Run by BOTH create_descriptor()
 // (cache miss) and BinaryNgDeviceOperation::override_runtime_arguments() (cache hit).
 //
@@ -708,7 +907,14 @@ void for_each_core_runtime_args(
     // between noop and work across differently-shaped cache hits.
     const size_t noop_reader_len = row_major_inputs ? 26 : 24;
     const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
-    const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE || op_type == BinaryOpType::REQUANT) ? 5 : 4;
+    const size_t base_compute_len = base_compute_args_len(op_type);
+    const auto activation_scalars = get_activation_scalar_values(operation_attributes, a, b, c);
+    const size_t noop_compute_len = base_compute_len + activation_scalars.size();
+    const auto append_activation_scalars = [&](RuntimeArgList& compute_args) {
+        TT_ASSERT(compute_args.size() <= base_compute_len);
+        compute_args.resize(base_compute_len, uint32_t{0});
+        compute_args.insert(compute_args.end(), activation_scalars.begin(), activation_scalars.end());
+    };
 
     // Scratch lists reused for every core; each core below reassigns all three in full before fn().
     RuntimeArgList reader_runtime_args;
@@ -923,6 +1129,7 @@ void for_each_core_runtime_args(
             compute_runtime_args.push_back(std::bit_cast<uint32_t>(
                 operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
         }
+        append_activation_scalars(compute_runtime_args);
 
         fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
 
@@ -948,9 +1155,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
     const bool is_where_op = operation_attributes.is_where_op;
-    // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
-    // used.
-    const auto input_dtype = operation_attributes.input_dtype;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
     }
@@ -966,17 +1170,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto c_num_tiles_per_shard = has_sharding ? shard_volumes->c_shard_volume : std::nullopt;
 
     const auto a_dtype = a.dtype();
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar.
-    // When b is a scalar, it is packed as bfloat16 for block-float input types (BFLOAT8_B,
-    // BFLOAT4_B), so the CB format must be BFLOAT16 to match — not the block-float a_dtype.
-    // An 8-bit int tensor takes its scalar as an INT32 tile, writing 16/32-bit elements and
-    // reading it as a full lane next to the zero-extended byte.
-    const bool int8_sub = CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a.dtype());
-    const auto b_dtype = b.has_value()                              ? b->dtype()
-                         : is_quant_op                              ? DataType::FLOAT32
-                         : int8_sub                                 ? DataType::INT32
-                         : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
-                                                                    : DataType::BFLOAT16;
+    const auto b_dtype = compute_b_dtype(operation_attributes, a, b);
     const auto c_dtype = c.dtype();
     // Int8 input (dequant/requant operand A) is read through the UInt8 unpacker.
     const auto a_data_format = cb_dataformat_for(a_dtype);
@@ -984,6 +1178,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
     // Int8 output is packed through the UInt8 packer path.
     const auto c_pack_data_format = cb_dataformat_for(c_dtype);
+    const bool uint8_out_typecast = is_uint8_out_typecast(is_quant_op, a_dtype, c_dtype);
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
@@ -1057,95 +1252,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     }
 
     {
-        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
-        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations = operation_attributes.rhs_activations;
-        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations = operation_attributes.post_activations;
+        const auto activations = get_compute_activations(operation_attributes, op_config, a_dtype, b_dtype, c_dtype);
+        const auto& lhs_activations = activations.lhs;
+        const auto& rhs_activations = activations.rhs;
+        const auto& post_activations = activations.post;
+        // Scalars of the activations are read from compute runtime args, which get_activation_scalar_values fills.
+        auto runtime_scalars = make_activation_runtime_scalars(op_type);
 
-        // Under a left-hand scalar the kernel evaluates op(c_1, c_0), so the mathematical
-        // operands are swapped relative to the physical CBs. The caller's per-operand
-        // activation lists and the op-derived preprocess steps are both stated against the
-        // mathematical operands, so both follow the same inversion: math LHS lands on c_1,
-        // math RHS on c_0.
-        //
-        // This is the single point where "lhs" changes meaning. Above it -- scalar_is_lhs,
-        // lhs_activations, OpConfig::process_lhs -- lhs is the mathematical operand. Below it,
-        // and in the kernels, LHS is physical CB c_0. A caller that rewrites operands into
-        // slots must leave the activation lists in mathematical order and let this inversion
-        // map them; inverting them there as well cancels out and lands operand-b activations
-        // on the scalar.
-        const bool scalar_first = operation_attributes.scalar_is_lhs;
-        if (scalar_first) {
-            std::swap(lhs_activations, rhs_activations);
-        }
-
-        const auto& process_c0 = scalar_first ? op_config.process_rhs : op_config.process_lhs;
-        const auto& process_c1 = scalar_first ? op_config.process_lhs : op_config.process_rhs;
-
-        if (process_c0.has_value()) {
-            lhs_activations.push_back(*process_c0);
-        }
-
-        if (process_c1.has_value()) {
-            rhs_activations.push_back(*process_c1);
-        }
-
-        // LDEXP decomposes to EXP2(rhs) then MUL on the FPU path.  The RHS
-        // intermediate CB is Float16_b (due to op_has_exp), but LHS has no
-        // activation and stays in its original block-float format (BFLOAT8_B /
-        // BFLOAT4_B).  The resulting data-format mismatch between the two FPU
-        // binary operands produces incorrect results.  Adding a typecast for
-        // LHS forces it through a Float16_b intermediate CB so both operands
-        // use the same format.
-        // Note: LOGADDEXP / LOGADDEXP2 are not affected because they process
-        // both sides (EXP/EXP2), so lhs_activations is never empty for them.
-        if (!is_sfpu_op && lhs_activations.empty() && !rhs_activations.empty() && op_type == BinaryOpType::LDEXP &&
-            (a_dtype == DataType::BFLOAT8_B || a_dtype == DataType::BFLOAT4_B)) {
-            lhs_activations.push_back({
-                unary::UnaryOpType::TYPECAST,
-                {static_cast<int>(a_dtype), static_cast<int>(DataType::BFLOAT16)},
-            });
-        }
-
-        if (op_config.postprocess.has_value()) {
-            post_activations.insert(post_activations.begin(), *op_config.postprocess);
-        }
-
-        // Subtract runs in an int32 lane and a negative result is not packed as its low byte. The UInt8
-        // packer returns 255 for every lane below -1. Since Torch wraps modulo 256 instead, we mask
-        // the lane to its low byte before the pack.
-        // A caller's post activations must see the wrapped result and not the raw difference.
-        //   uint8: (d & 0xFF)
-        //   int8:  ((d + 128) & 0xFF) - 128, which also sign-extends the byte for relu, abs and other such ops.
-        if (int8_sub) {
-            if (!post_activations.empty()) {
-                ttsl::SmallVector<unary::EltwiseUnaryWithParam> wrap_first;
-                if (a_dtype == DataType::INT8) {
-                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{128});
-                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
-                    wrap_first.emplace_back(unary::UnaryOpType::ADD_UNARY_SFPU, std::int32_t{-128});
-                } else {
-                    wrap_first.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
-                }
-                post_activations.insert(post_activations.begin(), wrap_first.begin(), wrap_first.end());
-            }
-            post_activations.emplace_back(unary::UnaryOpType::BITWISE_AND, std::uint32_t{0xFF});
-        }
-
-        bool is_integer_division =
-            (operation_attributes.binary_op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 &&
-             b_dtype == DataType::INT32);
-
-        if (binary::utils::is_typecast(a_dtype, c_dtype) and !is_quant_op and !is_integer_division) {
-            post_activations.push_back({
-                unary::UnaryOpType::TYPECAST,
-                {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
-            });
-        }
-
-        const auto post_dtype = int8_sub ? std::optional<DataType>{DataType::INT32} : input_dtype;
-
-        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype);
-        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype);
+        add_activation_defines(compute_kernel_defines, lhs_activations, "LHS", a_dtype, &runtime_scalars);
+        add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype, &runtime_scalars);
 
         // The PACK_RELU fast path applies ZERO_RELU via the packer config set once at the top
         // of the compute kernel.  Subtile-broadcast kernels do an intermediate
@@ -1168,11 +1283,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 compute_kernel_defines["QUANT_OUT_ZERO_POINT_RT_ARGS_IDX"] = "4";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
+                add_activation_defines(
+                    compute_kernel_defines, post_activations, "POST", activations.post_dtype, &runtime_scalars);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", post_dtype);
+            add_activation_defines(
+                compute_kernel_defines, post_activations, "POST", activations.post_dtype, &runtime_scalars);
         }
+        TT_FATAL(
+            runtime_scalars.values == get_activation_scalar_values(operation_attributes, a, b, c),
+            "binary_ng {}: compute runtime args do not match the activation scalars the kernel defines read",
+            op_type);
     }
 
     // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
@@ -1187,7 +1308,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32) ||
         // Quant SFPU kernels compute on the fp32 input in DST; keep fp32 dest
         // accumulation regardless of the (possibly narrow, e.g. uint8) output format.
-        operation_attributes.is_quant_op || int8_sub;
+        operation_attributes.is_quant_op ||
+        CMAKE_UNIQUE_NAMESPACE::is_int8_sub(operation_attributes.binary_op_type, a_dtype) || uint8_out_typecast;
 
     // Determine max tiles per cycle based on sharding and output data type
     // Multi-tile processing only enabled when all tensors are sharded

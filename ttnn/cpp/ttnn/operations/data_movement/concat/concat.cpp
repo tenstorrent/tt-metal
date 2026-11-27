@@ -5,15 +5,14 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_device_operation.hpp"
 #include "ttnn/operations/data_movement/concat/codegen/concat_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/concat/concat_force.hpp"
-#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
@@ -192,25 +191,13 @@ MassagedConcat build_non_aligned_last_dim_concat(
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
-    auto dim_aligned = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
+    auto dim_aligned = [&output_memory_config](const std::vector<ttnn::Tensor>& tensors, int dim) -> bool {
         const bool rm_width_concat =
             tensors.front().layout() == ttnn::ROW_MAJOR_LAYOUT && dim == tensors.front().logical_shape().rank() - 1;
-        // RM width-concat uses max alignment across inputs; TILE uses per-input (tile pages unaffected).
-        uint32_t common_align = 0;
-        if (rm_width_concat) {
-            for (const auto& t : tensors) {
-                TT_FATAL(
-                    t.storage_type() == ttnn::StorageType::DEVICE,
-                    "ttnn.concat: expected device storage, got storage type {}",
-                    t.storage_type());
-                common_align = std::max<uint32_t>(common_align, t.mesh_buffer().alignment());
-            }
-        }
+        // RM width-concat uses max alignment across inputs and output; TILE uses per-input (tile pages unaffected).
+        const uint32_t common_align =
+            rm_width_concat ? rm_width_concat_common_alignment(tensors, output_memory_config) : 0;
         return std::all_of(tensors.begin(), tensors.end(), [&](const ttnn::Tensor& tensor) {
-            TT_FATAL(
-                tensor.storage_type() == ttnn::StorageType::DEVICE,
-                "ttnn.concat: expected device storage, got storage type {}",
-                tensor.storage_type());
             const uint32_t align = rm_width_concat ? common_align : tensor.mesh_buffer().alignment();
             return (tensor.padded_shape()[dim] * tensor.element_size()) % align == 0;
         });
@@ -299,8 +286,8 @@ ttnn::Tensor concat_native(
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
-    // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
-    // which don't currently support sub_core_grids
+    // For interleaved outputs, if sub_core_grids is provided, use direct path. Alignment and
+    // layout-normalization checks live in `concat_impl` so all callers enforce the same rule.
     if (sub_core_grids.has_value() && !first_tensor.is_sharded() &&
         (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
         return ttnn::operations::data_movement::concat_impl(input_tensors, dim, groups, mem_config, sub_core_grids);
@@ -428,6 +415,10 @@ ttnn::Tensor concat_native(
 struct PreparedConcat {
     MemoryConfig mem_config;
     int dim;
+    // Filtered inputs after dropping empty-along-dim (torch.cat); empty iff `passthrough` is set.
+    std::vector<ttnn::Tensor> inputs;
+    // Lone/all-empty short-circuit: callers must `to_memory_config` this instead of invoking concat.
+    std::optional<ttnn::Tensor> passthrough;
 };
 
 // Validation shared by the routed entry and both forced entries, so they accept and reject the same calls.
@@ -442,10 +433,9 @@ PreparedConcat prepare_concat(
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
 
-    // One input has nothing to validate; the entries differ on what a lone input means (native and the routed entry
-    // convert its memory config, forced codegen rejects it at the gate).
+    // One input has nothing to validate; routed and native passthrough, forced codegen rejects downstream.
     if (input_tensors.size() == 1) {
-        return {mem_config, dim};
+        return {mem_config, dim, /*inputs=*/{}, /*passthrough=*/input_tensors.front()};
     }
 
     // TODO: Issue #8426: Add validation for ttnn.concat for sharded inputs
@@ -483,7 +473,33 @@ PreparedConcat prepare_concat(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-    return {mem_config, dim};
+    // Drop empty-along-dim inputs after shape validation; `dim` is normalized above so indexing is safe.
+    // Dropped inputs skip dtype/layout checks (torch.cat-lenient on degenerate zero-size tensors).
+    std::vector<ttnn::Tensor> filtered;
+    filtered.reserve(input_tensors.size());
+    for (const auto& t : input_tensors) {
+        if (t.logical_shape()[dim] != 0) {
+            filtered.push_back(t);
+        }
+    }
+    const bool any_dropped = filtered.size() < input_tensors.size();
+    if (any_dropped) {
+        // Sharded output / groups>1 in the drop path is untested; reject rather than silently produce wrong shards.
+        TT_FATAL(
+            !mem_config.is_sharded(),
+            "ttnn.concat: dropping empty-along-dim inputs is not supported with sharded output memory_config");
+        TT_FATAL(
+            groups == 1,
+            "ttnn.concat: dropping empty-along-dim inputs is not supported with groups > 1 (got {})",
+            groups);
+    }
+    if (filtered.empty()) {
+        return {mem_config, dim, /*inputs=*/{}, /*passthrough=*/input_tensors.front()};
+    }
+    if (filtered.size() == 1) {
+        return {mem_config, dim, /*inputs=*/{}, /*passthrough=*/filtered.front()};
+    }
+    return {mem_config, dim, std::move(filtered), /*passthrough=*/std::nullopt};
 }
 
 }  // namespace
@@ -497,10 +513,10 @@ ttnn::Tensor concat_force_native(
     const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     auto prepared = prepare_concat(input_tensors, dim, memory_config, groups);
-    if (input_tensors.size() == 1) {
-        return ttnn::to_memory_config(input_tensors.at(0), prepared.mem_config, std::nullopt);
+    if (prepared.passthrough) {
+        return ttnn::to_memory_config(*prepared.passthrough, prepared.mem_config, std::nullopt);
     }
-    return concat_native(input_tensors, prepared.dim, prepared.mem_config, groups, sub_core_grids);
+    return concat_native(prepared.inputs, prepared.dim, prepared.mem_config, groups, sub_core_grids);
 }
 
 ttnn::Tensor concat_force_codegen(
@@ -513,13 +529,16 @@ ttnn::Tensor concat_force_codegen(
     namespace cc = ttnn::operations::data_movement::concat_codegen;
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     auto prepared = prepare_concat(input_tensors, dim, memory_config, groups);
+    TT_FATAL(
+        !prepared.passthrough, "ttnn.concat: codegen path does not support a lone or all-empty-along-dim input list");
     const ttnn::prim::ConcatCodegenParams params{
         .dim = static_cast<uint32_t>(prepared.dim), .output_mem_config = prepared.mem_config};
     TT_FATAL(
         cc::supported_execution_controls(groups, sub_core_grids),
         "ttnn.concat: codegen path does not support groups > 1 or sub_core_grids");
-    TT_FATAL(cc::supported_by_codegen(input_tensors, params), "ttnn.concat: codegen path does not support this input");
-    return ttnn::prim::concat_codegen(input_tensors, params);
+    TT_FATAL(
+        cc::supported_by_codegen(prepared.inputs, params), "ttnn.concat: codegen path does not support this input");
+    return ttnn::prim::concat_codegen(prepared.inputs, params);
 }
 
 }  // namespace ttnn::operations::data_movement::detail
@@ -538,70 +557,8 @@ ttnn::Tensor concat(
     namespace cc = dm::concat_codegen;
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     auto prepared = dm::detail::prepare_concat(input_tensors, dim, memory_config, groups);
-    const auto& mem_config = prepared.mem_config;
-    if (input_tensors.size() == 1) {
-        const ttnn::Tensor& input_tensor = input_tensors.front();
-        if (input_tensor.logical_volume() == 0 && ttnn::is_device_tensor(input_tensor) && input_tensor.is_allocated())
-            [[unlikely]] {
-            const tt::tt_metal::TensorSpec output_spec(
-                input_tensor.logical_shape(),
-                tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), mem_config));
-            return ttnn::create_device_tensor(output_spec, input_tensor.device());
-        }
-        return ttnn::to_memory_config(input_tensor, mem_config, std::nullopt);
-    }
-
-    const ttnn::Tensor& first_tensor = input_tensors.front();
-    bool has_empty_input = false;
-    ttnn::Shape logical_output_shape = first_tensor.logical_shape();
-    logical_output_shape[prepared.dim] = 0;
-    for (const auto& t : input_tensors) {
-        has_empty_input |= t.logical_shape()[prepared.dim] == 0;
-        logical_output_shape[prepared.dim] += t.logical_shape()[prepared.dim];
-    }
-
-    if (has_empty_input || logical_output_shape.volume() == 0) [[unlikely]] {
-        for (const auto& input_tensor : input_tensors) {
-            TT_FATAL(
-                ttnn::is_device_tensor(input_tensor),
-                "ttnn.concat: expected a tensor with device storage, but got a tensor with storage type {}",
-                input_tensor.storage_type());
-            TT_FATAL(input_tensor.is_allocated(), "Operand to concat needs to be allocated in a buffer on device.");
-            TT_FATAL(
-                input_tensor.device() == first_tensor.device(), "Operands to concat need to be on the same device.");
-            TT_FATAL(input_tensor.dtype() == first_tensor.dtype(), "All Tensors should have same dtypes.");
-        }
-    }
-
-    if (logical_output_shape.volume() == 0) [[unlikely]] {
-        const tt::tt_metal::TensorSpec output_spec(
-            logical_output_shape,
-            tt::tt_metal::TensorLayout(first_tensor.dtype(), first_tensor.tensor_spec().page_config(), mem_config));
-        return ttnn::create_device_tensor(output_spec, first_tensor.device());
-    }
-
-    if (has_empty_input) [[unlikely]] {
-        std::vector<ttnn::Tensor> non_empty_tensors;
-        non_empty_tensors.reserve(input_tensors.size());
-        for (const auto& t : input_tensors) {
-            if (t.logical_shape()[prepared.dim] != 0) {
-                non_empty_tensors.push_back(t);
-            }
-        }
-        if (non_empty_tensors.size() == 1) {
-            const ttnn::Tensor& input_tensor = non_empty_tensors.front();
-            if (input_tensor.is_sharded()) {
-                const ttnn::Tensor interleaved_tensor =
-                    ttnn::to_memory_config(input_tensor, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
-                return ttnn::to_memory_config(interleaved_tensor, mem_config, std::nullopt);
-            }
-            if (input_tensor.memory_config() == mem_config) {
-                return ttnn::clone(input_tensor, std::nullopt, mem_config, std::nullopt);
-            }
-            return ttnn::to_memory_config(input_tensor, mem_config, std::nullopt);
-        }
-        return ttnn::concat(
-            non_empty_tensors, prepared.dim, memory_config, optional_output_tensor, groups, sub_core_grids);
+    if (prepared.passthrough) {
+        return ttnn::to_memory_config(*prepared.passthrough, prepared.mem_config, std::nullopt);
     }
 
     const ttnn::prim::ConcatCodegenParams params{
@@ -610,12 +567,12 @@ ttnn::Tensor concat(
     // (supported_by_codegen), perf (is_demoted: native measured faster) and live L1 (fits_live_l1: a CB plan exists for
     // the L1 free now). Failing any one sends the whole call to native. Forced codegen applies the first three, skips
     // the perf gate, and raises instead of falling back when L1 holds no plan.
-    if (dm::codegen_supported_on_arch(input_tensors.front()) &&
-        cc::supported_execution_controls(groups, sub_core_grids) && cc::supported_by_codegen(input_tensors, params) &&
-        !cc::is_demoted(input_tensors, params) && cc::fits_live_l1(input_tensors, params)) {
-        return ttnn::prim::concat_codegen(input_tensors, params);
+    if (dm::codegen_supported_on_arch(prepared.inputs.front()) &&
+        cc::supported_execution_controls(groups, sub_core_grids) && cc::supported_by_codegen(prepared.inputs, params) &&
+        !cc::is_demoted(prepared.inputs, params) && cc::fits_live_l1(prepared.inputs, params)) {
+        return ttnn::prim::concat_codegen(prepared.inputs, params);
     }
-    return dm::detail::concat_native(input_tensors, prepared.dim, prepared.mem_config, groups, sub_core_grids);
+    return dm::detail::concat_native(prepared.inputs, prepared.dim, prepared.mem_config, groups, sub_core_grids);
 }
 
 }  // namespace ttnn

@@ -7,7 +7,7 @@
 #include <limits>
 #include <optional>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "qkv_causal_conv1d_silu_device_operation_types.hpp"
 #include "hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"

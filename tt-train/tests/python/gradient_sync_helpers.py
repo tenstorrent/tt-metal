@@ -14,6 +14,7 @@ import ml_dtypes
 import numpy as np
 import ttnn
 import ttml
+from ttml.modules import LinearLayer
 
 
 def to_bf16(values: np.ndarray) -> np.ndarray:
@@ -53,6 +54,26 @@ def upload(values: np.ndarray, placements: list):
     """``values`` as a bf16 tensor laid out on the mesh by ``placements``, one per mesh axis."""
     mapper = ttnn.create_mesh_mapper(device(), ttnn.MeshMapperConfig(placements))
     return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+
+
+def fpu_add_bound(*operands: np.ndarray) -> np.ndarray:
+    """How far one FPU add of the operands can land from their exact sum. The FPU aligns the smaller operand to the
+    larger one's exponent with 10 fraction bits (see the "Not exact" note in docs/MIXED_PRECISION.md), so it can lose
+    up to one unit at 2^(e - 10), e being the larger operand's exponent."""
+    largest = np.max(np.abs(np.stack([np.asarray(o, dtype=np.float64) for o in operands])), axis=0)
+    with np.errstate(divide="ignore"):
+        exponent = np.floor(np.log2(largest))
+    return np.where(largest > 0, np.exp2(exponent - 10), 0.0)
+
+
+def sharded_linear(reduce_dtype, in_features: int = 128, out_features: int = 64) -> tuple:
+    """A bias-free ``LinearLayer`` sharded with ``fully_shard(reduce_dtype=...)`` and unsharded, as ``backward_post``
+    expects it after a backward. Returns ``(layer, fsdp_state, weight_tensor, shard_dim)``; keep ``layer`` alive."""
+    layer = LinearLayer(in_features, out_features, has_bias=False)
+    ttml.fsdp.fully_shard(layer, reduce_dtype=reduce_dtype)
+    layer.unshard()  # backward_post expects the gathered weight and restores the cached shard
+    ((parameter, shard_dim),) = layer._fsdp_state.managed
+    return layer, layer._fsdp_state, parameter.tensor, shard_dim
 
 
 def per_device_tensor(values: np.ndarray):

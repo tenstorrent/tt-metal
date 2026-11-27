@@ -4,7 +4,7 @@
 
 #include "device.hpp"
 
-#include "tt-metalium/device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
 
 namespace ttml::core {
 
