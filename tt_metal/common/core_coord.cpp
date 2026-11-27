@@ -153,8 +153,7 @@ bool CoreRange::CoreIterator::operator==(const CoreIterator& other) const { retu
 
 bool CoreRange::CoreIterator::operator!=(const CoreIterator& other) const { return !(current_ == other.current_); }
 
-CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreRange> core_ranges) :
-    ranges_(core_ranges.begin(), core_ranges.end()) {
+CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreRange> core_ranges) : ranges_(core_ranges.begin(), core_ranges.end()) {
     this->validate_no_overlap();
 }
 
@@ -165,6 +164,36 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
 CoreRangeSet::CoreRangeSet(ttsl::Span<const CoreCoord> core_coords) {
+    // Cores that fill their bounding box exactly once merge to that one range. Checking this is linear, while the
+    // general path checks every pair for overlap and merges through sets, which sharded allocations pay for every
+    // tensor.
+    if (core_coords.size() > 1) {
+        size_t min_x = std::numeric_limits<size_t>::max(), max_x = 0;
+        size_t min_y = std::numeric_limits<size_t>::max(), max_y = 0;
+        for (const auto& c : core_coords) {
+            min_x = std::min(min_x, c.x);
+            max_x = std::max(max_x, c.x);
+            min_y = std::min(min_y, c.y);
+            max_y = std::max(max_y, c.y);
+        }
+        const size_t width = max_x - min_x + 1;
+        if (width * (max_y - min_y + 1) == core_coords.size()) {
+            std::vector<bool> seen(core_coords.size(), false);
+            bool unique = true;
+            for (const auto& c : core_coords) {
+                const size_t i = ((c.y - min_y) * width) + (c.x - min_x);
+                if (seen[i]) {
+                    unique = false;
+                    break;
+                }
+                seen[i] = true;
+            }
+            if (unique) {
+                ranges_ = {CoreRange({min_x, min_y}, {max_x, max_y})};
+                return;
+            }
+        }
+    }
     std::vector<CoreRange> core_ranges;
     core_ranges.reserve(core_coords.size());
     for (const auto& core_coord : core_coords) {
@@ -652,8 +681,8 @@ bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b)
 
 }  // namespace tt::tt_metal
 
-auto fmt::formatter<tt::tt_metal::CoreCoord>::format(const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const
-    -> format_context::iterator {
+auto fmt::formatter<tt::tt_metal::CoreCoord>::format(
+    const tt::tt_metal::CoreCoord& core_coord, format_context& ctx) const -> format_context::iterator {
     std::stringstream ss;
     ss << core_coord.str();
     return fmt::format_to(ctx.out(), "{}", ss.str());
