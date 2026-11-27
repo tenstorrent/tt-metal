@@ -59,6 +59,9 @@ ALWI void unary_bcast_init(uint32_t icb) {
             false, false /*transpose within 16x16 face*/, icb)));
         MATH((llk_math_eltwise_unary_datacopy_init<unary_bcast_data_copy_type<bcast_type>, is_fp32_dest_acc_en, bcast_type>(
             icb)));
+        // Same Src zero-flag policy as copy_init: unless Zero_Flag_disabled_src is set, MOVB2D flushes every
+        // datum with a zero exponent, turning bf16 -0.0 into +0.0.
+        MATH((ckernel::math::_configure_copy_zero_flag_state_(dst_format)));
     }
 #endif
 #else

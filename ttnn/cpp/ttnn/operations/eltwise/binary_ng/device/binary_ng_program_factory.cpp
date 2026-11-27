@@ -1632,6 +1632,18 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
     }
 
+    // The SFPU broadcast kernels expand the LLK-broadcast operand straight into DEST (an intermediate
+    // bf16 pack would turn NaN into inf and -0.0 into +0.0), so they cannot apply a pre-activation to it.
+    if (use_llk_bcast && (is_sfpu_op || is_where_op)) {
+        const auto sbt = operation_attributes.subtile_broadcast_type;
+        const bool llk_bcast_is_a = sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_A_COL_B ||
+                                    sbt == SubtileBroadcastType::COL_A || sbt == SubtileBroadcastType::SCALAR_A;
+        if (not compute_kernel_defines[llk_bcast_is_a ? "PROCESS_LHS_ACTIVATIONS(i)" : "PROCESS_RHS_ACTIVATIONS(i)"]
+                    .empty()) {
+            use_llk_bcast = false;
+        }
+    }
+
     if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines, is_where_op);

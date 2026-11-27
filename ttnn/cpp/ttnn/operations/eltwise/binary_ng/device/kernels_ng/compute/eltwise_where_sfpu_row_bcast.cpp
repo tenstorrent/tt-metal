@@ -24,68 +24,51 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
     DataflowBuffer exp_dfb_out(cb_out);
 
+    // The broadcast operand is expanded by unary_bcast straight into its DEST slot: packing the expanded
+    // tile to L1 and copying it back would round NaN to inf and -0.0 to +0.0 in a 16-bit DEST.
+#if WHERE_TTS
+    constexpr uint32_t tensor_dst_offset = 1;
+#else
+    constexpr uint32_t tensor_dst_offset = 2;
+#endif
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_in0;
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    constexpr auto cb_left = tt::CBIndex::c_5;
-    constexpr auto cb_right = cb_in1;
+    constexpr auto cb_plain = cb_in1;
+    constexpr uint32_t bcast_dst_offset = 0;
+    constexpr uint32_t plain_dst_offset = tensor_dst_offset;
 #endif
 #if SRC_BCAST_B
     constexpr auto cb_bcast = cb_in1;
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    constexpr auto cb_left = cb_in0;
-    constexpr auto cb_right = tt::CBIndex::c_6;
+    constexpr auto cb_plain = cb_in0;
+    constexpr uint32_t bcast_dst_offset = tensor_dst_offset;
+    constexpr uint32_t plain_dst_offset = 0;
 #endif
 
-    DataflowBuffer exp_dfb_in0(cb_in0);
-    DataflowBuffer exp_dfb_in1(cb_in1);
     DataflowBuffer exp_dfb_bcast(cb_bcast);
-    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
-    DataflowBuffer exp_dfb_left(cb_left);
-    DataflowBuffer exp_dfb_right(cb_right);
+    DataflowBuffer exp_dfb_plain(cb_plain);
 
-    compute_kernel_hw_startup(cb_left, cb_out);
-    copy_init(cb_left);
+    compute_kernel_hw_startup(cb_in0, cb_out);
+    copy_init(cb_in0);
     BINARY_SFPU_INIT
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        exp_dfb_in0.wait_front(num_tiles_per_cycle);
-        exp_dfb_in1.wait_front(num_tiles_per_cycle);
+        exp_dfb_bcast.wait_front(num_tiles_per_cycle);
+        exp_dfb_plain.wait_front(num_tiles_per_cycle);
+        exp_dfb_out.reserve_back(num_tiles_per_cycle);
 
-        exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
+        tile_regs_acquire();
         reconfig_data_format(cb_bcast, cb_bcast);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast);
-
-        tile_regs_acquire();
-        unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_llk_post);
-        exp_dfb_llk_post.push_back(num_tiles_per_cycle);
-        tile_regs_release();
-
-        exp_dfb_bcast.pop_front(num_tiles_per_cycle);
-        // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
-
-        exp_dfb_out.reserve_back(num_tiles_per_cycle);
-        exp_dfb_llk_post.wait_front(num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        copy_init(cb_left);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_left, i, i * 3);
+            unary_bcast<BroadcastType::ROW>(cb_bcast, i, i * 3 + bcast_dst_offset);
         }
-        copy_init(cb_right);
+        reconfig_data_format_srca(cb_bcast, cb_plain);
+        copy_init(cb_plain);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-// TTS: tensor is true value, goes to dst_reg 1
-#if WHERE_TTS
-            copy_tile(cb_right, i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            copy_tile(cb_plain, i, i * 3 + plain_dst_offset);
             fill_tile_init();
 // TTS: scalar is false value, goes to dst_reg 2
+#if WHERE_TTS
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 2, *scalar_val);
 #endif
@@ -94,11 +77,8 @@ void kernel_main() {
 #endif
 #endif
 
-// TST: tensor is false value, goes to dst_reg 2
-#if WHERE_TST
-            copy_tile(cb_right, i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-            fill_tile_init();
 // TST: scalar is true value, goes to dst_reg 1
+#if WHERE_TST
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 1, *scalar_val);
 #endif
@@ -119,7 +99,7 @@ void kernel_main() {
         tile_regs_release();
 
         exp_dfb_out.push_back(num_tiles_per_cycle);
-        exp_dfb_left.pop_front(num_tiles_per_cycle);
-        exp_dfb_right.pop_front(num_tiles_per_cycle);
+        exp_dfb_bcast.pop_front(num_tiles_per_cycle);
+        exp_dfb_plain.pop_front(num_tiles_per_cycle);
     }
 }
