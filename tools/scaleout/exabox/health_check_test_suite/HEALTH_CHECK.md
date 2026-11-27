@@ -666,6 +666,15 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 ## Checks (grouped by IP)
 
+A check that finds chips at fault lists them in `parts`, each named by BDF, tray
+and ASIC. In `checks.csv` every WARN/FAIL row also carries `part` (those chips; a
+tray with all 8 listed is named once as `UBBn (all 8 chips)`) and `cause`:
+`PCIE/LINK` for PCIe and ETH checks, `CHIP/BOARD` for GDDR, ASIC, firmware,
+thermal and board checks, and `UNKNOWN` for a chip missing from the bus, a reset
+and a stress test. A missing chip is `POWER` (12 V lost), `POWER-DOWNSTREAM`
+(12 V present, VR power-good low) or `PCIE/LINK` only once the tray's power is
+read, which this suite does not do yet; until then it is never guessed.
+
 ### Board
 | Check | Rule | On fail |
 |---|---|---|

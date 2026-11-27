@@ -56,6 +56,22 @@ CHECK_CATEGORY = {
 }
 STRESS_PHASES = {"tests", "retest"}
 
+# Cause class of a WARN/FAIL row, by category. A chip gone from the bus is
+# POWER (12 V lost), POWER-DOWNSTREAM (12 V present, VR power-good low) or
+# PCIE/LINK, and only the tray's power reads tell which; the suite does not read
+# them, so a lost chip is UNKNOWN rather than a guess.
+CAUSE_BY_CATEGORY = {
+    "pcie": "PCIE/LINK",
+    "eth": "PCIE/LINK",
+    "gddr": "CHIP/BOARD",
+    "asic": "CHIP/BOARD",
+    "firmware": "CHIP/BOARD",
+    "thermal": "CHIP/BOARD",
+    "board": "CHIP/BOARD",
+}
+CHIP_LOST_CHECKS = {"pcie_enum_count", "asic_location_per_ubb"}
+TRAY_RE = re.compile(r"\((UBB\d)/U\d\)")
+
 # Benign fleet-wide WARNs: tracked but kept out of the actionable rollups.
 ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 
@@ -169,6 +185,8 @@ CHECKS_COLS = [
     "testcases_failed",
     "executed",
     "details_short",
+    "cause",
+    "part",
 ]
 
 
@@ -204,6 +222,24 @@ def category_for(phase: str, check: dict) -> str:
     if phase in STRESS_PHASES:
         return "stress_test"
     return IP_TO_CATEGORY.get(check.get("ip", ""), "other")
+
+
+def cause_for(category: str, check_name: str) -> str:
+    if check_name in CHIP_LOST_CHECKS or category == "reset":
+        return "UNKNOWN"
+    return CAUSE_BY_CATEGORY.get(category, "UNKNOWN")
+
+
+def part_cell(parts: list) -> str:
+    """The check's chips, '; '-joined; a tray with all 8 chips listed is named once."""
+    trays = [m.group(1) if m else None for m in map(TRAY_RE.search, parts)]
+    whole = {t for t in trays if t and trays.count(t) == 8}
+    out = []
+    for p, t in zip(parts, trays):
+        name = f"{t} (all 8 chips)" if t in whole else p
+        if name not in out:
+            out.append(name)
+    return "; ".join(out)
 
 
 def iter_checks(report: dict, primary_only: bool = True):
@@ -368,6 +404,8 @@ def checks_rows(report: dict, meta: dict):
                 "testcases_failed": tf,
                 "executed": executed,
                 "details_short": (c.get("details", "") or "").replace("\n", " | ")[:cap],
+                "cause": cause_for(cat, name) if st in ("WARN", "FAIL") else "",
+                "part": part_cell(c.get("parts") or []) if st in ("WARN", "FAIL") else "",
             }
         )
     return rows

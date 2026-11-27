@@ -43,6 +43,7 @@ def format_bdf(bdf: str) -> str:
 
 
 EXPECTED_CHIP_COUNT = 32
+EXPECTED_BDFS = tuple(expected_bdf(tray, asic) for tray in range(1, 5) for asic in range(1, 9))
 
 
 # Per-ASIC eth port classification on a BH Galaxy UBB.

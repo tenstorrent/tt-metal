@@ -62,6 +62,17 @@ class Category(str, Enum):
     other = "other"
 
 
+class CauseClass(str, Enum):
+    """Likely cause of a WARN/FAIL check. POWER and POWER-DOWNSTREAM need the
+    tray's 12 V and VR power-good reads; without them a lost chip is UNKNOWN."""
+
+    POWER = "POWER"
+    POWER_DOWNSTREAM = "POWER-DOWNSTREAM"
+    PCIE_LINK = "PCIE/LINK"
+    CHIP_BOARD = "CHIP/BOARD"
+    UNKNOWN = "UNKNOWN"
+
+
 class PhaseKind(str, Enum):
     """Primary phases vs the per-reset re-snapshots the diag tool splices in on
     instability (segregated so an unstable machine doesn't double-count)."""
@@ -110,6 +121,10 @@ class CheckRecord(BaseModel):
     executed: Flag = Field(description="0 if a stress test executed 0 cases (check-level fail-closed).")
 
     details_short: Optional[str] = Field(None, description="Human-readable check detail, newlines flattened.")
+    cause: Optional[CauseClass] = Field(None, description="Likely cause class of a WARN/FAIL; empty otherwise.")
+    part: Optional[str] = Field(
+        None, description="Chips at fault by BDF (tray/ASIC), or 'UBBn (all 8 chips)'; empty when not chip-specific."
+    )
 
     @model_validator(mode="before")
     @classmethod

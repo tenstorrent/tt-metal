@@ -12,7 +12,7 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
 from .eth_status import read_pcie_functions
-from .galaxy import EXPECTED_CHIP_COUNT, expected_bdf, format_bdf
+from .galaxy import EXPECTED_BDFS, EXPECTED_CHIP_COUNT, format_bdf
 from .model import FAIL, PASS, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
@@ -21,8 +21,6 @@ from .snapshot_checks import validate_snapshot
 # is not used on Galaxy units, it can leave chips that re-enumerate but read
 # 0xffffffff until a -glx_reset.
 RESET_FLAGS = ("-glx_reset",)
-
-EXPECTED_BDFS = tuple(expected_bdf(tray, asic) for tray in range(1, 5) for asic in range(1, 9))
 
 
 def chip_root_ports(sys_root: Path = Path("/sys")) -> set[str]:
@@ -75,8 +73,9 @@ def reset_loop(
     the chips by BDF.
 
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
-    taken + validated after each reset iteration, and appended to `post_reset_phases` as (name, Phase) pairs for the caller to
-    splice into the report.
+    taken + validated after each reset iteration, and appended to
+    `post_reset_phases` as (name, Phase) pairs for the caller to splice into the
+    report.
     """
 
     def _post_reset_snapshot(label: str) -> None:
@@ -136,12 +135,12 @@ def reset_loop(
                     "rc": cp.returncode,
                     "duration_s": dt,
                     "post_pcie_count": post_count,
-                    "missing": missing,
                     "rescan_errors": rescan_errors,
                     "stdout_tail": cp.stdout[-2000:] if cp.stdout else "",
                     "stderr_tail": cp.stderr[-2000:] if cp.stderr else "",
                 },
                 ip="other",
+                parts=missing,
             )
         )
         # Post-reset snapshot: validate the unit's state after this iteration.

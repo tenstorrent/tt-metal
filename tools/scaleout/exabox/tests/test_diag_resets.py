@@ -85,7 +85,8 @@ class TestResetLoop(unittest.TestCase):
         (check,) = phase.checks
         self.assertEqual(check.status, FAIL)
         self.assertEqual(check.data["post_pcie_count"], 24)
-        self.assertEqual(len(check.data["missing"]), 8)
+        self.assertEqual(len(check.parts), 8)
+        self.assertIn("0000:c1:00.0 (UBB3/U1)", check.parts)
         self.assertIn("0000:c1:00.0 (UBB3/U1)", check.details)
         # The lost tray's root ports were read before the reset, so they are rescanned too.
         self.assertEqual((self.root / "devices" / "pci0000:c0" / "0000:c0:01.1" / "rescan").read_text(), "1")

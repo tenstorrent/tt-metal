@@ -16,6 +16,7 @@ from .galaxy import (
     BOARD_REV_EXPECTATIONS,
     ETH_EXAMAX_BY_ASIC,
     ETH_INTERNAL_BY_ASIC,
+    EXPECTED_BDFS,
     EXPECTED_CHIP_COUNT,
     TRAY_TO_UBB_NIBBLE,
     UBB_NIBBLE_TO_TRAY,
@@ -24,6 +25,12 @@ from .galaxy import (
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+
+
+def _parts(bdfs) -> list[str]:
+    """Check.parts for these BDFs: each chip once, named by tray and ASIC."""
+    return [format_bdf(b) for b in dict.fromkeys(bdfs)]
+
 
 # GDDR train+BIST bitmask layout — tt-system-firmware telemetry.h:103-118.
 # Exposed by tt-smi -s as smbus_telem.DDR_STATUS (legacy WH name; on BH this is
@@ -73,8 +80,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # localise the missing chip(s) without manual cross-referencing.
     n = len(devs)
     actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
-    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
-    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
+    missing_bdfs_enum = sorted(set(EXPECTED_BDFS) - set(actual_bdfs))
     enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
     if missing_bdfs_enum:
         enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
@@ -90,6 +96,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "actual_bdfs": actual_bdfs,
             },
             ip="pcie",
+            parts=_parts(missing_bdfs_enum),
         )
     )
     if n == 0:
@@ -167,6 +174,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             + (f"; failed: [{', '.join(format_bdf(b) for b in bad)}]" if bad else ""),
             data={"failed_chips": bad},
             ip="gddr",
+            parts=_parts(bad),
         )
     )
 
@@ -181,6 +189,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             + (f"; partial: [{', '.join(f'{format_bdf(b)}={m}' for b, m in gddr_bad[:5])}]" if gddr_bad else ""),
             data={"partial_chips": gddr_bad},
             ip="gddr",
+            parts=_parts(b for b, _ in gddr_bad),
         )
     )
 
@@ -197,6 +206,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             data={"harvested_chips": harv_bad, "distribution": dict(Counter(harv))},
             ip="asic",
             console_visible=False,
+            parts=_parts(b for b, _ in harv_bad),
         )
     )
 
@@ -241,6 +251,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "missing_bdfs": missing_bdfs,
             },
             ip="asic",
+            parts=_parts(missing_bdfs),
         )
     )
 
@@ -273,6 +284,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             + (f"; mismatches: [{'; '.join(_fmt_mismatch(m) for m in mismatches[:3])}]" if mismatches else ""),
             data={"mismatches": mismatches},
             ip="asic",
+            parts=_parts(m["bdf"] for m in mismatches),
         )
     )
 
@@ -380,6 +392,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"failures": train_failures},
             ip="gddr",
+            parts=_parts(f["bdf"] for f in train_failures),
         )
     )
     phase.add(
@@ -394,6 +407,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"failures": bist_failures},
             ip="gddr",
+            parts=_parts(f["bdf"] for f in bist_failures),
         )
     )
 
@@ -446,6 +460,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"mismatches": lane_mismatches},
             ip="pcie",
+            parts=_parts(m["bdf"] for m in lane_mismatches),
         )
     )
 
@@ -502,6 +517,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     "rev": rev,
                 },
                 ip="pcie",
+                parts=_parts(bdf for bdf, _ in under),
             )
         )
 
@@ -544,6 +560,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     "rev": rev,
                 },
                 ip="gddr",
+                parts=_parts(b for b, _ in gddr_speed_bad),
             )
         )
 
@@ -661,6 +678,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 ),
                 data={"failures": eth_link_failures},
                 ip="eth",
+                parts=_parts(f["bdf"] for f in eth_link_failures),
             )
         )
     else:
@@ -742,6 +760,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 },
                 ip="thermal",
                 console_visible=False,
+                parts=_parts([hottest_bdf] if status == WARN else []),
             )
         )
 
