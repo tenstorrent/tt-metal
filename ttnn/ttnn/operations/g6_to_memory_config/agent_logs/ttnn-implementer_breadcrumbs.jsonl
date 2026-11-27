@@ -22,3 +22,5 @@
 {"event":"test_run","result":"pass","detail":"golden slice: 19 block-format/DRAM-width-sharded test_op cells + 12 test_op_loose = 31/31 passed, 0 xfail/xpass","ts":"2026-11-27T09:07:29-05:00"}
 {"event":"test_run","result":"pass","detail":"BB-05 probe: all 19 new cells under budget, max l1_op_bytes 429696 (2183 bounce, block 373); bf4b bounce on 110 movers, bf8b push_shard/pull_bank","ts":"2026-11-27T09:08:26-05:00"}
 {"event":"profile","detail":"Qwen 2183 bf4b bounce (3 cells: test_op + 2 loose), device kernel ns 312290 / 310352 / 313980, median 312.3 us; Phase 0 baseline 307-318 us -> no regression","ts":"2026-11-27T09:09:33-05:00"}
+{"event":"test_run","result":"pass","detail":"re-verified Refinement 1 on device: acceptance+precision 32/32; golden -k BFLOAT8_B|BFLOAT4_B|test_op_loose 31/31, 0 xfail/xpass","ts":"2026-11-27T09:27:33-05:00"}
+{"event":"profile","detail":"Qwen 2183 bf4b bounce device kernel ns 311213 / 317696 / 313733 (median 313.7 us), within Phase 0 band 307-318 us; no regression","ts":"2026-11-27T09:27:33-05:00"}

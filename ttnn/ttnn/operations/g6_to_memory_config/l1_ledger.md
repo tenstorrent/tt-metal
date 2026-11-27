@@ -7,7 +7,7 @@ Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes (
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_bounce_pages` (bounce regime only) | `bounce_depth · bounce_block_pages`, with `bounce_block_pages = min(ceil(core_pages_max / bounce_depth), floor(L1_OP_BUDGET_BYTES / (bounce_depth · page_size)))` | `bounce_depth · bounce_block_pages` — both slots are live at once by design (reader fills block `k+1` while the writer drains block `k`); equals capacity | `{leading: folded into tile_row, tile_row: folded into page, tile_col: folded into page, page: spans → bounce_block_pages per slot × bounce_depth}` | input dtype (`Float16_b` Phase 0; `Bfp8_b` / `Bfp4_b` refinement) — a dataflow-only byte payload that never passes through DEST, so the DEST-width rule does not apply | reader | writer | bounce kernels, the whole call | nothing to share with: it is the op's only buffer. Not aliased onto the input or output: in `bounce` both live in DRAM, and an L1 staging slot is the only place a DRAM→DRAM page can land (a NoC read lands only in the issuer's L1) |
+| `cb_bounce_pages` (bounce regime only) | `bounce_depth · bounce_block_pages`, with `bounce_block_pages = min(ceil(core_pages_max / bounce_depth), floor(L1_OP_BUDGET_BYTES / (bounce_depth · page_size)))` | `bounce_depth · bounce_block_pages` — both slots are live at once by design (reader fills block `k+1` while the writer drains block `k`); equals capacity | `{leading: folded into tile_row, tile_row: folded into page, tile_col: folded into page, page: spans → bounce_block_pages per slot × bounce_depth}` | input dtype (`Float16_b`, `Bfp8_b`, `Bfp4_b`) — a dataflow-only byte payload that never passes through DEST, so the DEST-width rule does not apply | reader | writer | bounce kernels, the whole call | nothing to share with: it is the op's only buffer. Not aliased onto the input or output: in `bounce` both live in DRAM, and an L1 staging slot is the only place a DRAM→DRAM page can land (a NoC read lands only in the issuer's L1) |
 
 Pull and push regimes allocate **no CB**. Considered and decided per the reuse patterns: the
 phase boundary "page arrived" → "page stored" is not storage — pull packs straight into the
@@ -47,7 +47,7 @@ L1_op(core) = output_share(regime, core)                                   # sca
 Only one term is non-zero per regime: owner regimes into L1 carry the output share and no CB;
 `push_*` into DRAM carry nothing; `bounce` carries only the CB (its target is DRAM). Golden maxima:
 192512 B (`pull_bank`, Qwen 2078), 40960 B (L1-sharded targets), 429696 B
-(`bounce`, bf4b 2183, refinement: `bounce_block_pages` = ceil(745 / 2) = 373, 2 · 373 · 576 B, as
+(`bounce`, bf4b 2183: `bounce_block_pages` = ceil(745 / 2) = 373, 2 · 373 · 576 B, as
 `plan_of` reports) — all under 1347776 B. A shape whose `L1_op` exceeds the budget is
 refused on the host before allocation (BB-05).
 

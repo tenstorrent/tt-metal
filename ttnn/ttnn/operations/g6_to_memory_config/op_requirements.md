@@ -25,7 +25,7 @@
 - **Compute config**: none (no compute kernel, no arithmetic)
 - **Golden baseline**: 91 / 117 registry cells pass (86 bf16 production cells + 5 Phase 0 loose cases); 26 xfail_expected; 0 loud. Plus 88/88 regression tests. 179 / 205 total.
 
-### [ ] Refinement 1 — Block formats and DRAM width-sharded targets
+### [x] Refinement 1 — Block formats and DRAM width-sharded targets
 
 **Goal**: add `ttnn.bfloat8_b` and `ttnn.bfloat4_b` to `SUPPORTED["dtype"]` and remove the `{"out_scheme": "width_sharded", "out_buffer": "dram"}` entry from `EXCLUSIONS`. After this, `SUPPORTED == TARGET` on every axis. This moves all 26 current `xfail_expected` cells to passing:
 - 12 bf8b production cells (Panoptic 0/2/5/7/9/11/15/25/26/28/34/36);
