@@ -20,6 +20,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
+#include "g6_typecast_rm_rows.hpp"
 
 namespace {
 
@@ -53,30 +54,6 @@ FORCE_INLINE void zero_pad_columns(const Noc& noc, const CircularBuffer& cb, uin
     }
 }
 
-// Copy one row of `row_bytes` in the widest unit both addresses and the size allow.
-template <uint32_t row_bytes>
-FORCE_INLINE void copy_row(uint32_t src, uint32_t dst) {
-    if constexpr (row_bytes % 4 == 0) {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes / 4; ++i) {
-            d[i] = s[i];
-        }
-    } else if constexpr (row_bytes % 2 == 0) {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes / 2; ++i) {
-            d[i] = s[i];
-        }
-    } else {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes; ++i) {
-            d[i] = s[i];
-        }
-    }
-}
-
 }  // namespace
 
 void kernel_main() {
@@ -92,7 +69,8 @@ void kernel_main() {
     constexpr uint32_t row_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t values_per_row = get_compile_time_arg_val(10);
     constexpr uint32_t staging_align = get_compile_time_arg_val(11);
-    constexpr auto input_args = TensorAccessorArgs<12>();
+    constexpr uint32_t staging_depth = get_compile_time_arg_val(12);
+    constexpr auto input_args = TensorAccessorArgs<13>();
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
@@ -103,16 +81,21 @@ void kernel_main() {
 
     if constexpr (rm_mode) {
         // start_tile / core_tiles carry start_row / core_rows here.
+        // staging_depth >= 2: the bank-run reads of block b+1 are issued into the next staging slot BEFORE
+        // block b is compacted, so the DMA overlaps the RISC-V compaction. Only one block is ever in flight,
+        // so the plain read barrier retires exactly block b (no transaction ids needed).
         constexpr uint32_t pseudo_tile_values = 1024;
         const uint32_t nb = input_accessor.contiguous_page_stride();
-        const uint32_t staging = (get_write_ptr(cb_input_staging) + staging_align - 1) & ~(staging_align - 1);
+        const uint32_t staging0 = (get_write_ptr(cb_input_staging) + staging_align - 1) & ~(staging_align - 1);
+        const uint32_t staging_bytes = rows_per_block * in_page_bytes;
         const uint32_t end_row = start_tile + core_tiles;
-        for (uint32_t blk = start_tile; blk < end_row; blk += rows_per_block) {
-            DeviceZoneScopedN("READ_BLOCK");
-            const uint32_t rows = (end_row - blk < rows_per_block) ? (end_row - blk) : rows_per_block;
-            const uint32_t block_pages = (rows * values_per_row + pseudo_tile_values - 1) / pseudo_tile_values;
+        auto block_rows = [&](uint32_t blk) {
+            return (end_row - blk < rows_per_block) ? (end_row - blk) : rows_per_block;
+        };
+        // One read per bank run: rows blk + j + k*nb, k = 0..cnt-1, contiguous in their bank.
+        auto issue_block = [&](uint32_t blk, uint32_t staging) {
+            const uint32_t rows = block_rows(blk);
             const uint32_t runs = rows < nb ? rows : nb;
-            // One read per bank run: rows blk + j + k*nb, k = 0..cnt-1, contiguous in their bank.
             uint32_t slot = 0;
             for (uint32_t j = 0; j < runs; ++j) {
                 const uint32_t cnt = (rows - j - 1) / nb + 1;
@@ -120,26 +103,36 @@ void kernel_main() {
                     input_accessor.get_noc_addr(blk + j), staging + slot * in_page_bytes, cnt * in_page_bytes);
                 slot += cnt;
             }
+        };
+        uint32_t stage = 0;
+        if (start_tile < end_row) {
+            issue_block(start_tile, staging0);
+        }
+        for (uint32_t blk = start_tile; blk < end_row; blk += rows_per_block) {
+            DeviceZoneScopedN("READ_BLOCK");
+            const uint32_t rows = block_rows(blk);
+            const uint32_t block_pages = (rows * values_per_row + pseudo_tile_values - 1) / pseudo_tile_values;
+            const uint32_t staging = staging0 + stage * staging_bytes;
+            const uint32_t next_stage = (stage + 1 == staging_depth) ? 0 : stage + 1;
+            const uint32_t next_blk = blk + rows_per_block;
+            noc_async_read_barrier();  // block blk landed (the only block in flight)
+            if constexpr (staging_depth > 1) {
+                if (next_blk < end_row) {
+                    issue_block(next_blk, staging0 + next_stage * staging_bytes);
+                }
+            }
             {
                 DeviceZoneScopedN("READ_WAIT_SPACE");
                 cb_reserve_back(cb_input_tiles, block_pages);
             }
-            noc_async_read_barrier();
-            // Compact: staging slot (bank-run order) -> dense row-major position in the pseudo-tile block.
-            const uint32_t dense = get_write_ptr(cb_input_tiles);
-            slot = 0;
-            for (uint32_t j = 0; j < runs; ++j) {
-                const uint32_t cnt = (rows - j - 1) / nb + 1;
-                uint32_t src = staging + slot * in_page_bytes;
-                uint32_t dst = dense + j * row_bytes;
-                for (uint32_t k = 0; k < cnt; ++k) {
-                    copy_row<row_bytes>(src, dst);
-                    src += in_page_bytes;
-                    dst += nb * row_bytes;
-                }
-                slot += cnt;
-            }
+            g6_rm::compact_block<row_bytes>(staging, in_page_bytes, nb, rows, get_write_ptr(cb_input_tiles));
             cb_push_back(cb_input_tiles, block_pages);
+            if constexpr (staging_depth == 1) {
+                if (next_blk < end_row) {
+                    issue_block(next_blk, staging0);
+                }
+            }
+            stage = next_stage;
         }
         return;
     }

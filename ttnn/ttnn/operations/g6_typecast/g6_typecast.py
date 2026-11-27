@@ -175,6 +175,7 @@ def _cache_key(input_tensor, dtype):
         # Block knobs change CT args / CB sizes: part of the key so a turned knob never replays a stale program.
         _pd.BUFFER_DEPTH,
         _pd.BLOCK_TILES_CAP,
+        _pd.STAGING_DEPTH,
         _pd.L1_OP_BUDGET_BYTES,
         _pd.L1_SLACK_BYTES,
     )

@@ -10,39 +10,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "g6_typecast_rm_rows.hpp"
 
 // rm_mode (regime R2 `rm_pseudo_tile_stream`): mirror of the reader. Per block of `rows_per_block` rows:
 // wait the block's ceil(rows * W / 1024) dense pseudo-tile pages, expand the rows into bank-run order in
 // the 64B-aligned staging zone (aligned-page stride), release the CB slot, then ONE NoC write per bank run
 // (rows r, r+nb, ... are adjacent in their bank). The staging zone is reused only after the previous
 // block's writes are flushed. Padding bytes of each aligned page slot are don't-care.
-
-namespace {
-
-template <uint32_t row_bytes>
-FORCE_INLINE void copy_row(uint32_t src, uint32_t dst) {
-    if constexpr (row_bytes % 4 == 0) {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes / 4; ++i) {
-            d[i] = s[i];
-        }
-    } else if constexpr (row_bytes % 2 == 0) {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes / 2; ++i) {
-            d[i] = s[i];
-        }
-    } else {
-        auto* s = reinterpret_cast<const volatile tt_l1_ptr uint8_t*>(src);
-        auto* d = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst);
-        for (uint32_t i = 0; i < row_bytes; ++i) {
-            d[i] = s[i];
-        }
-    }
-}
-
-}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
@@ -54,7 +28,8 @@ void kernel_main() {
     constexpr uint32_t row_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t values_per_row = get_compile_time_arg_val(7);
     constexpr uint32_t staging_align = get_compile_time_arg_val(8);
-    constexpr auto output_args = TensorAccessorArgs<9>();
+    constexpr uint32_t staging_depth = get_compile_time_arg_val(9);
+    constexpr auto output_args = TensorAccessorArgs<10>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
@@ -65,41 +40,41 @@ void kernel_main() {
 
     if constexpr (rm_mode) {
         // start_tile / core_tiles carry start_row / core_rows here.
+        // staging_depth >= 2: block b is expanded into its own staging slot while block b-1's writes are
+        // still leaving the other slot; the flush after the expansion retires b-1 (the only block in flight),
+        // which also frees slot (b+1) % depth before the next expansion.
         constexpr uint32_t pseudo_tile_values = 1024;
         const uint32_t nb = output_accessor.contiguous_page_stride();
-        const uint32_t staging = (get_write_ptr(cb_output_staging) + staging_align - 1) & ~(staging_align - 1);
+        const uint32_t staging0 = (get_write_ptr(cb_output_staging) + staging_align - 1) & ~(staging_align - 1);
+        const uint32_t staging_bytes = rows_per_block * out_page_bytes;
         const uint32_t end_row = start_tile + core_tiles;
+        uint32_t stage = 0;
         for (uint32_t blk = start_tile; blk < end_row; blk += rows_per_block) {
             DeviceZoneScopedN("WRITE_BLOCK");
             const uint32_t rows = (end_row - blk < rows_per_block) ? (end_row - blk) : rows_per_block;
             const uint32_t block_pages = (rows * values_per_row + pseudo_tile_values - 1) / pseudo_tile_values;
             const uint32_t runs = rows < nb ? rows : nb;
+            const uint32_t staging = staging0 + stage * staging_bytes;
             {
                 DeviceZoneScopedN("WRITE_WAIT_DATA");
                 cb_wait_front(cb_output_tiles, block_pages);
             }
-            noc_async_writes_flushed();  // previous block's writes have left the staging zone
-            const uint32_t dense = get_read_ptr(cb_output_tiles);
-            uint32_t slot = 0;
-            for (uint32_t j = 0; j < runs; ++j) {
-                const uint32_t cnt = (rows - j - 1) / nb + 1;
-                uint32_t src = dense + j * row_bytes;
-                uint32_t dst = staging + slot * out_page_bytes;
-                for (uint32_t k = 0; k < cnt; ++k) {
-                    copy_row<row_bytes>(src, dst);
-                    src += nb * row_bytes;
-                    dst += out_page_bytes;
-                }
-                slot += cnt;
+            if constexpr (staging_depth == 1) {
+                noc_async_writes_flushed();  // previous block's writes have left the (single) staging zone
             }
+            g6_rm::expand_block<row_bytes>(get_read_ptr(cb_output_tiles), staging, out_page_bytes, nb, rows);
             cb_pop_front(cb_output_tiles, block_pages);
-            slot = 0;
+            if constexpr (staging_depth > 1) {
+                noc_async_writes_flushed();  // block blk-1 left its slot (overlapped with the expansion above)
+            }
+            uint32_t slot = 0;
             for (uint32_t j = 0; j < runs; ++j) {
                 const uint32_t cnt = (rows - j - 1) / nb + 1;
                 noc_async_write(
                     staging + slot * out_page_bytes, output_accessor.get_noc_addr(blk + j), cnt * out_page_bytes);
                 slot += cnt;
             }
+            stage = (stage + 1 == staging_depth) ? 0 : stage + 1;
         }
         noc_async_write_barrier();
         return;

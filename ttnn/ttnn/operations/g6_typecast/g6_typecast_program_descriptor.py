@@ -18,6 +18,7 @@ blocks of `block_tiles` tiles: one reader barrier, one CB handshake per kernel p
 Knobs (single source each — every dependent quantity derives from them):
   BUFFER_DEPTH     — CB depth knob; effective depth = min(BUFFER_DEPTH, max blocks per core)
   BLOCK_TILES_CAP  — optional upper bound on block_tiles (None = coarsest block that fits L1)
+  STAGING_DEPTH    — R2 only: staging slots per dataflow direction (2 = DMA / row-move overlap)
   L1_OP_BUDGET_BYTES / L1_SLACK_BYTES — L1 grant (BB-05) and allocator headroom
 """
 
@@ -32,6 +33,9 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 # ---- knobs ----------------------------------------------------------------------------------------
 BUFFER_DEPTH = 2
 BLOCK_TILES_CAP = None  # None: block = whole per-core range clamped to the L1 grant
+# R2 staging slots per direction: 2 overlaps the bank-run DMA of one block with the RISC-V compaction /
+# expansion of the neighbouring block (reader and writer alike); 1 = serialized single staging zone.
+STAGING_DEPTH = 2
 L1_OP_BUDGET_BYTES = 1347776
 L1_SLACK_BYTES = 65536
 
@@ -188,7 +192,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
     # ---- kernels ----
     # RM-only CT slots (6..11) are inert zeros on the TILE path.
     reader_ct = [CB_INPUT_TILES, block_tiles, in_page_bytes, mask_pad_columns, tensor_tile_cols, w_tail]
-    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN]
+    reader_ct += [0, CB_INPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
@@ -199,7 +203,7 @@ def _create_tile_program_descriptor(input_tensor, output_tensor):
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    writer_ct = [CB_OUTPUT_TILES, block_tiles, out_page_bytes, 0, CB_OUTPUT_STAGING, 0, 0, 0, STAGING_ALIGN]
+    writer_ct = [CB_OUTPUT_TILES, block_tiles, out_page_bytes, 0, CB_OUTPUT_STAGING, 0, 0, 0, STAGING_ALIGN, 1]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_writer.cpp"),
@@ -243,7 +247,7 @@ def plan_rm_blocks(
 
     `block_tiles` (pseudo-tiles per block) stays the single block knob: `BLOCK_TILES_CAP` caps it, and the
     rows of a block are the rows whose values fill at most `block_tiles` pseudo-tiles. Default: the coarsest
-    block that fits the L1 grant. Per-row cost = both staging slots (aligned pages); per-block cost =
+    block that fits the L1 grant. Per-row cost = STAGING_DEPTH x both staging slots (aligned pages); per-block cost =
     effective_depth x block_tiles x (in + out pseudo-tile bytes).
     """
     budget = L1_OP_BUDGET_BYTES - L1_SLACK_BYTES - fixed_bytes
@@ -253,7 +257,9 @@ def plan_rm_blocks(
     while True:
         block_tiles = _div_up(rows * values_per_row, PSEUDO_TILE_VALUES)
         depth = min(BUFFER_DEPTH, _div_up(core_rows_max, rows))
-        cost = rows * (in_row_cost + out_row_cost) + depth * block_tiles * (in_tile_bytes + out_tile_bytes)
+        cost = rows * STAGING_DEPTH * (in_row_cost + out_row_cost) + depth * block_tiles * (
+            in_tile_bytes + out_tile_bytes
+        )
         if cost <= budget:
             return rows, block_tiles, depth
         assert rows > 1, f"g6_typecast: one row ({values_per_row} values) does not fit the L1 grant ({budget} B)"
@@ -285,7 +291,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     out_l1_bytes_per_bank = 0
     if output_tensor.memory_config().buffer_type == ttnn.BufferType.L1:
         out_l1_bytes_per_bank = _div_up(num_rows, _num_l1_banks(device)) * out_aligned
-    staging_fixed = 2 * STAGING_ALIGN
+    staging_fixed = 2 * STAGING_ALIGN  # one re-alignment unit per staging CB
     rows_per_block, block_tiles, effective_depth = plan_rm_blocks(
         rows_g1,
         values_per_row,
@@ -296,6 +302,9 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         out_l1_bytes_per_bank + staging_fixed,
     )
     cb_pages = effective_depth * block_tiles
+    # Staging slots never exceed the blocks a core walks (one block per core => one slot).
+    staging_depth = min(STAGING_DEPTH, _div_up(rows_g1, rows_per_block))
+    staging_rows = staging_depth * rows_per_block
 
     def _cb(index, dtype, page_bytes, pages):
         return ttnn.CBDescriptor(
@@ -308,8 +317,8 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         _cb(CB_INPUT_TILES, in_dtype, in_tile_bytes, cb_pages),
         _cb(CB_OUTPUT_TILES, out_dtype, out_tile_bytes, cb_pages),
         # Staging zones: whole block of aligned pages + one alignment unit (re-aligned in-kernel).
-        _cb(CB_INPUT_STAGING, in_dtype, in_aligned, rows_per_block + _div_up(STAGING_ALIGN, in_aligned)),
-        _cb(CB_OUTPUT_STAGING, out_dtype, out_aligned, rows_per_block + _div_up(STAGING_ALIGN, out_aligned)),
+        _cb(CB_INPUT_STAGING, in_dtype, in_aligned, staging_rows + _div_up(STAGING_ALIGN, in_aligned)),
+        _cb(CB_OUTPUT_STAGING, out_dtype, out_aligned, staging_rows + _div_up(STAGING_ALIGN, out_aligned)),
     ]
 
     def _core_tiles(core_rows):
@@ -332,7 +341,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
 
     # mask_pad_columns / tensor_tile_cols / w_tail are TILE-only (0 here).
     reader_ct = [CB_INPUT_TILES, block_tiles, in_aligned, 0, 0, 0]
-    reader_ct += [1, CB_INPUT_STAGING, rows_per_block, in_row_bytes, values_per_row, STAGING_ALIGN]
+    reader_ct += [1, CB_INPUT_STAGING, rows_per_block, in_row_bytes, values_per_row, STAGING_ALIGN, staging_depth]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_reader.cpp"),
@@ -343,7 +352,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         config=ttnn.ReaderConfigDescriptor(),
     )
     writer_ct = [CB_OUTPUT_TILES, block_tiles, out_aligned, 1, CB_OUTPUT_STAGING, rows_per_block, out_row_bytes]
-    writer_ct += [values_per_row, STAGING_ALIGN]
+    writer_ct += [values_per_row, STAGING_ALIGN, staging_depth]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_typecast_writer.cpp"),
@@ -373,6 +382,7 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
         "rows_per_block": rows_per_block,
         "block_tiles": block_tiles,
         "effective_depth": effective_depth,
+        "staging_depth": staging_depth,
     }
     return program_descriptor, plan
 
