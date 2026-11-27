@@ -16,7 +16,7 @@ golden's selection) (``score_rows``):
 * ``tail``, the near-tie baseline: attention over the golden's selection without its ``m`` lowest-ranked keys, ``m``
   the device's miss count on that row, i.e. what dropping the cut's tail costs;
 
-and the largest attention weight of one key the device missed (``selection_error.missed_key_max``).
+and the largest attention weight of one key the device missed (``missed_key_max``).
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from dataclasses import dataclass
 
 import torch
 
-from models.demos.common.prefill.long_context_accuracy.dsa.selection_error import missed_key_max
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import row_sums
 
 ATTEND_BATCH = 8  # query rows per batched FP64 attention (bounds the [rows, k, lora] gather)
@@ -111,6 +110,15 @@ def tail_dropped(want: torch.Tensor, misses: torch.Tensor) -> torch.Tensor:
     valid = (want >= 0).sum(1, keepdim=True)
     rank = torch.arange(want.shape[1]).unsqueeze(0)
     return want.masked_fill(rank >= valid - misses.unsqueeze(1), -1)
+
+
+def missed_key_max(want_weights: torch.Tensor, missed: torch.Tensor) -> torch.Tensor:
+    """Per query row (``[rows]``, the weights' dtype), the largest weight of one missed key in one head: the maximum
+    of ``want_weights`` ``[rows, heads, k]`` (the reference attention softmax over the reference selection) over the
+    heads and the keys ``missed`` ``[rows, k]`` marks (``~topk_selection.topk_hits & valid``); 0 on a row with no
+    miss."""
+    masked = want_weights.masked_fill(~missed.unsqueeze(1), -math.inf)
+    return masked.amax(dim=(1, 2)).where(missed.any(dim=1), 0.0)
 
 
 @dataclass

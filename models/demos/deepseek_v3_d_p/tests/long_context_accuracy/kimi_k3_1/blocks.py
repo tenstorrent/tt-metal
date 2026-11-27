@@ -4,8 +4,8 @@
 each fed host rows from the FP64 chain golden ``k31-l0-3-fp64-1m`` and returning host ``BlockOutputs`` in global
 row order:
 
-* ``KimiK31MoeBlock``: ``TtMoEBlockFfn`` of layer 1 or 2 on one 4x4 stage; ``extras`` hold the routing (expert ids
-  and weights); no carried state.
+* ``KimiK31MoeBlock``: ``TtMoEBlockFfn`` of layer 1 or 2 on one 4x4 stage; ``extras`` hold the routing (expert ids);
+  no carried state.
 * ``KimiK31DsaBlock``: ``ttMLA`` of layer 3 with the adapter's caches, sized from the context length; ``extras`` hold
   the indexer top-k; the carried state is the KV and index caches.
 
@@ -82,9 +82,9 @@ def owner_positions(
     return owned[keep], sp_row * rows_per_sp_row + pos[keep]
 
 
-def moe_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """The routing of the MoE block's last call as (checkpoint expert ids ``[rows, 16]`` int64, weights ``[rows, 16]``
-    bf16) in the chunk's token order.
+def moe_routing(ffn, block, rows: int) -> torch.Tensor:
+    """The routing of the MoE block's last call as checkpoint expert ids ``[rows, 16]`` int64 in the chunk's token
+    order.
 
     ``block.last_head.routing_rows`` holds, on each chip, its owner rows: per token 16 expert ids (block order) then
     16 bf16 weights as uint16 words (``router_common.hpp routing_rows``). The chip at SP row r, TP column p
@@ -107,7 +107,7 @@ def moe_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
             words[pos] = (shard.to(torch.int64).reshape(-1, 2 * MOE_TOP_K) & 0xFFFF)[owned]
     assert (words[:rows] >= 0).all(), "a chunk row no chip's routing rows hold"
     perm = block_order_perm(mesh, MOE_NUM_EXPERTS // (R * C), sp_axis)
-    return perm[words[:rows, :MOE_TOP_K]], words[:rows, MOE_TOP_K:].to(torch.int16).view(torch.bfloat16)
+    return perm[words[:rows, :MOE_TOP_K]]
 
 
 class KimiK31MoeBlock:
@@ -117,7 +117,7 @@ class KimiK31MoeBlock:
 
     ``forward`` feeds bf16 rows ``[hi - lo, hidden]``, zero-padded to the chunk with the real span passed as the runtime
     passes it, and returns the MoE output (routed + shared, ``[hi - lo, hidden]``) and the routing
-    (``extras["expert_ids"]`` in checkpoint expert numbering, ``extras["expert_weights"]``). No carried state."""
+    (``extras["expert_ids"]`` in checkpoint expert numbering). No carried state."""
 
     def __init__(self, layer: int) -> None:
         self.layer = layer
@@ -146,10 +146,10 @@ class KimiK31MoeBlock:
         tt_x = stage_input(x, self.chunk, self.mesh, self.layout)
         y = self.ffn(tt_x, actual_isl=rows, actual_start=lo)  # (the runtime passes every chunk's real span)
         ttnn.deallocate(tt_x)
-        ids, weights = moe_routing(self.ffn, self.ffn._block(self.chunk), rows)  # (the call's cached block)
+        ids = moe_routing(self.ffn, self.ffn._block(self.chunk), rows)  # (the call's cached block)
         output = sp_tp_rows(self.mesh, y, self.layout.sp_axis, rows)
         ttnn.deallocate(y)
-        return BlockOutputs(output, {"expert_ids": ids, "expert_weights": weights})
+        return BlockOutputs(output, {"expert_ids": ids})
 
     def carried_state(self) -> dict[str, torch.Tensor]:
         return {}

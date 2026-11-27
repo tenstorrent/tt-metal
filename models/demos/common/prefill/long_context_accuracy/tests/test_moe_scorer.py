@@ -14,7 +14,7 @@ import torch
 
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
 from models.demos.common.prefill.long_context_accuracy.block import METRIC_TIERS, BlockOutputs, ChunkScore
-from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer
+from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer, routing_rows
 
 BARS = (
     AcceptanceBar("moe_row_nrmse_median", "max", 0.20),
@@ -32,19 +32,14 @@ def _golden_rows(output, ids, weights) -> dict[str, torch.Tensor]:
     return {"out": torch.tensor(output), "ids": torch.tensor(ids, dtype=torch.int32), "weights": torch.tensor(weights)}
 
 
-def _outputs(output, ids, weights) -> BlockOutputs:
-    return BlockOutputs(
-        torch.tensor(output, dtype=torch.bfloat16),
-        {"expert_ids": torch.tensor(ids), "expert_weights": torch.tensor(weights, dtype=torch.bfloat16)},
-    )
+def _outputs(output, ids) -> BlockOutputs:
+    return BlockOutputs(torch.tensor(output, dtype=torch.bfloat16), {"expert_ids": torch.tensor(ids)})
 
 
 def _hand_case() -> tuple[BlockOutputs, dict[str, torch.Tensor]]:
     """3 rows, hidden 2, top-2. Output: rows 0 and 2 exact, row 1 off by 1 in one element (reference [0, 2]).
     Routing: row 0 the golden's set; row 1 misses golden rank 1 (weight 0.4); row 2 misses golden rank 0 (0.6)."""
-    outputs = _outputs(
-        [[3.0, 4.0], [0.0, 1.0], [6.0, 8.0]], [[0, 1], [2, 9], [9, 5]], [[0.6, 0.4], [0.6, 0.4], [0.5, 0.4]]
-    )
+    outputs = _outputs([[3.0, 4.0], [0.0, 1.0], [6.0, 8.0]], [[0, 1], [2, 9], [9, 5]])
     rows = _golden_rows([[3.0, 4.0], [0.0, 2.0], [6.0, 8.0]], [[0, 1], [2, 3], [4, 5]], [[0.6, 0.4]] * 3)
     return outputs, rows
 
@@ -119,9 +114,7 @@ def test_misses_land_in_the_window_of_their_absolute_row() -> None:
     scorer = _scorer(window=2)
     out = [[1.0, 1.0], [1.0, 1.0]]
     for start, ids in ((0, [[0, 1], [0, 1]]), (2, [[0, 1], [0, 7]])):
-        scorer.score_chunk(
-            start, _outputs(out, ids, [[0.5, 0.5]] * 2), _golden_rows(out, [[0, 1]] * 2, [[0.5, 0.5]] * 2)
-        )
+        scorer.score_chunk(start, _outputs(out, ids), _golden_rows(out, [[0, 1]] * 2, [[0.5, 0.5]] * 2))
     run, *windows = scorer.score_run({})[1]
     assert run["run_misses"] == 1
     assert [(w["start"], w["misses"]) for w in windows] == [(0, 0), (2, 1)]
@@ -133,18 +126,46 @@ def test_score_chunk_reports_contract_breaks_and_no_measurement() -> None:
     scorer = _scorer()
     good = [[1.0, 2.0], [3.0, 4.0]]
     rows = _golden_rows(good, [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
-    exact = _outputs(good, [[1, 0], [3, 2]], [[0.5, 0.5]] * 2)  # (the golden's sets, in another order)
+    exact = _outputs(good, [[1, 0], [3, 2]])  # (the golden's sets, in another order)
     assert scorer.score_chunk(0, exact, rows) == ChunkScore()
 
-    nan = _outputs([[1.0, float("nan")], [3.0, 4.0]], [[0, 1], [2, 3]], [[0.5, 0.5]] * 2)
+    nan = _outputs([[1.0, float("nan")], [3.0, 4.0]], [[0, 1], [2, 3]])
     assert scorer.score_chunk(2, nan, rows).violations == ["non-finite MoE output"]
 
-    twice = _outputs(good, [[0, 1], [2, 2]], [[0.5, 0.5]] * 2)
+    twice = _outputs(good, [[0, 1], [2, 2]])
     assert scorer.score_chunk(4, twice, rows).violations == ["a row routed to one expert twice"]
 
     # (a routing miss is no contract break: the window bars judge it)
-    missing = _outputs(good, [[0, 1], [3, 9]], [[0.5, 0.5]] * 2)
+    missing = _outputs(good, [[0, 1], [3, 9]])
     scored = scorer.score_chunk(6, missing, rows)
     assert scored == ChunkScore()
     # (no measurement: a per-chunk bar fails closed)
     assert check([scored.measurement], BARS[:1]) == ["moe_row_nrmse_median: not measured by any window"]
+
+
+def test_routing_rows_hand_case() -> None:
+    """Reference experts 0-3 with weights .4 .3 .2 .1 (best first); the device picks 0, 1, 2 and 7 instead of 3:
+    recall 3/4, dropped .1 (expert 3), one miss at rank 3."""
+    want, want_w = torch.tensor([[0, 1, 2, 3]]), torch.tensor([[0.4, 0.3, 0.2, 0.1]])
+    got = torch.tensor([[0, 1, 2, 7]])
+    order = -torch.arange(4.0).expand(1, 4)  # the reference's own order
+    r = routing_rows(got, want, want_w, order)
+    assert r["recall"].tolist() == [0.75] and r["dropped"].tolist() == pytest.approx([0.1])
+    assert r["misses"]["rank"].tolist() == [3]
+    same = routing_rows(want, want, want_w, order)
+    assert same["recall"].tolist() == [1.0] and same["dropped"].tolist() == [0.0]
+    assert same["misses"]["row"].numel() == 0
+
+
+def test_routing_rows_rank_misses_by_the_reference_scores() -> None:
+    """Row 0: reference experts 3 / 5 / 7 / 1 at weights 0.4 / 0.3 / 0.2 / 0.1, scores order 3 > 5 > 7 > 1; the
+    device picks {3, 5, 2, 1}: recall 3/4, expert 7 missed at rank 2 of 4, dropped reference weight 0.2. Row 1: the
+    same set in another order: recall 1, nothing dropped."""
+    want = torch.tensor([[3, 5, 7, 1], [0, 1, 2, 3]])
+    want_w = torch.tensor([[0.4, 0.3, 0.2, 0.1], [0.25, 0.25, 0.25, 0.25]])
+    got = torch.tensor([[3, 5, 2, 1], [3, 2, 1, 0]])
+    scores = torch.tensor([[4.0, 3.0, 2.0, 1.0], [4.0, 3.0, 2.0, 1.0]])
+    r = routing_rows(got, want, want_w, scores)
+    assert r["recall"].tolist() == pytest.approx([0.75, 1.0])
+    assert r["dropped"].tolist() == pytest.approx([0.2, 0.0])
+    assert r["misses"]["row"].tolist() == [0] and r["misses"]["rank"].tolist() == [2]

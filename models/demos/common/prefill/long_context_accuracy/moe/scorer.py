@@ -3,8 +3,7 @@
 """``MoeScorer``: a MoE Block's long-context accuracy against its golden, every row scored (``block.BlockScorer``).
 
 Per row: the MoE output's error (``windowed_errors.row_sums``) and the routing against the golden's top-k
-(``routing_error.routing_rows``: recall, the golden weight on missed experts, missed experts ranked in the golden's
-selection). The MoE carries no state across chunks, so its error is judged per window, absolutely, not by growth.
+(``routing_rows``: recall, the golden weight on missed experts, missed experts ranked in the golden's selection). The MoE carries no state across chunks, so its error is judged per window, absolutely, not by growth.
 
 Every window measure (``measure``) has its metric name; the same measure over the whole run is reported as
 ``run_<name>``, since a metric name lives in one metric tier only. Metric tiers (``block.METRIC_TIERS``):
@@ -21,7 +20,7 @@ Per chunk (``score_chunk``): the Block's contracts only (finite output; no row r
 measurement. The bars are per window (``run`` bars): the window values do not hold on a chunk's smaller sample.
 
 Device outputs (``BlockOutputs``): ``output`` ``[rows, hidden]``; ``extras["expert_ids"]`` ``[rows, k]`` (the
-golden's expert numbering) and ``extras["expert_weights"]`` ``[rows, k]``.
+golden's expert numbering).
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ from collections.abc import Callable, Mapping
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs, ChunkScore, MetricTiers
-from models.demos.common.prefill.long_context_accuracy.moe.routing_error import routing_rows
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_hits, topk_recall
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     SUM_YY,
     Window,
@@ -57,6 +56,21 @@ TRENDS = (
     ("recall_mean", "min"),
     ("dropped_weight_mean", "max"),
 )
+
+
+def routing_rows(got: torch.Tensor, want: torch.Tensor, want_weights: torch.Tensor, want_scores: torch.Tensor) -> dict:
+    """Per row, a routing ``got`` (expert ids ``[rows, k]``) against the reference ``want`` / ``want_weights``:
+
+    * ``recall``: the fraction of the reference's experts ``got`` also picks;
+    * ``dropped``: the reference weight on the experts ``got`` misses (in the router's own weight units, absolute);
+    * ``misses``: every missed reference expert, ranked in the reference's selection by ``want_scores`` (its score
+      of each of its experts, larger first; ``topk_selection.missed_keys``)."""
+    hits = topk_hits(got, want)
+    return {
+        "recall": topk_recall(hits, want),
+        "dropped": (want_weights.float() * ~hits).sum(dim=1),
+        "misses": missed_keys(hits, want, want_scores),
+    }
 
 
 def measure(floor: float) -> Callable[[Window], dict]:
@@ -101,13 +115,7 @@ class MoeScorer:
     def score_chunk(self, lo: int, outputs: BlockOutputs, rows: Mapping[str, torch.Tensor]) -> ChunkScore:
         want_ids = rows[self.expert_ids].long()
         order = -torch.arange(want_ids.shape[1], dtype=torch.float32).expand(want_ids.shape)  # (best first)
-        r = routing_rows(
-            outputs.extras["expert_ids"].long(),
-            outputs.extras["expert_weights"],
-            want_ids,
-            rows[self.expert_weights],
-            order,
-        )
+        r = routing_rows(outputs.extras["expert_ids"].long(), want_ids, rows[self.expert_weights], order)
         sums = row_sums(rows[self.output], outputs.output)
         self.series.append(lo, sums=sums, recall=r["recall"], dropped=r["dropped"])
         self.series.add_events("misses", **{**r["misses"], "row": r["misses"]["row"] + lo})
