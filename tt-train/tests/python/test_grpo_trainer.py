@@ -43,6 +43,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import ml_dtypes
 import numpy as np
 import pytest
 import torch
@@ -54,7 +55,7 @@ from datasets import Dataset
 from safetensors.numpy import save_file
 from transformers import AutoTokenizer, LlamaConfig as HFLlamaConfig, LlamaForCausalLM
 
-from ttml.common.config import DeviceConfig, TransformerConfig
+from ttml.common.config import DeviceConfig, TransformerConfig, load_config
 from ttml.common.utils import build_mesh, repeat_interleave
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.modules import RunMode
@@ -439,6 +440,181 @@ def test_save_checkpoint_round_trip_llama(patch_llama_weight_loading, tmp_path):
     _assert_same_parameters(model, loaded)
 
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+FP32_PRECISION = {"master_dtype": "float32", "reduce_dtype": "float32"}
+
+
+def _stored_dtypes(model) -> set:
+    return {p.get_value(ttml.autograd.PreferredPrecision.NATIVE).dtype for p in model.parameters().values()}
+
+
+@pytest.mark.requires_device
+def test_setup_ttml_model_resumes_fp32_master_weights_bit_for_bit(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """The precision block is applied right after the model is built, before a trainer checkpoint loads, so fp32
+    master weights resume exactly. Without the block the same checkpoint loads into bf16 parameters, rounded."""
+    model, tokenizer = grpo_ttml_model.setup_ttml_model(
+        TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID, precision=FP32_PRECISION
+    )
+    assert _stored_dtypes(model) == {ttnn.DataType.FLOAT32}
+    rng = np.random.default_rng(0)
+    for param in model.parameters().values():
+        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
+    save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=patch_llama_weight_loading)
+    ckpt_dir = str(tmp_path / "checkpoints" / "grpo_step_1")
+
+    resumed, _ = grpo_ttml_model.setup_ttml_model(
+        TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir, precision=FP32_PRECISION
+    )
+    assert _stored_dtypes(resumed) == {ttnn.DataType.FLOAT32}
+    _assert_same_parameters(model, resumed)
+
+    rounded, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, ckpt_dir)
+    assert _stored_dtypes(rounded) == {ttnn.DataType.BFLOAT16}
+    name, saved = next(iter(model.parameters().items()))
+    assert not np.array_equal(
+        rounded.parameters()[name].to_numpy(ttnn.DataType.FLOAT32), saved.to_numpy(ttnn.DataType.FLOAT32)
+    ), "premise: without the block the checkpoint's fp32 values are rounded"
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+class _GradientDtypes(TrainerCallback):
+    """Records the gradients' dtypes right before each optimizer step."""
+
+    def __init__(self) -> None:
+        self.per_step: list[set] = []
+
+    def on_before_optimizer_step(self, trainer):
+        self.per_step.append(
+            {p.get_grad().dtype for p in trainer.model.parameters().values() if p.is_grad_initialized()}
+        )
+
+
+@pytest.mark.requires_device
+def test_grpo_trainer_trains_fp32_master_weights_with_fp32_gradient_accumulation(
+    patch_llama_weight_loading, tmp_path, gradient_reduce_default
+):
+    """The config's precision block reaches the model before its weights load: fused AdamW then steps fp32 master
+    weights on gradients added up in fp32 over two micro-batches, and every parameter moves."""
+    grpo_cfg = GRPOConfig(
+        epsilon=0.2,
+        per_device_train_batch_size=4,
+        num_iterations=1,
+        gradient_accumulation_steps=2,
+        logging_steps=1,
+        output_dir=str(tmp_path),
+        checkpointing=False,
+        checkpoint_interval=999,
+        prompts_to_train=8,
+        temperature=1.0,
+        max_completion_length=4,
+        num_generations=2,
+        warmup_steps=0,
+        rollout_backend="ttml_in_process_sync",
+        lr_scheduler_type="constant",
+        precision=FP32_PRECISION,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
+    prompts = ["What is 1+1?", "Name a color.", "Name a fruit.", "What is 2+2?"] * 2
+    dataset = Dataset.from_dict(
+        {
+            "prompt": [
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": p}], tokenize=False, add_generation_prompt=True
+                )
+                for p in prompts
+            ],
+            "answer": ["2", "blue", "apple", "4"] * 2,
+        }
+    )
+    gradients = _GradientDtypes()
+
+    trainer = GRPOTrainer(
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=HF_MODEL_ID,
+        dataset_func=lambda: dataset,
+        config=grpo_cfg,
+        reward_func=lambda completions, **_: [float(i % 2) for i in range(len(completions))],
+        optimizer_dict={"type": "AdamW", "lr": 1.0e-3},
+        callbacks=[gradients],
+    )
+    assert _stored_dtypes(trainer.model) == {ttnn.DataType.FLOAT32}
+    assert ttml.autograd.AutoContext.get_instance().get_gradient_reduce_dtype() == ttnn.DataType.FLOAT32
+    before = {name: p.to_numpy(ttnn.DataType.FLOAT32) for name, p in trainer.model.parameters().items()}
+
+    trainer.train()
+
+    assert gradients.per_step and all(
+        dtypes == {ttnn.DataType.FLOAT32} for dtypes in gradients.per_step
+    ), gradients.per_step
+    parameters = trainer.model.parameters()
+    assert _stored_dtypes(trainer.model) == {ttnn.DataType.FLOAT32}
+    moved = [
+        name for name, p in parameters.items() if not np.array_equal(p.to_numpy(ttnn.DataType.FLOAT32), before[name])
+    ]
+    assert len(moved) == len(parameters), f"unchanged: {sorted(set(parameters) - set(moved))}"
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def test_grpo_trainer_rejects_a_whole_config_as_optimizer_dict(expect_error):
+    """``create_optimizer`` applies a whole config's precision block, which here would run after the weights loaded.
+    The trainer takes that block from ``GRPOConfig.precision`` and only the optimizer's own dict as
+    ``optimizer_dict``."""
+    whole_config = {
+        "training_config": {"optimizer": {"type": "AdamW", "lr": 1.0e-3}, "precision": {"master_dtype": "float32"}}
+    }
+    with expect_error(ValueError, "must be the optimizer's own dict"):
+        GRPOTrainer(
+            transformer_config=None,
+            device_config=None,
+            model_source="unused",
+            dataset_func=lambda: None,
+            config=None,
+            optimizer_dict=whole_config,
+        )
+
+
+@pytest.mark.parametrize(
+    "precision, error, message",
+    [
+        ({"master_dtpye": "float32"}, RuntimeError, "Unknown key precision.master_dtpye"),
+        ({"reduce_dtype": "float16"}, RuntimeError, 'precision.reduce_dtype must be "bfloat16" or "float32"'),
+        ("float32", TypeError, "precision must be a dict"),
+    ],
+)
+def test_grpo_config_checks_its_precision_block(expect_error, precision, error, message):
+    """A typo in the precision block stops the config, before a trainer opens a device and builds a model."""
+    with expect_error(error, message):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="ttml_in_process_sync", precision=precision)
+
+
+def test_get_grpo_config_reads_the_precision_block_of_the_training_config(expect_error):
+    """The block has one place in the YAML, ``training_config.precision`` next to the optimizer. ``get_grpo_config``
+    puts it into ``GRPOConfig.precision``, which the trainer applies and wandb logs with the rest of the config."""
+    raw = load_config("training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml")
+    assert get_grpo_config(raw).precision is None  # the shipped config has no block
+
+    raw["training_config"]["precision"] = dict(FP32_PRECISION)
+    cfg = get_grpo_config(raw)
+    assert cfg.precision == FP32_PRECISION
+    logged = grpo_trainer_module._build_wandb_config(
+        SimpleNamespace(config=cfg, model_source="unused", optimizer_dict=raw["training_config"]["optimizer"])
+    )
+    assert logged["precision"] == FP32_PRECISION and logged["optimizer"] == raw["training_config"]["optimizer"]
+
+    raw["training_config"]["precision"] = {"master_dtpye": "float32"}
+    with expect_error(RuntimeError, "Unknown key precision.master_dtpye"):
+        get_grpo_config(raw)
+
+    del raw["training_config"]["precision"]
+    raw["training_config"]["grpo_config"]["precision"] = dict(FP32_PRECISION)
+    with expect_error(ValueError, "belongs under training_config.precision"):
+        get_grpo_config(raw)
 
 
 @pytest.mark.requires_device
@@ -975,7 +1151,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1, source=None, **config_ov
         dataset_func=lambda: None,
         config=cfg,
         reward_funcs=[lambda completions, **_: list(_REWARDS)],
-        optimizer_dict={},
+        optimizer_dict={"type": "AdamW"},  # never built: _build_policy is replaced
         callbacks=[_Recorder(), monitor],
     ).train()
     return run
@@ -1304,7 +1480,7 @@ def _trainer_with_remote_rollout(monkeypatch, client, reward_funcs, callbacks=()
         dataset_func=lambda: None,
         config=_remote_grpo_config(),
         reward_funcs=reward_funcs,
-        optimizer_dict={},
+        optimizer_dict={"type": "AdamW"},  # never built: _build_policy is replaced
         callbacks=list(callbacks),
     )
 
@@ -2393,3 +2569,90 @@ def test_grpo_gradients_match_across_device_counts(fresh_device_mesh, parallelis
     for name, grad in expected.items():
         error = np.linalg.norm(actual[name] - grad) / np.linalg.norm(grad)
         assert error < 2e-2, f"{name}: relative gradient error {error:.3g}"
+
+
+QWEN3_BUILDS = {
+    "one_device": {"mesh_shape": [1, 1]},
+    "fsdp_lazy": {"enable_fsdp": True, "mesh_shape": [1, 2]},
+    "fsdp_eager": {"enable_fsdp": True, "mesh_shape": [1, 2], "lazy_parameter_init": False},
+}
+
+
+def _tiny_fp32_qwen3_checkpoint(directory) -> str:
+    """A two-layer random Qwen3 in HF format, saved in fp32, with Qwen3-0.6B's tokenizer next to it."""
+    from transformers import Qwen3Config, Qwen3ForCausalLM
+
+    torch.manual_seed(0)
+    config = Qwen3Config(
+        vocab_size=256,
+        hidden_size=128,
+        intermediate_size=256,
+        num_hidden_layers=2,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        head_dim=64,
+        max_position_embeddings=256,
+        tie_word_embeddings=True,
+    )
+    Qwen3ForCausalLM(config).save_pretrained(directory)
+    AutoTokenizer.from_pretrained(QWEN3_MODEL_ID).save_pretrained(directory)
+    return str(directory)
+
+
+def _gathered(model) -> dict:
+    """Every parameter as one host array in its stored dtype, whatever its mesh layout."""
+    return {name: ttml.Sharding.from_tensor(param).gather(param) for name, param in model.parameters().items()}
+
+
+def _assert_same_values(actual: dict, expected: dict) -> None:
+    assert sorted(actual) == sorted(expected)
+    for name, values in expected.items():
+        np.testing.assert_array_equal(actual[name], values, err_msg=name)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("build", list(QWEN3_BUILDS))
+def test_qwen3_builds_load_and_resume_fp32_master_weights(fresh_device_mesh, tmp_path, gradient_reduce_default, build):
+    """Every Qwen3 build shards, applies the precision block and then loads: one device, FSDP built lazily (the
+    default) and FSDP built eagerly. From an fp32 HF file each gets fp32 master weights with the file's values
+    unrounded, the FSDP builds hold what the one-device build holds, and a trainer checkpoint resumes bit for bit."""
+    hf_dir = _tiny_fp32_qwen3_checkpoint(tmp_path / "hf")
+
+    def setup(device_config, model_source):
+        return grpo_ttml_model.setup_ttml_model(
+            QWEN3_TRANSFORMER_CONFIG, device_config, model_source, precision=FP32_PRECISION
+        )
+
+    def on_fresh_mesh(device_config):
+        mesh = build_mesh(device_config)
+        return fresh_device_mesh(mesh.shape, mesh.axis_names, what=f"Qwen3 with fp32 master weights ({build})")
+
+    one_device_values = None
+    if build != "one_device":
+        one_device = DeviceConfig({"device_config": QWEN3_BUILDS["one_device"]})
+        with on_fresh_mesh(one_device):
+            model, _ = setup(one_device, hf_dir)
+            one_device_values = _gathered(model)
+            del model
+            ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    device_config = DeviceConfig({"device_config": QWEN3_BUILDS[build]})
+    with on_fresh_mesh(device_config):
+        model, tokenizer = setup(device_config, hf_dir)
+        assert _stored_dtypes(model) == {ttnn.DataType.FLOAT32}
+        loaded = _gathered(model)
+        # Rounded to bf16 on the way in, the random weights would all be bf16 values. The norm weights are ones.
+        random_weights = {name: values for name, values in loaded.items() if np.ptp(values) > 0}
+        assert len(random_weights) > len(loaded) // 2
+        for name, values in random_weights.items():
+            assert not np.array_equal(values, values.astype(ml_dtypes.bfloat16).astype(np.float32)), name
+        if one_device_values is not None:
+            _assert_same_values(loaded, one_device_values)
+
+        save_checkpoint(model, 1, str(tmp_path), tokenizer=tokenizer, model_source=hf_dir)
+        del model
+        resumed, _ = setup(device_config, str(tmp_path / "checkpoints" / "grpo_step_1"))
+        assert _stored_dtypes(resumed) == {ttnn.DataType.FLOAT32}
+        _assert_same_values(_gathered(resumed), loaded)
+        del resumed
+        ttml.autograd.AutoContext.get_instance().reset_graph()

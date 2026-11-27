@@ -348,6 +348,9 @@ fi
 
 MAX_SEQ_LEN=${VARIANT_MAX_SEQ_LEN:-$(manifest_env PREFILL_MAX_SEQ_LEN)}
 NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+# Packed manifests set a forward budget; the runtime packs budget // chunk size chunks per forward, and they retire
+# together, so the summary times the throughput window over whole forwards.
+FORWARD_TOKENS_BUDGET=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"].get("PREFILL_FORWARD_TOKENS_BUDGET", ""))' "${MANIFEST}")
 
 RUNNER_OVERRIDES="${VARIANT_MAX_SEQ_LEN:+export PREFILL_MAX_SEQ_LEN=${MAX_SEQ_LEN};}"
 SC4_MAX_SEQ_LEN=${MAX_SEQ_LEN}
@@ -422,6 +425,7 @@ emit_summary() {
   python3 "${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/summarize_ci_run.py" \
     --ranklogs "${RANKLOGS}" --real-chunks "${REAL_CHUNKS}" \
     --chunk-size "${CHUNK_SIZE}" --pipeline-ranks "${EXPECTED_RANKS:-1}" \
+    --chunks-per-forward "$(( ${FORWARD_TOKENS_BUDGET:-${CHUNK_SIZE}} / CHUNK_SIZE ))" \
     --probe-chunks "${PROBE_CHUNKS}" \
     --summary-name "${RUN_NAME}_${CONFIG}" \
     || echo "summary generation failed (non-fatal)"

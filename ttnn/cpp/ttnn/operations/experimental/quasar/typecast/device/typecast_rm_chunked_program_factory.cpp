@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_rm_chunked_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
@@ -205,12 +206,12 @@ tt::tt_metal::ProgramDescriptor TypecastRowMajorChunkedProgramFactory::create_de
     std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK_INIT"] = fmt::format(
         "typecast_tile_init<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
-        static_cast<uint32_t>(datatype_to_dataformat_converter(input_dtype)),
-        static_cast<uint32_t>(datatype_to_dataformat_converter(output_dtype)));
+        typecast_kernel_data_format(datatype_to_dataformat_converter(input_dtype)),
+        typecast_kernel_data_format(datatype_to_dataformat_converter(output_dtype)));
 
     const char* const path =
         "ttnn/cpp/ttnn/operations/experimental/quasar/typecast/device/kernels/compute/eltwise_typecast.cpp";

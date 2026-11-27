@@ -108,7 +108,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
 
         _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
-        sfpu::sfpu_rope_configure_addrmod();
         PROFILER_SYNC();
     }
     {

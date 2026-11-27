@@ -47,6 +47,13 @@ void UpsampleOperation::validate_on_program_cache_miss(const operation_attribute
     TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input.is_allocated(), "Input tensor must have allocated buffer");
 
+    TT_FATAL(
+        !tt::tt_metal::is_mx(input.dtype()),
+        "Quasar upsample does not support MX tensors ({}): it replicates per-pixel channel sticks of a row-major "
+        "tensor, and an MX tile (32-element blocks with a shared scale) has no row-major layout. Typecast to "
+        "bfloat16 first.",
+        input.dtype());
+
     // Scale factor validation
     TT_FATAL(args.scale_factor_h > 0.0f, "scale_factor_h must be positive, got {}", args.scale_factor_h);
     TT_FATAL(args.scale_factor_w > 0.0f, "scale_factor_w must be positive, got {}", args.scale_factor_w);

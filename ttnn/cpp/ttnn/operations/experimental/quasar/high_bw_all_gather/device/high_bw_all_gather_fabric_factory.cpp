@@ -752,39 +752,98 @@ uint32_t host_cache_slot_first_page(const HighBwAllGatherParams& args, const Chi
 // read_chip_shard_geometry in kernels/fabric/fabric_all_gather_common.hpp): reader [0] input [1] output [2]
 // shards-arrived counter [3] cache slot tensor [4] layers per user [5] layer [6] cache slot first page (host) [7] pages
 // per cache slot, geometry at 8; sender [0] output [1] shards-arrived counter [2] downstream-started counter, geometry
-// at 3.
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> common_args(
+// at 3. The chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
+// pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab.
+constexpr uint32_t kReaderInputAddressArg = 0;
+constexpr uint32_t kReaderOutputAddressArg = 1;
+constexpr uint32_t kReaderShardsArrivedCounterArg = 2;
+constexpr uint32_t kReaderBatchIndexAddressArg = 3;
+constexpr uint32_t kReaderLayersPerUserArg = 4;
+constexpr uint32_t kReaderLayerArg = 5;
+constexpr uint32_t kReaderCacheSlotFirstPageArg = 6;
+constexpr uint32_t kReaderGeometryArg = 8;
+constexpr uint32_t kSenderOutputAddressArg = 0;
+constexpr uint32_t kSenderShardsArrivedCounterArg = 1;
+constexpr uint32_t kSenderDownstreamStartedCounterArg = 2;
+constexpr uint32_t kSenderGeometryArg = 3;
+constexpr uint32_t kGeometryPrefixAddressArg = 0;
+constexpr uint32_t kGeometryValidPagesPerOuterSliceArg = 1;
+
+// Kernel indices: the order create_workload_descriptor pushes the kernels (a descriptor kernel's index is its handle).
+constexpr uint32_t kFabricLinkWorkerReaderKernel = 0;
+constexpr uint32_t kFabricLinkWorkerSenderKernel = 1;
+constexpr uint32_t kLocalCopyCoreReaderKernel = 2;
+constexpr uint32_t kLocalCopyCoreWriterKernel = 3;
+
+// Positions of the two counters in WorkloadDescriptor::semaphores.
+constexpr size_t kDownstreamStartedCounterSlot = 0;
+constexpr size_t kShardsArrivedCounterSlot = 1;
+
+// The common args derived from hash-excluded attributes (input_batch_index, gathered_dim_size, batch_slot_num_layers,
+// batch_slot_layer_idx). The cache-miss build and the cache-hit patch both take them from here.
+struct HashExcludedCommonArgs {
+    uint32_t layers_per_user = 1;
+    uint32_t layer = 0;
+    uint32_t cache_slot_first_page = 0;
+    uint32_t valid_pages_per_outer_slice = 0;
+};
+
+HashExcludedCommonArgs hash_excluded_common_args(
+    const HighBwAllGatherParams& args, const ChipShardPageGeometry& geometry) {
+    return HashExcludedCommonArgs{
+        .layers_per_user = args.batch_slot_num_layers,
+        .layer = args.batch_slot_layer_idx,
+        .cache_slot_first_page = host_cache_slot_first_page(args, geometry),
+        .valid_pages_per_outer_slice = host_valid_pages_per_outer_slice(args, geometry)};
+}
+
+// Tensor addresses are Buffer* bindings, patched on every cache hit; an absent metadata tensor is a null Buffer* (0).
+std::pair<tt::tt_metal::KernelDescriptor::RTArgList, tt::tt_metal::KernelDescriptor::RTArgList> common_args(
     const HighBwAllGatherParams& args,
     const HighBwAllGatherInputs& tensor_args,
     const Tensor& output,
     const ChipShardPageGeometry& geometry,
     uint32_t shards_arrived_counter_address,
     uint32_t downstream_started_counter_address) {
-    std::vector<uint32_t> reader{
-        tensor_args.input_tensor.mesh_buffer().address(),
-        output.mesh_buffer().address(),
-        shards_arrived_counter_address,
-        tensor_args.has_batch_index_metadata() ? tensor_args.input_batch_index_tensor->mesh_buffer().address() : 0u,
-        args.batch_slot_num_layers,
-        args.batch_slot_layer_idx,
-        host_cache_slot_first_page(args, geometry),
-        geometry.pages_per_cache_slot};
-    std::vector<uint32_t> sender{
-        output.mesh_buffer().address(), shards_arrived_counter_address, downstream_started_counter_address};
-    // the chip shard geometry: [0] prefix tensor address [1] valid pages per outer slice (host) [2] outer slices [3]
-    // pages per outer slice [4] ranks [5] KV slab [6] full gathered length [7] pages per KV slab
-    const std::array<uint32_t, 8> geometry_block{
-        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->mesh_buffer().address() : 0u,
-        host_valid_pages_per_outer_slice(args, geometry),
-        geometry.num_outer_slices,
-        geometry.pages_per_outer_slice,
-        geometry.num_ranks,
-        args.gathered_slab_global,
-        tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices,
-        geometry.pages_per_kv_slab};
-    reader.insert(reader.end(), geometry_block.begin(), geometry_block.end());
-    sender.insert(sender.end(), geometry_block.begin(), geometry_block.end());
-    return {std::move(reader), std::move(sender)};
+    const auto hash_excluded = hash_excluded_common_args(args, geometry);
+    tt::tt_metal::Buffer* batch_index_buffer =
+        tensor_args.has_batch_index_metadata() ? tensor_args.input_batch_index_tensor->buffer() : nullptr;
+    tt::tt_metal::Buffer* prefix_buffer =
+        tensor_args.has_gathered_prefix_metadata() ? tensor_args.gathered_prefix_tensor->buffer() : nullptr;
+
+    tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
+    reader_common_args.push_back(tensor_args.input_tensor.buffer());
+    reader_common_args.push_back(output.buffer());
+    // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor); a caller-supplied one is
+    // re-applied on every hit by HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments
+    reader_common_args.push_back(shards_arrived_counter_address);
+    reader_common_args.push_back(batch_index_buffer);
+    reader_common_args.push_back(hash_excluded.layers_per_user);
+    reader_common_args.push_back(hash_excluded.layer);
+    reader_common_args.push_back(hash_excluded.cache_slot_first_page);
+    reader_common_args.push_back(geometry.pages_per_cache_slot);
+
+    tt::tt_metal::KernelDescriptor::RTArgList sender_common_args;
+    sender_common_args.push_back(output.buffer());
+    // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor); a caller-supplied one is
+    // re-applied on every hit by HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments
+    sender_common_args.push_back(shards_arrived_counter_address);
+    // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor); a caller-supplied one is
+    // re-applied on every hit by HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments
+    sender_common_args.push_back(downstream_started_counter_address);
+
+    // the chip shard geometry block, appended to both
+    for (auto* common : {&reader_common_args, &sender_common_args}) {
+        common->push_back(prefix_buffer);
+        common->push_back(hash_excluded.valid_pages_per_outer_slice);
+        common->push_back(geometry.num_outer_slices);
+        common->push_back(geometry.pages_per_outer_slice);
+        common->push_back(geometry.num_ranks);
+        common->push_back(args.gathered_slab_global);
+        common->push_back(static_cast<uint32_t>(tensor_args.input_tensor.padded_shape()[args.dim] * args.num_devices));
+        common->push_back(geometry.pages_per_kv_slab);
+    }
+    return {std::move(reader_common_args), std::move(sender_common_args)};
 }
 
 CoreRangeSet resolve_fabric_worker_cores(MeshDevice* mesh_device, const HighBwAllGatherParams& args) {
@@ -816,15 +875,31 @@ void validate_semaphore_core_coverage(
         required_cores);
 }
 
+// The fabric link worker cores of a cached program (the cores that use the two global counters): the cores its
+// fabric-link-worker reader kernel holds runtime args on, since create_workload_descriptor gives every link worker
+// reader args and places that kernel on exactly those cores. Only read when a hit swaps the caller's semaphores.
+CoreRangeSet fabric_link_worker_cores_of(const tt::tt_metal::Program& program) {
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    const auto& runtime_args_by_core = tt::tt_metal::GetRuntimeArgs(program, kFabricLinkWorkerReaderKernel);
+    for (size_t x = 0; x < runtime_args_by_core.size(); ++x) {
+        for (size_t y = 0; y < runtime_args_by_core[x].size(); ++y) {
+            if (runtime_args_by_core[x][y].size() > 0) {
+                cores.emplace_back(x, y);
+            }
+        }
+    }
+    return CoreRangeSet(cores);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 using namespace CMAKE_UNIQUE_NAMESPACE;
 
-HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactory::create_mesh_workload(
+tt::tt_metal::WorkloadDescriptor HighBwAllGatherFabricFactory::create_workload_descriptor(
     const HighBwAllGatherParams& args,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const HighBwAllGatherInputs& tensor_args,
-    Tensor& output_tensor) {
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& input = tensor_args.input_tensor;
     auto* mesh_device = input.device();
     const auto subdevice_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -864,6 +939,12 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
     }
+    // Park both counters on the descriptor so they live as long as the cached workload: the op's own, or copies of the
+    // caller's (a cache hit that brings other caller semaphores replaces these, see override_runtime_arguments).
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    static_assert(kDownstreamStartedCounterSlot == 0 && kShardsArrivedCounterSlot == 1);
+    workload_descriptor.semaphores.push_back(downstream_started_counter);
+    workload_descriptor.semaphores.push_back(shards_arrived_counter);
 
     const uint32_t page_bytes = input.mesh_buffer().aligned_page_size();
     const uint32_t fabric_payload_bytes = static_cast<uint32_t>(args.packet_size);
@@ -889,7 +970,7 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     // blocks_converted_semaphore (per program, one per local copy core): conversion blocks of a non-interleaved input's
     // own shard that copy core has written into the output.
     const uint32_t num_local_copy_cores = plan.local_copy_cores[0].size();
-    auto reader_config = [&](bool local_copy_core, uint32_t blocks_converted_semaphore) {
+    auto reader_compile_args = [&](bool local_copy_core, uint32_t blocks_converted_semaphore) {
         std::vector<uint32_t> compile_args{
             kFabricChunkCbIndex,
             kReaderMetadataCbIndex,
@@ -908,11 +989,10 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         append_accessor(compile_args, output_tensor);
         append_accessor(compile_args, batch_index_tensor);
         append_accessor(compile_args, prefix_tensor);
-        return tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_args};
+        return compile_args;
     };
+    const auto reader_config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_0_default};
     std::vector<uint32_t> sender_compile_args{
         kFabricChunkCbIndex,
         kWriterMetadataCbIndex,
@@ -924,11 +1004,10 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         fabric_payload_bytes};
     append_accessor(sender_compile_args, output_tensor);
     append_accessor(sender_compile_args, prefix_tensor);
-    const auto sender_config = tt::tt_metal::DataMovementConfig{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::RISCV_1_default,
-        .compile_args = sender_compile_args};
-    auto local_copy_writer_config = [&](uint32_t blocks_converted_semaphore) {
+    // the sender and the local copy writer share this configuration
+    const auto writer_config = tt::tt_metal::DataMovementConfigDescriptor{
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_1_default};
+    auto local_copy_writer_compile_args = [&](uint32_t blocks_converted_semaphore) {
         std::vector<uint32_t> compile_args{
             kFabricChunkCbIndex,
             kWriterMetadataCbIndex,
@@ -942,14 +1021,11 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             kInputRunCbIndex};
         append_accessor(compile_args, output_tensor);
         append_accessor(compile_args, prefix_tensor);
-        return tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = compile_args};
+        return compile_args;
     };
 
     // the same for every program: one geometry and one pair of counters (global semaphores) for the whole mesh
-    const auto [reader_common, writer_common] = common_args(
+    const auto [reader_common_args, sender_common_args] = common_args(
         args,
         tensor_args,
         output_tensor,
@@ -959,11 +1035,10 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     // 1D fabric routes by hop count (always one), 2D by destination chip
     const bool is_2d = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
 
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    workload_descriptor.programs.reserve(tensor_coords.coords().size());
     for (const auto& chip : tensor_coords.coords()) {
         const uint32_t chip_index = plan.linear_chip_index(chip);
-        tt::tt_metal::Program program{};
+        tt::tt_metal::ProgramDescriptor desc;
         const auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
         const auto& local_copy_cores = plan.local_copy_cores[chip_index];
 
@@ -977,61 +1052,80 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
         const auto local_copy_core_set = CoreRangeSet(local_copy_cores);
         const auto all_core_set = CoreRangeSet(all_cores);
 
-        tt::tt_metal::CreateCircularBuffer(
-            program,
-            all_core_set,
-            tt::tt_metal::CircularBufferConfig(
-                2 * chunks_per_cb_batch * fabric_chunk_bytes, {{kFabricChunkCbIndex, data_format}})
-                .set_page_size(kFabricChunkCbIndex, page_bytes));
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = 2 * chunks_per_cb_batch * fabric_chunk_bytes,
+            .core_ranges = all_core_set,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(kFabricChunkCbIndex),
+                .data_format = data_format,
+                .page_size = page_bytes}}}});
         for (const uint32_t metadata_cb : {kReaderMetadataCbIndex, kWriterMetadataCbIndex}) {
-            tt::tt_metal::CreateCircularBuffer(
-                program,
-                all_core_set,
-                tt::tt_metal::CircularBufferConfig(kMetadataCbBytes, {{metadata_cb, tt::DataFormat::UInt32}})
-                    .set_page_size(metadata_cb, kMetadataCbBytes));
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = kMetadataCbBytes,
+                .core_ranges = all_core_set,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(metadata_cb),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = kMetadataCbBytes}}}});
         }
 
         if (!input_interleaved) {
-            tt::tt_metal::CreateCircularBuffer(
-                program,
-                local_copy_core_set,
-                tt::tt_metal::CircularBufferConfig(
-                    2 * chunks_per_cb_batch * kInputRunCbPageBytes, {{kInputRunCbIndex, tt::DataFormat::UInt32}})
-                    .set_page_size(kInputRunCbIndex, kInputRunCbPageBytes));
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = 2 * chunks_per_cb_batch * kInputRunCbPageBytes,
+                .core_ranges = local_copy_core_set,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(kInputRunCbIndex),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = kInputRunCbPageBytes}}}});
         }
         // one per local copy core, consecutive ids: conversion blocks of the own shard that copy core has done
-        // (non-interleaved input)
-        const uint32_t blocks_converted_semaphore =
-            tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0);
-        for (uint32_t c = 1; c < num_local_copy_cores; ++c) {
-            TT_FATAL(
-                tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0) ==
-                    blocks_converted_semaphore + c,
-                "high_bw_all_gather: blocks-converted semaphores must have consecutive ids");
+        // (non-interleaved input). They are this program's first semaphores, so they take ids 0, 1, ...; the fabric
+        // connection semaphores appended per link worker below take the next free ids on that core.
+        const uint32_t blocks_converted_semaphore = 0;
+        for (uint32_t c = 0; c < num_local_copy_cores; ++c) {
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+                .id = blocks_converted_semaphore + c, .core_ranges = fabric_link_worker_core_set, .initial_value = 0});
         }
         const std::string dir(kKernelDir);
-        const auto fabric_link_worker_reader_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_reader.cpp",
+        auto make_kernel = [&](const char* source,
+                               const CoreRangeSet& cores,
+                               std::vector<uint32_t> compile_time_args,
+                               const tt::tt_metal::DataMovementConfigDescriptor& config) {
+            tt::tt_metal::KernelDescriptor kernel;
+            kernel.kernel_source = dir + source;
+            kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+            kernel.core_ranges = cores;
+            kernel.compile_time_args = std::move(compile_time_args);
+            kernel.config = config;
+            return kernel;
+        };
+        // pushed in kernel-index order (kFabricLinkWorkerReaderKernel, ...); the override relies on it
+        desc.kernels.push_back(make_kernel(
+            "fabric_all_gather_reader.cpp",
             fabric_link_worker_core_set,
-            reader_config(false, blocks_converted_semaphore));
-        const auto fabric_link_worker_sender_id = tt::tt_metal::CreateKernel(
-            program, dir + "fabric_all_gather_sender.cpp", fabric_link_worker_core_set, sender_config);
-        const auto local_copy_core_reader_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_reader.cpp",
+            reader_compile_args(false, blocks_converted_semaphore),
+            reader_config));
+        desc.kernels.push_back(make_kernel(
+            "fabric_all_gather_sender.cpp", fabric_link_worker_core_set, sender_compile_args, writer_config));
+        desc.kernels.push_back(make_kernel(
+            "fabric_all_gather_reader.cpp",
             local_copy_core_set,
-            reader_config(true, blocks_converted_semaphore));
-        const auto local_copy_core_writer_id = tt::tt_metal::CreateKernel(
-            program,
-            dir + "fabric_all_gather_copy_writer.cpp",
+            reader_compile_args(true, blocks_converted_semaphore),
+            reader_config));
+        desc.kernels.push_back(make_kernel(
+            "fabric_all_gather_copy_writer.cpp",
             local_copy_core_set,
-            local_copy_writer_config(blocks_converted_semaphore));
+            local_copy_writer_compile_args(blocks_converted_semaphore),
+            writer_config));
+        auto& fabric_link_worker_reader = desc.kernels[kFabricLinkWorkerReaderKernel];
+        auto& fabric_link_worker_sender = desc.kernels[kFabricLinkWorkerSenderKernel];
+        auto& local_copy_core_reader = desc.kernels[kLocalCopyCoreReaderKernel];
+        auto& local_copy_core_writer = desc.kernels[kLocalCopyCoreWriterKernel];
 
-        tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_reader_id, reader_common);
-        tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_sender_id, writer_common);
-        tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_reader_id, reader_common);
-        tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_writer_id, reader_common);
+        fabric_link_worker_reader.emplace_common_runtime_args(reader_common_args);
+        fabric_link_worker_sender.emplace_common_runtime_args(sender_common_args);
+        local_copy_core_reader.emplace_common_runtime_args(reader_common_args);
+        local_copy_core_writer.emplace_common_runtime_args(reader_common_args);
 
         for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
             const auto& on_ring = plan.chip_on_ring[chip_index][ring];
@@ -1053,8 +1147,8 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     std::vector<uint32_t> reader_args{
                         first_owned_chunk, owned_chunk_stride, static_cast<uint32_t>(outgoing_shards.size())};
                     reader_args.insert(reader_args.end(), outgoing_shards.begin(), outgoing_shards.end());
-                    tt::tt_metal::SetRuntimeArgs(
-                        program, fabric_link_worker_reader_id, fabric_link_worker.core, reader_args);
+                    fabric_link_worker_reader.runtime_args.emplace_back(
+                        fabric_link_worker.core, std::move(reader_args));
 
                     // the started signal goes to the downstream's link worker that sends back into this chip; data and
                     // shards-arrived increments go to the downstream's link worker of the same direction
@@ -1083,20 +1177,31 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                         static_cast<uint32_t>(outgoing_shards.size())};
                     sender_args.insert(sender_args.end(), outgoing_shards.begin(), outgoing_shards.end());
                     if (fabric_link_worker.has_fabric_connection) {
-                        tt::tt_fabric::append_fabric_connection_rt_args(
+                        tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
                             *mesh_device,
                             mesh_device->get_fabric_node_id(chip),
                             mesh_device->get_fabric_node_id(*downstream),
                             fabric_link_worker.fabric_link_index,
-                            program,
+                            desc,
                             fabric_link_worker.core,
                             sender_args);
                     }
-                    tt::tt_metal::SetRuntimeArgs(
-                        program, fabric_link_worker_sender_id, fabric_link_worker.core, sender_args);
+                    fabric_link_worker_sender.runtime_args.emplace_back(
+                        fabric_link_worker.core, std::move(sender_args));
                 }
             }
         }
+        // A cache hit that swaps in caller semaphores reads the link worker cores back from which cores have reader
+        // args (fabric_link_worker_cores_of), so every link worker must get a non-empty reader arg list.
+        TT_FATAL(
+            fabric_link_worker_reader.runtime_args.size() == fabric_link_workers.size() &&
+                std::all_of(
+                    fabric_link_worker_reader.runtime_args.begin(),
+                    fabric_link_worker_reader.runtime_args.end(),
+                    [](const auto& core_args) { return !core_args.second.empty(); }),
+            "high_bw_all_gather: every fabric link worker needs reader runtime args ({} workers, {} arg lists)",
+            fabric_link_workers.size(),
+            fabric_link_worker_reader.runtime_args.size());
         // Local copy core c of n owns chunk numbers c, c + n, ... of this chip's shard (interleaved input), or
         // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the latter
         // signals every fabric link worker of this chip per block.
@@ -1110,88 +1215,118 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             local_copy_writer_args.push_back(noc.y);
         }
         for (uint32_t c = 0; c < num_local_copy_cores; ++c) {
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                local_copy_core_reader_id,
+            local_copy_core_reader.runtime_args.emplace_back(
                 local_copy_cores[c],
-                std::vector<uint32_t>{
+                tt::tt_metal::KernelDescriptor::CoreRuntimeArgs{
                     c, num_local_copy_cores, 1, chunk_walk::make_outgoing_shard(rank, chunk_walk::kWholeChipShard)});
             local_copy_writer_args[0] = c;
-            tt::tt_metal::SetRuntimeArgs(
-                program, local_copy_core_writer_id, local_copy_cores[c], local_copy_writer_args);
+            local_copy_core_writer.runtime_args.emplace_back(local_copy_cores[c], local_copy_writer_args);
         }
 
-        workload.add_program(ttnn::MeshCoordinateRange(chip), std::move(program));
-        shared_variables.emplace(
-            ttnn::MeshCoordinateRange(chip),
-            shared_variables_t{
-                .fabric_link_worker_reader_kernel_id = fabric_link_worker_reader_id,
-                .fabric_link_worker_sender_kernel_id = fabric_link_worker_sender_id,
-                .local_copy_core_reader_kernel_id = local_copy_core_reader_id,
-                .local_copy_core_writer_kernel_id = local_copy_core_writer_id,
-                .downstream_started_counter = downstream_started_counter,
-                .shards_arrived_counter = shards_arrived_counter,
-                .fabric_link_worker_cores = fabric_link_worker_core_set,
-                .chip_shard_geometry = chip_shard_geometry});
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(chip), std::move(desc)});
     }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    return workload_descriptor;
 }
 
-void HighBwAllGatherFabricFactory::override_runtime_arguments(
+HighBwAllGatherMeshWorkloadFactory::cached_mesh_workload_t HighBwAllGatherMeshWorkloadFactory::create_mesh_workload(
+    const HighBwAllGatherParams& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const HighBwAllGatherInputs& tensor_args,
+    Tensor& output_tensor) {
+    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensor);
+}
+
+void HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
     const HighBwAllGatherParams& args,
     const HighBwAllGatherInputs& tensor_args,
     Tensor& output_tensor) {
-    // Only the common args change between calls (addresses, cache slot, valid length), and they are the same for every
-    // program: every program's shared state holds the same geometry and counters (the call's external semaphores, if
-    // any, replace them below in every program alike). So they are built once.
-    auto& any_shared = cached_workload.shared_variables.begin()->second;
+    // Between calls only the common args change (addresses, cache slot, valid length, and caller semaphores), and they
+    // are the same for every program. The tensor addresses are Buffer* bindings; the rest is patched here.
     const bool external_counters = args.ready_semaphore.has_value();
-    const auto [reader_common, writer_common] = common_args(
-        args,
-        tensor_args,
-        output_tensor,
-        any_shared.chip_shard_geometry,
-        external_counters ? args.data_valid_semaphore->address() : any_shared.shards_arrived_counter.address(),
-        external_counters ? args.ready_semaphore->address() : any_shared.downstream_started_counter.address());
-    // Every program gets the same common args, and a completed update writes them to all of them, so one record (on the
-    // first program's shared state) stands for the workload. In steady state the addresses, slot, length and counters
-    // repeat, and nothing needs rewriting. The counter addresses are part of the args, so a match also means no
-    // external-semaphore swap is pending.
-    if (any_shared.applied_reader_common == reader_common && any_shared.applied_writer_common == writer_common) {
-        return;
-    }
-    const auto swaps_counters = [&](const shared_variables_t& shared) {
-        return external_counters && (shared.downstream_started_counter.address() != args.ready_semaphore->address() ||
-                                     shared.shards_arrived_counter.address() != args.data_valid_semaphore->address());
+    const auto swaps_counters = [&](const descriptor_adapter_t::shared_variables_t& shared) {
+        const auto& parked = shared.workload_descriptor.semaphores;
+        return external_counters &&
+               (parked.at(kDownstreamStartedCounterSlot).address() != args.ready_semaphore->address() ||
+                parked.at(kShardsArrivedCounterSlot).address() != args.data_valid_semaphore->address());
     };
-    // Validate every program before patching any: a failed check then leaves the workload and the record as they were.
-    for (const auto& [coordinate_range, shared] : cached_workload.shared_variables) {
-        if (swaps_counters(shared)) {
-            validate_semaphore_core_coverage(*args.ready_semaphore, shared.fabric_link_worker_cores, "ready_semaphore");
+    // The hash-excluded values, the same for every program. Derived (and their bounds checked) before anything is
+    // patched, as is the semaphore check below: a failed check then leaves the workload as it was.
+    const bool selected_batch = args.input_batch_index.has_value() || tensor_args.has_batch_index_metadata();
+    const auto hash_excluded =
+        hash_excluded_common_args(args, derive_shard_page_geometry(args, tensor_args, selected_batch));
+    // Validate every program before patching any.
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        if (swaps_counters(cached_workload.shared_variables.at(coordinate_range))) {
+            const auto fabric_link_worker_cores = fabric_link_worker_cores_of(program);
+            validate_semaphore_core_coverage(*args.ready_semaphore, fabric_link_worker_cores, "ready_semaphore");
             validate_semaphore_core_coverage(
-                *args.data_valid_semaphore, shared.fabric_link_worker_cores, "data_valid_semaphore");
+                *args.data_valid_semaphore, fabric_link_worker_cores, "data_valid_semaphore");
         }
     }
+
+    // Default adapter behaviour: patch the Buffer* bindings (input, output, cache slot and prefix tensors). When the
+    // cache-filling call passed one buffer in two tensor slots, the adapter could not tell which slot holds which
+    // buffer, recorded no bindings, and would refuse this hit; the addresses are then written directly below instead,
+    // as the legacy factory always did.
+    const bool bindings_resolved = std::all_of(
+        cached_workload.shared_variables.begin(), cached_workload.shared_variables.end(), [](const auto& entry) {
+            return !entry.second.resolved_bindings.empty();
+        });
+    if (bindings_resolved) {
+        descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensor);
+    }
+    const auto address_of = [](const std::optional<Tensor>& tensor) -> uint32_t {
+        return tensor.has_value() ? static_cast<uint32_t>(tensor->mesh_buffer().address()) : 0u;
+    };
+    const uint32_t input_address = static_cast<uint32_t>(tensor_args.input_tensor.mesh_buffer().address());
+    const uint32_t output_address = static_cast<uint32_t>(output_tensor.mesh_buffer().address());
+    const uint32_t batch_index_address =
+        tensor_args.has_batch_index_metadata() ? address_of(tensor_args.input_batch_index_tensor) : 0u;
+    const uint32_t prefix_address =
+        tensor_args.has_gathered_prefix_metadata() ? address_of(tensor_args.gathered_prefix_tensor) : 0u;
+
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared = cached_workload.shared_variables.at(coordinate_range);
         if (swaps_counters(shared)) {
-            shared.downstream_started_counter = *args.ready_semaphore;
-            shared.shards_arrived_counter = *args.data_valid_semaphore;
+            // keep the caller's current semaphores alive with the cached workload, as the op's own are
+            shared.workload_descriptor.semaphores.at(kDownstreamStartedCounterSlot) = *args.ready_semaphore;
+            shared.workload_descriptor.semaphores.at(kShardsArrivedCounterSlot) = *args.data_valid_semaphore;
         }
-        auto patch_common_args = [&](tt::tt_metal::KernelHandle kernel, const std::vector<uint32_t>& values) {
+        // The parked counters are the ones the programs must use: unchanged for the op's own (workload-scoped, so
+        // rewriting them is a no-op), the call's for caller-supplied ones.
+        const uint32_t shards_arrived_counter_address =
+            static_cast<uint32_t>(shared.workload_descriptor.semaphores.at(kShardsArrivedCounterSlot).address());
+        const uint32_t downstream_started_counter_address =
+            static_cast<uint32_t>(shared.workload_descriptor.semaphores.at(kDownstreamStartedCounterSlot).address());
+        auto patch_reader_common = [&](uint32_t kernel) {
             auto& common = GetCommonRuntimeArgs(program, kernel);
-            for (size_t i = 0; i < values.size(); ++i) {
-                common[i] = values[i];
+            if (!bindings_resolved) {
+                common[kReaderInputAddressArg] = input_address;
+                common[kReaderOutputAddressArg] = output_address;
+                common[kReaderBatchIndexAddressArg] = batch_index_address;
+                common[kReaderGeometryArg + kGeometryPrefixAddressArg] = prefix_address;
             }
+            common[kReaderShardsArrivedCounterArg] = shards_arrived_counter_address;
+            common[kReaderLayersPerUserArg] = hash_excluded.layers_per_user;
+            common[kReaderLayerArg] = hash_excluded.layer;
+            common[kReaderCacheSlotFirstPageArg] = hash_excluded.cache_slot_first_page;
+            common[kReaderGeometryArg + kGeometryValidPagesPerOuterSliceArg] =
+                hash_excluded.valid_pages_per_outer_slice;
         };
-        patch_common_args(shared.fabric_link_worker_reader_kernel_id, reader_common);
-        patch_common_args(shared.fabric_link_worker_sender_kernel_id, writer_common);
-        patch_common_args(shared.local_copy_core_reader_kernel_id, reader_common);
-        patch_common_args(shared.local_copy_core_writer_kernel_id, reader_common);
+        patch_reader_common(kFabricLinkWorkerReaderKernel);
+        patch_reader_common(kLocalCopyCoreReaderKernel);
+        patch_reader_common(kLocalCopyCoreWriterKernel);  // the local copy writer takes the reader's common args
+        auto& sender_common = GetCommonRuntimeArgs(program, kFabricLinkWorkerSenderKernel);
+        if (!bindings_resolved) {
+            sender_common[kSenderOutputAddressArg] = output_address;
+            sender_common[kSenderGeometryArg + kGeometryPrefixAddressArg] = prefix_address;
+        }
+        sender_common[kSenderShardsArrivedCounterArg] = shards_arrived_counter_address;
+        sender_common[kSenderDownstreamStartedCounterArg] = downstream_started_counter_address;
+        sender_common[kSenderGeometryArg + kGeometryValidPagesPerOuterSliceArg] =
+            hash_excluded.valid_pages_per_outer_slice;
     }
-    any_shared.applied_reader_common = reader_common;
-    any_shared.applied_writer_common = writer_common;
 }
 
 }  // namespace ttnn::operations::experimental::quasar::high_bw_all_gather

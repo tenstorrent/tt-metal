@@ -26,6 +26,7 @@ from helpers.llk_params import (
 from helpers.param_config import (
     DEST_DEPTH_BLOCK_COUNTS,
     InputOutputFormat,
+    flat_axes,
     generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
@@ -1056,41 +1057,35 @@ def prepare_binary_max_min_inputs(src_A, src_B, input_format, output_format):
     return in0, in1
 
 
-def _generate_max_min_combinations(
-    formats_list: List[InputOutputFormat],
-    input_dimensions_list=([32, 32],),
-):
-    """Generate max/min resolved routes and the operation-specific axes."""
-    combinations = []
-    for format_variant in generate_quasar_sfpu_format_variants(
-        MathOperation.SfpuBinaryMax, formats_list
-    ):
-        for is_max_op in [True, False]:
-            for input_dimensions in input_dimensions_list:
-                combinations.append(
-                    (
-                        format_variant,
-                        is_max_op,
-                        input_dimensions,
-                    )
-                )
-    return combinations
+MAX_MIN_FLAT_NAMES = ("formats", "dest_acc", "is_max_op", "input_dimensions")
+_MAX_MIN_INPUT_DIMENSIONS = [[32, 32]]
 
 
-MAX_MIN_FLOAT_SWEEP = dict(
-    formats_dest_acc_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-    ),
+def _generate_max_min_combinations(formats_list: List[InputOutputFormat]):
+    """Generate (formats, dest_acc, is_max_op, input_dimensions) for each resolved max/min route."""
+    return [
+        (variant.formats, variant.dest_acc, is_max_op, input_dimensions)
+        for variant in generate_quasar_sfpu_format_variants(
+            MathOperation.SfpuBinaryMax, formats_list
+        )
+        for is_max_op in [True, False]
+        for input_dimensions in _MAX_MIN_INPUT_DIMENSIONS
+    ]
+
+
+MAX_MIN_FLOAT_SWEEP = flat_axes(
+    MAX_MIN_FLAT_NAMES,
+    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_FLOAT_FORMATS),
 )
-MAX_MIN_INT32_SWEEP = dict(
-    formats_dest_acc_is_max_input_dims=_generate_max_min_combinations(
-        SFPU_BINARY_MAX_MIN_INT32_FORMATS,
-    ),
+MAX_MIN_INT32_SWEEP = flat_axes(
+    MAX_MIN_FLAT_NAMES,
+    _generate_max_min_combinations(SFPU_BINARY_MAX_MIN_INT32_FORMATS),
 )
 
 
 def _run_max_min(
-    format_variant,
+    formats,
+    dest_acc,
     is_max_op,
     input_dimensions,
     spec,
@@ -1102,8 +1097,12 @@ def _run_max_min(
     is_perf=False,
     perf_report=None,
 ):
-    formats = format_variant.formats
-    dest_acc = format_variant.dest_acc
+    format_variant = resolve_quasar_sfpu_variant(
+        MathOperation.SfpuBinaryMax, formats, dest_acc
+    )
+    assert (
+        format_variant is not None
+    ), f"no Quasar SFPU route for {formats} dest_acc={dest_acc}"
     binary_op = "MAX" if is_max_op else "MIN"
     src0_idx, src1_idx, dst_idx = tile_indices
     num_faces = MAX_NUM_FACES
@@ -1227,7 +1226,10 @@ def _run_max_min(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -1236,10 +1238,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min for the non-redundant floating-point formats."""
-    format_variant, is_max_op, input_dimensions = formats_dest_acc_is_max_input_dims
     spec = StimuliSpec.uniform(low=-0.9, high=1.1)
     _run_max_min(
-        format_variant,
+        formats,
+        dest_acc,
         is_max_op,
         input_dimensions,
         spec,
@@ -1258,7 +1260,10 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
     tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    is_max_op,
+    input_dimensions,
     tile_indices,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
@@ -1267,12 +1272,11 @@ def test_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report=None,
 ):
     """Binary SFPU max/min (Int32)."""
-    format_variant, is_max_op, input_dimensions = formats_dest_acc_is_max_input_dims
-    formats = format_variant.formats
     iinfo = torch.iinfo(format_dict[formats.input_format])
     spec = StimuliSpec.uniform(low=float(iinfo.min), high=float(iinfo.max - 1))
     _run_max_min(
-        format_variant,
+        formats,
+        dest_acc,
         is_max_op,
         input_dimensions,
         spec,
