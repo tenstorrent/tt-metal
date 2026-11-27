@@ -80,10 +80,13 @@ CASES = [
     *(MoEPerfCase("glm53", "xy4-sp1", 2560 * f, forward_chunks=f) for f in (1, 2, 4)),
 ]
 # Host ms of one MoE layer forward (untraced, traced) by case id, on a 14 kW CI Galaxy (bh_sc1_high_power): untraced the
-# fastest run, traced the mean of the runs. A case without targets only reports. (kimi_k3_1-xy4-sp1-2560: local, until CI's.)
+# fastest run, traced the mean of the runs. A case without targets only reports.
 TARGETS_MS = {
     "kimi_k3-8x4-5120": (2.38, 2.27),
-    "kimi_k3_1-xy4-sp1-2560": (3.54, 3.46),  # (local, mean of 2 runs: re-centre on CI)
+    # K3 / K3.1 carve: mean of 2 CI runs of that run's number (10k: 1 run)
+    "kimi_k3_1-xy4-sp1-2560": (3.43, 3.38),
+    "kimi_k3-xy4-sp1-5120-packed-2560@0-2560@2560": (4.42, 4.33),
+    "kimi_k3-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (6.26, 6.15),
     # GLM-5.3: each the mean over 3 runs of that run's number (fastest untraced sample, traced replay)
     "glm53-8x4-5120": (1.32, 1.21),
     "glm53-xy4-sp1-2560": (1.55, 1.44),
