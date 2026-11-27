@@ -7,3 +7,4 @@
 {"event":"test_run","mode":"probe","target":"knob paths","result":"pass","detail":"multi-image ragged, 2 blocks depth1/depth2 with mcast, ragged blocks depth2, absent mcast (replica_groups=1), H_out=1; all bit-exact with poisoned x padding","ts":"2026-11-26T19:16:17-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 24/24 (--dev and plain), golden 20/20; R1 column_group_bcast, mcast down strips, seed_rows=4 replicate","ts":"2026-11-27T04:31:25-05:00"}
 {"event":"test_run","result":"pass","scope":"acceptance 27/27 dev+prod, golden 20/20, probe_007 non-production paths (absent channel, image folding, depth 2 / 3 rounds) bit-exact","ts":"2026-11-27T06:06:31-05:00"}
+{"event":"test_run","result":"pass","mode":"dev+prod","tests":"27/27 test_g6_expand.py","details":"column_group_broadcast: sender reads+expands+mcasts per grid row, all cores write their out rows","ts":"2026-11-27T07:31:04-05:00"}
