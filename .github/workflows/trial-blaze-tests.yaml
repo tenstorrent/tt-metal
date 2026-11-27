@@ -2,25 +2,13 @@ name: "Trial blaze tests"
 
 # Standalone version of the blaze merge gate that "Package and release" runs:
 # builds the tt-metal profiler (tracy) artifact for the dispatched ref, then
-# dispatches tt-blaze's ci.yaml against it and waits for it to finish. Nothing
-# is tagged, packaged, or published.
+# starts the tt-blaze relay, which runs tt-blaze's ci.yaml on main against it,
+# and waits for it to finish. Nothing is tagged, packaged, or published.
+# The relay runs only tt-blaze's full merge gate from tt-blaze main: other
+# tt-blaze refs and selected BH Loudbox buckets are run in tt-blaze itself.
 
 on:
   workflow_dispatch:
-    inputs:
-      blaze-ref:
-        description: "tt-blaze branch/tag/SHA to run the gate from."
-        required: false
-        default: main
-        type: string
-      selected-buckets:
-        description: >-
-          Comma-separated tt-blaze BH Loudbox bucket ids, e.g. "router,infra-cb".
-          Empty runs tt-blaze's full merge gate (ci.yaml). Set, it runs tt-blaze's
-          BH Loudbox Intermittent workflow with only these buckets.
-        required: false
-        default: ""
-        type: string
   schedule:
     - cron: "0 4,8,16,20 * * *"
 
@@ -54,21 +42,14 @@ jobs:
 
   blaze-merge-gate:
     needs: [build-artifact-profiler]
-    if: ${{ !cancelled() && needs.build-artifact-profiler.result == 'success' }}
+    # Runs on main only. The tokens and the relay serve only runs on main; a
+    # manual run from another branch builds the artifact and skips the gate.
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
-    # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
-    secrets:
-      TT_BLAZE_PAT: ${{ secrets.TT_BLAZE_PAT }}
+      # The gate signs in for short-lived tokens on tenstorrent/tt-blaze-relay
+      # (the default GITHUB_TOKEN cannot dispatch another repo).
+      id-token: write
+    # The gate starts the tt-blaze relay with this run's id. The relay takes
+    # the commit and the profiler build of this run from GitHub.
     uses: ./.github/workflows/blaze-merge-gate.yaml
-    with:
-      # Artifacts belong to the TOP-LEVEL run, which is this workflow.
-      metal-run-id: ${{ github.run_id }}
-      # tt-blaze checks its tt-metal submodule out here so its JIT-compiled kernels
-      # match the libraries it links against.
-      metal-ref: ${{ github.sha }}
-      dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      # Scheduled runs use blaze main with metal main.
-      blaze-ref: ${{ inputs.blaze-ref || 'main' }}
-      # Scheduled runs have no inputs, so they always run the full merge gate.
-      selected-buckets: ${{ inputs.selected-buckets || '' }}

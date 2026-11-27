@@ -42,7 +42,6 @@ namespace ckernel {
 #ifdef TRISC_MATH
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace sfpu {
@@ -71,30 +70,20 @@ inline void _top8_configure_addrmod_() {
         .set(ADDRMOD_OFFSET + ADDR_MOD_0);
 
     addr_mod_t{
-        .dest = {.incr = 2, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
-
-    addr_mod_t{
         .dest = {.incr = 14, .clr = 0, .cr = 0, .c_to_cr = 0},
     }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_2);
-
-    addr_mod_t{
-        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
-    }
-        .set(ADDRMOD_OFFSET + ADDR_MOD_3);
+        .set(ADDRMOD_OFFSET + ADDR_MOD_1);
 }
 
 // Load input data (FP16B) from tile layout and fuse with expert indices
 inline void _load_input_group_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);  // offset 22
 }
 
@@ -112,43 +101,43 @@ inline void _add_row_indices_() {
 
 // Store sorted group back to tile layout
 inline void _store_sorted_group_() {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);  // offset 22
 
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 64);  // offset 22
 }
 
 // Load sorted group from tile layout
 inline void _load_sorted_group_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_0, 0);  // offset 22
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 64);  // offset 22
 }
 
@@ -175,16 +164,16 @@ template <uint32_t face_offset, uint32_t group_offset>
 inline void _top8_load_rows_0_3_() {
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 0>();
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
 
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 0>();
 
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
 }
 
@@ -192,68 +181,68 @@ template <uint32_t face_offset, uint32_t group_offset>
 inline void _top8_load_rows_4_7_() {
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 4>();
 
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 22
 
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 4>();
 
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 22
 }
 
 template <uint32_t face_offset, uint32_t group_offset>
 inline void _top8_store_rows_0_3_() {
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 0>();
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
 
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 0>();
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
 }
 
 template <uint32_t face_offset, uint32_t group_offset>
 inline void _top8_store_rows_4_7_() {
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 4>();
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 22
 
     _top8_set_d_rwc_<face_offset, group_offset, /*row_offset*/ 4>();
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 22
 }
 
 inline void _top8_load_indices_() {
-    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 64);  // offset 22
 }
 
 inline void _top8_store_indices_() {
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 64);  // offset 18
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 64);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 64);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_0, 64);  // offset 22
 }
 
@@ -296,29 +285,29 @@ inline void _top8_add_core_offset_to_indices_4_7_(uint32_t core_offset) {
 
 inline void _top8_store_rows_0_3_final_() {
     _top8_set_d_rwc_<0, 0, /*row_offset*/ 0>();
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 18
 
     _top8_set_d_rwc_<0, 8, /*row_offset*/ 0>();
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 0
-    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 2
-    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 16
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 0
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 2
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 16
     TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 0);  // offset 18
 }
 
 inline void _top8_store_rows_4_7_final_() {
     _top8_set_d_rwc_<0, 0, /*row_offset*/ 4>();
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::FP16B, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::FP16B, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);  // offset 22
 
     _top8_set_d_rwc_<0, 8, /*row_offset*/ 4>();
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 4
-    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 6
-    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 20
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 4
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 0);  // offset 6
+    TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 0);  // offset 20
     TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, 0);  // offset 22
 }
 
@@ -443,43 +432,50 @@ inline void _top8_merge_sorted_8_() {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     if constexpr (replay) {
-        lltt::replay(0, 16);
+        TTI_REPLAY(0, 16, 0, 0);
         TTI_SFPTRANSP(0, 0, 0, 0);
         _top8_bitonic_merge_8_rows_();
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(16, 16);
+        TTI_REPLAY(16, 16, 0, 0);
     } else {
-        lltt::record<lltt::Exec>(0, 16);
+        TTI_REPLAY(0, 16, 1, 1);
         _load_sorted_group_();
         TTI_SFPTRANSP(0, 0, 0, 0);
         _top8_bitonic_merge_8_rows_();
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::record<lltt::Exec>(16, 16);
+        TTI_REPLAY(16, 16, 1, 1);
         _store_sorted_group_();
     }
 }
 
 inline void _calculate_top8_tile_(uint32_t tile_index) {
+    // ADDR_MOD_3 is slot 7 under the SFPU addr-mod base. This op steps dest by -14 through it; restore zero
+    // advance before returning.
+    addr_mod_t{
+        .dest = {.incr = -14, .clr = 0, .cr = 0, .c_to_cr = 0},
+    }
+        .set(ADDR_MOD_7);
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     //-------------------------------------------------------------------------
     // PHASE 1: Sort all 4 groups using replay buffer
     //-------------------------------------------------------------------------
-    lltt::record<lltt::Exec>(0, 8);
+    TTI_REPLAY(0, 8, 1, 1);
     _load_input_group_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::record<lltt::Exec>(8, 24);
+    TTI_REPLAY(8, 24, 1, 1);
     _top8_bitonic_sort_8_rows_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
@@ -489,19 +485,19 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
 
-    lltt::replay(0, 8);
+    TTI_REPLAY(0, 8, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _add_row_indices_();
-    lltt::replay(8, 24);
+    TTI_REPLAY(8, 24, 0, 0);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _store_sorted_group_();
 
@@ -512,11 +508,11 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 
     // Group 1
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 8, 0, 0, p_setrwc::SET_D);
-    lltt::record<lltt::Exec>(0, 9);
+    TTI_REPLAY(0, 9, 1, 1);
     _top8_load_indices_();
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_add_group_offset_to_indices_<1>();
-    lltt::record<lltt::Exec>(9, 9);
+    TTI_REPLAY(9, 9, 1, 1);
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_store_indices_();
 
@@ -527,15 +523,15 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
 
     // Group 2
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
-    lltt::replay(0, 9);
+    TTI_REPLAY(0, 9, 0, 0);
     _top8_add_group_offset_to_indices_<2>();
-    lltt::replay(9, 9);
+    TTI_REPLAY(9, 9, 0, 0);
 
     // Group 3
     TTI_INCRWC(p_setrwc::CR_D, 8, 0, 0);
-    lltt::replay(0, 9);
+    TTI_REPLAY(0, 9, 0, 0);
     _top8_add_group_offset_to_indices_<3>();
-    lltt::replay(9, 9);
+    TTI_REPLAY(9, 9, 0, 0);
 
     //-------------------------------------------------------------------------
     // PHASE 3: Sequential merge all 4 groups into final top-8
@@ -556,7 +552,7 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     _top8_add_core_offset_to_indices_0_3_(tile_index);
 
     // Mask is available in tile 2
-    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_1, 128);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_2, 128);
 
     // Now, let us bitshift by tile_index to get the mask for this tile
     // Mask to get only bit at tile_index
@@ -607,6 +603,9 @@ inline void _calculate_top8_tile_(uint32_t tile_index) {
     // Store the result
     TTI_SFPTRANSP(0, 0, 0, 0);
     _top8_store_rows_4_7_final_();
+
+    // Restore the ADDR_MOD_7 invariant (zero advance) for the next op.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
 }
 
 }  // namespace sfpu

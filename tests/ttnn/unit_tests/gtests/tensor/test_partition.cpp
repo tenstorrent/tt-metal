@@ -23,7 +23,7 @@
 #include <cstring>
 #include <numeric>
 #include <type_traits>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 #include <tuple>
 #include <vector>
 #include <sys/mman.h>

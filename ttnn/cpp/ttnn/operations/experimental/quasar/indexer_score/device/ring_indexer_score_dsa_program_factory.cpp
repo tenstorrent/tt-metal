@@ -12,12 +12,12 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>    // tt::tile_size
-#include <tt-metalium/work_split.hpp>  // corerange_to_cores
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>  // tt::tile_size
+#include <tt-metalium/utils/work_split.hpp>          // corerange_to_cores
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex

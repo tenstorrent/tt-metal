@@ -4,8 +4,8 @@
 
 #include "reduce_scatter_minimal_direct_factory.hpp"
 
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"

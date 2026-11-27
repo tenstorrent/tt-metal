@@ -313,6 +313,22 @@ def test_sparse_sdpa_pcc_multi_chunk(device, nv_fn, nv_id):
     assert p >= 0.99, f"PCC {p:.5f} ({nv_id})"
 
 
+# ---- q may sit in L1; DRAM and L1 q are distinct programs (different q accessor) ----
+@run_for_blackhole()
+def test_sparse_sdpa_q_in_l1(device):
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32
+    device.clear_program_cache()
+    # Twice each: the second pass hits the cache with fresh buffers (q's address is re-applied per dispatch).
+    for seed in (0, 1):
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 3) % 50, seed=seed)
+        for q_memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
+            out, scale = run_op(q, kv, indices, device, kc, V_DIM, q_memory_config=q_memory_config)
+            p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+            assert p >= 0.99, f"PCC {p:.5f} (q in {q_memory_config.buffer_type}, seed {seed})"
+    n = device.num_program_cache_entries()
+    assert n == 2, f"DRAM and L1 q shared a program: {n} program-cache entries (expected 2)"
+
+
 # ---- the kv (K cache) length T rides on the accessor's runtime args, so changing T must NOT recompile ----
 @run_for_blackhole()
 def test_sparse_sdpa_kv_len_no_recompile(device):
@@ -784,7 +800,7 @@ def check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed):
         (64, None, 1024, 256, 64, "mixed", True),  # 1 token + a sliver per core: S = cores + 10
         (128, 160, 1024, 512, 128, "mixed", True),  # Sqt=4: the merge fills DST
         (96, 160, 1024, 512, 128, "mixed", True),  # Sqt=3
-        (128, 160, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+        (128, 160, 4096, 1280, 640, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
     ],
 )
 def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split):
@@ -797,6 +813,19 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split)
     check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed=71)
 
 
+@run_for_blackhole()
+@pytest.mark.parametrize("H", [64, 96], ids=["glm_heads", "k3_heads"])
+def test_sparse_sdpa_l1_output(device, H):
+    """An L1 output (and L1 q, as the sparse MLA passes them) matches the golden, on the split-K per-chip shape."""
+    S, T, TOPK, kc = 160, 4096, 2048, 128
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_pattern("mixed", TOPK), seed=17)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=18, round_scale=True)
+    tt_q = ttnn.to_memory_config(bf16_dev(q, device), ttnn.L1_MEMORY_CONFIG)
+    out = scaled_sdpa(tt_q, tt_packed, idx_dev(indices, device), kc, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert_pcc_per_token(ttnn.to_torch(out), golden(q, reconstructed, indices, SCALE, V_DIM))
+
+
 # ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
 @run_for_blackhole()
 @pytest.mark.parametrize(
@@ -807,7 +836,7 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split)
         (64, 32, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments
         (64, 64, 1024, 512, 128, "causal", True),  # prefill-like valid counts
         (32, 40, 1024, 256, 64, "mixed", True),  # 4 chunks/token, odd S
-        (128, 32, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+        (128, 32, 4096, 1280, 640, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
     ],
 )
 def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id, split):

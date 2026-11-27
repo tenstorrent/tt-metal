@@ -14,20 +14,11 @@ namespace ckernel::sfpu
 /**
  * @brief Configure the advancing output store for supplied-index packing.
  * @note Call after shared SFPU initialization and operand copy initialization, before
- *       @ref _topk_xl_pack_supplied_indices_. Programs ADDR_MOD_0; leaves the TopK
- *       bitonic address modifiers intact. Reinitialize datacopy before the next copy.
+ *       @ref _topk_xl_pack_supplied_indices_. The store advances through the ADDR_MOD_6
+ *       dest += 2 invariant that hw_configure establishes.
  */
 inline void _topk_xl_pack_supplied_indices_init_()
 {
-    // Keep ADDR_MOD_6's +32 stride live for the subsequent TopK sort/rebuild.
-    // Using it for +2 here would require restoring it in addition to the MOP.
-    // ADDR_MOD_0 is unused by those bitonic kernels; datacopy is reinitialized separately.
-    addr_mod_t {
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 2},
-    }
-        .set(ADDR_MOD_0);
 }
 
 /**
@@ -71,14 +62,14 @@ inline void _topk_xl_pack_supplied_indices_(const std::uint32_t scores, const st
             packed = padding;
         }
         v_endif;
-        sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = packed;
+        sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_6) = packed;
     }
     if constexpr (K == 512)
     {
 #pragma GCC unroll 8
         for (std::uint32_t i = 0; i < half_slots; ++i)
         {
-            sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_0) = padding;
+            sfpi::dst_reg[output_offset].mode<sfpi::DataLayout::I32>(ADDR_MOD_6) = padding;
         }
     }
 }

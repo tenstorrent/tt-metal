@@ -100,7 +100,7 @@ inline void _llk_math_compressed_custom_mm_(
             std::uint32_t fmt = meta & 0x3;
             if (fmt != 0)
             {
-                lltt::replay(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN);
+                TTI_REPLAY(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN, 0, 0);
                 TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_2, 0);
             }
             else
@@ -122,7 +122,7 @@ inline void _llk_math_compressed_custom_mm_(
         std::uint32_t fmt = meta & 0x3;
         if (fmt != 0)
         {
-            lltt::replay(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN);
+            TTI_REPLAY(ckernel::math::replay_buf_offset, COMPRESSED_CUSTOM_MM_REPLAY_LEN, 0, 0);
             TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_3, 0);
         }
         else

@@ -499,8 +499,8 @@ ttnn.Tensor.__add__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwar
 ttnn.Tensor.__radd__ = lambda self, *args, **kwargs: ttnn.add(self, *args, **kwargs)
 ttnn.Tensor.__sub__ = lambda self, *args, **kwargs: ttnn.subtract(self, *args, **kwargs)
 # Routed through subtract's scalar-first overload rather than ttnn.rsub: same op, one device
-# path shared with subtract(scalar, tensor), and RSUB additionally has no SFPU kernel on Quasar
-# and rejects a non-bfloat16 output under fast_and_approximate_mode=false.
+# path shared with subtract(scalar, tensor), and RSUB additionally rejects a non-bfloat16 output
+# under fast_and_approximate_mode=false.
 ttnn.Tensor.__rsub__ = lambda self, other, *args, **kwargs: ttnn.subtract(other, self, *args, **kwargs)
 ttnn.Tensor.__mul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
 ttnn.Tensor.__rmul__ = lambda self, *args, **kwargs: ttnn.multiply(self, *args, **kwargs)
@@ -633,6 +633,12 @@ from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_
 
 experimental.SparseKvPushPart = SparseKvPushPart
 experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
+
+# A generic op compiled outside the program cache (compile_generic_op), and the kernel config buffer it can run from
+from ttnn._ttnn.operations.experimental import CompiledProgram, KernelConfigBuffer
+
+experimental.CompiledProgram = CompiledProgram
+experimental.KernelConfigBuffer = KernelConfigBuffer
 
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe

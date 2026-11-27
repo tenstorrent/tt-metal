@@ -5,7 +5,7 @@
 #include "routed_expert_ffn.hpp"
 #include "routed_expert_ffn_common.hpp"
 
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/narrow/narrow.hpp"

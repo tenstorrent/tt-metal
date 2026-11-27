@@ -78,23 +78,32 @@ class MLAPrefillAdapter(PrefillModelAdapter):
         cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
         return unwrap_multimodal_config(cfg)
 
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint missing weight-cache pieces are built from: PREFILL_HF_MODEL > ``env_var`` > the default."""
+        return os.environ.get("PREFILL_HF_MODEL") or os.environ.get(self.env_var, "") or self.hf_model_default
+
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
     def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """Mirror the pytest weight_cache_path layout so the runner reads the same
         files the cache-populate run wrote:
-          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {rows}x{cols}[_sp1]
-        ``mesh_shape`` is (axis 0, axis 1); see ``mesh_cache_key`` for the SP-axis suffix.
+          $PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / weight_cache_key(mesh_shape, sp_axis)
         Defaults to ``ttnn_cache_default``; None only if explicitly empty."""
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
-        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / mesh_cache_key(mesh_shape, sp_axis)
+        path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / self.weight_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def weight_cache_key(self, mesh_shape: tuple, sp_axis: int) -> Path:
+        """The cache's path below the model directory: ``{rows}x{cols}[_sp1]`` (``mesh_cache_key``; ``mesh_shape``
+        is (axis 0, axis 1)). A model whose cache producer keys it otherwise overrides this."""
+        return Path(mesh_cache_key(mesh_shape, sp_axis))
 
     # ------------------------------------------------------------------
     # KV cache + runtime build
@@ -188,9 +197,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             overlap_shared_expert_with_dispatch=params.overlap_shared_expert_with_dispatch,
             tp_shard_kv=True if self._dense_tp_shard_kv(params) else None,
             build_missing_cache=self.builds_missing_weight_cache,
-            hf_model_path=os.environ.get("PREFILL_HF_MODEL")
-            or os.environ.get(self.env_var, "")
-            or self.hf_model_default,
+            hf_model_path=self.hf_model_path,
         )
         return TtPrefillRuntime(
             mesh_device=mesh_device,

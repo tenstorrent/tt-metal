@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
 from typing import List
 
 import pytest
@@ -21,6 +22,7 @@ from helpers.golden_generators import (
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DestAccumulation,
+    DestSync,
     PackerReluType,
     PerfRunType,
 )
@@ -54,6 +56,7 @@ from helpers.test_variant_parameters import (
     RELU_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TemplateParameter,
     generate_input_dim,
 )
 from helpers.tile_constants import (
@@ -216,6 +219,19 @@ PACK_DEST_DEPTH_COMBINATIONS = [
 ]
 
 
+# 16-bit DEST rows per section; 32-bit DEST holds half as many.
+DEST_ROWS_SYNC_HALF = 512
+DEST_ROWS_SYNC_FULL = 1024
+# A face shorter than this still takes this many DEST rows.
+MIN_DEST_ROWS_PER_FACE = 8
+
+
+@dataclass
+class PackBlockTest(TemplateParameter):
+    def convert_to_cpp(self):
+        return "#define TEST_PACK_BLOCK 1"
+
+
 @pytest.mark.quasar
 @parametrize(
     **flat_axes(PACK_FLAT_NAMES, ALL_PACK_COMBINATIONS),
@@ -235,6 +251,7 @@ def test_pack_quasar(
     *,
     is_perf=False,
     perf_report=None,
+    pack_block_tiles=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
@@ -256,7 +273,9 @@ def test_pack_quasar(
         tile_dimensions,
         BlocksCalculationAlgorithm.Standard,
     )
-
+    if pack_block_tiles is not None:
+        # One block per DEST section, so block packs reach the section capacity.
+        num_blocks, tiles_in_block = tile_cnt_A // pack_block_tiles, pack_block_tiles
     # Same method as test_pack.py for original ReLu testing and threshold tolerance issue
     unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     data_formats = infer_data_formats(
@@ -336,6 +355,7 @@ def test_pack_quasar(
         "templates": [
             DEST_SYNC(dest_sync),
             RELU_TYPE(relu_type),
+            *([PackBlockTest()] if pack_block_tiles is not None else []),
         ],
         "runtimes": [
             TEST_FACE_DIMS(tile_shape.face_r_dim),
@@ -431,6 +451,35 @@ def test_pack_quasar(
     assert test_passed, "Assert against golden failed"
 
 
+def generate_pack_block_combinations():
+    """Valid (output format, dest_acc, dest_sync, tile dims) combinations for test_pack_block_quasar."""
+    combinations = []
+    for output_format in (DataFormat.Float16_b, DataFormat.Float32, DataFormat.MxFp8R):
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
+            # Float32 output requires 32-bit DEST.
+            if output_format.is_32_bit() and dest_acc == DestAccumulation.No:
+                continue
+            for dest_sync in (DestSync.Half, DestSync.Full):
+                for tile_dimensions in SUPPORTED_TILE_SIZES:
+                    if is_mx_unsupported_tile_dims(
+                        DataFormat.Float16_b, output_format, tile_dimensions
+                    ):
+                        continue
+                    combinations.append(
+                        (output_format, dest_acc, dest_sync, runtime(tile_dimensions))
+                    )
+    return combinations
+
+
+# Column names of the tuples ``generate_pack_block_combinations`` returns.
+PACK_BLOCK_FLAT_NAMES = (
+    "output_format",
+    "dest_acc",
+    "dest_sync",
+    "tile_dimensions",
+)
+
+
 @pytest.mark.quasar
 @parametrize(**flat_axes(PACK_FLAT_NAMES, PACK_DEST_DEPTH_COMBINATIONS))
 def test_pack_dest_depth_quasar(
@@ -445,4 +494,35 @@ def test_pack_dest_depth_quasar(
         tile_dimensions,
         [PerfRunType.L1_TO_L1],
         1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    **flat_axes(PACK_BLOCK_FLAT_NAMES, generate_pack_block_combinations()),
+    loop_factor=[1],
+)
+def test_pack_block_quasar(
+    output_format, dest_acc, dest_sync, tile_dimensions, loop_factor
+):
+    # Two DEST sections exercise back-to-back blocks without reinitialization.
+    shape = construct_tile_shape(tile_dimensions)
+    dest_rows = (
+        DEST_ROWS_SYNC_HALF if dest_sync == DestSync.Half else DEST_ROWS_SYNC_FULL
+    ) >> (dest_acc == DestAccumulation.Yes)
+    rows_per_tile = shape.total_num_faces() * max(
+        MIN_DEST_ROWS_PER_FACE, shape.face_r_dim
+    )
+    tiles_per_section = dest_rows // rows_per_tile
+    tile_count = 2 * tiles_per_section
+    test_pack_quasar(
+        InputOutputFormat(DataFormat.Float16_b, output_format),
+        dest_acc,
+        dest_sync,
+        [tile_count * tile_dimensions[0], tile_dimensions[1]],
+        PackerReluType.NoRelu,
+        tile_dimensions,
+        run_types=[PerfRunType.L1_TO_L1],
+        loop_factor=loop_factor,
+        pack_block_tiles=tiles_per_section,
     )

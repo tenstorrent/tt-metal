@@ -37,7 +37,7 @@ SKIP_FILES = {
 BANNED_HEADERS = {
     "tt_stl/reflection.hpp": "reflection.hpp pulls in <reflect> and <nlohmann/json.hpp>; use forward declarations or move usage to .cpp files",
     "tt_stl/concepts.hpp": "concepts.hpp pulls in <reflect>; use sizeof(T)==0 for always_false_v, or move usage to .cpp files",
-    "tt-metalium/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include only the specific headers you actually need",
+    "tt-metalium/workload/legacy/host_api.hpp": "host_api.hpp declares the free-function API (CreateKernel, CreateBuffer, ...) and pulls in program, buffer, device and kernel headers; include only the specific headers you actually need",
 }
 
 # Exhaustive set of UMD headers allowed in the public API.
@@ -208,7 +208,8 @@ HEADER_SUFFIXES = {".h", ".hpp", ".hh", ".hxx"}
 ALLOWED_DEPENDENCIES = {
     "stable": {"stable"},
     "experimental": {"stable", "experimental"},
-    "internal": {"stable", "experimental", "internal"},
+    "legacy": {"stable", "legacy"},
+    "internal": {"stable", "experimental", "internal", "legacy"},
 }
 # Preserve ordinary string/character literals so comment markers in them are not
 # interpreted as comments. Recognize raw-string openers here, but find their
@@ -304,6 +305,8 @@ def tier(path: str) -> str | None:
         return None  # Internal headers belong in api/internal/.
     if path.startswith("tt-metalium/experimental/"):
         return "experimental"
+    if path.startswith("tt-metalium/") and "/legacy/" in path and not path.startswith("tt-metalium/experimental/"):
+        return "legacy"
     if path.startswith("tt-metalium/"):
         return "stable"
     if path.startswith("internal/"):
@@ -490,7 +493,9 @@ def validate(
         is_header = source_file.suffix in HEADER_SUFFIXES
         source = source_file.relative_to(api_root).as_posix()
         source_tier = tier(source) if is_header else None
-        lines = source_lines(source_file.read_text(encoding="utf-8"))
+        raw_text = source_file.read_text(encoding="utf-8")
+        lines = source_lines(raw_text)
+        forwarding_header = "DEPRECATED-FORWARDING-HEADER" in raw_text
         if is_header:
             header_count += 1
             if source_tier is None:
@@ -515,7 +520,7 @@ def validate(
                     error
                     for error in (
                         include.check_for_errors(prefix_counts),
-                        include.check_for_banned_header(),
+                        None if forwarding_header else include.check_for_banned_header(),
                         include.check_for_umd_header(),
                     )
                     if error is not None

@@ -10,8 +10,8 @@
 
 #include <gtest/gtest.h>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <vector>
 
 namespace {

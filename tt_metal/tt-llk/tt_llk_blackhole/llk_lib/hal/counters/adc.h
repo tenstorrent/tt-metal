@@ -179,20 +179,41 @@ enum class Dimension : std::uint32_t
     W = 3  ///< W counter.
 };
 
-/** @brief Four counter slots in either the X/Y or Z/W instruction group. */
+/** @brief Four counter slots in either the X/Y or Z/W instruction group, held as scalars. */
 class Group
 {
 public:
-    Value fields[4]; ///< Channel 0 first/second dimension, followed by channel 1 first/second dimension.
+    std::uint32_t values[4] {}; ///< Slot values; omitted slots hold zero.
+    std::uint8_t selected = 0;  ///< Bit i selects slot i; explicitly supplied zeroes remain selected.
+
+    constexpr Group() = default;
+
+    /** @brief Read four descriptor fields: channel 0 first/second dimension, then channel 1. */
+    constexpr __attribute__((always_inline)) Group(const Value& a, const Value& b, const Value& c, const Value& d) :
+        values {a.selected ? a.value : 0, b.selected ? b.value : 0, c.selected ? c.value : 0, d.selected ? d.value : 0},
+        selected(static_cast<std::uint8_t>(a.selected | (b.selected << 1) | (c.selected << 2) | (d.selected << 3)))
+    {
+    }
 
     /**
      * @brief Encode field presence independently of the supplied values.
      *
-     * @return A four-bit mask whose bit i selects fields[i]; explicitly supplied zeroes remain selected.
+     * @return A four-bit mask whose bit i selects slot i; explicitly supplied zeroes remain selected.
      */
     inline __attribute__((always_inline)) constexpr std::uint8_t mask() const
     {
-        return fields[0].selected | (fields[1].selected << 1) | (fields[2].selected << 2) | (fields[3].selected << 3);
+        return selected;
+    }
+
+    /**
+     * @brief Test whether a slot participates in the update.
+     *
+     * @param index: Slot index in [0, 3].
+     * @return True if the slot was supplied, including an explicit zero.
+     */
+    inline __attribute__((always_inline)) constexpr bool is_selected(const std::size_t index) const
+    {
+        return (selected >> index) & 1;
     }
 
     /**
@@ -203,7 +224,19 @@ public:
      */
     inline __attribute__((always_inline)) constexpr std::uint32_t value(const std::size_t index) const
     {
-        return fields[index].selected ? fields[index].value : 0;
+        return values[index];
+    }
+
+    /**
+     * @brief Select a slot and store its value.
+     *
+     * @param index: Slot index in [0, 3].
+     * @param slot_value: Value to store in the slot.
+     */
+    inline __attribute__((always_inline)) constexpr void select(const std::size_t index, const std::uint32_t slot_value)
+    {
+        values[index] = slot_value;
+        selected |= static_cast<std::uint8_t>(1u << index);
     }
 };
 
@@ -350,7 +383,7 @@ inline __attribute__((always_inline)) constexpr std::uint32_t set_group(const st
     {
         for (std::size_t i = 0; i < 4; ++i)
         {
-            if (group.fields[i].selected)
+            if (group.is_selected(i))
             {
                 return single(clients, zw, i, group.value(i));
             }
@@ -394,11 +427,11 @@ constexpr Sequence constant_sets(const std::uint8_t clients, const bool zw, cons
     Group small {};
     for (std::size_t i = 0; i < 4; ++i)
     {
-        if (group.fields[i].selected)
+        if (group.is_selected(i))
         {
             if (group.value(i) <= PackedCounterValueMax)
             {
-                small.fields[i] = group.fields[i];
+                small.select(i, group.value(i));
             }
             else
             {
@@ -444,7 +477,14 @@ constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const A
         {
             Sequence with_xx;
             with_xx.append(xx(clients, group));
-            const Group ys {{Value {}, group.fields[1], Value {}, group.fields[3]}};
+            Group ys {};
+            for (const std::size_t i : {1u, 3u})
+            {
+                if (group.is_selected(i))
+                {
+                    ys.select(i, group.value(i));
+                }
+            }
             with_xx.append(constant_sets(clients, false /*zw*/, ys));
             // Prefer the dedicated dual-X instruction whenever it needs no additional instructions.
             if (with_xx.count <= result.count)
@@ -472,8 +512,8 @@ constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const A
 constexpr Sequence plan(const AddrCounter& descriptor)
 {
     hal::detail::require(is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
-    const Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
-    const Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
+    const Group xy {descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y};
+    const Group zw {descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w};
     auto result = plan_group(descriptor.clients, false /*zw*/, descriptor.action, xy);
     result.append(plan_group(descriptor.clients, true /*zw*/, descriptor.action, zw));
     return result;
@@ -559,8 +599,8 @@ inline __attribute__((always_inline)) void set()
 inline __attribute__((always_inline)) void set(const AddrCounter descriptor)
 {
     hal::detail::require(detail::is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
-    const detail::Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
-    const detail::Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
+    const detail::Group xy {descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y};
+    const detail::Group zw {descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w};
     detail::emit_runtime<false /*ZW*/>(descriptor.clients, descriptor.action, xy);
     detail::emit_runtime<true /*ZW*/>(descriptor.clients, descriptor.action, zw);
 }
