@@ -17,9 +17,7 @@ from tt_py_test_utils_common.utility_functions import is_quasar
 # once per test.
 pytestmark = pytest.mark.use_module_device
 
-_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(
-    is_quasar(), reason="Quasar does not support block-float formats (bfloat8_b, bfloat4_b)"
-)
+_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(is_quasar(), reason="Quasar has no Bfp8_b/Bfp4_b formats")
 
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 _LAYOUT_IDS = ["TILE", "RM"]
@@ -1111,7 +1109,7 @@ def test_quasar_untilize_with_unpadding_rejects_rank_mismatch(device, shape, out
         ttnn.experimental.quasar.untilize_with_unpadding(ttnn_in, output_end)
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, pytest.param(ttnn.bfloat8_b, marks=_SKIP_BLOCK_FLOAT_ON_QUASAR)])
 def test_quasar_untilize_l1_output_reserved_in_budget(device, dtype):
     tile_dim, out_tile_bytes = 32, 2048  # untilize emits bfloat16 for both input dtypes
     in_tile_bytes = 2048 if dtype == ttnn.bfloat16 else 1088

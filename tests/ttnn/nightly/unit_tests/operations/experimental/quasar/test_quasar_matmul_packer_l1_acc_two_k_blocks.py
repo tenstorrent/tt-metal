@@ -5,27 +5,24 @@
 """#58177 in the Quasar copy of the 2D, 1D in1-multicast and Reuse factories: with packer_l1_acc requested, two K
 blocks must keep partial sums in the accumulation format like more blocks do, instead of rounding them through the
 block-float output format. The same matmul split into two and into four K blocks must be equally accurate.
-Quasar has no block-float formats."""
+Every case uses bfloat4_b, which Quasar does not have. The module is skipped."""
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_quasar
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
 # once per test.
-pytestmark = pytest.mark.use_module_device
+pytestmark = [
+    pytest.mark.use_module_device,
+    pytest.mark.skipif(is_quasar(), reason="Quasar has no Bfp4_b format (bfloat4_b)"),
+]
 
 qsr = ttnn._ttnn.operations.experimental.quasar
-
-
-@pytest.fixture(autouse=True)
-def _block_float_arch(device):
-    if device.arch() == ttnn.device.Arch.QUASAR:
-        pytest.skip("Quasar does not support block-float formats")
 
 
 def _two_vs_four_k_blocks_config(family, in0_block_w):

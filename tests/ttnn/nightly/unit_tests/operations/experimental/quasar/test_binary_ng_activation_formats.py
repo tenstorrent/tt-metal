@@ -4,8 +4,8 @@
 
 """Format-state regressions for the experimental Quasar API.
 
-Every case runs on Quasar and on WH/BH, except the cases that use a block-float
-format (bfloat8_b, bfloat4_b). Quasar has no block-float formats. See
+Every case runs on Quasar and on WH/BH, except the cases that use bfloat8_b or bfloat4_b.
+Quasar has no Bfp formats. Its block formats are the MX ones covered by test_binary_ng_mx.py. See
 QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
 cases that the native gate admits run on the Quasar-native factory, unless
 TTNN_QSR_NATIVE=0: the no-broadcast tensor-tensor cases, and the bf16 ROW, COL,
@@ -42,9 +42,7 @@ _SHAPES = [
 ]
 
 _BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
-_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(
-    is_quasar(), reason="Quasar does not support block-float formats (bfloat8_b, bfloat4_b)"
-)
+_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(is_quasar(), reason="Quasar has no Bfp8_b/Bfp4_b formats")
 
 _SHARED_DFB_CASES = [(ttnn.bfloat16, ttnn.bfloat16, shapes) for shapes in _SHAPES] + [
     (dtype, dtype, (_FULL, _FULL)) for dtype in (ttnn.float32, ttnn.bfloat8_b)
@@ -72,7 +70,7 @@ def _activations(side):
         pytest.param(
             *case,
             id=f"shared_dfb-{i}",
-            marks=_SKIP_BLOCK_FLOAT_ON_QUASAR if case[0] in _BLOCK_FLOAT_DTYPES else [],
+            marks=_SKIP_BLOCK_FLOAT_ON_QUASAR if any(d in _BLOCK_FLOAT_DTYPES for d in case[:2]) else [],
         )
         for i, case in enumerate(_SHARED_DFB_CASES)
     ],
