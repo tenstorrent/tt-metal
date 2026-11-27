@@ -198,10 +198,12 @@ class DsaScorer:
         if not inside.numel():
             return
         local = inside - lo
-        normed = normed_input(rows[names.input], self.w, self.dims)  # (the chunk's, as its device input)
+        # the scored rows' normed input only: its ops are per row (one row reduction, elementwise IEEE ops), so each
+        # row equals the chunk's device input before rounding bit for bit, at ~1/60 of the chunk's cost
+        normed = normed_input(rows[names.input][local], self.w, self.dims)
         arms, ref = score_rows(
             inside,
-            normed[local],
+            normed,
             out[local],
             got[local],
             want[local],

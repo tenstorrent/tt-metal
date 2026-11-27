@@ -43,11 +43,11 @@ def missed_keys(hits: torch.Tensor, want: torch.Tensor, scores: torch.Tensor) ->
     rank.scatter_(1, masked.argsort(dim=1, descending=True), torch.arange(want.shape[1]).expand_as(want).contiguous())
     top = masked.max(dim=1, keepdim=True).values
     cut = scores.masked_fill(~valid, float("inf")).min(dim=1, keepdim=True).values
-    share = (scores - cut) / (top - cut).clamp_min(1e-30)
-    row = torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)
+    row = torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)[missed]
+    share = (scores[missed] - cut[row, 0]) / (top - cut).clamp_min(1e-30)[row, 0]  # (elementwise: on the misses only)
     return {
-        "row": row[missed],
+        "row": row,
         "rank": rank[missed],
         "selected": valid.sum(dim=1, keepdim=True).expand_as(want)[missed],
-        "spread_share": share[missed].float(),
+        "spread_share": share.float(),
     }
