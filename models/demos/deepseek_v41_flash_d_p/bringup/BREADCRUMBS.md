@@ -1680,3 +1680,46 @@
 - Per-chunk values touched (rule 20): none (no code path changed).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.1 --spec $BRINGUP_SPEC --check`; numbers alone:
   `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_roofline`.
+
+## WA.2 perf (attempt 1): wo_a bank-local reads, op-level probe on the mesh (no model load)
+
+- Loads: none ("needs no model: an op probe on the resident runner's held mesh, random fixed-seed tensors of wo_a's
+  real shapes and dtypes").
+- Step 0 first (OV-76; WOA_BANK_DESIGN.md section 7), today's grouped_matmul with diagnostic stubs (the op's new
+  `diag=` argument, compile-time defines GMM_DIAG_NO_W / _NO_X / _NO_COMPUTE, diagnostic only), rt profiler, slowest
+  chip, 20 calls: 256 rows (bw 2 d 2): today 151.65 us, no weight reads 107.33 (0.708x), no compute 149.46 (0.986x),
+  no x 118.15 (0.779x); 160 rows (bw 4 d 4): today 131.58, no_w 71.38 (0.542x), no_compute 130.00, no_x 119.07.
+  -> reader-bound at both row counts (no-compute ~ today); not killed by step 0 (0.708 < 0.9). Today's chip spread:
+  142.7-151.7 us (256), 117.7-131.6 us (160).
+- Expected saving per chunk before building (device): the weight stream can at best hide behind the compute + x
+  stream (no_w 107 / 71 us), realistic bank path ~120 / ~95 us a call: ~30 / ~35 us a call x 21 wo_a calls = ~0.6 ms
+  a 8192 chunk, ~0.75 ms a 5120 chunk. Host: 0 (one prepared program a call either way, same patch count).
+- Built (ttnn.bringup.grouped_matmul option `w_layout`, default None = today's path untouched; grouped_matmul_ttnn/
+  bank.py + kernels/gmm_bank_reader.cpp; CHANGELOG / README / INDEX): bank b = group b, each core's columns K-major in
+  its bank (one contiguous read a K block), WIDTH_SHARDED DRAM via the experts' bank_host_tensor; cores a
+  cores_per_bank / 2 x 2 "band" (or a "row") on the anchor's side; reader: bank-local reads (`w_inflight`, trids),
+  today's READY / VALID x multicast with bounded waits, non-blocking `x_ahead`. Compute and writer kernels: today's.
+- Gotchas (each measured): sender at the bank's anchor (inside the rectangle) -> NoC-0 multicast wraps round the chip,
+  342 us at 256 rows; sender at the rectangle's first core -> 155 (DS41-393). A read-ahead blocking on a slot at depth
+  2 stalls the multicast on the sender's compute (no_w 106 -> 152 us) -> non-blocking x_ahead. from_torch straight to
+  the sharded config quantizes bfp8 differently (0.0625 off) -> bank.upload converts plain, then .to(mesh, mc)
+  (DS41-392; bank_sharded of the flat experts takes the sharded route, unchecked for bfp4). Hashing the 80-slot layout
+  in the program-cache key every call cost ~30 us host -> cached digest. Host-side bfp8 from_torch opens the cluster
+  (UMD, chip locks): never run it in a plain python on this box (my one try waited on the runner's lock and timed out).
+  A kernel source change restarts the resident runner's process (one device open each: 8 this step).
+- Sweep: per-chip programs in one MeshProgramDescriptor (32 knob sets a launch, ~4.5 s a layout, 0 device opens), each
+  chip vs today at the same block_w on that chip, us normalised by that chip's own today. 870 configs, 0 inexact.
+- Result (last gate check, PASS incl. determinism): 256 rows 151.32 -> 125.01 us (band 10, bw 2 d 4 wi 1 xa 1), 0.552
+  ms a 8192 chunk at 21 calls; 160 rows 131.50 -> 106.89 us (band 10, bw 4 d 4 wi 2 xa 1), 0.517 ms a 5120 chunk.
+  Owner's KILL line (half WA.1's bound: 0.595 / 0.50 ms): **KILL at 8192** (3.8 us a call short of 121.2), 5120
+  passes; exact everywhere. Host a call: bank ~124-134 us vs today ~100 (+24-34 us, untrimmed: WA.3 would have to).
+  Table and verdict: ledgers/galaxy_8x4-full/results/WA.2_probe.md.
+- No model code changed (the brief: no model changes in this task), so no WOA_BANK Setting yet: the switch is the
+  fork option (w_layout None = today). `orchestrator measure --task WA.2` not run: no model switch to A/B, the gate's
+  probe is the measurement. Fork regression of the existing cases not run (brief: none on the 8x4); today's kernels
+  only gained #ifdef'd diagnostic blocks and today's call measured unchanged (151.2-151.8 / 131.4-131.8 us).
+- Per-chunk values (rule 20): none touched in the model. In the op, x / w / y addresses are prepared-program patches
+  (same count as today); every knob is a compile-time constant of a program built once a layout.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate WA.2 --spec $BRINGUP_SPEC --check`; fork tests
+  alone: resident submit of `scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_fork_bank.py`.

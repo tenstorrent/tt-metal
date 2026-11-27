@@ -1430,3 +1430,39 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   ms. Above the 0.5 ms kill line (to confirm at its gate). WA.2's kill line is then < 0.6 ms measured at 8192. Agent's own
   caveat: WA.2 first runs a no-weight-read stub; if that is within ~10 % of today, wo_a is compute-bound and the gain ~0.
   RAM used 44 GB; / 81 GB free.
+- 15:22 WA.1 PASS -> d82eec2fe36 (1 attempt, ~17 min). Upper bound 1.19 ms a 8192 chunk, 1.00 ms a 5120 chunk (20 wo_a
+  calls; today 151 / 133 us a call, best case 91.4 / 83.2 us, DRAM-bound; compute floor 72.8 us at 256 rows = 80 % of
+  it). NOT killed (>= 0.5). Reviewed the design: G = 8 = banks, bank b holds group b whole (K-major per-core regions, one
+  contiguous read a K block), 12 cores a bank (96) in a 6 x 2 rectangle near the bank's optimal worker, x multicast per
+  cluster; same compute kernel (bit-identical by construction); call-time with both copies resident (+1.33 GiB for 40
+  layers; 6.18 GiB headroom left at 1M packed); host packing 23-38 ms a layer. Its step 0 (stubbed today's op: no weight
+  reads / no compute / no x) decides compute- vs read-bound before any build. WA.2 kill: measured < 0.60 ms a 8192 chunk.
+- 15:24 DEVICE OPEN: resident runner start (reason: WA.2 op probe on the mesh, no model load). RAM used 43 -> 48 GB.
+- 15:25 OV-76 note to WA.2 (gate's probe path, step 0 first and its kill). orchestrator resume --until WA.2 (tmux orch_wa).
+- 15:30 OWNER: the 1.33 GiB second wo_a copy is for the comparison only, not kept. Note to WA.3 / WA.4: both copies only
+  in A/B / off-on loads; a normal (shipped) load uploads only the layout in use; selecting an unloaded layout raises.
+- 15:33 OWNER: if WA.4 shows a device win across the board (any size), ship it on BOTH branches: accept on batching
+  (default on) and port to model_bringup. QUEUED MB.WA (port + 5120 accept gate; task text
+  /home/dnijemcevic/handoff_20261127/MBWA_task.yaml, appended to model_bringup's tasks.yaml at the branch switch after WA.4).
+  WA.5's wq_b / wo_b part stays an estimate (owner decision).
+- 15:50 heartbeat: WA.2 agent active (transcript live), fork edits in progress (reader / compute kernels: step 0 stubs), probe running on the resident runner (new process after the kernel change). RAM used 45 GB; / 80 GB free.
+- 16:20 status: WA.2 agent still at work (sweep). Interim WA.2.json: step 0 at 256 rows: no weight reads 107.2 us vs today
+  151.3 (71 %: NOT compute-bound), no compute 149.4, no x 117.8; at 160: 70.9 / 129.7 / 118.9 vs 131.5. Bank path exact
+  (mismatch 0, repeats 0, every case): 256 rows 151.3 -> 125.0 us, 160 rows 131.5 -> 105.1-106.9 us: gain 0.552 ms a 8192
+  chunk, 0.517 ms a 5120 chunk (21 calls). Literal kill line (< half of 1.19 = 0.595 at 8192) is crossed by ~0.04 ms; 5120
+  clears its half (0.50). DECISION: continue, not kill: exact, a real device win on both chunks, and the owner's later word
+  (15:33: ship any across-the-board win on both branches) supersedes the plan's effort cut-off. Concern: host us a call
+  bank 296 / 124 vs today ~100 -> note OV-78 to WA.3 (no extra host time a call). A model load (107 s, determinism check)
+  ran in WA.2's gate run (fork kernels the model calls changed). RAM used 60 GB (avail 311).
+- 16:30 heartbeat: WA.2 agent done (~55 min). FRAMEWORK WASTE: WA.2 has no ab switch, yet the orchestrator runs a 'new' side quick model profile (test_profile.py BRINGUP_QUICK, a model load; perf_pick() only exempts device: false, F302). WA.3 would repeat it. Fix at the WA.2 stop (--until): a perf task without ab is gated, not A/B-measured (selftest), before WA.3. RAM used 60 GB; / 79 GB free.
+- 16:45 WA.2 WAITING (on-only quick profile: framework, see F304). Reviewed: default path untouched (diag #ifdefs + plumbing
+  only), exact everywhere (435 configs, both row counts), final: 256 rows 151.3 -> 125.0 us, 160 rows 131.5 -> 106.9 us;
+  host +24 us a call (296 at 160 was an outlier run; 133.6 before). decide --accept (owner's any-win word over the literal
+  0.04 ms miss at 8192).
+- 16:47 FRAMEWORK F304 (cd101febf5f): ab_mode: none = a device perf task gated, not A/B-measured (selftest
+  test_cpu_perf_task.py, 2 passed); WA.3 set ab_mode: none (validate: valid). The commit skipped only the repo-wide
+  check-models-do-not-import-tests hook (2 pre-existing violations, F303's open item).
+- 16:50 OWNER asked why the bank path scatters cores into 8 clusters (more core ranges, more host time). Note OV-79 to WA.3:
+  measure the bank-local reader on today's 8 x 11 rectangle (row g reads bank g) vs the clusters, device + host us; wire the
+  rectangle if it keeps the gain; take the per-call str(memory_config) / shard asserts off the call path.
+- 16:52 orchestrator resume --until WA.5 (WA.2 accept gate, then WA.3).

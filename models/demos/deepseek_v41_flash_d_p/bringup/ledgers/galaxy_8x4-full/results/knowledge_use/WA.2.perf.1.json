@@ -1,0 +1,110 @@
+{
+ "used": [
+  {
+   "id": "DS41-391",
+   "how": "today's interleaved wo_a tile (g, k, n) in bank n % 8: the reason for the bank layout and the step-0 stubs that confirmed reader-bound",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-320",
+   "how": "kept today's compute kernel and the PNX-padded CB slot layout so 2- / 3- / 4-column cores stay bit-identical; checked on every swept config",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-319",
+   "how": "weight reads issued a few blocks ahead under transaction ids (w_inflight 1-4), not all at once; sweep picked 1-2",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-390",
+   "how": "exactness judged vs today's op at the same block_w (the K order); headline keeps today's block_w; flagged that random-input identity needs WA.3's real-chunk check",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-249",
+   "how": "bank-local weight stream expected near the DRAM rate: the bank path's no-x stub ran 92.7 us (weights + compute) at both row counts",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-191",
+   "how": "160-row bfp8 projections weight-read bound: the case for DRAM-local weights over program configs",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-306",
+   "how": "stock DRAM-sharded matmul refused wo_a: extended the fork instead (grouped_matmul w_layout)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-388",
+   "how": "host us a call from 20 warm calls is noisy (one 296 us outlier at 160 rows): reported it as such, the earlier run alongside",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-175",
+   "how": "kept the sweep on the mesh (per-chip programs in one MeshProgramDescriptor) instead of single-card processes",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "host-side bfloat8_b from_torch (no device) opens the UMD cluster and takes chip locks: not CPU-only on a Galaxy",
+  "a kernel source change restarts the resident runner's device process (one device open each)",
+  "the resident submit takes node ids but not -k filters (batch.parse_all)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: bank.plan refuses an uneven unit split (refusal test G=3); every bank the same size, every tile once (test_bank_pack_cpu)"
+  },
+  {
+   "id": "OV-76",
+   "answer": "done",
+   "evidence": "probe at tests/woa/test_woa_probe.py (gate path); step 0 run first (no_w 0.707x at 256 rows < 0.9: not killed), woa_stub_us_* recorded; bank path built after; results/WA.2_probe.md verdict at top"
+  }
+ ],
+ "cited_only": [
+  "DS41-392",
+  "DS41-393"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "WA.2",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T16:20:16",
+  "head": "d82eec2fe36",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.2_probe.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/WA.2.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_fork_bank.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/bank.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/grouped_matmul.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_bank_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul_bank.py"
+  ]
+ }
+}

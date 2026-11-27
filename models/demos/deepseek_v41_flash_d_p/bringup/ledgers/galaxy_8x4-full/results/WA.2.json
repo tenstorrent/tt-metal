@@ -1,0 +1,290 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-27T16:17:12",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-27T16:17:12",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-27T16:17:12",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-27T16:17:12",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-27T16:17:12",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-27T16:17:12",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-27T16:17:12",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-27T16:17:12",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-27T16:17:12",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-27T16:17:12",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-27T16:17:12",
+   "value": 91.0
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-27T16:17:12",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-27T16:18:16",
+   "value": 1
+  },
+  "model_loads": {
+   "by": "WA.2#test_determinism.0",
+   "ns": 1795796140553087458,
+   "pid": 1420948,
+   "t": "2026-11-27T16:15:40",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-27T16:15:40",
+   "value": 0
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-27T16:17:14",
+   "value": 108.63
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-27T16:17:14",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-27T16:17:14",
+   "value": 107.19
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-27T16:17:14",
+   "value": 108.79
+  },
+  "woa_gain_ms_c5120": {
+   "calls": 21,
+   "t": "2026-11-27T16:18:11",
+   "value": 0.517
+  },
+  "woa_gain_ms_c8192": {
+   "calls": 21,
+   "t": "2026-11-27T16:17:45",
+   "value": 0.552
+  },
+  "woa_host_us_bank_160": {
+   "t": "2026-11-27T16:18:11",
+   "value": 296.0
+  },
+  "woa_host_us_bank_256": {
+   "t": "2026-11-27T16:17:45",
+   "value": 124.2
+  },
+  "woa_host_us_today_160": {
+   "t": "2026-11-27T16:18:10",
+   "value": 99.6
+  },
+  "woa_host_us_today_256": {
+   "t": "2026-11-27T16:17:45",
+   "value": 100.2
+  },
+  "woa_mismatch_r160_best": {
+   "knobs": [
+    "band10",
+    4,
+    4,
+    2,
+    1
+   ],
+   "t": "2026-11-27T16:18:10",
+   "value": 0.0
+  },
+  "woa_mismatch_r160_best_any_bw": {
+   "knobs": [
+    "band10",
+    2,
+    3,
+    2,
+    1
+   ],
+   "t": "2026-11-27T16:18:10",
+   "value": 0.0
+  },
+  "woa_mismatch_r160_default": {
+   "cores": 96,
+   "t": "2026-11-27T16:17:46",
+   "value": 0.0
+  },
+  "woa_mismatch_r160_sweep": {
+   "configs": 435,
+   "inexact": 0,
+   "t": "2026-11-27T16:18:08",
+   "value": 0.0
+  },
+  "woa_mismatch_r256_best": {
+   "knobs": [
+    "band10",
+    2,
+    4,
+    1,
+    1
+   ],
+   "t": "2026-11-27T16:17:45",
+   "value": 0.0
+  },
+  "woa_mismatch_r256_default": {
+   "cores": 96,
+   "t": "2026-11-27T16:17:19",
+   "value": 0.0
+  },
+  "woa_mismatch_r256_sweep": {
+   "configs": 435,
+   "inexact": 0,
+   "t": "2026-11-27T16:17:43",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r160_best": {
+   "t": "2026-11-27T16:18:10",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r160_best_any_bw": {
+   "t": "2026-11-27T16:18:10",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r160_default": {
+   "t": "2026-11-27T16:17:46",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r160_sweep": {
+   "t": "2026-11-27T16:18:08",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r256_best": {
+   "t": "2026-11-27T16:17:45",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r256_default": {
+   "t": "2026-11-27T16:17:19",
+   "value": 0.0
+  },
+  "woa_repeat_diff_r256_sweep": {
+   "t": "2026-11-27T16:17:43",
+   "value": 0.0
+  },
+  "woa_repeat_diff_today_160": {
+   "t": "2026-11-27T16:17:46",
+   "value": 0.0
+  },
+  "woa_repeat_diff_today_256": {
+   "t": "2026-11-27T16:17:19",
+   "value": 0.0
+  },
+  "woa_stub_us_no_compute_160": {
+   "t": "2026-11-27T16:17:17",
+   "value": 129.7
+  },
+  "woa_stub_us_no_compute_256": {
+   "t": "2026-11-27T16:17:16",
+   "value": 149.44
+  },
+  "woa_stub_us_no_w_160": {
+   "t": "2026-11-27T16:17:17",
+   "value": 70.92
+  },
+  "woa_stub_us_no_w_256": {
+   "t": "2026-11-27T16:17:16",
+   "value": 107.2
+  },
+  "woa_stub_us_no_x_160": {
+   "t": "2026-11-27T16:17:17",
+   "value": 118.87
+  },
+  "woa_stub_us_no_x_256": {
+   "t": "2026-11-27T16:17:16",
+   "value": 117.81
+  },
+  "woa_us_bank_160": {
+   "knobs": [
+    "band10",
+    4,
+    4,
+    2,
+    1
+   ],
+   "t": "2026-11-27T16:18:10",
+   "value": 106.89
+  },
+  "woa_us_bank_256": {
+   "knobs": [
+    "band10",
+    2,
+    4,
+    1,
+    1
+   ],
+   "t": "2026-11-27T16:17:45",
+   "value": 125.01
+  },
+  "woa_us_bank_any_bw_160": {
+   "t": "2026-11-27T16:18:10",
+   "value": 105.13
+  },
+  "woa_us_today_160": {
+   "knobs": [
+    4,
+    4,
+    1
+   ],
+   "t": "2026-11-27T16:18:10",
+   "value": 131.5
+  },
+  "woa_us_today_256": {
+   "knobs": [
+    2,
+    2,
+    1
+   ],
+   "t": "2026-11-27T16:17:45",
+   "value": 151.32
+  }
+ },
+ "task": "WA.2"
+}

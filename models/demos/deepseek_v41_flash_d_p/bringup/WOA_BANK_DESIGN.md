@@ -196,3 +196,14 @@ Extend the fork (constraint 3), defaults = today's behaviour:
   programs do not prepare, fall back to one knob set a launch and sweep in a loop (same opens: 0, the runner's mesh).
 - KILL (WA.2) if the best measured gain is < half the upper bound (8192: < 0.60 ms a chunk, i.e. > 121.2 us a call at
   256 rows; 5120: < 0.50 ms, > 108.1 us at 160 rows) or if any output is not bit-identical or not repeatable.
+
+## WA.2: what the build measured (2026-11-27; results/WA.2_probe.md)
+
+- Step 0 decided go: today's no-weight-reads stub 0.707x (256 rows) / 0.540x (160), no-compute 0.99x (reader-bound).
+- Departures from sections 3, 6 and 7, each measured: the x sender is the rectangle's FIRST core, not the core next to
+  the anchor (a NoC-0 multicast from inside the rectangle wraps round the chip: 342 vs 155 us at 256 rows); the x
+  read-ahead is non-blocking (`x_ahead`, 0-3 blocks, never waits for a slot) instead of `x_prefetch`; `x_senders` 2 not
+  built; the weight goes through `bank.upload` (plain bfp8 conversion, then the sharded placement; `bank_sharded`'s
+  route re-quantizes bfp8); 10 cores a bank (5 x 2) beat 12; the sweep ran as one mesh program with a knob set a chip.
+- Result: 151.3 -> 125.0 us (256 rows), 131.5 -> 106.9 us (160 rows), bit-identical; gain 0.552 / 0.517 ms a chunk at
+  21 calls vs the KILL line 0.595 / 0.50: killed at 8192 by 3.8 us a call, passes at 5120.

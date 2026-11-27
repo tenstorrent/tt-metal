@@ -24,3 +24,42 @@ Source: none (new op), deepseek_v41_flash_d_p P.81 (OWNER 2026-11-18: attention 
 - Needed by: deepseek_v41_flash_d_p P.81 (ATTN_ROOFLINE)
 - Files: grouped_matmul.py, __init__.py, kernels/gmm_reader.cpp, kernels/gmm_compute.cpp, kernels/gmm_writer.cpp,
   tests/unit/test_grouped_matmul.py, README.md; ../__init__.py (PYTHON_OPS), ../INDEX.md
+
+### Option w_layout: bank-local weights (2026-11-27)
+- What: `grouped_matmul(..., w_layout=None, w_inflight=1, x_ahead=1, diag=())`. `w_layout` (default None: today's
+  path, unchanged) = a `bank.BankLayout` from the new `bank.py`: `plan(device, G, K, N, max_cores, cores_per_bank=12,
+  shape="band", sender="start")` (the G x NT (group, column) units an equal run a DRAM bank; a bank's cores a
+  cores_per_bank / 2 x 2 rectangle ("band") or one grid row ("row") on its optimal NoC-0 worker's side, nearest its row;
+  each core's PN columns K-major in its bank so any K block is ONE contiguous read; refuses an uneven split, a shape
+  that does not fit, more cores than max_cores; no padding, OV-3), `regions`, `upload` (the experts' bank_host_tensor
+  matrix, WIDTH_SHARDED DRAM, replicated). New reader kernels/gmm_bank_reader.cpp: each core reads only its own bank
+  (get_noc_addr_from_bank_id), `w_inflight` K blocks in flight under transaction ids; the cluster's sender (the
+  rectangle's first core) reads x and multicasts it to the rectangle (today's READY / VALID handshake, bounded waits),
+  reading up to `x_ahead` later x blocks whose slots are already free (never waits for a slot). Compute and writer
+  kernels: today's. Diagnostic `diag` stubs (compile-time defines GMM_DIAG_NO_W / _NO_X / _NO_COMPUTE in today's and
+  the bank reader / the compute kernel; timing probes only, wrong output).
+- Why: deepseek_v41_flash_d_p WA.2 (OWNER 2026-11-27): wo_a's interleaved weight is read one 1088 B tile at a time from
+  banks across the chip; step 0 of the probe showed today's call reader-bound (no weight reads 0.71x / 0.54x of today
+  at 256 / 160 rows, no compute 0.99x).
+- Measured (8x4, real-time profiler, slowest chip, 20 calls; models/demos/deepseek_v41_flash_d_p/tests/woa/
+  test_woa_probe.py; wo_a 8 x [rows, 4096] @ [4096, 1024] bfloat8_b, HiFi2 fp32 DEST): 256 rows (block_w 2) today
+  151.3 us -> best bank config (band, 10 cores a bank = 80 cores, depth 4, w_inflight 1, x_ahead 1) 125.0 us; 160 rows
+  (block_w 4) 131.5 -> 106.9 us (band 10, depth 4, w_inflight 2, x_ahead 1). Host a call ~124-134 us vs today's ~100
+  (the layout's program-cache key is a digest computed once; the rest not trimmed yet). Bit-identical to today's path at the same
+  block_w on every chip for all 870 swept configs, repeats bit-identical. Lessons: a NoC-0 multicast from a sender
+  inside the rectangle (at the bank's anchor) wraps around the chip: 2x slower x stream (342 vs 155 us); an x
+  read-ahead that blocks on a slot at depth 2 stalls the multicast on the sender's own compute (hence the non-blocking
+  x_ahead); `from_torch(..., memory_config=<WIDTH_SHARDED>)` quantizes bfloat8_b differently from the plain TILE
+  conversion (max |d| 0.0625), so `upload` converts plain and then places the tensor (`.to(mesh, mc)`).
+- Tests: tests/unit/test_grouped_matmul_bank.py (8 device cases smallest first: G 8 [32, 256] @ [256, 1024] at several
+  knob sets, band / row, start / anchor senders, a G 4 case (two banks a group), [96, 1024] float32 output at 10 cores a
+  bank, the 8x4's wo_a at 160 and 256 rows; vs today's path at the same knobs bit-identical on every chip, vs torch,
+  a repeat on fresh buffers (cache hit) bit-identical; refusals; a CPU packing test on a fake Galaxy grid). Run on the
+  model's mesh through the resident runner (models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_fork_bank.py): 12
+  passed. The existing cases (option off) were not re-run: the brief forbids fork regression suites on the 8x4; today's
+  path is unchanged when no diag define is set (its kernels only gained #ifdef blocks), and today's call measured the
+  same as before (151.2 / 131.6 us, PB.MM256 151.0, P.81 133.0).
+- Cores: bank path 8 x cores_per_bank (96 at 12, 80 at 10; <= max_cores, the 110-core matmul cap, agent rule 18).
+- Needed by: deepseek_v41_flash_d_p WA.2 (probe only; not called by the model yet: WA.3)
+- Files: bank.py, grouped_matmul.py, __init__.py, kernels/gmm_bank_reader.cpp, kernels/gmm_reader.cpp,
+  kernels/gmm_compute.cpp, tests/unit/test_grouped_matmul_bank.py, README.md; ../INDEX.md

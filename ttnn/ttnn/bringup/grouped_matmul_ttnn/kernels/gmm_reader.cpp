@@ -11,6 +11,8 @@
 //        receivers credit the sender's READY semaphore once their slot is reserved and wait for VALID.
 // Every semaphore wait is bounded (WAIT_LIMIT polls): a lost credit gives a wrong result, never a hang.
 // (A version reading DEPTH - 1 blocks ahead under NoC transaction ids measured slower on the 8x4: 0.143 vs 0.133 ms.)
+// Diagnostic defines (WA.2 step 0, never set by a model): GMM_DIAG_NO_W skips the weight reads, GMM_DIAG_NO_X the x
+// reads and the multicast handshake (every core then runs on its own).
 // compile-time args: MT, KT, NT, BW, PN, GX, CB_IN0, CB_IN1, IN0_TB, IN1_TB, PNX, x accessor, w accessor
 // common args: x address, w address; per-core args: g, n0, sender, mc_x0, mc_x1, mc_y, sender_x, sender_y
 
@@ -73,6 +75,7 @@ void kernel_main() {
     for (uint32_t kb = 0; kb < NBLK; ++kb) {
         cb_reserve_back(CB_IN0, IN0_PAGES);
         const uint32_t a = get_write_ptr(CB_IN0);
+#ifndef GMM_DIAG_NO_X
         if (sender) {
             uint32_t l1 = a;
             for (uint32_t m = 0; m < MT; ++m) {
@@ -83,7 +86,9 @@ void kernel_main() {
                 }
             }
         }
+#endif
         cb_reserve_back(CB_IN1, IN1_PAGES);
+#ifndef GMM_DIAG_NO_W
         {
             const uint32_t l1 = get_write_ptr(CB_IN1);
             for (uint32_t k = 0; k < BW; ++k) {
@@ -93,6 +98,10 @@ void kernel_main() {
                 }
             }
         }
+#endif
+#ifdef GMM_DIAG_NO_X
+        noc_async_read_barrier();
+#else
         if constexpr (GX > 1) {
             if (sender) {
                 noc_async_read_barrier();
@@ -111,6 +120,7 @@ void kernel_main() {
         } else {
             noc_async_read_barrier();
         }
+#endif
         cb_push_back(CB_IN0, IN0_PAGES);
         cb_push_back(CB_IN1, IN1_PAGES);
     }

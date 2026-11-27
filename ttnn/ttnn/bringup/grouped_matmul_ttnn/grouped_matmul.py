@@ -99,7 +99,15 @@ def supported(x_shape, w_shape, x_dtype, w_dtype, out_dtype, device, max_grid=No
     return hit
 
 
-def program(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1) -> ttnn.ProgramDescriptor:
+DIAG_STUBS = {"no_w": "GMM_DIAG_NO_W", "no_x": "GMM_DIAG_NO_X", "no_compute": "GMM_DIAG_NO_COMPUTE"}
+
+
+def _defines(diag, names):
+    """The diagnostic stubs' compile-time defines among ``names`` (diagnostic: timing probes only, wrong output)."""
+    return [(DIAG_STUBS[d], "1") for d in diag if DIAG_STUBS[d] in names]
+
+
+def program(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1, diag=()) -> ttnn.ProgramDescriptor:
     dev = x.device()
     p = plan(tuple(x.shape), tuple(w.shape), x.dtype, w.dtype, out.dtype, dev, max_grid, block_w)
     assert p is not None, f"grouped_matmul: no layout for {tuple(x.shape)} x {tuple(w.shape)}"
@@ -168,6 +176,7 @@ def program(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1) -> ttnn.
                 compile_time_args=[MT, KT, NT, BW, pn, GX, CB_IN0, CB_IN1, a, b, pn_max] + x_ct + w_ct,
                 runtime_args=rd,
                 common_runtime_args=[x.buffer_address(), w.buffer_address()],
+                defines=_defines(diag, ("GMM_DIAG_NO_W", "GMM_DIAG_NO_X")),
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
@@ -183,6 +192,123 @@ def program(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1) -> ttnn.
                 core_ranges=crs,
                 compile_time_args=[MT, BW, pn, KT // BW, CB_IN0, CB_IN1, CB_PART, CB_OUT, rt, pn_max],
                 runtime_args=cp,
+                defines=_defines(diag, ("GMM_DIAG_NO_COMPUTE",)),
+                config=cfg,
+            ),
+        ]
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+
+
+def bank_block_w(x_shape, layout, x_dtype, w_dtype, out_dtype, block_w=None):
+    """The bank path's K block (tiles), or None (nothing fits L1): ``plan``'s rule with the layout's widest core."""
+    MT, KT, pn = x_shape[2] // 32, layout.KT, layout.pn_max
+    a, b, o = _tile_bytes(x_dtype), _tile_bytes(w_dtype), _tile_bytes(out_dtype)
+    part = MT * pn * _tile_bytes(ttnn.float32)
+    for bw in (block_w,) if block_w else (32, 16, 8, 4, 2, 1):
+        if KT % bw == 0 and 2 * MT * bw * a + 2 * bw * pn * b + part + MT * pn * o <= L1_BUDGET:
+            return bw
+    return None
+
+
+def _merged(cores) -> ttnn.CoreRangeSet:
+    """The cores as few rectangles as merge finds (one dispatch write a rectangle instead of one a core)."""
+    rs = [ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores]
+    return ttnn.CoreRangeSet(rs[:1]).merge(ttnn.CoreRangeSet(rs[1:])) if len(rs) > 1 else ttnn.CoreRangeSet(rs)
+
+
+def bank_program(
+    x, w, out, ckc, layout, block_w=None, depth=2, rt=1, w_inflight=1, x_ahead=1, diag=()
+) -> ttnn.ProgramDescriptor:
+    """The bank path's program (option ``w_layout``, bank.py): today's compute and writer kernels on the layout's
+    cores; the reader gmm_bank_reader.cpp (each core reads only its own bank, ``w_inflight`` K blocks in flight; the
+    cluster's sender multicasts x to its rectangle, ``x_ahead``: x blocks after kb read while kb is waited for and
+    multicast, as far as their slots are free)."""
+    dev = x.device()
+    G, M, K = x.shape[1], x.shape[2], x.shape[3]
+    assert (G, K // 32) == (layout.G, layout.KT) and K % 32 == 0, (tuple(x.shape), layout.G, layout.KT)
+    BW = bank_block_w(tuple(x.shape), layout, x.dtype, w.dtype, out.dtype, block_w)
+    assert BW is not None and layout.KT % BW == 0, f"grouped_matmul: bank path, block_w {block_w}"
+    MT, KT, NT = M // 32, layout.KT, layout.NT
+    a, b, o = _tile_bytes(x.dtype), _tile_bytes(w.dtype), _tile_bytes(out.dtype)
+    pn_max = layout.pn_max
+    assert depth >= 2, f"grouped_matmul: depth {depth} (>= 2)"
+    assert 1 <= w_inflight <= min(depth, 8), f"grouped_matmul: w_inflight {w_inflight} (1 .. min(depth, 8))"
+    assert 0 <= x_ahead <= min(3, depth - 1), f"grouped_matmul: x_ahead {x_ahead} (0 .. min(3, depth - 1))"
+    allc = _merged([s.core for s in layout.slots])
+
+    def cb(idx, dtype, page, pages):
+        return ttnn.CBDescriptor(
+            total_size=page * pages,
+            core_ranges=allc,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
+        )
+
+    cbs = [
+        cb(CB_IN0, x.dtype, a, depth * MT * BW),
+        cb(CB_IN1, w.dtype, b, depth * BW * pn_max),
+        cb(CB_PART, ttnn.float32, _tile_bytes(ttnn.float32), MT * pn_max),
+        cb(CB_OUT, out.dtype, o, MT * pn_max),
+    ]
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=allc, initial_value=0) for i in range(2)]
+
+    def phys(c):
+        return dev.worker_core_from_logical_core(ttnn.CoreCoord(*c))
+
+    x_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
+    y_ct = list(ttnn.TensorAccessorArgs(out).get_compile_time_args())
+    fp32 = bool(getattr(ckc, "fp32_dest_acc_en", True))
+    rt = max(1, min(rt, MT))
+    dst = (4 if fp32 else 8) * (2 if rt * pn_max > (4 if fp32 else 8) else 1)
+    assert rt * pn_max <= dst, f"grouped_matmul: rt {rt} x {pn_max} column tiles exceed DEST ({dst} tiles)"
+    cfg = ttnn.ComputeConfigDescriptor(
+        math_fidelity=getattr(ckc, "math_fidelity", ttnn.MathFidelity.HiFi2),
+        fp32_dest_acc_en=fp32,
+        math_approx_mode=bool(getattr(ckc, "math_approx_mode", False)),
+        dst_full_sync_en=rt * pn_max > (4 if fp32 else 8),
+    )
+    if fp32:
+        modes = [ttnn.UnpackToDestMode.Default] * NUM_CB_SLOTS
+        modes[CB_PART] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        cfg.unpack_to_dest_mode = modes
+    by_pn = {}
+    for s in layout.slots:
+        by_pn.setdefault(s.pn, []).append(s)
+    kernels = []
+    for pn, slots in by_pn.items():
+        crs = _merged([s.core for s in slots])
+        rd, wr, cp = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for s in slots:
+            x0, y0, x1, y1 = layout.rect[s.cluster]
+            lo, hi, snd = phys((x0, y0)), phys((x1, y1)), phys(layout.sender[s.cluster])
+            ndest = (x1 - x0 + 1) * (y1 - y0 + 1)
+            cx, cy = s.core
+            rd[cx][cy] = [s.g, s.tile0, s.bank, int(s.sender), lo.x, lo.y, hi.x, hi.y, ndest, snd.x, snd.y]
+            wr[cx][cy] = [s.g, s.n0]
+            cp[cx][cy] = []
+        kernels += [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNELS / "gmm_bank_reader.cpp"),
+                core_ranges=crs,
+                compile_time_args=[MT, KT, BW, pn, pn_max, CB_IN0, CB_IN1, a, b, depth, w_inflight, x_ahead] + x_ct,
+                runtime_args=rd,
+                common_runtime_args=[x.buffer_address(), w.buffer_address()],
+                defines=_defines(diag, ("GMM_DIAG_NO_W", "GMM_DIAG_NO_X")),
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNELS / "gmm_writer.cpp"),
+                core_ranges=crs,
+                compile_time_args=[MT, NT, pn, CB_OUT, o] + y_ct,
+                runtime_args=wr,
+                common_runtime_args=[out.buffer_address()],
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNELS / "gmm_compute.cpp"),
+                core_ranges=crs,
+                compile_time_args=[MT, BW, pn, KT // BW, CB_IN0, CB_IN1, CB_PART, CB_OUT, rt, pn_max],
+                runtime_args=cp,
+                defines=_defines(diag, ("GMM_DIAG_NO_COMPUTE",)),
                 config=cfg,
             ),
         ]
@@ -193,7 +319,7 @@ def _ckc_key(ckc):
     return tuple(str(getattr(ckc, k, None)) for k in ("math_fidelity", "fp32_dest_acc_en", "math_approx_mode"))
 
 
-def _prepared(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1):
+def _prepared(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1, diag=(), bank=None):
     mesh = x.device()
     mg = None if max_grid is None else ((max_grid.x, max_grid.y) if hasattr(max_grid, "x") else tuple(max_grid))
     key = (
@@ -211,12 +337,17 @@ def _prepared(x, w, out, ckc, max_grid=None, block_w=None, depth=2, rt=1):
         depth,
         rt,
         _ckc_key(ckc),
+        tuple(diag),
+        None if bank is None else (bank[0].key(), bank[1], bank[2]),
     )
     hit = _PREPARED.get(key)
     if hit is not None:
         _PREPARED.move_to_end(key)
         return hit[1]
-    desc = program(x, w, out, ckc, max_grid, block_w, depth, rt)
+    if bank is None:
+        desc = program(x, w, out, ckc, max_grid, block_w, depth, rt, diag)
+    else:
+        desc = bank_program(x, w, out, ckc, bank[0], block_w, depth, rt, bank[1], bank[2], diag)
     shape = mesh.shape
     md = ttnn.MeshProgramDescriptor()
     md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(shape[0] - 1, shape[1] - 1))] = desc
@@ -242,21 +373,36 @@ def grouped_matmul(
     block_w: int | None = None,
     depth: int = 2,
     rt: int = 1,
+    w_layout=None,
+    w_inflight: int = 1,
+    x_ahead: int = 1,
+    diag: tuple = (),
 ) -> ttnn.Tensor:
     """x [1, G, M, K] @ w [1, G, K, N] -> [1, G, M, N] (TILE, DRAM interleaved; any tile dtypes, e.g. bfloat8_b
-    operands and output). ``dtype`` (default x's): the output dtype. ``compute_kernel_config``: its math fidelity,
-    fp32 DEST and approx mode (default HiFi2, fp32 DEST). ``output_tensor``: the caller's buffer of exactly that spec,
-    returned as is. ``max_grid`` (default the whole compute grid): the cores come from (0, 0) .. (max_grid - 1) (a
-    Galaxy's 110-core matmul cap). ``block_w`` (default the widest of 32 / 16 / 8 / .. tiles that fits L1): K tiles a
-    block. ``depth`` (default 2): K blocks of x and of w buffered a core. ``rt`` (default 1): row tiles a DST block
-    (rt x the core's column tiles; full-sync DEST when that exceeds half of it). Needs G <= the grid's rows
-    (``supported``)."""
-    for t in (x, w):
+        operands and output). ``dtype`` (default x's): the output dtype. ``compute_kernel_config``: its math fidelity,
+        fp32 DEST and approx mode (default HiFi2, fp32 DEST). ``output_tensor``: the caller's buffer of exactly that spec,
+        returned as is. ``max_grid`` (default the whole compute grid): the cores come from (0, 0) .. (max_grid - 1) (a
+        Galaxy's 110-core matmul cap). ``block_w`` (default the widest of 32 / 16 / 8 / .. tiles that fits L1): K tiles a
+        block. ``depth`` (default 2): K blocks of x and of w buffered a core. ``rt`` (default 1): row tiles a DST block
+        (rt x the core's column tiles; full-sync DEST when that exceeds half of it). ``diag`` (diagnostic, timing probes
+    only: wrong output): stubs from DIAG_STUBS (no_w: no weight reads, no_x: no x reads / multicast, no_compute: no
+    products). ``w_layout`` (default None: today's path, an INTERLEAVED weight): a bank.BankLayout; ``w`` is then
+    the layout's WIDTH_SHARDED DRAM weight (bank.upload) and every core reads only its own bank (bank.py): same tiles,
+    K order and output as today's path; ``w_inflight`` (default 1) K blocks of weights in flight a core ahead of the one
+    consumed, ``x_ahead`` (default 1, <= min(3, depth - 1)) x blocks the sender reads ahead when their slots are free
+    (bank path only). Needs G <= the grid's rows
+        (``supported``)."""
+    for t in (x, w) if w_layout is None else (x,):
         assert t.layout == ttnn.TILE_LAYOUT, t.layout
         mc = t.memory_config()
         assert mc.buffer_type == ttnn.BufferType.DRAM and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, mc
+    if w_layout is not None:
+        mc = w.memory_config()
+        assert w.layout == ttnn.TILE_LAYOUT and mc.buffer_type == ttnn.BufferType.DRAM, (w.layout, mc)
+        assert mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, f"w_layout needs the bank tensor, got {mc}"
+        assert tuple(mc.shard_spec.shape) == (w_layout.tiles_per_bank * 32, 32), f"w_layout: shard {mc.shard_spec}"
     odt = dtype or x.dtype
-    shape = [1, x.shape[1], x.shape[2], w.shape[3]]
+    shape = [1, x.shape[1], x.shape[2], w.shape[3] if w_layout is None else w_layout.NT * 32]
     if output_tensor is None:
         output_tensor = ttnn.allocate_tensor_on_device(
             ttnn.Shape(shape), odt, ttnn.TILE_LAYOUT, x.device(), memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -265,6 +411,8 @@ def grouped_matmul(
         o = output_tensor
         assert o.dtype == odt and o.layout == ttnn.TILE_LAYOUT and list(o.shape) == shape, (o.dtype, o.shape)
         assert o.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, o.memory_config()
-    pp = _prepared(x, w, output_tensor, compute_kernel_config, max_grid, block_w, depth, rt)
+    assert all(d in DIAG_STUBS for d in diag), diag
+    bank = None if w_layout is None else (w_layout, w_inflight, x_ahead)
+    pp = _prepared(x, w, output_tensor, compute_kernel_config, max_grid, block_w, depth, rt, tuple(diag), bank)
     ttnn.bringup.run_prepared(pp, [x, w, output_tensor])
     return output_tensor

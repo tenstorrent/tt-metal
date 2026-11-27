@@ -10,6 +10,8 @@
 // RT (compile-time, default 1): row tiles a DST block (RT x PN tiles; RT > 1 with full-sync DEST): fewer unpacks per
 // product (RT + PN unpacks for RT PN products); the last block of a K block takes the remainder MT % RT.
 // in1 blocks are BW x PNX tiles (row stride PNX >= PN, the reader's layout).
+// Diagnostic define (WA.2 step 0, never set by a model): GMM_DIAG_NO_COMPUTE skips the K-block products (the CBs
+// still advance; the output is garbage).
 // compile-time args: MT, BW, PN, NBLK, CB_IN0, CB_IN1, CB_PART, CB_OUT, RT, PNX
 
 #include <cstdint>
@@ -41,6 +43,7 @@ void kernel_main() {
     for (uint32_t kb = 0; kb < NBLK; ++kb) {
         cb_wait_front(CB_IN0, MT * BW);
         cb_wait_front(CB_IN1, BW * PNX);
+#ifndef GMM_DIAG_NO_COMPUTE
         pack_reconfig_l1_acc(kb > 0 ? 1 : 0);
         for (uint32_t m = 0; m + RT <= MT; m += RT) {
             tile_regs_acquire();
@@ -73,6 +76,7 @@ void kernel_main() {
             tile_regs_release();
             matmul_block_init(CB_IN0, CB_IN1, false, PN, RT, BW);
         }
+#endif
         cb_pop_front(CB_IN0, MT * BW);
         cb_pop_front(CB_IN1, BW * PNX);
     }

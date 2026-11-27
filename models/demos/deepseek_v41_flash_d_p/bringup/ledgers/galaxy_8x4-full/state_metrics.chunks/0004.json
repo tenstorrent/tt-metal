@@ -4664,5 +4664,28 @@
   "woa_today_us_r256": 150.96,
   "woa_upper_bound_ms_c5120": 0.995,
   "woa_upper_bound_ms_c8192": 1.191
+ },
+ "WA.2": {
+  "woa_mismatch_r160_best": 0.0,
+  "woa_mismatch_r160_best_any_bw": 0.0,
+  "woa_mismatch_r160_default": 0.0,
+  "woa_mismatch_r160_sweep": 0.0,
+  "woa_mismatch_r256_best": 0.0,
+  "woa_mismatch_r256_default": 0.0,
+  "woa_mismatch_r256_sweep": 0.0,
+  "woa_repeat_diff_r160_best": 0.0,
+  "woa_repeat_diff_r160_best_any_bw": 0.0,
+  "woa_repeat_diff_r160_default": 0.0,
+  "woa_repeat_diff_r160_sweep": 0.0,
+  "woa_repeat_diff_r256_best": 0.0,
+  "woa_repeat_diff_r256_default": 0.0,
+  "woa_repeat_diff_r256_sweep": 0.0,
+  "woa_repeat_diff_today_160": 0.0,
+  "woa_repeat_diff_today_256": 0.0,
+  "woa_us_bank_160": 106.89,
+  "woa_us_bank_256": 125.01,
+  "woa_us_bank_any_bw_160": 105.13,
+  "woa_us_today_160": 131.5,
+  "woa_us_today_256": 151.32
  }
 }
