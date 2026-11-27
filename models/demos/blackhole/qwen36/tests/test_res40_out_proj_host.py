@@ -65,7 +65,11 @@ def progcfg_fields(monkeypatch):
 
 def _tp_args(tp, grid=(11, 10)):
     args = SimpleNamespace(num_devices=tp, **_QWEN38)
-    mesh = SimpleNamespace(shape=(1, tp), compute_with_storage_grid_size=lambda: SimpleNamespace(x=grid[0], y=grid[1]))
+    mesh = SimpleNamespace(
+        shape=(1, tp),
+        compute_with_storage_grid_size=lambda: SimpleNamespace(x=grid[0], y=grid[1]),
+        dram_grid_size=lambda: SimpleNamespace(x=8, y=1),
+    )
     Qwen36ModelArgs._init_tp_config(args, mesh)
     return args
 
