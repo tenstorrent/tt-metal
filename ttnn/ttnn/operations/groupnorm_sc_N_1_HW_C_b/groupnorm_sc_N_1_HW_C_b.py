@@ -222,8 +222,11 @@ def validate(input_tensor, num_groups, *, gamma=None, beta=None, eps=1e-5, in_pl
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"groupnorm_sc_N_1_HW_C_b: unsupported combination (refinement candidate): {exc}")
 
-    # The shape-class gate (a feasible column-slice count, the L1 fit) is the C++ planner's: it raises
-    # NotImplementedError when the op is called.
+    # (4) Shape-class gate: the C++ planner raises NotImplementedError when no column-slice count is feasible or the
+    # plan does not fit L1. Returns the plan's scalars.
+    return ttnn._ttnn.operations.groupnorm_sc_N_1_HW_C_b.plan(
+        input_tensor, num_groups, gamma=gamma, beta=beta, eps=eps, in_place=bool(in_place)
+    )
 
 
 # ---------------------------------------------------------------------------

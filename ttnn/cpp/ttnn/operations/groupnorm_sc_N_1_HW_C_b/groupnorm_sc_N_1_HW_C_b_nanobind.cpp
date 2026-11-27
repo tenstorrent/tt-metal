@@ -10,7 +10,9 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
+#include "device/groupnorm_sc_N_1_HW_C_b_device_operation.hpp"
 #include "device/groupnorm_sc_N_1_HW_C_b_device_operation_types.hpp"
+#include "device/groupnorm_sc_N_1_HW_C_b_planner.hpp"
 #include "groupnorm_sc_N_1_HW_C_b.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -101,6 +103,75 @@ Tensor groupnorm_with_tuning(
         tuning.chunk_zones);
 }
 
+// validate()'s shape-class gate: the planner the op runs, without a launch. Raises the op's refusals; returns the
+// solved plan's scalars.
+nb::dict plan_groupnorm(
+    const Tensor& input_tensor,
+    int num_groups,
+    const std::optional<Tensor>& gamma,
+    const std::optional<Tensor>& beta,
+    float eps,
+    bool in_place) {
+    const TuningOverrides tuning = read_tuning_overrides();
+    const GroupnormScN1HwCbParams params{
+        .num_groups = static_cast<uint32_t>(num_groups),
+        .eps = eps,
+        .in_place = in_place,
+        .max_resident_chunks = tuning.max_resident_chunks,
+        .chunk_tiles_target = tuning.chunk_tiles_target,
+        .max_cores = tuning.max_cores,
+        .chunk_zones = tuning.chunk_zones,
+    };
+    const std::optional<Tensor> no_output;
+    const GroupnormScN1HwCbInputs tensors{.input = input_tensor, .gamma = gamma, .beta = beta, .output = no_output};
+    check_support(params, tensors);
+    const planner::Plan& plan = planner::solve_plan(planner::plan_inputs(params, tensors));
+
+    nb::dict out;
+    out["N"] = plan.N;
+    out["HW"] = plan.HW;
+    out["C"] = plan.C;
+    out["G"] = plan.G;
+    out["Ht"] = plan.Ht;
+    out["Wt"] = plan.Wt;
+    out["Cg"] = plan.Cg;
+    out["span_tiles"] = plan.span_tiles;
+    out["gps"] = plan.gps;
+    out["S"] = plan.S;
+    out["gx"] = plan.gx;
+    out["W"] = plan.W;
+    out["G_core"] = plan.G_core;
+    out["U"] = plan.U;
+    out["P"] = plan.P;
+    out["cpi"] = plan.cpi;
+    out["h"] = plan.h;
+    out["T"] = plan.T;
+    out["R"] = plan.R;
+    out["rows_core_max"] = plan.rows_core_max;
+    out["B_max"] = plan.B_max;
+    out["K_alloc"] = plan.K_alloc;
+    out["stream"] = plan.stream;
+    out["is_rm"] = plan.is_rm;
+    out["has_gamma"] = plan.has_gamma;
+    out["has_beta"] = plan.has_beta;
+    out["grid_x"] = plan.grid_x;
+    out["grid_y"] = plan.grid_y;
+    out["out_writer_chunks"] = plan.out_writer_chunks;
+    out["sharded"] = plan.sharded;
+    out["in_place"] = plan.in_place;
+    out["map_period"] = plan.map_period;
+    out["vc_last"] = plan.vc_last;
+    out["NU"] = plan.NU;
+    out["NSEG"] = plan.NSEG;
+    out["ops_path"] = plan.ops_path;
+    out["stage_pages"] = plan.stage_pages;
+    out["col_mask"] = plan.col_mask;
+    out["mcast_row_major"] = plan.mcast_row_major;
+    out["ring_pages"] = plan.ring_pages;
+    out["pilot_cols"] = plan.pilot_cols;
+    return out;
+}
+
 }  // namespace
 
 void bind_groupnorm_sc_N_1_HW_C_b_operation(nb::module_& mod) {
@@ -144,6 +215,19 @@ void bind_groupnorm_sc_N_1_HW_C_b_operation(nb::module_& mod) {
         nb::arg("eps") = 1e-5f,
         nb::arg("in_place") = false,
         nb::arg("output_tensor") = nb::none());
+
+    mod.def(
+        "plan",
+        &plan_groupnorm,
+        "The planner's solve for these inputs without a launch (validate()'s shape-class gate). Raises the op's "
+        "refusals; returns the plan's scalars as a dict.",
+        nb::arg("input_tensor"),
+        nb::arg("num_groups"),
+        nb::kw_only(),
+        nb::arg("gamma") = nb::none(),
+        nb::arg("beta") = nb::none(),
+        nb::arg("eps") = 1e-5f,
+        nb::arg("in_place") = false);
 }
 
 }  // namespace ttnn::operations::groupnorm_sc_N_1_HW_C_b
