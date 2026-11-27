@@ -1,2 +1,7 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-26T23:18:10+00:00"}
 {"event":"test_run","mode":"dev","scope":"test_g6_permute (14 shapes)","result":"pass","ts":"2026-11-26T23:24:00+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-26T19:00:51-05:00"}
+{"event":"hypothesis","detail":"env: /opt/openmpi-v5.0.7-ulfm vanished after an ~18:30 reboot; libtt_metal.so needs MPIX_Comm_shrink/revoke. Preloading a local stub (generated/mpix_stub) lets ttnn import against system OpenMPI 4.1","ts":"2026-11-26T19:16:30-05:00"}
+{"event":"test_run","mode":"dev","scope":"test_g6_permute.py (41)","result":"pass","classification":"none","ts":"2026-11-26T19:16:30-05:00"}
+{"event":"test_run","mode":"dev","scope":"test_g6_permute_debug.py forced plans (10)","result":"pass","detail":"multi-block cores on direct/a-split/b-split regroup/closed paths, block_wt 2-3, depth 1 rings, inf padding","ts":"2026-11-26T19:16:30-05:00"}
+{"event":"test_run","mode":"prod","scope":"acceptance+debug (51) and golden (27 pass, 12 xfail)","result":"pass","ts":"2026-11-26T19:16:30-05:00"}
