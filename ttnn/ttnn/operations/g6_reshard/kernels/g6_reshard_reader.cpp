@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_reshard PULL issuer. One source, one instance per issuer of an out-holding core
-// (issuer 0 on RISCV_1/NoC0, issuer 1 on RISCV_0/NoC1). Each instance reads the pieces of
-// in0's blocks that overlap its row range of this core's out block straight into the out
-// shard, then waits once.
+// PULL reshard issuer. The host launches this one source once per issuer of every out-holding
+// core (issuer 0: RISCV_1 / NoC0, issuer 1: RISCV_0 / NoC1). An issuer owns the tile rows
+// [row_begin, row_end) x [block_col_begin, block_col_end) of its core's out block and reads each
+// piece of in0 that overlaps them straight into the out shard: no CB, no compute, no conversion.
 //
-// No kernel_lib helper covers this move: the local-copy helpers are self-aimed and
-// single-packet, mcast is one-to-many, and noc_async_read_shard / num_contiguous_pages know
-// nothing of the destination stride. Raw noc_async_read per maximal run is the operation.
+// Raw noc_async_read / noc_async_read_barrier instead of a kernel_lib helper:
+// local_copy_helpers_dataflow.hpp is self-aimed and single-packet only, while pieces come from
+// remote cores and a merged run can exceed one NoC packet (16 tiles = 17408 B for bfloat8_b).
 
 #include <cstdint>
 
@@ -20,79 +21,70 @@ void kernel_main() {
     constexpr uint32_t block_width_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t tensor_width_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t aligned_page_bytes = get_compile_time_arg_val(4);
-    constexpr auto src_args = TensorAccessorArgs<5>();
+    constexpr auto in_accessor_args = TensorAccessorArgs<5>();
 
-    // A tail shard keeps the full shard row stride on both sides, so rows of a piece merge
-    // into one run only when the piece spans both full shard widths.
-    constexpr bool rows_contiguous_on_both_sides = in_block_width_tiles == block_width_tiles;
-    constexpr uint32_t src_row_stride_bytes = in_block_width_tiles * aligned_page_bytes;
-    constexpr uint32_t dst_row_stride_bytes = block_width_tiles * aligned_page_bytes;
+    // Shards keep their full row stride even when cut short at the tensor edge.
+    constexpr uint32_t in_row_stride_bytes = in_block_width_tiles * aligned_page_bytes;
+    constexpr uint32_t out_row_stride_bytes = block_width_tiles * aligned_page_bytes;
+    // Rows of a piece are contiguous on both sides only when both shard widths equal the piece width.
+    constexpr bool shard_widths_match = in_block_width_tiles == block_width_tiles;
 
-    const uint32_t src_base_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t out_shard_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
 
-    // Tile coordinates of the padded 2-D view, already clipped to the tensor on the host.
-    const uint32_t issuer_row_begin = get_arg_val<uint32_t>(0);
-    const uint32_t issuer_row_end = get_arg_val<uint32_t>(1);
-    const uint32_t block_row_begin = get_arg_val<uint32_t>(2);
-    const uint32_t block_col_begin = get_arg_val<uint32_t>(3);
-    const uint32_t block_col_end = get_arg_val<uint32_t>(4);
+    const uint32_t block_row_begin = get_arg_val<uint32_t>(0);
+    const uint32_t block_col_begin = get_arg_val<uint32_t>(1);
+    const uint32_t block_col_end = get_arg_val<uint32_t>(2);
+    const uint32_t row_begin = get_arg_val<uint32_t>(3);
+    const uint32_t row_end = get_arg_val<uint32_t>(4);
 
     {
-        DeviceZoneScopedN("RESHARD-ISSUE");
-        if (issuer_row_begin < issuer_row_end) {
-            const auto src = TensorAccessor(src_args, src_base_addr, aligned_page_bytes);
+        DeviceZoneScopedN("g6_reshard_issue");
+        const auto in_accessor = TensorAccessor(in_accessor_args, in_addr, aligned_page_bytes);
 
-            const uint32_t first_in_block_row_start =
-                (issuer_row_begin / in_block_height_tiles) * in_block_height_tiles;
-            const uint32_t first_in_block_col_start = (block_col_begin / in_block_width_tiles) * in_block_width_tiles;
+        // An issuer with no rows (a one-row block split two ways) issues nothing but still waits below.
+        if (row_begin < row_end) {
+            // locate_pieces: first in0 block row and column that overlap this issuer's sub-block.
+            const uint32_t first_in_row = (row_begin / in_block_height_tiles) * in_block_height_tiles;
+            const uint32_t first_in_col = (block_col_begin / in_block_width_tiles) * in_block_width_tiles;
 
-            uint32_t piece_row0 = issuer_row_begin;
-            uint32_t next_in_block_row_start = first_in_block_row_start + in_block_height_tiles;
-            uint32_t dst_piece_row_addr = out_shard_addr + (issuer_row_begin - block_row_begin) * dst_row_stride_bytes;
-            uint32_t src_row_page_id = issuer_row_begin * tensor_width_tiles;
+            for (uint32_t in_row0 = first_in_row; in_row0 < row_end; in_row0 += in_block_height_tiles) {
+                const uint32_t in_row_end = in_row0 + in_block_height_tiles;
+                const uint32_t piece_row_begin = in_row0 > row_begin ? in_row0 : row_begin;
+                const uint32_t piece_row_end = in_row_end < row_end ? in_row_end : row_end;
+                const uint32_t piece_rows = piece_row_end - piece_row_begin;
+                const uint32_t out_row_slot = (piece_row_begin - block_row_begin) * block_width_tiles;
 
-            while (piece_row0 < issuer_row_end) {
-                const uint32_t piece_row1 =
-                    next_in_block_row_start < issuer_row_end ? next_in_block_row_start : issuer_row_end;
-                const uint32_t piece_rows = piece_row1 - piece_row0;
+                for (uint32_t in_col0 = first_in_col; in_col0 < block_col_end; in_col0 += in_block_width_tiles) {
+                    const uint32_t in_col_end = in_col0 + in_block_width_tiles;
+                    const uint32_t piece_col_begin = in_col0 > block_col_begin ? in_col0 : block_col_begin;
+                    const uint32_t piece_col_end = in_col_end < block_col_end ? in_col_end : block_col_end;
+                    const uint32_t piece_width = piece_col_end - piece_col_begin;
+                    const uint32_t row_bytes = piece_width * aligned_page_bytes;
 
-                uint32_t piece_col0 = block_col_begin;
-                uint32_t next_in_block_col_start = first_in_block_col_start + in_block_width_tiles;
-                uint32_t dst_piece_addr = dst_piece_row_addr;
+                    // move_pieces: one source resolution per piece, one NoC read per maximal run.
+                    uint64_t src_noc_addr =
+                        in_accessor.get_noc_addr(piece_row_begin * tensor_width_tiles + piece_col_begin);
+                    uint32_t dst_l1_addr =
+                        out_addr + (out_row_slot + (piece_col_begin - block_col_begin)) * aligned_page_bytes;
 
-                while (piece_col0 < block_col_end) {
-                    const uint32_t piece_col1 =
-                        next_in_block_col_start < block_col_end ? next_in_block_col_start : block_col_end;
-                    const uint32_t piece_width = piece_col1 - piece_col0;
-                    const uint32_t piece_width_bytes = piece_width * aligned_page_bytes;
-
-                    uint64_t src_noc_addr = src.get_noc_addr(src_row_page_id + piece_col0);
-                    if (rows_contiguous_on_both_sides && piece_width == in_block_width_tiles) {
-                        noc_async_read(src_noc_addr, dst_piece_addr, piece_rows * piece_width_bytes);
+                    if (shard_widths_match && piece_width == in_block_width_tiles) {
+                        noc_async_read(src_noc_addr, dst_l1_addr, piece_rows * row_bytes);
                     } else {
-                        uint32_t dst_addr = dst_piece_addr;
                         for (uint32_t r = 0; r < piece_rows; ++r) {
-                            noc_async_read(src_noc_addr, dst_addr, piece_width_bytes);
-                            src_noc_addr += src_row_stride_bytes;
-                            dst_addr += dst_row_stride_bytes;
+                            noc_async_read(src_noc_addr, dst_l1_addr, row_bytes);
+                            src_noc_addr += in_row_stride_bytes;
+                            dst_l1_addr += out_row_stride_bytes;
                         }
                     }
-
-                    dst_piece_addr += piece_width_bytes;
-                    piece_col0 = piece_col1;
-                    next_in_block_col_start += in_block_width_tiles;
                 }
-
-                dst_piece_row_addr += piece_rows * dst_row_stride_bytes;
-                src_row_page_id += piece_rows * tensor_width_tiles;
-                piece_row0 = piece_row1;
-                next_in_block_row_start += in_block_height_tiles;
             }
         }
     }
+
     {
-        DeviceZoneScopedN("RESHARD-WAIT");
+        DeviceZoneScopedN("g6_reshard_wait");
+        // complete_block: nothing may be left in flight when the next program starts.
         noc_async_read_barrier();
     }
 }
