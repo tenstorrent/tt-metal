@@ -285,7 +285,9 @@ class MiniMaxH3Attention(Module):
         # Sol-Attn (block-sparse ring attention, opt-in per request through `set_sol_request`). The pre-pass is kept
         # in a plain dict, not as a child Module, so the weight cache and state dict never see it.
         self.sdpa_scale = 1.0 / math.sqrt(head_dim)
-        self._sol: dict = {"prepass": None, "request": None}
+        # `dense_step` keeps one denoise step on the dense ring op while the request stays armed (the schedule's
+        # leading dense steps); the transformer sets it per step and keys its traces by it.
+        self._sol: dict = {"prepass": None, "request": None, "dense_step": False}
         self._sol_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
             q_chunk_size=SOL_BLOCK,
@@ -687,7 +689,12 @@ class MiniMaxH3Attention(Module):
         # Sequence is fractured across SP, so attention must gather K/V around the ring.
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         sol_request = self._sol["request"]
-        use_sol = self.use_ring and sol_request is not None and sol_request[0] == q_BHNE.shape[2]
+        use_sol = (
+            self.use_ring
+            and sol_request is not None
+            and sol_request[0] == q_BHNE.shape[2]
+            and not self._sol["dense_step"]
+        )
         exp_program_config = None if use_sol else self._exp_sdpa_program_config(q_BHNE.shape[2])
         if use_sol:
             spatial_BHNE = self._sol_attention(q_BHNE, k_BHNE, v_BHNE)

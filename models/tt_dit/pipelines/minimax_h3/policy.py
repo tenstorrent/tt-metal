@@ -58,6 +58,39 @@ def get_num_frames(duration_s: float) -> int:
 
 
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
+
+
+@dataclass(frozen=True)
+class SolSchedule:
+    """Where one generation's ring attention runs Sol-Attn: the first `dense_steps` denoise steps and the first
+    `dense_layers` blocks stay dense, the rest route with threshold `tau`."""
+
+    tau: float = 1.0
+    dense_steps: int = 1
+    dense_layers: int = 2
+
+    def is_dense_step(self, step: int) -> bool:
+        return step < self.dense_steps
+
+
+def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
+    """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
+
+    `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). `H3_SOL_TAU` (default 1.0),
+    `H3_SOL_DENSE_STEPS` (default 1) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule.
+    """
+    if env.get("H3_SOL_ATTN", "0") != "1":
+        return None
+    schedule = SolSchedule(
+        tau=float(env.get("H3_SOL_TAU", "1.0")),
+        dense_steps=int(env.get("H3_SOL_DENSE_STEPS", "1")),
+        dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", "2")),
+    )
+    if schedule.dense_steps < 0 or schedule.dense_layers < 0:
+        raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")
+    return schedule
+
+
 MINIMAX_H3_DEFAULT_DURATION_S = 5
 # Frame counts the shortest and longest served durations resolve to: 107 and 362.
 MINIMAX_H3_MIN_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[0])

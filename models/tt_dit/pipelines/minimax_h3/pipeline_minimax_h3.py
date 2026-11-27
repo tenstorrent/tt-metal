@@ -153,6 +153,7 @@ from .policy import (
     served_canvases,
     served_envelope,
     served_reference_image_sizes,
+    sol_schedule,
     validate_request,
 )
 from .references import encode_references, prepare_references, reference_condition_shapes, split_condition_blocks
@@ -3420,25 +3421,31 @@ class MiniMaxH3Pipeline:
     ) -> None:
         """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN=1`, default off).
 
-        `H3_SOL_TAU` is the routing threshold (default 1.0). `sink_tokens` is the always-dense prefix: text,
-        condition and audio rows, everything in front of the target video. The sparse op compiles `logical_n` into
-        its kernels, so each new packed length pays a compile, and the pre-pass buffers change with it: a change of
-        request releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
+        The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
+        leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
+        rows, everything in front of the target video. The sparse op compiles `logical_n` into its kernels, so each
+        new packed length pays a compile, and the pre-pass buffers change with it: a change of request or schedule
+        releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
         """
         sol = None
-        if os.environ.get("H3_SOL_ATTN", "0") == "1" and not self.dynamic_length:
-            tau = float(os.environ.get("H3_SOL_TAU", "1.0"))
-            sol = (rung // self.sp_factor, logical_n, sink_tokens, tau)
+        schedule = None if self.dynamic_length else sol_schedule(os.environ)
+        if schedule is not None:
+            sol = (rung // self.sp_factor, logical_n, sink_tokens, schedule)
         if sol == self._sol_key:
             return
         self._release_denoise_traces()
         for state in (*self._buckets.values(), self._request_state):
             state.warm = False
-        transformer.set_sol_request(None if sol is None else sol[:3], tau=1.0 if sol is None else sol[3])
+        if sol is None:
+            transformer.set_sol_request(None)
+        else:
+            transformer.set_sol_request(sol[:3], tau=schedule.tau, dense_layers=schedule.dense_layers)
         self._sol_key = sol
         self._log(
-            "attention: dense ring" if sol is None else
-            f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+            "attention: dense ring"
+            if sol is None
+            else f"attention: Sol-Attn (tau {schedule.tau}, dense steps {schedule.dense_steps}, dense layers "
+            f"{schedule.dense_layers}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
         )
 
     def _denoise(
@@ -3752,6 +3759,7 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
+                    transformer.set_sol_dense_step(self._sol_key is not None and self._sol_key[3].is_dense_step(i))
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,

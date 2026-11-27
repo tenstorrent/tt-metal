@@ -344,7 +344,8 @@ class MiniMaxH3Transformer3DModel(Module):
             use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
 
-        # 4. The block stack.
+        # 4. The block stack. `_sol_dense_step`: see `set_sol_dense_step`.
+        self._sol_dense_step = False
         self.transformer_blocks = ModuleList(
             [
                 MiniMaxH3TransformerBlock(
@@ -615,7 +616,12 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_expanded_indices=as_indices(adaln_expanded_indices) if adaln_expanded_indices is not None else None,
             adaln_selector=adaln_step_selector,
             traced=traced,
-            tracer_trace_key=(pad_to, adaln_tile_map is not None, adaln_step_selector is not None),
+            tracer_trace_key=(
+                pad_to,
+                adaln_tile_map is not None,
+                adaln_step_selector is not None,
+                self._sol_dense_step,
+            ),
             **(
                 {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
             ),
@@ -670,7 +676,11 @@ class MiniMaxH3Transformer3DModel(Module):
         for r in range(0, timesteps.shape[2], tile):
             end = min(r + tile, timesteps.shape[2])
             ts = ttnn.slice(timesteps, [0, 0, r, 0], [1, 1, end, timesteps.shape[3]])
-            ep = None if endpoint_timesteps is None else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, endpoint_timesteps.shape[3]])
+            ep = (
+                None
+                if endpoint_timesteps is None
+                else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, endpoint_timesteps.shape[3]])
+            )
             chunks.append(self._temb(ts, ep))
         temb = ttnn.concat(chunks, dim=2) if len(chunks) > 1 else chunks[0]
         try:
@@ -799,14 +809,24 @@ class MiniMaxH3Transformer3DModel(Module):
         for temb, _ in tembs:
             ttnn.deallocate(temb)
 
-    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0) -> None:
-        """Run every block's ring attention through Sol-Attn for this request shape, or (None) dense again.
+    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0, dense_layers: int = 0) -> None:
+        """Run the blocks' ring attention through Sol-Attn for this request shape, or (None) dense again.
 
-        See `MiniMaxH3Attention.set_sol_request`. Captured `run_blocks` traces reference the pre-pass buffers this
-        replaces, so the caller releases them first whenever the request changes.
+        The first `dense_layers` blocks stay dense. See `MiniMaxH3Attention.set_sol_request`. Captured `run_blocks`
+        traces reference the pre-pass buffers this replaces, so the caller releases them first whenever the request
+        changes.
         """
+        for index, block in enumerate(self.transformer_blocks):
+            block.attn.set_sol_request(None if index < dense_layers else request, tau=tau)
+
+    def set_sol_dense_step(self, dense: bool) -> None:
+        """Run the next forwards dense (True) or through the Sol-Attn request (False), leaving the request armed.
+
+        The flag is part of `run_blocks`' trace key, so a bucket holds one dense trace and one Sol trace.
+        """
+        self._sol_dense_step = dense
         for block in self.transformer_blocks:
-            block.attn.set_sol_request(request, tau=tau)
+            block.attn._sol["dense_step"] = dense
 
     def release_traces(self) -> None:
         """Release every captured `run_blocks` trace, across all `tracer_trace_key` buckets."""
