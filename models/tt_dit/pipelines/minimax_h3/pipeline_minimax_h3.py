@@ -49,6 +49,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, fields
+from fractions import Fraction
 from pathlib import Path
 from typing import NamedTuple
 
@@ -641,17 +642,34 @@ def draw_request_latents(
     return condition_noise, video_rows, audio_rows
 
 
-# The number of first forwards a request runs at half the height and width (default 0: none); see
-# `MiniMaxH3Pipeline._denoise_lowres`.
+# The number of first forwards a request runs at a lower resolution (default 0: none), and that resolution as a
+# fraction of the height and width (default 1/2); see `MiniMaxH3Pipeline._denoise_lowres`.
 LOWRES_STEPS_ENV = "MINIMAX_H3_LOWRES_STEPS"
+LOWRES_SCALE_ENV = "MINIMAX_H3_LOWRES_SCALE"
 
 
 def lowres_noise_rows(
-    video_rows: torch.Tensor, num_latent_frames: int, latent_height: int, latent_width: int, channels: int, patch_size
+    video_rows: torch.Tensor,
+    num_latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    channels: int,
+    patch_size,
+    lowres_height: int,
+    lowres_width: int,
 ) -> torch.Tensor:
-    """The request's video noise at half the height and width: twice its 2x2 means, which is unit variance again."""
+    """The request's video noise at the low resolution (even sizes): its lowest spatial frequencies, which is white
+    unit-variance noise again."""
     latents = unpatchify_video_tokens(video_rows, num_latent_frames, latent_height, latent_width, channels, patch_size)
-    return patchify_video_latents(2.0 * torch.nn.functional.avg_pool3d(latents, (1, 2, 2)), patch_size)
+    spectrum = torch.fft.fftshift(torch.fft.fft2(latents, norm="ortho"), dim=(-2, -1))
+    top, left = (latent_height - lowres_height) // 2, (latent_width - lowres_width) // 2
+    spectrum = spectrum[..., top : top + lowres_height, left : left + lowres_width].clone()
+    # The crop keeps one of the two rows and one of the two columns at the highest frequency, so the real part
+    # below has half their power: double it first.
+    spectrum[..., 0, :] *= 2**0.5
+    spectrum[..., 0] *= 2**0.5
+    lowres = torch.fft.ifft2(torch.fft.ifftshift(spectrum, dim=(-2, -1)), norm="ortho").real
+    return patchify_video_latents(lowres, patch_size)
 
 
 def lowres_handoff_rows(
@@ -663,13 +681,15 @@ def lowres_handoff_rows(
     latent_width: int,
     channels: int,
     patch_size,
+    lowres_height: int,
+    lowres_width: int,
 ) -> torch.Tensor:
-    """Full-resolution rows at `sigma` from the clean half-resolution estimate: a x2 trilinear upscale, re-noised
-    with the request's own noise (the noise the low-res stage started from, at full resolution)."""
-    latents = unpatchify_video_tokens(
-        lowres_rows, num_latent_frames, latent_height // 2, latent_width // 2, channels, patch_size
+    """Full-resolution rows at `sigma` from the clean low-resolution estimate: a trilinear upscale in space,
+    re-noised with the request's own noise (the noise the low-res stage started from, at full resolution)."""
+    latents = unpatchify_video_tokens(lowres_rows, num_latent_frames, lowres_height, lowres_width, channels, patch_size)
+    upscaled = torch.nn.functional.interpolate(
+        latents, size=(num_latent_frames, latent_height, latent_width), mode="trilinear"
     )
-    upscaled = torch.nn.functional.interpolate(latents, scale_factor=(1, 2, 2), mode="trilinear")
     return (1.0 - sigma) * patchify_video_latents(upscaled, patch_size) + sigma * noise_rows
 
 
@@ -3522,33 +3542,44 @@ class MiniMaxH3Pipeline:
         num_audio_latents: int,
         on_event: PipelineEventCallback,
     ) -> tuple[torch.Tensor, torch.Tensor, MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
-        """The first `MINIMAX_H3_LOWRES_STEPS` forwards (default 0: none) at half the height and width, then the
-        hand-off to full resolution. Returns the rows and the schedules for the steps that are left.
+        """The first `MINIMAX_H3_LOWRES_STEPS` forwards (default 0: none) at `MINIMAX_H3_LOWRES_SCALE` (default
+        1/2) of the height and width, then the hand-off to full resolution. Returns the rows and the schedules for
+        the steps that are left.
 
-        The video's last low-res step lands on its clean estimate, which is upscaled x2 and re-noised to the
-        sigma of the next step; the audio rows keep stepping through their own schedule, whatever the video's
-        resolution. A request with condition rows, with a latent that does not halve onto the patch grid, or
-        with no full-resolution forward left is returned as it came.
+        The video's last low-res step lands on its clean estimate, which is upscaled and re-noised to the sigma of
+        the next step; the audio rows keep stepping through their own schedule, whatever the video's resolution.
+        A request with condition rows, with a latent the scale does not put on the patch grid, or with no
+        full-resolution forward left is returned as it came.
         """
         steps = int(os.environ.get(LOWRES_STEPS_ENV, "0"))
         if steps <= 0:
             return video_rows, audio_rows, scheduler, audio_scheduler
         total = scheduler.num_inference_steps
         patch_size = self.patch_size
+        scale = Fraction(os.environ.get(LOWRES_SCALE_ENV, "1/2"))
+        lowres_height, lowres_width = latent_height * scale, latent_width * scale
         if (
             steps >= total
-            or latent_height % (2 * patch_size[1])
-            or latent_width % (2 * patch_size[2])
+            or not 0 < scale < 1
+            or lowres_height % patch_size[1]
+            or lowres_width % patch_size[2]
             or layout.num_condition_video_rows
             or layout.num_condition_audio_rows
         ):
             return video_rows, audio_rows, scheduler, audio_scheduler
-        video_shape = (num_latent_frames, latent_height, latent_width, self.vae_config.latent_channels, patch_size)
+        lowres_size = (int(lowres_height), int(lowres_width))
+        video_shape = (
+            num_latent_frames,
+            latent_height,
+            latent_width,
+            self.vae_config.latent_channels,
+            patch_size,
+            *lowres_size,
+        )
         lowres_layout = build_packed_sequence(
             layout.token_tags[layout.text_indices],
             num_latent_frames,
-            latent_height // 2,
-            latent_width // 2,
+            *lowres_size,
             num_audio_latents,
             patch_size,
         )
