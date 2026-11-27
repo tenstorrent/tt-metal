@@ -5,6 +5,7 @@
 #include "dit_fused_distributed_groupnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <limits>
 #include <set>
@@ -26,6 +27,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_program_utils.hpp"
+#include "ttnn/operations/normalization/groupnorm/device/kernels/gn_runtime_size_args.h"
 #include "ttnn/operations/normalization/groupnorm/groupnorm_grid_utils.hpp"
 #include "dit_fused_distributed_groupnorm_device_operation_types.hpp"
 
@@ -34,17 +36,148 @@ using namespace tt::constants;
 
 namespace ttnn::experimental::prim {
 
+DitFusedDistributedGroupnormGrid gn_choose_grid(const DitFusedDistributedGroupnormParams& args, const Tensor& input) {
+    const auto grid_size = input.device()->compute_with_storage_grid_size();
+    const auto& shape = input.padded_shape();
+    const uint32_t W = shape[-1];
+    const uint32_t Ht = static_cast<uint32_t>(shape.volume() / W / TILE_HEIGHT);
+    const uint32_t num_forwarders = (args.ring_size <= 1) ? 0u : (args.second_ring_size > 1 ? 2u : 1u);
+
+    DitFusedDistributedGroupnormGrid grid;
+    grid.num_virtual_cols =
+        ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, static_cast<int>(args.num_groups), W);
+    TT_FATAL(grid.num_virtual_cols >= 1, "no group-column split of {} channels into {} groups", W, args.num_groups);
+    const uint32_t col_rep_max = grid_size.x / grid.num_virtual_cols;  // ≥ 1
+
+    // Spatial-row split. Unlike stock GroupNorm — which fills the whole grid.y and FATALs when the
+    // input is too short — the per-device shard height Ht may be small (H is sharded across the
+    // cluster). Pick the largest num_virtual_rows that (a) factors as col_replication × num_actual_rows
+    // within the grid (col_replication ≤ grid.x/num_virtual_cols, num_actual_rows ≤ grid.y), (b)
+    // leaves a core free for each fabric forwarder and (c) gives every core at least one tile row.
+    // The rows need not divide evenly: the first Ht % num_virtual_rows cores of each column take one
+    // more. So the grid follows the input size only below grid-many tile rows. vr==1 is always
+    // feasible.
+    const uint32_t reduction_core_budget = grid_size.x * grid_size.y - num_forwarders;
+    for (uint32_t cr = 1; cr <= col_rep_max; ++cr) {
+        for (uint32_t nr = 1; nr <= grid_size.y; ++nr) {
+            const uint32_t vr = cr * nr;
+            if (vr <= Ht && (grid.num_virtual_cols * vr) <= reduction_core_budget && vr > grid.num_virtual_rows) {
+                grid.num_virtual_rows = vr;
+                grid.num_actual_rows = nr;
+                grid.col_replication = cr;
+            }
+        }
+    }
+    return grid;
+}
+
+namespace {
+
+// Writes every runtime arg that depends on the input's spatial size, at program creation and on every
+// program cache hit. Each group column's Ht tile rows are split over its num_virtual_rows cores in
+// order, the first Ht % num_virtual_rows of them taking one row more than the others.
+void write_size_runtime_args(
+    Program& program,
+    const DitFusedDistributedGroupnormSharedVariables& shared,
+    const Tensor& input,
+    uint32_t num_channels_per_group) {
+    const auto& shape = input.padded_shape();
+    const uint32_t W = shape[-1];
+    const uint32_t H = static_cast<uint32_t>(shape.volume() / W);
+    const uint32_t Ht = H / TILE_HEIGHT;
+    const uint32_t Wt = W / TILE_WIDTH;
+    const uint32_t num_virtual_rows = shared.num_virtual_rows;
+    TT_FATAL(
+        num_virtual_rows <= Ht,
+        "dit_fused_distributed_groupnorm: {} tile rows per device are fewer than the program's {} cores per group",
+        Ht,
+        num_virtual_rows);
+    const uint32_t base_rows = Ht / num_virtual_rows;
+    const uint32_t num_tall_cores = Ht % num_virtual_rows;
+    const auto rows_of = [&](uint32_t slot) { return base_rows + (slot < num_tall_cores ? 1u : 0u); };
+    const auto start_page_of = [&](const CoreCoord& v) {
+        const uint32_t slot = static_cast<uint32_t>(v.y);
+        const uint32_t first_row = (slot * base_rows) + std::min(slot, num_tall_cores);
+        return (first_row * Wt) + (shared.per_core_Nt * static_cast<uint32_t>(v.x));
+    };
+
+    // A spatial extent that is not whole tiles leaves padding rows in the last tile row. The readers
+    // zero them and the sender corrects the statistics, which cover the padded extent, for the zeros.
+    const uint32_t logical_H = input.logical_shape()[-2];
+    const bool has_pad_rows = logical_H != H;
+    std::array<uint32_t, gn_size_args::NUM_ARGS> common{};
+    common[gn_size_args::BASE_ROWS] = base_rows;
+    common[gn_size_args::NUM_TALL_CORES] = num_tall_cores;
+    common[gn_size_args::NUM_MCAST_CORES] = num_virtual_rows;
+    common[gn_size_args::PAD_ROW_FIRST_PAGE] = has_pad_rows ? (Ht - 1) * Wt : std::numeric_limits<uint32_t>::max();
+    common[gn_size_args::PAD_ROW_VALID_ROWS] = has_pad_rows ? logical_H - ((Ht - 1) * TILE_HEIGHT) : TILE_HEIGHT;
+    common[gn_size_args::PAD_STATS_SCALE] =
+        std::bit_cast<uint32_t>(static_cast<float>(H) / static_cast<float>(logical_H));
+    const auto write_common = [&](KernelHandle kernel) {
+        auto& args = GetCommonRuntimeArgs(program, kernel);
+        for (uint32_t i = 0; i < gn_size_args::NUM_ARGS; ++i) {
+            args[i] = common[i];
+        }
+    };
+    for (const auto kernel : shared.reader_kernel_ids) {
+        write_common(kernel);
+    }
+    write_common(shared.writer_kernel_ids[0]);
+    write_common(shared.compute_kernel_ids[0]);
+
+    auto& sender_args = GetRuntimeArgs(program, shared.reader_kernel_ids[0]);
+    for (size_t s = 0; s < shared.sender_cores.size(); ++s) {
+        const auto& core = shared.sender_cores[s];
+        auto& a = sender_args.at(core.x).at(core.y);
+        const uint32_t start = start_page_of(shared.sender_virtual_cores[s]);
+        a[2] = start;  // in0 start page
+        a[3] = start;  // output start page
+    }
+    if (shared.reader_kernel_ids.size() > 1) {
+        auto& receiver_args = GetRuntimeArgs(program, shared.reader_kernel_ids[1]);
+        for (size_t r = 0; r < shared.receiver_cores.size(); ++r) {
+            const auto& core = shared.receiver_cores[r];
+            const auto& v = shared.receiver_virtual_cores[r];
+            auto& a = receiver_args.at(core.x).at(core.y);
+            const uint32_t start = start_page_of(v);
+            a[2] = start;
+            a[3] = start;
+            a[gn_core_size_args::RECEIVER_BASE + gn_core_size_args::BLOCK_H] = rows_of(v.y);
+        }
+    }
+    auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_ids[0]);
+    auto& compute_args = GetRuntimeArgs(program, shared.compute_kernel_ids[0]);
+    for (size_t i = 0; i < shared.cores.size(); ++i) {
+        const auto& core = shared.cores[i];
+        const auto& v = shared.virtual_cores[i];
+        const uint32_t rows = rows_of(v.y);
+        auto& w = writer_args.at(core.x).at(core.y);
+        w[5] = start_page_of(v);  // output start page
+        w[gn_core_size_args::WRITER_BASE + gn_core_size_args::BLOCK_H] = rows;
+        auto& c = compute_args.at(core.x).at(core.y);
+        c[gn_core_size_args::COMPUTE_BASE + gn_core_size_args::BLOCK_H] = rows;
+        // The two-pass mean's 1/N over this core's 32 row-columns of each group, each covering
+        // num_channels_per_group * rows elements.
+        c[gn_core_size_args::COMPUTE_BASE + gn_core_size_args::TWO_PASS_RECIPROCAL] =
+            std::bit_cast<uint32_t>(1.0f / static_cast<float>(std::max(1U, num_channels_per_group * rows)));
+    }
+}
+
+}  // namespace
+
 // Multi-core mcast GroupNorm across the device grid — the on-device reduction is identical to the
 // stock ttnn::group_norm mcast path (groupnorm_mcast_program_factory.cpp): cores split into
 // num_virtual_cols group-columns × spatial-row stacks; one mcast-group master per column reduces
 // its column over the spatial rows, NoC-reads its peers' partials, and Welford-combines them into
-// the device-global (mean, var). The ONLY additions for the distributed op are, on the master
-// reader: (1) after the intra-device combine and BEFORE the mcast-back, the masters coalesce their
+// the device-global (mean, var). The additions for the distributed op are, on the master reader:
+// (1) after the intra-device combine and BEFORE the mcast-back, the masters coalesce their
 // per-group (mean, var) sub-sticks over one forwarder, ring all-gather every device's stats, and
 // Chan-merge them into the GLOBAL (mean, var); (2) the master then mcasts the GLOBAL stat (not the
 // device-local one) back to its column. Compute + writer run verbatim on every reduction core and
-// are agnostic to sender/receiver role and to whether the stat is device-local or global. At
-// ring_size==1 there is no fabric and the result is bit-exact with stock local GroupNorm.
+// are agnostic to sender/receiver role and to whether the stat is device-local or global. Unlike
+// stock, a column's tile rows need not split evenly over its cores, so the program serves every
+// spatial size (gn_choose_grid, write_size_runtime_args), and the intra-device combine weights the
+// cores by their row counts.
 DitFusedDistributedGroupnormMeshWorkloadFactory::cached_program_t
 DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const DitFusedDistributedGroupnormParams& args,
@@ -103,60 +236,36 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const CoreRange core_grid({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     const uint32_t max_cores = core_grid.size();
 
-    const uint32_t num_virtual_cols =
-        ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, static_cast<int>(num_groups), W);
-    const uint32_t col_rep_max = grid_size.x / num_virtual_cols;  // ≥ 1
-
-    // Spatial-row split. Unlike stock GroupNorm — which fills the whole grid.y and FATALs when the
-    // input is too short — the per-device shard height Ht may be small (H is sharded across the
-    // cluster). Pick the largest num_virtual_rows that (a) divides Ht, (b) factors as
-    // col_replication × num_actual_rows within the grid (col_replication ≤ grid.x/num_virtual_cols,
-    // num_actual_rows ≤ grid.y), and (c) leaves a core free for each fabric forwarder. This maximizes
-    // the reduction parallelism while keeping per_core_Mt integral. vr==1 is always feasible.
-    const uint32_t reduction_core_budget = max_cores - num_forwarders;
-    uint32_t num_virtual_rows = 1, num_actual_rows = 1, col_replication = 1;
-    for (uint32_t cr = 1; cr <= col_rep_max; ++cr) {
-        for (uint32_t nr = 1; nr <= grid_size.y; ++nr) {
-            const uint32_t vr = cr * nr;
-            if (vr <= Ht && (Ht % vr) == 0 && (num_virtual_cols * vr) <= reduction_core_budget &&
-                vr > num_virtual_rows) {
-                num_virtual_rows = vr;
-                num_actual_rows = nr;
-                col_replication = cr;
-            }
-        }
-    }
+    const auto grid_choice = gn_choose_grid(args, input_tensor);
+    const uint32_t num_virtual_cols = grid_choice.num_virtual_cols;
+    const uint32_t num_virtual_rows = grid_choice.num_virtual_rows;
+    const uint32_t num_actual_rows = grid_choice.num_actual_rows;
+    const uint32_t col_replication = grid_choice.col_replication;
     const uint32_t num_actual_cols = num_virtual_cols * col_replication;
     const uint32_t num_reduction_cores = num_actual_cols * num_actual_rows;
-    TT_FATAL(Ht % num_virtual_rows == 0, "internal: num_virtual_rows ({}) must divide Ht ({})", num_virtual_rows, Ht);
+    TT_FATAL(
+        num_virtual_rows <= Ht, "internal: num_virtual_rows ({}) exceeds the tile rows ({})", num_virtual_rows, Ht);
 
-    const uint32_t per_core_Mt = Ht / num_virtual_rows;
-    const uint32_t per_core_M = per_core_Mt * tile_h;
+    // The tile rows are split unevenly over a column's cores (see write_size_runtime_args), so the
+    // per-core height is a runtime arg; the program depends on the height only through the grid.
     const uint32_t per_core_N = W / num_virtual_cols;
     const uint32_t per_core_Nt = (per_core_N + tile_w - 1) / tile_w;
     const uint32_t num_shards_c = W / per_core_N;  // == num_virtual_cols
     const uint32_t num_groups_per_core = (num_groups > num_shards_c) ? (num_groups / num_shards_c) : 1u;
-    const uint32_t num_batches_per_core = 1;         // N == 1
-    const uint32_t num_rows_per_group = per_core_M;  // per-core rows per group (N == 1, one batch)
+    const uint32_t num_batches_per_core = 1;  // N == 1
 
     auto [block_wt, num_groups_per_reset] = ttnn::prim::find_max_tile_span(per_core_N, num_channels_per_group);
-    const uint32_t block_ht = per_core_Mt;  // num_batches_per_core == 1
     const uint32_t block_wt_last = (per_core_Nt + num_groups_per_core - 1) / num_groups_per_core;
     const uint32_t input_mask_num_tiles_per_core = block_wt * num_groups_per_core;
     const uint32_t per_core_N_bytes_padded =
         tt::round_up(per_core_N * datum_size_bytes, output_tensor.mesh_buffer().alignment());
 
-    // num_out_blocks: L1 safety net that splits the (now per-core) block height so height-scaled CBs
-    // fit L1. With the multi-core split per_core_M is small, so this is typically 1. The stock
-    // heuristic is keyed on the whole-tensor volume divided across cores; pass the per-core
-    // footprint with a core count of 1 for the same result, then clamp to the block height.
-    const uint32_t num_out_blocks =
-        std::min(ttnn::prim::groupnorm_heuristic_num_out_blocks(per_core_M * per_core_N, 1u), block_ht);
-    TT_FATAL(
-        num_out_blocks >= 1 && num_out_blocks <= block_ht,
-        "num_out_blocks ({}) must be in [1, block_ht ({})]",
-        num_out_blocks,
-        block_ht);
+    // The kernels take the per-core height at run time and process it in one out block, streaming
+    // the height-scaled CBs one tile at a time; the named args they replace are zeroed below.
+    constexpr uint32_t num_out_blocks = 1;
+    constexpr uint32_t per_core_Mt = 0;
+    constexpr uint32_t block_ht = 0;
+    constexpr uint32_t num_rows_per_group = 0;
 
     TT_FATAL(num_groups_per_core <= 16, "num_groups_per_core ({}) must be <= 16 for welford", num_groups_per_core);
     TT_FATAL(
@@ -379,7 +488,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // Circular buffers
     // ------------------------------------------------------------------------
-    const uint32_t in0_block_tiles = block_ht / num_out_blocks * block_wt;
+    // The input, output and intermediate CBs are streamed one tile at a time by every kernel, so their
+    // depth only sets how far a producer can run ahead. It is fixed so that it does not follow the size.
+    constexpr uint32_t in0_block_tiles = 32;
     const uint32_t interm_block_tiles = in0_block_tiles;
 
     // c_0 input (+ c_19 alias on fp32 path)
@@ -542,33 +653,13 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         reader_defines["GN_DISTRIBUTED_AG"] = "1";
     }
 
-    // Values that depend on the input's spatial size go to the kernels as common runtime args
-    // (gn_runtime_size_args.h) instead of compile-time args, so a new input size reuses the compiled
-    // kernels. The kernels support this with bf16 stats only, which cb_data_format pins.
+    // Values that depend on the input's spatial size go to the kernels as runtime args
+    // (gn_runtime_size_args.h) instead of compile-time args, so a new input size reuses the program.
+    // write_size_runtime_args writes them, here and on every program cache hit. The kernels support
+    // this with bf16 stats only, which cb_data_format pins.
     TT_FATAL(!stats_is_fp32, "dit_fused_distributed_groupnorm requires bf16 stats");
-    const uint32_t two_pass_reciprocal = std::bit_cast<uint32_t>(
-        1.0f / static_cast<float>(std::max(1U, num_channels_per_group * num_rows_per_group / tile_w)));
-    // A spatial extent that is not whole tiles leaves padding rows in the last tile row. The readers
-    // zero them and the sender corrects the statistics, which cover the padded extent, for the zeros.
-    const uint32_t logical_H = input_tensor.logical_shape()[2];
-    const bool has_pad_rows = logical_H != H;
-    const uint32_t pad_row_first_page = has_pad_rows ? (Ht - 1) * Wt : std::numeric_limits<uint32_t>::max();
-    const uint32_t pad_row_valid_rows = has_pad_rows ? logical_H - ((Ht - 1) * tile_h) : tile_h;
-    const uint32_t pad_stats_scale = std::bit_cast<uint32_t>(static_cast<float>(H) / static_cast<float>(logical_H));
-    const std::vector<uint32_t> size_args = {
-        per_core_Mt,                              // PER_CORE_M
-        block_ht,                                 // BLOCK_H
-        num_out_blocks,                           // NUM_OUT_BLOCKS
-        per_core_Mt * Wt / num_batches_per_core,  // NUM_TILES_PER_BATCH
-        num_cores_per_mcast_group,                // NUM_MCAST_CORES
-        two_pass_reciprocal,                      // TWO_PASS_RECIPROCAL
-        per_core_Mt * per_core_Nt,                // PER_CORE_MN
-        num_rows_per_group,                       // NUM_ROWS_PER_GROUP
-        pad_row_first_page,                       // PAD_ROW_FIRST_PAGE
-        pad_row_valid_rows,                       // PAD_ROW_VALID_ROWS
-        pad_stats_scale,                          // PAD_STATS_SCALE
-    };
-    // The kernels read these from size_args instead; zero them so they don't enter the kernel hash.
+    constexpr uint32_t two_pass_reciprocal = 0;
+    // The kernels read these from runtime args instead; zero them so they don't enter the kernel hash.
     const auto zero_size_args = [](std::unordered_map<std::string, uint32_t>& named_ct) {
         for (const char* name :
              {"per_core_M",
@@ -782,6 +873,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     KernelHandle compute_kernel_id =
         CreateKernel(program, gn_kernel_base + "compute/welford_groupnorm.cpp", all_reduction_cores, compute_config);
 
+    // Placeholders, filled in by write_size_runtime_args below.
+    const std::vector<uint32_t> size_args(gn_size_args::NUM_ARGS, 0u);
     SetCommonRuntimeArgs(program, sender_reader_kernel_id, size_args);
     if (has_receivers) {
         SetCommonRuntimeArgs(program, receiver_reader_kernel_id, size_args);
@@ -817,6 +910,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     std::vector<size_t> stats_dram_addr_reader_arg_idx;
     std::vector<CoreCoord> sender_cores_out;
     std::vector<CoreCoord> receiver_cores_out;
+    std::vector<CoreCoord> sender_virtual_out;
+    std::vector<CoreCoord> receiver_virtual_out;
 
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
         std::vector<CoreCoord> group = mcast_groups[i];  // non-const: split_and_form_rectangle_grids mutates it
@@ -826,11 +921,15 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         for (size_t j = 0; j < group.size(); ++j) {
             const CoreCoord core = group[j];
             const CoreCoord virtual_core = virtual_group[j];
-            const uint32_t in0_start_id = per_core_Mt * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
-            const uint32_t out_tile_start_id = in0_start_id;
+            // The start pages are size-dependent: write_size_runtime_args fills them in.
+            constexpr uint32_t in0_start_id = 0;
+            constexpr uint32_t out_tile_start_id = 0;
 
             if (j == 0) {  // mcast-group master (sender reader + fabric)
+                // The sender kernel derives its tile rows from being the first core of its group.
+                TT_FATAL(virtual_core.y == 0, "internal: mcast group {} does not start at tile-row slot 0", i);
                 sender_cores_out.push_back(core);
+                sender_virtual_out.push_back(virtual_core);
                 std::vector<CoreCoord> mcast_group_first;
                 std::vector<CoreCoord> mcast_group_mid(group);
                 std::vector<CoreCoord> mcast_group_last;
@@ -923,6 +1022,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                 SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
             } else {  // receiver reader
                 receiver_cores_out.push_back(core);
+                receiver_virtual_out.push_back(virtual_core);
                 CoreCoord sender_virtual = device->worker_core_from_logical_core(group.front());
                 std::vector<uint32_t> rt = {
                     input_addr,
@@ -932,6 +1032,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                     Wt,
                     static_cast<uint32_t>(sender_virtual.x),
                     static_cast<uint32_t>(sender_virtual.y)};
+                TT_FATAL(rt.size() == gn_core_size_args::RECEIVER_BASE, "internal: receiver runtime-arg layout");
+                rt.push_back(0u);  // BLOCK_H
                 SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
             }
         }
@@ -946,7 +1048,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     for (size_t i = 0; i < core_coords.size(); ++i) {
         const CoreCoord core = core_coords[i];
         const CoreCoord virtual_core = virtual_core_coords[i];
-        const uint32_t out_tile_start_id = per_core_Mt * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
+        constexpr uint32_t out_tile_start_id = 0;  // size-dependent: write_size_runtime_args
 
         if (virtual_core.x > curr_virtual_core_x) {
             curr_virtual_core_x++;
@@ -974,7 +1076,11 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             input_mask_tile_start_id,
             Wt,
         };
+        TT_FATAL(writer_rt.size() == gn_core_size_args::WRITER_BASE, "internal: writer runtime-arg layout");
+        writer_rt.push_back(0u);  // BLOCK_H
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt);
+        SetRuntimeArgs(
+            program, compute_kernel_id, core, std::vector<uint32_t>(gn_core_size_args::NUM_COMPUTE_ARGS, 0u));
     }
 
     // Forwarder RT args: gather all masters' NoC coords (slot order), present_count = num_masters.
@@ -1022,19 +1128,24 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         reader_ids.push_back(receiver_reader_kernel_id);
     }
 
-    return {
-        std::move(program),
-        DitFusedDistributedGroupnormSharedVariables{
-            .reader_kernel_ids = reader_ids,
-            .writer_kernel_ids = {writer_kernel_id},
-            .compute_kernel_ids = {compute_kernel_id},
-            .forwarder_kernel_ids = forwarder_kernel_ids,
-            .forwarder_cores = forwarder_cores,
-            .cores = core_coords,
-            .sender_cores = sender_cores_out,
-            .receiver_cores = receiver_cores_out,
-            .stats_dram_addr_reader_arg_idx = stats_dram_addr_reader_arg_idx,
-        }};
+    DitFusedDistributedGroupnormSharedVariables shared{
+        .reader_kernel_ids = reader_ids,
+        .writer_kernel_ids = {writer_kernel_id},
+        .compute_kernel_ids = {compute_kernel_id},
+        .forwarder_kernel_ids = forwarder_kernel_ids,
+        .forwarder_cores = forwarder_cores,
+        .cores = core_coords,
+        .sender_cores = sender_cores_out,
+        .receiver_cores = receiver_cores_out,
+        .stats_dram_addr_reader_arg_idx = stats_dram_addr_reader_arg_idx,
+        .virtual_cores = virtual_core_coords,
+        .sender_virtual_cores = sender_virtual_out,
+        .receiver_virtual_cores = receiver_virtual_out,
+        .num_virtual_rows = num_virtual_rows,
+        .per_core_Nt = per_core_Nt,
+    };
+    write_size_runtime_args(program, shared, input_tensor, num_channels_per_group);
+    return {std::move(program), std::move(shared)};
 }
 
 DitFusedDistributedGroupnormMeshWorkloadFactory::cached_mesh_workload_t
@@ -1119,6 +1230,11 @@ void DitFusedDistributedGroupnormMeshWorkloadFactory::override_runtime_arguments
             fwd_args_by_core.at(fc.x).at(fc.y)[0] = stats_dram_addr;
             fwd_args_by_core.at(fc.x).at(fc.y)[1] = global_semaphores.at(f).address();
         }
+
+        // The program serves every spatial size with this grid, so the size-dependent args follow
+        // the input on every call.
+        write_size_runtime_args(
+            program, shared, tensor_args.input, tensor_args.input.padded_shape()[-1] / operation_attributes.num_groups);
     }
 }
 

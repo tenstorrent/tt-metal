@@ -36,11 +36,14 @@ void kernel_main() {
 
 #ifdef GN_RUNTIME_SIZE_ARGS
     const std::uint32_t num_mcast_cores = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_MCAST_CORES);
-    const std::uint32_t per_core_M = get_common_arg_val<std::uint32_t>(gn_size_args::PER_CORE_M);
-    const std::uint32_t block_h = get_common_arg_val<std::uint32_t>(gn_size_args::BLOCK_H);
-    const std::uint32_t num_tiles_per_batch = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_TILES_PER_BATCH);
-    const std::uint32_t num_out_blocks = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
-    const std::uint32_t num_rows_per_group = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_ROWS_PER_GROUP);
+    const std::uint32_t base_rows = get_common_arg_val<std::uint32_t>(gn_size_args::BASE_ROWS);
+    const std::uint32_t num_tall_cores = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_TALL_CORES);
+    // The sender is the first core of its group, so it holds one row more when any core does.
+    const std::uint32_t block_h = base_rows + (num_tall_cores > 0 ? 1 : 0);
+    const std::uint32_t per_core_M = block_h;
+    const std::uint32_t num_tiles_per_batch = block_h * get_arg_val<std::uint32_t>(4);
+    constexpr std::uint32_t num_out_blocks = 1;
+    const std::uint32_t num_rows_per_group = block_h * tile_height;
     const std::uint32_t pad_row_first_page = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_FIRST_PAGE);
     const std::uint32_t pad_row_valid_rows = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_VALID_ROWS);
     const float pad_stats_scale =
@@ -68,9 +71,11 @@ void kernel_main() {
     constexpr uint32_t stats_local_cb_id = get_named_compile_time_arg_val("stats_local_cb_id");
     constexpr uint32_t stats_gathered_cb_id = get_named_compile_time_arg_val("stats_gathered_cb_id");
     // Per-device element count per group, the per-subgroup COUNT_PER_VALUE for the cross-device
-    // combine. num_rows_per_group is PER CORE, so scale by the mcast-group core count.
+    // combine. num_rows_per_group is PER CORE, so scale by the mcast-group core count. With
+    // GN_RUNTIME_SIZE_ARGS the cores' rows differ, so count the column's rows instead.
 #ifdef GN_RUNTIME_SIZE_ARGS
-    const uint32_t count_per_device = num_channels_per_group * num_rows_per_group * num_mcast_cores;
+    const uint32_t count_per_device =
+        num_channels_per_group * tile_height * (base_rows * num_mcast_cores + num_tall_cores);
 #else
     constexpr uint32_t count_per_device = num_channels_per_group * num_rows_per_group * num_mcast_cores;
 #endif
@@ -431,8 +436,15 @@ void kernel_main() {
             auto* p_global_means_read = reinterpret_cast<stats_read_t*>(global_means_ptr);
             auto* p_global_vars_read = reinterpret_cast<stats_read_t*>(global_vars_ptr);
 #ifdef GN_RUNTIME_SIZE_ARGS
-            auto global_result = combine_welford_stats<global_stride>(
-                p_global_means_read, p_global_vars_read, num_mcast_cores, num_channels_per_group * num_rows_per_group);
+            // The group's cores are in the order of their tile rows; the first num_tall_cores hold
+            // one row more than the others.
+            auto global_result = combine_welford_stats_two_counts<global_stride>(
+                p_global_means_read,
+                p_global_vars_read,
+                num_mcast_cores,
+                num_tall_cores,
+                num_channels_per_group * (base_rows + 1) * tile_height,
+                num_channels_per_group * base_rows * tile_height);
             // The device's statistics so far include the zeroed padding rows. Every device holds the
             // same padded and logical extents, so the cross-device merge below can use these
             // corrected statistics with equal weights.

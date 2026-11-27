@@ -94,10 +94,10 @@ void kernel_main() {
     constexpr uint32_t per_core_N = get_named_compile_time_arg_val("per_core_N");
 
 #ifdef GN_RUNTIME_SIZE_ARGS
-    const uint32_t block_h = get_common_arg_val<uint32_t>(gn_size_args::BLOCK_H);
-    const uint32_t per_core_M = get_common_arg_val<uint32_t>(gn_size_args::PER_CORE_M);
-    const uint32_t per_core_MN = get_common_arg_val<uint32_t>(gn_size_args::PER_CORE_MN);
-    const uint32_t num_out_blocks = get_common_arg_val<uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
+    const uint32_t block_h = get_arg_val<uint32_t>(gn_core_size_args::COMPUTE_BASE + gn_core_size_args::BLOCK_H);
+    const uint32_t per_core_M = block_h;
+    const uint32_t per_core_MN = block_h * per_core_N;
+    constexpr uint32_t num_out_blocks = 1;
 #else
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
@@ -144,7 +144,8 @@ void kernel_main() {
     constexpr bool enable_fp32_reconfig = get_named_compile_time_arg_val("enable_fp32_reconfig") != 0;
     constexpr bool sfpu_two_pass_l1_replay = get_named_compile_time_arg_val("sfpu_two_pass_l1_replay") != 0;
 #ifdef GN_RUNTIME_SIZE_ARGS
-    const uint32_t sfpu_two_pass_reciprocal = get_common_arg_val<uint32_t>(gn_size_args::TWO_PASS_RECIPROCAL);
+    const uint32_t sfpu_two_pass_reciprocal =
+        get_arg_val<uint32_t>(gn_core_size_args::COMPUTE_BASE + gn_core_size_args::TWO_PASS_RECIPROCAL);
 #else
     constexpr uint32_t sfpu_two_pass_reciprocal = get_named_compile_time_arg_val("sfpu_two_pass_reciprocal");
 #endif

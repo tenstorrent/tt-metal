@@ -212,6 +212,17 @@ ttsl::hash::hash_t DitFusedDistributedGroupnormDeviceOperation::compute_program_
     auto* mesh_device = tensor_args.input.device();
     auto sd_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    // The input's spatial size reaches the kernels only as runtime args, which the factory rewrites
+    // on every hit, so the key leaves it out. It keeps what the program is built from: the channel
+    // count, the rank, the input's format and placement, and the reduction grid, which depends on the
+    // spatial size only for inputs with fewer tile rows than the grid has rows. The other tensors'
+    // shapes do not follow the spatial size.
+    const auto& input = tensor_args.input;
+    const auto grid = gn_choose_grid(args, input);
+    const auto& input_layout = input.tensor_spec().tensor_layout();
+    const auto spec_of = [](const std::optional<Tensor>& t) -> std::optional<TensorSpec> {
+        return t.has_value() ? std::optional<TensorSpec>(t->tensor_spec()) : std::nullopt;
+    };
     return tt::tt_metal::operation::hash_operation<DitFusedDistributedGroupnormDeviceOperation>(
         args.num_groups,
         args.eps,
@@ -228,7 +239,20 @@ ttsl::hash::hash_t DitFusedDistributedGroupnormDeviceOperation::compute_program_
         args.second_topology,
         args.compute_kernel_config,
         subdevice_core_range_set,
-        tensor_args);
+        input.storage_type(),
+        input_layout.get_data_type(),
+        input_layout.get_page_config(),
+        input_layout.get_memory_config(),
+        input_layout.get_alignment(),
+        input.padded_shape().rank(),
+        input.padded_shape()[-1],
+        grid.num_virtual_rows,
+        grid.num_actual_rows,
+        grid.col_replication,
+        spec_of(tensor_args.gamma),
+        spec_of(tensor_args.beta),
+        spec_of(tensor_args.input_mask),
+        spec_of(tensor_args.persistent_output_buffer));
 }
 
 }  // namespace ttnn::experimental::prim

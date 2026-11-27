@@ -68,9 +68,9 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
 
 #ifdef GN_RUNTIME_SIZE_ARGS
-    const uint32_t num_tiles_per_batch = get_common_arg_val<uint32_t>(gn_size_args::NUM_TILES_PER_BATCH);
-    const uint32_t num_out_blocks = get_common_arg_val<uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
-    const uint32_t block_h = get_common_arg_val<uint32_t>(gn_size_args::BLOCK_H);
+    const uint32_t block_h = get_arg_val<uint32_t>(gn_core_size_args::WRITER_BASE + gn_core_size_args::BLOCK_H);
+    const uint32_t num_tiles_per_batch = block_h * get_arg_val<uint32_t>(9);
+    constexpr uint32_t num_out_blocks = 1;
 #else
     constexpr uint32_t num_tiles_per_batch = get_named_compile_time_arg_val("num_tiles_per_batch");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");

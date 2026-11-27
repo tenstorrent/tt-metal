@@ -35,11 +35,12 @@ void kernel_main() {
     constexpr std::uint32_t num_channels_per_group = get_named_compile_time_arg_val("num_channels_per_group");
 
 #ifdef GN_RUNTIME_SIZE_ARGS
-    const std::uint32_t per_core_M = get_common_arg_val<std::uint32_t>(gn_size_args::PER_CORE_M);
-    const std::uint32_t block_h = get_common_arg_val<std::uint32_t>(gn_size_args::BLOCK_H);
-    const std::uint32_t num_tiles_per_batch = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_TILES_PER_BATCH);
-    const std::uint32_t num_out_blocks = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_OUT_BLOCKS);
-    const std::uint32_t num_rows_per_group = get_common_arg_val<std::uint32_t>(gn_size_args::NUM_ROWS_PER_GROUP);
+    const std::uint32_t block_h =
+        get_arg_val<std::uint32_t>(gn_core_size_args::RECEIVER_BASE + gn_core_size_args::BLOCK_H);
+    const std::uint32_t per_core_M = block_h;
+    const std::uint32_t num_tiles_per_batch = block_h * get_arg_val<std::uint32_t>(4);
+    constexpr std::uint32_t num_out_blocks = 1;
+    const std::uint32_t num_rows_per_group = block_h * tile_height;
     const std::uint32_t pad_row_first_page = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_FIRST_PAGE);
     const std::uint32_t pad_row_valid_rows = get_common_arg_val<std::uint32_t>(gn_size_args::PAD_ROW_VALID_ROWS);
 #else
