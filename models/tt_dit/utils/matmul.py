@@ -1240,7 +1240,7 @@ def register_matmul_configs(configs: dict) -> None:
 
     Args:
         configs: Mapping from grid key string to dict of (M,K,N) -> config tuples.
-            Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
+            Grid keys: ``"11x10"``, ``"12x10"``, ``"12x9"``, ``"12x8"``, ``"13x9"``, ``"8x8"``, ``"8x9"``.
             Config tuple format: ``(M_block, K_block, N_block)`` or
             ``(M_block, K_block, N_block, (sub_h, sub_w))``.
             When subblock is omitted, the default ``(2, 2)`` is used.
@@ -1260,6 +1260,7 @@ def register_matmul_configs(configs: dict) -> None:
         "11x10": grid_11_10_configs,
         "12x10": grid_12_10_configs,
         "12x9": grid_12_9_configs,
+        "12x8": grid_12_8_configs,
         "13x9": grid_13_9_configs,
     }
     for grid_key, entries in configs.items():

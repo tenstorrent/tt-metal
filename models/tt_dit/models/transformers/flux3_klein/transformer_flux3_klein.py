@@ -117,6 +117,29 @@ register_matmul_configs(
 )
 
 
+# SP4 x TP2 replicas (a 4x2 submesh per image) at 1024x1024: per device, 1024 image rows + 256 text rows. The QKV
+# (N 4608, chunks 3) and fused-SwiGLU MLP-in (N 9216) all-gather matmuls run on Attention.get_core_grid's grid: 12x9
+# for the 1280-row single stream, 12x8 for the 1024-row image and 256-row text streams of the double-stream blocks.
+# Swept on Blackhole Galaxy by replaying the model's own calls (same CCLManager semaphores and persistent buffers,
+# 2 links, 6 workers per link), best blocking per (shape, grid); per-call times measured vs the rule-engine config
+# these shapes used before: see the PR description. Outputs differ from the old blocking only at bf16 rounding level
+# (different K blocking -> different accumulation order).
+register_matmul_configs(
+    {
+        "12x9": {
+            (1280, 3072, 4608): (4, 4, 10, (2, 2)),  # QKV, single stream: 291.7 -> 253.7 us
+            (1280, 3072, 9216): (4, 8, 8, (2, 2)),  # MLP-in + SwiGLU, single stream: 542.8 -> 520.3 us
+        },
+        "12x8": {
+            (1024, 3072, 4608): (3, 4, 10, (3, 1)),  # QKV, double-stream image: 287.3 -> 227.9 us
+            (1024, 3072, 9216): (3, 4, 10, (3, 1)),  # MLP-in + SwiGLU, double-stream image: 526.1 -> 490.6 us
+            (256, 3072, 4608): (1, 8, 8, (1, 4)),  # QKV, double-stream text: 232.9 -> 211.0 us
+            (256, 3072, 9216): (1, 12, 8, (1, 4)),  # MLP-in + SwiGLU, double-stream text: 419.7 -> 392.6 us
+        },
+    }
+)
+
+
 @dataclass(frozen=True)
 class Flux3KleinSequenceLayout:
     """Row layout of one sample on the SP axis.
