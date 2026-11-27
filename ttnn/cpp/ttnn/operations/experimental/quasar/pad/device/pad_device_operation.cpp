@@ -157,8 +157,22 @@ void PadDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
                 input_tensor.dtype() == DataType::INT32 || input_tensor.dtype() == DataType::UINT32 ||
-                input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B,
+                input_tensor.dtype() == DataType::UINT16 || input_tensor.dtype() == DataType::BFLOAT8_B ||
+                tt::tt_metal::is_mx(input_tensor.dtype()),
             "Cannot pad tilized tensor with specified format");
+        // An MX tile is 32-element blocks with a shared scale, so the kernels can only copy whole input tiles
+        // and emit whole pad tiles. A zero-filled page is the MX zero tile (zero scale, zero elements); any
+        // other fill value would need an MX-aware encoder.
+        TT_FATAL(
+            !tt::tt_metal::is_mx(input_tensor.dtype()) || operation_attributes.pad_value == 0.0f,
+            "ttnn.pad on MX tensors ({}) supports only pad_value 0 (whole zero tiles); got {}",
+            input_tensor.dtype(),
+            operation_attributes.pad_value);
+        TT_FATAL(
+            !tt::tt_metal::is_mx(input_tensor.dtype()) || (input_tensor.logical_shape()[2] % TILE_HEIGHT == 0 &&
+                                                           input_tensor.logical_shape()[3] % TILE_WIDTH == 0),
+            "ttnn.pad on MX tensors needs a tile-aligned input (no implicit tile padding to overwrite), got {}",
+            input_tensor.logical_shape());
     } else if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
@@ -194,7 +208,8 @@ void PadDeviceOperation::validate_on_program_cache_miss(
             alignment_requirement);
     }
 
-    if (operation_attributes.output_mem_config.is_sharded()) {
+    // element_size() is undefined for MX (a TILE-only format); this row-major page-alignment check does not apply.
+    if (operation_attributes.output_mem_config.is_sharded() && !tt::tt_metal::is_mx(input_tensor.dtype())) {
         uint32_t output_shard_width =
             operation_attributes.output_mem_config.shard_spec().has_value()
                 ? operation_attributes.output_mem_config.shard_spec().value().shape[1]

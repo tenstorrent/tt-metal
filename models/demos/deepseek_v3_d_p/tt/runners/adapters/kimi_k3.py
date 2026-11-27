@@ -101,10 +101,9 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # aligned), the combine barrier, the dispatch semaphores and the router iteration words - 1696 B, plus 16. It sits in
     # L1_SMALL at the top of L1, above ring_mla's static CBs: every byte here is a byte less for them.
     moe_block_words_slab = 1712
-    # `weight_cache_path` appends `{name}_{arch}_{N}dev/{sp}x{tp}`, so this is the root only. The
-    # cache generator writes `<root>/kimi_k3_bh_32dev/<checkpoint-id>/mesh8x4.tpaxis1`, keyed by
-    # checkpoint so a different one cannot silently load another's tensors; `8x4` is a symlink onto
-    # that, which is what makes the layout match every other model here.
+    # `weight_cache_path` appends `{name}_{arch}_{N}dev/<checkpoint-id>/mesh{R}x{C}.tpaxis{T}`
+    # (`weight_cache_key`), so this is the root only: the cache generator keys it by checkpoint, so a
+    # different one cannot silently load another's tensors, and by TP axis, so either SP axis finds its own.
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill"
     # The runner prints this and the producer reads it only when PCC checking is on. Kimi-K3 has no
     # full-depth golden — the 1M trace records decoder_output for layers 0..24 of 93 — so a runner
@@ -391,6 +390,20 @@ class KimiK3Adapter(MLAPrefillAdapter):
             "latent_up": t["l.up_proj"].float(),
             "latent_norm": t["l.norm"].float(),
         }
+
+    def weight_cache_key(self, mesh_shape: tuple, sp_axis: int) -> Path:
+        """``<checkpoint-id>/mesh{R}x{C}.tpaxis{1 - sp_axis}``, as the cache generator writes it, for the checkpoint
+        missing pieces are built from (``hf_model_path``; run_multirank_pcc.sh exports PREFILL_HF_MODEL and keys its
+        check by it).
+        """
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
+
+        checkpoint = Path(self.hf_model_path)
+        assert (checkpoint / "model.safetensors.index.json").is_file(), (
+            f"{self.name}: the weight cache is keyed by checkpoint, and there is none at '{checkpoint}' "
+            "(set PREFILL_HF_MODEL)"
+        )
+        return checkpoint_cache_key(checkpoint, mesh_shape, 1 - sp_axis)
 
     def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0):
         """K3's TtMoe tensorbin cache for this mesh (weights.cache_root), keyed by moe_block_checkpoint."""

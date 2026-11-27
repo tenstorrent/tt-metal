@@ -156,8 +156,11 @@ void AllToAllAsyncGenericDeviceOperation::validate_on_program_cache_miss(
             (tilize_input && operation_attributes.in_dim == rank - 2 && operation_attributes.out_dim < rank - 2 &&
              input_shape[rank - 1] % tt::constants::TILE_WIDTH == 0 &&
              input_shape[rank - 2] % tt::constants::TILE_HEIGHT == 0 &&
-             input_tensor.memory_config().buffer_type() == BufferType::DRAM),
-        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM).",
+             (input_tensor.memory_config().buffer_type() == BufferType::DRAM ||
+              (input_tensor.memory_config().buffer_type() == BufferType::L1 &&
+               input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED))),
+        "Unsupported input layout {} (a row-major input must concatenate along dim {} with whole tiles, in DRAM or "
+        "interleaved L1).",
         input_tensor.layout(),
         rank - 2);
 

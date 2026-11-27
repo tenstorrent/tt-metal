@@ -1,0 +1,231 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Phase 0, step 3 of the persistent-stack port: N dense KDA layers as ONE persistent program (the reference's MkStack
+on one chip / TPStack on a TP mesh: the layer loop inside the kernels, per-layer argument table, the weight stream of
+layer l + 1 starting under layer l's tail), built from OUR HF weights and timed.
+
+    GLM53_MESH_SHAPE=1,1 GLM53_MK_LAYERS=0,1,2 GLM53_MK_VTP=8 pytest .../test_mk_stack_probe.py -s
+
+Prints the traced time per launch and per layer, and every layer's per-phase probe marks.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+import torch
+from loguru import logger
+
+import ttnn
+from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, load_hf_text_config
+from models.autoports.zai_org_glm_5_3_flash.tt.mk_stack import MkStack
+from models.autoports.zai_org_glm_5_3_flash.tt.optimized_decoder import OptimizedDecoderConfig
+from models.autoports.zai_org_glm_5_3_flash.tt.stack_model import layer_kind, set_knobs
+from models.autoports.zai_org_glm_5_3_flash.tt.tp8_layer import TPDenseKDALayer
+from models.autoports.zai_org_glm_5_3_flash.tt.tp_stack import TPStack
+from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+from models.demos.glm53_flash.tests.test_mk_layer_probe import RawHFSource
+from models.demos.glm53_flash.tt.mesh import mesh_device_params
+
+MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "1,1").split(","))
+LAYERS = [int(v) for v in os.environ.get("GLM53_MK_LAYERS", "0,1,2").split(",")]
+VTP = int(os.environ.get("GLM53_MK_VTP", "8"))
+B = int(os.environ.get("GLM53_MK_B", "1"))
+T = int(os.environ.get("GLM53_MK_T", "1"))
+N_TRACE = int(os.environ.get("GLM53_MK_N", "4"))
+TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
+
+
+# the stack's kernel binaries need a kernel-config ring above the default 69 KB: the ring is the L1 below the
+# allocatable region, so the device opens with the reference's smaller worker_l1_size (1,264,512)
+WORKER_L1 = int(os.environ.get("GLM53_MK_WORKER_L1", "1264512"))
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "device_params",
+    [mesh_device_params(*MESH, trace_region_size=TRACE_MB << 20, worker_l1_size=WORKER_L1)],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def test_mk_stack_probe(mesh_device):
+    snapshot = default_snapshot_dir()
+    cfg = load_hf_text_config(str(snapshot))
+    ocfg = OptimizedDecoderConfig()
+    kinds = {L: layer_kind(cfg, L) for L in LAYERS}
+    assert all(k == DENSE_KDA for k in kinds.values()), f"this probe stacks dense KDA layers only: {kinds}"
+    if os.environ.get("GLM53_MK_KNOBS", "1") == "1":  # the reference's dense-kind knob set (GLM53_STACK_KNOBS)
+        set_knobs(False, VTP, T)
+    source = RawHFSource(snapshot, LAYERS)
+    t0 = time.perf_counter()
+    tps = []
+    for L in LAYERS:
+        tps.append(
+            TPDenseKDALayer(
+                mesh_device, cfg, L, source, ocfg, b=B, probe=False, vtp=VTP, fabric=tps[0].fabric if tps else None
+            )
+        )
+    logger.info(f"{len(tps)} dense KDA layers built in {time.perf_counter() - t0:.1f} s: mesh {MESH}, vtp {VTP}")
+    one_chip = MESH[0] * MESH[1] == 1
+    mks = [tp.mk for tp in tps]
+    stack = (
+        MkStack(mesh_device, mks, t=T, probe=True) if one_chip else TPStack(mesh_device, mks, tps[0], t=T, probe=True)
+    )
+    states = [tp.attn.allocate_state(B) for tp in tps]
+    active = tps[0].masks(torch.ones(B))
+    hists = [s.C for s in states]
+    ss = [s.S for s in states]
+    res = stack.residual()
+    torch.manual_seed(0)
+    x = tps[0].replicated(
+        (torch.randn(*tuple(res.shape)) * 0.1).float(), ttnn.float32, memory_config=res.memory_config()
+    )
+    ttnn.copy(x, res)
+    t0 = time.perf_counter()
+    stack(hists, active, ss)  # builds the stack program (eager launch)
+    ttnn.synchronize_device(mesh_device)
+    logger.info(f"first stack launch (build + run) {time.perf_counter() - t0:.1f} s")
+    if os.environ.get("GLM53_MK_GEO", "1") == "1":  # the readers' per-phase geometry (ReaderPhases.geo) and ring slots
+        rd0 = getattr(tps[0].mk, "readers", None)
+        if rd0 is not None:
+            roles = [getattr(p_.ds, "role", "?") for p_ in rd0.phases]
+            for role, g in zip(roles, rd0.geo):
+                logger.info(
+                    f"MK_GEO: {role}: {dict((k, v) for k, v in g.items() if k != 'w_dtype')} dtype {g.get('w_dtype')}"
+                )
+            logger.info(
+                f"MK_GEO rings {rd0.rings} slots {rd0.ring_slots} readers {len(rd0.assign)} in0_cap {getattr(rd0, 'in0_cap', None)} nr_max {getattr(rd0, 'nr_max', None)}"
+            )
+    if os.environ.get("GLM53_MK_CBDUMP", "0") == "1":  # the composed program's CB placement (tt/cb_guard.py replay)
+        from models.autoports.zai_org_glm_5_3_flash.tt import cb_guard
+
+        logger.info(f"MK_STACK_INFO: {getattr(stack, 'info', None)}")
+        desc = getattr(stack, "desc", None)
+        cbs = list(desc.cbs) if desc is not None else []
+        if not cbs and isinstance(getattr(stack, "program", None), tuple):
+            try:
+                mpd = stack.program[1]
+                cbs = list(mpd[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 0))].cbs)
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"no cbs from the program: {e}")
+        rows = []
+        for addr, size, ranges, idx in cb_guard.placement(cbs):
+            rows.append((idx, addr, size, ranges))
+        for r in rows:
+            logger.info(f"MK_STACK_CB: idx {r[0]} addr {r[1]} size {r[2]} end {r[1] + r[2]} ranges {r[3]}")
+    if one_chip:
+        for L in range(len(tps)):
+            _, marks = stack.probe_marks(L)
+            logger.info(f"MK_STACK_PROBE marks layer {LAYERS[L]}: {marks}")
+    if os.environ.get("GLM53_MK_CHECK", "0") == "1":
+        # self-consistency of the STACK against the single-layer programs run in sequence (the same shards, the same
+        # partial sums on this mesh: no HF golden needed, so a TP-vtp-sized geometry on fewer chips is checkable):
+        # fresh states, the stack's input residual x -> layer programs one after another -> compare with the stack's
+        # residual after its launch
+        H = cfg.hidden_size
+        res_stack = ttnn.to_torch(ttnn.get_device_tensors(res)[0]).float()
+        states2 = [tp.attn.allocate_state(B) for tp in tps]
+        xr = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).float()  # the stack's input (replicated)
+        cur = tps[0].replicated(xr.reshape(1, 1, T, 4 * H).contiguous(), ttnn.float32)
+        details = None
+        for tp, st in zip(tps, states2):
+            s1, out, details, _ = tp(cur, st.C, active, st.S, t=T)
+            ttnn.synchronize_device(mesh_device)
+            cur = out
+        # the last layer's named intermediates (the layer program's details dict) vs the stack's shared pool tensors
+        # of the same shape / dtype: the best-matching pool tensor per name (which sub-result the stack gets wrong)
+        shared = list(getattr(stack, "shared", []))
+        pool = []
+        for i, st_ in enumerate(shared):
+            try:
+                pool.append(
+                    (i, tuple(st_.shape), str(st_.dtype), ttnn.to_torch(ttnn.get_device_tensors(st_)[0]).float())
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        if isinstance(details, dict):
+            for name, v in details.items():
+                if not hasattr(v, "shape") or not hasattr(v, "dtype"):
+                    continue
+                try:
+                    ref = ttnn.to_torch(ttnn.get_device_tensors(v)[0]).float()
+                except Exception:  # noqa: BLE001
+                    continue
+                cands = [(i, t) for i, shp, dt, t in pool if shp == tuple(v.shape) and dt == str(v.dtype)]
+                best = None
+                for i, t in cands:
+                    a_, b_ = t.reshape(-1).nan_to_num(0, 1e9, -1e9), ref.reshape(-1).nan_to_num(0, 1e9, -1e9)
+                    pc = (
+                        float(torch.corrcoef(torch.stack([a_, b_]))[0, 1])
+                        if a_.numel() > 1 and a_.std() > 0 and b_.std() > 0
+                        else float("nan")
+                    )
+                    md = float((a_ - b_).abs().max())
+                    if best is None or (pc == pc and (best[1] != best[1] or pc > best[1])):
+                        best = (i, pc, md)
+                logger.info(
+                    f"MK_STACK_NAMED: {name} {tuple(v.shape)} {v.dtype}: best pool match {best} of {len(cands)} candidates"
+                )
+        o_seq = ttnn.to_torch(ttnn.get_device_tensors(cur)[0]).float().reshape(T, 4, H)
+        o_stk = res_stack.reshape(-1, H)[: 4 * T].reshape(T, 4, H) if res_stack.numel() >= 4 * T * H else res_stack
+        a, b = o_stk.reshape(-1), o_seq.reshape(-1)
+        fin = bool(torch.isfinite(a).all())
+        p_ = float(torch.corrcoef(torch.stack([a.nan_to_num(0, 1e9, -1e9), b]))[0, 1]) if fin else 0.0
+        # the stack's shared intermediates after the launch (the last layer's values): where garbage first appears
+        for i, st_ in enumerate(getattr(stack, "shared", [])[:60]):
+            try:
+                v = ttnn.to_torch(ttnn.get_device_tensors(st_)[0]).float()
+                logger.info(
+                    f"MK_STACK_SHARED: {i} shape {tuple(st_.shape)} {st_.dtype} absmax {float(v.nan_to_num(0).abs().max()):.3g} "
+                    f"nonfinite {int((~torch.isfinite(v)).sum())} mem {st_.memory_config().buffer_type}"
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"MK_STACK_SHARED: {i} unreadable: {e}")
+        if fin:  # where the stack differs: per stream, and the worst column tiles (summed over streams)
+            d = (o_stk - o_seq).abs().reshape(T, 4, H)
+            per_stream = [
+                round(
+                    float(
+                        torch.corrcoef(
+                            torch.stack(
+                                [o_stk.reshape(T, 4, H)[:, s_].reshape(-1), o_seq.reshape(T, 4, H)[:, s_].reshape(-1)]
+                            )
+                        )[0, 1]
+                    ),
+                    6,
+                )
+                for s_ in range(4)
+            ]
+            col = d.sum(dim=(0, 1))  # [H]
+            tiles = col.reshape(-1, 32).sum(1)
+            top = torch.topk(tiles, 8)
+            logger.info(
+                f"MK_STACK_DIFF: per stream pcc {per_stream}; worst column tiles (of {H // 32}) "
+                f"{[(int(i), round(float(v), 4)) for v, i in zip(top.values, top.indices)]}; max |diff| "
+                f"{float(d.max()):.4g} at {tuple(int(v) for v in (d == d.max()).nonzero()[0])}"
+            )
+        logger.info(
+            f"MK_STACK_CHECK: mesh {MESH} vtp {VTP} layers {LAYERS} t {T}: stack vs sequential layer programs pcc "
+            f"{p_:.6f}; stack finite {fin} absmax {float(a.nan_to_num(0).abs().max()):.3g}; sequential absmax "
+            f"{float(b.abs().max()):.3g}; res shape {tuple(res_stack.shape)}"
+        )
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(N_TRACE):
+        stack(hists, active, ss)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    ttnn.synchronize_device(mesh_device)
+    t0 = time.perf_counter()
+    reps = 5
+    for _ in range(reps):
+        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_device(mesh_device)
+    per_launch = (time.perf_counter() - t0) / (reps * N_TRACE) * 1e6
+    ttnn.release_trace(mesh_device, tid)
+    logger.info(
+        f"MK_STACK_PROBE: mesh {MESH} layers {LAYERS} vtp {VTP} t {T}: traced {per_launch:.1f} us per launch = "
+        f"{per_launch / len(tps):.1f} us per layer"
+    )
+    assert per_launch > 0

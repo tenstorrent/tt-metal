@@ -41,6 +41,8 @@ constexpr auto init_args = TensorAccessorArgs<packed_args.next_compile_time_args
 constexpr auto fe_args = TensorAccessorArgs<init_args.next_compile_time_args_offset()>();
 constexpr auto fb_args = TensorAccessorArgs<fe_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
+// The slab is SP-sharded: this rank's entry holds heads [sp_rank * stored_heads, +stored_heads).
+constexpr uint32_t stored_heads = Chronology::entry_tiles / state_tiles;
 // The common args after the chronology's.
 constexpr uint32_t packed_arg = Chronology::next_common;
 constexpr uint32_t init_arg = packed_arg + 1;
@@ -55,6 +57,8 @@ constexpr uint32_t final_arg = packed_arg + 6;
 // and entry state column by column (the initial state on the chronologically first rank, else the predecessor's landed
 // columns, in the head's landing slot), then copies the landed entry state to the head's correction cores as their
 // seed; on the first rank, the relayed final states P as well, which the final carry and a separated tail start from.
+// With the SP-sharded slab, the first rank reads the heads it holds from its entry, and the rank holding any other head
+// sends that head's entry state into its landing slot here (sender_relay_chunk_scan.cpp).
 void kernel_main() {
     const uint32_t heads = get_arg_val<uint32_t>(0);
     const auto head_of = [](uint32_t s) { return get_arg_val<uint32_t>(1 + s * (1 + cores_per_head)); };
@@ -109,8 +113,24 @@ void kernel_main() {
     cb_reserve_back(cb_ein_exact, heads * state_tiles);
     if (holder) {
         // The relay starts from the first rank's entry states, head by head: the first head's hop starts as soon as
-        // its own reads have landed.
+        // its own reads have landed, or a remote head's as each of its columns lands.
         const auto init = TensorAccessor(init_args, get_common_arg_val<uint32_t>(init_arg));
+        // A head another rank holds: that rank's sender writes each tile column of the head's entry state into its
+        // landing slot, in order, then counts it in the arrival counter (no predecessor counts there on this rank).
+        const auto owner = [&](uint32_t s) { return head_of(s) / stored_heads; };
+        const auto remote = [&](uint32_t s) {
+            return Chronology::slab && !chronology.zero_entry && owner(s) != chronology.sp_rank;
+        };
+        // A relay core's heads lie about H/2 apart (relay_chunk_scan_relay_slot), so no two have one owner: a single
+        // remote head's columns arrive in order, but two remote heads' columns may interleave in the one counter, so
+        // then every remote column is waited for first.
+        uint32_t remote_heads = 0;
+        for (uint32_t s = 0; s < heads; ++s) {
+            remote_heads += remote(s) ? 1 : 0;
+        }
+        const uint32_t remote_columns = remote_heads * kt;
+        const bool interleaved = remote_heads > 1;
+        uint32_t arrived = 0;
         for (uint32_t s = 0; s < heads; ++s) {
             read_summary(s);
             if (chronology.zero_entry) {
@@ -118,11 +138,12 @@ void kernel_main() {
                 for (uint32_t offset = 0; offset < state_bytes; offset += MEM_ZEROS_SIZE) {
                     noc_async_read(zeros, landing + s * state_bytes + offset, MEM_ZEROS_SIZE);
                 }
-            } else {
+            } else if (!remote(s)) {
+                const uint32_t stored = Chronology::slab ? head_of(s) % stored_heads : head_of(s);
                 for (uint32_t j = 0; j < kt; ++j) {
                     for (uint32_t r = 0; r < kt; ++r) {
                         noc_async_read_page(
-                            chronology.entry_base() + head_of(s) * state_tiles + r * kt + j,
+                            chronology.entry_base() + stored * state_tiles + r * kt + j,
                             init,
                             landing + s * state_bytes + j * column_bytes + r * state_tile);
                     }
@@ -131,8 +152,19 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_e, state_tiles);
             cb_push_back(cb_b, state_tiles);
-            cb_push_back(cb_ein, state_tiles);
-            cb_push_back(cb_ein_exact, state_tiles);
+            if (remote(s)) {
+                for (uint32_t j = 0; j < kt; ++j) {
+                    kda_counter::wait(arrival_semaphore, interleaved ? remote_columns : ++arrived);
+                    cb_push_back(cb_ein, kt);
+                    cb_push_back(cb_ein_exact, kt);
+                }
+            } else {
+                cb_push_back(cb_ein, state_tiles);
+                cb_push_back(cb_ein_exact, state_tiles);
+            }
+        }
+        if (remote_columns != 0) {
+            kda_counter::consume(arrival_semaphore, remote_columns);
         }
     } else {
         for (uint32_t s = 0; s < heads; ++s) {

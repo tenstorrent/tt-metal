@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -224,4 +225,19 @@ inline void pack_tiles_to_output(const uint32_t cb_source, const uint32_t cb_out
     }
     cb_push_back(cb_output, num_tiles);
     cb_pop_front(cb_source, num_tiles);
+}
+
+// DEST[reg] = the sum of the first num_tiles tiles of cb_in, with DEST[reg + 1] as scratch. Leaves SrcA on cb_in, so
+// the caller reconfigures it for its next copy.
+inline void sum_tiles_to_dest(const uint32_t cb_in, const uint32_t num_tiles, const uint32_t reg) {
+    const uint32_t scratch_reg = reg + 1U;
+    reconfig_data_format_srca(cb_in);
+    copy_init(cb_in);
+    copy_tile(cb_in, /* tile_idx */ 0, reg);
+    for (uint32_t tile = 1; tile < num_tiles; ++tile) {
+        copy_init(cb_in);
+        copy_tile(cb_in, tile, scratch_reg);
+        add_binary_tile_init();
+        add_binary_tile(reg, scratch_reg, reg);
+    }
 }

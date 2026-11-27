@@ -46,8 +46,10 @@ ttnn::Shape scale_output_shape(const ttnn::Shape& input_shape) {
 
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    // Single factory for both layouts; create() branches on input.layout(). ROW_MAJOR/TILE stay separate
-    // program-cache entries because compute_program_hash hashes the input's tensor_spec().
+    // Single factory for both layouts; create_descriptor() branches on input.layout(). ROW_MAJOR/TILE stay
+    // separate program-cache entries because the default program hash covers the input's whole TensorSpec
+    // (not just its logical shape: the row-major accessor bakes in the aligned page size, which follows the
+    // padded width and so the spec's Alignment).
     return PerTokenCastToFp8ProgramFactory{};
 }
 
@@ -154,14 +156,6 @@ PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceO
     auto [output_e4m3_spec, scale_spec] = compute_output_specs(attrs, tensor_args);
     auto* device = tensor_args.input_tensor.device();
     return {create_device_tensor(output_e4m3_spec, device), create_device_tensor(scale_spec, device)};
-}
-
-ttsl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // The whole spec, not just its logical shape: the row-major accessor bakes in the aligned page size, which
-    // follows the padded width and so the spec's Alignment.
-    return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
-        attrs, tensor_args.input_tensor.tensor_spec());
 }
 
 }  // namespace ttnn::experimental::prim::qsr::per_token_cast_to_fp8

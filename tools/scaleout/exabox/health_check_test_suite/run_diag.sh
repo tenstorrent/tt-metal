@@ -10,7 +10,9 @@
 # Tiers (what each one runs is defined in tiers.py; keep the case below and the
 # --help text in step with it):
 #   flash           quick ETH link health, the unit read as found: snapshot validate
-#                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
+#                   + two tt-triage check_eth_status reads 30 s apart
+#                   + sys-triage bundle, if the host has the package and BMC credentials.
+#                   No resets, no tests
 #   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
 #                   + eth link_up + eth bandwidth
 #                   + post-test -glx_reset + triage (host_side + device_side)
@@ -42,7 +44,8 @@ Usage: $0 {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.
 
 Tiers:
   flash           Quick ETH link health, the unit read as found: snapshot validate + two
-                  tt-triage check_eth_status reads 30 s apart. No resets, no tests.
+                  tt-triage check_eth_status reads 30 s apart + sys-triage. No resets,
+                  no tests.
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
@@ -67,7 +70,7 @@ phase and says so. Nothing needs configuring to turn them on.
 
 sys-triage collects the syseng system and per-tray triage bundle (FW stack, FRU, CPLD
 DIAG, lspci, kernel logs, per-chip vuart) into <output dir>/logs/sys_triage/, as the last
-step of full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys-triage\` is on
+step of flash, full, pre_bmc_reboot and post_bmc_reboot only. It runs when \`sys-triage\` is on
 PATH (same .deb) and the BMC credentials are set; otherwise the phase reports SKIP with
 the reason. It never gates the run.
 
