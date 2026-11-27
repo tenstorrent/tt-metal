@@ -16,6 +16,8 @@ Run without the repo conftest (its helpers query the cluster): no fixtures, no t
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
@@ -216,7 +218,8 @@ def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
         assert 4 * T <= sent <= 128
     assert torch.equal(got[True].view(torch.int32), got[False].view(torch.int32))
     assert torch.equal(got[True].view(torch.int32), coef[:, :T].reshape(-1).view(torch.int32))
-    with open("models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/sync.cpp") as f:
+    repo_root = Path(__file__).resolve().parents[4]
+    with open(repo_root / "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/sync.cpp") as f:
         sync_src = f.read()
     # every round-1 writer and reader addresses the message through R1_MSG_ROW (no 32-stride index left)
     assert sync_src.count("msg[R1_MSG_ROW * s + t]") >= 4 and "msg[32 * s + t]" not in sync_src
