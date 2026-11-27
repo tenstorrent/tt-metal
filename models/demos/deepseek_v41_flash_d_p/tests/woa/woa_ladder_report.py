@@ -9,6 +9,11 @@ off; the same gate commands, the switch as each side sets it) and writes one tab
 rung, the attention section's device ms, and the test_woa_offon numbers (wo_a device ms, load delta). A side that has
 not run yet shows "-".
 
+FIX.40 (F308): the A/B's off side ran every ladder with DS41_WOA_BANK=on (each gate command's own prefix won over the
+side's env). The real off side of the ladders is the gate results of tasks WA.4R (8192 single + 4x2k + 4x1792s, one
+fresh load, DS41_WOA_BANK=off) and WA.4R5 (5120, its own load): ``results/WA.4R.json`` / ``results/WA.4R5.json``
+(``--off-results DIR``; ``--off-results ''`` = the A/B's old side as before). Off and on are then different loads.
+
     python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report [--ab DIR] [--out FILE]
 """
 
@@ -23,6 +28,17 @@ OUT = pathlib.Path("models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8
 RUNGS = (51200, 131072, 139264, 262144, 524288, 786432, 1024000)
 SIDES = ("old", "new")  # off, on
 TAG = "_tagentic_cc"
+RESULTS = OUT.parent
+OFF_TASKS = {"sk8": "WA.4R", "pw": "WA.4R", "sk5": "WA.4R5"}  # table -> gate task whose results are the real off side
+
+
+def _task_metrics(results: pathlib.Path, task: str) -> dict:
+    """A gate task's recorded metrics (results/<task>.json), values only; {} if absent."""
+    try:
+        m = json.loads((results / f"{task}.json").read_text()).get("metrics", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {k: (v.get("value") if isinstance(v, dict) else v) for k, v in m.items()}
 
 
 def _metrics(side_dir: pathlib.Path, pick) -> dict:
@@ -70,6 +86,20 @@ def _table(ms: dict, key) -> list[str]:
     return rows
 
 
+def _delta_line(ms: dict, key) -> list[str]:
+    """One line: the range over rungs of on - off, device ms and attention device ms (the numbers to judge)."""
+    parts = []
+    for name, fld in (("device", "steady_device_ms"), ("attention", "steady_device_ms_attention")):
+        d = [
+            ms["new"][key(fld, r)] - ms["old"][key(fld, r)]
+            for r in RUNGS
+            if ms["old"].get(key(fld, r)) is not None and ms["new"].get(key(fld, r)) is not None
+        ]
+        if d:
+            parts.append(f"{name} {min(d):+.2f}..{max(d):+.2f} ms (median {sorted(d)[len(d) // 2]:+.2f})")
+    return ["on - off over the rungs: " + "; ".join(parts) + "."] if parts else []
+
+
 def _single_key(fld: str, r: int) -> str:
     return f"steady_host_ms_p{r}{TAG}" if fld == "host" else f"{fld}_p{r}{TAG}"
 
@@ -103,17 +133,28 @@ def switch_as_run(ab: pathlib.Path) -> dict:
     return out
 
 
-def render(ab: pathlib.Path) -> str:
+def render(ab: pathlib.Path, off_results: pathlib.Path | None = None) -> str:
     sk8 = {s: _metrics(ab / s, lambda n: n.startswith("test_skip_positions") and "5120" not in n) for s in SIDES}
     sk5 = {s: _metrics(ab / s, lambda n: n.startswith("test_skip_positions") and "5120" in n) for s in SIDES}
     pw = {s: _metrics(ab / s, lambda n: n.startswith("test_packed_walls")) for s in SIDES}
+    off_src = {}
+    if off_results is not None:
+        for name, ms in (("sk8", sk8), ("pw", pw), ("sk5", sk5)):
+            got = _task_metrics(off_results, OFF_TASKS[name])
+            if got:
+                ms["old"] = got
+                off_src[name] = OFF_TASKS[name]
     wo = {s: _metrics(ab / s, lambda n: n.startswith("test_woa_offon")) for s in SIDES}
     nr = {s: _metrics(ab / s, lambda n: n.startswith("test_no_rebuild")) for s in SIDES}
     out = [
         "# WA.4: wo_a bank-local reads, the accept measurement (DS41_WOA_BANK off vs on)",
         "",
-        "Rendered by tests/woa/woa_ladder_report.py from the A/B runs of WA.4 (" + str(ab) + "; old = off, new = on,",
-        "the gate's commands, one resident load a side's chunk size, the switch call-time). Ladder method as PB.LAD",
+        "Rendered by tests/woa/woa_ladder_report.py from the A/B runs of WA.4 ("
+        + str(ab)
+        + "; new = on"
+        + (", off = tasks WA.4R / WA.4R5" if off_src else ", old = off")
+        + ",",
+        "the gate's commands, one resident load a side's chunk size). Ladder method as PB.LAD",
         "(tests/packed/ladder_common.py): steady = mid-request chunk, resumed = first chunk after a prefix hit; 10 timed",
         "runs, median, program-cache misses refused; device ms = one profiled run (slowest chip); exposed host = wall -",
         "device. Layers 0-20 (DECODER_SKIP=decode). `-` = that side has not run (yet).",
@@ -121,6 +162,19 @@ def render(ab: pathlib.Path) -> str:
     ]
     sw = switch_as_run(ab)
     same = sorted(u for u, v in sw.get("old", {}).items() if v is not None and v == sw.get("new", {}).get(u, v))
+    if off_src:
+        out += [
+            "**Off side = tasks "
+            + " / ".join(sorted(set(off_src.values())))
+            + " (FIX.40, F308):** the off columns of the ladder tables come from the gate results"
+            " results/WA.4R.json (single 8192, 4 x 2k, 4 x 1792s: one fresh load, DS41_WOA_BANK=off) and"
+            " results/WA.4R5.json (single 5120, its own load, DS41_WOA_BANK=off); the on columns are the A/B's new side."
+            " **Off and on were measured in different loads: walls and exposed host drift between loads by 1-3 ms;"
+            " judge device ms (and the attention section, where wo_a sits).** The A/B's own old side (switch on, F308)"
+            " is not shown; test_no_rebuild was not re-run with the switch off (its off line below ran with it on).",
+            "",
+        ]
+        same = []
     if same:
         out += [
             "**Switch as run (the sides' batch plans):** the off side ran "
@@ -136,7 +190,7 @@ def render(ab: pathlib.Path) -> str:
         ("4 x 1792 + 1024 split (lanes4x1792s, test_packed_walls)", pw, _lane_key("lanes4x1792s")),
         ("Single request, 5120 tokens (test_skip_positions, BRINGUP_CHUNK=5120: 160 rows a chip)", sk5, _single_key),
     ):
-        out += [f"## {title}", ""] + _table(ms, key) + [""]
+        out += [f"## {title}", ""] + _table(ms, key) + [""] + _delta_line(ms, key) + [""]
     out[-1:] = []
     out += ["", "## test_woa_offon (one load, all 40 layers, DECODER_SKIP=off; H = 139264)", ""]
     w = wo["new"] or wo["old"]
@@ -162,7 +216,12 @@ def render(ab: pathlib.Path) -> str:
         "## Cold no-rebuild (test_no_rebuild, strict)",
         "",
     ]
-    for s, name in (("old", "off"), ("new", "on")):
+    nr_old = (
+        "off"
+        if sw.get("old", {}).get("test_no_rebuild") in (None, "off")
+        else "A/B old side (ran with switch on, F308)"
+    )
+    for s, name in (("old", nr_old), ("new", "on")):
         p = {k: v for k, v in nr[s].items() if k.startswith("no_rebuild_pass_")}
         b = {k: v for k, v in nr[s].items() if k.startswith("program_builds_after_warmup_")}
         out.append(
@@ -183,9 +242,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ab", default=str(AB))
     ap.add_argument("--out", default=str(OUT))
+    ap.add_argument("--off-results", default=str(RESULTS), help="dir of results/WA.4R*.json; '' = the A/B's old side")
     ap.add_argument("--print", action="store_true")
     a = ap.parse_args()
-    text = render(pathlib.Path(a.ab))
+    text = render(pathlib.Path(a.ab), pathlib.Path(a.off_results) if a.off_results else None)
     if a.print:
         print(text)
     else:

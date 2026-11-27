@@ -1814,3 +1814,21 @@
   `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_estimate`;
   `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report`.
 - Rule 20: no per-chunk value touched (no model code changed).
+
+## FIX.40 (overseer fix, attempt 1): WA.4_ladder.md re-rendered with the real off side (CPU only)
+
+- What: tests/woa/woa_ladder_report.py takes the ladders' off side from the gate results of WA.4R (single 8192,
+  4 x 2k, 4 x 1792s; one fresh resident load, DS41_WOA_BANK=off, plan logs/WA.4R.shared/plan.json) and WA.4R5 (5120,
+  its own load, off): `--off-results` (default results/; `''` = the A/B's old side as before). On side unchanged
+  (ab/WA.4/new). Adds a one-line on - off range (device, attention) under each table. The A/B's own off side (switch
+  on, DS41-397 / F308) is no longer shown for the ladders; test_no_rebuild was not re-run off (labelled).
+- Numbers (on - off over the 7 rungs; different loads, judge device ms): single 8192 attention -0.88..-0.23 (median
+  -0.47, lower at every rung), device -0.73..+0.08 (-0.39); single 5120 attention -0.45..-0.26 (-0.34), device
+  -0.66..-0.02 (-0.31); 4 x 2k device -1.25..+1.05 (+0.42), attention median -0.02; 4 x 1792s device -0.44..+0.36
+  (+0.03), attention median -0.16. Single-request ladders confirm test_woa_offon's -0.40 ms wo_a (and the probe's
+  -0.35 at 5120); packed between-load drift (+-1.2 ms) exceeds the win.
+- WA.4_ladder.md verdict section: kept, its off-side paragraph and Ladders bullet rewritten with these numbers.
+  WA.5 part 1 (tests/woa/wa5_report.md -> results/WA.5_report.md): "Ladder deltas" now the real table.
+- No device runs, no model code. Rule 20: no per-chunk value touched.
+- Re-run: `PYTHONPATH=$PWD python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report`; then
+  `gate FIX.40 --spec $BRINGUP_SPEC --check`.

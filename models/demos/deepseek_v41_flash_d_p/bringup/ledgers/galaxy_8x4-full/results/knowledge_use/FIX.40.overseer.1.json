@@ -1,0 +1,54 @@
+{
+ "used": [
+  {
+   "id": "DS41-397",
+   "how": "dropped the A/B old side (switch on) for the ladders and took the off side from WA.4R / WA.4R5, checked their plan env DS41_WOA_BANK=off",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "FIX.40",
+   "answer": "done",
+   "evidence": "woa_ladder_report.py --off-results reads results/WA.4R.json / WA.4R5.json (plans logs/WA.4R.shared/plan.json, logs/WA.4R5.WA.4R5.plan.json: DS41_WOA_BANK=off); WA.4_ladder.md re-rendered (single 8192 attention median -0.47 ms, 5120 -0.34); wa5_report.md part 1 updated"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "report-only step, no kernel or model code"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "n/a",
+   "evidence": "no device runs; no fork suites"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.40",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-27T21:36:17",
+  "head": "48be51c89d8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.40.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5_report.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.40.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/wa5_report.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/woa_ladder_report.py"
+  ]
+ }
+}

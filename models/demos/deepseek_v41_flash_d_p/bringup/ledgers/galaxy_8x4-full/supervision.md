@@ -1563,3 +1563,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   unit to be dropped per this word). Then the wq_b / wo_b C++ bank probe.
 - 21:20 heartbeat: WA.4R (off ladders) running; RAM used 69 GB; / 71G free.
 - 21:21 WA.4R PASS -> f87b2565df7 (off ladders 8192 single + 4x2k + 4x1792s; framework-added determinism 290 s). WA.4R5 next.
+- 21:30 WA.4R5 PASS -> 48be51c89d8 (5120 ladder off). FIX.40 released (re-render WA.4 / WA.5 tables with the real off side).
+  NC.1 appended (C++ grouped_matmul into the tree; op-level gate; my first append dropped its id line and merged it into
+  WA.4R5: fixed, validate: valid). orchestrator resume --until NC.1.
+- 21:40 OWNER: ladders are not re-run per change. For the rest of this series exactly TWO ladder runs: (1) batching, once
+  after ALL C++ ports (layers 0-20 ladder + cold no-rebuild); (2) model_bringup, once after ONE batch (wo_a bank layout +
+  shared C++ ops; MB.WA folds into it, its own ladder / 40-layer units dropped), 5120 ladder + no-rebuild. Port tasks:
+  ab_mode none, op-level gates only (no model load, so no framework determinism). wq_b / wo_b: folded into the final
+  batching ladder if ready before it, else one ladder at its end. Framework waste to fix: the auto determinism check on a
+  measurement-only task of unchanged code (WA.4R: 290 s).

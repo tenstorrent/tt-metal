@@ -1,7 +1,7 @@
 # WA.5: wo_a bank-local reads, the report (CPU only, 2026-11-27)
 
 Written by tests/woa/test_woa_report.py from tests/woa/wa5_report.md. Sources: results/WA.2_probe.md, WA.3_offon.md (OV-79 table: the model's 11 x 10 grid), WA.4_ladder.md (re-rendered
-from the WA.4 A/B, OV-80), PB.MM256.json / PB.MM256_ladder.md, P.81 (BREADCRUMBS.0004, DS41-306). Device us a call =
+at FIX.40: on = the WA.4 A/B's new side, off = tasks WA.4R / WA.4R5, F308), PB.MM256.json / PB.MM256_ladder.md, P.81 (BREADCRUMBS.0004, DS41-306). Device us a call =
 real-time profiler, slowest chip, 20 calls. A chunk = layers 0-20 (DECODER_SKIP=decode), 20 calls of each projection.
 The estimate in part 3: `python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_estimate` (gated by
 tests/woa/test_woa_report.py).
@@ -17,18 +17,27 @@ tests/woa/test_woa_report.py).
 | all bytes (w + x + y) at 410 GB/s | 114.2 | 104.0 |
 | busiest core's compute at the HiFi2 peak (band 10: 4 column tiles) | 97.1 | 60.7 |
 
-- **In the model, 8192 chunk (the only real off vs on: test_woa_offon, one load, switch per call):** wo_a 3.058 ->
+- **In the model, 8192 chunk (same load: test_woa_offon, one load, switch per call):** wo_a 3.058 ->
   2.656 ms a chunk (152.9 -> 132.8 us a call); device ms a chunk 85.41 -> 84.82 (-0.60, single 8192), 94.72 -> 94.20
   (-0.52, packed 4 x 2k). Bit-identical off == on over 40 layers; host a call unchanged within noise; load +1.97 s.
-- **5120 chunk (160 rows):** no real in-model off vs on was measured (test_woa_offon's 5120 case pads to 256 rows in
-  the 8192 load; the 5120 ladder's off side ran with the switch on, below). From the op probe: -17.5 us x 20 =
-  **about -0.35 ms a 5120 chunk** (on-side device 60.35-76.44 ms over the ladder).
-- **Ladder deltas: none usable.** The WA.4 A/B's off side ran its ladder, 5120 and no-rebuild units with
-  DS41_WOA_BANK=on (each gate command names the switch, and a command's prefix wins over the side's env; DS41-397).
-  So the re-rendered tables are on vs on: single 8192 device -0.58..+0.26 ms, attention -0.22..+0.23; 4 x 2k device
-  +0.06..+1.01; 4 x 1792s -0.94..+1.23; 5120 -0.26..+0.39. That is session noise; a real off vs on would show the
-  attention section ~0.40 ms lower at every rung. The ladders neither confirm nor refute the -0.40 ms; the accept rests
-  on test_woa_offon.
+- **5120 chunk (160 rows):** from the op probe -17.5 us x 20 = about -0.35 ms a 5120 chunk; the real 5120 ladder
+  (below) gives attention -0.34 ms (median over the 7 rungs). test_woa_offon's 5120 case pads to 256 rows in the 8192
+  load, so the ladder is the in-model 5120 number.
+- **Ladder deltas (FIX.40, real off vs on, F308):** off = tasks WA.4R (8192 single + packed, one fresh load,
+  DS41_WOA_BANK=off) and WA.4R5 (5120, its own load), on = the WA.4 A/B's new side (the A/B's own off side had run
+  with the switch on, DS41-397). Different loads: walls drift 1-3 ms between loads, so judge device ms. on - off over
+  the rungs 51200..1024000:
+
+| path | device ms on - off (median) | attention device ms on - off (median) |
+|---|---|---|
+| single 8192 | -0.73..+0.08 (-0.39) | -0.88..-0.23 (-0.47), lower at every rung |
+| single 5120 | -0.66..-0.02 (-0.31) | -0.45..-0.26 (-0.34), lower at every rung |
+| packed 4 x 2048 | -1.25..+1.05 (+0.42) | -0.46..+1.21 (-0.02) |
+| packed 4 x 1792 + 1024 | -0.44..+0.36 (+0.03) | -0.37..+0.61 (-0.16) |
+
+  The single-request ladders confirm the same-load win (wo_a sits in the attention section: -0.40 ms expected at
+  8192, -0.35 at 5120). The packed ladders' device drift between loads (+-1.2 ms) is larger than the win: they neither
+  confirm nor refute it there; test_woa_offon's same-load 4 x 2k number (-0.52 ms chunk, wo_a -0.41) stands.
 
 ## 2. What closed the gap, and what did not
 

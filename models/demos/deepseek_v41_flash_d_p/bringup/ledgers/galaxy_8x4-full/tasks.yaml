@@ -7120,41 +7120,54 @@ tasks:
       and q_a+wkv were not swept at 256 rows. Sweeps are host-compile bound (~2-3 s a cell); submeshes in the shared runner
       hit DS41-335.'
     details: 'OWNER 2026-11-23: re-sweep EVERY matmul the model runs at the 8192 chunk (layers 0-20, DECODER_SKIP=decode;
-      single 8192 and packed 4x2k / 4x1792s: 256 rows a chip, plus any other M the model passes), not only the attention
-      projections. (1) Inventory: record every matmul call of a real chunk (ttnn.matmul / linear / minimal_matmul and every
-      ttnn.bringup fork matmul: grouped_matmul, the MoE / shared-expert / dense / engram / mhc / compressor / indexer projections)
-      with its shape, dtypes, fidelity, current config and where it comes from (mm_configs key or the generic rule); table
-      in the report with each one''s device us a chunk from the real-time profile, largest first. (2) Bring the two tuned
-      entries from 3f9b309b676 (git show 3f9b309b676 -- models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py) and the probe''s
-      sweep machinery (tests/projsplit/test_projsplit_probe.py, path-limited). (3) Sweep IN PARALLEL ACROSS CHIPS (owner 2026-11-23, binding; P.19 did it this way and the owner OKs single-card
-      processes on this Galaxy): reuse tests/perf/test_matmul_sweep.py (P.19 / OV-27): -k capture with tt/mm_configs.RECORD
-      at the 8192 chunk (single and 4x2k) = the inventory; then N parallel single-card processes, one card each (P23_SHARD=i/N
-      P23_CALLS=<capture> scripts/run_safe_pytest.sh --device auto ... -k test_sweep_card, N up to 32), then merge_shards.
-      Stop the resident runner first (resident stop, not yield); bounded per-process timeouts (P23_TIMEOUT_S), smallest
-      shapes first; candidates held to the 110-core grid 11 x 10 (FIX.15; the test''s 12 x 10 note predates it) and the
-      model''s L1 view; program configs (1D / 2D / minimal_matmul / DRAM-sharded where it applies, in0_block_w, per_core
-      M / N, out_subblock; the fork matmuls'' exposed knobs); fidelity, dtypes and accumulation unchanged; keep every faster config (OWNER rule 3, 2026-11-23: bit-identity
-      with today''s config or its summation order is NOT a criterion; a config is judged on speed, the accuracy limits and
-      its own bit-identical repeats); confirm every winner''s time on the whole mesh once (one run, every chip). Extend
-      the sweep where the 8192 shapes or the fork matmuls need it; reuse 3f9b309b676''s two entries as candidates. (4) Put every winner behind the CALL-TIME switch DS41_MM_TUNED256 (off | on; default off until
-      accepted; tt/settings.py, bringup/hooks.py batch_call_settings) so both sides run in one load; the 5120 path (160 rows)
-      unchanged and bit-identical. (5) Test models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py (BATCH_SHARED, resident
-      runner, one load, layers 0-20): a real 8192 chunk single AND a packed 4x2k chunk at a long history, off vs on: record
-      mm256_repeat_max_abs_diff_<case> (two runs with on: must be 0), mm256_offon_rel_l2_<case> per layer (a diagnostic)
-      and the device ms per section off vs on. Accuracy is judged by the gate''s test_chunk8192_reference.py with the switch
-      on (every layer, final hidden, top-5 within the reference limits) and the framework''s fresh-process determinism check.
-      Report models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MM256_ladder.md: the
-      inventory, the tuned table (shape, today config / us, tuned config / us, gain us a chunk), section device ms off vs
-      on, and the gate''s ladder off vs on (single 8192, 4x2k, 4x1792s; 51200 .. 1024000; steady + resumed). Every Python-built
+      single 8192 and packed 4x2k / 4x1792s: 256 rows a chip, plus any other M the model passes), not only the attention projections.
+      (1) Inventory: record every matmul call of a real chunk (ttnn.matmul / linear / minimal_matmul and every ttnn.bringup
+      fork matmul: grouped_matmul, the MoE / shared-expert / dense / engram / mhc / compressor / indexer projections) with
+      its shape, dtypes, fidelity, current config and where it comes from (mm_configs key or the generic rule); table in the
+      report with each one''s device us a chunk from the real-time profile, largest first. (2) Bring the two tuned entries
+      from 3f9b309b676 (git show 3f9b309b676 -- models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py) and the probe''s sweep
+      machinery (tests/projsplit/test_projsplit_probe.py, path-limited). (3) Sweep IN PARALLEL ACROSS CHIPS (owner 2026-11-23,
+      binding; P.19 did it this way and the owner OKs single-card processes on this Galaxy): reuse tests/perf/test_matmul_sweep.py
+      (P.19 / OV-27): -k capture with tt/mm_configs.RECORD at the 8192 chunk (single and 4x2k) = the inventory; then N parallel
+      single-card processes, one card each (P23_SHARD=i/N P23_CALLS=<capture> scripts/run_safe_pytest.sh --device auto ...
+      -k test_sweep_card, N up to 32), then merge_shards. Stop the resident runner first (resident stop, not yield); bounded
+      per-process timeouts (P23_TIMEOUT_S), smallest shapes first; candidates held to the 110-core grid 11 x 10 (FIX.15; the
+      test''s 12 x 10 note predates it) and the model''s L1 view; program configs (1D / 2D / minimal_matmul / DRAM-sharded
+      where it applies, in0_block_w, per_core M / N, out_subblock; the fork matmuls'' exposed knobs); fidelity, dtypes and
+      accumulation unchanged; keep every faster config (OWNER rule 3, 2026-11-23: bit-identity with today''s config or its
+      summation order is NOT a criterion; a config is judged on speed, the accuracy limits and its own bit-identical repeats);
+      confirm every winner''s time on the whole mesh once (one run, every chip). Extend the sweep where the 8192 shapes or
+      the fork matmuls need it; reuse 3f9b309b676''s two entries as candidates. (4) Put every winner behind the CALL-TIME
+      switch DS41_MM_TUNED256 (off | on; default off until accepted; tt/settings.py, bringup/hooks.py batch_call_settings)
+      so both sides run in one load; the 5120 path (160 rows) unchanged and bit-identical. (5) Test models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py
+      (BATCH_SHARED, resident runner, one load, layers 0-20): a real 8192 chunk single AND a packed 4x2k chunk at a long history,
+      off vs on: record mm256_repeat_max_abs_diff_<case> (two runs with on: must be 0), mm256_offon_rel_l2_<case> per layer
+      (a diagnostic) and the device ms per section off vs on. Accuracy is judged by the gate''s test_chunk8192_reference.py
+      with the switch on (every layer, final hidden, top-5 within the reference limits) and the framework''s fresh-process
+      determinism check. Report models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MM256_ladder.md:
+      the inventory, the tuned table (shape, today config / us, tuned config / us, gain us a chunk), section device ms off
+      vs on, and the gate''s ladder off vs on (single 8192, 4x2k, 4x1792s; 51200 .. 1024000; steady + resumed). Every Python-built
       op through ttnn.bringup.prepare_program / run_prepared. Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md
-      and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md. Run only the tests you add plus the gate; no fork
-      regression suites on the 8x4.'
+      and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md. Run only the tests you add plus the gate; no
+      fork regression suites on the 8x4.'
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_MM_TUNED256=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_MM_TUNED256=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
-      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_MM_TUNED256=on
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mm256_offon.py &&
+      BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode LADDER_POS=51200,131072,139264,262144,524288,786432,1024000
+      LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
+      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
     metrics:
       err_layer_L*: <= limit
       err_final_hidden*: <= limit
@@ -7166,14 +7179,15 @@ tasks:
       no_rebuild_pass_*: == 1
       program_builds_after_warmup_*: == 0
 - id: WA.0
-  title: 'OWNER 2026-11-27 wo_a bank-local reads: box on the re-reserved node (chip locks free, recover-hosts link check, test_box,
-    RAM baseline), README commit fetched, model_bringup -> 3cedffd3b34 and model_bringup_batching -> 7704c61363c fast-forwarded,
-    work on the batching branch'
+  title: 'OWNER 2026-11-27 wo_a bank-local reads: box on the re-reserved node (chip locks free, recover-hosts link check,
+    test_box, RAM baseline), README commit fetched, model_bringup -> 3cedffd3b34 and model_bringup_batching -> 7704c61363c
+    fast-forwarded, work on the batching branch'
   step: check
   device: true
   deps: []
   brief:
-    details: Overseer task (plan /home/dnijemcevic/handoff_20261127/WOA_PLAN.md). Done by hand (supervision.md 2026-11-27); the gate is the box test.
+    details: Overseer task (plan /home/dnijemcevic/handoff_20261127/WOA_PLAN.md). Done by hand (supervision.md 2026-11-27);
+      the gate is the box test.
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_box.py
     metrics:
@@ -7191,37 +7205,38 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
   - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
   brief:
-    prior_work: 'P.81 (grouped wo_a fork ttnn.bringup.grouped_matmul, tests/perf/test_attn_proj_probe.py: 0.175 -> 0.133 ms a call
-      at 160 rows; stock DRAM-sharded matmul refused wo_a''s per-group weights; BREADCRUMBS ~1052), DS41-306 (gap to floor wq_b
-      1.36x, wo_b 1.30x, wo_a 2.0x; floor = weights at 410 GB/s), DS41-191 (160-row bfp8 projections are weight-read bound),
-      PB.MM256 (results/PB.MM256_ladder.md: wo_a gmm retuned at 256 rows, block_w 2; tt/mm_configs.py GMM256), projsplit PS.2
-      KILL (splitting projections across chips was slower; dnijemcevic/model_bringup_projsplit). The routed experts'' per-bank
-      layout (MOE_BLOCK_SRC=block): ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/flat_routed_expert_weights.py (layout),
-      its plan.cpp (core placement next to each bank''s optimal worker), gate_up_weight_read.hpp / down_weight_reader.cpp (readers:
-      noc_async_read from get_noc_addr_from_bank_id(own bank)).'
-    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md first (the owner''s plan and binding constraints; verify its facts
-      against the code, do not trust them). This task is WA.1 only: CPU only, NO device, NO model or fork code changes. Write
-      models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md. AT ITS TOP: the upper bound (best case) of the gain in device
-      ms a chunk over layers 0-20 at 8192 (256 rows a chip) and at 5120 (160 rows), and the verdict against the owner''s KILL LINE
-      (upper bound < 0.5 ms a 8192 chunk -> stop, no build). Then: (1) today''s wo_a as the model holds and calls it (tt/attention.py
-      ttnn.bringup.grouped_matmul call, tt/settings.py WO_A_GMM_*, tt/mm_configs.py GMM256, weight dtype / layout / memory config,
-      the fork''s gmm_reader.cpp read pattern: how many reads in flight, page size, which banks each core touches); its measured
-      device us a call at 160 and 256 rows (from this ledger''s profiles: results/PB.MM256_ladder.md, P.81, DS41-306; cite) vs
-      the DRAM floor (state the Blackhole DRAM bandwidth and bank count you use, from this ledger''s measurements where they exist);
-      (2) where the 2.0x goes, argued from the code and the numbers: DRAM bank conflicts / NoC distance / too few reads in flight
-      / compute / x multicast; what the bank-local layout fixes and what it does not; (3) the per-bank layout: which group, K-blocks
-      and N-columns go to which bank (8 groups x [4096 x 1024] bfp8 a chip, ~36 MB a layer a chip), the per-core region packing,
-      cores placed next to each bank''s optimal worker with 88 or more cores within the 110-core matmul cap (FIX.15), how x reaches
-      them; same tiles, same K order, same fidelity / accumulation (owner constraint 1: bit-identical to today); what of the experts''
-      helpers (flat_routed_expert_weights.py, plan.cpp placement) is reused as is; (4) the switch: call-time (both layouts resident)
-      vs load-time, with the DRAM budget a chip at 1M history with packed segments (cite the numbers) and the reason (owner constraint
-      2); load-time host packing cost estimate (constraint 4); (5) the roofline of the new layout at 160 and 256 rows; (6) the
-      option(s) to add to ttnn.bringup.grouped_matmul (constraint 3) and the fork tests; (7) the plan for WA.2''s probe and its
-      knob sweep run in parallel across chips / cards. Also write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_design.py
-      (CPU): computes the floor / roofline table from the model''s real shapes (checkpoint config / the model''s constants, not
-      hand-typed), checks the design file exists and has the sections above, and records via models.demos.common.bringup.core.metrics.record:
-      woa_floor_us_r160, woa_floor_us_r256 (weights at the DRAM bandwidth, a call), woa_today_us_r160, woa_today_us_r256 (measured,
-      cited), woa_upper_bound_ms_c8192, woa_upper_bound_ms_c5120 (device ms a chunk, layers 0-20). Run only the test you add.'
+    prior_work: 'P.81 (grouped wo_a fork ttnn.bringup.grouped_matmul, tests/perf/test_attn_proj_probe.py: 0.175 -> 0.133 ms
+      a call at 160 rows; stock DRAM-sharded matmul refused wo_a''s per-group weights; BREADCRUMBS ~1052), DS41-306 (gap to
+      floor wq_b 1.36x, wo_b 1.30x, wo_a 2.0x; floor = weights at 410 GB/s), DS41-191 (160-row bfp8 projections are weight-read
+      bound), PB.MM256 (results/PB.MM256_ladder.md: wo_a gmm retuned at 256 rows, block_w 2; tt/mm_configs.py GMM256), projsplit
+      PS.2 KILL (splitting projections across chips was slower; dnijemcevic/model_bringup_projsplit). The routed experts''
+      per-bank layout (MOE_BLOCK_SRC=block): ttnn/ttnn/bringup/moe_block_ttnn/flat_routed_expert/flat_routed_expert_weights.py
+      (layout), its plan.cpp (core placement next to each bank''s optimal worker), gate_up_weight_read.hpp / down_weight_reader.cpp
+      (readers: noc_async_read from get_noc_addr_from_bank_id(own bank)).'
+    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md first (the owner''s plan and binding constraints; verify
+      its facts against the code, do not trust them). This task is WA.1 only: CPU only, NO device, NO model or fork code changes.
+      Write models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md. AT ITS TOP: the upper bound (best case) of the
+      gain in device ms a chunk over layers 0-20 at 8192 (256 rows a chip) and at 5120 (160 rows), and the verdict against
+      the owner''s KILL LINE (upper bound < 0.5 ms a 8192 chunk -> stop, no build). Then: (1) today''s wo_a as the model holds
+      and calls it (tt/attention.py ttnn.bringup.grouped_matmul call, tt/settings.py WO_A_GMM_*, tt/mm_configs.py GMM256,
+      weight dtype / layout / memory config, the fork''s gmm_reader.cpp read pattern: how many reads in flight, page size,
+      which banks each core touches); its measured device us a call at 160 and 256 rows (from this ledger''s profiles: results/PB.MM256_ladder.md,
+      P.81, DS41-306; cite) vs the DRAM floor (state the Blackhole DRAM bandwidth and bank count you use, from this ledger''s
+      measurements where they exist); (2) where the 2.0x goes, argued from the code and the numbers: DRAM bank conflicts /
+      NoC distance / too few reads in flight / compute / x multicast; what the bank-local layout fixes and what it does not;
+      (3) the per-bank layout: which group, K-blocks and N-columns go to which bank (8 groups x [4096 x 1024] bfp8 a chip,
+      ~36 MB a layer a chip), the per-core region packing, cores placed next to each bank''s optimal worker with 88 or more
+      cores within the 110-core matmul cap (FIX.15), how x reaches them; same tiles, same K order, same fidelity / accumulation
+      (owner constraint 1: bit-identical to today); what of the experts'' helpers (flat_routed_expert_weights.py, plan.cpp
+      placement) is reused as is; (4) the switch: call-time (both layouts resident) vs load-time, with the DRAM budget a chip
+      at 1M history with packed segments (cite the numbers) and the reason (owner constraint 2); load-time host packing cost
+      estimate (constraint 4); (5) the roofline of the new layout at 160 and 256 rows; (6) the option(s) to add to ttnn.bringup.grouped_matmul
+      (constraint 3) and the fork tests; (7) the plan for WA.2''s probe and its knob sweep run in parallel across chips /
+      cards. Also write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_design.py (CPU): computes the floor / roofline
+      table from the model''s real shapes (checkpoint config / the model''s constants, not hand-typed), checks the design
+      file exists and has the sections above, and records via models.demos.common.bringup.core.metrics.record: woa_floor_us_r160,
+      woa_floor_us_r256 (weights at the DRAM bandwidth, a call), woa_today_us_r160, woa_today_us_r256 (measured, cited), woa_upper_bound_ms_c8192,
+      woa_upper_bound_ms_c5120 (device ms a chunk, layers 0-20). Run only the test you add.'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_design.py
     metrics:
@@ -7253,27 +7268,27 @@ tasks:
     prior_work: 'WA.1: WOA_BANK_DESIGN.md (layout, placement, roofline, upper bound, probe plan) and tests/woa/test_woa_design.py.
       P.81''s probe tests/perf/test_attn_proj_probe.py (today''s wo_a call at 160 rows); P.19 / OV-27 tests/perf/test_matmul_sweep.py
       (per-card parallel sweep machinery: P23_SHARD, --device auto, merge_shards).'
-    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md and WOA_BANK_DESIGN.md first. Op-level probe on the 8x4 mesh,
-      NO model load. (1) Add the per-bank layout + bank-local reader to ttnn.bringup.grouped_matmul BEHIND AN OPTION (default
-      = today''s path, untouched; CHANGELOG entry; INDEX.md line): the host packing helper (reuse the experts'' layout / placement
-      helpers where they fit), the WIDTH_SHARDED DRAM weight, cores next to each bank''s optimal worker within the 110-core matmul
-      cap, a reader that reads only its own bank. Same tiles, same K order, same fidelity and fp32 accumulation as today''s path:
-      the output must be bit-identical. New kernels: bounded waits, every awaited semaphore signalled, NOC writes inside buffers,
-      smallest shape first (the box hung twice on new kernels). Every Python-built op through ttnn.bringup.prepare_program / run_prepared.
-      Fork tests for the new option in grouped_matmul_ttnn/tests/unit (random inputs, option vs today exact, vs a torch reference).
-      (2) Write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py (BATCH_SHARED = True; run it through the resident
-      runner, agent rule 1): real shapes and dtypes (8 groups x [rows, 4096] @ [4096, 1024], bfp8 weights, the model''s activation
-      dtype, HiFi2 / fp32 DEST as the model calls it, today''s tuned WO_A_GMM / GMM256 knobs), fixed-seed inputs, at 256 AND 160
-      rows a chip: today''s call vs the new option: max abs diff (must be 0), repeats of each (must be 0), device us a call (program
-      real-time profiler; never the per-op device-profiler mode), host us a call. (3) Sweep the new option''s knobs (block_w,
-      depth, cores a bank, in-flight reads, as you exposed them) IN PARALLEL ACROSS CHIPS / CARDS (owner: different configs on
-      different chips at once; reuse P.19''s per-card machinery, resident runner stopped first, bounded per-process timeouts,
-      single-card processes OK on this Galaxy by the owner''s word 2026-11-23); confirm the best on the whole mesh once. Record
-      per case woa_mismatch_<case> (max abs diff vs today), woa_repeat_diff_<case>, woa_us_today_<rows>, woa_us_bank_<rows> (best
-      config), woa_gain_ms_c8192 and woa_gain_ms_c5120 (gain a call x 21 layers, device ms a chunk). Table + best knobs in
-      models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.2_probe.md; AT ITS TOP the verdict against
-      the owner''s KILL line (measured gain < half WA.1''s upper bound, or not exact -> KILL). No model code changes in this task.
-      Run only the tests you add; no fork regression suites on the 8x4.'
+    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md and WOA_BANK_DESIGN.md first. Op-level probe on the 8x4
+      mesh, NO model load. (1) Add the per-bank layout + bank-local reader to ttnn.bringup.grouped_matmul BEHIND AN OPTION
+      (default = today''s path, untouched; CHANGELOG entry; INDEX.md line): the host packing helper (reuse the experts'' layout
+      / placement helpers where they fit), the WIDTH_SHARDED DRAM weight, cores next to each bank''s optimal worker within
+      the 110-core matmul cap, a reader that reads only its own bank. Same tiles, same K order, same fidelity and fp32 accumulation
+      as today''s path: the output must be bit-identical. New kernels: bounded waits, every awaited semaphore signalled, NOC
+      writes inside buffers, smallest shape first (the box hung twice on new kernels). Every Python-built op through ttnn.bringup.prepare_program
+      / run_prepared. Fork tests for the new option in grouped_matmul_ttnn/tests/unit (random inputs, option vs today exact,
+      vs a torch reference). (2) Write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py (BATCH_SHARED = True;
+      run it through the resident runner, agent rule 1): real shapes and dtypes (8 groups x [rows, 4096] @ [4096, 1024], bfp8
+      weights, the model''s activation dtype, HiFi2 / fp32 DEST as the model calls it, today''s tuned WO_A_GMM / GMM256 knobs),
+      fixed-seed inputs, at 256 AND 160 rows a chip: today''s call vs the new option: max abs diff (must be 0), repeats of
+      each (must be 0), device us a call (program real-time profiler; never the per-op device-profiler mode), host us a call.
+      (3) Sweep the new option''s knobs (block_w, depth, cores a bank, in-flight reads, as you exposed them) IN PARALLEL ACROSS
+      CHIPS / CARDS (owner: different configs on different chips at once; reuse P.19''s per-card machinery, resident runner
+      stopped first, bounded per-process timeouts, single-card processes OK on this Galaxy by the owner''s word 2026-11-23);
+      confirm the best on the whole mesh once. Record per case woa_mismatch_<case> (max abs diff vs today), woa_repeat_diff_<case>,
+      woa_us_today_<rows>, woa_us_bank_<rows> (best config), woa_gain_ms_c8192 and woa_gain_ms_c5120 (gain a call x 21 layers,
+      device ms a chunk). Table + best knobs in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.2_probe.md;
+      AT ITS TOP the verdict against the owner''s KILL line (measured gain < half WA.1''s upper bound, or not exact -> KILL).
+      No model code changes in this task. Run only the tests you add; no fork regression suites on the 8x4.'
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py
     metrics:
@@ -7301,23 +7316,30 @@ tasks:
   - ttnn/ttnn/bringup/INDEX.md
   ab_mode: none
   brief:
-    prior_work: 'WA.1 WOA_BANK_DESIGN.md; WA.2 results/WA.2_probe.md (the fork option, best knobs, op-level gain, exactness).'
+    prior_work: WA.1 WOA_BANK_DESIGN.md; WA.2 results/WA.2_probe.md (the fork option, best knobs, op-level gain, exactness).
     details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md, WOA_BANK_DESIGN.md and results/WA.2_probe.md first. Wire
-      the fork option into the model''s wo_a behind DS41_WOA_BANK (off | on; default off until accepted) in tt/settings.py with
-      the owner decision text. CALL-TIME with both layouts resident (listed in bringup/hooks.py batch_call_settings) if the DRAM
-      budget a chip at 1M history with packed segments allows it (WA.1 section 4); otherwise load-time, with the reason in settings.py
-      and the report. Weights packed at load on the host (constraint 4): measure the load-time delta of layers 0-20 (and 40 by
-      estimate); cache it only if it matters. Nothing built on the request path (rule 20); no extra launches. Test models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
-      (BATCH_SHARED, resident runner, one load if call-time, layers 0-20 by default, all 40 when WOA_OFFON_LAYERS=all): a real
-      single 8192 chunk and a packed 4x2k chunk at a long history, and a single 5120 chunk: off vs on, record woa_offon_max_abs_diff_<case>
-      (every layer output and every served cache: must be 0), woa_repeat_max_abs_diff_<case> (two runs with on: must be 0), the
-      device ms of the wo_a section off vs on (real-time profiler) and woa_load_delta_s. Report results/WA.3_offon.md. Every Python-built
-      op through ttnn.bringup.prepare_program / run_prepared. Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md
-      and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md. Run only the tests you add plus the gate; no fork
-      regression suites on the 8x4.'
+      the fork option into the model''s wo_a behind DS41_WOA_BANK (off | on; default off until accepted) in tt/settings.py
+      with the owner decision text. CALL-TIME with both layouts resident (listed in bringup/hooks.py batch_call_settings)
+      if the DRAM budget a chip at 1M history with packed segments allows it (WA.1 section 4); otherwise load-time, with the
+      reason in settings.py and the report. Weights packed at load on the host (constraint 4): measure the load-time delta
+      of layers 0-20 (and 40 by estimate); cache it only if it matters. Nothing built on the request path (rule 20); no extra
+      launches. Test models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py (BATCH_SHARED, resident runner, one load
+      if call-time, layers 0-20 by default, all 40 when WOA_OFFON_LAYERS=all): a real single 8192 chunk and a packed 4x2k
+      chunk at a long history, and a single 5120 chunk: off vs on, record woa_offon_max_abs_diff_<case> (every layer output
+      and every served cache: must be 0), woa_repeat_max_abs_diff_<case> (two runs with on: must be 0), the device ms of the
+      wo_a section off vs on (real-time profiler) and woa_load_delta_s. Report results/WA.3_offon.md. Every Python-built op
+      through ttnn.bringup.prepare_program / run_prepared. Read models/demos/deepseek_v41_flash_d_p/bringup/PACKED_RULES.md
+      and rule 20 of models/demos/common/bringup/agents/bringup-engineer.md. Run only the tests you add plus the gate; no
+      fork regression suites on the 8x4.'
   gate:
-    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
-      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py && NO_REBUILD_PACKED_STRICT=1
+      BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
     metrics:
       woa_offon_max_abs_diff_*: == 0
       woa_repeat_max_abs_diff_*: == 0
@@ -7350,22 +7372,36 @@ tasks:
   ab_rungs:
   - last
   brief:
-    prior_work: 'WA.1 design, WA.2 probe (results/WA.2_probe.md), WA.3 DS41_WOA_BANK in the model (results/WA.3_offon.md: off
-      == on exact, repeats exact, load delta). Ladder method: PB.LAD / PB.MM256 (results/PB.MM256_ladder.md).'
-    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md first. Accept measurement of DS41_WOA_BANK=on vs off on this
-      branch. Fix only what the gate shows broken; do not measure walls yourself beyond a check (the gate measures). Acceptance
-      (owner rules): off == on bit-identical (test_woa_offon with WOA_OFFON_LAYERS=all in the gate), the reference limits at 8192
-      with the switch on (40 layers, fresh process), fresh-process determinism, cold no-rebuild PASS, and a device win (no minimum
-      gain). Report models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md: one table per
-      path, off vs on (single 8192, 4x2k, 4x1792s at 51200, 131072, 139264, 262144, 524288, 786432, 1024000; single 5120 at the
-      same rungs; steady + resumed; columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms), device ms of
-      the attention section and of wo_a off vs on, the load-time delta, weight DRAM a chip off / on. Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+    prior_work: 'WA.1 design, WA.2 probe (results/WA.2_probe.md), WA.3 DS41_WOA_BANK in the model (results/WA.3_offon.md:
+      off == on exact, repeats exact, load delta). Ladder method: PB.LAD / PB.MM256 (results/PB.MM256_ladder.md).'
+    details: 'Read /home/dnijemcevic/handoff_20261127/WOA_PLAN.md first. Accept measurement of DS41_WOA_BANK=on vs off on
+      this branch. Fix only what the gate shows broken; do not measure walls yourself beyond a check (the gate measures).
+      Acceptance (owner rules): off == on bit-identical (test_woa_offon with WOA_OFFON_LAYERS=all in the gate), the reference
+      limits at 8192 with the switch on (40 layers, fresh process), fresh-process determinism, cold no-rebuild PASS, and a
+      device win (no minimum gain). Report models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md:
+      one table per path, off vs on (single 8192, 4x2k, 4x1792s at 51200, 131072, 139264, 262144, 524288, 786432, 1024000;
+      single 5120 at the same rungs; steady + resumed; columns steady wall ms, tok/s, resumed wall ms, device ms, exposed
+      host ms), device ms of the attention section and of wo_a off vs on, the load-time delta, weight DRAM a chip off / on.
+      Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
   gate:
     cmd: BRINGUP_CHUNK=8192 DS41_WOA_BANK=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
-      && NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc scripts/run_safe_pytest.sh --run-all --no-precompile
+      models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on
+      DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on
+      DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on
+      LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py && NO_REBUILD_PACKED_STRICT=1
+      BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=on
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
     metrics:
       err_layer_L*: <= limit
       err_final_hidden*: <= limit
@@ -7378,8 +7414,8 @@ tasks:
       no_rebuild_pass_*: == 1
       program_builds_after_warmup_*: == 0
 - id: WA.5
-  title: 'OWNER 2026-11-27 wo_a bank-local reads: report, CPU only: what closed the gap (or not), and an estimate (no build) of
-    whether the same layout would help wq_b / wo_b'
+  title: 'OWNER 2026-11-27 wo_a bank-local reads: report, CPU only: what closed the gap (or not), and an estimate (no build)
+    of whether the same layout would help wq_b / wo_b'
   step: perf
   role: perf
   device: false
@@ -7393,15 +7429,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5_report.md
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md
   brief:
-    prior_work: 'WA.1 WOA_BANK_DESIGN.md, WA.2 results/WA.2_probe.md, WA.3 results/WA.3_offon.md, WA.4 results/WA.4_ladder.md
-      (or the KILL verdict of whichever task stopped the plan).'
+    prior_work: WA.1 WOA_BANK_DESIGN.md, WA.2 results/WA.2_probe.md, WA.3 results/WA.3_offon.md, WA.4 results/WA.4_ladder.md
+      (or the KILL verdict of whichever task stopped the plan).
     details: 'CPU only, no device, no code changes outside the paths. Write models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5_report.md
       (plain words, short): (1) the result: wo_a device us a call today vs bank-local at 160 and 256 rows vs the DRAM floor,
       device ms a chunk at 8192 / 5120, the ladder deltas; (2) what closed the gap and what did not, measured where possible
       (bank conflicts, NoC distance, reads in flight, compute); (3) an ESTIMATE ONLY (do not build: owner decision) of whether
       the same layout would help wq_b and wo_b (their shapes and dtypes as the model holds them, their gap to floor from DS41-306
-      / PB.MM256, what the stock DRAM-sharded matmul already gave them in P.81, the expected device ms a chunk), with the uncertainty
-      stated; (4) a known_issues entry (DS41-n) with the lesson. Write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_report.py
+      / PB.MM256, what the stock DRAM-sharded matmul already gave them in P.81, the expected device ms a chunk), with the
+      uncertainty stated; (4) a known_issues entry (DS41-n) with the lesson. Write models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_report.py
       (CPU) that checks the report exists with the four parts and records woa_report_parts and woa_est_ms_wq_b, woa_est_ms_wo_b
       (device ms a 8192 chunk, layers 0-20, best estimate).'
   gate:
@@ -7420,8 +7456,15 @@ tasks:
   brief:
     details: Measurement only (no agent). The gate's own results are the off side; the on side is ab/WA.4/new.
   gate:
-    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
-      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off
+      SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off
+      LADDER_POS=51200,131072,139264,262144,524288,786432,1024000 LADDER_CASES=4x2k,4x1792s scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
     metrics:
       steady_tok_s_p*: '> 0'
       ladder_lanes4x2k_tok_s_p*: '> 0'
@@ -7435,6 +7478,90 @@ tasks:
   brief:
     details: Measurement only (no agent). The gate's own results are the off side; the on side is ab/WA.4/new.
   gate:
-    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode DS41_WOA_BANK=off
+      SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
       steady_tok_s_p*: '> 0'
+- id: FIX.40
+  title: Re-render models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - WA.5
+  gate:
+    cmd: BRINGUP_TASK=WA.5 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_report.py
+    metrics:
+      woa_report_parts: '>= 4'
+      woa_est_ms_wq_b: '>= 0'
+      woa_est_ms_wo_b: '>= 0'
+  device: false
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/tests/woa
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.5_report.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'Re-render models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md with the
+      REAL off side: WA.4''s A/B off side ran every ladder with DS41_WOA_BANK=on (framework F308, fixed). On side: runs/galaxy_8x4-full/run1/ab/WA.4/new
+      (test_skip_positions__BRINGUP_CHUNK-8192__*, test_packed_walls, test_skip_positions__BRINGUP_CHUNK-5120). Off side:
+      the gate results of tasks WA.4R (8192 single + 4x2k + 4x1792s) and WA.4R5 (5120), results/WA.4R*.json and their logs
+      under runs/galaxy_8x4-full/run1/logs. Same tables as before (per history: steady wall ms, tok/s, resumed wall ms, device
+      ms, exposed host ms, attention device ms; off / on / delta), say in one line that off and on were measured in different
+      loads (walls drift between loads: judge device ms), keep the verdict section (test_woa_offon''s same-load numbers).
+      Update results/WA.5_report.md part 1 with the real ladder deltas. Extend tests/woa/woa_ladder_report.py to read the
+      off side from the WA.4R / WA.4R5 runs if needed. No device runs.'
+    gate_tasks:
+    - WA.5
+- id: NC.1
+  title: 'OWNER 2026-11-27: the native C++ ttnn.grouped_matmul (tt_ops_code_gen native_migrate port, no prepared program)
+    into the batching tree; layer-level checks only (exact vs the Python prepared op at the model''s wo_a shapes, repeats,
+    no rebuild, host us a call); model-wide check deferred to the end of the prepared-op ports'
+  step: perf
+  role: perf
+  device: true
+  ab_mode: none
+  deps:
+  - WA.4R5
+  - FIX.40
+  paths:
+  - ttnn/cpp/ttnn/operations/grouped_matmul
+  - ttnn/cpp/ttnn/operations/CMakeLists.txt
+  - ttnn/cpp/ttnn-nanobind
+  - ttnn/ttnn/bringup/grouped_matmul_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  - tests/ttnn/unit_tests/operations/grouped_matmul
+  - models/demos/deepseek_v41_flash_d_p/tests/woa
+  - models/demos/deepseek_v41_flash_d_p/tt/attention.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.1_layer.md
+  brief:
+    prior_work: 'native-migrate run (tt_ops_code_gen b1c98579, ~/repos/tt_ops_code_gen/native_migrate): branch port/grouped_matmul-nm-20261127T173252Z
+      in the checkout /scratch/dnijemcevic/native/tt-metal (base f39977aa64b = WA.3), commits 60d3c9bc9d8 .. 49384eeffde (the
+      last: the overseer''s fix, assert messages formatted only on failure). Summary: /scratch/dnijemcevic/native/tt-metal/generated/native_migrate/grouped_matmul/summary.md:
+      ported, acceptance 42 + golden cut + fork unit tests pass; host a warm call wo_a 8x160 142 -> 88 us, bank 82 -> 55 us;
+      dispatch bytes identical; device 1.000x.'
+    details: 'Take the port AS IS (git diff f39977aa64b 49384eeffde in /scratch/dnijemcevic/native/tt-metal; apply it on this
+      branch, which since added WA.4 / WA.5: resolve only real conflicts, change nothing else), rebuild (cmake --build build
+      --target install). Keep ttnn.bringup.grouped_matmul as the model''s entry (it now calls the C++ op); the model code
+      should need no change. Layer-level checks only (OWNER: model-wide verification once, at the end of all prepared-op ports):
+      write models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py (BATCH_SHARED, resident runner, no model
+      load, op level on the whole mesh): the model''s wo_a calls at 256 and 160 rows, interleaved and bank paths, today''s
+      tuned knobs, real inputs if cheap (else fixed-seed bfp8 of the real shapes): C++ op vs the Python prepared route (keep
+      it reachable for this test only, e.g. the port''s grouped_matmul_generic copy) max abs diff (must be 0), repeats on
+      fresh buffers (0), program-cache entries after warm-up on fresh buffers / new data (no growth), host us a warm call
+      C++ vs Python, device us both (real-time profiler). Record gmm_native_mismatch_<case>, gmm_native_repeat_<case>, gmm_native_cache_growth_<case>,
+      gmm_native_host_us_<route>_<case>. Report results/NC.1_layer.md. Run only the tests you add plus the gate; no fork regression
+      suites on the 8x4.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile tests/ttnn/unit_tests/operations/grouped_matmul/pre_migration/test_acceptance.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py
+    metrics:
+      gmm_native_mismatch_*: == 0
+      gmm_native_repeat_*: == 0
+      gmm_native_cache_growth_*: == 0
