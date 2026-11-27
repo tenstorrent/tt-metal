@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
@@ -79,12 +80,15 @@ sfpi_inline sfpi::vFloat erfc_q2_poly(sfpi::vFloat s) {
     return q;
 }
 
+constexpr std::uint32_t ERFC_A_HI_MASK = 0xFFFFF000U;
+constexpr float ERFC_CLAMP = 5.0f;
+
 // Split a^2 = hi + lo:
 //   a_hi = a with the low 12 mantissa bits cleared -> 12 significant bits (1 implicit + 11 stored)
 //   hi   = a_hi * a_hi -> a 12-bit by 12-bit product needs 24 bits, exact in fp32
 //   lo   = (a - a_hi) * (a + a_hi) ~= a^2 - a_hi^2     (a - a_hi is exact; |lo| < 0.02 for a <= 5)
 sfpi_inline void erfc_square_split(sfpi::vFloat a, sfpi::vFloat& hi, sfpi::vFloat& lo) {
-    sfpi::vFloat ah = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(a) & 0xFFFFF000U);
+    sfpi::vFloat ah = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(a) & ERFC_A_HI_MASK);
     hi = ah * ah;
     lo = (a - ah) * (a + ah);
 }
@@ -106,10 +110,10 @@ constexpr float ERFC_EXP_C4 = 0.5f;
 //    We can rearrange this to get
 //        j ~ round(-hi * log2(e))              integer in [-36, 0]
 //        f ~ -hi - j*ln2_hi - j*ln2_lo - lo,   ln2 = ln2_hi + ln2_lo is closely representable in FP32.
-// 2. Taylor expand exp(f) and keep 1 + f term outside so that only a small part is rounded.
-//        exp(f)= 1 + f + f^2 * rho(f)          rho(f) ~ (e^f - 1 - f)/f^2 = 1/2 + f/6 + f^2/24 + ... is a slowly
-//        varying
-//                                              function (Horner coefficients P0, P1, C2, C3, C4).
+// 2. Taylor expand exp(f) and keep the 1 + f term outside so that only a small part is rounded:
+//        exp(f) = 1 + f + f^2 * rho(f)
+//    where rho(f) = (e^f - 1 - f)/f^2 = 1/2 + f/6 + f^2/24 + ... varies slowly, so it is fitted by a polynomial in f
+//    (Horner coefficients P0, P1, C2, C3, C4).
 // 3. Multiplying by 2^j in fp representation is just 1.m * 2^(E + j - 127) which is equivalent to adding j.
 //    So  2^j * exp(f) is equivalent to adding j to the biased exponent of exp(f).
 sfpi_inline sfpi::vFloat erfc_exp_neg_a2(sfpi::vFloat hi, sfpi::vFloat lo) {
@@ -141,9 +145,11 @@ sfpi_inline sfpi::vFloat erfc_exp_neg_a2(sfpi::vFloat hi, sfpi::vFloat lo) {
 // Since 1/denom = u0/(1 + eps) = u0 * (1 - eps + eps^2 - ...), the remaining error is eps^2 ~ 2^-28, below fp32
 // rounding. This residual step replaces the second Newton iteration.
 sfpi_inline sfpi::vFloat erfc_recip_two_plus_a(sfpi::vFloat a) {
-    sfpi::vFloat d_hi = a + 2.0f;
-    sfpi::vFloat d_lo = a + (2.0f - d_hi);
-    sfpi::vFloat u0 = sfpu_reciprocal_iter<1, true>(d_hi);  // d_hi in [2, 7] is finite and non-zero
+    sfpi::vFloat d_hi = a + sfpi::vConstFloatPrgm0;
+    sfpi::vFloat d_lo = a + (sfpi::vConstFloatPrgm0 - d_hi);
+    // // d_hi in [2, 7] is finite and non-zero. The [1, 2) in sfpu_reciprocal_iter's doc is stricter than this path
+    // needs.
+    sfpi::vFloat u0 = sfpu_reciprocal_iter</*max_iter=*/1, /*normalized=*/true>(d_hi);
     sfpi::vFloat res = u0 * d_hi - 1.0f;
     res = u0 * d_lo + res;
     return u0 - u0 * res;
@@ -166,7 +172,7 @@ inline void calculate_erfc() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x0 = sfpi::dst_reg[0];
         // Clamp x >= 5 returns erfc(5) and x <= -5 returns 2 - erfc(5) = 2
-        sfpi::vFloat a = sfpi::min(sfpi::abs(x0), 5.0f);
+        sfpi::vFloat a = sfpi::min(sfpi::abs(x0), ERFC_CLAMP);
         // u = 1/(2 + a)
         sfpi::vFloat u = erfc_recip_two_plus_a(a);
         sfpi::vFloat hi, lo;
@@ -191,7 +197,7 @@ inline void init_erfc_bf16();
 template <bool APPROXIMATION_MODE>
 void erfc_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    sfpu_reciprocal_init<false>();              // vConstFloatPrgm0 is 2.0
+    sfpu_reciprocal_init</*APPROXIMATE=*/false>();  // vConstFloatPrgm0 is 2.0
     sfpi::vConstFloatPrgm1 = ERFC_Q_COEFFS[1];  // vConstFloatPrgm1 is c1 of Q2
     sfpi::vConstFloatPrgm2 = ERFC_Q_COEFFS[0];  // vConstFloatPrgm2 is c0 of Q2
 }
