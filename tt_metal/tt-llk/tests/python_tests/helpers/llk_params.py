@@ -907,6 +907,9 @@ class SdpaOp(Enum):
     ExpPoly = 3  # calculate_exponential_first_column<false, scale>
     Softplus = 4  # calculate_softplus_first_column
     Correction = 5  # calculate_fused_max_sub_exp_add_tile
+    ExpPolyDegree = (
+        6  # calculate_exponential_polynomial<true, 4, degree, ...>, called directly
+    )
 
 
 class SdpaFwOp(Enum):

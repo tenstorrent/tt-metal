@@ -5915,8 +5915,8 @@ class SdpaSfpuGolden:
 
         if op == SdpaOp.RecipIter:
             transformed = torch.reciprocal(x)
-        elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly):
-            # Both fold the scale, so the reference is exp(scale * x).
+        elif op in (SdpaOp.ExpAccurate, SdpaOp.ExpPoly, SdpaOp.ExpPolyDegree):
+            # All fold the scale, so the reference is exp(scale * x).
             transformed = torch.exp(exp_scale * x)
         elif op == SdpaOp.Softplus:
             transformed = torch.nn.functional.softplus(

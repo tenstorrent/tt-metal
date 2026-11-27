@@ -1234,6 +1234,14 @@ class SDPA_EXP_SCALE(TemplateParameter):
 
 
 @dataclass
+class SDPA_EXP_POLY_DEGREE(TemplateParameter):
+    poly_degree: int = 2
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int EXP_POLY_DEGREE = {self.poly_degree};"
+
+
+@dataclass
 class SDPA_SOFTPLUS_PARAMS(TemplateParameter):
     softplus_beta_bits: int = 0x3F800000  # 1.0f
     softplus_beta_reciprocal_bits: int = 0x3F800000  # 1.0f
