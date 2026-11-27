@@ -187,6 +187,7 @@ enum class SfpuType : std::uint32_t
     power_iterative,
     log,
     log10,
+    logsigmoid,
     digamma,
     erf,
     erfc,
