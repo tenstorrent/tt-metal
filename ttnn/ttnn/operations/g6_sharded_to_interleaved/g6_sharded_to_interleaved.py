@@ -186,7 +186,11 @@ _PROGRAM_CACHE = {}
 
 def g6_sharded_to_interleaved(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     validate(input_tensor, memory_config)
+    return _dispatch(input_tensor, memory_config)
 
+
+def _dispatch(input_tensor, memory_config):
+    """Allocate the output and run the one program. Callers must have passed validate()'s structural checks."""
     # The call's first and only device allocation, so a freed output-sized range is reused.
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,
