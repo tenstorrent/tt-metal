@@ -265,7 +265,8 @@ def _measure_and_gate(
 def test_sparse_mla_real_data_perf(request, mesh_device, device_params, variant, case_name, layer, data, config_only):
     real_data = RealData(REAL_DATA_LAYERS[layer])
     if reason := real_data.missing():
-        pytest.skip(reason)
+        # CI must not pass without the real-data cases; a local box without the capture just skips them.
+        (pytest.fail if CI_RUN else pytest.skip)(reason)
     cache, shared_layer = REAL_DATA_CASES[data], GATE_CASES[case_name][1]
     label = f"{case_name} sparse MLA {BOX.name} real {layer} {data}"
     require_high_power(f"{label} perf")

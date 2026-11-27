@@ -35,9 +35,13 @@ def read_sharded_rows(tensor_dir: Path, key: str, start: int, end: int) -> torch
 
 def write_sharded_rows(tensor_dir: Path, key: str, start: int, rows: torch.Tensor) -> None:
     """Write `rows` as rows [start, start + len(rows)) of `key`: one rows_<s>_<e>.safetensors shard that
-    read_sharded_rows reads back."""
+    read_sharded_rows reads back. Rejects a shard that overlaps another (re-writing the same range replaces it)."""
+    end = start + rows.shape[0]
     tensor_dir.mkdir(parents=True, exist_ok=True)
-    save_file({key: rows.contiguous()}, str(tensor_dir / f"rows_{start:08d}_{start + rows.shape[0]:08d}.safetensors"))
+    for shard in tensor_dir.glob("rows_*.safetensors"):
+        s, e = (int(x) for x in shard.stem.split("_")[1:3])
+        assert (s, e) == (start, end) or e <= start or s >= end, f"rows [{start}:{end}] overlap {shard}"
+    save_file({key: rows.contiguous()}, str(tensor_dir / f"rows_{start:08d}_{end:08d}.safetensors"))
 
 
 def interleave_pe(pe: torch.Tensor) -> torch.Tensor:
