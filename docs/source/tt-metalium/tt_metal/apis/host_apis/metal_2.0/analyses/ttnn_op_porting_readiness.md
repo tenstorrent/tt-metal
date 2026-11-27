@@ -28,7 +28,7 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
    - `fileId`: `1KUMj8SyBGlNMZlLFgs1MbAZlO2g6EoUc4KaxSlcy8jw`
    - `exportMimeType`: `text/csv`
 
-   The sheet is large (~150 KB), so instead of returning inline the harness **saves the result to a tool-results file and prints its path**. You'll see a message that the result exceeded the token limit and was saved — **this is expected, not a failure.** Use that saved path in the next step. (The saved file is JSON of the shape `{"content": "<base64>", ...}`. If a smaller export ever *does* come back inline, it's the same shape — write it to a file first.)
+   The sheet is large (~150 KB), so instead of returning inline the harness **saves the result to a tool-results file and prints its path**. You'll see a message that the result exceeded the token limit and was saved — **this is expected, not a failure.** Use that saved path in the next step. (The saved file is usually JSON of the shape `{"content": "<base64>", ...}`; step 3 covers a harness that saves the CSV itself. If a smaller export ever *does* come back inline, it's the same shape — write it to a file first.)
 3. **Decode into the analyses folder.** Extract the base64 `content` field and decode it:
    ```bash
    jq -r '.content' <SAVED_TOOL_RESULT_PATH> \

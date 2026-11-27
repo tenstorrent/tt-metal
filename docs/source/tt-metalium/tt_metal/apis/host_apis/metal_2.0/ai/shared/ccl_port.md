@@ -155,7 +155,7 @@ tt::tt_metal::experimental::FabricTargets fabric_target(
 }
 ```
 
-Put it in the factory file, inside `namespace { namespace CMAKE_UNIQUE_NAMESPACE { … } }`, and call it as `CMAKE_UNIQUE_NAMESPACE::fabric_target`. `ccl/` and `experimental/ccl/` are unity builds, which merge the anonymous namespaces of the factories they batch together, so a second port with a plain anonymous-namespace `fabric_target` is a redefinition; CMake gives each source its own `CMAKE_UNIQUE_NAMESPACE` (`eltwise/ternary`'s factory uses the same idiom). Headers: `<tt-metalium/experimental/fabric/fabric.hpp>` and `<tt-metalium/experimental/fabric/pipeline_builder.hpp>`.
+Put it in the factory file, inside `namespace { namespace CMAKE_UNIQUE_NAMESPACE { … } }`, and call it as `CMAKE_UNIQUE_NAMESPACE::fabric_target`. `ccl/` and `experimental/ccl/` are unity builds, which merge the anonymous namespaces of the factories they batch together, so a second port with a plain anonymous-namespace `fabric_target` is a redefinition whenever the two land in one unity batch; CMake gives each source its own `CMAKE_UNIQUE_NAMESPACE` (`eltwise/ternary`'s factory uses the same idiom). Headers: `<tt-metalium/experimental/fabric/fabric.hpp>` and `<tt-metalium/experimental/fabric/pipeline_builder.hpp>`.
 
 ### One sender, or a FabricConnectionManager
 
@@ -182,7 +182,7 @@ for (uint32_t link = 0; link < num_links; ++link) { links.emplace(worker_cores[l
 auto add_side = [&](const char* name, tt::tt_fabric::FabricNodeId peer) {
     spec.advanced_options.fabric_connections.push_back(FabricConnectionsSpec{
         .unique_id = FabricConnectionsSpecName{name},
-        .targets = fabric_target(*mesh_device, self_node, peer),
+        .targets = CMAKE_UNIQUE_NAMESPACE::fabric_target(*mesh_device, self_node, peer),
         .links = links});
     writer.advanced_options.fabric_connection_bindings.push_back(FabricConnectionBinding{
         .fabric_connections_spec_name = FabricConnectionsSpecName{name}, .accessor_name = name});
@@ -235,7 +235,7 @@ The program now fails at build time where legacy may have silently misrouted:
 
 ## Verifying a CCL port
 
-- **Hardware.** A CCL op's tests need a multi-device mesh, and a `Ring` op needs a ring: three or more devices on an axis that wraps (a T3K's 1×8; an N300's two chips are a line, not a ring). On less, every test skips, which checks nothing ([a skip is not a pass](../port/metal2_port.md#run-tests)). The auditor reads the mesh shapes the op's tests ask for and names the smallest in the brief, so the invoker can book it.
+- **Hardware.** A CCL op's tests need a multi-device mesh, often more devices than one card has. Read the shapes the tests ask for (their `mesh_device` parameters and skip conditions) rather than guessing. `all_to_all_async`, for one, turns a 2-device `Ring` into `Linear` and then rejects it, so its tests need a 1×8 ring, and on an N300 every one skips, which checks nothing ([a skip is not a pass](../port/metal2_port.md#run-tests)). The auditor names the smallest mesh in the brief, so the invoker can book it.
 - **Watcher.** If the device fails to open with `idle_erisc.elf … overflows region`, set `TT_METAL_WATCHER_DISABLE_ETH=1` and reset the card ([Watcher](workspace_setup.md#watcher--on-for-every-test-run)).
 - **Mock devices don't stand in** (as of November 2026). Under a mocked T3K or 8×P150, the CCL tests tried so far fail in their own setup (the sub-device manager, or `tilize` in `from_torch`) before the op runs.
 

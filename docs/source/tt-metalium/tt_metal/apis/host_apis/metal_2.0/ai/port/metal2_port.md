@@ -134,7 +134,7 @@ The impulse behind such a comment is sound, so satisfy it the other way round: *
 Before starting, confirm you have the following. If any is missing or unclear, ask the invoker before proceeding — the invoker can answer in seconds; you will burn substantial time guessing.
 
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
-- **Tests** — *not* invoker-supplied. You locate the op's tests yourself and confirm the set with the invoker before relying on it; see [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests) below.
+- **Tests** — *not* invoker-supplied, unless the invoker names them. You locate the op's tests yourself and confirm the set with the invoker before relying on it; see [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests) below.
 - **`METAL2_PORT_BRIEF.md`** (with the team-facing **`METAL2_PREPORT_AUDIT.md`** alongside it) — present in the op directory; the brief is issued only when the audit cleared (precondition above). The brief is your actionable input: its **TTNN factory analysis** section records the Metal 2.0 factory concept the port targets, inherited not re-derived. See the [TTNN integration doc](../shared/ttnn_factory.md) for the concept and the device-op-class edits the port forces.
 - **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. **Take one only from the invoker**, and prefer a recent port: a port made under an older revision of this recipe can differ from what you are being asked to do, and the divergence is invisible from the diff alone. Where the reference and this recipe disagree, the recipe wins — read a reference for spec *shape*, never for *scope*.
 
@@ -493,7 +493,7 @@ If positional RTAs survive after the buffer-address RTA goes away (uncommon — 
 
 > *Boundary note:* `dfb::name` implicitly converts to `uint32_t`; `sem::name`, `tensor::name`, `global_sem::name` and `fabric::name` do not. The recipe assumes no out-of-op call site requires passing one of those handles — see [§Read this first](#read-this-first). If you encounter one, that's an assumption violation; stop and document per the off-ramp below. A `GlobalSemaphore`'s *address* is not a handle: the kernel holds it as a plain integer from `GlobalSemaphore(global_sem::<name>).address()` and passes it wherever legacy did, out-of-op fabric helpers included ([CCL ops](../shared/ccl_port.md#kernel-side-the-device-object)).
 
-**4. Named arguments throughout.** Compile-time, runtime, and common runtime arguments all become named via `get_arg(args::<name>)`. The CTA / RTA / CRTA distinction is a host-only concern; the kernel uses one uniform retrieval syntax. Pick names that match the variables they were going to be assigned to. All of a kernel's argument names share one `args::` namespace, so where a CTA and an RTA would take the same name (a local shadowing a file-scope CTA of the same name), suffix the compile-time one `_ct`; the kernel's variables keep their names. An argument the kernel reads but never uses ports like any other: name it. Dropping it is cleanup for the report, not port work.
+**4. Named arguments throughout.** Compile-time, runtime, and common runtime arguments all become named via `get_arg(args::<name>)`. The CTA / RTA / CRTA distinction is a host-only concern; the kernel uses one uniform retrieval syntax. Pick names that match the variables they were going to be assigned to. All of a kernel's argument names share one `args::` namespace, so where a CTA and an RTA would take the same name (a local shadowing a file-scope CTA of the same name), suffix the compile-time one `_ct`; the kernel's variables keep their names. An argument the kernel reads but never uses ports like any other: name it. Dropping it is cleanup for the report, not port work. (The exception is a dead CB's index CTA, which drops with the CB.)
 
 ```cpp
 // Legacy:
@@ -599,7 +599,7 @@ DFBBinding{
 
 **End every braced initializer's last field with a trailing comma**, as the example above does. Without it `clang-format` aligns the whole list to the opening brace instead of block-indenting it, and the result is unreadable and churns the diff. This is worth getting right *as you write*, not at the end: a port declares one of these per binding — dozens across a normal factory — and the pre-commit hook reformats all of them at once, so the cost of the habit not being there arrives as a large unexpected diff on top of a failed first commit.
 
-**`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_modes`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back`, no `at()` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, `find` (a lookup is `find(key)->second`), or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
+**`Table`s are maps, not vectors.** Several spec fields that look list-like — `compile_time_args`, `runtime_arg_values` / `common_runtime_arg_values`, `unpack_modes`, `defines`, `tensor_args` — are `Table` (a hash-friendly map type), *not* `std::vector`. `Table` has **no `push_back`, no `at()` and no iterator-pair constructor**; building one the way you'd build a vector won't compile. Use brace-init `{{key, value}, …}`, `insert` / `emplace`, `operator[]`, `get(key)` for a lookup (an optional reference, empty when the key is absent), or the single-argument range constructor `Table(existing_map)` (e.g. to convert a legacy `std::map` of defines). When a `Table` must be built conditionally, declare it and `insert`/`emplace` into it — don't reach for `push_back`.
 
 For each resource type, construct the spec entry and its run-args entry as a pair. The order emerges naturally from the op's existing structure (reader / writer / compute order, tensor → DFB → semaphore precedence); the recipe does not prescribe a fixed sequence.
 
@@ -873,14 +873,14 @@ Run the op's correctness tests the same way — in the background, reading the l
 ./build/test/ttnn/unit_tests_ttnn --gtest_filter='*<Op>*'
 
 # Python pytests — broader coverage (dtype/layout sweeps, program-cache behavior)
-pytest <confirmed-tests-dir> -x -v
+pytest <confirmed-tests-dir> -x -v -rs
 ```
 
 Recommended order: gtests first (faster, exercises the C++ op directly), then pytests once gtests are green. If the op has a UDM/specialized variant, its gtests live in a sibling binary (`unit_tests_ttnn_udm`, etc.) — the recipe's worked example in [`workspace_setup.md`](../shared/workspace_setup.md) shows the pattern.
 
 > **A selected-but-unconverted kernel path can crash the whole pytest *session*, not just fail it.** While converting kernels path-by-path, a test that selects a not-yet-converted kernel hits that kernel's positional `get_compile_time_arg_val(0)` (the host now emits only named args), which `static_assert`s at JIT; the resulting `TT_FATAL` can segfault the Python process during traceback rendering (exit 139) and take down the entire pytest run rather than reporting a clean failure. Exclude not-yet-converted paths with `-k` until you convert them. This is a known tooling issue — not a port error, and not a card hang (no `0xdeadc0de`).
 
-**A skip is not a pass.** Run pytest with `-rs` and read the summary: at least one test of the op must have run, not skipped. If every one skips on the hardware you have, nothing has exercised the port: the kernels were never compiled, and the spec was never built. Tell the invoker which hardware the tests need, and record the gap in the report's [Outcome](#outcome).
+**A skip is not a pass.** Run pytest with `-rs` and read the summary (gtest reports its `[  SKIPPED ]` count too): at least one test of the op must have run, not skipped. If every one skips on the hardware you have, nothing has exercised the port: the kernels were never compiled, and the spec was never built. Tell the invoker which hardware the tests need, and record the gap in the report's [Outcome](#outcome).
 
 All tests passing pre-conversion should continue to pass post-conversion. If a previously-passing test now fails, **stop and report** — likely cause is a structural error in the spec that compiled but failed at `ValidateProgramSpec` validation, or an incorrect tensor-arg / runtime-arg layout.
 
@@ -941,12 +941,12 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
   ```bash
   OP=ttnn/cpp/ttnn/operations/<family>/<op>       # the op directory
   BASE=$(git merge-base origin/main HEAD)        # the pre-port revision
-  guards() {  # one line per guard: the macro and its first argument, whitespace collapsed
-    perl -0777 -ne 'while (/\b(TT_FATAL|TT_ASSERT|TT_THROW)\s*\(\s*(.*?)\s*[,)]/sg) { ($g = "$1($2") =~ s/\s+/ /g; print "$g\n" }'
+  guards() {  # one line per guard: the macro and its whole first argument, whitespace collapsed
+    perl -0777 -ne 'while (/\b(TT_FATAL|TT_ASSERT|TT_THROW)\s*\(\s*((?:[^(),"]++|"(?:[^"\\]|\\.)*"|(\((?:[^()"]++|"(?:[^"\\]|\\.)*"|(?-1))*\)))*?)\s*[,)]/sg) { ($g = "$1($2") =~ s/\s+/ /g; print "$g\n" }'
   }
   files=$({ git ls-tree -r --name-only "$BASE" -- "$OP"; git ls-files -co --exclude-standard -- "$OP"; } | grep -E '\.(cpp|hpp|h)$' | sort -u)
   echo "files scanned: $(echo "$files" | grep -c .)"
-  for f in $files; do
+  printf '%s\n' "$files" | while IFS= read -r f; do   # bash and zsh alike
     diff <(git show "$BASE:$f" 2>/dev/null | guards | sort) <(cat "$f" 2>/dev/null | guards | sort) | sed -n "s|^\([<>]\)|$f \1|p"
   done
   ```
@@ -981,7 +981,7 @@ Structure the report with the following sections. Each section may be empty (wri
 
 The port's result in one line, so a reader knows it at a glance. **Both values are success-tier** — a grounded capitulation is a complete deliverable, not a lesser result than a clean port (see [§When the discipline doesn't fit](#when-the-discipline-doesnt-fit)):
 
-- **`PORTED`** — the factory converted and its tests pass (note which factories, if the op has several and some are left for a later pass). Tests that skipped don't count: if none could run on the hardware available, write `PORTED (unverified)`, say what did run (the build), and name the hardware the tests need.
+- **`PORTED`** — the factory converted and its tests pass (note which factories, if the op has several and some are left for a later pass). Tests that skipped don't count: if none could run on the hardware available, write `PORTED (unverified)`, say what did run (the build), and name the hardware the tests need. That is still a port, on the same tier; the test run is owed, on that hardware.
 - **`CAPITULATED`** — a grounded stop: Metal 2.0 cannot express something, or the change reaches outside the op's directory. Record the specifics as a [Handoff points](#handoff-points) entry.
 
 ### Provenance

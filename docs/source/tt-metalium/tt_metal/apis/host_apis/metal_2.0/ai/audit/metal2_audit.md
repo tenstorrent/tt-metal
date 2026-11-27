@@ -458,7 +458,7 @@ Metal 2.0 enforces single-producer / single-consumer per node (SPSC) as a spec-v
 
 **Why this check exists.** Op kernels frequently `#include` headers outside their own directory. When a Metal 2.0 port crosses one of these boundaries, the kernel's named tokens (`dfb::name`, `sem::name`, `tensor::name`) need to translate into whatever shape the donor's signature expects. Some shapes cross cleanly; others require donor-side conversion work, most commonly because **the donor itself isn't on Device 2.0 yet**.
 
-The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2.0 migration before Metal 2.0 can proceed. A donor consumed by this op that is still on pre-Device-2.0 idioms (`InterleavedAddrGen`, `ShardedAddrGen`, raw sem addresses, `CircularBuffer&`) blocks this op's Metal 2.0 port until the donor migrates — that **GATE judgment is recorded in [the Device 2.0 prerequisite](#device-20-prerequisite)**; here, inventory the donor shape so the gate is specific and schedulable.
+The Device 2.0 → Metal 2.0 sequencing rule applies: ops must complete Device 2.0 migration before Metal 2.0 can proceed. A donor consumed by this op that is still on pre-Device-2.0 idioms (`InterleavedAddrGen`, `ShardedAddrGen`, raw program-semaphore addresses, `CircularBuffer&`) blocks this op's Metal 2.0 port until the donor migrates — that **GATE judgment is recorded in [the Device 2.0 prerequisite](#device-20-prerequisite)**; here, inventory the donor shape so the gate is specific and schedulable.
 
 **Inventory phase.** For each kernel file in the op, list every `#include` whose resolved path lies outside the op's own directory. Identify the donor class:
 
