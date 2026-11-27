@@ -89,7 +89,8 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
     """`MiniMaxH3Pipeline` whose transformer carries a lightx2v Turbo adapter.
 
     `lora_strength` multiplies the adapter's own `alpha / rank`, which the loader reads from the file;
-    1.0 runs the adapter as trained.
+    1.0 runs the adapter as trained. A FastVideo FastH3 bundle adapter takes its step grid from the bundle's
+    `adapter_manifest.json`.
     """
 
     def __init__(
@@ -110,7 +111,6 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
         # Stays None when the transformer loads from the weight cache, which skips `_read_safetensors`.
         self.merged_targets: int | None = None
         self._time_embedder_states: dict[str, dict[str, torch.Tensor]] | None = None
-        self.base_timesteps = bundle_base_timesteps(self.lora_path)
         with safe_open(str(self.lora_path), framework="pt", device="cpu") as handle:
             metadata = handle.metadata()
         video_shift, audio_shift = kwargs.get("video_shift"), kwargs.get("audio_shift")
@@ -158,13 +158,18 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
             **kwargs,
         )
 
+    @property
+    def base_timesteps(self) -> tuple[int, ...] | None:
+        # Read from `lora_path` on each use: serving swaps the adapter on a live pipeline without `__init__`.
+        return bundle_base_timesteps(self.lora_path)
+
     def __call__(self, prompt: str, *, num_inference_steps: int | None = None, **kwargs):
         """`num_inference_steps=None` takes a HyperFlow adapter's or a FastH3 bundle's own grid; a plain
         Turbo adapter publishes none, so it keeps the base pipeline's default."""
         if num_inference_steps is None and self.hyperflow is not None:
             num_inference_steps = self.hyperflow.num_grid_points
-        elif num_inference_steps is None and self.base_timesteps is not None:
-            num_inference_steps = len(self.base_timesteps) + 1
+        elif num_inference_steps is None and (rungs := self.base_timesteps) is not None:
+            num_inference_steps = len(rungs) + 1
         if num_inference_steps is not None:
             kwargs["num_inference_steps"] = num_inference_steps
         return super().__call__(prompt, **kwargs)
@@ -262,18 +267,19 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
 
     def _build_schedulers(self, num_inference_steps: int) -> tuple[MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
         contract = self.hyperflow
-        if (contract is None and self.base_timesteps is None) or self._warming:
+        rungs = self.base_timesteps if contract is None else None
+        if (contract is None and rungs is None) or self._warming:
             return super()._build_schedulers(num_inference_steps)
         scheduler = MiniMaxH3Scheduler(shift=self.video_shift)
         audio_scheduler = MiniMaxH3Scheduler(shift=self.audio_shift)
         if contract is None:
-            if num_inference_steps != len(self.base_timesteps) + 1:
+            if num_inference_steps != len(rungs) + 1:
                 raise ValueError(
-                    f"this FastH3 bundle runs {len(self.base_timesteps)} forwards "
-                    f"(num_inference_steps {len(self.base_timesteps) + 1}), got {num_inference_steps}"
+                    f"this FastH3 bundle runs {len(rungs)} forwards "
+                    f"(num_inference_steps {len(rungs) + 1}), got {num_inference_steps}"
                 )
-            scheduler.set_timesteps(sigmas=bundle_sigmas(self.base_timesteps, self.video_shift))
-            audio_scheduler.set_timesteps(sigmas=bundle_sigmas(self.base_timesteps, self.audio_shift))
+            scheduler.set_timesteps(sigmas=bundle_sigmas(rungs, self.video_shift))
+            audio_scheduler.set_timesteps(sigmas=bundle_sigmas(rungs, self.audio_shift))
             return scheduler, audio_scheduler
         contract.assert_forwards(num_inference_steps)
         scheduler.set_timesteps(sigmas=contract.modality_sigmas(self.video_shift))
