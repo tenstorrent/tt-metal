@@ -382,6 +382,8 @@ ttnn::Tensor composite_all_gather(
         "If input memory config is sharded, then output memory config must be provided. Defaulting the output memory "
         "config to the input sharded memory config will break the op as the input and output shapes are different.");
     auto output_memory_config = memory_config.value_or(input_memory_config);
+    auto intermediate_memory_config =
+        output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
 
     if (input_memory_config.is_sharded()) {
         /*
@@ -389,8 +391,6 @@ ttnn::Tensor composite_all_gather(
          * If sharded to sharded, use DRAM interleaved as the intermediate memory
          * config for executing the composite.
          */
-        auto intermediate_memory_config =
-            output_memory_config.is_sharded() ? ttnn::DRAM_MEMORY_CONFIG : output_memory_config;
         input_tensor = ttnn::to_memory_config(input_tensor, intermediate_memory_config);
     }
 
@@ -408,10 +408,14 @@ ttnn::Tensor composite_all_gather(
         use_l1_small_for_semaphores);
 
     // Do the gather itself
-    ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
+    ttnn::Tensor all_gather_output_tensor = ttnn::concat(
+        broadcasted_tensors,
+        gather_dim,
+        convert_to_bfloat16_for_composite ? std::optional<ttnn::MemoryConfig>{}
+                                          : std::optional<ttnn::MemoryConfig>{intermediate_memory_config});
 
     if (convert_to_bfloat16_for_composite) {
-        all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
+        all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype, intermediate_memory_config);
     }
 
     if (output_memory_config.is_sharded()) {
