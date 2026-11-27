@@ -246,7 +246,11 @@ def one_load_errors(spec: Spec, task: dict, tasks: dict | None = None) -> list[s
         units = with_determinism(task, gate_units(task, tasks))
     except Exception:  # noqa: BLE001 -- a malformed gate is reported by the other checks
         return []
-    return batch.one_load_errors(units, {})
+    try:  # F307: an unset BRINGUP_CHUNK is the spec's chunk
+        chunk = str(spec.data["target"]["chunk"])
+    except Exception:  # noqa: BLE001 -- a spec without a target chunk: unset stays its own value
+        chunk = None
+    return batch.one_load_errors(units, {}, chunk)
 
 
 FULL_MODEL_STEPS = ("integrate", "assemble", "contract", "perf")

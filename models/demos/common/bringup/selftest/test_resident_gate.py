@@ -441,3 +441,14 @@ def test_call_hooks_follow_an_edit_of_the_hooks_file(tmp_path, monkeypatch):
     st = hooks.stat()
     os.utime(hooks, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
     assert B.call_vars({}) == {"TOY_A", "TOY_BANK"}
+
+
+def test_one_load_counts_two_chunks_as_two_loads(call_hooks, monkeypatch):
+    """F307: the chunk is the load's geometry even when a test declares BRINGUP_CHUNK per-run (test_no_rebuild): an
+    8192 gate's 5120 ladder is a second executed-layers load (WA.4), an unset chunk is the spec's."""
+    monkeypatch.setattr(B, "DECLARED_ITEM_VARS", {"BRINGUP_CHUNK"})
+    two = [("t#a", f"BRINGUP_CHUNK=8192 {PROFILE}"), ("t#b", f"BRINGUP_CHUNK=5120 {PROFILE}")]
+    err = B.one_load_errors(two, {}, "8192")
+    assert len(err) == 1 and "one per chunk" in err[0] and "5120" in err[0]
+    same = [("t#a", f"BRINGUP_CHUNK=5120 {PROFILE}"), ("t#b", PROFILE)]  # unset = the spec's 5120: one load
+    assert B.one_load_errors(same, {}, "5120") == []

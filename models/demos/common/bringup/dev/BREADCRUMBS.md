@@ -2984,3 +2984,13 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   orchestrator crashed at the A/B's first unit (OSError 36, File name too long), after the agent had finished.
 - Fix: Orchestrator.ab_test_names keeps the tag when it is <= 80 characters, else the first difference (60 characters
   at most) + an 8-hex hash of the whole tag. Selftest: test_cpu_perf_task.py::test_ab_test_names_stay_short_for_long_env_differences.
+
+## F307 (2026-11-27, DeepSeek-V4.1 WA.4): two chunks in one layer class are two loads, also for validate
+- Seen: WA.4's accept gate held an 8192 ladder and a 5120 ladder (both performance units). validate passed it: test_no_rebuild
+  declares BRINGUP_CHUNK per-run, and core/batch.DECLARED_ITEM_VARS is global, so model_key dropped BRINGUP_CHUNK for every
+  unit and gate_groups put both ladders in one process; at run time the 5120 run raised NeedsFreshProcess (one_load).
+- Fix: batch.one_load_errors(units, env, chunk) counts the distinct effective chunks per layer class (a run's BRINGUP_CHUNK
+  after the determinism check's configuration, unset = the spec's target chunk, passed by core/gate.one_load_errors): more
+  than one is an error before any device work. Grouping itself is unchanged. Selftest:
+  test_resident_gate.py::test_one_load_counts_two_chunks_as_two_loads. It also flags passed X.8 / PB.NR (real two-chunk
+  gates from before the strict rule): only a re-run of them would need splitting.
