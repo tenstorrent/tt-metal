@@ -4,19 +4,43 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | data_movement (no compute kernel, no arithmetic) |
-| Goal | Materialize `x.expand(*sizes).contiguous()` for `x` of shape `(d_0, d_1, 1, W)` as a new DRAM-interleaved TILE tensor `(d_0, d_1, H_out, W)`, bit-identical, in one device program. Production: `(1, 1, 1, W) -> (1, 1, W, W)`, W in {512, 256, 196, 185, 207}. |
-| Math | `out[n, c, h, w] = x[n, c, 0, w]` for all `h < H_out`; every other dim keeps its index. In tile terms: output tile `(image, r, col)` = input tile `(image, col)` with its row 0 copied into all 32 rows. |
-| References | Contract: `eval/prompts/g6_expand.txt`. Golden suite: `eval/golden_tests/g6_expand/{feature_spec.py, helpers.py}`. Semantics of blocks: `.claude/references/blocking-model.md`. Ledger: `ttnn/ttnn/operations/g6_expand/l1_ledger.md`. Catalog entries used: `examples/{mcast_topology, tile_reorder, noc_placement, double_buffer, bank_stagger, width_split}` (see "Catalog evidence"). |
+| Classification | data_movement — two dataflow kernels per core, **no compute kernel, no arithmetic** |
+| Goal | In one device program, materialize `x` `(d0, d1, 1, W)` broadcast along dim 2 to `(d0, d1, H, W)` as a new TILE tensor. Production: `(1,1,1,W) -> (1,1,W,W)`, `W ∈ {185,196,207,256,512}`. Every logical element bit-identical, every out page written once. |
+| Math | `out[i0,i1,h,w] = x[i0,i1,0,w]`. In tile terms: out page `(n, r, c) = T(q)`, with `q = n·Wt + c` and `T(q)` = x page `q` with its row 0 copied into all 32 rows. |
+| Precision | No value passes through any engine that interprets it: x bytes move by NoC transfers and RISC-V word copies only. Bit identity (NaN payloads, ±0, denormals, ±inf) holds by construction. No `fp32_dest_acc_en`, fidelity or approx mode applies. |
+| References | task spec (contract); `eval/golden_tests/g6_expand/{feature_spec.py,helpers.py}`; `.claude/references/{blocking-model.md,l1-footprint-discipline.md,op-design-template.md}`; `ttnn/cpp/ttnn/kernel_lib/mcast/{host/mcast.hpp,kernel/mcast_args.hpp,kernel/pipes/mcast_pipe.hpp}`; `ttnn/cpp/ttnn/kernel_lib/{local_copy_helpers_dataflow.hpp,l1_helpers.hpp,tile_column_dataflow.hpp}`; `tt_metal/hw/inc/api/dataflow/{noc.h,circular_buffer.h}`; catalog `ttnn/ttnn/operations/examples/master.md` (see Catalog evidence) |
+
+### Tile-level restatement
+
+| Quantity | Definition |
+|----------|------------|
+| `num_images` (N) | `d0·d1` (production 1) |
+| `tensor_cols_tiles` (Wt) | `ceil(W/32)` = `x.padded_shape[-1] // 32` |
+| `tensor_rows_tiles` (Ht) | `ceil(H/32)`, per image (H = out dim 2) |
+| `tensor_pages` (Q) | `N·Wt` = `x.buffer_num_pages()` — one x page per `(n, c)` because `d2 = 1` |
+| out pages | `N·Ht·Wt` = `out.buffer_num_pages()` |
+| `q -> (n, c)` | `n = q // Wt`, `c = q % Wt` |
+| out page id of `(q, r)` | `(n·Ht + r)·Wt + c` |
+| Row-broadcast page `T(q)` | bf16 tile = 4 faces × 512 B, face `f` at byte `512·f`, 16 rows × 32 B row-major inside a face. Row 0 of a tile = bytes `[0,32)` (face 0) ++ `[512,544)` (face 1). `T(q)`: rows 0–15 of faces 0 **and 2** = x page `q` bytes `[0,32)`; rows 0–15 of faces 1 **and 3** = bytes `[512,544)`. Equivalently: build bytes `[0,1024)` from the two 32 B segments, then bytes `[1024,2048)` = bytes `[0,1024)`. |
+| Input padding | x rows 1–31 are never a source (they are overwritten in place). x row-0 columns `≥ W` land only in out's padding columns. No logical out element depends on padding. |
+| Output padding | rows `≥ H mod 32` of the last tile row and columns `≥ W` of the last tile column hold row copies — legal ("may hold anything"). Non-aligned W and H need no separate path. |
+
+| W | Wt = Ht | Q | out pages | `alignment` |
+|---|---------|---|-----------|-------------|
+| 512 | 16 | 16 | 256 | tile_aligned |
+| 256 | 8 | 8 | 64 | tile_aligned |
+| 207 | 7 | 7 | 49 | w_non_aligned |
+| 196 | 7 | 7 | 49 | w_non_aligned |
+| 185 | 6 | 6 | 36 | w_non_aligned |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` | yes | rank 4, `d_2 == 1`, bf16, TILE, DRAM interleaved, on device | — | buffer address RT (reader) |
-| `sizes` | list or tuple of 4 ints, positional | yes | each `-1` or `>= 1`; `sizes[d] in {-1, d_d}` for d in {0, 1, 3}; `sizes[2] in {-1} ∪ [1, ∞)` | — | host only (derives the output shape and the plan) |
+| `input_tensor` | `ttnn.Tensor` | yes, positional | see Input | — | buffer address → common RT arg of the reader (patched per call) |
+| `sizes` | list or tuple of 4 `int`, positional | yes | each `-1` or `≥ 1`; see Validation | — | host only: gives out shape → Ht → plan → CT/RT |
 
-There is no `memory_config`, output dtype or `compute_kernel_config`: `out` takes the dtype, layout and memory config of `input_tensor`.
+No `memory_config`, no output dtype, no `compute_kernel_config`. `-1` in `sizes` is replaced by the size of x along that dim before any check (canonicalization); there is no index-axis parameter.
 
 ## Tensors
 
@@ -24,271 +48,258 @@ There is no `memory_config`, output dtype or `compute_kernel_config`: `out` take
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | `(d_0, d_1, 1, W)`, rank 4; production `(1, 1, 1, W)` |
-| Dtype | bfloat16 |
-| Layout | TILE (32×32, four 16×16 faces) |
+| Shape | rank 4, `(d0, d1, d2, d3)` with `d2 == 1` (dim 2 is the only expanded dim); production `(1,1,1,W)` |
+| Dtype | bfloat16 (SUPPORTED) |
+| Layout | TILE |
 | Memory | DRAM interleaved, on device |
-| Bytes read | only row 0 of each tile (two 32-B segments: face 0 row 0 at page offset 0, face 1 row 0 at page offset 512). Rows 1–31 and nothing else of `x` is ever read — padding-independence by construction. |
 
 ### Output
 
 | Property | Value |
 |----------|-------|
-| Shape | `[d if s == -1 else s for d, s in zip(x.shape, sizes)]` = `(d_0, d_1, H_out, W)` |
-| Dtype | bfloat16 (= input) |
-| Layout | TILE (= input) |
-| Memory | DRAM interleaved (= input's memory config); a new allocation, never a view |
-| Padding | Tile padding of `out` (rows ≥ H_out of the last tile row, columns ≥ W of the last tile column) holds copies of `x`'s row-0 tile bytes, including `x`'s own column padding. The contract leaves it unconstrained; no logical element depends on it. |
+| Shape | `sizes` with each `-1` replaced by x's size: `(d0, d1, H, d3)`, `H = sizes[2]` (`-1` → 1) |
+| Dtype | `input_tensor.dtype` |
+| Layout | `input_tensor.layout` (TILE) |
+| Memory | `input_tensor.memory_config()` (DRAM interleaved). A new allocation, never a view. |
+
+### Validation and registry (`validate()`, first line of every entry point)
+
+| # | Check | Raises |
+|---|-------|--------|
+| 1 | `x` not on device | `ValueError` |
+| 2 | `rank(x) != 4`, or `len(sizes) != rank(x)`, or a size that is not an `int` | `ValueError` |
+| 3 | a size `s != -1` with `s <= 0` | `ValueError` |
+| 4 | a dim with `x.shape[d] != 1` and `s ∉ {-1, x.shape[d]}` | `ValueError` |
+| 5 | a dim `d ∈ {0,1,3}` with `x.shape[d] == 1` and `s ∉ {-1, 1}` (expansion outside dim 2) | `ValueError` |
+| 6 | `x.shape[2] != 1` (the contract has one row per image) | `ValueError` |
+| 7 | `x` not DRAM interleaved | `ValueError` |
+| 8 | axes `{dtype, layout, alignment}` outside `SUPPORTED` | `UnsupportedAxisValue` |
+| 9 | cell in `EXCLUSIONS` | `ExcludedCell` |
+
+Every message raised by `validate()` (rows 1–9) starts with `g6_expand`. The acceptance test matches on that prefix.
+
+| Registry item | Value |
+|---------------|-------|
+| `INPUT_TAGGERS` | `{"alignment": tag_alignment}`. `tag_alignment(inputs, axes)`: `scenario = inputs[0]`; out shape = `scenario["sizes"]` with each `-1` replaced by `scenario["shape"][d]`; `"w_non_aligned"` if `W_out % 32` (regardless of H), elif `H_out % 32` → `"h_non_aligned"`, else `"tile_aligned"`. `validate()` builds the same scenario dict from the call. |
+| `SUPPORTED` (Phase 0) | `dtype: [bfloat16]`, `layout: [TILE_LAYOUT]`, `alignment: ["tile_aligned", "w_non_aligned"]` — equals TARGET. The kernels are alignment-agnostic; `"h_non_aligned"` is refused only because it is outside TARGET. |
+| `EXCLUSIONS` | `[]` |
+| INVALID | none (lives in `feature_spec.py`, not checked by the op) |
+| Structural impossibilities | none to add |
 
 ## Blocking Model
 
-The first design section. Everything below it is the realization of these decisions.
-
 ### Axes
 
-Index space: output tiles `(image, replica, col)` with `image = n·d_1 + c`, `replica` = tile row within an image, `col` = tile column. Input tiles `(image, col)`; the input has exactly one tile row per image. Leading `image` and `col` fold into one axis, **pattern** = the input page index `p = image·tensor_pattern_wt + col`: they are contiguous in `x`, and the op treats them identically (each `p` owns one distinct output pattern). Tensor-scope extents (all `ceil`, per image):
+| Axis | Character (+ reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
+|------|----------------------|-------------|---------------|-------------|-----------------|--------------|
+| `n` — image (`d0·d1`) | independent — out image `n` reads only x image `n` | folded with `c` into the page axis `q = n·Wt + c` (the op treats `n` and `c` identically and x pages are contiguous in `q`); extent = `block_pages` | whole group assignment | `ExpandPlan.block_pages` | groups own contiguous `q` ranges, which may straddle images | knob-turn |
+| `c` — out tile column = x page within an image | independent — out column `c` reads only x page `c` | `block_pages` (along `q`) | `group_pages` of the group = **1 in every production case**: that is the group's whole assignment in one block, not a collapsed knob | `ExpandPlan.block_pages`, set once in `select_plan` | `num_groups` groups, contiguous balanced `q` ranges (first `Q mod G` groups get one more page) | knob-turn |
+| `r` — out tile row (expanded axis, tile granularity) | independent. **x does not vary along `r`, so splitting `r` makes x reuse-shared by construction** → each x page is broadcast within its group | `block_rows` | `core_rows_tiles` (the core's whole share). The block's pages stay resident while every copy is written; cutting `r` has no L1 term, so there is nothing to buy. | derived from `ExpandPlan.row_splits` | `row_splits` cores per group split `Ht` balanced; the injector (split 0) takes the floor share, the last `Ht mod row_splits` splits take the ceiling | knob-turn |
+| `i` — row inside a tile (32) | independent — every row sources row 0 | not a blocking axis: the 2048 B page is the indivisible transfer and write quantum | 32 | tile shape | none (inside one page) | — |
+| stage data: built block `T` (`q` × 32 rows) | produced by `replicate_rows_block` | spans `q` → `block_pages` | `block_pages` | as above | **Computed on the injector only.** The injector is a communication role, and this is the one stage it also computes while its receivers wait. It has nothing to spread: every core writes whole pages, so every core needs all of `T`, and splitting one page's replication across cores would cost an all-gather larger than the work. | perf lamp L3 (split the replication across the injector's two RISC-Vs) |
 
-- `tensor_pattern_wt = ceil(W / 32)` (production 16, 8, 7, 7, 6)
-- `tensor_pattern_tiles = d_0 · d_1 · tensor_pattern_wt` (production = `tensor_pattern_wt`)
-- `tensor_replica_rows = ceil(H_out / 32)` (production 16, 8, 7, 7, 6)
+### Core-assignment knobs
 
-| Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
-|------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `pattern` (x page `p`; folds `image` × `col`) | **independent** — output tile `(p, r)` depends on input tile `p` alone; no result spans `p`. The input varies along it. | `block_pattern_tiles` | `min(core_pattern_tiles, max_block_pattern_tiles)` = the core's whole pattern assignment (production: 2 at W=512, 1 otherwise) | host plan (`select_plan`), passed as reader/writer CT arg; capacity of `cb_pattern_tiles` derives from it | `pattern_groups` contiguous ranges of `pattern_tiles_per_group` pages, one per **grid column** of the rectangle; `pattern_tiles_per_group = ceil(P / min(P, max_pattern_groups))`, `pattern_groups = ceil(P / pattern_tiles_per_group)`; `max_pattern_groups` defaults to `grid_x` | knob-turn |
-| `replica` (out tile row within an image) | **independent, and the input is reuse-shared along it** — no output depends on another, and every replica row of a pattern needs the identical input tile, so splitting it makes every core of a grid column need the same `x` pages. | `block_replica_rows` | `core_replica_rows` — the core's whole replica assignment. The replica axis costs no L1: writes stream over it from the resident pattern pages, so the block spans it fully at any size. | host plan; RT arg (`core_replica_rows`, `replica_start`) | `replica_groups` contiguous ranges of `replica_rows_per_group` rows, one per **grid row** of the rectangle; `replica_rows_per_group = ceil(R / min(R, max_replica_groups))`, `replica_groups = ceil(R / replica_rows_per_group)`; `max_replica_groups` defaults to `grid_y`. The input pages of a grid column are read from DRAM **once** by the column's top core and multicast down the column. | knob-turn (raising `max_replica_groups` adds multicast receivers, not DRAM reads) |
-| `image` (`n·d_1 + c`) | independent — folded into `pattern` (see above). | folded: `block_pattern_tiles` | folded | folded | folded: a pattern range may span images; each `p` carries its image as `p / tensor_pattern_wt` | knob-turn |
-| in-tile rows (32 rows of one output tile) | not a block axis — sub-tile. All 32 rows of an output tile are the same two 32-B segments of input row 0. | none: the whole tile is the atomic unit (one 2 KB page per DRAM write, catalog `tile_reorder`) | 32 rows, one page | tile format | n/a | n/a |
+| Knob | Meaning | Phase 0 value | Source |
+|------|---------|---------------|--------|
+| `grid` `(gx, gy)` | `device.compute_with_storage_grid_size()` | runtime, never inlined | `ExpandPlan.grid` |
+| `strips_per_column` (b) | groups stacked in one grid column | Phase 0 rule below | `ExpandPlan.strips_per_column` |
+| `row_splits` (rs) | cores per group, a vertical strip | `min(Ht, gy // b)` | `ExpandPlan.row_splits` |
+| `num_groups` (G) | groups; group `g` sits in grid column `g // b`, rows `[(g mod b)·rs, (g mod b)·rs + rs)`; its injector is the strip's top core | `min(Q, gx·b)` | `ExpandPlan.num_groups` |
 
-**Phase 0 realizes the full 2D split on day 1**: the production shapes use 64, 64, 49, 49, 36 cores (Work Distribution). No knob is an inlined constant: `max_pattern_groups`, `max_replica_groups`, `block_pattern_tiles`, `pattern_cb_depth_blocks` and the grid are host parameters; every page count, trip count, runtime arg and the core rectangle derive from `select_plan`.
+**Phase 0 rule (`select_plan`):** pick `b ∈ [1, gy]` that minimizes `key(b) = (ceil(Q/G_b) · ceil(Ht/rs_b), ceil(Q/G_b), b)`, with `rs_b = min(Ht, gy // b)` and `G_b = min(Q, gx·b)`. The first term is the most out pages any core writes (occupancy). The second is the pages each injector replicates, which is the serial term on every group's critical path. The third prefers fewer strips. Columns fill first, so the used set is one rectangle (plus one partial column when `G mod b ≠ 0`).
 
-**The intermediate (the pattern pages) re-run through the table.** A pattern page has the `pattern` axis only; it is built once per grid column by that column's top core (the injector) and multicast to the column. Building it on the injector while the column's other cores wait is a **work-assignment decision**, recorded here rather than left implicit: the build of one page is not divisible across cores without an all-gather of the 2 KB result, and replicating on every core instead (multicast only the 64 B of row 0, each core replicates) leaves the chain `fetch → replicate → write` exactly as long — the replicate sits on every core's critical path either way. The alternative payload is the "mcast payload" perf lamp, not a different occupancy.
+| W | b | rs | G | `group_pages` | `core_rows_tiles` | cores | used set |
+|---|---|----|---|---------------|-------------------|-------|----------|
+| 512 | 2 | 5 | 16 | 1 | 3 (splits 0–3, injector included), 4 (split 4) | 80 | 8 cols × 10 rows |
+| 256 | 1 | 8 | 8 | 1 | 1 | 64 | 8 × 8 |
+| 207, 196 | 1 | 7 | 7 | 1 | 1 | 49 | 7 × 7 |
+| 185 | 1 | 6 | 6 | 1 | 1 | 36 | 6 × 6 |
 
-**Stall-shadow check.** Two stages wait: the injector on the DRAM fetch of row 0, the receivers on the column multicast. No work in this op is independent of `x`'s row 0 — every output byte is a copy of it, and there is no arithmetic whose algebra would allow a reorder. The only work that fits the windows is setup: building the `TensorAccessor`s, programming the writer's stateful write size (2048 B), and computing the first output page ids. The kernels do that setup before their first blocking wait.
+(The plans are identical on 13×10 and 11×10 grids. For W=512, `b = 1` ties on the first key term, 4 pages per core, but loses on the second: 2 pages per injector.)
 
 ### Buffer-depth knobs
 
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| `cb_pattern_tiles` | `pattern_cb_depth_blocks` (blocks of `block_pattern_tiles` pages) | 1 | Depth 1 holds one block resident while the writer streams it to every replica row. Depth 2 overlaps block `k+1`'s fetch/replicate/multicast with block `k`'s writes, which only exists when `num_blocks_this_core > 1`. Every production core has exactly one block, so depth 2 buys nothing there. |
+| `cb_row_bcast_tiles` | `t_block_depth` | **1** (every production group has one block). Derived: `1` if `ceil(group_pages_max / block_pages) == 1`, else `2`. | With more than one block per group, a second slot lets the injector load, replicate and publish block `k+1` while the group writes block `k`. With one block there is no next block. |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| Blackhole DRAM read alignment: source and L1 destination must agree modulo 64 B (`NOC_DRAM_READ_ALIGNMENT_BYTES 64`, `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:379`; check `tt_metal/hw/inc/internal/debug/sanitize.h:746`) | the landing offset of the row-0 fetch | The fetch lands each 32-B segment at the **same in-page offset** it has in `x` (0 and 512) in the pattern page itself. CB bases are allocated at DRAM alignment (`tt_metal/impl/program/program.cpp:2505-2509`) and the page size is 2048, so both offsets agree modulo 64. Never fetch into a staging slot at a different offset. | watcher alignment hang (`--dev`), or silently shifted bytes on a lenient path |
-| Per-core L1 budget 1,347,776 B (spec, Model environment / BB-05) | `block_pattern_tiles` | `max_block_pattern_tiles = (L1_OP_BUDGET_BYTES − L1_RESERVED_BYTES) // (pattern_cb_depth_blocks · tile_bytes)` = (1,347,776 − 4,096) // 2,048 = **656** at depth 1. `L1_RESERVED_BYTES = 4096` covers the multicast semaphores and alignment. A core whose `core_pattern_tiles` exceeds it walks `num_blocks_this_core > 1` blocks; nothing is refused. | CB allocation overlaps the model's own L1 tensors and fails at launch |
-| Stateful self-read size ≤ `NOC_MAX_BURST_SIZE` (`ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.inl:66`) | replicate transfer size | The replicate copies 32-B face-row segments (or larger power-of-two spans within a page if the implementer doubles), always ≤ one burst | compile-time `static_assert` |
-| Multicast destination address is the **same L1 address on every core of a grid column** (one `send(src, dst, size)` per block, `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/mcast_pipe.hpp:92`) | per-core `cb_pattern_tiles` push/pop history | Every core of a column runs the same `num_blocks_this_core`, and every block reserves/pushes/pops the **nominal** `block_pattern_tiles` pages. The ragged last block narrows only the fetch, replicate, send size and writes. This also closes the CB ring each block (depth 1: one push = capacity). | multicast lands on a slot the receiver has not reserved, so the receiver writes stale pages: wrong output |
-| NoC L1 alignment 16 B (`noc_parameters.h:375-376`) | replicate segment offsets | Segments are 32 B at 32-B offsets inside a 64-B-aligned page | sanitizer alignment hang |
+| L1 left to the op (BB-05: 1,347,776 B/core) | `block_pages` | `block_pages ≤ floor(1347776 / (t_block_depth · page_bytes))` (658 at depth 1, 329 at depth 2, for 2 KiB pages), applied in `select_plan`. A shape is never refused. | launch refused / L1 clash for very wide W |
+| Multicast landing address | slot sequence | one CB descriptor over all participating cores. Every core of a group reserves and pushes the **nominal** `block_pages` on every block, including a ragged last block (the actual count goes only into the NoC transfers and writes). | injector and receiver slots drift apart → the multicast lands in a slot the receiver is not reading (silent corruption) |
+| Multicast receiver set | `row_splits` | a group is a 1-D line of `rs` cores in one grid column, with `b·rs ≤ gy` | a strip crossing into the next group → foreign pages |
+| BH DRAM read alignment (64 B, relative) | none on extent | whole-page reads into slot offsets `k·page_bytes`, which keep the DRAM page offset modulo 64 | silent corruption (watcher stops it) |
+| `NOC_MAX_BURST_SIZE` (16 KiB on BH, noc_parameters.h:290) | write and multicast size | page writes are 2 KiB single-packet. Multicast payload `pages·page_bytes` may exceed 16 KiB, and `Noc::async_write_multicast`'s default `max_page_size` takes the multi-packet path (noc.h:498). | — |
+| Ready-ack counter | `rs − 1` increments per block | ≤ `gy − 1` | — |
 
 ### Regimes
 
-The named-boundary minimum: **each input byte the output depends on crosses DRAM once, each output page crosses once.** For `x` that is the 64 B of row 0 per input tile, which is below "the input tensor crosses once": rows 1–31 never cross.
+| Regime | Status | Predicate | Block | Data movement vs. minimum (boundary: DRAM — each x page read once, each out page written once) | What a bigger block buys |
+|--------|--------|-----------|-------|------------------------------------------------------------|--------------------------|
+| **R1 `column_group_bcast`** — 2-D split `q × r`; each group's injector reads its x pages once, replicates row 0 in place, multicasts the built pages down its strip; every core writes its rows | **built** | always (every call that passes `validate`). `rs = 1` is its no-multicast setting of the same kernels (reached when `Ht = 1` or forced), not a separate algorithm. | `block_pages` (q) × `core_rows_tiles` (r) | **At the DRAM minimum for out.** x: each page read once, but as a whole 2048 B page, of which 64 B is logical (perf lamp L5). Above minimum only on the NoC: `(rs − 1)·page_bytes` multicast per x page, plus one data-ready flag multicast and `rs − 1` ready-acks per block. Domain: all shapes. | Per block: one DRAM read barrier, one replicate pass (its fences), one ready-ack round + one multicast + one flag per group, one CB reserve/push/wait/pop, one writes-flushed. Phase 0: each **once per kernel** (one block per group in every production case). |
+| R2 `per_core_read` — same 2-D split, every core reads its own x pages from DRAM and replicates them itself | **rejected** — superseded by R1 | — | as R1 | x crosses DRAM `rs` times (Q·rs page reads; all `rs` reads of a page hit the same bank). For the 1-page-per-core shapes that is one x read per out page — the duplicated small requests RB-010 forbids. | — |
+| R3 `row_only_split` — split only `r`, every core writes all `q` | **rejected** — superseded by R1 | — | Q × `core_rows_tiles` | x needs a whole-grid 2-D multicast of all Q pages (or Q·cores DRAM reads). Every core replicates all Q pages serially, and L1 grows as `Q·page_bytes`, unbounded in W. | — |
+| R4 `compute_row_bcast` — TRISC unpack with row broadcast → DEST → pack | **rejected** — superseded by R1's byte copies | — | — | Same DRAM traffic as R1, but every value passes through unpacker / FPU / DEST / packer, so bit identity of denormals and signalling-NaN payloads is not guaranteed (the contract forbids a representation that can change a value). It also adds three TRISC binaries per core (BB-18). | — |
+| R5 `sub_page_split` — more cores than out pages, each writing faces of a page | **rejected** — superseded by R1 | — | — | 512 B DRAM writes (4× the transactions). Catalog `tile_reorder`: whole-page writes win. No production shape has fewer out pages than the grid can use. | — |
+| Dependent-axis split + combine | not applicable | — | — | The op has no dependent axis (no reduction, no scan). | — |
 
-| Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
-|--------|--------|-----------|-------|---------------------------|--------------------------|
-| **R1 `column_mcast_2d`**: pattern axis over grid columns, replica axis over grid rows; each column's top core fetches row 0 of its pattern range, replicates each page, multicasts the block down the column; every core writes its replica rows × its pattern block | **built** | every valid call (rank 4, `d_2 == 1`, bf16, TILE, DRAM interleaved, any `P ≥ 1`, `R ≥ 1`). The single built regime. A ragged split, `replica_groups == 1` or `num_blocks_this_core > 1` are runtime extents of the same regime, not separate algorithms. | `block_pattern_tiles × core_replica_rows` output pages from `block_pattern_tiles` resident pattern pages | **Minimum on DRAM**: `x` row-0 bytes once per call (P × 64 B), `out` once (P × R × 2 KB). Above it: cross-core, one multicast per block per column, `block_pattern_tiles × 2 KB` injected once and delivered to `replica_groups − 1` receivers, plus the handshake semaphores. | Per block: one fetch round trip and barrier, one replicate barrier, one multicast handshake (receivers' ready → data → flag), one CB reserve/push on the reader, one wait/flush/pop on the writer. A larger `core_replica_rows` spreads that fixed chain over more 2 KB writes. A larger `block_pattern_tiles` puts more pages under one handshake and barrier pair. |
-| R0 `per_core_fetch_2d`: the same split, every core fetches and replicates its own pattern block from DRAM, no multicast | **rejected**: superseded by R1 | — | same as R1 | `x` row-0 bytes cross DRAM `replica_groups` times (W=512: 8×; W ≤ 256: once per **output tile**, since `core_replica_rows = 1`). This multiplies 32-B requests on the few banks holding `x`, which then queue behind `out`'s writes. RB-010's dispreferred form. | as R1, minus the handshake |
-| R2 `pattern_split_only` (`replica_groups = 1`) | **rejected as the Phase-0 value**; it is R1 at `max_replica_groups = 1`, reachable by a knob turn with no code change | — | `block_pattern_tiles × tensor_replica_rows` | Minimum on DRAM and zero cross-core traffic, the cheapest traffic of all. But the core count is `pattern_groups ≤ tensor_pattern_wt` (W=185: 6 cores), fixed by the tensor's shape, which the spec forbids for multi-tile outputs. | a core writes `R` pages per pattern from one fetch |
-| R3 `replica_split_only` (`pattern_groups = 1`) | **rejected**: superseded by R1 | — | `tensor_pattern_tiles × core_replica_rows` | Every core needs every pattern. Delivered by DRAM re-reads that is `x` × all cores; by multicast it needs a 2D broadcast to the whole rectangle (catalog `mcast_topology`: a 1D work split needs a 2D mcast). Every core also holds P pages and replicates all P. | — |
-| R4 `fpu_row_broadcast`: build the pattern by unpacking `x` with a row broadcast into DEST and packing | **rejected**: superseded by R1's byte copies | — | — | Same traffic as R1, but values pass through srcB/DEST. The contract forbids any representation that can change bits (denormal flush, NaN payload, signed zero), and R1's NoC byte copies are bit-exact by construction. | — |
-| R5 `dram_scatter_rows`: fill the 64 row segments of each pattern page with 32-B DRAM reads directly | **rejected**: superseded by R1's one fetch + local replicate | — | — | 32× more 32-B DRAM requests on `x`'s banks than R1 (RB-010) | — |
-| R6 `segment_writes`: write each output page as 64 × 32-B DRAM writes straight from row 0, no pattern page | **rejected**: superseded by R1's whole-page writes | — | — | 64× the write commands, sub-page DRAM writes. Catalog `tile_reorder`: whole 2 KB page writes are at least as fast as face-sized pieces. | — |
-
-There is one built regime, so there is no regime-selection function and no regime-pinned test. `select_plan` still reports its plan (BB-08).
+The op has one built regime, so there is no regime-selection function. The knob values that vary by shape and grid (`b`, `rs`, `block_pages`, `t_block_depth`) are pinned by the forced-plan tests (`test_pinned_plans`).
 
 ### Traffic ranking
 
-There is no dependent axis, so no "split the dependent axis and combine" candidate exists. Byte counts are for the production shapes (bf16, `P = R`).
+| Candidate split | x DRAM crossings | out DRAM crossings | Cross-core bytes | Serial work on the slowest core | Verdict |
+|-----------------|------------------|--------------------|------------------|---------------------------------|---------|
+| `q` only (R1 at `rs = 1`) | 1 | 1 | 0 | replicate `ceil(Q/G)` pages, write `Ht·ceil(Q/G)` pages | **cheapest traffic**; writer count capped at `Q` (6–16 in production), i.e. by the tensor's shape |
+| `q × r` + group broadcast (R1) | 1 | 1 | `Q·(rs−1)·page_bytes` (1-D column lines, ≤ `gy−1` hops) | replicate `ceil(Q/G)`, write `ceil(Q/G)·ceil(Ht/rs)` | **chosen** |
+| `q × r`, per-core reads (R2) | `rs` | 1 | 0 | as R1 plus a DRAM read and a replicate per core | rejected (RB-010) |
+| `r` only + whole-grid broadcast (R3) | 1 | 1 | `Q·(cores−1)·page_bytes` | replicate **Q** pages on every core | rejected |
+| dependent axis + combine | — | — | — | — | does not exist |
 
-| Candidate split | `x` crossings of DRAM (row-0 bytes) | `out` crossings | Cross-core traffic | Parallelism | Verdict |
-|-----------------|------------------------------------|-----------------|--------------------|-------------|---------|
-| pattern only (R2) | 1 × (P × 64 B) | 1 | none | `≤ P` cores (6–16), set by the shape | cheapest traffic; core count forbidden by the spec as a default |
-| 2D, column multicast (R1) | 1 × (P × 64 B) | 1 | per column: `block_pattern_tiles × 2 KB` multicast to `replica_groups − 1` cores | up to `grid_x × grid_y` | **chosen**: DRAM minimum, multicast of a small payload, full occupancy |
-| 2D, per-core fetch (R0) | `replica_groups` × (P × 64 B) | 1 | none | up to `grid_x × grid_y` | rejected (RB-010) |
-| replica only (R3) | `cores` × (P × 64 B), or one 2D multicast | 1 | every core receives all P pages | `≤ R` cores | rejected |
-
-Production totals for R1 on the 11×10 grid: W=512 reads 1,024 B of `x`, writes 524,288 B, multicasts 8 × 4 KB. W=256: 512 B, 131,072 B, 8 × 2 KB. W=207/196: 448 B, 100,352 B, 7 × 2 KB. W=185: 384 B, 73,728 B, 6 × 2 KB. `out` dominates every case by more than 99%: the op is bound by DRAM writes (feature_spec LOOSE_CASES p1), so the plan's job is to start every core's writes as early as possible and keep every bank busy.
+**Chosen: R1.** It ties the cheapest split on DRAM crossings (x once, out once), the most expensive tier. Against `q`-only it adds only multicast bytes on the cheapest non-local tier. This is an explicit trade (blocking-model §4): those NoC bytes buy write-issue parallelism. Each core issues at most `ceil(Ht/rs)` page writes per page instead of `Ht`, and the core count becomes the plan's choice instead of `Q`, as the spec's Work-geometry rule requires. The `q`-only point stays one knob value away (`row_splits = 1`), built and test-pinned. The grid-synchronization lamp L1 measures the trade.
 
 ### Block schedule
 
-Logical schedule, realized by two asynchronous kernels on every core of the rectangle: **reader** on NCRISC, NoC0 (role `injector` on the top row, `receiver` below it); **writer** on BRISC, NoC1. No compute kernel.
+Logical schedule (reader and writer are separate asynchronous kernels):
 
 ```cpp
-// reader, injector role (top core of each grid column)
+// injector core of group g (row split 0)
 for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-    reserve_pattern_block(block_idx);    // cb_pattern_tiles: nominal block_pattern_tiles pages
-    fetch_row0_block(block_idx);         // row 0 of each x page in the block -> page offsets 0 / 512
-    replicate_block(block_idx);          // rows 1..31 of every page from its own row 0
-    mcast_block(block_idx);              // whole block -> same address on the column's receivers
-    publish_pattern_block(block_idx);    // push nominal block_pattern_tiles
+    load_block(block_idx);            // reader
+    replicate_rows_block(block_idx);  // reader, in place
+    publish_block(block_idx);         // reader: hand to local writer, multicast to the strip
+    store_block(block_idx);           // writer
 }
-// reader, receiver role (every other core of the column)
+// receiver core of group g (row splits 1 .. rs-1)
 for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-    reserve_pattern_block(block_idx);
-    receive_block(block_idx);            // ready signal to the injector, wait for the data flag
-    publish_pattern_block(block_idx);
+    receive_block(block_idx);         // reader
+    store_block(block_idx);           // writer
 }
-// writer, every core
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
-    wait_pattern_block(block_idx);       // nominal block_pattern_tiles
-    store_block(block_idx);              // core_replica_rows x block_pattern_tiles whole-page writes
-    release_pattern_block(block_idx);    // writes flushed, then pop nominal block_pattern_tiles
-}
-// both kernels end with every NoC transaction completed (BB-03)
 ```
 
-| Block operation | Kernel | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
-|-----------------|--------|------------------------|--------------------|----------------------------------|
-| `reserve_pattern_block` | reader | `block_pattern_tiles` pages | — | one CB reserve per block |
-| `fetch_row0_block` | reader (injector) | `this_block_pattern_tiles` × 2 segments of 32 B | the reserved block | two 32-B DRAM reads per input page, all issued back to back, **one read barrier per block** |
-| `replicate_block` | reader (injector) | `this_block_pattern_tiles` pages × 62 row segments | the block | one stateful-read setup per (page, face half), **one read barrier per block** (not per page) |
-| `mcast_block` | reader (injector) | `this_block_pattern_tiles × 2048` B contiguous | the block | **one multicast send per block**: one handshake (wait for `replica_groups − 1` ready signals), one data multicast, one flag |
-| `receive_block` | reader (receiver) | same bytes, landing at the receiver's reserved block | the reserved block | one ready signal + one flag wait per block |
-| `publish_pattern_block` | reader | `block_pattern_tiles` pages (nominal) | — | one push per block |
-| `wait_pattern_block` | writer | `block_pattern_tiles` pages (nominal) | — | one wait per block |
-| `store_block` | writer | `core_replica_rows × this_block_pattern_tiles` output pages, replica-row outer, pattern inner (consecutive writes hit different banks when the block has more than one pattern) | the block, read-only, for every replica row | one 2048-B write per output page, issued back to back with **no barrier inside the block**; stateful write size programmed once per kernel |
-| `release_pattern_block` | writer | `block_pattern_tiles` pages | — | one writes-flushed wait + one pop per block; one write barrier at kernel end |
+| Operation | Runs on | Block shape | Resident across it | Intended frequency of fixed-cost work |
+|-----------|---------|-------------|--------------------|---------------------------------------|
+| `load_block` | injector reader (NCRISC, NoC0) | `block_pages` x pages (`group_q_start + block_idx·block_pages + k`) | the reserved slot | one `reserve_back(block_pages)` per block; all page reads issued back-to-back, **one read barrier per block**. Each whole page lands at slot offset `k·page_bytes`, so row 0 is already where `T` needs it (no staging). |
+| `replicate_rows_block` | injector reader | `block_pages` pages, in place | slot | **one pass per block.** Every page goes through each copy round together: one ordering fence per round per block, never per page. Byte copies only (RISC-V 32-bit word copies and/or self-aimed NoC L1→L1 copies). It writes rows 1–15 of faces 0/1 from row 0, then faces 2/3 from faces 0/1, and never reads x rows ≥ 1. |
+| `publish_block` | injector reader | the slot's actual `pages·page_bytes` | slot until `send()` returns | `push_back(block_pages)` to the local writer first, then **one** `send()` per block (waits `rs−1` ready-acks, multicasts the pages to the strip below, multicasts the data-ready flag). `send()` with the default source guard returns once the NoC has read the slot, before the next `reserve_back`. Skipped when `rs = 1`. |
+| `receive_block` | receiver reader | `block_pages` pages | slot | `reserve_back(block_pages)`, then **one** `receive(block_idx)` (one ready-ack to the injector, wait for the data-ready flag, clear it), then `push_back(block_pages)`, per block |
+| `store_block` | writer (BRISC, NoC1) on every core | pages × `core_rows_tiles` | the block's pages, until the last copy has left L1 | one `wait_front(block_pages)` per block. `pages × core_rows_tiles` page writes issued back-to-back (row-major over `(r, k)`), **one `async_writes_flushed` per block** before `pop_front(block_pages)`, **one `async_write_barrier` per kernel**. |
 
-Ragged extents (`this_block_pattern_tiles = last_block_pattern_tiles` on the last block of a ragged column, ragged `core_replica_rows` on the last grid row) narrow only the fetch/replicate/send/write work. CB reserve/push/wait/pop counts stay nominal.
+Kernel ends (BB-03): the injector reader ends with `async_write_barrier` (multicast + flag acked). The receiver reader ends with `async_atomic_barrier` (its ready-ack increments). The writer ends with `async_write_barrier`.
+
+**Stall-shadow check.** Receivers stall on the data-ready flag, and the injector stalls on the DRAM read. No logical out element is independent of x, so no data work exists to schedule into either wait. Only per-kernel setup is hoisted in front of the waits: accessors, the core's out page ids, one-packet write state. No reorder touches floating-point order, because there is no floating-point work.
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| **Grid synchronization** (core count) | Full participation leaves **one output page per core** at W ≤ 256 (36–64 cores). Every receiver then pays launch, handshake and flag wait for a single 2 KB write, and the DRAM write bound is reached with far fewer writers. | Cap `max_replica_groups` (e.g. 4 or 2) so `core_replica_rows ≥ 2` on W = 185–256; measure W=207, 196, 256. R2 (`max_replica_groups = 1`) is the extreme. |
-| **Overlap** (multicast granularity) | One send per block means W=512 receivers wait for both pages of the block to be replicated before writing anything. | One send per pattern page (`block_pattern_tiles` sends per block, receivers push per page) so receivers start writing page 0 while the injector replicates page 1. Measure W=512. |
-| **Multicast payload** | The built pattern (2 KB per page) crosses the column. Multicasting only row 0 (2 × 32 B, or the 544-B span `[0, 544)`) right after the fetch moves 32× fewer bytes, and every core replicates its own copy in parallel. | Row-0 multicast + per-core `replicate_block`. Measure W=512 (largest payload). |
-| **Replicate mechanism** | 62 stateful 32-B self-reads per page may be issue-bound on NCRISC. | (a) doubling copies (row 0→1, 0–1→2–3, 0–3→4–7, 0–7→8–15 per face half, then faces 0–1 → 2–3: 9 reads, 5 barriers); (b) RISC-V word stores (row 0's 16 words loaded once, 496 stores); (c) on the injector, split the replicate between NCRISC and BRISC (catalog `split_reader`, only if NCRISC is issue-bound). |
-| **Bank alignment** | When `tensor_pattern_wt % 8 == 0` (W = 256, 512) every page of output column `c` lies in bank `c % 8`, so every core of a grid column writes the same one or two banks in the same order (catalog `bank_stagger`). | Rotate each core's `store_block` walk by its grid row: start at pattern index `gr % this_block_pattern_tiles` and replica row `gr % core_replica_rows`, wrapping. Measure W=512. |
-| **Grid orientation** | Patterns ride grid columns and replicas ride grid rows. On the asymmetric 11×10 Blackhole grid the line placement changes NoC/DRAM contention (catalog `noc_placement`). | Transposed rectangle: patterns on grid rows, `McastCoreOrder.RowMajor` groups. Measure W=512. |
+| L1 grid synchronization (`row_splits`) | For 185–256 every core writes one page. The multicast hop (ready-ack, multicast, flag poll) is a fixed cost paid to save ≤ `Ht−1` page writes per writer, and DRAM bandwidth may already saturate with `Q` writers. | `row_splits = 1` (no multicast, `Q` cores each writing `Ht` pages) and `row_splits ≈ Ht/2`, on all five shapes |
+| L2 strip packing (`strips_per_column`) | For W=512 the rule picks `b=2` (80 cores, 1 page per injector). `b=1` (13 or 11 groups, ≤ 2 pages per injector, up to 130 cores) has the same pages per core. | `strips_per_column = 1` on W=512 |
+| L3 replicate realization | The replicate is serial on every group's critical path: about 500 word stores per page (rows 1–15 of faces 0/1, then faces 2/3), or 5 self-aimed NoC rounds. | RISC-V word copies vs NoC doubling `32→64→128→256 B` then `1 KiB → 1 KiB` vs a mix. Also split the replicate across the injector's NCRISC and BRISC (BRISC is idle until `publish_block`). |
+| L4 half-page body | Faces 2/3 duplicate faces 0/1, so only 1 KiB of each page is unique. | Replicate faces 0/1 only, multicast 1 KiB per page, write each out page as two 1 KiB writes. This halves replicate and multicast bytes and doubles write transactions (catalog `tile_reorder` predicts whole pages win). |
+| L5 x read shape | The whole-page read moves 2048 B to use 64 B (32 KiB vs 1 KiB at W=512). | Two 32 B reads per page (offsets 0 and 512) into the same slot offsets |
+| L6 bank alignment of writes | When `Wt` is a multiple of the DRAM bank count (W=512: 16 columns), every page of column `c` sits on bank `c mod banks`, so all cores of a group write to one bank at once. | Stagger each core's first row (`bank_stagger`), and horizontal strips (`McastCoreOrder.RowMajor`) |
+| L7 overlap (multi-block groups only; none in production) | With more than one block, depth 2 may still serialize replicate against writes. | `t_block_depth = 3` against 2 at `block_pages` < `group_pages` |
+
+### Catalog evidence
+
+| Entry | What it set |
+|-------|-------------|
+| `mcast_topology`, `shared_input_reuse` | Broadcast x along the axis it does not vary with (`r` → 1-D column lines, one injector per line). The measured win is smaller than the read-count reduction, which motivates lamp L1. |
+| `noc_placement` | Reader on NoC0, writer on NoC1 (the default config descriptors). Column-shaped lines are slower for DRAM traffic → lamp L6 (orientation). |
+| `tile_reorder` | Whole-page 2 KiB writes, not faces (R5 rejected; L4 measured, not assumed). |
+| `double_buffer` | Batch the writes: one flush per block, not per page. Depth matters only with more than one block (L7). |
+| `bank_stagger` | Lamp L6. |
+| `width_split` | The page axis `q` (width) is the primary cut, because Ht alone strands most of the grid when x is one tile row tall. |
+| compute entries (`compute_block_size`, `compute_fusion`, …) | Not applicable: there is no compute kernel. |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| `x` row 0 → injector L1 | raw bf16 bits, two 32-B segments per input page | NoC0 DRAM read through `TensorAccessor(x)` at `get_noc_addr(p, 0)` and `get_noc_addr(p, 512)` into the pattern page at offsets 0 and 512 | landing offset = source offset (DRAM alignment cap) |
-| replicate in place | raw bits | NoC0 self-aimed L1→L1 reads (`local_copy` helper): face 0 row 0 → face 0 rows 1–15 and face 2 rows 0–15. Face 1 row 0 → face 1 rows 1–15 and face 3 rows 0–15. | in the destination page itself. No staging buffer, no second CB. |
-| injector → column | raw bits, `this_block_pattern_tiles × 2048` B | `ttnn.Mcast`, column-major groups of `replica_groups` cores, fixed sender index 0 (top core), NoC0, `handshake=True` | the handshake is required: it guarantees each receiver has reserved its slot (multi-block back-pressure) and that its semaphores are initialized before data lands |
-| reader → writer | pages of `cb_pattern_tiles` | CB push / wait | single producer (reader), single consumer (writer) |
-| pattern page → `out` | raw bits, 2048-B page | NoC1 DRAM write through `TensorAccessor(out)`, page id `out_page(p, r) = (p / tensor_pattern_wt) · tensor_replica_rows · tensor_pattern_wt + r · tensor_pattern_wt + p % tensor_pattern_wt` | each output page written exactly once |
+| x page → injector L1 | bf16 tile page (2048 B); row 0 logical, rows 1–31 padding | NoC0 read via `TensorAccessor` (DRAM interleaved) into `cb_row_bcast_tiles` slot `k` | lands in place; padding is overwritten next |
+| replicate | same page | byte copies on the injector's reader | in place; bit-exact by construction |
+| injector → receivers | built pages | `ttnn.Mcast` channel on NoC0, one 1-D multicast down the strip + data-ready flag, ready-ack handshake | lands at the same slot address on every receiver |
+| reader → writer | CB pages | `cb_row_bcast_tiles` push / wait | one producer (reader), one consumer (writer) per core |
+| L1 → out DRAM | 2048 B pages | NoC1 writes via `TensorAccessor`; each built page is written `core_rows_tiles` times | each out page written once, by exactly one core |
 
-No value is ever interpreted: there is no compute kernel, no unpack/pack and no format conversion, so every bit (NaN payloads, ±0, denormals, ±inf) arrives unchanged.
-
-**Placement axis.** TARGET has no `memory_layout` axis: production is DRAM interleaved only, so there are no sharded schemes to classify. If a sharded placement were added, a height cut of `out` (replica axis) and a width cut (pattern axis) are both cuts of independent axes, so each would be a knob-turn that pins this regime's assignment.
+Placement: TARGET has no `memory_layout` axis. x and out are DRAM interleaved only, so no physical shard is consumed or produced. A later sharded out would be a knob-turn, because the op has no dependent axis: a height shard (cut along `r`) or a width shard (cut along `q`) keeps the group multicast and redirects only the writes into the local shard.
 
 ## Work Distribution
 
 | Field | Value |
 |-------|-------|
-| Work unit | a block: `block_pattern_tiles × core_replica_rows` output pages, sourced from `block_pattern_tiles` pattern pages |
-| Grid | one rectangle `CoreRange((0, 0), (pattern_groups − 1, replica_groups − 1))` inside `device.compute_with_storage_grid_size()` (`grid_x × grid_y`, 11 × 10 on the target Blackhole). Grid column `gc` = pattern group, grid row `gr` = replica group. Reader and writer each occupy that one range (BB-17). If the reader is compile-time-specialized per role, the injector row and the receiver rows are two rectangles. |
-| Per-core work | core `(gc, gr)`: patterns `[gc · pattern_tiles_per_group, min(P, (gc + 1) · pattern_tiles_per_group))`, replica rows `[gr · replica_rows_per_group, min(R, (gr + 1) · replica_rows_per_group))`. Writes `core_pattern_tiles × core_replica_rows` pages. Core `(gc, 0)` is its column's injector and also writes its own share. |
-| Remainder | `pattern_groups = ceil(P / pattern_tiles_per_group)` and `replica_groups = ceil(R / replica_rows_per_group)`, so the last group on each axis is non-empty and ragged. All tile counts use `ceil` per image: `tensor_pattern_wt = ceil(W / 32)`, `tensor_replica_rows = ceil(H_out / 32)`. |
-| Why not `split_work_to_cores` | It yields a linear core list in two work groups. R1 needs each pattern group to be one grid column (the multicast line) and each replica group one grid row, so it uses per-axis `ceil` math on the rectangle. |
-
-Production plans on the 11 × 10 grid (`max_pattern_groups = 11`, `max_replica_groups = 10`):
-
-| W | P = R | `pattern_tiles_per_group` | `pattern_groups` | `replica_rows_per_group` | `replica_groups` | cores | pages per core | multicast per column |
-|---|-------|---------------------------|------------------|--------------------------|------------------|-------|----------------|----------------------|
-| 512 | 16 | 2 | 8 | 2 | 8 | 64 | 4 | 4 KB → 7 receivers |
-| 256 | 8 | 1 | 8 | 1 | 8 | 64 | 1 | 2 KB → 7 receivers |
-| 207 | 7 | 1 | 7 | 1 | 7 | 49 | 1 | 2 KB → 6 receivers |
-| 196 | 7 | 1 | 7 | 1 | 7 | 49 | 1 | 2 KB → 6 receivers |
-| 185 | 6 | 1 | 6 | 1 | 6 | 36 | 1 | 2 KB → 5 receivers |
-
-The evenized `ceil` rule uses the **fewest cores that reach the minimum per-core maximum**. At W=512, 16 patterns over 11 columns cannot beat 2 per core, so 8 columns are used, not 11.
+| Work unit | a block: `block_pages` x pages × `core_rows_tiles` out tile rows |
+| Grid | `device.compute_with_storage_grid_size()`; used set = `G·rs` cores, columns `0 .. ceil(G/b)−1`, rows `0 .. b·rs−1` (last column partial when `G mod b ≠ 0`) |
+| Per-core work | `group_q_start, group_pages` (shared by the strip), `core_r_start, core_rows_tiles` (own), role ∈ {injector, receiver} |
+| Remainder | `Q` over `G`: first `Q mod G` groups take `ceil`. `Ht` over `rs`: last `Ht mod rs` splits take `ceil`, injector floor. All counts come from `ceil`, per image: `Wt = ceil(W/32)`, `Ht = ceil(H/32)`, out page id `(n·Ht + r)·Wt + c`. |
+| Blocks per core | `num_blocks_this_core = ceil(group_pages / block_pages)`, `last_block_pages = group_pages − (num_blocks_this_core−1)·block_pages`. Every core of a strip has the same block sequence. |
 
 ## Circular Buffers
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
-|---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
-| `cb_pattern_tiles` | 0 | `tile_bytes` = 2048 (bf16 32×32) | `pattern_cb_depth_blocks × block_pattern_tiles` | spans `pattern` (`block_pattern_tiles` pages live for the whole block); streams over `replica` (the writer re-reads the resident pages for every replica row, no pages per row) | bfloat16 (bits only; never unpacked, no DEST) | reader | writer | one block per CB cycle, every block of the kernel |
+|---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
+| `cb_row_bcast_tiles` | 0 | `page_bytes` (2048) | `t_block_depth · block_pages` | spans `q` (`block_pages` pages of one block); streams `r` (each resident page is re-written `core_rows_tiles` times, no capacity); `i` inside the page | `x.dtype` (bf16; bytes moved verbatim) | reader | writer | whole kernel, one slot per block |
 
-Semaphores: allocated by `ttnn.Mcast.attach` from `first_semaphore_id = 0` (ready + data), on the rectangle. There is no other buffer. The full ledger is in `l1_ledger.md`.
+It is the only CB. The x read lands in it, the replicate is in place, the multicast sends from it and lands in it, and the writer writes out pages straight from it. Ledger: `l1_ledger.md`.
 
 ## Block Operation Realization
 
 | # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
 |---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
-| 1 | `reserve_pattern_block` | `block_pattern_tiles` | raw CB API | — | `cb_pattern_tiles`, nominal pages reserved | reserved, unpublished |
-| 2 | `fetch_row0_block` (injector) | `this_block_pattern_tiles` × 2 × 32 B | raw `Noc::async_read` + `TensorAccessor` | DRAM `x` | `cb_pattern_tiles` reserved pages, row 0 of every page | row 0 valid, rows 1–31 stale |
-| 3 | `replicate_block` (injector) | `this_block_pattern_tiles` × 62 segments | **helper** `dataflow_kernel_lib::set_read_state` / `read_with_state` | `cb_pattern_tiles` row 0 (same pages) | `cb_pattern_tiles` same pages, in place | full pattern pages, still reserved |
-| 4 | `mcast_block` (injector) | `this_block_pattern_tiles × 2048` B | **helper** `McastArgs::sender(noc).send` | `cb_pattern_tiles` reserved block (source) | same address on the column's receivers | source guarded (read by the NoC) before `send` returns |
-| 4' | `receive_block` (receiver) | same | **helper** `McastArgs::receiver(noc).receive` | — | `cb_pattern_tiles` reserved block | full pattern pages, reserved |
-| 5 | `publish_pattern_block` | `block_pattern_tiles` (nominal) | raw CB API | — | `cb_pattern_tiles` push | published to the writer |
-| 6 | `wait_pattern_block` | `block_pattern_tiles` (nominal) | raw CB API | `cb_pattern_tiles` published | — | readable |
-| 7 | `store_block` | `core_replica_rows × this_block_pattern_tiles` pages | raw `Noc::async_write` (stateful size) + `TensorAccessor` | `cb_pattern_tiles` (read-only, every replica row) | DRAM `out` | — |
-| 8 | `release_pattern_block` | `block_pattern_tiles` | raw CB API | `cb_pattern_tiles` | — | popped after `async_writes_flushed` |
+| 1 | `load_block` | `block_pages` pages | raw NoC + accessor | — (x in DRAM) | `cb_row_bcast_tiles`, `block_pages` reserved | reserved, raw pages |
+| 2 | `replicate_rows_block` | `block_pages` pages | custom block op (no covering helper) | `cb_row_bcast_tiles` (reserved, raw) | same slot | reserved, built |
+| 3 | `publish_block` | actual pages of the block | `Mcast` sender pipe | `cb_row_bcast_tiles` (reserved, built) | `cb_row_bcast_tiles` on receivers; local `push_back(block_pages)` | pushed to local writer; receivers' slots filled |
+| 4 | `receive_block` | `block_pages` pages | `Mcast` receiver pipe | — | `cb_row_bcast_tiles`, `push_back(block_pages)` | pushed |
+| 5 | `store_block` | pages × `core_rows_tiles` | raw NoC + accessor | `cb_row_bcast_tiles`, `wait_front(block_pages)` | — (out in DRAM) | popped after flush |
 
 ## API Mapping
 
 | Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
 |-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
-| `fetch_row0_block` | raw_api | `Noc::async_read`; `TensorAccessor::get_noc_addr(page_id, offset)` | `tt_metal/hw/inc/api/dataflow/noc.h:252`; `tt_metal/hw/inc/api/tensor/tensor_accessor.h:165`; barrier `noc.h:739` | size 32 B, offsets 0 and 512, page id `p` | DRAM `x` | `cb_pattern_tiles` | trip count `this_block_pattern_tiles` |
-| `replicate_block` | helper | `dataflow_kernel_lib::set_read_state<32>(noc, row0_addr)`, `read_with_state(noc, dst_addr, row0_addr)` | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:74-75`, `:94-95` (example "fill a destination region with N copies of one stick", `local_copy_helpers_dataflow.inl:41-50`); barrier `noc.h:739` | `transfer_size = 32` | `cb_pattern_tiles` | `cb_pattern_tiles` (in place) | trip count `this_block_pattern_tiles` |
-| `mcast_block` | helper | `McastArgs<CT, RT>().sender(noc).send(src_l1, dst_l1, size_bytes)` | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp:37-42`, `:217`; `kernel/pipes/mcast_pipe.hpp:92`; source guard `kernel/pipes/pipe_common.hpp:13` | `src_l1 = dst_l1` = the block's write pointer, `size = this_block_pattern_tiles · 2048` | `cb_pattern_tiles` | receivers' `cb_pattern_tiles` | `size` from `this_block_pattern_tiles` |
-| `receive_block` | helper | `McastArgs<CT, RT>().receiver(noc).receive()` | `mcast_args.hpp:44-47`, `:219`; `mcast_pipe.hpp:163` | round 0..`num_blocks_this_core − 1` | — | `cb_pattern_tiles` | — |
-| host channel | helper | `ttnn.Mcast(device, ttnn.McastConfig(noc=NOC_0, handshake=True), rectangle, replica_groups, ttnn.McastFixedSenderConfig(), ttnn.McastCoreOrder.ColumnMajor)`; `.attach(descriptor, "pattern_mcast", [reader_kernel], 0)` | `ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast.hpp:96-110`, `:133-139`, `:149-153`; Python binding `ttnn/cpp/ttnn-nanobind/mcast_host.cpp:59-79`; usage `ttnn/ttnn/operations/examples/mcast_topology/mcast_topology.py:373-380` | receiver group size `replica_groups` | — | — | `replica_groups` |
-| `store_block` | raw_api | `Noc::set_async_write_state` + `async_write_with_state` (or `async_write`); `TensorAccessor::get_noc_addr(page_id)` | `noc.h:562`, `:610` (`:411`); `tensor_accessor.h:165`; `async_writes_flushed` `noc.h:783`; `async_write_barrier` `noc.h:760` | 2048 B per page | `cb_pattern_tiles` | DRAM `out` | trip counts `core_replica_rows`, `this_block_pattern_tiles` |
-| kernel exit (BB-03) | raw_api | `Noc::async_write_barrier`, `Noc::async_atomic_barrier` (reader: multicast data/flag writes and ready-signal increments) | `noc.h:760`, `:805` | — | — | — | — |
+| `load_block` | raw_api | `CircularBuffer::reserve_back`; `Noc::async_read(TensorAccessor, CircularBuffer, page_bytes, {.page_id}, {.offset_bytes = k·page_bytes})`; `Noc::async_read_barrier` | circular_buffer.h:31; noc.h:252; noc.h:739 | x accessor from `TensorAccessorArgs(x)` | — | `cb_row_bcast_tiles` | `block_pages` (reserve count, read count) |
+| `replicate_rows_block` | raw_api | RISC-V word copies via `addr_to_l1_ptr`; and/or self-aimed copies `local_addr` + `set_read_state<size>` + `read_with_state`, ordered by `Noc::async_read_barrier` | l1_helpers.hpp:30; local_copy_helpers_dataflow.hpp:57, :75, :95; noc.h:739 | segment offsets 0 / 512, face size 512 | `cb_row_bcast_tiles` | same | `block_pages` (pages per pass) |
+| `publish_block` | helper | host `ttnn.Mcast(device, McastConfig(handshake=True), used_cores, row_splits, McastFixedSenderConfig(), McastCoreOrder.ColumnMajor)` + `attach`; device `McastArgs<ct_off, rt_off>().sender(noc).send(src_l1, dst_l1, pages·page_bytes)`; `CircularBuffer::push_back` | mcast.hpp:131, :149; mcast_args.hpp:217; mcast_pipe.hpp:92; circular_buffer.h:43 | `src_l1 == dst_l1` = slot write pointer; group size = `row_splits`; `rs = 1` → `ttnn.attach_absent_mcast` | `cb_row_bcast_tiles` | receivers' `cb_row_bcast_tiles` | payload = actual pages of the block |
+| `receive_block` | helper | `CircularBuffer::reserve_back`; `McastArgs<…>().receiver(noc).receive(block_idx)`; `CircularBuffer::push_back`; `Noc::async_atomic_barrier` at kernel end | circular_buffer.h:31; mcast_args.hpp:219; mcast_pipe.hpp:163; circular_buffer.h:43; noc.h:805 | PRE_HANDSHAKE on (host `handshake=True`) | — | `cb_row_bcast_tiles` | `block_pages` |
+| `store_block` | raw_api | `CircularBuffer::wait_front`; `Noc::async_write(slot + k·page_bytes → out page)`; `Noc::async_writes_flushed`; `CircularBuffer::pop_front`; `Noc::async_write_barrier` at end | circular_buffer.h:55; noc.h:411; noc.h:783; circular_buffer.h:63; noc.h:760 | out accessor from `TensorAccessorArgs(out)`; one-packet write state reuse is an allowed realization (2 KiB ≤ 16 KiB burst) | `cb_row_bcast_tiles` | — | `block_pages`, `core_rows_tiles` |
 
-**Helpers considered and rejected for the raw entries:**
+**Helpers considered and rejected:**
 
-| Raw entry | Candidate | File:line of the mismatch | Reason |
-|-----------|-----------|---------------------------|--------|
-| `fetch_row0_block` | `local_copy_helpers_dataflow.hpp` | `:57` (`local_addr` builds a source aimed at this core's own L1) | self-aimed L1 only; cannot address a DRAM page through a `TensorAccessor` |
-| `fetch_row0_block` | `l1_helpers.hpp` | `:100-101` (`fill_l1_range` writes one constant value) | fills a constant, does not read |
-| `fetch_row0_block`, `store_block` | `tile_column_dataflow.hpp` | `:9-24` (writes one tile column with RISC-V stores) | column of a tile in L1, not a DRAM page transfer |
-| `store_block` | kernel_lib (all dataflow headers: `dfb_helpers_dataflow.hpp:14-18`, `reduce_helpers_dataflow.hpp`, `tilize_helpers_dataflow.hpp`, `mcast/`) | — | kernel_lib has no DRAM page writer. The block operation is the raw `Noc` write issued per page inside `store_block`. |
-| all | compute helpers (`eltwise_convenience.hpp`, `untilize_helpers.hpp`, …) | — | regime R4 rejected: a compute path passes values through srcB/DEST, which the bit-identity contract forbids |
+| Raw entry | Candidate | File:Line | Why it cannot express the shape |
+|-----------|-----------|-----------|---------------------------------|
+| `load_block`, `store_block` | kernel_lib dataflow helpers (tilize / reduce-scaler / mcast / local-copy / tile-column) | tilize_helpers_dataflow.hpp; reduce_helpers_dataflow.hpp; local_copy_helpers_dataflow.hpp:57–158 | None of them moves interleaved DRAM pages into or out of a CB block. They cover RM-stick tilize, scaler tiles, multicast and L1→L1 copies. The catalog's own readers (`mcast_topology`) use `Noc::async_read` directly. |
+| `replicate_rows_block` | `fill_tile_column`, `copy_tile_column` | tile_column_dataflow.hpp:69, :91 | They move one **column** (16 elements at stride `FACE_WIDTH` in two faces). The op needs one 32 B **row segment** per face copied into 15 rows and two faces. |
+| `replicate_rows_block` | `fill_l1_range<val_size>` | l1_helpers.hpp:101 | It replicates one scalar (≤ 4 B), not a 32 B pattern. |
+| `replicate_rows_block` | compute `copy` with `BroadcastDim::Row` | eltwise/api/convenience.hpp:113; eltwise/api/chain.hpp:330 | Values pass through unpacker / FPU / DEST / packer, so bit identity is not guaranteed for denormals and signalling-NaN payloads (R4 rejected). It also needs a compute kernel. |
+| **Gap to close** | a dataflow block helper `replicate_tile_row0(addr, pages)` (row 0 → all 32 rows, N pages, byte copies) | — | It would make `replicate_rows_block` a one-line helper call. Build it in-kernel now, as a block function over `block_pages`. |
+
+## Host Program Contract
+
+| Item | Contract |
+|------|----------|
+| Dispatch (BB-01) | Exactly one `ttnn.generic_op([x, out], descriptor)` per call. `out = ttnn.allocate_tensor_on_device(ttnn.Shape(out_shape), x.dtype, x.layout, device, x.memory_config())`. No other ttnn op, no host readback, no pad/slice/to_layout. |
+| Plan API (BB-08) | `select_plan(input_tensor, sizes, *, strips_per_column=None, row_splits=None, block_pages=None) -> ExpandPlan`: host-only, pure, deterministic, validates first. `ExpandPlan` is a frozen dataclass with fields `regime` (`"column_group_bcast"`), `grid`, `tensor_pages`, `tensor_rows_tiles`, `tensor_cols_tiles`, `strips_per_column`, `row_splits`, `num_groups`, `group_pages_max`, `block_pages`, `t_block_depth`, `num_cores`, `l1_bytes_per_core`, `core_roles` (dict `(x, y) → "injector" \| "receiver"`) and `core_work` (dict `(x, y) → (group_q_start, group_pages, core_r_start, core_rows_tiles)`). The plan a call used is `select_plan(x, sizes)`. |
+| Override semantics | `strips_per_column` fixes `b` (`1 ≤ b ≤ gy`, else `ValueError`). `row_splits` caps `rs = min(row_splits, Ht, gy // b)` (≥ 1). `block_pages` sets `min(block_pages, group_pages_max, L1 clamp)` (≥ 1), then `t_block_depth` is re-derived and the L1 clamp re-checked. Un-overridden knobs follow the Phase 0 rule. |
+| Forced plan | `g6_expand_with_plan(input_tensor, sizes, plan)`: `validate()` first. `plan` must match `(Q, Ht, grid)` of the call, else `ValueError`. Same build and dispatch path as `g6_expand`. Used only by the regime-pinned tests. |
+| Exports | `ttnn.operations.g6_expand` exports `g6_expand`, `select_plan`, `g6_expand_with_plan`, `ExpandPlan`, `validate`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS`. |
+| Program cache (BB-07, BB-16) | A Python-side dict maps `(device id, x.shape, x.padded_shape, out shape, dtype, layout, x.memory_config(), grid, plan knobs)` to the built `ProgramDescriptor`. On a hit the descriptor is **not rebuilt**: only the two buffer addresses change. They live in **common runtime args** (reader: x address; writer: out address) and are patched in place. Do not set `custom_program_hash`: generic_op's structural hash (kernel sources, CT args, core ranges, CB sizes) keys the device cache and cannot collide with another generic op. |
+| Knob sources | Every knob is set once in `ExpandPlan`. CB `total_size = t_block_depth·block_pages·page_bytes`. `block_pages` is a kernel CT arg (the CB quantum). Per-core `group_q_start, group_pages, core_r_start, core_rows_tiles` are per-core RT args. `Wt, Ht` are kernel args. No literal restates a knob. |
+| Core ranges (BB-17) | Injector-reader kernel: the `b` injector rows over the used columns. Receiver-reader kernel: the remaining rows. Writer kernel: the whole used set. Each is ≤ 2 rectangles per band (W=512: 2 + 2 + 1 ranges). Roles are chosen by core placement; the data path never changes. |
+| Zones and role dump (BB-21) | Every block operation and every blocking wait sits in its own `DeviceZoneScopedN` zone (`G6E-load`, `G6E-replicate`, `G6E-publish`, `G6E-receive-wait`, `G6E-store`, `G6E-drain`), compiled out of the plain build. `plan.core_roles` is the role dump. |
+| L1 (BB-05) | `l1_bytes_per_core = t_block_depth·block_pages·page_bytes ≤ 1,347,776` is guaranteed by the `block_pages` clamp, never by refusing or tagging a shape. Production: 2048 B/core. |
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| Combining the 32 rows of an input tile | A reduce/bcast-style read of `x` touches rows 1–31, which hold the model's garbage. The golden suite poisons them with 1000.0. | Only bytes `[0, 32)` and `[512, 544)` of each `x` page are read. Rows 1–31 never leave DRAM. |
-| Bits changed in transit | NaN payloads, −0, denormals (golden `special_values` case) | Pure NoC byte copies, no compute kernel |
-| Fetch alignment on Blackhole | DRAM reads require src ≡ dst (mod 64) | Land at the same in-page offset (Mechanism caps) |
-| Multicast address divergence | Receivers must have the block reserved at the injector's address | Nominal push/pop counts; identical block sequence per column; `handshake=True` |
-| Ragged last pattern group | Its column has fewer pages than nominal | Send size and writes use `this_block_pattern_tiles`; CB counts stay nominal |
-| `replica_groups == 1` (`R == 1`: `H_out ≤ 32`) | A group of one core has no receivers. The helper's zero-fan-out `send` is a degenerate local copy (`mcast_args.hpp:21-23`). | Either keep the channel (send onto itself: same bytes) or attach an absent channel (`ttnn.attach_absent_mcast`) and skip `mcast_block`. Same kernels either way. |
-| Transactions left in flight (BB-03) | Ready-signal increments and multicast flags are NoC transactions; the next program starts right after | Reader ends with `async_write_barrier` + `async_atomic_barrier`; writer with `async_write_barrier` |
-| Hand-over before data lands (BB-06) | A receiver publishing before the flag | `receive()` returns only after delivery (`mcast_pipe.hpp:140-141`); publish follows it |
-| Out-of-memory as a support statement (BB-05) | Large W | Clamp `block_pattern_tiles ≤ 656`; extra pages become extra blocks; nothing is refused |
-| `d_2 ≠ 1` or a non-dim-2 expansion | Outside the Phase-0 contract | `ValueError` in `validate()` (Host contract) |
-| Program rebuilt per call (BB-07) | Python building a descriptor and attaching an `Mcast` every call | Cache the descriptor per key; patch only the two buffer addresses per call (pattern: `tests/ttnn/unit_tests/base_functionality/test_kernel_defines_hash.py:45`) |
-
-## Host contract
-
-### Registry (`ttnn/ttnn/operations/g6_expand/g6_expand.py`)
-
-| Item | Decision |
-|------|----------|
-| `INPUT_TAGGERS` | `{"alignment": tag_alignment}`. `tag_alignment(inputs, axes)`: `scenario = inputs[0]`; `out = [d if s == -1 else s for d, s in zip(scenario["shape"], scenario["sizes"])]`; `"w_non_aligned"` if `out[-1] % 32` (H is then not read), else `"h_non_aligned"` if `out[-2] % 32`, else `"tile_aligned"`. |
-| `SUPPORTED` | `dtype: [ttnn.bfloat16]`, `layout: [ttnn.TILE_LAYOUT]`, `alignment: ["tile_aligned", "w_non_aligned"]` (= TARGET) |
-| `EXCLUSIONS` | `[]` |
-| `validate(input_tensor, sizes)` order | (1) structural checks raising `ValueError`: on device; DRAM interleaved; rank 4; `len(sizes) == 4`; every size `-1` or `≥ 1`; a size `≠ -1` differing from a non-1 input dim; an expansion of dim 0, 1 or 3; `d_2 != 1`. (2) SUPPORTED per axis → `UnsupportedAxisValue`. (3) EXCLUSIONS → `ExcludedCell`. Structural checks come first because the tagger needs a well-formed output shape. |
-| Entry point | `g6_expand(input_tensor, sizes)`: `validate` first; output shape; `ttnn.allocate_tensor_on_device` in the input's memory config; cached descriptor; exactly one `ttnn.generic_op([input_tensor, output], descriptor)`. No `pad`/`slice`/`to_layout`/reshape on input or output. |
-| Plan reporting (BB-08) | `select_plan(shape, sizes, grid) -> Plan` (frozen: rectangle, `pattern_tiles_per_group`, `pattern_groups`, `replica_rows_per_group`, `replica_groups`, `block_pattern_tiles`, `num_blocks` per column, role per core). Exported, and the plan of the last call kept as `g6_expand.last_plan`. |
-| Descriptor cache (BB-07, BB-16) | Key: input shape, output shape, dtype, layout, memory config, device id and grid. A hit patches only the `x` and `out` buffer-address runtime args. No allocation besides the output tensor, and no kernel build after the first call per key. |
-| Profiling zones (BB-21) | Zone build only (no change to the plain build): reader `G6_FETCH`, `G6_REPLICATE`, `G6_MCAST_SEND`, `G6_MCAST_WAIT`, `G6_CB_RESERVE`; writer `G6_CB_WAIT`, `G6_STORE`, `G6_DRAIN`. Role per core comes from `Plan` (`injector` / `receiver`). |
-
-### Structural impossibilities
-
-None beyond `feature_spec.py`'s `INVALID = []`.
-
-## Catalog evidence
-
-| Entry | Knob it informed |
-|-------|------------------|
-| `mcast_topology` | Broadcast along the axis the operand does not vary with. Column-major `ttnn.Mcast` groups on a 2D split. A 1D replica split would need a 2D mcast (R3 rejected). |
-| `tile_reorder` | Whole 2 KB page per DRAM write, batched barriers (R6 rejected; `store_block` has no per-page barrier) |
-| `noc_placement` | Reads on NoC0, writes on NoC1 (reader/writer defaults); grid-orientation lamp |
-| `double_buffer` | No buffering gain once DRAM-bound with enough cores. Depth 1 is the Phase-0 value; depth 2 only for multi-block cores. |
-| `bank_stagger` | Bank-alignment lamp (`tensor_pattern_wt % 8 == 0`) |
-| `width_split` | A short, wide output must not be split by the axis that has few units. Here both axes are spread. |
-
-## Acceptance test
-
-`tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand.py`, limited by BB-22 to the five production cases and the cases the spec's rules require. It deliberately does not sweep single-tile, non-square or multi-batch shapes: production never calls them, and the spec overrides the generic sweep. Every case is graded bit-exactly (`TOLERANCES[bf16] = ("exact", None)`): production W ∈ {512, 256, 196, 185, 207}; sizes as a tuple; sizes with −1; special bf16 bit patterns; poisoned input padding; output is a new DRAM-interleaved TILE bf16 tensor and the input is left unchanged; repeat determinism with no new program-cache entry on a repeat call; the mixed-width sequence under the program cache; and the spec's validation errors.
+| Poisoned x padding leaks | The whole-page read brings rows 1–31 (golden poison 1000.0) into the slot. Any row of faces 0–3 left unreplicated ships padding into a logical out element. | The replicate overwrites all of rows 1–15 of faces 0/1 and all of faces 2/3, sourcing only bytes `[0,32)` and `[512,544)`. The poison loose cases and `test_input_padding_does_not_leak` pin it. |
+| Multicast lands in the wrong slot | The landing address is the injector's write pointer, so receivers must sit on the same slot. | Lockstep nominal `block_pages` reserve/push on every core of a strip, including a ragged last block; one CB descriptor over all used cores. |
+| RISC-V stores not yet visible to a NoC read | If the replicate uses word stores, the following multicast, self-aimed copy or DRAM write reads that L1 through the NoC. | Order the stores before the first NoC read of the page with the data-movement store-ordering idiom of the target arch (see tile_column_dataflow.hpp header note). The repeat-determinism test (BB-06) catches races. |
+| Lingering NoC transactions (BB-03) | The receiver's ready-ack is a remote atomic increment that `receive()` does not drain. The injector's `send()` returns before the multicast is acked. | Receiver reader ends with `async_atomic_barrier`; injector reader and writer end with `async_write_barrier`. |
+| Injector hand-off order | `push_back` before `send()` lets the local writer start early. Overwriting the slot is safe only after the NoC has read it. | `send()` with the default `SourceL1Guard::Guard` returns only after the slot is read, and the next `reserve_back` comes after it. At depth 1 the reserve also waits for the writer's pop. |
+| `rs = 1` (no receivers) | Happens for `Ht = 1` or a forced plan. A multicast channel with no receivers must not wait for acks. | Host attaches the channel absent (`ttnn.attach_absent_mcast`). The injector skips `send()` and still writes all rows. Pinned by `test_pinned_plans`. |
+| Same-bank writes at W=512 | `Wt = 16` is a multiple of the bank count, so each group's pages all sit on one bank. | Correct as is; lamp L6 measures staggering. |
+| Grid-dependent plans | `b`, `rs` and `G` come from the device grid; a path that only some grids reach can pass here and fail elsewhere. | Production plans are identical on 13×10 and 11×10. `test_pinned_plans` forces `rs = 1`, `b = 1` (ragged 2-page groups) and `block_pages = 1` (multi-block, depth 2) on any grid. |
+| Stale program on a cache hit | A Python descriptor cache with an incomplete key replays the wrong program. | The key holds every input of `select_plan` and the descriptor builder. Addresses are the only per-call values, in common RT args. `test_repeat_and_program_cache` checks zero new device-cache entries and bit-identical repeats. |
