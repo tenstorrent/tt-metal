@@ -34,7 +34,7 @@ void bind_split(nb::module_& mod) {
             dim (int, optional): the dimension to split along, in ``[-r, r)`` for an input of rank ``r``. Negative values count from the last dimension. Defaults to `0`.
 
         Keyword Args:
-            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the outputs. Defaults to `None`, which keeps the memory configuration of `input_tensor`, except that an L1 `input_tensor` split into more than 2 chunks gives DRAM outputs when it is too large for the free L1 of a single core.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the outputs. Defaults to `None`: an interleaved `input_tensor` keeps its memory configuration. A sharded `input_tensor` whose memory configuration has a `shard_spec`, split into chunks of equal size, keeps its memory layout, buffer type and cores, with the shard shape scaled like the chunk shape, when the scaled shape is whole elements and, for a TILE input, whole tiles; otherwise a sharded `input_tensor` gives DRAM interleaved outputs. An L1 `input_tensor` split into more than 2 chunks also gives DRAM outputs when it is too large for the free L1 of a single core.
 
         Returns:
             List[ttnn.Tensor]: the chunks, in order along `dim`, with the dtype and layout of `input_tensor`.
@@ -64,6 +64,7 @@ void bind_split(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1
         )doc";
 
     ttnn::bind_function<"split">(
