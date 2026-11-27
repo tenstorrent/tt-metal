@@ -31,7 +31,7 @@ from safetensors import safe_open
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import load_kda_layer_state_dict, resolve_model_root
-from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
+from models.demos.deepseek_v3_d_p.tt.kda.config import kimi_k3_projection_dtype
 from models.demos.deepseek_v3_d_p.tt.kda.weights import current_cache_globs as kda_current_cache_globs
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import checkpoint_cache_key
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtIndexer
@@ -197,6 +197,12 @@ def load_layer_state_dict(
     return state_dict
 
 
+def load_dense_ffn_weights(checkpoint_dir: Path, layer_idx: int) -> dict:
+    """A dense layer's MLP, {"ffn_weights": {gate_proj, up_proj, down_proj}} (as load_layer_state_dict groups it)."""
+    prefix = layer_prefix(Path(checkpoint_dir), layer_idx)
+    return {"ffn_weights": load_tensors(Path(checkpoint_dir), {a: prefix + k for a, k in DENSE_FFN_KEYS.items()})}
+
+
 def load_routed_expert_weights(checkpoint_dir: Path, layer_idx: int, num_experts: int) -> list[dict]:
     """The layer's routed experts, renamed from the checkpoint's `w1`/`w3`/`w2`.
 
@@ -273,13 +279,30 @@ def _marker_exists(root: Path | None, layer_idx: int) -> bool:
     return root is not None and _marker(root, layer_idx).is_file()
 
 
+# The MLA projections K3_ACC_BF16_WEIGHTS keeps in bf16 (tt/kimi_k3/accuracy.py), as ttMLA.load_weights names them.
+_MLA_BF16_ORIGIN = ("q_a_proj", "q_b_proj", "kv_a_proj_with_mqa", "wkv_b1", "wkv_b2", "o_proj", "g_proj")
+
+
 def _attention_cache_globs(layer_idx: int, model_cfg: type) -> tuple[str, ...]:
     """One glob per attention tensorbin of the layer in its current format: a KDA layer's in the current KDA cache
-    format (projections at `KIMI_K3_PROJECTION_DTYPE`), and an attention layer's indexer (dtype-pinned by
-    `TtIndexer`) when the model has one."""
+    format (projections at `kimi_k3_projection_dtype()`), and an attention layer's indexer (dtype-pinned by
+    `TtIndexer`) when the model has one. Under K3_ACC_BF16_WEIGHTS an attention layer's bf16 MLA projections too, so a
+    cache built without the knob reads as stale and the layer's attention is rebuilt from the checkpoint."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
     if layer_idx not in model_cfg.mla_layer_ids():
-        return kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), KIMI_K3_PROJECTION_DTYPE)
-    return TtIndexer.cache_globs(f"layer_{layer_idx}.mla") if has_indexer(model_cfg) else ()
+        dense = (
+            tuple(f"layer_{layer_idx}.ffn.{p}_dtype_BFLOAT16_layout_TILE.tensorbin" for p in DENSE_FFN_KEYS)
+            if accuracy.bf16_weights() and layer_idx < model_cfg.NUM_DENSE_LAYERS
+            else ()
+        )
+        return dense + kda_current_cache_globs(f"layer_{layer_idx}.kda", kimi_k3_kda_config(), kimi_k3_projection_dtype())
+    mla = (
+        tuple(f"layer_{layer_idx}.mla.{name}_dtype_BFLOAT16_layout_TILE.tensorbin" for name in _MLA_BF16_ORIGIN)
+        if accuracy.bf16_weights()
+        else ()
+    )
+    return mla + (TtIndexer.cache_globs(f"layer_{layer_idx}.mla") if has_indexer(model_cfg) else ())
 
 
 def layer_is_stale(

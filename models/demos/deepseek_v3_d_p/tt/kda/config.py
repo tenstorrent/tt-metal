@@ -136,6 +136,9 @@ class KDAProgramConfig:
     qkv_channel_chunk_size: int = 768
     tp_ccl_topology: ttnn.Topology = ttnn.Topology.Linear
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
+    # The layer output's dtype after the output projection's TP reduction: None keeps the projection's (the norm
+    # output's); bf16 rounds an fp32 one once (the residual stream's consumers take bf16).
+    output_dtype: ttnn.DataType | None = None
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
@@ -232,8 +235,19 @@ def tuned_projection_matmul_configs(
 KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
 
 
+def kimi_k3_projection_dtype() -> ttnn.DataType:
+    """The K3 projections' weight dtype: KIMI_K3_PROJECTION_DTYPE, or bf16 under K3_ACC_BF16_WEIGHTS
+    (tt/kimi_k3/accuracy.py)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+    return accuracy.weight_dtype(KIMI_K3_PROJECTION_DTYPE)
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
-    """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
+    """Return the production K3 program configuration with caller-owned per-axis CCL topology (production unless a
+    K3_ACC_* accuracy knob is set: tt/kimi_k3/accuracy.py)."""
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
     # Fixed production/proxy geometries; native worker capacity is validated by
     # the recurrence constructor for the actual TP-local head count and device.
     group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
@@ -248,16 +262,17 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
             summary_group_chunks=group_chunks[active_seq_len_local],
             # HiFi3, not HiFi2: HiFi2 keeps only SrcB's 6 explicit mantissa bits, which biases the FP32 state products
             # low over long sequences. With SP these are the relay's hop and entry correction (affine prefix).
-            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
-            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
+            scan_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
+            affine_prefix_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
-        gated_rms_output_dtype=ttnn.bfloat16,
-        input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        gated_rms_output_dtype=ttnn.float32 if accuracy.fidelity() else ttnn.bfloat16,
+        output_dtype=ttnn.bfloat16 if accuracy.fidelity() else None,
+        input_projection_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi2),
         # HiFi3 for the same SrcB truncation.
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
-        projection_dtype=KIMI_K3_PROJECTION_DTYPE,
+        output_projection_math_fidelity=accuracy.math_fidelity(ttnn.MathFidelity.HiFi3),
+        projection_dtype=kimi_k3_projection_dtype(),
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
         # Tuned on Galaxy (12x10 grid, TP4).

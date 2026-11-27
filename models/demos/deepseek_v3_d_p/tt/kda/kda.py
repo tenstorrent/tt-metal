@@ -236,6 +236,8 @@ class ttKDA:
             raise ValueError("grouped KDA affine prefix currently requires K == V")
         self.tp_ccl_topology = program_config.tp_ccl_topology
         self.gated_rms_output_dtype = program_config.gated_rms_output_dtype
+        self.capture_layer = layer_idx  # (the GPTQ teacher capture's taps: tt/kimi_k3/capture.py)
+        self.output_dtype = program_config.output_dtype
         if weights is not None and state_dict is not None:
             raise ValueError("pass either constructed KDAWeights or host state_dict, not both")
         if weights is None:
@@ -582,6 +584,17 @@ class ttKDA:
         The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
         """
         weights = self.weights
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None and capture.CAPTURE.wants(self.capture_layer):
+            # kda_fb_in: f_a_proj's output, the low-rank columns of the fused projection (every TP rank holds them)
+            rank = weights.decay_output_projection.shape[-2]
+            starts = [0] * len(projected.shape)
+            ends = list(projected.shape)
+            starts[-1], ends[-1] = decay_rank_offset, decay_rank_offset + rank
+            fa = ttnn.slice(projected, starts, ends)
+            capture.CAPTURE.tap(self.capture_layer, "kda_fb_in", fa, capture.REP)
+            ttnn.deallocate(fa)
         gate = ttnn.linear(
             projected,
             weights.decay_output_projection,
@@ -630,6 +643,10 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # kda_o_in: the gated o_norm output (o_proj's input), heads over TP
+            capture.CAPTURE.tap(self.capture_layer, "kda_o_in", output)
         if self._fused_output_reduce_scatter:
             return ttnn.experimental.matmul_reduce_scatter_prefill(
                 output,
@@ -649,6 +666,10 @@ class ttKDA:
             output = reduce_scatter_tp_partials(
                 output, self.tt_ccl, self._tp_cluster_axis, self.tp_ccl_topology, self._tp_num_links
             )
+        if self.output_dtype is not None and output.dtype != self.output_dtype:
+            rounded = ttnn.typecast(output, self.output_dtype, memory_config=output.memory_config())
+            ttnn.deallocate(output)
+            output = rounded
         return output
 
     def forward(
@@ -721,6 +742,11 @@ class ttKDA:
             **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None and capture.CAPTURE.debug:  # (K3_CAPTURE_DEBUG: KDA stage taps)
+            for name, t in (("dbg_kda_q", q), ("dbg_kda_k", k), ("dbg_kda_v", v), ("dbg_kda_decay", gate)):
+                capture.CAPTURE.tap(self.capture_layer, name, t)
         # With sequence parallelism the relay forms the output gate from the gathered input (with the fused gather, its
         # buffer, and this rank's slice from the shard) and applies the gated norm; otherwise its own program does.
         relay_norm = self.recurrence.applies_output_norm

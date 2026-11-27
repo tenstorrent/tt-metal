@@ -163,6 +163,17 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         return KimiSparseMoeBlock
 
+    def resolve_sparse_kv_cache_format(self, requested):
+        """The base resolution, or bf16 (BF16_RM) for a sparse (DSA) kvpe under K3_ACC_KV=bf16 (tt/kimi_k3/accuracy.py)."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        resolved = super().resolve_sparse_kv_cache_format(requested)
+        if resolved is not None and accuracy.kv_bf16():
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+            return MlaKvCacheFormat.BF16_RM
+        return resolved
+
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         """Size the KV cache to this rank's FULL-ATTENTION layers, not its layers.
 

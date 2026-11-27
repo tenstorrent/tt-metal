@@ -177,6 +177,10 @@ class ttMLA:
         hidden_size = config.hidden_size
         qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
         use_gate = bool(getattr(config, "mla_use_output_gate", False))
+        # The projections' device dtype: bfloat8_b, or bf16 under K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py).
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        wdt = accuracy.weight_dtype(ttnn.bfloat8_b)
 
         def _cache_name(name, prefix="mla"):
             return str(cache_path / f"layer_{layer_idx}.{prefix}.{name}") if cache_path else None
@@ -224,7 +228,7 @@ class ttMLA:
             return ttnn.as_tensor(
                 wkv_b1,
                 device=device if on_device else None,
-                dtype=ttnn.bfloat8_b,
+                dtype=wdt,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem if on_device else None,
                 mesh_mapper=mapper,
@@ -237,7 +241,7 @@ class ttMLA:
                 return _wkv_b1_as(mapper_tp1, _cache_name("wkv_b1"))
 
             def _tensorbin(name):
-                return name and Path(f"{name}_dtype_{ttnn.bfloat8_b.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
+                return name and Path(f"{name}_dtype_{wdt.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin")
 
             repl_name = _cache_name("wkv_b1", "mla_repl")
             repl_file = _tensorbin(repl_name)
@@ -295,7 +299,7 @@ class ttMLA:
             "kv_a_proj_with_mqa": ttnn.as_tensor(
                 kv_a_proj,
                 device=device,
-                dtype=ttnn.bfloat8_b,
+                dtype=wdt,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=mem,
                 mesh_mapper=mapper_tp0,
@@ -319,7 +323,7 @@ class ttMLA:
                     "q_a_proj": ttnn.as_tensor(
                         q_a_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
@@ -329,7 +333,7 @@ class ttMLA:
                     "q_b_proj": ttnn.as_tensor(
                         q_b_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
@@ -340,7 +344,7 @@ class ttMLA:
                     "wkv_b2": ttnn.as_tensor(
                         wkv_b2,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp1,
@@ -350,7 +354,7 @@ class ttMLA:
                     "o_proj": ttnn.as_tensor(
                         o_proj,
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=wdt,
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=mem,
                         mesh_mapper=mapper_tp0,
@@ -365,7 +369,7 @@ class ttMLA:
                 result["g_proj"] = ttnn.as_tensor(
                     g_proj,
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=wdt,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem,
                     mesh_mapper=mapper_tp1,
@@ -606,6 +610,29 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py): HiFi4 everywhere; fp32 DEST where the config already had it (the
+        # default keeps bf16 DEST: the tuned subblocks of its matmuls are sized for it).
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+        self._acc_fidelity = accuracy.fidelity()
+        if self._acc_fidelity:
+            self.default_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            self.hifi2_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi3_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+        # K3_ACC_MLA_FP32: fp32 DEST at HiFi4 for every matmul / norm (the tuned subblocks clipped to <= 4 tiles:
+        # _acc_pc), HiFi4 for the fused matmul + reduce-scatter ops, fp32 kv_a partials.
+        self._acc_mla_fp32 = accuracy.mla_fp32()
+        self._mmrs_kwargs = accuracy.mmrs_kwargs(mesh_device.arch())
+        if self._acc_mla_fp32:
+            self.default_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi2_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
+            self.hifi3_fp32_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
 
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x - 1,
@@ -659,7 +686,8 @@ class ttMLA:
             self._kv_stem_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                 name="kv_stem",
                 shape=[1, self.tp_factor, self.active_seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim],
-                dtype=ttnn.bfloat16,
+                # (K3_ACC_MLA_FP32: kv_a's TP partials stay fp32 to the reduction)
+                dtype=ttnn.float32 if accuracy.mla_fp32() else ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
 
@@ -1104,15 +1132,35 @@ class ttMLA:
                 return self._make_batched_mm_kwargs(weight_name, seq_len_local)
             return {
                 "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-                "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+                "dtype": self._out_dtype(self.MM_DEFAULT_DTYPES[weight_name]),
                 "compute_kernel_config": self.default_compute_kernel_config,
             }
         return {
             "memory_config": cfg["out_mem_config"],
-            "program_config": cfg["program_config"],
-            "dtype": cfg["out_dtype"],
+            "program_config": self._acc_pc(cfg["program_config"]),
+            "dtype": self._out_dtype(cfg["out_dtype"]),
             "compute_kernel_config": self._tuned_compute_kernel_config(cfg),
         }
+
+    @staticmethod
+    def _to_bf16(t: ttnn.Tensor, memory_config) -> ttnn.Tensor:
+        if t.dtype == ttnn.bfloat16:
+            return t
+        out = ttnn.typecast(t, ttnn.bfloat16, memory_config=memory_config)
+        ttnn.deallocate(t)
+        return out
+
+    def _acc_pc(self, pc):
+        """A matmul program config, its subblock clipped to fp32 DEST under K3_ACC_MLA_FP32."""
+        if getattr(self, "_acc_mla_fp32", False):
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
+
+            return accuracy.fp32_dest_program_config(pc)
+        return pc
+
+    def _out_dtype(self, dtype):
+        """A projection's output dtype: bf16 instead of bf8 under K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py)."""
+        return ttnn.bfloat16 if getattr(self, "_acc_fidelity", False) and dtype == ttnn.bfloat8_b else dtype
 
     def _tuned_compute_kernel_config(self, cfg: dict):
         """HiFi2 bf16 dest by default; ``fp32_dest_acc`` -> fp32 dest; ``math_fidelity`` HiFi3 (fp32 dest only)."""
@@ -1138,7 +1186,7 @@ class ttMLA:
         return {
             # L1 up to DeepSeek-V3.2's TP=2 640-row case (40 MiB, measured), DRAM beyond.
             "memory_config": ttnn.L1_MEMORY_CONFIG if out_bytes <= 40 << 20 else ttnn.DRAM_MEMORY_CONFIG,
-            "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+            "program_config": self._acc_pc(ttnn.MatmulMultiCoreReuseProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                 # The batched default's K block: bf16 partials accumulate in L1, so the blocking sets the rounding.
                 in0_block_w=max(w for w in range(1, 5) if k_tiles % w == 0),
@@ -1146,7 +1194,7 @@ class ttMLA:
                 out_subblock_w=max(w for w in range(1, 9) if n_tiles % w == 0),
                 per_core_M=max(m for m in range(1, 11) if m_tiles % m == 0),
                 per_core_N=n_tiles,
-            ),
+            )),
             "dtype": ttnn.bfloat16,
             "compute_kernel_config": self.default_compute_kernel_config,
         }
@@ -1182,9 +1230,9 @@ class ttMLA:
 
         return {
             "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-            "dtype": self.MM_DEFAULT_DTYPES[weight_name],
+            "dtype": self._out_dtype(self.MM_DEFAULT_DTYPES[weight_name]),
             "compute_kernel_config": self.default_compute_kernel_config,
-            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            "program_config": self._acc_pc(ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_compute_grid,
                 in0_block_w=in0_block_w,
                 out_subblock_h=out_subblock_h,
@@ -1194,7 +1242,7 @@ class ttMLA:
                 fuse_batch=False,
                 fused_activation=None,
                 mcast_in0=False,
-            ),
+            )),
         }
 
     def _get_sdpa_program_config(self, seq_len_local: int) -> ttnn.SDPAProgramConfig:
@@ -1412,6 +1460,7 @@ class ttMLA:
                 scatter_dim=-1,
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
+                **self._mmrs_kwargs,
             )
             if self._q_distnorm:
                 qr = self._q_a_latent_distnorm(qr, seq_len_local)
@@ -1454,6 +1503,7 @@ class ttMLA:
             scatter_dim=-2,
             topology=self.tp_ccl_topology,
             num_links=self.ccl_num_links,
+            **self._mmrs_kwargs,
         )
 
     def _gather_tp_rows(self, qr_local: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
@@ -1559,6 +1609,8 @@ class ttMLA:
         merged = ttnn.concat(parts, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for t in parts:
             ttnn.deallocate(t)
+        if q.dtype == ttnn.bfloat16:  # (K3_ACC_BF16_WEIGHTS: the parts are bf16 already)
+            return merged
         weight = ttnn.typecast(merged, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
         return weight
@@ -1597,6 +1649,10 @@ class ttMLA:
         → query assembly. Consumes qr (the indexer, if any, has already read it by this point) unless it is borrowed:
         the persistent q_a gather buffer, which must stay allocated."""
         num_heads_local = self.num_heads // self.tp_factor
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_qb_in: q_a_layernorm's output (replicated over TP)
+            capture.CAPTURE.tap(self.layer_idx, "mla_qb_in", qr, capture.REP)
         if self._llama4_beta is not None:
             # Mistral's per-position query temperature, applied to the normed q_a latent rather than to
             # Q: every step from here to Q (q_b_proj, head split, wkv_b1, RoPE) is linear or a per-row
@@ -1615,6 +1671,9 @@ class ttMLA:
         )
         if not qr_borrowed:
             ttnn.deallocate(qr)
+        if capture.CAPTURE is not None:  # mla_kvb1_in: q_nope per head (q_b's output, heads over TP)
+            capture.CAPTURE.tap_q_nope(self.layer_idx, tt_q, self.qk_nope_head_dim + self.qk_rope_head_dim,
+                                       self.qk_nope_head_dim)
 
         if self._early_q_reshard:
             return self._q_stem_seq_sharded(tt_q, rope_tensors, kv_actual_isl, seq_len_local, metadata)
@@ -1810,6 +1869,8 @@ class ttMLA:
         # or falling back to the legacy all-gather.
         if self.tp_factor > 1:
             kv_mm_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            if self._acc_mla_fp32:  # (fp32 TP partials: gathered and reduced in fp32)
+                kv_mm_kwargs["dtype"] = ttnn.float32
         return ttnn.linear(
             hidden_states,
             self.kv_a_proj_with_mqa_weight,
@@ -1858,7 +1919,7 @@ class ttMLA:
                 tt_kv,
                 dim=1,
                 split_output_width=self.kv_lora_rank,
-                memory_config=kv_mem,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self._acc_mla_fp32 else kv_mem,
                 compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
             # tt_kv aliases model-owned gather scratch; keep that buffer alive.
@@ -1882,6 +1943,9 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
+        if self._acc_mla_fp32:  # (the fp32 reduction's outputs: rounded once to the cache's bf16)
+            tt_kv_nope = self._to_bf16(tt_kv_nope, latent_mem)
+            tt_kv_rope = self._to_bf16(tt_kv_rope, kv_mem)
         tt_kv_rope = self._apply_rope(tt_kv_rope, rope_tensors, kv_actual_isl, metadata=metadata)
 
         if return_kv_intermediates:
@@ -1909,6 +1973,10 @@ class ttMLA:
         return tt_kvpe, tt_kv_nope, kv_intermediates
 
     def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_kvb2_in: the attention output in kv_lora space per head
+            capture.CAPTURE.tap(self.layer_idx, "mla_kvb2_in", t, capture.HEADS)
         return ttnn.linear(
             t,
             self.wkv_b2_weight,
@@ -2025,7 +2093,7 @@ class ttMLA:
             fused_activation=cfg["fused_activation"],
             compute_kernel_config=self._tuned_compute_kernel_config(cfg),
             memory_config=cfg["out_mem_config"],
-            dtype=cfg["out_dtype"],
+            dtype=self._out_dtype(cfg["out_dtype"]),
             topology=topology,
             cluster_axis=self.tp_axis,
             num_links=links,
@@ -2107,6 +2175,10 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None:  # mla_o_in: o_proj's input (after the output gate), heads over TP
+            capture.CAPTURE.tap(self.layer_idx, "mla_o_in", v_out)
         if self.tp_factor > 1:
             # CCL ports in the last grid column: the matmul keeps every row (GLM-5.3: 10x10 = 100 cores instead of
             # 10x8 = 80, 12 -> 10 output tiles per core).
@@ -2118,6 +2190,7 @@ class ttMLA:
                 topology=self.tp_ccl_topology,
                 num_links=self.ccl_num_links,
                 use_column_major_ccl=True,
+                **self._mmrs_kwargs,
             )
         return ttnn.linear(
             v_out,
@@ -3113,6 +3186,21 @@ class ttMLA:
             k_chunk_size=k_chunk,
             cache_batch_idx=cache_batch_idx,
             **block_cyclic,
+            # K3_ACC_FIDELITY (tt/kimi_k3/accuracy.py): HiFi4 + fp32 DEST, the approximate exp kept (the op's
+            # exact-exp path is not used: its kernels hard-wire the approximate exp)
+            **(
+                {
+                    "compute_kernel_config": ttnn.init_device_compute_kernel_config(
+                        q_rm.device().arch(),
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        math_approx_mode=True,
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=False,
+                    )
+                }
+                if self._acc_fidelity
+                else {}
+            ),
         )
         out = attention() if prefetch is None else self._beside_prefetch(prefetch, attention)
         if q_rm is not q:  # the caller owns q
