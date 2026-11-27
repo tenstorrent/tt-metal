@@ -8,11 +8,11 @@
 #include <limits>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include "impl/kernels/kernel.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Emit the CRTA words for a single tensor binding, in order:
 //   [base_address_word, optional runtime_field_words...]
@@ -88,4 +88,4 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

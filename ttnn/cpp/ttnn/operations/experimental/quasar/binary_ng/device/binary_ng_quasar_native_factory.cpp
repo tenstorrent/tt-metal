@@ -36,22 +36,22 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/specification/compute_hardware_config.hpp>
+#include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 // log_debug and log_warning. Included explicitly: this target is a unity build, so a missing include
 // here still compiles.
 #include <tt-logger/tt-logger.hpp>
@@ -59,7 +59,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 
 namespace ttnn::operations::experimental::quasar::binary_ng {
 
@@ -505,12 +505,16 @@ ProgramArtifacts create_native_artifacts(
     const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     TT_FATAL(
         !is_scalar || op.scalar.has_value(), "binary_ng Quasar-native: a tensor-scalar op requires a scalar value");
+    // A one-element MX operand is not VALUE: the reader's first-element fill writes a full bf16 tile (2048 B) into the
+    // ring entry, which an MX entry (1056 B for 8-bit MX) cannot hold. It takes the SCALAR mode instead, which the
+    // compute expands into a Float16_b held ring.
     // Fires before any JIT work on a type that matches_quasar_native_slice, the only admitting caller, refuses.
     const std::array<OperandMode, 2> modes = operand_modes(
         op.subtile_broadcast_type,
         is_scalar,
-        a.logical_shape().volume() == 1,
-        !is_scalar && tensor_args.input_tensor_b->logical_shape().volume() == 1);
+        a.logical_shape().volume() == 1 && !is_mx(a.dtype()),
+        !is_scalar && tensor_args.input_tensor_b->logical_shape().volume() == 1 &&
+            !is_mx(tensor_args.input_tensor_b->dtype()));
     // A held operand (COL, SCALAR) is expanded once per page change. It runs its activation chain while it expands,
     // so it has no post ring. A held or VALUE operand is read at one ring entry for a run of tiles.
     const auto held = [](OperandMode mode) { return mode == OperandMode::COL || mode == OperandMode::SCALAR; };
@@ -604,7 +608,10 @@ ProgramArtifacts create_native_artifacts(
 
         const bool is_integer_division =
             (op_type == BinaryOpType::DIV && a_dtype == DataType::INT32 && b_dtype == DataType::INT32);
-        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division) {
+        // The unpacker and the packer convert MX, never a fused TYPECAST: its define carries host DataFormat values,
+        // and the device numbers MxInt8, MxInt4 and MxInt2 differently.
+        const bool involves_mx = is_mx(a_dtype) || is_mx(c_dtype);
+        if (binary::utils::is_typecast(a_dtype, c_dtype) && !is_integer_division && !involves_mx) {
             post_activations.push_back({
                 unary::UnaryOpType::TYPECAST,
                 {static_cast<int>(a_dtype), static_cast<int>(c_dtype)},
@@ -823,8 +830,8 @@ ProgramArtifacts create_native_artifacts(
     // --- DataflowBuffers (mirrors the descriptor factory's CB block). A BORROWED operand backs the DFB
     // with its resident L1 shard or slice (num_entries == its borrowed part, borrowed_from set); any
     // NoC-read operand is a derived-depth ring filled over the NoC.
-    // post_lhs/post_rhs exist only when that operand has activations; their format is the op_has_exp
-    // Float16_b intermediate on the FPU path, else the operand's own format. ---
+    // post_lhs/post_rhs exist only when that operand has activations; their format is Float16_b for an MX operand
+    // and for the op_has_exp intermediate on the FPU path, else the operand's own format. ---
     // capacity = num_entries / max(producers, consumers) is what reaches the credit register, so the
     // knob is PER-THREAD and num_entries is derived. A global depth is meaningless: depth 2 is illegal
     // at R=4 (must divide by max(R,C)) and depth 4 at R=C=4 gives capacity 1, i.e. no double buffering.
@@ -885,8 +892,9 @@ ProgramArtifacts create_native_artifacts(
         dfbs.push_back(make_dfb(OUT_TAIL, c_tile_bytes, compute_threads, c_df, c_tile, std::nullopt));
     }
 
-    const tt::DataFormat a_inter_df = is_sfpu ? a_df : (op_has_exp ? tt::DataFormat::Float16_b : a_df);
-    const tt::DataFormat b_inter_df = is_sfpu ? b_df : (op_has_exp ? tt::DataFormat::Float16_b : b_df);
+    // An MX intermediate would quantize again between the activation and the binary op, so keep it in Float16_b.
+    const tt::DataFormat a_inter_df = (is_mx(a_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_inter_df = (is_mx(b_dtype) || (!is_sfpu && op_has_exp)) ? tt::DataFormat::Float16_b : b_df;
     // post_lhs/post_rhs intermediate rings (c_3/c_4), allocated only when that operand has an activation chain.
     // Each compute thread produces (PREPROCESS) and consumes (binary op) its own tile counter of the ring, in
     // program order, so the ring holds one batch per compute thread.
@@ -910,20 +918,25 @@ ProgramArtifacts create_native_artifacts(
     }
     // A staging ring, like a post ring, holds one batch per compute thread: each thread expands a batch into its own
     // tile counter, and the binary op reads it.
+    // The expansion rings of an MX operand hold Float16_b: an MX ring would quantize the expanded tile again.
+    const tt::DataFormat a_ring_df = is_mx(a_dtype) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_ring_df = is_mx(b_dtype) ? tt::DataFormat::Float16_b : b_df;
+    const uint32_t a_ring_bytes = static_cast<uint32_t>(a_tile.get_tile_size(a_ring_df));
+    const uint32_t b_ring_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_ring_df));
     if (stage_a) {
         dfbs.push_back(
-            make_dfb(STAGE_LHS, a_tile_bytes, compute_threads * num_tiles_per_cycle, a_df, a_tile, std::nullopt));
+            make_dfb(STAGE_LHS, a_ring_bytes, compute_threads * num_tiles_per_cycle, a_ring_df, a_tile, std::nullopt));
     }
     if (stage_b) {
         dfbs.push_back(
-            make_dfb(STAGE_RHS, b_tile_bytes, compute_threads * num_tiles_per_cycle, b_df, b_tile, std::nullopt));
+            make_dfb(STAGE_RHS, b_ring_bytes, compute_threads * num_tiles_per_cycle, b_ring_df, b_tile, std::nullopt));
     }
     // A held ring holds two entries per compute thread: each thread expands its new page before it pops the old one.
     if (held_a) {
-        dfbs.push_back(make_dfb(HELD_LHS, a_tile_bytes, 2 * compute_threads, a_df, a_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_LHS, a_ring_bytes, 2 * compute_threads, a_ring_df, a_tile, std::nullopt));
     }
     if (held_b) {
-        dfbs.push_back(make_dfb(HELD_RHS, b_tile_bytes, 2 * compute_threads, b_df, b_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_RHS, b_ring_bytes, 2 * compute_threads, b_ring_df, b_tile, std::nullopt));
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident

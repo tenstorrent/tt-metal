@@ -5,12 +5,13 @@
 import pytest
 import torch
 import copy
+from types import SimpleNamespace
 import ttnn
 import numpy as np
 import torch.nn as nn
 from models.experimental.vadv2.reference import transformer
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.reference.resnet import ResNet
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
@@ -241,6 +242,12 @@ def test_vadv2_transformer(
     map_reg_branch.append(nn.Linear(256, 2))
     map_reg_branch = nn.Sequential(*map_reg_branch)
     map_reg_branches = nn.ModuleList([copy.deepcopy(map_reg_branch) for i in range(3)])
+    # Trained weights: random ones barely move the reference points, so a wrong refinement still passes.
+    map_reg_branches = load_torch_model(
+        torch_model=map_reg_branches,
+        layer="pts_bbox_head.map_reg_branches.",
+        model_location_generator=model_location_generator,
+    )
     reg_branch = []
     for _ in range(2):
         reg_branch.append(nn.Linear(256, 256))
@@ -248,6 +255,9 @@ def test_vadv2_transformer(
     reg_branch.append(nn.Linear(256, 10))
     reg_branch = nn.Sequential(*reg_branch)
     reg_branches = nn.ModuleList([copy.deepcopy(reg_branch) for i in range(3)])
+    reg_branches = load_torch_model(
+        torch_model=reg_branches, layer="pts_bbox_head.reg_branches.", model_location_generator=model_location_generator
+    )
     img_metas = [
         {
             "can_bus": np.array(
@@ -354,6 +364,18 @@ def test_vadv2_transformer(
         img_metas=img_metas,
     )
 
+    def branch_params(branches):
+        return {
+            str(lid): {
+                str(i): SimpleNamespace(
+                    weight=ttnn.to_device(preprocess_linear_weight(linear.weight, dtype=ttnn.bfloat16), device),
+                    bias=ttnn.to_device(preprocess_linear_bias(linear.bias, dtype=ttnn.bfloat16), device),
+                )
+                for i, linear in enumerate(m for m in branch if isinstance(m, nn.Linear))
+            }
+            for lid, branch in enumerate(branches)
+        }
+
     ttnn_model = TtVADPerceptionTransformer(
         params=parameter,
         device=device,
@@ -363,7 +385,10 @@ def test_vadv2_transformer(
         decoder=True,
         map_decoder=True,
         embed_dims=256,
-        params_branches=None,
+        params_branches=SimpleNamespace(
+            reg_branches=branch_params(reg_branches),
+            map_reg_branches=branch_params(map_reg_branches),
+        ),
     )
     shift = ttnn.from_torch(shift, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     can_bus = bev_queries.new_tensor([each["can_bus"] for each in img_metas])  # [:, :]
@@ -388,8 +413,8 @@ def test_vadv2_transformer(
         bev_w,
         grid_length=grid_length,
         bev_pos=bev_pos,
-        reg_branches=None,
-        map_reg_branches=None,
+        reg_branches=True,
+        map_reg_branches=True,
         img_metas=img_metas,
         shift=shift,
         can_bus=can_bus,
@@ -398,7 +423,7 @@ def test_vadv2_transformer(
     result1 = assert_with_pcc(model_outputs[0], ttnn.to_torch(ttnn_outputs[0]).float(), 0.99)
     result2 = assert_with_pcc(model_outputs[1], ttnn.to_torch(ttnn_outputs[1]).float(), 0.99)
     result3 = assert_with_pcc(model_outputs[2], ttnn.to_torch(ttnn_outputs[2]).float(), 0.99)
-    result4 = assert_with_pcc(model_outputs[3], ttnn.to_torch(ttnn_outputs[3]).float(), 0.98)
-    result5 = assert_with_pcc(model_outputs[4], ttnn.to_torch(ttnn_outputs[4]).float(), 0.98)
+    result4 = assert_with_pcc(model_outputs[3], ttnn.to_torch(ttnn_outputs[3]).float(), 0.999)
+    result5 = assert_with_pcc(model_outputs[4], ttnn.to_torch(ttnn_outputs[4]).float(), 0.99)
     result6 = assert_with_pcc(model_outputs[5], ttnn.to_torch(ttnn_outputs[5]).float(), 0.98)
-    result7 = assert_with_pcc(model_outputs[6], ttnn.to_torch(ttnn_outputs[6]).float(), 0.98)
+    result7 = assert_with_pcc(model_outputs[6], ttnn.to_torch(ttnn_outputs[6]).float(), 0.999)

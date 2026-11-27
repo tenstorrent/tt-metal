@@ -9,8 +9,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "reshard_writer.hpp"
+#include "interleaved_block_io.hpp"
 #include "api/tensor/noc_traits.h"
-#include "internal/tensor/transfer_noc_addr.h"
 #ifdef DO_COL_MASK
 #include "col_mask_dataflow.h"
 #endif
@@ -37,18 +37,31 @@ void kernel_main() {
 
     const uint32_t num_segments_to_write_back = get_arg(args::num_segments_to_write_back);
     const uint32_t storage_core_start_offset = get_arg(args::storage_core_start_offset);
-    // One segment per storage core this block spans, three values each: the byte count and the
-    // destination node's coordinates. The count varies per core, so the block is positional and the
+    // One segment per storage core this block spans, two values each: the byte count and the
+    // destination output shard id. The count varies per core, so the block is positional and the
     // local copy is sized by the longest block any core was given.
     constexpr auto max_write_back_segments = get_arg(args::max_write_back_segments);
-    uint32_t segment_values[3 * max_write_back_segments];
-    for (uint32_t i = 0; i < 3 * num_segments_to_write_back; ++i) {
+    uint32_t segment_values[2 * max_write_back_segments];
+    for (uint32_t i = 0; i < 2 * num_segments_to_write_back; ++i) {
         segment_values[i] = get_vararg(i);
     }
     tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_values);
 #endif
 
     const Noc noc;
+
+    // Interleaved input/output (sharded program config over interleaved tensors): this core's block starts at tile row
+    // tile_row_start and tile column width_shard_tile_start_id of the [Mt, Kt] tile grid.
+    constexpr bool in0_interleaved = get_arg(args::in0_interleaved) == 1;
+    constexpr bool out_interleaved = get_arg(args::out_interleaved) == 1;
+    constexpr auto io_Kt = get_arg(args::io_Kt);
+    constexpr auto io_block_ht = get_arg(args::io_block_ht);
+    const uint32_t io_first_tile_id = (get_arg(args::tile_row_start) * io_Kt) + width_shard_tile_start_id;
+    if constexpr (in0_interleaved) {
+        // The input is not resident in this core's L1: read the block into in0, which compute waits on.
+        read_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"in0">(), *tensor::get_token_if_present<"src">(), io_first_tile_id);
+    }
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb::gamma);
 #endif
@@ -131,15 +144,14 @@ void kernel_main() {
 #endif
 
 #ifndef SKIP_WRITE_BACK
-    // The output tensor's shard sits at the same address on every core it is sharded across, so its
-    // base address doubles as the destination address on each storage core. No data moves through a
-    // buffer here: the writes go straight from this core's output buffer to the storage cores.
-    // Raw: same L1 address on the storage cores (no handle form yet).
-    const uint32_t output_base_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::dst));
+    // The output tensor addressed by shard: each segment names the storage core's shard it lands in.
+    // No data moves through a buffer here: the writes go straight from this core's output buffer to the
+    // storage cores.
+    const auto output = TensorAccessor(tensor::dst);
     write_resharded_data(
         noc,
         dfb_out_obj,
-        output_base_addr,
+        output,
         num_segments_to_write_back,
         storage_core_start_offset,
         segment_args,
@@ -147,6 +159,11 @@ void kernel_main() {
         storage_core_stride_w_bytes,
         block_ht);
 #endif
+
+    if constexpr (out_interleaved) {
+        write_interleaved_block<io_block_ht, block_w, io_Kt>(
+            noc, *dfb::get_token_if_present<"out">(), *tensor::get_token_if_present<"dst">(), io_first_tile_id);
+    }
 
 #endif  // IDLE_CORE
 }

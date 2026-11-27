@@ -7,19 +7,20 @@
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
 #include "mesh_event_impl.hpp"
-#include <tt-metalium/tt_metal_profiler.hpp>
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/program/slow_dispatch.hpp"
-#include <mesh_device.hpp>
-#include <mesh_event.hpp>
+#include "tt_metal/impl/kernels/kernel.hpp"
+#include "mesh_workload_impl.hpp"
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/execution/mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
-#include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
 #include "emulated_program_runner.hpp"  // emule mesh register/run split
@@ -84,13 +85,10 @@ namespace tt::tt_metal::distributed {
 SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device,
     uint32_t id,
+    std::shared_ptr<ThreadPool> dispatch_thread_pool,
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
-    MeshCommandQueueBase(
-        mesh_device,
-        id,
-        create_passthrough_thread_pool(mesh_device->impl().get_context_id()),
-        std::move(lock_api_function)),
+    MeshCommandQueueBase(mesh_device, id, std::move(dispatch_thread_pool), std::move(lock_api_function)),
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
@@ -109,7 +107,6 @@ SDMeshCommandQueue::~SDMeshCommandQueue() {
         return;
     }
     try {
-        std::lock_guard<std::mutex> guard(logical_cores_mutex_);
         wait_for_cores_idle();
     } catch (const std::exception& e) {
         // Destructors must not throw; leave the cores as they are and report it.
@@ -206,7 +203,10 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*inde
 }
 
 void SDMeshCommandQueue::wait_for_cores_idle() {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+    // Shard writes run on one dispatch thread per device and each starts here. The first to take the
+    // lock waits on every device and clears the map; the rest find it empty.
+    std::lock_guard<std::mutex> guard(logical_cores_mutex_);
+    auto& context = mesh_device_->impl().metal_context();
     if (!logical_cores_for_previous_workload_.empty()) {
         // In emulated mode this map is always empty (LaunchProgram is synchronous),
         // so this block is effectively a no-op for emulated devices.
@@ -217,17 +217,24 @@ void SDMeshCommandQueue::wait_for_cores_idle() {
     }
 }
 
-void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking) {
-    auto& context = MetalContext::instance(mesh_device_->impl().get_context_id());
+void SDMeshCommandQueue::dispatch_program(
+    const MeshCoordinateRange& coord_range,
+    Program& program,
+    bool blocking,
+    const PerDeviceRuntimeArgs* per_device_runtime_args,
+    const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
+    auto& context = mesh_device_->impl().metal_context();
     const auto& program_cores = program.impl().logical_cores();
 
     // Collect local devices for this program, handling async idle checks
     std::vector<IDevice*> local_devices;
+    std::vector<uint32_t> local_coord_indices;  // coordinate index in coord_range, per local device
     local_devices.reserve(coord_range.shape().mesh_size());
     for (const auto& coord : coord_range) {
         if (!mesh_device_->impl().is_local(coord)) {
             continue;
         }
+        local_coord_indices.push_back(coordinate_index_in_range(coord_range, coord));
         auto* device = mesh_device_->impl().get_device(coord);
         bool need_wait = false;
         std::vector<std::vector<CoreCoord>> cores_to_wait;
@@ -261,6 +268,43 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         return;
     }
 
+    // Per-device runtime args: slow dispatch writes each device's runtime args from the kernel's own storage, so each
+    // device's field values are written there before it is dispatched, and the program's own values are restored
+    // after the last one.
+    struct FieldWords {
+        uint32_t* words;
+        const PerDeviceRuntimeArgsField* field;
+        std::vector<uint32_t> defaults;
+    };
+    std::vector<FieldWords> per_device_fields;
+    if (per_device_runtime_args != nullptr) {
+        for (const auto& field : per_device_runtime_args->fields) {
+            const auto kernel = program.impl().get_kernel(field->kernel);
+            uint32_t* words = (field->core.has_value() ? kernel->runtime_args_data(*field->core).data()
+                                                       : kernel->common_runtime_args_data().data()) +
+                              field->first_word;
+            per_device_fields.push_back({words, field.get(), std::vector<uint32_t>(words, words + field->num_words)});
+        }
+    }
+    auto apply_per_device_args = [&](size_t local_index) {
+        for (auto& [words, field, defaults] : per_device_fields) {
+            const uint32_t coord_index = local_coord_indices[local_index];
+            const uint32_t* src = field->present[coord_index] != 0
+                                      ? field->values.data() + static_cast<size_t>(coord_index) * field->num_words
+                                      : defaults.data();
+            std::copy(src, src + field->num_words, words);
+        }
+    };
+    // Restores the program's own values when this scope ends, including on an exception from dispatch.
+    struct RestorePerDeviceArgs {
+        std::vector<FieldWords>& fields;
+        ~RestorePerDeviceArgs() {
+            for (auto& [words, field, defaults] : fields) {
+                std::copy(defaults.begin(), defaults.end(), words);
+            }
+        }
+    } restore_per_device_args{per_device_fields};
+
     // Emule note: the register/run split is bracketed by enqueue_mesh_workload around the whole
     // workload, not here per-program, so cross-chip sender/receiver programs co-run in one scheduler
     // generation. LaunchProgram / DispatchCompiledProgramToDevice below only register (defer flag set
@@ -270,21 +314,25 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
         log_warning(tt::LogMetal, "DISPATCH_PROGRAM cfg_only={}", configure_only_);
         // Configure every device and stop: no go signal, nothing runs, nothing to wait for. These
         // cores are not registered as busy, so a later dispatch does not wait on them.
-        for (auto* device : local_devices) {
-            tt_metal::experimental::ConfigureProgramWithoutLaunch(device, program);
+        for (size_t i = 0; i < local_devices.size(); i++) {
+            apply_per_device_args(i);
+            tt_metal::slow_dispatch::ConfigureProgramWithoutLaunch(local_devices[i], program, kernel_config_buffer);
         }
         return;
     }
 
     // First device: full launch (compiles, finalizes, allocates CBs, dispatches)
-    tt_metal::slow_dispatch::LaunchProgramAsync(*local_devices[0], program, /*force_slow_dispatch=*/false);
+    apply_per_device_args(0);
+    tt_metal::slow_dispatch::LaunchProgramAsync(
+        *local_devices[0], program, /*force_slow_dispatch=*/false, kernel_config_buffer);
 
     // Remaining devices: dispatch pre-compiled binary only.
     // TODO: This loop can be parallelized with a inner thread loop
     // since 1 program can span multiple devices on different PCIe links.
     // For 1:1 program-to-device mapping, this loop is empty.
     for (size_t i = 1; i < local_devices.size(); i++) {
-        tt_metal::experimental::DispatchCompiledProgramToDevice(local_devices[i], program);
+        apply_per_device_args(i);
+        tt_metal::slow_dispatch::DispatchCompiledProgram(local_devices[i], program, kernel_config_buffer);
     }
 
     if (blocking) {
@@ -304,7 +352,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
                     // Device had active cores before this program was launched
                     // Merge the active cores from the previous program with the active cores from the current
                     // program
-                    const auto& hal = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
+                    const auto& hal = mesh_device_->impl().metal_env().get_hal();
                     auto program_cores = program.impl().logical_cores();
                     for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                          core_type_index++) {
@@ -319,6 +367,16 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    enqueue_mesh_workload_impl(mesh_workload, blocking, /*kernel_config_buffer=*/nullptr);
+}
+
+void SDMeshCommandQueue::enqueue_mesh_workload(
+    MeshWorkload& mesh_workload, const experimental::KernelConfigBufferImpl& kernel_config_buffer, bool blocking) {
+    enqueue_mesh_workload_impl(mesh_workload, blocking, &kernel_config_buffer);
+}
+
+void SDMeshCommandQueue::enqueue_mesh_workload_impl(
+    MeshWorkload& mesh_workload, bool blocking, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;  // Skip workload execution for mock devices
     }
@@ -331,9 +389,15 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     num_workloads_enqueued_++;
 
     auto& range_program_map = mesh_workload.get_programs();
+    auto per_device_runtime_args_of = [&](const MeshCoordinateRange& coord_range) -> const PerDeviceRuntimeArgs* {
+        return mesh_workload.impl().has_per_device_runtime_args()
+                   ? mesh_workload.impl().per_device_runtime_args(coord_range)
+                   : nullptr;
+    };
 
 #ifdef TT_METAL_USE_EMULE
     if (this->get_target_device_type() == tt::TargetDevice::Emule) {
+        TT_FATAL(kernel_config_buffer == nullptr, "A kernel config buffer is not supported on emulated devices");
         // Co-schedule every program in this workload in one fiber run so cross-chip sender/receiver
         // programs co-run in one scheduler generation and the teleport's fiber wake reaches the
         // parked receiver. Register all (deferred) sequentially (not the thread pool, to avoid a
@@ -348,6 +412,9 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             // registration's core state intact (see emule_pending_queues).
             tt::tt_metal::emule::flush_deferred_mesh_dispatch();
         }
+        TT_FATAL(
+            !mesh_workload.impl().has_per_device_runtime_args(),
+            "Per-device runtime args are not supported on emulated devices");
         tt::tt_metal::emule::MeshDispatchLock dispatch_lock;
         tt::tt_metal::emule::begin_mesh_dispatch();
         for (auto& [coord_range, program] : range_program_map) {
@@ -388,15 +455,19 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 continue;  // No local work for this host
             }
             auto* program_ptr = &program;
+            const auto* per_device = per_device_runtime_args_of(coord_range);
             launch_thread_pool_->enqueue(
-                [this, coord_range, program_ptr, blocking]() { dispatch_program(coord_range, *program_ptr, blocking); },
+                [this, coord_range, program_ptr, blocking, per_device, kernel_config_buffer]() {
+                    dispatch_program(coord_range, *program_ptr, blocking, per_device, kernel_config_buffer);
+                },
                 device->id());
         }
         launch_thread_pool_->wait();
     } else {
         // Single device: sequential launch
         for (auto& [coord_range, program] : range_program_map) {
-            dispatch_program(coord_range, program, blocking);
+            dispatch_program(
+                coord_range, program, blocking, per_device_runtime_args_of(coord_range), kernel_config_buffer);
         }
     }
 }
@@ -462,9 +533,8 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
         IDevice* device = mesh_device_->impl().get_device(target.device_coord);
         // target.address is the full device destination (caller pre-applies the
         // DRAM L1 NOC offset). write_core is synchronous, so `blocking` is moot.
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .write_core(&value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
+        mesh_device_->impl().metal_env().get_cluster().write_core(
+            &value, sizeof(value), tt_cxy_pair(device->id(), target.virtual_core_coord), target.address);
     }
 }
 
@@ -475,11 +545,10 @@ void SDMeshCommandQueue::finish(ttsl::Span<const SubDeviceId>) {
     auto lock = lock_api_function_();
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
+    auto& cluster = mesh_device_->impl().metal_env().get_cluster();
     for (auto device_id : mesh_device_->get_device_ids()) {
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id())
-            .get_cluster()
-            .dram_barrier(device_id);
-        tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).get_cluster().l1_barrier(device_id);
+        cluster.dram_barrier(device_id);
+        cluster.l1_barrier(device_id);
     }
 
     // Barrier across all active hosts of the mesh

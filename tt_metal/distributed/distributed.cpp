@@ -4,17 +4,17 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <utility>
 
-#include "device.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/mesh/legacy/device.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_event_impl.hpp"
 #include "mesh_command_queue_base.hpp"
 #include "mesh_workload_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include "tt-metalium/workload/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
@@ -91,6 +91,9 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
 
         if (is_service_workload.value()) {
+            TT_FATAL(
+                !mesh_workload.impl().has_per_device_runtime_args(),
+                "Per-device runtime args are not supported for service workloads");
             // Service workload: dispatch each program via SD, bypassing FD. Re-confirm each core is still
             // a claimed service core (this loop runs every enqueue, unlike the cached scan): guards the
             // cached classification against a core released between enqueues, failing loudly instead of
@@ -124,16 +127,21 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     // Emulated devices have no dispatch firmware: tt-emule's queue compiles and launches each program itself
     // through the slow-dispatch path, so the fast-dispatch compile, binary upload and command generation are skipped.
     const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
+    // Fail on an unbound CB before either dispatch mode writes anything to the device.
+    mesh_workload.impl().check_circular_buffers_bound();
     if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
-        // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
-        // short-circuits for mock devices (no hardware to dispatch to). Compile here so
-        // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
+        // Slow dispatch normally JIT-compiles and checks the KERNEL_CONFIG window inside LaunchProgram, but the SD
+        // mesh CQ short-circuits for mock devices (no hardware to dispatch to). Do both here so kernel artifacts are
+        // still produced and an oversized program still fails; the SD CQ then no-ops the skipped dispatch.
         // Mock only, not is_mock_or_emulated(): Emule builds kernels via its own host-JIT path.
         mesh_workload.impl().compile(mesh_cq.device());
+        if (!mesh_workload.impl().fits_kernel_config_window()) {
+            mesh_workload.impl().throw_kernel_config_window_overflow(mesh_cq.device());
+        }
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }

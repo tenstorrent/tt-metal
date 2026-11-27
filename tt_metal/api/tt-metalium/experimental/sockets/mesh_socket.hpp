@@ -11,18 +11,18 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <tt-metalium/distributed_context.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include <vector>
 
 namespace tt::tt_fabric {
@@ -190,6 +190,8 @@ public:
     // Not the same as get_config_buffer()->address(): a per-core buffer holds its address on each
     // device's Buffer and leaves the mesh-level scalar at 0, so that would report 0.
     DeviceAddr get_config_buffer_address() const;
+    // Offset of the first downstream's bytes_acked word in a sender core's config buffer.
+    static uint32_t sender_bytes_acked_offset(uint32_t l1_alignment);
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;

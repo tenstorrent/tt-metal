@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include <algorithm>
 #include <array>
@@ -290,14 +290,29 @@ inline Tensor transpose_(
                 const uint64_t Wt = tt::div_up(a.logical_shape()[3], tt::constants::TILE_WIDTH);
                 const uint64_t Ht = tt::div_up(a.logical_shape()[2], tt::constants::TILE_HEIGHT);
                 const uint64_t tile_size = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype()));
-                const uint64_t cb_size_for_rm = (2 * Wt + 2 * Ht + Ht * Wt) * tile_size;
+                uint64_t required = (2 * Wt + 2 * Ht + Ht * Wt) * tile_size;
                 auto* device = a.device();
-                auto lowest_address = device->lowest_occupied_compute_l1_address();
-                uint32_t max_l1_space =
+                const auto& allocator = device->allocator();
+                // The output buffer is allocated after lowest_occupied_compute_l1_address() is
+                // sampled, so an L1 output's per-bank footprint has to be reserved up front.
+                if (output_mem_constructed.buffer_type() == BufferType::L1) {
+                    const auto output_spec = ttnn::prim::qsr::TransposeDeviceOperation::compute_output_specs(
+                        ttnn::prim::qsr::TransposeParams{
+                            .dim = transpose_dim, .output_mem_config = output_mem_constructed, .pad_value = pad_value},
+                        ttnn::prim::qsr::TransposeInputs{.input = a});
+                    // HYBRID mode aligns every L1 page to the DRAM alignment, so round each page,
+                    // not just the total, using the larger of the two alignments.
+                    const uint64_t page_alignment = std::max<uint64_t>(
+                        allocator->get_alignment(BufferType::L1), allocator->get_alignment(BufferType::DRAM));
+                    required += output_spec.compute_consumed_memory_bytes_per_bank(
+                        page_alignment, allocator->get_num_banks(BufferType::L1));
+                }
+                const auto lowest_address = device->lowest_occupied_compute_l1_address();
+                const uint64_t l1_top =
                     lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-                max_l1_space =
-                    max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-                if (cb_size_for_rm > max_l1_space) {
+                const uint64_t l1_base = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+                const uint64_t max_l1_space = l1_top > l1_base ? l1_top - l1_base : 0;
+                if (required > max_l1_space) {
                     return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
                 }
             }
@@ -412,6 +427,26 @@ ttnn::Tensor transpose_impl(
     const auto& input_shape = input_tensor.logical_shape();
     uint32_t normalized_dim1 = input_shape.get_normalized_index(dim1);
     uint32_t normalized_dim2 = input_shape.get_normalized_index(dim2);
+
+    // MX tiles (shared scale per 32-element block, face order) can only be moved whole. Only the N<->C swap
+    // (prim CN factory: reorders whole tiles, no compute) is MX-correct. H<->W swaps elements inside a tile
+    // through the unpacker transpose + datacopy, and every H/C/N<->H/W permutation moves sub-tile rows; the
+    // unpack-transpose of an MX tile into SrcA is not validated, so those are rejected rather than risked.
+    if (tt::tt_metal::is_mx(input_tensor.dtype()) && normalized_dim1 != normalized_dim2) {
+        const uint32_t rank_diff = input_shape.rank() < 4 ? 4 - input_shape.rank() : 0;
+        const uint32_t d1 = normalized_dim1 + rank_diff;
+        const uint32_t d2 = normalized_dim2 + rank_diff;
+        const bool is_cn = input_shape.rank() <= 4 && ((d1 == 0 && d2 == 1) || (d1 == 1 && d2 == 0));
+        TT_FATAL(
+            is_cn,
+            "Quasar transpose on MX tensors ({}) supports only the N<->C swap (dims 0 and 1 of a rank-4 tensor), "
+            "which moves whole tiles. Transposes that touch H or W reorder elements inside tiles, which MX tiles "
+            "(32-element blocks with a shared scale) cannot take. Got dims {} and {} of a rank-{} tensor.",
+            input_tensor.dtype(),
+            dim1,
+            dim2,
+            input_shape.rank());
+    }
 
     Tensor input_unsqueezed = input_tensor;
     uint32_t initial_rank = input_shape.rank();

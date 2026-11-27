@@ -6,17 +6,16 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
 
 namespace ttnn::prim::qsr {
 
@@ -57,6 +56,12 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
 
     const auto* src0_buffer = &input_tensor.mesh_buffer();
     MeshDevice* device = input_tensor.device();
+
+    // An MX tile (1056 B for the 8-bit formats) is not a multiple of the 64 B DRAM alignment, so its aligned
+    // page is larger than the DFB entry. Move exactly one tile per NOC transaction so a read cannot overrun
+    // the next ring entry. Every other format keeps the aligned page size.
+    const bool mx_tiles = tt::tt_metal::is_mx(input_tensor.dtype());
+    auto move_size = [&](uint32_t aligned_page_size) { return mx_tiles ? stick_size : aligned_page_size; };
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
@@ -128,7 +133,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .compile_time_args =
             {
-                {"page_size", src0_buffer->aligned_page_size()},
+                {"page_size", move_size(src0_buffer->aligned_page_size())},
                 {"read_size", stick_size},
             },
         .runtime_arg_schema =
@@ -153,7 +158,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
             },
         .compile_time_args =
             {
-                {"page_size", dst_buffer->aligned_page_size()},
+                {"page_size", move_size(dst_buffer->aligned_page_size())},
                 {"write_size", stick_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},

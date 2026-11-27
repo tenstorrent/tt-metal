@@ -10,7 +10,7 @@
 // The KDA cross-device counters: global semaphores that keep their counts across calls, which peers bump over the
 // fabric. A peer may count the next call before this core consumes this call's count, so a count is consumed by
 // subtracting it, never by clearing. After a run that stopped mid-call, the host zeroes them
-// (reset_persistent_semaphores in relay_affine_prefix.py).
+// (reset_persistent_semaphores in relay_chunk_scan.py).
 namespace kda_counter {
 
 // Wait until the counter at `address` on this core reaches `count`.

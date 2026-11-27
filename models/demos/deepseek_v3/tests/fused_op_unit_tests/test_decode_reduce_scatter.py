@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, is_ring_fabric
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 def run_decode_reduce_scatter_deepseek_impl(

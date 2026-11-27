@@ -19,7 +19,7 @@
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -146,8 +146,26 @@ void py_module(nb::module_& m) {
         },
         nb::arg("training_config"),
         nb::arg("parameters"),
-        "Apply training_config.precision to the parameters (precision.master_dtype) before creating the optimizer. "
-        "Returns the dtype applied, or None.");
+        "Apply training_config.precision before creating the optimizer: precision.master_dtype to the parameters, "
+        "and precision.reduce_dtype (None when unset) as the dtype the gradient syncs sum in by default. Returns the "
+        "master dtype applied, or None.");
+
+    m.def(
+        "validate_precision_config",
+        [](nb::dict training_config) {
+            ttml::core::validate_precision_config(ttml::nanobind::util::obj_to_yaml(training_config));
+        },
+        nb::arg("training_config"),
+        "Check training_config.precision without applying it, with the error apply_precision_config would raise: a map "
+        "of known keys (master_dtype, reduce_dtype), each \"bfloat16\" or \"float32\".");
+
+    m.def(
+        "cast_fp32_gradients_to_bf16",
+        &ttml::core::cast_fp32_gradients_to_bf16,
+        nb::arg("parameters"),
+        "Replace every fp32 gradient of parameters with its bf16 cast; bf16 and missing gradients stay as they are. "
+        "With reduce_dtype float32 a gradient can be fp32 when the step starts: an optimizer whose math takes bf16 "
+        "gradients, such as one registered from Python, calls this first.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
@@ -213,15 +231,60 @@ void py_module(nb::module_& m) {
         // Synchronize gradients across devices for DDP
         py_distributed.def(
             "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&)>(
-                &ttml::core::distributed::synchronize_gradients),
-            nb::arg("parameters"));
-        py_distributed.def(
-            "synchronize_gradients",
-            static_cast<void (*)(const ttml::serialization::NamedParameters&, const std::vector<uint32_t>&)>(
+            static_cast<void (*)(const ttml::serialization::NamedParameters&, std::optional<ttnn::DataType>)>(
                 &ttml::core::distributed::synchronize_gradients),
             nb::arg("parameters"),
-            nb::arg("cluster_axes"));
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none());
+        py_distributed.def(
+            "synchronize_gradients",
+            static_cast<void (*)(
+                const ttml::serialization::NamedParameters&,
+                const std::vector<uint32_t>&,
+                std::optional<ttnn::DataType>)>(&ttml::core::distributed::synchronize_gradients),
+            nb::arg("parameters"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none());
+        py_distributed.def(
+            "check_reduce_dtype",
+            &ttml::core::distributed::check_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "Raise ValueError unless reduce_dtype is None, BFLOAT16 or FLOAT32, the dtypes a gradient sum runs in.");
+        py_distributed.def(
+            "resolve_reduce_dtype",
+            &ttml::core::distributed::resolve_reduce_dtype,
+            nb::arg("reduce_dtype").none(),
+            "The dtype a gradient sum runs in: reduce_dtype once check_reduce_dtype accepts it, else the stored "
+            "training_config.precision.reduce_dtype (AutoContext.get_gradient_reduce_dtype), which may be None.");
+        py_distributed.def(
+            "reduce_scatter_route_dim",
+            [](const ttnn::Tensor& tensor,
+               const std::vector<uint32_t>& cluster_axes,
+               std::optional<ttnn::DataType> reduce_dtype) {
+                return ttml::core::distributed::reduce_scatter_route_dim(
+                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+            },
+            nb::arg("tensor"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none(),
+            "The tensor dim synchronize_tensor's fp32 reduce-scatter route scatters along for these arguments, or None "
+            "when the sum takes the all-reduce.");
+        py_distributed.def(
+            "synchronize_tensor",
+            [](const ttnn::Tensor& tensor,
+               const std::vector<uint32_t>& cluster_axes,
+               std::optional<ttnn::DataType> reduce_dtype) {
+                return ttml::core::distributed::synchronize_tensor(
+                    tensor, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()), reduce_dtype);
+            },
+            nb::arg("tensor"),
+            nb::arg("cluster_axes"),
+            nb::kw_only(),
+            nb::arg("reduce_dtype") = nb::none(),
+            "Average a tensor over the devices of cluster_axes. reduce_dtype=FLOAT32 sums in fp32 and casts the mean "
+            "back to the tensor's dtype; None or BFLOAT16 sums in the tensor's own dtype.");
 
         // Raw (non-autograd) CCL collectives on ttnn tensors.
         // Unlike ttml.ops.distributed.* these do NOT register graph nodes, so they can be
@@ -283,6 +346,7 @@ void py_module(nb::module_& m) {
                 // DistributedContext::send takes Span<std::byte> (non-const),
                 // but underlying MPI_Send treats it as readonly.
                 auto* ptr = reinterpret_cast<std::byte*>(const_cast<char*>(data.c_str()));
+                nb::gil_scoped_release release;
                 self.send(ttsl::Span<std::byte>(ptr, data.size()), DistRank{dest}, DistTag{tag});
             },
             nb::arg("data"),
@@ -291,13 +355,24 @@ void py_module(nb::module_& m) {
         py_dist_ctx.def(
             "recv",
             [](DistributedContext& self, std::size_t nbytes, int source, int tag) -> nb::bytes {
-                std::vector<std::byte> buffer(nbytes);
-                self.recv(ttsl::Span<std::byte>(buffer.data(), buffer.size()), DistRank{source}, DistTag{tag});
-                return nb::bytes(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+                auto result = nb::steal<nb::bytes>(PyBytes_FromStringAndSize(nullptr, static_cast<Py_ssize_t>(nbytes)));
+                if (!result.is_valid()) {
+                    throw nb::python_error();
+                }
+                auto* ptr = reinterpret_cast<std::byte*>(PyBytes_AsString(result.ptr()));
+                {
+                    nb::gil_scoped_release release;
+                    self.recv(ttsl::Span<std::byte>(ptr, nbytes), DistRank{source}, DistTag{tag});
+                }
+                return result;
             },
             nb::arg("nbytes"),
             nb::arg("source"),
             nb::arg("tag") = 0);
+        py_dist_ctx.def("duplicate", [](DistributedContext& self) -> std::shared_ptr<DistributedContext> {
+            nb::gil_scoped_release release;
+            return self.duplicate();
+        });
 
         // Bind SocketManager methods
         auto py_socket_manager =

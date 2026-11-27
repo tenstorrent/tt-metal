@@ -12,7 +12,7 @@
 #include <initializer_list>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

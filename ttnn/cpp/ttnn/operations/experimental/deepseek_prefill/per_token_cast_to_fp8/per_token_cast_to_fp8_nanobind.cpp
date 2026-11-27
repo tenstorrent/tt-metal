@@ -32,9 +32,9 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
 
             Args:
                 * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR or TILE tensor of shape [..., M, H].
-                  Requires H % 128 == 0, DRAM interleaved memory, and Blackhole hardware.
+                  Requires H % 128 == 0, DRAM or L1 interleaved memory, and Blackhole hardware.
                 * :attr:`memory_config`: optional DRAM interleaved output memory config
-                  (default: same as input).
+                  (default: the input's when it is in DRAM, else DRAM interleaved).
                 * :attr:`round_scale_to_power_of_two`: round each scale upward to a power of two.
 
             Returns:

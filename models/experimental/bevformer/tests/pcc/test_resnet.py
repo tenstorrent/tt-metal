@@ -144,3 +144,37 @@ def test_reslayer2(device, reset_seeds, reference_and_parameters):
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16, layout))
     _check(torch_output, ttnn_model, ttnn_output)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
+@pytest.mark.parametrize("poison", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"])
+def test_stem_conv_ignores_hwc_padding(device, reset_seeds, reference_and_parameters, poison):
+    """The stem conv reads convert_to_hwc's padding channels, which hold whatever L1 held (#64507),
+    even Inf. Their zero weights must cancel them exactly: the output equals that of zero padding
+    bit for bit. Not a PCC check, which zeroes NaN before correlating."""
+    _, parameters = reference_and_parameters
+    conv = parameters.conv_args.conv1
+    stem_kwargs = parameters.tt_kwargs
+    stem = TTResNet.stem_conv(
+        conv, parameters["res_model"].conv1, device, stem_kwargs["weights_dtype"], stem_kwargs["stem_act_block_h"]
+    )
+    channels = TTResNet.stem_hwc_channels(conv.in_channels)
+    pixels = torch.randn(1, 1, IMAGE_HEIGHT * IMAGE_WIDTH, conv.in_channels)
+
+    def run(padding):
+        hwc = torch.cat([pixels, torch.full((*pixels.shape[:-1], channels - conv.in_channels), padding)], dim=-1)
+        output, _, _ = stem(
+            ttnn.from_torch(
+                hwc,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=stem.input_memory_config,
+            )
+        )
+        return ttnn.to_torch(output)
+
+    expected = run(0.0)
+    actual = run(poison)
+    assert torch.isfinite(expected).all()
+    assert torch.equal(actual, expected), f"{int((actual != expected).sum())} of {actual.numel()} outputs differ"

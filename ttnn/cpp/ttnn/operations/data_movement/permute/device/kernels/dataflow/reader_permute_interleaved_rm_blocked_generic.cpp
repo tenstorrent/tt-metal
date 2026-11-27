@@ -11,6 +11,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/scratchpad.h"
 
 void kernel_main() {
     constexpr uint32_t N = get_arg(args::N);
@@ -23,9 +24,26 @@ void kernel_main() {
     constexpr uint32_t x_block_size = get_arg(args::x_block_size);
     constexpr uint32_t w_block_size = get_arg(args::w_block_size);
     constexpr uint32_t element_size = get_arg(args::element_size);
+    constexpr uint32_t read_alignment = get_arg(args::read_alignment);
+    // The bounce scratchpad is bound only when this is set, hence get_token_if_present below.
+    constexpr bool bounce_misaligned_rows = static_cast<bool>(get_arg(args::bounce_misaligned_rows));
+    constexpr uint32_t read_alignment_minus_one = read_alignment - 1;
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
     constexpr uint32_t w_block_size_bytes = w_block_size * element_size;
+
+    // One aligned slot per row of an X block, each with room for the row at any offset below read_alignment.
+    // Must match the scratchpad size in permute_rm_program_factory.cpp.
+    constexpr uint32_t bounce_slot_bytes =
+        (input_cb_page_size + read_alignment_minus_one + read_alignment_minus_one) & ~read_alignment_minus_one;
+    [[maybe_unused]] uint32_t bounce_window = 0;
+    if constexpr (bounce_misaligned_rows) {
+        static_assert(x_block_size <= 32, "bounced_rows tracks one X block in a 32-bit mask");
+        const Scratchpad<uint32_t> bounce(*scratch::get_token_if_present<"bounce">());
+        const uint32_t bounce_base =
+            static_cast<uint32_t>(local_mem::detail::AddressAccess::address(bounce.local_mem()));
+        bounce_window = (bounce_base + read_alignment_minus_one) & ~read_alignment_minus_one;
+    }
 
     uint32_t start_block = get_arg(args::start_block);
     uint32_t end_block = get_arg(args::end_block);
@@ -55,6 +73,7 @@ void kernel_main() {
     uint32_t X_stride = src_strides[x_dim];
 
     const auto s0 = TensorAccessor(tensor::input);
+    constexpr bool fast_path = get_arg(args::fast_path) != 0 && decltype(s0)::DSpec::is_interleaved;
     Noc noc;
 
     uint32_t idxs[N];
@@ -114,17 +133,64 @@ void kernel_main() {
 
         // We read in 'x_block_len' chunks along the X dimension
         uint32_t page_offset = 0;
+        // Bit k set: row k was read into its bounce slot at offset bounce_offsets[k] and still needs moving.
+        [[maybe_unused]] uint32_t bounced_rows = 0;
+        [[maybe_unused]] uint8_t bounce_offsets[x_block_size];
         // Read along the X dimension
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
-            tt::data_movement::common::noc_async_read_sharded(
-                noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
+            if constexpr (bounce_misaligned_rows) {
+                const uint32_t l1_dst = src_buffer_l1_addr + page_offset;
+                const uint32_t src_offset =
+                    (uint32_t)s0.get_noc_addr(static_cast<uint32_t>(addr_offset), w_offset) & read_alignment_minus_one;
+                if (src_offset != (l1_dst & read_alignment_minus_one)) {
+                    const uint32_t k = x - x_start;
+                    noc.async_read(
+                        s0,
+                        CoreLocalMem<uint32_t>(bounce_window + k * bounce_slot_bytes + src_offset),
+                        w_read_size_bytes,
+                        {.page_id = static_cast<uint32_t>(addr_offset), .offset_bytes = w_offset},
+                        {});
+                    bounced_rows |= 1u << k;
+                    bounce_offsets[k] = static_cast<uint8_t>(src_offset);
+                    page_offset += input_cb_page_size;
+                    continue;
+                }
+            }
+            if constexpr (fast_path) {
+                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    s0,
+                    CoreLocalMem<uint32_t>(src_buffer_l1_addr + page_offset),
+                    w_read_size_bytes,
+                    {.page_id = static_cast<uint32_t>(addr_offset), .offset_bytes = w_offset},
+                    {});
+            } else {
+                tt::data_movement::common::noc_async_read_sharded(
+                    noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
+            }
 
             // Advance output pointer by one page size for next row
             page_offset += input_cb_page_size;
         }
         // Wait for all async reads to complete before proceeding
         noc.async_read_barrier();
+        if constexpr (bounce_misaligned_rows) {
+            if (bounced_rows != 0) {
+                for (uint32_t k = 0; k < x_end - x_start; ++k) {
+                    if ((bounced_rows >> k) & 1u) {
+                        const uint32_t l1_dst = src_buffer_l1_addr + k * input_cb_page_size;
+                        const uint32_t bounce_src = bounce_window + k * bounce_slot_bytes + bounce_offsets[k];
+#ifdef ARCH_QUASAR
+                        tt::data_movement::common::copy_via_memmove<false>(l1_dst, bounce_src, w_read_size_bytes);
+#else
+                        tt::data_movement::common::tt_memmove<false, true, false, w_block_size_bytes>(
+                            noc, l1_dst, bounce_src, w_read_size_bytes);
+#endif
+                    }
+                }
+                noc.async_write_barrier();
+            }
+        }
         // Push the filled block into the circular buffer
         dfb.push_back(x_block_size);
     }

@@ -7,9 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-umd/types/core_coordinates.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -20,26 +20,26 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include "impl/dispatch/command_queue_common.hpp"
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/device.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
-#include <tt-metalium/host_buffer.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
-#include "math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
@@ -638,8 +638,8 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
     }
 
     const auto& cluster = MetalContext::instance().get_cluster();
-    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_simulator_enabled()) {
-        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware.";
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || rt_options.get_target_device() == tt::TargetDevice::Emule) {
+        GTEST_SKIP() << "Grid expansion is only enabled on Blackhole real hardware and the simulator.";
     }
 
     for (const auto& mesh_device : devices_) {

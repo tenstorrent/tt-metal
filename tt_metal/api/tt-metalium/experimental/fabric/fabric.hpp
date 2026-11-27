@@ -6,10 +6,10 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 // UMD: re-exports CoreType (used in append_fabric_connection/FabricHandle default params).
 #include <tt-umd/types/core_coordinates.hpp>
@@ -195,6 +195,11 @@ void SetFabricConfig(
     FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT,
     FabricRouterConfig router_config = FabricRouterConfig{});
 
+// Returns the fabric configuration in effect in `mesh_device`'s context.
+FabricConfig GetFabricConfig(const tt::tt_metal::distributed::MeshDevice& mesh_device);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 FabricConfig GetFabricConfig();
 
 namespace experimental {
@@ -297,6 +302,25 @@ public:
 
     size_t get_memory_map_end_address() const;
 
+    // The get_memory_map_end_address() a config built with these arguments against `mesh_device` would have, without
+    // building one.
+    static size_t compute_memory_map_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t base_l1_address);
+
+    // The address a mux's memory map must end by on a `core_type` core of `mesh_device`: the physical end of L1, or
+    // usable_l1_end_address when that is lower (0 means no lower bound). The constructor fails when the map ends past
+    // it, so compare compute_memory_map_end_address() against it to size a mux that will build.
+    static size_t compute_l1_end_address(
+        const tt::tt_metal::distributed::MeshDevice& mesh_device,
+        CoreType core_type = CoreType::WORKER,
+        size_t usable_l1_end_address = 0);
+
     // Returns vector of pairs of base addresses and size to clear
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
@@ -349,6 +373,37 @@ private:
         size_t get_total_size() const;
     };
 
+    // The mux's L1 regions, in address order from the base address.
+    struct MemoryMap {
+        MemoryRegion status;
+        MemoryRegion local_fabric_router_status;
+        MemoryRegion termination_signal;
+        MemoryRegion connection_info;
+        MemoryRegion connection_handshake;
+        MemoryRegion flow_control;
+        MemoryRegion buffer_index;
+        MemoryRegion full_size_channels;
+        MemoryRegion header_only_channels;
+
+        // The end of the last region (header-only channels)
+        size_t get_end_address() const;
+    };
+
+    // Lays out the mux's L1 regions from `base_l1_address`. The constructor and compute_memory_map_end_address() both
+    // use it, so the end address a caller budgets with is the one the mux gets.
+    static MemoryMap lay_out_memory_map(
+        size_t base_l1_address,
+        size_t noc_aligned_address_size_bytes,
+        uint8_t num_full_size_channels,
+        uint8_t num_header_only_channels,
+        uint8_t num_buffers_full_size_channel,
+        uint8_t num_buffers_header_only_channel,
+        size_t buffer_size_bytes_full_size_channel,
+        size_t buffer_size_bytes_header_only_channel);
+
+    // A channel built with 0 buffers gets default_num_buffers, so its kernel compiles; it carries no traffic.
+    static uint8_t num_buffers_or_default(uint8_t num_buffers);
+
     CoreType core_type_ = CoreType::WORKER;
     uint8_t core_type_index_ = 0;
 
@@ -361,9 +416,6 @@ private:
     size_t buffer_size_bytes_full_size_channel_ = 0;
     size_t buffer_size_bytes_header_only_channel_ = 0;
 
-    size_t full_size_channel_size_bytes_ = 0;
-    size_t header_only_channel_size_bytes_ = 0;
-
     size_t num_full_size_channel_iters_ = default_num_full_size_channel_iters;
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
     // The fabric endpoints the mux can connect to, read from the fabric context when the config is built. A channel
@@ -373,18 +425,7 @@ private:
     size_t fabric_tensix_channel_num_buffers_ = 0;
     size_t fabric_endpoint_status_address_ = 0;
 
-    // memory regions
-    MemoryRegion status_region_{};
-    MemoryRegion local_fabric_router_status_region_{};
-    MemoryRegion termination_signal_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion flow_control_region_{};
-    MemoryRegion buffer_index_region_{};
-    MemoryRegion full_size_channels_region_{};
-    MemoryRegion header_only_channels_region_{};
-
-    size_t memory_map_end_address_;
+    MemoryMap memory_map_{};
 
     // Set by place_in_program_local_l1.
     bool in_program_local_l1_ = false;
@@ -555,7 +596,15 @@ void add_fabric_mux_v2_to_program(
     uint32_t link_idx,
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
-// Returns the eth direction in which the data should be forwarded from the src to reach the dest
+// Returns the eth direction in which the data should be forwarded from the src to reach the dest, in
+// `mesh_device`'s context. The device only selects the context: src and dst don't have to belong to it.
+std::optional<eth_chan_directions> get_eth_forwarding_direction(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    FabricNodeId src_fabric_node_id,
+    FabricNodeId dst_fabric_node_id);
+
+// Same, in the default context.
+[[deprecated("Use the overload that takes a MeshDevice instead. This API will be removed after 2026-12-31.")]]
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 

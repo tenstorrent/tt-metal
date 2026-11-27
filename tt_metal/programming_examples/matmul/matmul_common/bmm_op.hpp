@@ -7,12 +7,12 @@
 
 #include <algorithm>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 
 #include <tt-umd/types/xy_pair.hpp>
 
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 using CoreCoord = tt_xy_pair;
 
