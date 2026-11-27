@@ -10,7 +10,8 @@
 #   anywhere else (IRD container, a dev box, a device node, inside a job): runs ./build_metal.sh /
 #       scripts/run_safe_pytest.sh / the command directly.
 # Overrides: XRUN_MODE=login|local   XRUN_DRY_RUN=1 (print, do not run)   NODE_JOB=<jobid>
-#            XRUN_BUILDER=local (build on the login node itself, XRUN_LOCAL_JOBS jobs, default 16) | sbatch; see env.sh.
+#            XRUN_BUILDER=node (build on the reserved node, XRUN_NODE_JOBS jobs, default 24) | local (build on the login
+#            node itself, XRUN_LOCAL_JOBS jobs, default 16) | sbatch; see env.sh.
 set -uo pipefail
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 detect() {
@@ -26,6 +27,15 @@ case "$CMD" in
   build)
     WAIT=1; [ "${1:-}" = "--no-wait" ] && { WAIT=0; shift; }
     if [ "$MODE" = local ]; then cd "$REPO" && export XRUN_BYPASS=1 && do_run ./build_metal.sh "$@"; exit $?; fi
+    if [ "${XRUN_BUILDER:-}" = node ]; then
+      # When no build node is usable: build on the reserved device node as a Slurm step (on-node). Its clang lacks a
+      # matching ld.lld, so the gcc toolchain ($XRUN_TOOLCHAIN); jobs are capped (XRUN_NODE_JOBS, default 24) because
+      # the node's per-user process limit (ulimit -u 512) also covers the tests running there.
+      echo "[xrun] XRUN_BUILDER=node: building on the reserved node with ${XRUN_NODE_JOBS:-24} jobs ($XRUN_TOOLCHAIN)"
+      INNER="export XRUN_BYPASS=1 CMAKE_BUILD_PARALLEL_LEVEL=${XRUN_NODE_JOBS:-24} TMPDIR=$XRUN_DATA/tmp; mkdir -p \$TMPDIR; nice -n 10 ./build_metal.sh --toolchain-path $XRUN_TOOLCHAIN $(printf "%q " "$@")"
+      if [ -n "${XRUN_DRY_RUN:-}" ]; then echo "[xrun:$MODE] $HERE/on-node \"$INNER\""; exit 0; fi
+      exec "$HERE/on-node" "$INNER"
+    fi
     if [ "${XRUN_BUILDER:-}" = local ]; then
       # Fallback when the build partition does not work: build here, throttled (a shared login node). The toolchain
       # links with ld.lld, which some hosts only ship as ld.lld-<version>: a PATH shim supplies the plain name.

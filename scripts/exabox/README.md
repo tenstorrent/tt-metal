@@ -53,7 +53,10 @@ Overrides: `XRUN_MODE=login|local`, `XRUN_DRY_RUN=1`, `XRUN_BYPASS=1` (skip the 
   (default `/data/$USER/jobs`). A build node with a full `/tmp` fails it in seconds: add it to `XRUN_BUILD_EXCLUDE`.
 - Without it (or with `XRUN_BUILDER=sbatch`), `build_tt_metal.sbatch` fetches, fast-forwards and updates submodules in
   `$XRUN_REPO` and builds in place; log `$XRUN_DATA/logs/ttmetal-build-<jobid>.out`. Commit or stash first.
-- Fallback when the build partition does not work: `XRUN_BUILDER=local` builds on the login node itself, niced and
+- When no build node is usable (all busy, or a full `/tmp`): `XRUN_BUILDER=node` builds on the reserved device node as a
+  Slurm step, with the gcc toolchain (`XRUN_TOOLCHAIN`; the node's clang has no matching `ld.lld`) and `XRUN_NODE_JOBS`
+  (default 24) jobs, kept low because the node's per-user process limit also covers the tests running there.
+- Last resort: `XRUN_BUILDER=local` builds on the login node itself, niced and
   limited to `XRUN_LOCAL_JOBS` (default 16) parallel jobs, with an `ld.lld` shim when the host only has `ld.lld-<version>`.
 - A build can take up to 1 hour.
 - Kernel `.cpp` changes under `kernels/` need NO build (compiled at runtime); do not submit builds for them.
