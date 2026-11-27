@@ -20,8 +20,8 @@
 // Buffer layout contract: dfb::rm holds row-sized entries (one entry = one chunk-wide RM row). Per
 // (h_chunk, w_chunk) iteration the reader pushes ht_in_chunk * TILE_HEIGHT entries — matching
 // compute_kernel_lib::tilize's asymmetric mode (block = 1 tile-row tall, consuming TILE_HEIGHT
-// input entries). Padded rows / W columns past valid data carry the reduction identity (0 for SUM)
-// from the reader's pre-fill, so they contribute nothing to the running sum.
+// input entries). Padded rows / W columns past valid data carry the reduction identity (0 for SUM,
+// -inf for MAX, +inf for MIN) from the reader's pre-fill, so they never change the result.
 //
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"

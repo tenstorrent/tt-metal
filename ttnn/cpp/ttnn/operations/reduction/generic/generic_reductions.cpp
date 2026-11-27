@@ -47,20 +47,23 @@ Tensor reduce(
     bool fast_and_approximate_mode = false,
     const std::optional<Layout>& output_layout = std::nullopt);
 
+
+static void validate_output_layout(DataType dtype, const std::optional<Layout>& output_layout) {
+    TT_FATAL(
+        output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(dtype),
+        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
+        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
+        "TILE and typecast explicitly if a row-major result is needed.",
+        dtype);
+}
+
 // Honor an output-layout request the device path could not satisfy natively (e.g. a tilized reduce
 // asked for ROW_MAJOR); a no-op when the path already emitted the requested layout.
 static Tensor convert_output_layout(const Tensor& tensor, const std::optional<Layout>& output_layout) {
     if (!output_layout.has_value() || tensor.layout() == *output_layout) {
         return tensor;
     }
-    // Untilizing a block-float result would widen it to BFLOAT16; reject rather than silently
-    // returning a dtype the caller did not ask for.
-    TT_FATAL(
-        *output_layout != Layout::ROW_MAJOR || !tt::tt_metal::is_block_float(tensor.dtype()),
-        "output_layout=ROW_MAJOR is not supported for a {} result: block-float formats only exist in "
-        "TILE layout, so honoring the request would silently widen the dtype to BFLOAT16. Reduce to "
-        "TILE and typecast explicitly if a row-major result is needed.",
-        tensor.dtype());
+    validate_output_layout(tensor.dtype(), output_layout);
     return ttnn::to_layout(tensor, *output_layout);
 }
 
@@ -377,7 +380,8 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else if constexpr (reduce_type == reduction_common::ReduceType::Min) {
             output_tensor = ttnn::operations::reduction::generic::detail::reduce(
                 input_tensor,
@@ -389,7 +393,8 @@ static Tensor reduce_impl(
                 compute_kernel_config,
                 sub_core_grids,
                 /*negate=*/false,
-                /*fast_and_approximate_mode=*/fast_and_approximate_mode);
+                /*fast_and_approximate_mode=*/fast_and_approximate_mode,
+                output_layout);
         } else {
             TT_THROW("Unsupported reduction operation");
         }
@@ -629,6 +634,8 @@ Tensor reduce(
         TT_FATAL(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
+    // Checked before path selection: the H-split and BFLOAT16-widening paths would otherwise bypass it.
+    validate_output_layout(input_tensor_arg.dtype(), output_layout);
 
     // A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min pad written into the
     // tile padding below ends up in blocks that also hold real lanes (the last block of each input row when the width
@@ -653,9 +660,6 @@ Tensor reduce(
                 sub_core_grids,
                 fast_and_approximate_mode,
                 output_layout);
-            if (result.layout() != TILE_LAYOUT) {
-                return result;
-            }
             return ttnn::typecast(result, block_dtype, std::nullopt, std::nullopt, sub_core_grids);
         }
     }
@@ -956,11 +960,26 @@ Tensor max(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * max(s * x) = s * min(x) when s < 0.*/
     if (scalar < 0.0f) {
-        return operations::reduction::reduce<reduction_common::ReduceType::Min>(
+        return operations::reduction::convert_output_layout(
+            operations::reduction::reduce<reduction_common::ReduceType::Min>(
+                input_tensor_arg,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout),
+            output_layout);
+    }
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Max>(
             input_tensor_arg,
             dim_arg,
             keepdim,
@@ -968,17 +987,9 @@ Tensor max(
             compute_kernel_config,
             scalar,
             sub_core_grids,
-            fast_and_approximate_mode);
-    }
-    return operations::reduction::reduce<reduction_common::ReduceType::Max>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        sub_core_grids,
-        fast_and_approximate_mode);
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor min(
@@ -989,7 +1000,8 @@ Tensor min(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    const std::optional<Layout>& output_layout) {
     TT_FATAL(
         !(fast_and_approximate_mode && input_tensor_arg.dtype() == DataType::FLOAT32),
         "ttnn.min does not support fast_and_approximate_mode=True on Float32 input: the FPU has no min, so SFPU path "
@@ -998,7 +1010,21 @@ Tensor min(
     /* Scaling is applied after reduction, so flip the op for negative scalars:
      * min(s * x) = s * max(x) when s < 0.*/
     if (scalar < 0.0f) {
-        return operations::reduction::reduce<reduction_common::ReduceType::Max>(
+        return operations::reduction::convert_output_layout(
+            operations::reduction::reduce<reduction_common::ReduceType::Max>(
+                input_tensor_arg,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout),
+            output_layout);
+    }
+    return operations::reduction::convert_output_layout(
+        operations::reduction::reduce<reduction_common::ReduceType::Min>(
             input_tensor_arg,
             dim_arg,
             keepdim,
@@ -1006,17 +1032,9 @@ Tensor min(
             compute_kernel_config,
             scalar,
             sub_core_grids,
-            fast_and_approximate_mode);
-    }
-    return operations::reduction::reduce<reduction_common::ReduceType::Min>(
-        input_tensor_arg,
-        dim_arg,
-        keepdim,
-        memory_config_arg,
-        compute_kernel_config,
-        scalar,
-        sub_core_grids,
-        fast_and_approximate_mode);
+            fast_and_approximate_mode,
+            output_layout),
+        output_layout);
 }
 
 Tensor std(
