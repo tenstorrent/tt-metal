@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_to_memory_config: plan selection and ProgramDescriptor.
+"""Program descriptor of g6_to_memory_config.
 
-Every page is moved by a core that holds it in its own L1: the target's owner pulls it, or the
-source's owner pushes it (1 NoC crossing, no CB). Only DRAM -> DRAM needs a staging buffer
-(`staged`), because a NoC transaction cannot go DRAM -> DRAM.
-
-Regimes: shard_pull, shard_push, bank_pull, bank_push, staged (op_design.md, Blocking Model).
+Regime selection, work split, kernels and the descriptor cache. Every page is moved by a core that
+holds it in its own L1 (owner regimes shard_pull / shard_push / bank_pull / bank_push, one mover per
+data-movement RISC); only DRAM -> DRAM goes through a staging CB on a full-grid split (staged).
 """
 
 from __future__ import annotations
@@ -21,28 +19,35 @@ from typing import NamedTuple, Optional
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-MOVER_KERNEL = str(KERNEL_DIR / "g6_to_memory_config_mover.cpp")
-STAGED_READER_KERNEL = str(KERNEL_DIR / "g6_to_memory_config_reader.cpp")
-STAGED_WRITER_KERNEL = str(KERNEL_DIR / "g6_to_memory_config_writer.cpp")
+MOVER_KERNEL = KERNEL_DIR / "g6_to_memory_config_mover.cpp"
+STAGED_READER_KERNEL = KERNEL_DIR / "g6_to_memory_config_reader.cpp"
+STAGED_WRITER_KERNEL = KERNEL_DIR / "g6_to_memory_config_writer.cpp"
 
-# Block-model knobs (op_design.md -> Blocking Model). Each is defined once here; everything that
-# depends on it (kernel count, RT slices, CB size, cache key) derives from it.
-MOVERS_PER_CORE = 2  # owner regimes: data-movement RISCs sharing one core's page sequence (1 or 2)
-STAGED_BLOCK_PAGES = 16  # staged: pages per CB handshake / read barrier
-STAGED_BUFFER_DEPTH = 2  # staged: blocks resident in cb_staged_pages
+# Blocking knobs (op_design.md, Blocking Model). Every CB size, loop bound and split derives from these.
+MOVERS_PER_CORE = 2
+STAGED_BLOCK_PAGES = 16
+STAGED_BUFFER_DEPTH = 2
 
-L1_BUDGET_BYTES = 1347776  # BB-05: L1 per core the model leaves to the op
+# L1 per core the model leaves to the op (BB-05).
+L1_BUDGET_BYTES = 1347776
 
-CB_STAGED_PAGES = 0
-
-# mover m runs on (processor, NoC); m = 0 is NCRISC/NoC0, m = 1 is BRISC/NoC1.
-_MOVER_PLACEMENT = (
+# Mover m runs on its own data-movement RISC and NoC, so the two halves of a core's pages issue in parallel.
+_MOVER_CONFIGS = (
     (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
     (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
 )
-assert 1 <= MOVERS_PER_CORE <= len(_MOVER_PLACEMENT)
+assert 1 <= MOVERS_PER_CORE <= len(_MOVER_CONFIGS)
 
-REGIMES = ("shard_pull", "shard_push", "bank_pull", "bank_push", "staged")
+CB_STAGED_PAGES = 0
+
+SHARD_PULL = "shard_pull"
+SHARD_PUSH = "shard_push"
+BANK_PULL = "bank_pull"
+BANK_PUSH = "bank_push"
+STAGED = "staged"
+PULL_REGIMES = (SHARD_PULL, BANK_PULL)
+BANK_REGIMES = (BANK_PULL, BANK_PUSH)
+SHARD_REGIMES = (SHARD_PULL, SHARD_PUSH)
 
 _BUFFER_NAME = {ttnn.BufferType.DRAM: "dram", ttnn.BufferType.L1: "l1"}
 _SCHEME_NAME = {
@@ -53,466 +58,494 @@ _SCHEME_NAME = {
 }
 
 
-class Plan(NamedTuple):
-    """The plan a call selects (BB-08). owner_side: "target" (pull), "source" (push), "none" (staged)."""
-
-    regime: str
-    owner_side: str
-    num_cores: int
-    movers_per_core: int
-
-
-@dataclass(frozen=True)
-class Geometry:
-    """2D page view every placement uses: leading dims fold into tile rows, page p = r * cols + c."""
-
-    tile_h: int
-    tile_w: int
-    tensor_tile_rows: int
-    tensor_tile_cols: int
-    page_size: int
-
-    @property
-    def tensor_pages(self) -> int:
-        return self.tensor_tile_rows * self.tensor_tile_cols
+# ---------------------------------------------------------------------------
+# Placements and tile geometry
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class Placement:
     buffer: str  # "dram" | "l1"
     scheme: str  # "interleaved" | "height_sharded" | "width_sharded" | "block_sharded"
-    ranges: tuple = ()  # shard grid ranges (sx, sy, ex, ey), in CoreRangeSet order
-    shard_shape: tuple = ()  # shard shape in elements (h, w)
-    orientation: Optional[str] = None
+    ranges: tuple = ()  # ((start_x, start_y, end_x, end_y), ...) in the CoreRangeSet's own order
+    shard_shape: tuple = ()  # (height, width) in elements
+    orientation: Optional[object] = None
 
     @property
-    def is_sharded(self) -> bool:
+    def is_sharded(self):
         return self.scheme != "interleaved"
 
     @property
-    def is_l1_sharded(self) -> bool:
+    def is_l1_sharded(self):
         return self.buffer == "l1" and self.is_sharded
 
     @property
-    def is_l1_interleaved(self) -> bool:
+    def is_l1_interleaved(self):
         return self.buffer == "l1" and not self.is_sharded
+
+    def key(self):
+        return (self.buffer, self.scheme, self.ranges, self.shard_shape, str(self.orientation))
+
+
+def placement_of(memory_config):
+    buffer = _BUFFER_NAME.get(memory_config.buffer_type)
+    scheme = _SCHEME_NAME.get(memory_config.memory_layout)
+    if buffer is None:
+        raise ValueError(f"g6_to_memory_config: buffer type {memory_config.buffer_type} is not DRAM or L1")
+    if scheme is None:
+        raise ValueError(f"g6_to_memory_config: memory layout {memory_config.memory_layout} is not supported")
+    if scheme == "interleaved":
+        return Placement(buffer, scheme)
+    spec = memory_config.shard_spec
+    if spec is None:
+        raise ValueError(f"g6_to_memory_config: {scheme} memory config carries no ShardSpec")
+    ranges = tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges())
+    return Placement(buffer, scheme, ranges, tuple(int(d) for d in spec.shape), spec.orientation)
 
 
 @dataclass(frozen=True)
-class OwnerShard:
-    """One owner core and the rectangle of tile pages its shard holds (clipped at the tensor edge)."""
+class TileGeometry:
+    """2D page view every placement shares: leading dims fold into tile rows, page p = r * tile_cols + c."""
 
+    tile_h: int
+    tile_w: int
+    tile_rows: int
+    tile_cols: int
+
+    @property
+    def pages(self):
+        return self.tile_rows * self.tile_cols
+
+
+def tile_geometry(tensor):
+    padded = [int(d) for d in tensor.padded_shape]
+    tile_h, tile_w = (int(d) for d in tensor.tile.tile_shape)
+    return TileGeometry(tile_h, tile_w, math.prod(padded[:-2]) * (padded[-2] // tile_h), padded[-1] // tile_w)
+
+
+@dataclass(frozen=True)
+class ShardGrid:
+    shard_tile_rows: int
+    shard_tile_cols: int
+    shards_down: int
+    shards_across: int
+
+    @property
+    def num_shards(self):
+        return self.shards_down * self.shards_across
+
+
+def shard_grid(placement, geom):
+    shard_rows = placement.shard_shape[0] // geom.tile_h
+    shard_cols = placement.shard_shape[1] // geom.tile_w
+    return ShardGrid(
+        shard_rows, shard_cols, math.ceil(geom.tile_rows / shard_rows), math.ceil(geom.tile_cols / shard_cols)
+    )
+
+
+def _range_cores(placement):
+    """Cores of the shard grid, range by range in the order the CoreRangeSet holds them, row-wise in each."""
+    return [(x, y) for sx, sy, ex, ey in placement.ranges for y in range(sy, ey + 1) for x in range(sx, ex + 1)]
+
+
+def check_shard_spec(placement, geom, what):
+    """Refuse (ValueError) a shard spec whose shards do not cover the tile grid one shard per core."""
+    if placement.orientation != ttnn.ShardOrientation.ROW_MAJOR:
+        raise ValueError(f"g6_to_memory_config: {what} shard spec must be ROW_MAJOR, got {placement.orientation}")
+    height, width = placement.shard_shape
+    if height <= 0 or width <= 0 or height % geom.tile_h or width % geom.tile_w:
+        raise ValueError(
+            f"g6_to_memory_config: {what} shard shape {placement.shard_shape} is not a multiple of the "
+            f"{geom.tile_h}x{geom.tile_w} tile"
+        )
+    grid = shard_grid(placement, geom)
+    if placement.scheme == "block_sharded":
+        if len(placement.ranges) != 1:
+            raise ValueError(f"g6_to_memory_config: {what} block-sharded grid must be one core range")
+        sx, sy, ex, ey = placement.ranges[0]
+        if grid.shards_across > ex - sx + 1 or grid.shards_down > ey - sy + 1:
+            raise ValueError(
+                f"g6_to_memory_config: {what} block shard grid {grid.shards_down}x{grid.shards_across} does not "
+                f"fit the core range {placement.ranges[0]}"
+            )
+    elif grid.num_shards > len(_range_cores(placement)):
+        raise ValueError(
+            f"g6_to_memory_config: {what} needs {grid.num_shards} shards but its grid has "
+            f"{len(_range_cores(placement))} cores"
+        )
+
+
+@dataclass(frozen=True)
+class ShardOwner:
     core: tuple  # (x, y) logical
     r0: int
     c0: int
-    core_rows: int
-    core_cols: int
+    rows: int
+    cols: int
+
+    @property
+    def pages(self):
+        return self.rows * self.cols
 
 
-def geometry_of(input_tensor) -> Geometry:
-    shape = list(input_tensor.shape)
-    tile_h, tile_w = (int(v) for v in input_tensor.tile.tile_shape)
-    leading = math.prod(shape[:-2]) if len(shape) > 2 else 1
-    return Geometry(
-        tile_h=tile_h,
-        tile_w=tile_w,
-        tensor_tile_rows=leading * math.ceil(shape[-2] / tile_h),
-        tensor_tile_cols=math.ceil(shape[-1] / tile_w),
-        page_size=int(input_tensor.buffer_aligned_page_size()),
-    )
-
-
-def placement_of(memory_config) -> Placement:
-    buffer = _BUFFER_NAME.get(memory_config.buffer_type)
-    scheme = _SCHEME_NAME.get(memory_config.memory_layout)
-    if buffer is None or scheme is None:
-        raise ValueError(
-            f"g6_to_memory_config: unsupported placement {memory_config.buffer_type}/{memory_config.memory_layout}"
-        )
-    if scheme == "interleaved":
-        return Placement(buffer=buffer, scheme=scheme)
-    spec = memory_config.shard_spec
-    if spec is None:
-        raise ValueError(f"g6_to_memory_config: {scheme} memory_config has no shard spec")
-    ranges = tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges())
-    orientation = "row_major" if spec.orientation == ttnn.ShardOrientation.ROW_MAJOR else "col_major"
-    return Placement(
-        buffer=buffer,
-        scheme=scheme,
-        ranges=ranges,
-        shard_shape=tuple(int(v) for v in spec.shape),
-        orientation=orientation,
-    )
-
-
-def shard_tiles(placement: Placement, geom: Geometry) -> tuple:
-    """Shard extent in tile pages (rows, cols); shard shapes are validated to be tile multiples."""
-    return placement.shard_shape[0] // geom.tile_h, placement.shard_shape[1] // geom.tile_w
-
-
-def shard_grid(placement: Placement, geom: Geometry) -> tuple:
-    """(shards along tile rows, shards along tile cols)."""
-    shard_rows, shard_cols = shard_tiles(placement, geom)
-    return math.ceil(geom.tensor_tile_rows / shard_rows), math.ceil(geom.tensor_tile_cols / shard_cols)
-
-
-def num_shards(placement: Placement, geom: Geometry) -> int:
-    rows, cols = shard_grid(placement, geom)
-    return rows * cols
-
-
-def _num_grid_cores(placement: Placement) -> int:
-    return sum((ex - sx + 1) * (ey - sy + 1) for sx, sy, ex, ey in placement.ranges)
-
-
-def shard_layout_error(placement: Placement, geom: Geometry) -> Optional[str]:
-    """Why the shard spec cannot hold the tensor as one shard per core, or None when it can."""
-    shard_h, shard_w = placement.shard_shape
-    if shard_h == 0 or shard_w == 0 or shard_h % geom.tile_h or shard_w % geom.tile_w:
-        return f"shard shape {list(placement.shard_shape)} is not a multiple of the {geom.tile_h}x{geom.tile_w} tile"
-    if placement.orientation != "row_major":
-        return "shard orientation must be ROW_MAJOR"
+def shard_owners(placement, geom):
+    """Shard s (row-major over the shard grid) -> core, as the buffer distribution spec places it:
+    ROUND_ROBIN_1D (height/width) takes the CoreRangeSet's cores in order, GRID_2D (block) the
+    row-major cores of its single range trimmed to the shard grid. Cores without a shard are omitted."""
+    grid = shard_grid(placement, geom)
     if placement.scheme == "block_sharded":
-        if len(placement.ranges) != 1:
-            return "a BLOCK_SHARDED grid must be one core range"
-        sx, sy, ex, ey = placement.ranges[0]
-        rows, cols = shard_grid(placement, geom)
-        if cols > ex - sx + 1 or rows > ey - sy + 1:
-            return f"{rows}x{cols} block shards do not fit the {ey - sy + 1}x{ex - sx + 1} core range"
-        return None
-    if num_shards(placement, geom) > _num_grid_cores(placement):
-        return f"{num_shards(placement, geom)} shards need as many cores; the grid has {_num_grid_cores(placement)}"
-    return None
-
-
-def shard_owner_cores(placement: Placement, geom: Geometry) -> list:
-    """Shard s (row-major over the shard grid) -> logical core, as BufferDistributionSpec places it.
-
-    HEIGHT/WIDTH (ROUND_ROBIN_1D): the grid's cores row-wise, range by range in CoreRangeSet order;
-    one shard per core, so shard s sits on cores[s]. BLOCK (GRID_2D): row-major cores of the single
-    range trimmed to the shard grid.
-    """
-    rows, cols = shard_grid(placement, geom)
-    if placement.scheme == "block_sharded":
-        sx, sy, _, _ = placement.ranges[0]
-        return [(sx + j, sy + i) for i in range(rows) for j in range(cols)]
-    cores = []
-    for sx, sy, ex, ey in placement.ranges:
-        cores.extend((x, y) for y in range(sy, ey + 1) for x in range(sx, ex + 1))
-    return cores[: rows * cols]
-
-
-def owner_shards(placement: Placement, geom: Geometry) -> list:
-    shard_rows, shard_cols = shard_tiles(placement, geom)
-    _, grid_cols = shard_grid(placement, geom)
-    shards = []
-    for s, core in enumerate(shard_owner_cores(placement, geom)):
-        r0 = (s // grid_cols) * shard_rows
-        c0 = (s % grid_cols) * shard_cols
-        shards.append(
-            OwnerShard(
-                core=core,
-                r0=r0,
-                c0=c0,
-                core_rows=min(shard_rows, geom.tensor_tile_rows - r0),
-                core_cols=min(shard_cols, geom.tensor_tile_cols - c0),
+        sx, sy = placement.ranges[0][:2]
+        cores = [(sx + j, sy + i) for i in range(grid.shards_down) for j in range(grid.shards_across)]
+    else:
+        cores = _range_cores(placement)[: grid.num_shards]
+    owners = []
+    for s, core in enumerate(cores):
+        i, j = divmod(s, grid.shards_across)
+        r0, c0 = i * grid.shard_tile_rows, j * grid.shard_tile_cols
+        owners.append(
+            ShardOwner(
+                core,
+                r0,
+                c0,
+                min(grid.shard_tile_rows, geom.tile_rows - r0),
+                min(grid.shard_tile_cols, geom.tile_cols - c0),
             )
         )
-    return shards
+    return owners
 
 
-def mover_slices(num_pages: int, movers_per_core: int = MOVERS_PER_CORE) -> list:
-    """Contiguous slices [begin, end) of one core's page sequence, one per mover."""
-    half = math.ceil(num_pages / movers_per_core)
-    return [(min(num_pages, m * half), min(num_pages, (m + 1) * half)) for m in range(movers_per_core)]
+def mover_slice(num_pages, mover):
+    """Contiguous slice [begin, end) of a core's page sequence taken by one mover."""
+    half = math.ceil(num_pages / MOVERS_PER_CORE)
+    begin = min(num_pages, mover * half)
+    return begin, min(num_pages, begin + half)
 
 
-def select_regime(src: Placement, dst: Placement, geom: Geometry) -> str:
-    """Exact regime-selection function of the design; depends on the placements only."""
+def coalesce(cores):
+    """Cover a core set with few maximal rectangles (launch messages go out once per range, BB-17)."""
+    remaining = set(cores)
+    ranges = []
+    for x, y in sorted(remaining, key=lambda c: (c[1], c[0])):
+        if (x, y) not in remaining:
+            continue
+        x_end = x
+        while (x_end + 1, y) in remaining:
+            x_end += 1
+        y_end = y
+        while all((xx, y_end + 1) in remaining for xx in range(x, x_end + 1)):
+            y_end += 1
+        for yy in range(y, y_end + 1):
+            for xx in range(x, x_end + 1):
+                remaining.discard((xx, yy))
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x_end, y_end)))
+    return ttnn.CoreRangeSet(ranges)
+
+
+# ---------------------------------------------------------------------------
+# Regime selection and work split
+# ---------------------------------------------------------------------------
+
+
+def select_regime(src, dst, geom):
     if dst.is_l1_sharded and src.is_l1_sharded:
-        return "shard_pull" if num_shards(dst, geom) >= num_shards(src, geom) else "shard_push"
+        # Equal bytes either way; the side with more shards keeps more cores busy, ties pull.
+        if shard_grid(dst, geom).num_shards >= shard_grid(src, geom).num_shards:
+            return SHARD_PULL
+        return SHARD_PUSH
     if dst.is_l1_sharded:
-        return "shard_pull"
+        return SHARD_PULL
     if src.is_l1_sharded:
-        return "shard_push"
+        return SHARD_PUSH
     if dst.is_l1_interleaved:
-        return "bank_pull"
+        return BANK_PULL
     if src.is_l1_interleaved:
-        return "bank_push"
-    return "staged"
+        return BANK_PUSH
+    return STAGED
 
 
-# ---------------------------------------------------------------------------
-# Per-call plan (everything that shapes the program; cached by placement key)
-# ---------------------------------------------------------------------------
+class Plan(NamedTuple):
+    regime: str
+    owner_side: Optional[str]  # "output" (pull), "input" (push), None (staged)
+    num_cores: int
+    movers_per_core: int
 
 
 @dataclass
-class _Build:
-    plan: Plan
-    geom: Geometry
+class Work:
+    regime: str
+    geom: TileGeometry
     src: Placement
     dst: Placement
-    owners: list  # OwnerShard list (shard_*)
-    grid_size: tuple  # compute_with_storage_grid (x, y)
-    staged_split: Optional[tuple] = None  # split_work_to_cores result (staged)
-    staged_block_pages: int = 0
-    descriptor: Optional[ttnn.ProgramDescriptor] = None
+    page_size: int
+    owners: list  # shard_*: ShardOwner per owner core
+    grid_cores: list  # bank_*: every worker core
+    staged: list  # staged: (core, start_page, num_pages)
+    staged_block_pages: int
+    num_l1_banks: int
+    core_ranges: object
+
+    @property
+    def owner_placement(self):
+        return self.dst if self.regime in PULL_REGIMES else self.src
+
+    def plan(self):
+        if self.regime in SHARD_REGIMES:
+            num_cores = len(self.owners)
+        elif self.regime in BANK_REGIMES:
+            num_cores = len(self.grid_cores)
+        else:
+            num_cores = len(self.staged)
+        owner_side = None if self.regime == STAGED else ("output" if self.regime in PULL_REGIMES else "input")
+        movers = 1 if self.regime == STAGED else MOVERS_PER_CORE
+        return Plan(self.regime, owner_side, num_cores, movers)
 
 
-_BUILD_CACHE = {}
-_BANK_CHECKED_DEVICES = set()
+_L1_BANKS = {}
 
 
-def _cache_key(input_tensor, memory_config) -> tuple:
+def _device_key(device):
+    return device.id() if hasattr(device, "id") else id(device)
+
+
+def l1_num_banks(device):
+    key = _device_key(device)
+    if key not in _L1_BANKS:
+        _L1_BANKS[key] = int(ttnn._ttnn.reports.get_device_info(device).l1_num_banks)
+    return _L1_BANKS[key]
+
+
+def plan_work(input_tensor, src, dst):
     device = input_tensor.device()
+    geom = tile_geometry(input_tensor)
+    regime = select_regime(src, dst, geom)
+    grid = device.compute_with_storage_grid_size()
+    num_banks = l1_num_banks(device)
+    work = Work(
+        regime=regime,
+        geom=geom,
+        src=src,
+        dst=dst,
+        page_size=int(input_tensor.buffer_aligned_page_size()),
+        owners=[],
+        grid_cores=[],
+        staged=[],
+        staged_block_pages=0,
+        num_l1_banks=num_banks,
+        core_ranges=None,
+    )
+    if regime in SHARD_REGIMES:
+        work.owners = shard_owners(work.owner_placement, geom)
+        work.core_ranges = coalesce([o.core for o in work.owners])
+    elif regime in BANK_REGIMES:
+        # Every worker core owns one L1 bank; which one is discovered on device, so all of them launch.
+        if num_banks != grid.x * grid.y:
+            raise RuntimeError(
+                f"g6_to_memory_config: {num_banks} L1 banks on a {grid.x}x{grid.y} worker grid; the bank "
+                "regimes need one bank per worker core"
+            )
+        work.grid_cores = [(x, y) for y in range(grid.y) for x in range(grid.x)]
+        work.core_ranges = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+        )
+    else:
+        _, all_cores, group_1, group_2, pages_1, pages_2 = ttnn.split_work_to_cores(grid, geom.pages, row_wise=True)
+        start = 0
+        for group, count in ((group_1, pages_1), (group_2, pages_2)):
+            for core in ttnn.corerange_to_cores(group, row_wise=True):
+                work.staged.append(((core.x, core.y), start, count))
+                start += count
+        assert start == geom.pages, (start, geom.pages)
+        work.staged_block_pages = min(STAGED_BLOCK_PAGES, max(pages_1, pages_2))
+        work.core_ranges = all_cores
+    return work
+
+
+def op_l1_bytes_per_core(work):
+    """Output L1 on the busiest core plus the op's own buffers (l1_ledger.md, BB-05)."""
+    total = 0
+    if work.dst.is_l1_sharded:
+        grid = shard_grid(work.dst, work.geom)
+        total += grid.shard_tile_rows * grid.shard_tile_cols * work.page_size
+    elif work.dst.is_l1_interleaved:
+        total += math.ceil(work.geom.pages / work.num_l1_banks) * work.page_size
+    if work.regime == STAGED:
+        total += STAGED_BUFFER_DEPTH * work.staged_block_pages * work.page_size
+    return total
+
+
+def check_l1_budget(work):
+    used = op_l1_bytes_per_core(work)
+    if used > L1_BUDGET_BYTES:
+        raise ValueError(
+            f"g6_to_memory_config: needs {used} B of L1 per core (output + op buffers), over the "
+            f"{L1_BUDGET_BYTES} B the model leaves to the op"
+        )
+
+
+def select_plan(input_tensor, memory_config):
+    """The plan a call with these arguments runs (BB-08)."""
+    return plan_work(input_tensor, placement_of(input_tensor.memory_config()), placement_of(memory_config)).plan()
+
+
+def dump_core_roles(input_tensor, memory_config):
+    """[(core_xy, role, pages)] of every launched kernel (BB-21). Bank movers learn their bank on device,
+    so their page count is reported as None."""
+    work = plan_work(input_tensor, placement_of(input_tensor.memory_config()), placement_of(memory_config))
+    roles = []
+    if work.regime in SHARD_REGIMES:
+        for owner in work.owners:
+            for mover in range(MOVERS_PER_CORE):
+                begin, end = mover_slice(owner.pages, mover)
+                roles.append((owner.core, f"{work.regime}/mover{mover}", end - begin))
+    elif work.regime in BANK_REGIMES:
+        for core in work.grid_cores:
+            for mover in range(MOVERS_PER_CORE):
+                roles.append((core, f"{work.regime}/mover{mover}", None))
+    else:
+        for core, _, count in work.staged:
+            roles.append((core, "staged/reader", count))
+            roles.append((core, "staged/writer", count))
+    return roles
+
+
+# ---------------------------------------------------------------------------
+# Descriptors
+# ---------------------------------------------------------------------------
+
+
+def _accessor_args(tensor):
+    return list(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+
+
+def _owner_descriptor(work, input_tensor, output_tensor, common_args):
+    is_pull = work.regime in PULL_REGIMES
+    owner_is_bank = work.regime in BANK_REGIMES
+    shard_tile_cols = 0 if owner_is_bank else shard_grid(work.owner_placement, work.geom).shard_tile_cols
+    accessors = _accessor_args(input_tensor) + _accessor_args(output_tensor)
+    kernels = []
+    for mover in range(MOVERS_PER_CORE):
+        processor, noc = _MOVER_CONFIGS[mover]
+        compile_args = [
+            int(is_pull),
+            int(owner_is_bank),
+            mover,
+            MOVERS_PER_CORE,
+            work.page_size,
+            work.geom.pages,
+            work.geom.tile_cols,
+            shard_tile_cols,
+        ] + accessors
+        runtime_args = ttnn.RuntimeArgs()
+        for owner in work.owners:
+            begin, end = mover_slice(owner.pages, mover)
+            runtime_args[owner.core[0]][owner.core[1]] = [owner.r0, owner.c0, owner.cols, begin, end]
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=str(MOVER_KERNEL),
+                core_ranges=work.core_ranges,
+                compile_time_args=compile_args,
+                runtime_args=runtime_args,
+                common_runtime_args=list(common_args),
+                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
+            )
+        )
+    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[])
+
+
+def _staged_descriptor(work, input_tensor, output_tensor, common_args):
+    block = work.staged_block_pages
+    cb = ttnn.CBDescriptor(
+        total_size=STAGED_BUFFER_DEPTH * block * work.page_size,
+        core_ranges=work.core_ranges,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(
+                buffer_index=CB_STAGED_PAGES, data_format=input_tensor.dtype, page_size=work.page_size
+            )
+        ],
+    )
+    runtime_args = ttnn.RuntimeArgs()
+    for core, start, count in work.staged:
+        runtime_args[core[0]][core[1]] = [start, count]
+    head = [CB_STAGED_PAGES, block, work.page_size]
+    reader = ttnn.KernelDescriptor(
+        kernel_source=str(STAGED_READER_KERNEL),
+        core_ranges=work.core_ranges,
+        compile_time_args=head + _accessor_args(input_tensor),
+        runtime_args=runtime_args,
+        common_runtime_args=list(common_args),
+        config=ttnn.DataMovementConfigDescriptor(processor=_MOVER_CONFIGS[0][0], noc=_MOVER_CONFIGS[0][1]),
+    )
+    writer = ttnn.KernelDescriptor(
+        kernel_source=str(STAGED_WRITER_KERNEL),
+        core_ranges=work.core_ranges,
+        compile_time_args=head + _accessor_args(output_tensor),
+        runtime_args=runtime_args,
+        common_runtime_args=list(common_args),
+        config=ttnn.DataMovementConfigDescriptor(processor=_MOVER_CONFIGS[1][0], noc=_MOVER_CONFIGS[1][1]),
+    )
+    return ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb])
+
+
+def create_program_descriptor(work, input_tensor, output_tensor):
+    if int(output_tensor.buffer_aligned_page_size()) != work.page_size:
+        raise RuntimeError("g6_to_memory_config: input and output page sizes differ")
+    common_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
+    if work.regime == STAGED:
+        return _staged_descriptor(work, input_tensor, output_tensor, common_args)
+    return _owner_descriptor(work, input_tensor, output_tensor, common_args)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch with a descriptor cache (BB-07)
+# ---------------------------------------------------------------------------
+
+_DESCRIPTORS = {}
+
+
+def _cache_key(input_tensor, src, dst):
     return (
-        device.id(),
-        tuple(int(v) for v in input_tensor.shape),
-        input_tensor.dtype,
-        tuple(int(v) for v in input_tensor.tile.tile_shape),
-        placement_of(input_tensor.memory_config()),
-        placement_of(memory_config),
+        _device_key(input_tensor.device()),
+        tuple(int(d) for d in input_tensor.shape),
+        tuple(int(d) for d in input_tensor.padded_shape),
+        str(input_tensor.dtype),
+        src.key(),
+        dst.key(),
         MOVERS_PER_CORE,
         STAGED_BLOCK_PAGES,
         STAGED_BUFFER_DEPTH,
     )
 
 
-def _check_one_l1_bank_per_core(device, grid_size) -> None:
-    """bank_* launches on the full worker grid and each core discovers its own L1 bank."""
-    if device.id() in _BANK_CHECKED_DEVICES:
-        return
-    l1_banks = ttnn._ttnn.reports.get_device_info(device).l1_num_banks
-    if l1_banks != grid_size[0] * grid_size[1]:
-        raise RuntimeError(
-            f"g6_to_memory_config: bank regimes need one L1 bank per worker core; "
-            f"{l1_banks} banks on a {grid_size[0]}x{grid_size[1]} grid"
-        )
-    _BANK_CHECKED_DEVICES.add(device.id())
+def _program_hash(key):
+    digest = hashlib.sha256(("g6_to_memory_config" + repr(key)).encode()).digest()
+    return int.from_bytes(digest[:8], "little") >> 1
 
 
-def _build(input_tensor, memory_config) -> _Build:
-    key = _cache_key(input_tensor, memory_config)
-    cached = _BUILD_CACHE.get(key)
-    if cached is not None:
-        return cached
-
-    geom = geometry_of(input_tensor)
+def dispatch(input_tensor, memory_config):
+    """Allocate the output in memory_config and run the one program that moves every page into it.
+    A repeat configuration reuses its descriptor; only the two buffer addresses are rewritten."""
     src = placement_of(input_tensor.memory_config())
     dst = placement_of(memory_config)
-    regime = select_regime(src, dst, geom)
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    grid_size = (grid.x, grid.y)
-
-    owners = []
-    staged_split = None
-    staged_block_pages = 0
-    if regime in ("shard_pull", "shard_push"):
-        owners = owner_shards(dst if regime == "shard_pull" else src, geom)
-        plan = Plan(regime, "target" if regime == "shard_pull" else "source", len(owners), MOVERS_PER_CORE)
-    elif regime in ("bank_pull", "bank_push"):
-        _check_one_l1_bank_per_core(input_tensor.device(), grid_size)
-        plan = Plan(
-            regime, "target" if regime == "bank_pull" else "source", grid_size[0] * grid_size[1], MOVERS_PER_CORE
-        )
+    key = _cache_key(input_tensor, src, dst)
+    descriptor = _DESCRIPTORS.get(key)
+    work = None
+    if descriptor is None:
+        work = plan_work(input_tensor, src, dst)
+        check_l1_budget(work)
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(input_tensor.shape)),
+        input_tensor.dtype,
+        ttnn.TILE_LAYOUT,
+        input_tensor.device(),
+        memory_config,
+    )
+    if descriptor is None:
+        descriptor = create_program_descriptor(work, input_tensor, output_tensor)
+        descriptor.custom_program_hash = _program_hash(key)
+        _DESCRIPTORS[key] = descriptor
     else:
-        staged_split = ttnn.split_work_to_cores(grid, geom.tensor_pages, row_wise=True)
-        staged_block_pages = min(STAGED_BLOCK_PAGES, staged_split[4])
-        plan = Plan(regime, "none", staged_split[0], 1)
-
-    build = _Build(
-        plan=plan,
-        geom=geom,
-        src=src,
-        dst=dst,
-        owners=owners,
-        grid_size=grid_size,
-        staged_split=staged_split,
-        staged_block_pages=staged_block_pages,
-    )
-    _BUILD_CACHE[key] = build
-    return build
-
-
-def select_plan(input_tensor, memory_config) -> Plan:
-    return _build(input_tensor, memory_config).plan
-
-
-def op_l1_bytes_per_core(input_tensor, memory_config) -> int:
-    """BB-05 footprint (l1_ledger.md): the output's own L1 on a core plus the op's CBs."""
-    build = _build(input_tensor, memory_config)
-    geom, dst = build.geom, build.dst
-    total = 0
-    if dst.is_l1_sharded:
-        shard_rows, shard_cols = shard_tiles(dst, geom)
-        total += shard_rows * shard_cols * geom.page_size
-    elif dst.is_l1_interleaved:
-        total += math.ceil(geom.tensor_pages / (build.grid_size[0] * build.grid_size[1])) * geom.page_size
-    if build.plan.regime == "staged":
-        total += STAGED_BUFFER_DEPTH * build.staged_block_pages * geom.page_size
-    return total
-
-
-def dump_core_roles(input_tensor, memory_config) -> list:
-    """BB-21: [(core_xy, role, pages)] for every launched core and role.
-
-    bank_* pages are None: a core's L1 bank, and so its page count, is found on device.
-    """
-    build = _build(input_tensor, memory_config)
-    regime = build.plan.regime
-    roles = []
-    if regime in ("shard_pull", "shard_push"):
-        for owner in build.owners:
-            for m, (begin, end) in enumerate(mover_slices(owner.core_rows * owner.core_cols)):
-                roles.append((owner.core, f"{regime}/mover{m}", end - begin))
-    elif regime in ("bank_pull", "bank_push"):
-        for y in range(build.grid_size[1]):
-            for x in range(build.grid_size[0]):
-                roles.extend(((x, y), f"{regime}/mover{m}", None) for m in range(MOVERS_PER_CORE))
-    else:
-        for core, _, num_pages in _staged_assignment(build):
-            roles.append(((core.x, core.y), "staged/reader", num_pages))
-            roles.append(((core.x, core.y), "staged/writer", num_pages))
-    return roles
-
-
-# ---------------------------------------------------------------------------
-# ProgramDescriptor
-# ---------------------------------------------------------------------------
-
-
-def _core_range_set(cores) -> ttnn.CoreRangeSet:
-    """Cores coalesced into maximal rectangles (BB-17)."""
-    singles = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
-    return ttnn.CoreRangeSet([]).merge(singles)
-
-
-def _staged_assignment(build: _Build) -> list:
-    """[(core, start_page, num_pages)]: contiguous page ranges in split_work_to_cores order."""
-    _, _, group_1, group_2, per_core_1, per_core_2 = build.staged_split
-    assignment = []
-    start = 0
-    for group, per_core in ((group_1, per_core_1), (group_2, per_core_2)):
-        if per_core == 0:
-            continue
-        for core in ttnn.corerange_to_cores(group, row_wise=True):
-            assignment.append((core, start, per_core))
-            start += per_core
-    assert start == build.geom.tensor_pages
-    return assignment
-
-
-def _dm_config(processor, noc):
-    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc)
-
-
-def _mover_kernels(build: _Build, input_tensor, output_tensor) -> list:
-    regime = build.plan.regime
-    is_pull = regime in ("shard_pull", "bank_pull")
-    is_bank = regime in ("bank_pull", "bank_push")
-    geom = build.geom
-    owner_placement = build.dst if is_pull else build.src
-    owner_shard_tile_cols = 0 if is_bank else shard_tiles(owner_placement, geom)[1]
-
-    accessor_args = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    accessor_args += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-    if is_bank:
-        core_ranges = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(build.grid_size[0] - 1, build.grid_size[1] - 1))]
-        )
-    else:
-        core_ranges = _core_range_set([owner.core for owner in build.owners])
-
-    kernels = []
-    for m in range(MOVERS_PER_CORE):
-        ct_args = [
-            m,
-            MOVERS_PER_CORE,
-            int(is_pull),
-            int(is_bank),
-            owner_shard_tile_cols,
-            geom.tensor_tile_cols,
-            geom.tensor_pages,
-        ] + accessor_args
-        rt_args = ttnn.RuntimeArgs()
-        if not is_bank:
-            for owner in build.owners:
-                begin, end = mover_slices(owner.core_rows * owner.core_cols)[m]
-                rt_args[owner.core[0]][owner.core[1]] = [owner.r0, owner.c0, owner.core_cols, begin, end]
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=MOVER_KERNEL,
-                core_ranges=core_ranges,
-                compile_time_args=ct_args,
-                runtime_args=rt_args,
-                common_runtime_args=[0, 0],
-                config=_dm_config(*_MOVER_PLACEMENT[m]),
-            )
-        )
-    return kernels, []
-
-
-def _staged_kernels(build: _Build, input_tensor, output_tensor):
-    all_cores = build.staged_split[1]
-    block = build.staged_block_pages
-    reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for core, start, num_pages in _staged_assignment(build):
-        reader_rt[core.x][core.y] = [start, num_pages]
-        writer_rt[core.x][core.y] = [start, num_pages]
-
-    reader = ttnn.KernelDescriptor(
-        kernel_source=STAGED_READER_KERNEL,
-        core_ranges=all_cores,
-        compile_time_args=[CB_STAGED_PAGES, block]
-        + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()),
-        runtime_args=reader_rt,
-        common_runtime_args=[0, 0],
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
-    )
-    writer = ttnn.KernelDescriptor(
-        kernel_source=STAGED_WRITER_KERNEL,
-        core_ranges=all_cores,
-        compile_time_args=[CB_STAGED_PAGES, block]
-        + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()),
-        runtime_args=writer_rt,
-        common_runtime_args=[0, 0],
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
-    )
-    page_size = build.geom.page_size
-    cb_staged_pages = ttnn.CBDescriptor(
-        total_size=STAGED_BUFFER_DEPTH * block * page_size,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(buffer_index=CB_STAGED_PAGES, data_format=input_tensor.dtype, page_size=page_size)
-        ],
-    )
-    return [reader, writer], [cb_staged_pages]
-
-
-def _program_hash(key: tuple) -> int:
-    digest = hashlib.blake2b(repr(("g6_to_memory_config", key)).encode(), digest_size=8).digest()
-    return int.from_bytes(digest, "little")
-
-
-def create_program_descriptor(input_tensor, output_tensor, memory_config) -> ttnn.ProgramDescriptor:
-    """The cached descriptor for this configuration, with this call's buffer addresses patched in.
-
-    Buffer addresses are the only values that change between calls with the same configuration
-    (BB-07); they ride in each kernel's common RT args [src_base_addr, dst_base_addr].
-    """
-    build = _build(input_tensor, memory_config)
-    if build.descriptor is None:
-        if build.plan.regime == "staged":
-            kernels, cbs = _staged_kernels(build, input_tensor, output_tensor)
-        else:
-            kernels, cbs = _mover_kernels(build, input_tensor, output_tensor)
-        descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        descriptor.custom_program_hash = _program_hash(_cache_key(input_tensor, memory_config))
-        build.descriptor = descriptor
-
-    addresses = [input_tensor.buffer_address(), output_tensor.buffer_address()]
-    for kernel in build.descriptor.kernels:
-        kernel.common_runtime_args = addresses
-    return build.descriptor
+        src_addr, dst_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
+        for kernel in descriptor.kernels:
+            kernel.common_runtime_args[0] = src_addr
+            kernel.common_runtime_args[1] = dst_addr
+    return ttnn.generic_op([input_tensor, output_tensor], descriptor)

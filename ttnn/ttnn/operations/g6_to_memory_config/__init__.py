@@ -5,18 +5,16 @@ from .g6_to_memory_config import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    Plan,
-    dump_core_roles,
     g6_to_memory_config,
-    select_plan,
     validate,
 )
+from .g6_to_memory_config_program_descriptor import Plan, dump_core_roles, select_plan
 
 __all__ = [
     "EXCLUSIONS",
     "INPUT_TAGGERS",
-    "Plan",
     "SUPPORTED",
+    "Plan",
     "dump_core_roles",
     "g6_to_memory_config",
     "select_plan",

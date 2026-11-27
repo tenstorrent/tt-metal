@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_to_memory_config has no compute stage and its program descriptor attaches no compute kernel:
-// routing a page through the unpacker/packer would change bfloat8_b/bfloat4_b bits, and there is no
-// arithmetic. Kept only as the empty TRISC role of the op's kernel set.
+// g6_to_memory_config has no compute stage and the program descriptor attaches no compute kernel:
+// pages are moved whole by the data-movement RISCs, and routing them through unpack/pack would change
+// bfloat8_b / bfloat4_b bits. This file exists only to complete the op's reader/compute/writer set.
 
 void kernel_main() {}
