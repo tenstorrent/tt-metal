@@ -610,8 +610,8 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
     switch (sfpu_format)
     {
         case DataFormat::Int32:
-            SFPU_UNARY_CALL_TINY_TILE(
-                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_zero_comp, (false, DataFormat::Int32, OPERATION, ITERATIONS), dst_index, vector_mode);
+            // Two's complement, as the *_tile_int32 compute API calls.
+            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_comp_int, (false, OPERATION, ITERATIONS), dst_index, vector_mode);
             break;
         case DataFormat::Int16:
             SFPU_UNARY_CALL_TINY_TILE(
