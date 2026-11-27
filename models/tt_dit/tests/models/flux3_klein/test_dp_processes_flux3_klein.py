@@ -7,6 +7,7 @@ dispatch over group processes (threads stand in for the processes). No device.""
 
 from __future__ import annotations
 
+import inspect
 import multiprocessing
 import os
 import pickle
@@ -379,7 +380,7 @@ def thread_groups(monkeypatch):
 
 @pytest.fixture
 def groups(thread_groups):
-    with dp.Flux3KleinProcessGroups(warmup=(1024,)) as groups:
+    with dp.Flux3KleinProcessGroups(dp.GROUP_PCIE_IDS, warmup=(1024,)) as groups:
         yield groups
 
 
@@ -392,7 +393,7 @@ def halves(thread_groups):
 def test_each_process_sees_only_its_chips_and_gets_the_warmup(thread_groups, monkeypatch):
     monkeypatch.setenv("TT_VISIBLE_DEVICES", "parent")
     monkeypatch.delenv("TT_MESH_GRAPH_DESC_PATH", raising=False)
-    with dp.Flux3KleinProcessGroups(warmup=(1024,)) as groups:
+    with dp.Flux3KleinProcessGroups(dp.GROUP_PCIE_IDS, warmup=(1024,)) as groups:
         assert [p.env["TT_VISIBLE_DEVICES"] for p in groups._processes] == [
             ",".join(map(str, g)) for g in dp.GROUP_PCIE_IDS
         ]
@@ -426,7 +427,7 @@ def test_four_processes_of_two_dp8_groups_split_the_executor_threads(thread_grou
 
 def test_a_set_executor_thread_count_wins(thread_groups, monkeypatch):
     monkeypatch.setenv("TT_METAL_EXECUTOR_THREADS", "5")
-    with dp.Flux3KleinProcessGroups(warmup=(1024,)) as groups:
+    with dp.Flux3KleinProcessGroups(dp.GROUP_PCIE_IDS, warmup=(1024,)) as groups:
         assert {p.env["TT_METAL_EXECUTOR_THREADS"] for p in groups._processes} == {"5"}
 
 
@@ -535,3 +536,8 @@ def test_a_process_that_fails_to_start_fails_the_constructor(thread_groups, expe
 def test_processes_may_not_share_chips(expect_error):
     with expect_error(ValueError, "share chips"):
         dp.Flux3KleinProcessGroups([dp.GROUP_PCIE_IDS[0], dp.HALF_PCIE_IDS[0]])
+
+
+def test_no_chip_sets_is_dp4():
+    default = inspect.signature(dp.Flux3KleinProcessGroups).parameters["processes"].default
+    assert default == dp.HALF_PCIE_IDS

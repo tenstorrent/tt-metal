@@ -3,10 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per group of a Blackhole Galaxy, (4, 2) by
-default (DP4), a 16-chip (2, 8) / (4, 4) group (DP2) or a (2, 2) group (DP8). Each process sees only its chips (TT_VISIBLE_DEVICES), opens
-them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group (GROUP_PCIE_IDS, the default) or two (4, 2) groups in
-two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one Python GIL. With `depth` > 1 a group holds that
-many requests and prepares the next while one runs (Flux3KleinPipeline.serve)."""
+default (DP4), a 16-chip (2, 8) / (4, 4) group (DP2) or a (2, 2) group (DP8). Each process sees only its chips
+(TT_VISIBLE_DEVICES), opens them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group (GROUP_PCIE_IDS) or two in
+two threads (HALF_PCIE_IDS, the default: two processes of two (4, 2) groups), so the groups' host dispatch does not
+share one Python GIL. With `depth` > 1 a group holds that many requests and prepares the next while one runs
+(Flux3KleinPipeline.serve).
+
+Measured picks per Galaxy (bf16, max img/s with the Galaxy loaded, 0-10 references): DP8 at 1024 with 0, 4 or 10
+references and at 2048 with 10 (Flux3KleinProcessGroups(QUARTER_PCIE_IDS, group_shape=(2, 2))), DP4 (the default) at
+every other size and reference count. For the lowest latency of one request: one SP8 x TP4 Flux3KleinPipeline on the
+whole Galaxy. DP2 is opt-in and not a pick: no measured cell had it ahead of DP4 or DP8."""
 
 from __future__ import annotations
 
@@ -195,10 +201,11 @@ def serve(
 class Flux3KleinProcessGroups:
     """Warm pipeline processes of one or two groups each; each request goes to the next free group.
 
-        with Flux3KleinProcessGroups() as groups:  # or Flux3KleinProcessGroups(HALF_PCIE_IDS)
+        with Flux3KleinProcessGroups() as groups:  # DP4: two processes of two (4, 2) groups (HALF_PCIE_IDS)
             results = groups.generate(requests)
 
-    DP2, one 16-chip group per process: Flux3KleinProcessGroups(sets, group_shape=(2, 8)), or (4, 4) on HALF_PCIE_IDS.
+    DP8: Flux3KleinProcessGroups(QUARTER_PCIE_IDS, group_shape=(2, 2)). DP2, one 16-chip group per process:
+    Flux3KleinProcessGroups(sets, group_shape=(2, 8)), or (4, 4) on HALF_PCIE_IDS.
 
     A group whose process dies fails the requests it holds and is dropped (logged, `alive_groups` shrinks); once none
     is left, every request fails. A hung device hangs its request, as in one process.
@@ -210,7 +217,7 @@ class Flux3KleinProcessGroups:
 
     def __init__(
         self,
-        processes: Iterable[Sequence[int]] = GROUP_PCIE_IDS,
+        processes: Iterable[Sequence[int]] = HALF_PCIE_IDS,
         *,
         group_shape: tuple[int, int] = GROUP_SHAPE,
         warmup: bool | Sequence[int] = True,
