@@ -85,8 +85,7 @@ None. The port did not capitulate, and nothing outside the op directory needed c
   - This op's writer passes `safe_get_noc_addr(…, global_semaphore_addr, 0)` into `perform_atomic_fabric_write` (`ccl/common/kernels/minimal_ccl_common.hpp:45`), as most CCL writers built on that header do.
   - I followed `ccl_port.md`: the address is a plain integer the kernel holds, so § Read this first's definition of a violation ("structurally unavailable") doesn't apply. A literal porter would stop here.
 - **[CCL] `ccl_port.md` puts `fabric_target` in "the factory file's anonymous namespace".** `ccl/` and `experimental/ccl/` are unity builds, which merge anonymous namespaces. The second CCL op in the same unity batch to follow the instruction gets a redefinition error.
-  - Today this is the first, so I followed it literally.
-  - It should be a shared helper, or `ccl_port.md` should say to prefix it per op.
+  - I first followed it literally (this is the first such port), then moved `fabric_target` into `namespace CMAKE_UNIQUE_NAMESPACE` per the recipe fix that followed this run. That compiles, and the generated unity source redefines the macro per source.
 - **[CCL] `FABRIC_2D` rule scope** (`ccl_port.md` § Fabric connections). "A kernel with `#if defined(FABRIC_2D)` code" doesn't say whether included headers count. The fabric headers every CCL writer includes have such branches, including the binding word layout (`edm_fabric_worker_adapters.hpp:32`).
   - I read it as "branches the kernel executes" and checked by hand: no switch on executed paths.
 - **The audit's donor shape table vs `ccl_port.md`.** The table marks `uint64_t NOC-encoded sem` "✗ not OK", which reads as covering a `GlobalSemaphore` address too. Recorded in the audit's Recipe notes; I followed `ccl_port.md`.

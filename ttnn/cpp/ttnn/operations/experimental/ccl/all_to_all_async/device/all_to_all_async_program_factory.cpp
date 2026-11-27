@@ -56,6 +56,8 @@ const tt::tt_metal::GlobalSemaphoreParamName A2A_CHUNK_READY{"chunk_ready"};
 const tt::tt_metal::experimental::FabricConnectionsSpecName A2A_FORWARD{"forward"};
 const tt::tt_metal::experimental::FabricConnectionsSpecName A2A_BACKWARD{"backward"};
 
+// A unity build merges anonymous namespaces across sources; CMake makes this one unique per source.
+namespace CMAKE_UNIQUE_NAMESPACE {
 // Same resolution as legacy append_fabric_connection_rt_args (tt_metal/fabric/fabric.cpp).
 tt::tt_metal::experimental::FabricTargets fabric_target(
     const tt::tt_metal::distributed::MeshDevice& mesh_device,
@@ -75,6 +77,7 @@ tt::tt_metal::experimental::FabricTargets fabric_target(
     }
     TT_THROW("Could not find any forwarding direction from {} to {}", self, peer);
 }
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // Calculate optimal chunk parameters to keep num_chunks < MAX_CHUNKS_PER_SHARD
 std::tuple<uint32_t, uint32_t, uint32_t> calculate_chunk_params(uint32_t pages_per_shard, uint32_t pages_per_packet) {
@@ -694,7 +697,7 @@ ttnn::device_operation::MeshWorkloadArtifacts::PerCoordProgram create_program_at
                                tt::tt_fabric::FabricNodeId peer) {
         spec.advanced_options.fabric_connections.push_back(tt::tt_metal::experimental::FabricConnectionsSpec{
             .unique_id = name,
-            .targets = fabric_target(*mesh_device, sender_fabric_node_id, peer),
+            .targets = CMAKE_UNIQUE_NAMESPACE::fabric_target(*mesh_device, sender_fabric_node_id, peer),
             .links = fabric_links,
         });
         worker_sender_writer_kernel.advanced_options.fabric_connection_bindings.push_back(
