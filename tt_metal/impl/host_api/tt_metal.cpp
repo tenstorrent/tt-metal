@@ -821,7 +821,8 @@ static KernelHandle CreateDramKernel(
     TT_FATAL(metal_context.get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
     TT_FATAL(
         metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0.");
+        "DRAM programmable cores are off: {}",
+        MetalEnvAccessor(metal_context.get_env()).impl().get_dram_cores_off_reason());
     std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(context_id, kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
 }

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/cleanup.hpp>
 #include <tt_stl/fmt.hpp>
@@ -147,21 +148,46 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
     return res.dram_programmable_cores;
 }
 
+// The message of an error thrown by TT_FATAL or TT_THROW, without its location and backtrace; e.what() otherwise.
+std::string error_message(const std::exception& e) {
+    const std::string_view what = e.what();
+    constexpr std::string_view info = "info:\n";
+    const size_t start = what.find(info);
+    if (start == std::string_view::npos) {
+        return std::string(what);
+    }
+    const std::string_view message = what.substr(start + info.size());
+    return std::string(message.substr(0, message.find('\n')));
+}
+
 // Takes the seat lock of every DRAM core metal programs and resets, so no DRISC service can start on one while this
-// env exists. Returns the first seat another process holds, holding none; otherwise holds them all in `held`.
+// env exists. Holds them all in `held`, or holds none and returns why: another process holds one, or taking one
+// failed.
 std::optional<std::string> hold_dram_core_seats(
     const Cluster& cluster, std::vector<internal::drisc_service::SeatLock>& held) {
-    for (const ChipId chip : cluster.all_chip_ids()) {
-        const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
-        for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
-            auto lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
-                {.asic_id = asic_id, .noc0_x = static_cast<uint32_t>(core.x), .noc0_y = static_cast<uint32_t>(core.y)});
-            if (!lock.has_value()) {
-                held.clear();
-                return fmt::format("chip {} DRAM core {} (ASIC {})", chip, core.str(), asic_id);
+    try {
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+            for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+                auto lock = internal::drisc_service::SeatLock::try_acquire_exclusive(
+                    {.asic_id = asic_id,
+                     .noc0_x = static_cast<uint32_t>(core.x),
+                     .noc0_y = static_cast<uint32_t>(core.y)});
+                if (!lock.has_value()) {
+                    held.clear();
+                    return fmt::format(
+                        "another process (a DRISC service client or metal) holds the seat of chip {} DRAM core {} "
+                        "(ASIC {})",
+                        chip,
+                        core.str(),
+                        asic_id);
+                }
+                held.push_back(std::move(*lock));
             }
-            held.push_back(std::move(*lock));
         }
+    } catch (const std::exception& e) {
+        held.clear();
+        return fmt::format("taking their DRISC seat locks failed ({})", error_message(e));
     }
     return std::nullopt;
 }
@@ -220,22 +246,23 @@ void MetalEnvImpl::initialize_base_objects() {
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
     // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
     const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
+    const auto dram_cores_override = this->rtoptions_->get_blackhole_dram_programmable_cores_override();
     bool enable_dram_cores = should_enable_blackhole_dram_programmable_cores(*this->cluster_, *this->rtoptions_);
-    if (enable_dram_cores && platform_arch == tt::ARCH::BLACKHOLE &&
-        cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
-        if (const auto busy = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
+    if (!enable_dram_cores) {
+        dram_cores_off_reason_ = dram_cores_override.has_value()
+                                     ? "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=0"
+                                     : "they auto-enable on Blackhole with firmware >= 19.12.0.0";
+    } else if (
+        platform_arch == tt::ARCH::BLACKHOLE && cluster_->get_target_device_type() == tt::TargetDevice::Silicon) {
+        if (auto reason = hold_dram_core_seats(*this->cluster_, this->dram_core_seat_locks_)) {
             TT_FATAL(
-                !this->rtoptions_->get_blackhole_dram_programmable_cores_override().has_value(),
-                "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but another process (a DRISC service client or "
-                "metal) holds the seat of {}, which metal would reset. Unset the variable to run with the DRAM "
-                "programmable cores off.",
-                *busy);
-            log_warning(
-                tt::LogMetal,
-                "Another process (a DRISC service client or metal) holds the seat of {}; disabling Blackhole DRAM "
-                "programmable cores for this process",
-                *busy);
+                !dram_cores_override.has_value(),
+                "TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1, but {}, so metal cannot reset them. Unset the "
+                "variable to run with the DRAM programmable cores off.",
+                *reason);
+            log_warning(tt::LogMetal, "Disabling Blackhole DRAM programmable cores for this process: {}", *reason);
             enable_dram_cores = false;
+            dram_cores_off_reason_ = std::move(*reason);
         }
     }
     this->hal_ = std::make_unique<Hal>(
