@@ -5,18 +5,9 @@ from .g6_embedding import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    Plan,
     g6_embedding,
     select_plan,
     validate,
 )
 
-__all__ = [
-    "EXCLUSIONS",
-    "INPUT_TAGGERS",
-    "SUPPORTED",
-    "Plan",
-    "g6_embedding",
-    "select_plan",
-    "validate",
-]
+__all__ = ["g6_embedding", "select_plan", "validate", "INPUT_TAGGERS", "SUPPORTED", "EXCLUSIONS"]
