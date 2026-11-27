@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "update_padded_kv_cache_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -17,6 +19,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/chip_position/chip_position_table.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -38,6 +41,25 @@ uint32_t tp_dedup_factor(const ttnn::distributed::MeshDeviceView& mesh_view, con
     return tp_axis.has_value() ? mesh_axis_extent(mesh_view, *tp_axis) : 1;
 }
 
+// Input rows this call writes: the window, or every row from the offset on. Validation and the program factory
+// share it so they agree.
+uint32_t written_input_rows(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args, uint32_t input_seq) {
+    return args.input_rows.value_or(input_seq - std::min(input_seq, args.input_row_offset));
+}
+
+bool has_input_window(const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args, uint32_t input_seq) {
+    return args.input_row_offset != 0 || written_input_rows(args, input_seq) != input_seq;
+}
+
+// Window offset in page-rows. A windowed call is a plain page copy (no rope / scales), so a page-row is one token
+// row for a ROW_MAJOR cache and one tile row otherwise. The cache-miss and cache-hit paths both use this, so a hit
+// patches the same value the miss set.
+uint32_t input_row_offset_page_rows(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args, const Tensor& cache) {
+    return args.input_row_offset / (cache.layout() == Layout::ROW_MAJOR ? 1 : TILE_HEIGHT);
+}
+
 // Reader kernel is reused from the kv_cache fill path — purely (src_addr, num_tiles, src_start) rt-args.
 // Writer is a forked variant that derives `start_id` on-device from the per-request `slot_idx` and
 // `kv_actual_global` plus the structural common rt-args (`my_sp_coord`/`sp_factor`/`layer_idx` etc.).
@@ -57,6 +79,8 @@ constexpr auto kWriterKernelPath =
     "writer_update_padded_kv_cache.cpp";
 
 constexpr uint32_t kSrcCbIndex = 0;
+constexpr uint32_t kUntilizedCbIndex = 16;
+constexpr uint32_t kRopeCbIndex = 3;
 constexpr uint32_t kNumInputPagesDoubleBuffered = 2;
 // L1-scratch CB the writer reads each 1-element metadata tensor into (element [0], 4 bytes). Both the
 // slot_idx and kv_actual_global tensors share this scratch slot (read sequentially): the writer reads
@@ -68,6 +92,67 @@ constexpr uint32_t kMetaCbIndex = 1;
 // would race the writer's own metadata reads.
 constexpr uint32_t kReaderMetaCbIndex = 2;
 constexpr uint32_t kMetadataBytes = 16;
+// The kernels' chip table entry for `coord`: its position on the linearized sp*tp axis.
+uint32_t linear_coord_of(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& coord) {
+    const auto& cache = tensor_args.cache;
+    uint32_t sp_coord;
+    if (args.cluster_axis.has_value()) {
+        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
+    } else {
+        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
+        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
+        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
+        //
+        // This value is ALREADY the linearized sp*tp position the block-cyclic math wants:
+        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
+        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
+        const auto& topology_coords = cache.tensor_topology().mesh_coords();
+        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
+        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
+        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
+    }
+    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
+    // tp_axis==nullopt => tp_factor=1 collapses this.
+    const uint32_t tp_factor = tp_dedup_factor(cache.device()->get_view(), args.tp_axis);
+    const uint32_t tp_coord = args.tp_axis.has_value()
+                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
+                                  : 0;
+    return sp_coord * tp_factor + tp_coord;
+}
+
+// The whole-mesh chip table, if any; create_descriptor and create_mesh_workload both decide through this.
+std::optional<std::vector<uint32_t>> whole_mesh_chip_table(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
+    const auto& cache = tensor_args.cache;
+    return chip_lookup_table(
+        *cache.device(), cache.device_storage().get_coords(), [&](const ttnn::MeshCoordinate& coord) {
+            return linear_coord_of(args, tensor_args, coord);
+        });
+}
+
+// The window offset is not hashed, so its bounds are checked on every call, before anything divides by the
+// window's rows.
+void validate_input_window(
+    const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
+    const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
+    const uint32_t rows = tensor_args.input.padded_shape()[-2];
+    if (!has_input_window(args, rows)) {
+        return;
+    }
+    const uint32_t window = written_input_rows(args, rows);
+    // Compare without adding: offset + window can wrap in uint32_t.
+    TT_FATAL(
+        args.input_row_offset % TILE_HEIGHT == 0 && window > 0 && window <= rows &&
+            args.input_row_offset <= rows - window,
+        "input row window [{}, {}) must be non-empty, 32-row aligned and inside the input's {} rows",
+        args.input_row_offset,
+        uint64_t{args.input_row_offset} + window,
+        rows);
+}
 
 // Runtime-arg checks shared by the cache-miss and cache-hit paths. The structural checks
 // (cluster_axis, tp_axis, layer_idx, 2D mesh) run on both paths. The slot_idx/kv_actual_global value
@@ -77,6 +162,7 @@ constexpr uint32_t kMetadataBytes = 16;
 void validate_runtime_args(
     const UpdatePaddedKvCacheDeviceOperation::operation_attributes_t& args,
     const UpdatePaddedKvCacheDeviceOperation::tensor_args_t& tensor_args) {
+    validate_input_window(args, tensor_args);
     TT_FATAL(
         !args.cluster_axis.has_value() || *args.cluster_axis < 2,
         "cluster_axis must be 0, 1, or None for a complete-mesh row-major cache; got {}",
@@ -154,11 +240,17 @@ void validate_runtime_args(
     // writer_tile_height compile arg from the architectural 32x32 constants, and the tile is absent
     // from compute_program_hash. Checked here rather than in the miss validator so it also runs on the
     // cache-hit path, where a non-standard tile would otherwise alias onto a cached 32x32 program.
-    const auto require_standard_tile = [](const Tensor& tensor, const char* name) {
+    const auto require_standard_tile = [](const Tensor& tensor, const char* name, bool untilize = false) {
         if (tensor.layout() != Layout::TILE) {
             return;
         }
         const auto tile = tensor.tensor_spec().tile();
+        if (untilize) {
+            TT_FATAL(
+                !tile.get_transpose_within_face() && !tile.get_transpose_of_faces(),
+                "split-input untilize requires ordinary face order for {}",
+                name);
+        }
         TT_FATAL(
             tile.get_height() == TILE_HEIGHT && tile.get_width() == TILE_WIDTH,
             "update_padded_kv_cache does not currently support tiles other than 32x32, but {} has a {}x{} "
@@ -168,21 +260,92 @@ void validate_runtime_args(
             tile.get_width());
     };
     require_standard_tile(cache, "cache");
-    require_standard_tile(tensor_args.input, "input");
+    require_standard_tile(tensor_args.input, "input", tensor_args.rope.has_value() && !tensor_args.scales.has_value());
 
-    // cache's dtype and layout are absent from the key (only input's are hashed), and both set the
-    // writer's page size, so they have to be re-checked on hits too: a second call that changes only
-    // the cache would otherwise reuse a program built for the first one's page geometry.
+    // The copy path requires matching dtype/layout; the split-input path validates its
+    // tiled BF16 inputs or row-major scaled-FP8 fields below. Check these on hits too.
     TT_FATAL(
         cache.dtype() == tensor_args.input.dtype(),
         "cache and input dtype must match (got {} and {})",
         cache.dtype(),
         tensor_args.input.dtype());
     TT_FATAL(
-        cache.layout() == tensor_args.input.layout(),
+        tensor_args.rope.has_value() || cache.layout() == tensor_args.input.layout(),
         "cache and input layout must match (got {} and {})",
         cache.layout(),
         tensor_args.input.layout());
+
+    TT_FATAL(!tensor_args.scales.has_value() || tensor_args.rope.has_value(), "scales requires a RoPE input");
+    if (tensor_args.scales.has_value()) {
+        namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
+        const auto& input = tensor_args.input;
+        TT_FATAL(
+            cache.layout() == Layout::ROW_MAJOR && cache.dtype() == DataType::FP8_E4M3,
+            "scaled split write requires ROW_MAJOR FP8 cache");
+        TT_FATAL(
+            cache.padded_shape()[-1] == packed::PACKED_ROW_BYTES, "scaled cache row width must match packed format");
+        TT_FATAL(
+            input.padded_shape().rank() == 4 && input.padded_shape()[0] == 1 && input.padded_shape()[1] == 1,
+            "scaled split inputs must be 4D single-batch, single-head");
+        const auto validate_field = [&](const Tensor& field, DataType dtype, uint32_t width, Layout layout) {
+            TT_FATAL(
+                field.storage_type() == StorageType::DEVICE && field.device() == cache.device() && field.is_allocated(),
+                "scaled split inputs must be allocated on the cache device");
+            TT_FATAL(
+                field.layout() == layout && field.dtype() == dtype && !field.is_sharded(),
+                "scaled split input has incorrect layout, dtype or memory layout");
+            TT_FATAL(
+                field.padded_shape().rank() == 4 && field.logical_shape()[-1] == width &&
+                    field.padded_shape()[-1] == width,
+                "scaled split input width must match packed format without padding");
+            for (uint32_t dim = 0; dim < 3; ++dim) {
+                TT_FATAL(
+                    field.padded_shape()[dim] == input.padded_shape()[dim] &&
+                        field.logical_shape()[dim] == input.logical_shape()[dim],
+                    "scaled split inputs must have identical leading shapes");
+            }
+        };
+        validate_field(input, DataType::FP8_E4M3, packed::LATENT_WIDTH, Layout::ROW_MAJOR);
+        validate_field(*tensor_args.scales, DataType::FLOAT32, packed::SCALE_WIDTH, Layout::ROW_MAJOR);
+        TT_FATAL(
+            tensor_args.rope->layout() == Layout::ROW_MAJOR || tensor_args.rope->layout() == Layout::TILE,
+            "scaled split RoPE must be ROW_MAJOR or TILE");
+        require_standard_tile(*tensor_args.rope, "rope", true);
+        validate_field(*tensor_args.rope, DataType::BFLOAT16, packed::ROPE_WIDTH, tensor_args.rope->layout());
+    } else if (tensor_args.rope.has_value()) {
+        const auto& input = tensor_args.input;
+        const auto& rope = *tensor_args.rope;
+        TT_FATAL(
+            cache.layout() == Layout::ROW_MAJOR && cache.dtype() == DataType::BFLOAT16,
+            "split-input cache write requires ROW_MAJOR BF16 cache");
+        TT_FATAL(
+            input.layout() == Layout::TILE && input.dtype() == DataType::BFLOAT16,
+            "split-input cache write requires TILE BF16 latent");
+        TT_FATAL(
+            rope.storage_type() == StorageType::DEVICE && rope.device() == cache.device() &&
+                input.device() == cache.device(),
+            "split inputs must be on the cache device");
+        TT_FATAL(
+            rope.layout() == Layout::TILE && rope.dtype() == DataType::BFLOAT16,
+            "split-input cache write requires TILE BF16 RoPE");
+        require_standard_tile(rope, "rope", true);
+        TT_FATAL(!input.is_sharded() && !rope.is_sharded(), "split inputs must be interleaved");
+        const auto& shape = input.padded_shape();
+        const auto& rope_shape = rope.padded_shape();
+        TT_FATAL(
+            shape.rank() == 4 && rope_shape.rank() == 4 && shape[0] == 1 && shape[1] == 1,
+            "split inputs must be 4D single-batch, single-head tensors");
+        for (uint32_t dim = 0; dim < 3; ++dim) {
+            TT_FATAL(
+                shape[dim] == rope_shape[dim] && input.logical_shape()[dim] == rope.logical_shape()[dim],
+                "split inputs must have identical leading shapes");
+        }
+        TT_FATAL(
+            shape[3] % TILE_WIDTH == 0 && rope_shape[3] % TILE_WIDTH == 0 && input.logical_shape()[3] == shape[3] &&
+                rope.logical_shape()[3] == rope_shape[3],
+            "split input widths must be tile-aligned without padding");
+        TT_FATAL(cache.padded_shape()[3] == shape[3] + rope_shape[3], "cache width must equal latent plus RoPE width");
+    }
 
     // Metadata-path invariant: the two per-request tensors are supplied together or not at all.
     // The path is selected on `slot_idx.has_value()`, but create_descriptor / override_runtime_arguments
@@ -209,7 +372,7 @@ void validate_runtime_args(
                 name,
                 meta.logical_volume());
             TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
-            // The writer resolves meta.buffer()->address() against cache.device(); a tensor on a
+            // The writer resolves meta.mesh_buffer().address() against cache.device(); a tensor on a
             // different mesh device would bake the wrong address and fail obscurely downstream.
             TT_FATAL(meta.device() == cache.device(), "metadata tensor {} must be on the same device as cache", name);
             // create_descriptor emits a single TensorAccessorArgs built from slot_idx and the writer uses
@@ -250,7 +413,7 @@ void validate_runtime_args(
         const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
         const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
 
-        const uint32_t input_seq = tensor_args.input.padded_shape()[-2];
+        const uint32_t input_seq = written_input_rows(args, tensor_args.input.padded_shape()[-2]);
         if (tp_factor > 1) {
             // A chip's 1/tp window is contiguous in the flattened (head, seq) page space only for a single
             // head -- which is what both GLM KV caches (KVPE width 576, index width 128) are.
@@ -309,6 +472,7 @@ UpdatePaddedKvCacheDeviceOperation::program_factory_t UpdatePaddedKvCacheDeviceO
 
 void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_input_window(args, tensor_args);
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
 
@@ -328,6 +492,12 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     if (input.dtype() == DataType::FP8_E4M3) {
         TT_FATAL(input.layout() == Layout::ROW_MAJOR, "FP8_E4M3 requires ROW_MAJOR layout");
     }
+    if (has_input_window(args, input.padded_shape()[-2])) {
+        TT_FATAL(
+            !tensor_args.rope.has_value() && !tensor_args.scales.has_value() && !args.tp_axis.has_value() &&
+                !input.is_sharded(),
+            "an input row window supports only the plain page copy of an interleaved input (no rope/scales/tp_axis)");
+    }
     // The per-element-tensor (metadata) path works in both layouts: the writer's page-row unit is the
     // `writer_tile_height` compile arg (TILE_HEIGHT for TILE, 1 for ROW_MAJOR), so no layout guard is
     // needed here.
@@ -336,11 +506,12 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input.padded_shape();
     TT_FATAL(cache_shape.rank() == 4, "cache must be 4D (got rank {})", cache_shape.rank());
     TT_FATAL(input_shape.rank() == 4, "input must be 4D (got rank {})", input_shape.rank());
-    TT_FATAL(cache_shape[-1] == input_shape[-1], "cache and input head dim must match");
+    TT_FATAL(tensor_args.rope.has_value() || cache_shape[-1] == input_shape[-1], "cache and input head dim must match");
     TT_FATAL(cache_shape[1] == input_shape[1], "cache and input num-heads dim must match");
 
     const uint32_t cache_seq = cache_shape[-2];
-    const uint32_t input_seq = input_shape[-2];
+    // With an input row window the written chunk is the window, not the whole input.
+    const uint32_t input_seq = written_input_rows(args, input_shape[-2]);
     // Seq / offset arithmetic stays tile-granular (multiples of 32) in BOTH layouts: the writer's
     // update_idxt boundary math counts tile-rows even when ROW_MAJOR makes each page a single token
     // row, so input/cache seq must be 32-aligned regardless of layout.
@@ -428,6 +599,13 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         args.cluster_axis,
         args.tp_axis.has_value(),
         args.tp_axis.value_or(0),
+        tensor_args.rope.has_value(),
+        tensor_args.rope.has_value() ? tensor_args.rope->memory_config() : MemoryConfig{},
+        tensor_args.rope.has_value() ? tensor_args.rope->layout() : Layout::ROW_MAJOR,
+        tensor_args.scales.has_value(),
+        tensor_args.scales.has_value() ? tensor_args.scales->memory_config() : MemoryConfig{},
+        cache.dtype(),
+        cache.layout(),
         input.dtype(),
         input.layout(),  // TILE vs ROW_MAJOR drives the page-unit math; must not collide
         input.memory_config(),
@@ -437,7 +615,11 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         // On the metadata path the writer bakes a TensorAccessorArgs built from slot_idx into its
         // compile-time args, so the bank table it selects cannot be refreshed on a cache hit. Only the
         // config is keyed, never the value; kv_actual_global is pinned to match by validate_runtime_args.
-        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{});
+        tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{},
+        // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
+        has_input_window(args, input.padded_shape()[-2]),
+        written_input_rows(args, input.padded_shape()[-2]),
+        chip_mapping_hash(*cache.device(), cache.device_storage().get_coords()));
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
@@ -455,6 +637,10 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* device = input.device();
     const bool has_metadata = tensor_args.slot_idx.has_value();
     const bool has_valid = tensor_args.valid_global.has_value() || args.valid_global.has_value();
+    // linear_coord comes from the whole-mesh chip table, else (a per-chip program) common arg 0, which keeps it out
+    // of the compile-time args so every chip shares one kernel binary. Nothing else uses `coord`.
+    const std::vector<uint32_t> chip_table = whole_mesh_chip_table(args, tensor_args).value_or(std::vector<uint32_t>{});
+    const uint32_t linear_coord = chip_table.empty() ? linear_coord_of(args, tensor_args, coord) : 0;
 
     const auto& cache_shape = cache.padded_shape();
     const auto& input_shape = input.padded_shape();
@@ -466,16 +652,34 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // expressed in pages, so switching layout is purely a reinterpretation of these page-unit counts
     // (plus the page byte size and the writer's tile_height compile arg). The seq/offset asserts keep
     // everything 32-row-aligned in both layouts, so the boundary math is identical.
-    const bool is_row_major = input.layout() == Layout::ROW_MAJOR;
+    const bool has_scaled = tensor_args.scales.has_value();
+    const bool has_rope = tensor_args.rope.has_value() && !has_scaled;
+    const bool tiled_rope = has_scaled && tensor_args.rope->layout() == Layout::TILE;
+    const bool is_row_major = cache.layout() == Layout::ROW_MAJOR;
 
     uint32_t single_page_size;  // bytes per page / CB page
     uint32_t Wt;                // width pages per (head, seq-row)
     uint32_t input_Ht;          // input seq in page-rows
     uint32_t cache_HtWt;        // cache page-rows per head
     uint32_t writer_tile_height;
-    if (is_row_major) {
+    if (has_rope) {
+        // Split tiled inputs are streamed in complete 32-row blocks through untilize.
+        single_page_size = tt::tile_size(data_format);
+        Wt = 1;
+        input_Ht = input_shape[-2] / TILE_HEIGHT;
+        cache_HtWt = cache_shape[-2] / TILE_HEIGHT;
+        writer_tile_height = TILE_HEIGHT;
+    } else if (tiled_rope) {
+        // A work block covers 32 tokens, with separate aligned latent and scale staging pages.
+        namespace packed = ttnn::operations::experimental::deepseek_prefill::pack_scaled_fp8_kv_cache;
+        single_page_size = packed::LATENT_WIDTH;
+        Wt = 1;
+        input_Ht = input_shape[-2] / TILE_HEIGHT;
+        cache_HtWt = cache_shape[-2] / TILE_HEIGHT;
+        writer_tile_height = TILE_HEIGHT;
+    } else if (is_row_major) {
         // ROW_MAJOR: page = one token row; use the buffer's aligned page size (handles row padding).
-        single_page_size = cache.buffer()->aligned_page_size();
+        single_page_size = cache.mesh_buffer().aligned_page_size();
         Wt = 1;
         input_Ht = input_shape[-2];
         cache_HtWt = cache_shape[-2];
@@ -488,41 +692,19 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         writer_tile_height = TILE_HEIGHT;
     }
     const uint32_t cache_CHtWt = cache_shape[1] * cache_HtWt;
+    // Page-rows per head this call writes: the input row window, or the whole input.
+    const uint32_t window_Ht = written_input_rows(args, input_shape[-2]) / writer_tile_height;
 
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
     // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
     const auto& mesh_view = device->get_view();
     const uint32_t sp_factor = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
-    uint32_t sp_coord;
-    if (args.cluster_axis.has_value()) {
-        sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
-    } else {
-        // Complete-mesh cache ownership follows the tensor's declared canonical row-major topology. An
-        // allocate-on-device tensor's storage coordinate vector may use a different internal order;
-        // using that order would rotate the wrong cache shard after a nonzero kv_actual_global.
-        //
-        // This value is ALREADY the linearized sp*tp position the block-cyclic math below wants:
-        // row-major over the full mesh is exactly sp_coord*tp + tp_coord. tp_axis is rejected in this
-        // mode, so tp_factor collapses to 1 and linear_coord reduces to this index unchanged.
-        const auto& topology_coords = cache.tensor_topology().mesh_coords();
-        const auto it = std::find(topology_coords.begin(), topology_coords.end(), coord);
-        TT_FATAL(it != topology_coords.end(), "cache mesh coordinate {} is absent from its tensor topology", coord);
-        sp_coord = static_cast<uint32_t>(std::distance(topology_coords.begin(), it));
-    }
-    // On the metadata path slot_idx and kv_actual_global are not host values — the writer kernel reads
-    // element [0] of each per-element tensor and divides kv_actual_global by TILE_HEIGHT on-device.
-
-    // KV dedup: linearize sp and tp into ONE block-cyclic axis of size sp*tp (linear = sp_coord*tp + tp_coord).
-    // The writer's offset math then needs no change. tp_axis==nullopt => tp_factor=1 collapses all of this.
+    // KV dedup: sp and tp linearize to ONE block-cyclic axis of size sp*tp (tp_factor=1 without tp_axis).
     const uint32_t tp_factor = tp_dedup_factor(mesh_view, args.tp_axis);
-    const uint32_t tp_coord = args.tp_axis.has_value()
-                                  ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
-                                  : 0;
-    const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
-    const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
-    const uint32_t chunk_local_t = input_Ht / tp_factor;            // tile-rows THIS chip actually writes
+    const uint32_t linear_factor = sp_factor * tp_factor;  // effective block-cyclic chip count
+    const uint32_t chunk_local_t = window_Ht / tp_factor;  // tile-rows THIS chip actually writes
 
-    // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == input_Ht at tp=1).
+    // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
 
     const auto compute_grid = device->compute_with_storage_grid_size();
@@ -531,9 +713,14 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     tt::tt_metal::ProgramDescriptor desc;
 
+    const uint32_t block_tiles =
+        has_rope ? cache_shape[-1] / TILE_WIDTH : (tiled_rope ? 2 * TILE_HEIGHT : (has_scaled ? 3 : 1));
+    const uint32_t untilize_tiles =
+        has_rope ? block_tiles : (tiled_rope ? tensor_args.rope->padded_shape()[-1] / TILE_WIDTH : 0);
+
     // CB for the input pages (a page is a tile in TILE layout, a token row in ROW_MAJOR).
     desc.cbs.push_back(CBDescriptor{
-        .total_size = kNumInputPagesDoubleBuffered * single_page_size,
+        .total_size = kNumInputPagesDoubleBuffered * block_tiles * single_page_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = kSrcCbIndex,
@@ -541,6 +728,33 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             .page_size = single_page_size,
         }}},
     });
+
+    if (has_rope) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = kNumInputPagesDoubleBuffered * block_tiles * single_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = kUntilizedCbIndex,
+                .data_format = data_format,
+                .page_size = single_page_size,
+            }}},
+        });
+    }
+
+    if (tiled_rope) {
+        const uint32_t rope_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+        for (const auto cb_index : {kRopeCbIndex, kUntilizedCbIndex}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = kNumInputPagesDoubleBuffered * untilize_tiles * rope_tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = cb_index,
+                    .data_format = tt::DataFormat::Float16_b,
+                    .page_size = rope_tile_size,
+                }}},
+            });
+        }
+    }
 
     // L1-scratch CBs the kernels read each metadata tensor's element into (each reused across its own
     // reads). Metadata path only; the reader gets a separate index because both kernels read
@@ -559,12 +773,25 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         }
     }
 
-    // Reader kernel descriptor. tile_height leads (the reader divides kv_actual_global by it, as the writer
-    // does), then has_metadata and the reader's metadata scratch CB, so the source accessor starts at 3.
-    // On the metadata path ONE metadata accessor follows it, for the 1-element kv_actual_global tensor.
+    // Reader compile args: row height, metadata flag/CB, BF16 untilize flag, two tile widths,
+    // scaled packing flag, tiled RoPE input CB.
+    // Accessors follow for input, optional RoPE/scales, and optional kv_actual_global metadata.
     KernelDescriptor::CompileTimeArgs reader_compile_args = {
-        writer_tile_height, static_cast<uint32_t>(has_metadata), has_metadata ? kReaderMetaCbIndex : 0u};
+        writer_tile_height,
+        static_cast<uint32_t>(has_metadata),
+        has_metadata ? kReaderMetaCbIndex : 0u,
+        static_cast<uint32_t>(has_rope),
+        has_rope ? input_shape[-1] / TILE_WIDTH : 0u,
+        (has_rope || tiled_rope) ? tensor_args.rope->padded_shape()[-1] / TILE_WIDTH : 0u,
+        static_cast<uint32_t>(has_scaled),
+        tiled_rope ? kRopeCbIndex : 0u};
     TensorAccessorArgs(input.buffer()).append_to(reader_compile_args);
+    if (tensor_args.rope.has_value()) {
+        TensorAccessorArgs(tensor_args.rope->buffer()).append_to(reader_compile_args);
+    }
+    if (has_scaled) {
+        TensorAccessorArgs(tensor_args.scales->buffer()).append_to(reader_compile_args);
+    }
     if (has_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_global->buffer()).append_to(reader_compile_args);
     }
@@ -578,18 +805,23 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     // Writer kernel descriptor. Compile args (uniform leading layout so the kernel offsets are fixed):
     // [0]=kSrcCbIndex, [1]=has_metadata, [2]=kMetaCbIndex (placeholder 0 on scalar path),
-    // [3]=writer_tile_height, [4]=has_valid, [5..]=cache accessor, then (metadata path only) ONE metadata accessor
+    // [3]=writer_tile_height, [4]=has_valid, [5]=BF16 untilize, [6]=block_pages, [7]=scaled packing,
+    // [8]=tiled RoPE output CB, [9..]=cache accessor, then (metadata path only) ONE metadata accessor
     // (the slot_idx and kv_actual_global tensors share an identical 1-element uint32 replicated-DRAM
     // layout, so the same TensorAccessorArgs serves both reads). writer_tile_height divides kv tokens
     // into the page-row unit (TILE_HEIGHT for TILE, 1 for ROW_MAJOR). On the metadata path the writer
     // reads slot_idx then kv_actual_global (each element [0]) via this accessor against the two raw
     // addresses in common args 8/9; on the scalar path it reads them directly from common args 8/9.
     KernelDescriptor::CompileTimeArgs writer_compile_args = {
-        kSrcCbIndex,
+        has_rope ? kUntilizedCbIndex : kSrcCbIndex,
         static_cast<uint32_t>(has_metadata),
         has_metadata ? kMetaCbIndex : 0u,
         writer_tile_height,
-        static_cast<uint32_t>(has_valid)};
+        static_cast<uint32_t>(has_valid),
+        static_cast<uint32_t>(has_rope),
+        block_tiles,
+        static_cast<uint32_t>(has_scaled),
+        tiled_rope ? kUntilizedCbIndex : 0u};
     TensorAccessorArgs(cache.buffer()).append_to(writer_compile_args);
     if (has_metadata) {
         // One accessor reused for both 1-element tensors (identical layout).
@@ -604,15 +836,15 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
-    // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
-    // this chip's position on the linearized sp*tp axis, layer_idx is hashed. Indices 8 and 9 carry the
-    // per-call values that override_runtime_arguments patches on cache hits (the buffer-binding fast
-    // path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
+    // 0-7 are structural (constant for this cached program): linear_coord (0 with a chip table, which then holds
+    // it)/linear_factor/chunk_local_t are this chip's position on the linearized sp*tp axis, layer_idx is hashed.
+    // Indices 8 and 9 carry the per-call values that override_runtime_arguments patches on cache hits (the
+    // buffer-binding fast path leaves them stale otherwise): metadata path -> [8]=slot_idx tensor's raw DRAM address,
     // [9]=kv_actual_global tensor's raw DRAM address; scalar path -> [8]=slot_idx, [9]=kv_actual_global.
     // The kernel composes batch_idx = slot_idx*num_layers + layer_idx.
     if (has_metadata) {
-        const uint32_t slot_idx_addr = tensor_args.slot_idx->buffer()->address();
-        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->buffer()->address();
+        const uint32_t slot_idx_addr = tensor_args.slot_idx->mesh_buffer().address();
+        const uint32_t kv_actual_global_addr = tensor_args.kv_actual_global->mesh_buffer().address();
         writer_kernel.emplace_common_runtime_args({
             linear_coord,
             linear_factor,
@@ -627,7 +859,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
             kv_actual_global_addr,  // smuggled-rta-ok: 1-element metadata tensor DRAM addr; read on-device
             // Arg 10: valid_global's DRAM addr when clamping, else an inert 0 (always present so the
             // indices never shift).
-            has_valid ? tensor_args.valid_global->buffer()->address() : 0u,  // smuggled-rta-ok: as above
+            has_valid ? tensor_args.valid_global->mesh_buffer().address() : 0u,  // smuggled-rta-ok: as above
         });
     } else {
         writer_kernel.emplace_common_runtime_args({
@@ -650,12 +882,12 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     // the kv_actual_global tensor's raw DRAM address, which the reader reads element [0] of on-device;
     // scalar path -> the value itself. Same dual use as the writer's args 8/9.
     const uint32_t reader_kv_actual =
-        has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+        has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     reader_kernel.emplace_common_runtime_args({
         linear_coord,
         linear_factor,
         chunk_local_t,
-        input_Ht,
+        window_Ht,
         sp_factor,
         tp_factor,
         Wt,
@@ -668,13 +900,41 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* src_buffer = input.buffer();
     auto* dst_buffer = cache.buffer();
     reader_kernel.emplace_common_runtime_args({src_buffer});
+    if (has_input_window(args, input_shape[-2])) {
+        // Window row r of head h reads input row h * INPUT_ROW_STRIDE_T + offset + r. A windowed call has no
+        // rope / scales bindings, so the offset sits right after the source binding (index 9).
+        reader_kernel.defines.emplace_back("INPUT_ROW_STRIDE_T", std::to_string(input_Ht));
+        reader_kernel.emplace_common_runtime_args({input_row_offset_page_rows(args, cache)});
+    }
+    if (tensor_args.rope.has_value()) {
+        reader_kernel.emplace_common_runtime_args({tensor_args.rope->buffer()});
+    }
+    if (has_scaled) {
+        reader_kernel.emplace_common_runtime_args({tensor_args.scales->buffer()});
+    }
     writer_kernel.emplace_common_runtime_args({dst_buffer});
+    // The chip table (size 0 without one) follows the other compile-time args (cache_dataflow_helpers.hpp).
+    for (KernelDescriptor* kernel : {&reader_kernel, &writer_kernel}) {
+        kernel->named_compile_time_args.emplace_back(
+            "chip_table_offset", static_cast<uint32_t>(kernel->compile_time_args.size()));
+        kernel->named_compile_time_args.emplace_back("chip_table_size", static_cast<uint32_t>(chip_table.size()));
+        kernel->compile_time_args.insert(kernel->compile_time_args.end(), chip_table.begin(), chip_table.end());
+    }
     const uint32_t g1_numcores = core_group_1.num_cores();
 
     const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     reader_kernel.runtime_args.reserve(num_cores);
     writer_kernel.runtime_args.reserve(num_cores);
 
+    KernelDescriptor compute_kernel;
+    if (has_rope || tiled_rope) {
+        compute_kernel.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp";
+        compute_kernel.core_ranges = all_cores;
+        compute_kernel.compile_time_args = {untilize_tiles, tiled_rope ? kRopeCbIndex : kSrcCbIndex, kUntilizedCbIndex};
+        // The FP8 staging CB shares this core with BF16 untilize; FP8 requires 32-bit DEST mode.
+        compute_kernel.config = ComputeConfigDescriptor{.fp32_dest_acc_en = tiled_rope};
+    }
     uint32_t num_blocks_written = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores.at(i);
@@ -688,11 +948,17 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
         // offset from the slot_idx/kv_actual_global it reads (metadata tensors or common-arg scalars).
         writer_kernel.emplace_runtime_args(core, {num_blocks_per_core * Wt, num_blocks_written});
 
+        if (has_rope || tiled_rope) {
+            compute_kernel.emplace_runtime_args(core, {num_blocks_per_core});
+        }
         num_blocks_written += num_blocks_per_core;
     }
 
     desc.kernels.push_back(std::move(reader_kernel));
     desc.kernels.push_back(std::move(writer_kernel));
+    if (has_rope || tiled_rope) {
+        desc.kernels.push_back(std::move(compute_kernel));
+    }
     return desc;
 }
 
@@ -702,7 +968,24 @@ UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    if (!whole_mesh_chip_table(args, tensor_args).has_value()) {
+        return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    }
+    // One program per range, built as the adapter builds its per-coordinate ones (same cache-hit path).
+    tt::tt_metal::distributed::MeshWorkload workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, descriptor_adapter_t::shared_variables_t> shared_variables;
+    const tt::tt_metal::WorkloadDescriptor no_workload_descriptor;
+    // Bind each program to its mesh's context, as the adapter does.
+    auto& mesh_device = *ttnn::device_operation::mesh_device_operation_utils::get_mesh_device(args, tensor_args);
+    for (const auto& range : tensor_coords.ranges()) {
+        auto desc = ProgramFactory::create_descriptor(args, tensor_args, output, range.start_coord());
+        tt::tt_metal::Program program{mesh_device, desc};
+        auto collected = descriptor_adapter_t::collect_tensor_buffers(tensor_args, output, no_workload_descriptor);
+        auto bindings = tt::tt_metal::resolve_bindings(program, desc, collected.buffers, collected.num_input_buffers);
+        workload.add_program(range, std::move(program));
+        shared_variables[range] = descriptor_adapter_t::shared_variables_t{.resolved_bindings = std::move(bindings)};
+    }
+    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
 }
 
 void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arguments(
@@ -725,11 +1008,15 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
     // The reader derives its source rows from kv_actual_global too, so patch its copy or a cache hit at a
     // new chunk start would re-read the previous call's rows.
     constexpr uint32_t kReaderKvActualGlobalCommonArgIdx = 7;
+    // Window offset in page-rows; matches the index set in create_descriptor.
+    constexpr uint32_t kReaderInputRowOffsetCommonArgIdx = 9;
+    const bool window = has_input_window(args, tensor_args.input.padded_shape()[-2]);
+    const uint32_t input_row_offset_t = input_row_offset_page_rows(args, tensor_args.cache);
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->buffer()->address() : args.slot_idx;
-    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->buffer()->address() : args.kv_actual_global;
+    const uint32_t arg8 = has_metadata ? tensor_args.slot_idx->mesh_buffer().address() : args.slot_idx;
+    const uint32_t arg9 = has_metadata ? tensor_args.kv_actual_global->mesh_buffer().address() : args.kv_actual_global;
     // Arg 10: valid_global's address (metadata) or token count (scalar); 0 when not clamping.
-    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->buffer()->address()
+    const uint32_t arg10 = tensor_args.valid_global.has_value() ? tensor_args.valid_global->mesh_buffer().address()
                                                                 : args.valid_global.value_or(0);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
@@ -745,6 +1032,9 @@ void UpdatePaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_a
             "update_padded_kv_cache reader is missing the kv_actual_global common arg");
         // arg9 already resolves to the address on the metadata path and the value on the scalar path.
         reader_common[kReaderKvActualGlobalCommonArgIdx] = arg9;
+        if (window) {
+            reader_common[kReaderInputRowOffsetCommonArgIdx] = input_row_offset_t;
+        }
     }
 }
 
@@ -764,7 +1054,11 @@ ttnn::Tensor update_padded_kv_cache(
     std::optional<uint32_t> cluster_axis,
     const std::optional<ttnn::Tensor>& valid_global_tensor,
     std::optional<uint32_t> valid_global,
-    std::optional<uint32_t> tp_axis) {
+    std::optional<uint32_t> tp_axis,
+    const std::optional<ttnn::Tensor>& rope,
+    const std::optional<ttnn::Tensor>& scales,
+    uint32_t input_row_offset,
+    std::optional<uint32_t> input_rows) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -775,6 +1069,8 @@ ttnn::Tensor update_padded_kv_cache(
         .cluster_axis = cluster_axis,
         .valid_global = valid_global,
         .tp_axis = tp_axis,
+        .input_row_offset = input_row_offset,
+        .input_rows = input_rows,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache = cache,
@@ -782,6 +1078,8 @@ ttnn::Tensor update_padded_kv_cache(
         .slot_idx = slot_idx_tensor,
         .kv_actual_global = kv_actual_global_tensor,
         .valid_global = valid_global_tensor,
+        .rope = rope,
+        .scales = scales,
     };
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }

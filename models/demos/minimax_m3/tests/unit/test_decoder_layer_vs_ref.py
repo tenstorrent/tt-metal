@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tier-1 PCC test for the full MiniMax-M3 DENSE decoder layer (layer 0) vs a torch reference.
+Tier-1 PCC test for a full MiniMax-M3 DENSE decoder layer (dense attention + dense MLP) vs a torch reference.
 
 Composes the validated dense-layer pieces with residuals (pre-norm transformer block):
     x += attention(input_layernorm(x))
@@ -27,12 +27,21 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.layer import DecoderLayer
 from models.demos.minimax_m3.tt.model import create_rope_setup
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config, with_layer_schedule
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import parametrize_mesh_with_fabric
 
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-DENSE_INTER, ALPHA, LIMIT = 12288, 1.702, 7.0
+# Dims and RoPE from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL; utils/model_variant.py).
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+DENSE_INTER, ALPHA, LIMIT = _CFG["dense_intermediate_size"], _CFG["swiglu_alpha"], _CFG["swiglu_limit"]
 
 
 def _gemma_norm(x, w):
@@ -129,22 +138,8 @@ def test_dense_decoder_layer_vs_ref(mesh_device, device_params, seq_len, reset_s
     }
     state = convert_hf_qkv_to_meta_format_partial(hf_state, HEAD_DIM, ROTARY_DIM)
 
-    hf_config = SimpleNamespace(
-        hidden_size=HIDDEN,
-        num_attention_heads=NQ,
-        num_key_value_heads=NKV,
-        head_dim=HEAD_DIM,
-        rotary_dim=ROTARY_DIM,
-        rope_theta=THETA,
-        rope_scaling=None,
-        rms_norm_eps=EPS,
-        max_position_embeddings=max(seq_len, 128),
-        use_qk_norm=True,
-        use_gemma_norm=True,
-        swiglu_alpha=ALPHA,
-        swiglu_limit=LIMIT,
-        moe_layer_freq=[0],  # layer 0 -> dense path
-    )
+    # One dense-MLP + dense-attention layer of the selected variant's config.
+    hf_config = SimpleNamespace(**dict(with_layer_schedule(_CFG, [0], [0]), max_position_embeddings=max(seq_len, 128)))
 
     mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)

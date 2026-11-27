@@ -12,12 +12,14 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import List, Sequence
 
 import torch
 
 import ttnn
 
+from ...layers.audio_aa_snake import FusedActivation1d
 from ...layers.audio_ops import (
     ConvTranspose1dViaConv3d,
     Snake,
@@ -29,14 +31,44 @@ from ...layers.audio_ops import (
     channel_factor,
     partition_channel,
 )
+from ...layers.audio_pack import PackedActivation1d, PackedConv1d
 from ...layers.audio_resample import Activation1d
-from ...layers.module import Module, ModuleList
+from ...layers.module import Module, ModuleList, release_device_cache
 from ...parallel.config import ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils.tensor import local_device_to_torch
 from ...utils.tracing import traced_function
 
 TILE_HEIGHT = ttnn.TILE_SIZE  # 32; the per-shard T-height floor for HEIGHT_SHARDED convs
+
+
+def _reshape_rows(x: ttnn.Tensor, shape) -> ttnn.Tensor:
+    """Reshape, freeing x."""
+    y = ttnn.reshape(x, shape)
+    try:
+        distinct = y.buffer_address() != x.buffer_address()
+    except Exception:  # noqa: BLE001 -- no address on this tensor kind: keep both alive rather than risk a free
+        distinct = False
+    if distinct:
+        ttnn.deallocate(x)
+    return y
+
+
+def _batch_sharded_to_torch(x_dev: ttnn.Tensor, axis: int, batch: int) -> torch.Tensor:
+    """Stack batch items from mesh axis."""
+    mesh_device = x_dev.device()
+    view = mesh_device.get_view() if ttnn.using_distributed_env() else None
+    coords = list(x_dev.tensor_topology().mesh_coords())
+    shards = ttnn.get_device_tensors(x_dev)
+    parts = []
+    for b in range(batch):
+        for coord, shard in zip(coords, shards):
+            if int(coord[axis]) == b and (view is None or view.is_local(coord)):
+                parts.append(ttnn.to_torch(shard))
+                break
+        else:
+            raise RuntimeError(f"no local device holds batch item {b} along mesh axis {axis}")
+    return torch.cat(parts, dim=0)
 
 
 class DilatedConv1d(_AlignedOutConv1d):
@@ -88,6 +120,8 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        pack: int | None = None,
+        act_mode: str = "chain",
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -96,80 +130,55 @@ class AMPBlock1(Module):
         self.mesh_device = mesh_device
 
         act_cls = SnakeBeta if activation == "snakebeta" else Snake
+        common = dict(mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config, ccl_manager=ccl_manager)
 
-        self.convs1 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
+        def conv(dil):
+            if pack is not None and pack > 1:
+                return PackedConv1d(
+                    channels,
+                    channels,
                     kernel_size=kernel_size,
-                    dilation=dilation[i],
+                    dilation=dil,
+                    pack=pack,
                     bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    **common,
                 )
-                for i in range(self.num_branches)
-            ]
-        )
-        self.convs2 = ModuleList(
-            [
-                DilatedConv1d(
-                    in_channels=channels,
-                    out_channels=channels,
-                    kernel_size=kernel_size,
-                    dilation=1,
-                    bias=True,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                    split_mode=split_mode,
-                )
-                for i in range(self.num_branches)
-            ]
-        )
+            return DilatedConv1d(
+                in_channels=channels,
+                out_channels=channels,
+                kernel_size=kernel_size,
+                dilation=dil,
+                bias=True,
+                split_mode=split_mode,
+                **common,
+            )
+
         # alpha_logscale=True: checkpoint stores log α / log β, collapsed at load time.
-        self.acts1 = ModuleList(
-            [
-                Activation1d(
+        def act():
+            if act_mode == "fused":
+                assert activation == "snakebeta", "the fused activation implements SnakeBeta only"
+                return FusedActivation1d(channels=channels, **common)
+            if pack is not None:
+                assert activation == "snakebeta", "packed blocks implement SnakeBeta only"
+                return PackedActivation1d(
                     channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
+                    pack=pack,
+                    split_mode=split_mode,
+                    **common,
                 )
-                for _ in range(self.num_branches)
-            ]
-        )
-        self.acts2 = ModuleList(
-            [
-                Activation1d(
-                    channels=channels,
-                    activation=act_cls(
-                        channels,
-                        alpha_logscale=True,
-                        mesh_device=mesh_device,
-                        dtype=dtype,
-                        parallel_config=parallel_config,
-                    ),
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    ccl_manager=ccl_manager,
-                )
-                for _ in range(self.num_branches)
-            ]
-        )
+            return Activation1d(
+                channels=channels,
+                activation=act_cls(
+                    channels, alpha_logscale=True, mesh_device=mesh_device, dtype=dtype, parallel_config=parallel_config
+                ),
+                **common,
+            )
+
+        self.convs1 = ModuleList([conv(dilation[i]) for i in range(self.num_branches)])
+        self.convs2 = ModuleList([conv(1) for _ in range(self.num_branches)])
+        self.acts1 = ModuleList([act() for _ in range(self.num_branches)])
+        self.acts2 = ModuleList([act() for _ in range(self.num_branches)])
 
     def forward(self, x_BTC: ttnn.Tensor, set_tail=None, x_rep=None) -> ttnn.Tensor:
         # set_tail(xd, mode): materialize the tile-align pad image to an op's boundary when
@@ -231,8 +240,17 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        pack_bands: dict[int, int] | None = None,
+        act_mode: str = "chain",
+        polyphase_ups: bool = False,
+        prepare_audio_ccl: bool = False,
     ) -> None:
         super().__init__()
+        # H3-only opt-in: decode inside an audio buffer scope so a capture replays the eager warm's
+        # persistent CCL buffers. LTX's vocoder and BWE keep their fresh-output gathers.
+        self.prepare_audio_ccl = prepare_audio_ccl
+        self.pack_bands = dict(pack_bands or {})
+        self.batch_shard = None
 
         if resblock_kernel_sizes is None:
             resblock_kernel_sizes = [3, 7, 11]
@@ -258,6 +276,7 @@ class Vocoder(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self._tpad_mask_cache: dict = {}
+        self._prepared_audio_ccl: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
         # tracer_trace_key. prep_run=False (capture never allocs), so lazy device state (snake α/β,
@@ -265,13 +284,6 @@ class Vocoder(Module):
         # the pipeline warms the decode eagerly at warmup, which the vocoder frees back to a
         # deterministic state, so capture and replay share one free-list.
 
-        # conv_pre stays UNSHARDED under T-sharding: at (2048 -> 1024, k=7), the widest conv in the
-        # decode, the sharded path returns uninitialized memory (absmax 2.6e+11 vs a reference 1.391,
-        # -204 dB), which made every T-sharded decode wrong. A shape sweep found it the only one
-        # affected; `_partition_t` and `_t_neighbor_pad` were exact here. Replicating is near-free --
-        # conv_pre sees the 207-latent input, ~1/800th of the waveform -- so `_forward_device` runs it
-        # first and partitions T after. Not under channel-TP, where conv_pre's own
-        # `gather_channel_to_full` rebuilds C_in and removing parallel_config would hand it a C-shard.
         self._conv_pre_unsharded = channel_factor(parallel_config) == 1
         self.conv_pre = _AlignedOutConv1d(
             in_channels=in_channels,
@@ -300,6 +312,7 @@ class Vocoder(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    polyphase=polyphase_ups,
                 )
                 for i in range(self.num_upsamples)
             ]
@@ -321,25 +334,36 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
+                        pack=self.pack_bands.get(i),
+                        act_mode=act_mode,
                     )
                 )
 
         final_channels = upsample_initial_channel // (2**self.num_upsamples)
 
-        self.act_post = Activation1d(
-            channels=final_channels,
-            activation=SnakeBeta(
-                final_channels,
-                alpha_logscale=True,
+        if act_mode == "fused":
+            self.act_post = FusedActivation1d(
+                channels=final_channels,
                 mesh_device=mesh_device,
                 dtype=dtype,
                 parallel_config=parallel_config,
-            ),
-            mesh_device=mesh_device,
-            dtype=dtype,
-            parallel_config=parallel_config,
-            ccl_manager=ccl_manager,
-        )
+                ccl_manager=ccl_manager,
+            )
+        else:
+            self.act_post = Activation1d(
+                channels=final_channels,
+                activation=SnakeBeta(
+                    final_channels,
+                    alpha_logscale=True,
+                    mesh_device=mesh_device,
+                    dtype=dtype,
+                    parallel_config=parallel_config,
+                ),
+                mesh_device=mesh_device,
+                dtype=dtype,
+                parallel_config=parallel_config,
+                ccl_manager=ccl_manager,
+            )
 
         self.conv_post = _AlignedOutConv1d(
             in_channels=final_channels,
@@ -359,6 +383,12 @@ class Vocoder(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._tpad_mask_cache)
+        self._prepared_audio_ccl.clear()
 
     def forward(self, mel_spec: torch.Tensor) -> torch.Tensor:
         """``mel_spec``: ``(B, 2, T_frames, mel_bins)`` stereo or
@@ -407,6 +437,7 @@ class Vocoder(Module):
         # leaves them as garbage the next decode would reuse. Drop them so re-warming recomputes
         # them (ltx-rt re-warm correctness delta, re-homed onto the @traced_function structure).
         self._tpad_mask_cache.clear()
+        self._prepared_audio_ccl.clear()
 
     def _host_to_device(self, mel_spec: torch.Tensor) -> ttnn.Tensor:
         """Host preprocessing + upload to a ROW_MAJOR full-T device tensor. Split out from
@@ -417,6 +448,74 @@ class Vocoder(Module):
             B, S, F, T = x_t.shape
             x_t = x_t.reshape(B, S * F, T)
         return self._upload_BCT(x_t)
+
+    def t_pad_for(self, t_rows: int) -> int:
+        """T pad for tile shards."""
+        if self.parallel_config is None or self.parallel_config.factor <= 1:
+            return 0
+        factor = self.parallel_config.factor
+        per_shard = max(-(-t_rows // factor), TILE_HEIGHT)
+        return per_shard * factor - t_rows
+
+    def forward_device_BTC(
+        self, x_dev: ttnn.Tensor, *, t_pad: int, traced: bool = False, trace_key=None
+    ) -> torch.Tensor:
+        """``(B, T+t_pad, C_in)`` on device -> ``(B, C_out, T_out)`` torch."""
+        if not self.prepare_audio_ccl:
+            self._t_pad = t_pad
+            y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
+            return self._device_to_host(y_dev)
+        key = (trace_key, tuple(x_dev.shape), x_dev.get_dtype(), t_pad, id(self.mesh_device))
+        manager = self.ccl_manager
+        tracers = type(self)._forward_device._tracers_keyed.get(self, {})
+        trace_live = any(t.trace_captured for t in tracers.values())
+        if traced:
+            prepared = self._prepared_audio_ccl.get(key)
+            current = getattr(manager, "audio_buffers_current", None)
+            if prepared is not None and prepared[0] is manager and current is not None and not current(prepared[1]):
+                # Stale record: a buffer it names was freed or replaced after it was made, e.g. an untraced
+                # decode inside the pipeline's transient CCL scope (ltx-server's warm gens) freed the pool it
+                # recorded. Drop it; if this shape's own trace is live, release this decoder's traces so the
+                # eager warm below can run and the capture is redone over the current buffers.
+                self._prepared_audio_ccl.pop(key, None)
+                prepared = None
+                if trace_key in tracers and tracers[trace_key].trace_captured:
+                    self.release_trace()
+                    trace_live = any(t.trace_captured for t in tracers.values())
+            if (prepared is None or prepared[0] is not manager) and not trace_live:
+                # No trace is live (first decode after `release_trace`, e.g. a server's guard that releases
+                # before a decode, or a warm that skipped the decode warm): run the eager warm a capture needs
+                # here, on a copy because the forward may free its input. Its output is dropped; the capture
+                # below computes the result as before. With another trace live an eager warm is unsafe, so
+                # that case still raises.
+                warm = ttnn.allocate_tensor_on_device(x_dev.spec, x_dev.device())
+                ttnn.copy(x_dev, warm)
+                self.forward_device_BTC(warm, t_pad=t_pad, traced=False, trace_key=trace_key)
+                ttnn.deallocate(warm)
+                prepared = self._prepared_audio_ccl.get(key)
+            if prepared is None or prepared[0] is not manager:
+                raise RuntimeError("audio CCL is not prepared for this decoder/shape; warm before capture")
+            buffers = prepared[1]
+        else:
+            if trace_live:
+                raise RuntimeError("release audio traces before eager warmup")
+            self._prepared_audio_ccl.pop(key, None)
+            buffers = None
+            # A replay copies its fresh input into the trace's input slot (Tracer._update_input: `ttnn.copy`),
+            # a program no eager op builds. Compile it here, in the eager warm a capture needs anyway, so neither
+            # the capture nor the first replay compiles a program under a live trace (served warms such as
+            # ltx-server's never run the pipeline's own capture warm). The forward may free x_dev, so copy first.
+            slot = ttnn.allocate_tensor_on_device(x_dev.spec, x_dev.device())
+            ttnn.copy(x_dev, slot)
+            ttnn.deallocate(slot)
+        self._t_pad = t_pad
+        scope = manager.audio_buffer_scope(buffers) if manager is not None else nullcontext({})
+        with scope as used:
+            y_dev = self._forward_device(x_dev, traced=traced, tracer_trace_key=trace_key)
+            result = self._device_to_host(y_dev)
+        if not traced:
+            self._prepared_audio_ccl[key] = (manager, used)
+        return result
 
     def _upload_BCT(self, x_BCT: torch.Tensor) -> ttnn.Tensor:
         """Upload a plain ``(B, C, T)`` tensor, T-padded for tile-aligned per-chip shards.
@@ -431,23 +530,25 @@ class Vocoder(Module):
 
         x_BTC_torch = x_BCT.transpose(1, 2).float().contiguous()
 
-        sharded = self.parallel_config is not None and self.parallel_config.factor > 1
         # Pad T so each shard holds >= one tile: a short clip (T=207 at factor 8 -> 26 rows/shard,
         # under a tile) starves the HEIGHT_SHARDED depthwise conv1d's DRAM slicer. Long clips are
         # unchanged (already >> a tile/shard). Pad rows are masked and cropped from the waveform later.
-        t_pad = 0
-        if sharded:
-            factor = self.parallel_config.factor
-            t_rows = x_BTC_torch.shape[1]
-            per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
-            t_pad = per_shard * factor - t_rows
-            if t_pad:
-                x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
+        t_pad = self.t_pad_for(x_BTC_torch.shape[1])
+        if t_pad:
+            x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
         self._t_pad = t_pad
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    # hold_capture_frees: per instance (task #6623). H3 opts in so a later job's buffers cannot land
+    # on this trace's intermediates (task #6000); LTX keeps it off, since the hold reserves the
+    # capture's intermediates without reuse and its cold warm-up then runs out of DRAM on cs04.
+    @traced_function(
+        device=lambda self: self.mesh_device,
+        prep_run=False,
+        clone_prep_inputs=False,
+        hold_capture_frees=lambda self: getattr(self, "hold_capture_frees", False),
+    )
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
         T-gather. Fixed-shape device in/out, so this region is trace-capturable."""
@@ -464,15 +565,15 @@ class Vocoder(Module):
         # A no-op when there is no channel-TP, which is why moving it above the T partition is safe.
         x_dev = partition_channel(x_dev, self.parallel_config, dim=2)
 
-        def _set_tail(xd, cumrate, mode):
+        def _set_tail(xd, cumrate, mode, pack=1):
             # Materialize the tile-align pad image (t_pad*cumrate tail rows) to the op's boundary so
             # it matches unsharded: zeros for gather/zeros-pad convs, the real last row for
-            # replicate-pad activations. No-op when unsharded (t_pad == 0).
             if t_pad == 0:
                 return xd
+            assert (t_pad * cumrate) % pack == 0, f"pad image {t_pad * cumrate} rows not a multiple of pack {pack}"
             return _set_tpad_tail(
                 xd,
-                t_pad * cumrate,
+                t_pad * cumrate // pack,
                 mode=mode,
                 mesh_device=self.mesh_device,
                 parallel_config=self.parallel_config,
@@ -493,7 +594,12 @@ class Vocoder(Module):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally
             x_dev = self.ups[i](x_dev)
             cumrate *= self.upsample_rates[i]
-            stage_set_tail = (lambda c: (lambda xd, mode: _set_tail(xd, c, mode)))(cumrate)
+            pack = self.pack_bands.get(i, 1)
+            if pack > 1:
+                B_, T_, C_ = x_dev.shape
+                assert T_ % pack == 0, f"band {i}: local T {T_} not a multiple of pack {pack}"
+                x_dev = _reshape_rows(x_dev, (B_, T_ // pack, pack * C_))
+            stage_set_tail = (lambda c, p: (lambda xd, mode: _set_tail(xd, c, mode, p)))(cumrate, pack)
             start = i * self.num_kernels
             # Mean over the num_kernels parallel AMP branches.
             block_outputs = []
@@ -512,11 +618,18 @@ class Vocoder(Module):
                 acc = new_acc
             x_dev = ttnn.multiply(acc, 1.0 / self.num_kernels)
             ttnn.deallocate(acc)
+            if pack > 1:
+                B_, Tp, Cp = x_dev.shape
+                x_dev = _reshape_rows(x_dev, (B_, Tp * pack, Cp // pack))
 
         x_dev = _set_tail(x_dev, cumrate, "replicate")  # act_post is a replicate-pad activation
         x_dev = self.act_post(x_dev)
         x_dev = _set_tail(x_dev, cumrate, "zeros")  # conv_post is zeros-pad
         x_dev = self.conv_post(x_dev)
+
+        B_, T_, C_ = x_dev.shape
+        if C_ == 1 and T_ % TILE_HEIGHT == 0:
+            x_dev = _reshape_rows(x_dev, (B_, T_ // TILE_HEIGHT, TILE_HEIGHT))
 
         if self.apply_final_activation:
             if self.use_tanh_at_final:
@@ -534,7 +647,12 @@ class Vocoder(Module):
     def _device_to_host(self, x_dev: ttnn.Tensor) -> torch.Tensor:
         """Readback + host crop. Trims padded out-channels and the upsampled image of the
         input T-padding (``self._t_pad``), then returns ``(B, out_channels, T_out)``."""
-        x_host = local_device_to_torch(x_dev)
+        if self.batch_shard is not None:
+            x_host = _batch_sharded_to_torch(x_dev, *self.batch_shard)
+        else:
+            x_host = local_device_to_torch(x_dev)
+        if self.out_channels == 1 and x_host.shape[-1] == TILE_HEIGHT:
+            x_host = x_host.reshape(x_host.shape[0], -1, 1)
         x_host = x_host[..., : self.out_channels]  # trim any padded out channels
         # Crop the upsampled image of the input T-padding.
         if self._t_pad > 0:

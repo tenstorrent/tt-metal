@@ -40,6 +40,10 @@ void kernel_main() {
     // FIFO position `blk` is physical block (lead_block + blk) mod num_blocks. Batched delivery is
     // the identity.
     constexpr uint32_t streaming = get_arg(args::streaming);
+    // A grouped weight stacks num_groups (K, N) matrices, and the prefetcher delivers, in ascending order, the
+    // groups set in group_mask: every group, or those a group selector picked.
+    constexpr uint32_t num_groups = get_arg(args::num_groups);
+    constexpr uint32_t group_mask = get_arg(args::group_mask);
 
     // ---- Runtime args ----
     // The host derives n_col_start (= ring_pos * n_per_recv_tiles) and total_n_tiles from the
@@ -59,7 +63,7 @@ void kernel_main() {
     const uint32_t page_bytes = k_block_w_tiles * slice_bytes;
 
     Scratchpad<uint32_t> scratchpad(scratch::expected);
-    const uint32_t scratch_addr = scratchpad.get_base_address();
+    const auto scratch = scratchpad.local_mem();
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
@@ -73,63 +77,80 @@ void kernel_main() {
         page_bytes,
         tile_bytes);
 
+    const uint32_t group_pages = num_blocks * k_block_w_tiles * total_n_tiles;
+    uint32_t num_delivered_groups = 0;
+    for (uint32_t group = 0; group < num_groups; ++group) {
+        num_delivered_groups += (group_mask >> group) & 1;
+    }
+    const uint32_t total_iters = num_layers * num_delivered_groups * num_blocks;
+
     uint32_t global_iter = 0;
     for (uint32_t layer = 0; layer < num_layers; ++layer) {
-        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-            pipe.wait_front(1);
-            const auto entry = pipe.scoped_read_lock(1);
-            const uint32_t page_addr = entry.get_ptr().get_address();
+        for (uint32_t group = 0; group < num_groups; ++group) {
+            if (((group_mask >> group) & 1) == 0) {
+                continue;
+            }
+            for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+                pipe.wait_front(1);
+                const auto entry = pipe.scoped_read_lock(1);
+                const auto page = entry.get_ptr();
 
-            // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
-            // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.
-            const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
-            prefetcher_validator::read_expected_block_tiles(
-                accessor,
-                scratch_addr,
-                tile_bytes,
-                phys_blk,
-                k_block_w_tiles,
-                total_n_tiles,
-                n_col_start,
-                n_per_recv_tiles);
+                // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
+                // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.
+                const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
+                prefetcher_validator::read_expected_block_tiles(
+                    accessor,
+                    scratch,
+                    tile_bytes,
+                    phys_blk,
+                    k_block_w_tiles,
+                    total_n_tiles,
+                    n_col_start,
+                    n_per_recv_tiles,
+                    group * group_pages);
 
-            const uint32_t mismatch_word =
-                prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
-            if (mismatch_word != prefetcher_validator::kNoMismatch) {
-                DPRINT(
-                    "PIPE_VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
-                    layer,
-                    blk,
-                    bank_id,
-                    recv_idx_in_bank,
-                    mismatch_word,
-                    prefetcher_validator::l1_word(page_addr, mismatch_word),
-                    prefetcher_validator::l1_word(scratch_addr, mismatch_word));
-                // Hang so the dispatch timeout surfaces this core.
-                while (true) {
-                    ;
+                const uint32_t mismatch_word = prefetcher_validator::first_mismatching_word(page, scratch, page_bytes);
+                if (mismatch_word != prefetcher_validator::kNoMismatch) {
+                    DPRINT(
+                        "PIPE_VALIDATOR_MISMATCH layer={} group={} blk={} bank={} recv_idx={} word={} got=0x{:x} "
+                        "exp=0x{:x}\n",
+                        layer,
+                        group,
+                        blk,
+                        bank_id,
+                        recv_idx_in_bank,
+                        mismatch_word,
+                        prefetcher_validator::l1_word(page, mismatch_word),
+                        prefetcher_validator::l1_word(scratch, mismatch_word));
+                    // Hang so the dispatch timeout surfaces this core.
+                    while (true) {
+                        ;
+                    }
                 }
-            }
 
-            if (prefetcher_validator::should_log(global_iter, num_layers * num_blocks, print_stride)) {
-                DPRINT(
-                    "PIPE_VALIDATOR ok layer={} blk={} bank={} recv_idx={}\n", layer, blk, bank_id, recv_idx_in_bank);
-            }
+                if (prefetcher_validator::should_log(global_iter, total_iters, print_stride)) {
+                    DPRINT(
+                        "PIPE_VALIDATOR ok layer={} group={} blk={} bank={} recv_idx={}\n",
+                        layer,
+                        group,
+                        blk,
+                        bank_id,
+                        recv_idx_in_bank);
+                }
 
-            pipe.pop_front(1, noc);
-            ++global_iter;
+                pipe.pop_front(1, noc);
+                ++global_iter;
+            }
         }
     }
 
     DPRINT("PIPE_VALIDATOR_LOOP_DONE bank={} recv_idx={}\n", bank_id, recv_idx_in_bank);
 
     // Bounded-poll for an entry the sender pushed past the last one this receiver consumed.
-    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
-        if (pipe.has_unconsumed_entries()) {
-            DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
-            while (true) {
-                ;
-            }
+    if (prefetcher_validator::extra_entry_within_poll_window([&] { return pipe.has_unconsumed_entries(); })) {
+        DPRINT("PIPE_VALIDATOR_OVERFLOW: sender pushed an extra entry past the expected last one\n");
+        while (true) {
+            ;
         }
     }
 

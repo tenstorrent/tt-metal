@@ -6,6 +6,7 @@
 
 #include <tt-metalium/tt_metal.hpp>
 #include <nanobind/stl/map.h>
+#include <tt-metalium/program_cache.hpp>
 
 #include <tt_stl/reflection.hpp>
 #include <cstddef>
@@ -37,8 +38,9 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
-#include <ttnn/api/ttnn/types.hpp>
+#include "ttnn/types.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -46,20 +48,26 @@
 #include "distribution_mode.hpp"
 
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn-nanobind/pipeline_module_nanobind.hpp"
 
 namespace {
 
-// The device a mesh coordinate names, or the mesh's first device when none is given.
+// The device a mesh coordinate names, or the mesh's first local device when none is given.
 // MeshDevice::get_device returns nullptr for a coordinate outside the mesh, and the raw L1
 // accessors would dereference it, so that is refused here with the coordinate in the message.
 tt::tt_metal::IDevice* device_at(
     tt::tt_metal::distributed::MeshDevice* mesh,
     const std::optional<tt::tt_metal::distributed::MeshCoordinate>& coord) {
     if (!coord.has_value()) {
-        return mesh->get_devices().at(0);
+        for (const auto& c : tt::tt_metal::distributed::MeshCoordinateRange(mesh->shape())) {
+            if (mesh->is_local(c)) {
+                return tt::tt_metal::internal::get_device(*mesh, c);
+            }
+        }
+        TT_THROW("Mesh of shape {} has no local devices", mesh->shape());
     }
-    tt::tt_metal::IDevice* device = mesh->get_device(*coord);
+    tt::tt_metal::IDevice* device = tt::tt_metal::internal::get_device(*mesh, *coord);
     TT_FATAL(device != nullptr, "MeshCoordinate {} is outside the mesh of shape {}", *coord, mesh->shape());
     return device;
 }
@@ -262,17 +270,32 @@ void py_module(nb::module_& mod) {
                 return nb::make_iterator<nb::rv_policy::reference_internal>(
                     nb::type<MeshCoordinateRange>(), "iterator", mcr.begin(), mcr.end());
             },
-            nb::keep_alive<0, 1>());
+            nb::keep_alive<0, 1>())
+        .def("__hash__", [](const MeshCoordinateRange& r) { return std::hash<MeshCoordinateRange>{}(r); })
+        .def(
+            "__eq__",
+            [](const MeshCoordinateRange& a, const MeshCoordinateRange& b) { return a == b; },
+            nb::is_operator());
 
-    static_cast<nb::class_<MeshCoordinateRangeSet>>(mod.attr("MeshCoordinateRangeSet"))
-        .def(nb::init<>(), "Default constructor for an empty MeshCoordinateRangeSet.")
+    auto mesh_coordinate_range_set =
+        static_cast<nb::class_<MeshCoordinateRangeSet>>(mod.attr("MeshCoordinateRangeSet"));
+    mesh_coordinate_range_set.def(nb::init<>(), "Default constructor for an empty MeshCoordinateRangeSet.")
         .def(nb::init<const MeshCoordinateRange&>(), "Constructor with specified range.", nb::arg("range"))
         .def("merge", &MeshCoordinateRangeSet::merge, nb::arg("range"))
-        .def("__repr__", [](const MeshCoordinateRangeSet& mcrs) {
-            std::ostringstream str;
-            str << mcrs;
-            return str.str();
-        });
+        .def(
+            "__repr__",
+            [](const MeshCoordinateRangeSet& mcrs) {
+                std::ostringstream str;
+                str << mcrs;
+                return str.str();
+            })
+        .def(
+            "__eq__",
+            [](const MeshCoordinateRangeSet& a, const MeshCoordinateRangeSet& b) { return a == b; },
+            nb::is_operator());
+    // merge() mutates the set in place, so like Python's own set it compares by value but is unhashable;
+    // nanobind would otherwise keep object.__hash__ and equal sets would hash differently.
+    mesh_coordinate_range_set.attr("__hash__") = nb::none();
 
     static_cast<nb::class_<SystemMeshDescriptor>>(mod.attr("SystemMeshDescriptor"))
         .def(nb::init<>())
@@ -289,7 +312,7 @@ void py_module(nb::module_& mod) {
         .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
-                auto* device = self.get_device(coord);
+                auto* device = tt::tt_metal::internal::get_device(self, coord);
                 TT_FATAL(device, "Device ID requested for MeshCoord {} not found.", coord);
                 return device->id();
             })
@@ -323,6 +346,16 @@ void py_module(nb::module_& mod) {
               in-use state. Call before closing a mesh that has carved submeshes so the shared
               command queue is idle, otherwise close throws "cq is in use by child submesh".
         )doc")
+        .def(
+            "lowest_occupied_compute_l1_address",
+            [](const MeshDevice& self) { return self.lowest_occupied_compute_l1_address(); },
+            R"doc(
+           Lowest L1 address occupied by an L1 buffer, as reported by the mesh's global allocator and the
+           active sub-devices' allocators, or None when they report no L1 buffer. This is the address the
+           runtime checks a program's circular buffers against (they must end below it). It does not cover
+           the L1_SMALL region, which sits above all L1 buffers, nor per-core (HYBRID mode) allocations held
+           by each device's own allocator. It is a snapshot of current allocations.
+       )doc")
         .def(
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
@@ -510,6 +543,10 @@ void py_module(nb::module_& mod) {
             "num_program_cache_entries",
             &MeshDevice::num_program_cache_entries,
             "Number of entries in the program cache for this device")
+        .def(
+            "program_cache_key_hashes",
+            [](MeshDevice& device) { return device.get_program_cache().key_hashes(); },
+            "Hashes of every program-cache key on this device (unordered; compares two warm-ups' key sets)")
         .def(
             "sfpu_eps",
             [](MeshDevice* /*device*/) { return tt::tt_metal::hal::get_eps(); },
@@ -701,7 +738,11 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_shape") = nb::none(),
         nb::arg("offset") = nb::none(),
         nb::arg("physical_device_ids") = nb::cast(std::vector<int>{}),
-        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
+        nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
+        // Release GIL: the open takes 15-30 s on a galaxy (sysmem mapping, firmware and fabric init), and
+        // a caller's watcher thread must run meanwhile (ltx-server sets TT_METAL_DEVICE_OPEN_STOP_FILE
+        // from one when a job queues for the device mid-open).
+        nb::call_guard<nb::gil_scoped_release>());
     // Release GIL: close can block a long time; other threads need it to run Python (e.g. real-time profiler
     // callbacks).
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"), nb::call_guard<nb::gil_scoped_release>());
@@ -926,6 +967,31 @@ void py_module(nb::module_& mod) {
            List[Tensor]: The shards of the tensor corresponding to the devices.
            )doc");
     mod.def(
+        "cpu_shards",
+        &ttnn::cpu_shards,
+        nb::arg("tensor"),
+        nb::arg("coords"),
+        nb::arg("blocking") = true,
+        nb::arg("cq_id") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+       Read the shards of a device tensor at the given mesh coordinates to the host, in one command-queue batch.
+
+       The function form of ``Tensor.cpu_shards``. Returns one single-device host tensor per coordinate, in the order
+       given, as ``get_device_tensors`` returns a host tensor's shards. Every coordinate must be one the tensor holds a
+       shard at (``tensor.device_coords()``), and none may repeat. The device tensor and its topology label are
+       untouched.
+
+       Args:
+           tensor (Tensor): The device tensor to read.
+           coords (List[MeshCoordinate]): The coordinates to read, in the order the results are returned.
+           blocking (bool): Wait for the read to finish. Defaults to True.
+           cq_id (int, optional): The command queue to read on. Defaults to None, the current command queue.
+
+       Returns:
+           List[Tensor]: One single-device host tensor per coordinate.
+           )doc");
+    mod.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> nbh::unique_ptr<TensorToMesh> {
             return nbh::steal_rewrap_unique<TensorToMesh>(replicate_tensor_to_mesh_mapper(mesh_device));
@@ -1086,6 +1152,30 @@ void py_module(nb::module_& mod) {
             Args:
                 tensors (List[Tensor]): The tensor shards to aggregate.
                 mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
+
+            Returns:
+                Tensor: The multi-device host tensor.
+            )doc");
+    mod.def(
+        "from_local_host_shards",
+        &from_local_host_shards,
+        nb::arg("shards"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        R"doc(
+            Creates a multi-device host tensor from the shards this host holds, labelled exactly as given.
+
+            Unlike ``from_host_shards``, which needs one shard per coordinate of the whole mesh and spells a 1-D
+            label of its own, this takes the ``TensorTopology`` the tensor should carry and one host shard per
+            coordinate it lists on this host (on a single-host mesh, every coordinate it lists). Coordinates that
+            belong to other hosts of a multi-host mesh, or that the label does not list (a tensor can live on part
+            of the mesh), stay unpopulated, so the result can be moved to the device with ``to``.
+
+            Args:
+                shards (Dict[MeshCoordinate, Tensor]): One host shard per local coordinate the topology lists; all
+                    with the same spec.
+                mesh_device (MeshDevice): The mesh the tensor is destined for; decides which coordinates are local.
+                topology (TensorTopology): The label the tensor carries, as the live tensor it will be placed into has it.
 
             Returns:
                 Tensor: The multi-device host tensor.

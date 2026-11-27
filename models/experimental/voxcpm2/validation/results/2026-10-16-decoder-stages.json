@@ -1,0 +1,328 @@
+{
+  "dtype": "float32",
+  "ttnn_version": "0.1.dev1+ggec74d3b",
+  "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py",
+  "stages": [
+    {
+      "stage": "audio_vae.decoder.model.0.forward",
+      "shape": [
+        1,
+        64,
+        100
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999982106595664,
+        "relative_rms": 0.0018932131456163561,
+        "max_abs": 0.010374307632446164,
+        "reason": null,
+        "gain": 1.0000572789328084,
+        "offset": 8.53843742645035e-05,
+        "residual_relative_rms": 0.0018889275766502563
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999982106595664,
+        "relative_rms": 0.0018932131456163561,
+        "max_abs": 0.010374307632446164,
+        "reason": null,
+        "gain": 1.0000572789328084,
+        "offset": 8.53843742645035e-05,
+        "residual_relative_rms": 0.0018889275766502563
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.1.forward",
+      "shape": [
+        1,
+        2048,
+        100
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999975430732658,
+        "relative_rms": 0.002236085154157077,
+        "max_abs": 0.008192062377929743,
+        "reason": null,
+        "gain": 0.9996980067409943,
+        "offset": 3.0955651007332083e-06,
+        "residual_relative_rms": 0.0022155654627515173
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999961053808013,
+        "relative_rms": 0.0027972176374528902,
+        "max_abs": 0.011097908020019486,
+        "reason": null,
+        "gain": 0.9998107442193428,
+        "offset": -3.3715767000864194e-05,
+        "residual_relative_rms": 0.00278978301063444
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.2.forward",
+      "shape": [
+        1,
+        1024,
+        800
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999935396941936,
+        "relative_rms": 0.003355424403400912,
+        "max_abs": 0.06206607818603556,
+        "reason": null,
+        "gain": 0.9991641766129288,
+        "offset": 0.00014289712864530658,
+        "residual_relative_rms": 0.0032298099893717544
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999899043861051,
+        "relative_rms": 0.004203190619239204,
+        "max_abs": 0.04459774494171137,
+        "reason": null,
+        "gain": 0.9989561967160174,
+        "offset": 0.00023791080097509433,
+        "residual_relative_rms": 0.004036710239570227
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.3.forward",
+      "shape": [
+        1,
+        512,
+        4800
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999914517087265,
+        "relative_rms": 0.004105029667581353,
+        "max_abs": 0.07560926675796509,
+        "reason": null,
+        "gain": 0.9988347212071346,
+        "offset": 0.0001582583431193519,
+        "residual_relative_rms": 0.003906976270610432
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999824899645318,
+        "relative_rms": 0.00592280367744898,
+        "max_abs": 0.09899687767028807,
+        "reason": null,
+        "gain": 0.9985108197408533,
+        "offset": 0.0005982810780995694,
+        "residual_relative_rms": 0.00558993417858433
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.4.forward",
+      "shape": [
+        1,
+        256,
+        24000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999962792768801,
+        "relative_rms": 0.002821285787434378,
+        "max_abs": 0.024557352066040084,
+        "reason": null,
+        "gain": 0.9990542966575445,
+        "offset": 8.360196458404709e-05,
+        "residual_relative_rms": 0.0026387977213163448
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999871735386872,
+        "relative_rms": 0.005278819486229093,
+        "max_abs": 0.06756132841110231,
+        "reason": null,
+        "gain": 0.9987385525254898,
+        "offset": 0.0006381031065296324,
+        "residual_relative_rms": 0.004897918343293731
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.5.forward",
+      "shape": [
+        1,
+        128,
+        48000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999921269327962,
+        "relative_rms": 0.004263590514657234,
+        "max_abs": 0.07030248641967793,
+        "reason": null,
+        "gain": 0.9981215431372988,
+        "offset": -7.730476269418781e-05,
+        "residual_relative_rms": 0.003808535344927535
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999734670904941,
+        "relative_rms": 0.007352595504461366,
+        "max_abs": 0.1227536201477052,
+        "reason": null,
+        "gain": 0.9976327677199064,
+        "offset": 0.0002737513943647156,
+        "residual_relative_rms": 0.006988304219483415
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.6.forward",
+      "shape": [
+        1,
+        64,
+        96000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999967835144903,
+        "relative_rms": 0.002108673802890265,
+        "max_abs": 0.04954910278320331,
+        "reason": null,
+        "gain": 0.9995525230776391,
+        "offset": -0.00018427253265066807,
+        "residual_relative_rms": 0.0020263850543059104
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999595125983508,
+        "relative_rms": 0.007512435787986342,
+        "max_abs": 0.23277568817138694,
+        "reason": null,
+        "gain": 0.9975236502425612,
+        "offset": 0.00045039739801002495,
+        "residual_relative_rms": 0.007174982533607409
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.7.forward",
+      "shape": [
+        1,
+        32,
+        192000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999956903972197,
+        "relative_rms": 0.0027458345730501537,
+        "max_abs": 0.14907646179199094,
+        "reason": null,
+        "gain": 0.9984643572515357,
+        "offset": 0.0002268156904082067,
+        "residual_relative_rms": 0.0023209972659820124
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999622265914608,
+        "relative_rms": 0.00854561060212827,
+        "max_abs": 0.503719329833984,
+        "reason": null,
+        "gain": 0.994293797879421,
+        "offset": 0.002094413818308354,
+        "residual_relative_rms": 0.0068429309920753694
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.8.forward",
+      "shape": [
+        1,
+        32,
+        192000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 1.0,
+        "relative_rms": 3.331749110407502e-08,
+        "max_abs": 3.814697265869802e-06,
+        "reason": null,
+        "gain": 0.9999999982531841,
+        "offset": 3.4306989478721294e-10,
+        "residual_relative_rms": 3.3275771232679225e-08
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999489056986658,
+        "relative_rms": 0.010051344024116103,
+        "max_abs": 0.9397563934326174,
+        "reason": null,
+        "gain": 0.9932814400230507,
+        "offset": 0.003032141422603851,
+        "residual_relative_rms": 0.008019988070004466
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.9.forward",
+      "shape": [
+        1,
+        1,
+        192000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999997436929018,
+        "relative_rms": 0.0010026261800499712,
+        "max_abs": 0.0018633604049682715,
+        "reason": null,
+        "gain": 0.9998549482720364,
+        "offset": -9.769964738464509e-05,
+        "residual_relative_rms": 0.000715861971172193
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999555187097376,
+        "relative_rms": 0.013173918106924146,
+        "max_abs": 0.025056242942810194,
+        "reason": null,
+        "gain": 0.9907234717164966,
+        "offset": -5.457645891750182e-05,
+        "residual_relative_rms": 0.009344746552997421
+      }
+    },
+    {
+      "stage": "audio_vae.decoder.model.10.forward",
+      "shape": [
+        1,
+        1,
+        192000
+      ],
+      "isolated": {
+        "passed": true,
+        "pcc": 0.9999999999999971,
+        "relative_rms": 7.510002278219271e-08,
+        "max_abs": 1.1920928960555064e-07,
+        "reason": null,
+        "gain": 1.0000000062881433,
+        "offset": -9.5854724829546e-12,
+        "residual_relative_rms": 7.483626125030828e-08
+      },
+      "cumulative": {
+        "passed": true,
+        "pcc": 0.9999540497816777,
+        "relative_rms": 0.012561082929597098,
+        "max_abs": 0.013906747102737413,
+        "reason": null,
+        "gain": 0.9917984879681624,
+        "offset": -4.5379666001937505e-05,
+        "residual_relative_rms": 0.009508165209335936
+      }
+    }
+  ],
+  "complete": true,
+  "conv_operand_dtype": "bfloat16",
+  "note": "Stage probe preceded reporting/formatting updates. These hashes identify the final full-suite qualification run, which reproduced the same decoder metrics; they are not claimed as byte hashes of the earlier diagnostic script.",
+  "qualification_source_sha256": {
+    "config.py": "6ad5276eb57266956b77e59d6d906d749ea92d7fd83380edf307677f07016276",
+    "tt/ops.py": "edb2cb43442c14327a9aaa1a928bf172dc8605b7f6da1e7f61980bcf1f4ddf96",
+    "tt/minicpm.py": "c62c807924304006ec4e6a44741800bf91f5f0d69c482be41656e7b35bed2d34",
+    "tt/local.py": "eacface493cd3163c1e8c12abf6621d785e72b0985b7dab3506996dbde7b00c9",
+    "tt/audio_vae.py": "97a19c4c6bbbaac3b358e0f169489190d947bced3dbcd3a1b3dcab39ed348dc9",
+    "validation/replay_component.py": "5b873f8d60963d5e8d804a284fdd500d82cb09eb65cdba66e68009f86eddb6e4",
+    "validation/metrics.py": "b0de04a2be6eae9ee813a31e5b2b128ad5df4dbd5cceb01fe350a27cbb8bc625",
+    "validation/cases.py": "5e455770717f20b08f412ce650b6f2ae89b10c7d77bfc5b17ef72f06b8ee7acc"
+  }
+}

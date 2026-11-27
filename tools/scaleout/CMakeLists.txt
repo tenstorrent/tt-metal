@@ -220,6 +220,28 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+add_executable(detect_bh_galaxy_revision)
+target_sources(detect_bh_galaxy_revision PRIVATE ${DETECT_BH_GALAXY_REVISION_SRCS})
+
+set_target_properties(
+    detect_bh_galaxy_revision
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+add_dependencies(detect_bh_galaxy_revision scaleout_generated_protos)
+
+target_include_directories(detect_bh_galaxy_revision SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+target_link_libraries(
+    detect_bh_galaxy_revision
+    PRIVATE
+        scaleout_tools
+        enchantum::enchantum
+        protobuf::libprotobuf
+)
+
 # Generate MGD library
 add_library(generate_mgd_lib OBJECT)
 target_sources(generate_mgd_lib PRIVATE ${GENERATE_MGD_LIB_SRCS})
@@ -360,7 +382,7 @@ if(ENABLE_DISTRIBUTED)
                 COMPONENT metalium-runtime
         )
 
-        # PGDs used by find_and_load_physical_grouping_descriptor() in fabric_host_utils (default + arch/cluster-specific under
+        # PGDs used by PhysicalGroupingDescriptor::find_and_load() (default + arch/cluster-specific under
         # TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/). Mirror that tree under the install datadir.
         file(
             GLOB _generate_rank_bindings_pgd_files

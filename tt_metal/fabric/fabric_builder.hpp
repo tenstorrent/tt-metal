@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <map>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include "tt_metal/fabric/fabric_router_builder.hpp"
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
@@ -32,12 +32,19 @@ class FabricBuilderContext;
  *   1. Construct with device, program, and contexts
  *   2. Call build phases in order:
  *      discover_channels() -> create_routers() -> connect_routers() ->
- *      compile_ancillary_kernels() -> create_kernels()
+ *      compile_ancillary_kernels() -> choose_master_router() -> create_kernels()
  *   3. FabricBuilder is destroyed, router builders are destroyed
+ *
+ * A subclass builds routers another way through make_router() and wires them through connect_routers().
  */
 class FabricBuilder {
 public:
-    FabricBuilder(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, FabricContext& fabric_context);
+    FabricBuilder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type);
+    virtual ~FabricBuilder() = default;
 
     /**
      * Discover active ethernet channels and neighbors for this device.
@@ -46,19 +53,27 @@ public:
     void discover_channels();
 
     /**
-     * Create all router builders for this device.
+     * Create all router builders for this device, one per live eth channel (see make_router()).
      */
     void create_routers();
 
     /**
      * Connect routers using topology-appropriate connections.
      */
-    void connect_routers();
+    virtual void connect_routers();
 
     /**
      * Compile ancillary kernels (e.g., tensix mux) for each router.
      */
     void compile_ancillary_kernels();
+
+    /**
+     * Choose the router that leads the chip's local handshake. A heuristic finds the optimal router, which is a router
+     * that already has a small kernel (master router kernel has extra code to handle the handshake).
+     * Must be called after connect_routers(), as the heuristic needs to know the router's downstream connections,
+     * and before create_kernels(), as the kernel creation process needs to know the master router.
+     */
+    void choose_master_router();
 
     /**
      * Create the main ERISC router kernels.
@@ -75,7 +90,22 @@ public:
      */
     size_t get_num_routers() const { return routers_.size(); }
 
-private:
+protected:
+    /**
+     * The router for one live eth channel.
+     */
+    virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
+
+    /**
+     * The chip's handshake master router, once its routers exist. Stock takes the first in routers_.
+     */
+    virtual chan_id_t pick_master_router_chan() const;
+
+    /**
+     * What every router kernel on the chip is told about the chip's routers.
+     */
+    virtual KernelCreationContext kernel_creation_context() const;
+
     /**
      * RouterConnectionPair - Internal struct for router connection info
      */
@@ -92,21 +122,6 @@ private:
     std::vector<RouterConnectionPair> get_router_connection_pairs() const;
 
     /**
-     * Configure local connections between routers on this device.
-     *
-     * Generic connection establishment: iterates through all routers and
-     * establishes connections to local targets based on their connection mappings.
-     * Each router's mapping determines which local routers to connect to.
-     *
-     * Handles variable router configurations (e.g., 2-4 mesh routers on edge devices).
-     *
-     * Called by connect_routers() after inter-device connections are established.
-     */
-    void configure_local_connections(
-        const std::map<FabricRouterBuilder*, std::map<RoutingDirection, FabricRouterBuilder*>>&
-            routers_by_direction_map);
-
-    /**
      * Compile kernels for directions that have no router/eth channel.
      *
      * In UDM mode, edge devices (e.g., corner of a mesh) don't have neighbors
@@ -121,6 +136,7 @@ private:
     tt::tt_metal::Program& program_;
     FabricContext& fabric_context_;
     FabricBuilderContext& builder_context_;
+    CoreType dispatch_core_type_;
 
     // Fabric node ID for this device (derived from device_->id())
     FabricNodeId local_node_;
@@ -137,8 +153,43 @@ private:
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors_;
     std::unordered_set<chan_id_t> dispatch_links_;
 
-    // Master router channel (first in map)
+    // The per-chip facts threaded into every per-router build: edge capabilities classified once
+    // at discovery, ring predicates bound once in the constructor. Only peer-chip facts are live
+    // ControlPlane queries downstream.
+    ChipRoutingFacts chip_facts_;
+
+    // Master router channel, set by choose_master_router()
     chan_id_t master_router_chan_ = 0;
 };
+
+// ============ Build Sessions ============
+
+/**
+ * FabricBuildSession
+ *
+ * Holds a builder's state for one fabric launch. Fabric init creates one session per launch,
+ * once and on one thread, before it builds any device, and destroys it when fabric is torn
+ * down. A builder that needs a whole-system view (e.g. lowering a topology graph before any
+ * router is built) does that work when its session is created; the per-device builders then
+ * only read it.
+ *
+ * make_device_builder() is called once per device, concurrently from the per-device build
+ * tasks, so it must be safe to call from several threads at once.
+ */
+class FabricBuildSession {
+public:
+    virtual ~FabricBuildSession() = default;
+
+    virtual std::unique_ptr<FabricBuilder> make_device_builder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type) const;
+};
+
+/**
+ * The build session for one fabric launch.
+ */
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context);
 
 }  // namespace tt::tt_fabric

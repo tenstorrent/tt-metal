@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device kernel time for the unoptimized port, via the repo's device-perf harness.
+"""Device kernel time of the port, via the repo's device-perf harness.
 
-This is the third of the three baseline numbers. Subtracting it from the steady-state host
-latency in test_nomic_perf.py gives the dispatch gap, which is what decides whether trace is
-worth doing before or after the expert work.
+Subtracting it from the steady-state host latency in test_nomic_perf.py gives the dispatch gap,
+which is what decides whether trace is worth doing.
 
 EXPECTED_SEQUENCES_PER_S is the measured baseline, not a target. It exists so a later change
 that silently regresses the kernel total fails here; raise it whenever an optimization lands.
@@ -18,12 +17,26 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_type
 from models.experimental.nomic_embed_text_v2_moe.tests.perf.perf_common import HEADLINE_SHAPE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
-# Measured on a p300c at origin/main 40653194d78, bfloat16 weights and activations,
-# HiFi4 with fp32 destination accumulation, DRAM-interleaved, no trace, one command queue.
-EXPECTED_SEQUENCES_PER_S = 66.7
+# Measured on a p300c with the matmul work of #57524, the SDPA and GELU work of #58503 (SDPA's
+# chunk sizes, its mask and the placement of its operands and rotary tables in tt/attention.py and
+# tt/common.py, the tanh GELU fused into fc1 in tt/matmul_config.py), the layer-norm weights read
+# as row-major rows from L1 at 8x512 (tt/common.py), the router's 64 scored columns
+# (tt/router.py), the routed experts of #60284 with their w2 at LoFi (tt/experts.py,
+# tt/model_config.py), and the large-input work (the residual stream in L1, fc1 on grouped_matmul
+# with its polynomial GELU, HiFi2 QKV, fc2 and routed w1, SDPA's chunks from a cost model), the dense
+# projections on pirotski_matmul, SDPA on its streaming kernel, and grouped_matmul's streamed data
+# movement with chunked weights (tt/experts.py, tt/mlp.py), the split layer norm's layout written by
+# its producers, QKV below N tile rows on grouped_matmul_w1 and the router front end in one op
+# (tt/router.py, tt/moe.py), no trace, one command queue. The
+# unoptimized port measured 66.7, the matmul work alone 171.0, with #58503 294.1, before the router
+# 300.0, before the routed experts 312.8, with their w2 at HiFi2 609.1, before the large-input work
+# 626.7, before pirotski_matmul, streaming SDPA and the grouped_matmul rewrite 829.4, before the
+# small-M and MoE glue work 1046.1.
+EXPECTED_SEQUENCES_PER_S = 1124.7
 
 # Wide enough to absorb run-to-run kernel variation, tight enough to catch a real regression.
 MARGIN = 0.03
@@ -32,6 +45,11 @@ MARGIN = 0.03
 @run_for_blackhole()
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_nomic_embed_text_v2_moe():
+    # The measured test skips on a p100 (TtModelConfig.from_device) and leaves no profiler log to read.
+    # Not ttnn.cluster.get_cluster_type(): it keeps the cluster open here, and the profiled run then
+    # waits on the device until the timeout.
+    if (card_type() or "").startswith("p100"):
+        pytest.skip("the model needs 8 DRAM banks; a p100 has 7")
     batch, seqlen = HEADLINE_SHAPE
     subdir = "nomic_embed_text_v2_moe"
     command = (

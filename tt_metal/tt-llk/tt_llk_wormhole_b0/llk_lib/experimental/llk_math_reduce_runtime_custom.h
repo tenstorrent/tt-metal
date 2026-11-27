@@ -245,7 +245,7 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_
     // The reduce runs on the FPU pool (GMPOOL). Restore the operand-driven zero-flag baseline so a
     // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it, mirroring
     // the standard _llk_math_reduce_init_.
-    math::_configure_default_zero_flag_state_();
+    math::_configure_default_zero_flag_state_<math::ZeroFlagAt::init_holds>();
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -290,14 +290,14 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
             // Tf32 that the pool wrote, so override SrcA to Tf32 (and disable the zero-flag source)
             // for the replayed transpose, exactly as the num_faces=4 path does below.
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+            math::_configure_src_zero_flag_(true);
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
 
             // Replay the 13 instructions (slots 2-14): hi/lo transpose of the single face-row + CLR_B.
             lltt::replay(2, 13);
 
             cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-            cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+            math::_configure_src_zero_flag_(false);
         }
         else
         {
@@ -310,7 +310,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        math::_configure_src_zero_flag_(true);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
     }
 
@@ -320,7 +320,7 @@ inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_inde
     if constexpr (is_fp32_dest_acc_en)
     {
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
+        math::_configure_src_zero_flag_(false);
     }
 }
 

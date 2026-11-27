@@ -24,7 +24,7 @@ a full block. `test_forward_loop.py` runs the production cadence; this one runs 
 Queries are random. Production reads them off the checkpoint instead, which changes two
 lines and no control flow:
 
-    op = TtAttnRes(mesh_device, hidden_size=..., eps=..., tp_axis=TP_AXIS,
+    op = TtAttnRes(mesh_device, hidden_size=..., eps=..., sp_axis=sp_axis, tp_axis=tp_axis,
                    weights=AttnResWeights.from_cache(mesh_device, cache_path, "attn_res"))
     walk = TtAttnResWalk(op, embeddings, op.weights.pre, op.weights.post, op.weights.output, LAYERS)
 
@@ -56,7 +56,6 @@ from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
 
 PCC_GATE = 0.9999
-TP_AXIS = 1
 
 LAYERS = 5
 BLOCK_SIZE = 2
@@ -98,8 +97,8 @@ class _ExampleTransformer(object):
     place the queries `num_layers` times and give each layer a private scratch.
     """
 
-    def __init__(self, mesh_device, queries, num_layers=LAYERS, block_size=BLOCK_SIZE):
-        self.op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, tp_axis=TP_AXIS)
+    def __init__(self, mesh_device, queries, sp_axis, num_layers=LAYERS, block_size=BLOCK_SIZE):
+        self.op = TtAttnRes(mesh_device, hidden_size=HIDDEN_SIZE, eps=EPS, sp_axis=sp_axis, tp_axis=1 - sp_axis)
         self.num_layers, self.block_size = num_layers, block_size
 
         q_pre, q_post, q_out = queries
@@ -139,8 +138,8 @@ class _ExampleTransformer(object):
             ttnn.deallocate(tensor)
 
 
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=["mesh_device", "device_params"])
-def test_example_matches_reference(mesh_device, device_params):
+@pytest.mark.parametrize("mesh_device, device_params, sp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"])
+def test_example_matches_reference(mesh_device, device_params, sp_axis):
     """The example runs, agrees with the oracle, and reaches every state on the way.
 
     The PCC gate is what makes this an example rather than pseudocode: a `write` that
@@ -152,7 +151,7 @@ def test_example_matches_reference(mesh_device, device_params):
     """
     rng = generator()
     queries = (random_queries(rng, LAYERS), random_queries(rng, LAYERS), random_queries(rng, 1)[0])
-    model = _ExampleTransformer(mesh_device, queries)
+    model = _ExampleTransformer(mesh_device, queries, sp_axis)
     hidden_states = random_hidden(rng, PER_CHIP_TOKENS * model.op.sp_factor)
 
     visited = []

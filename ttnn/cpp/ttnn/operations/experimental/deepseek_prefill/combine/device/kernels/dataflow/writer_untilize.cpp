@@ -182,6 +182,14 @@ void kernel_main() {
     // for the next invocation.
     volatile tt_l1_ptr uint32_t* counter_ready_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(counter_ready_semaphore_id));
+    // cb_experts_tok_counter is not used as a typical CB. It's intended to be a scratchpad that is setup
+    // once, remote-written-to once, then read by multiple consumers. The order of operations is
+    // - sender core remote-writes to this CB's data region, then bumps the untilizer core's semaphore
+    // - untilizer's reader kernel waits on the semaphore and reserves + pushes to the CB, thus making the data
+    //   available
+    // - untilizer's reader, writer and compute kernels wait_front on the CB, then read from it.
+    // These kernels must not pop_front because it can happen that pop lands before some other kernel got to its
+    // wait_front step, which would cause it to wait forever (a.k.a. hang)
     cb_experts_tok_counter.wait_front(cb_counter_total_pages);
     uint32_t counter_cb_base = cb_experts_tok_counter.get_read_ptr();
     const volatile tt_l1_ptr uint32_t* trailer =
@@ -353,6 +361,4 @@ void kernel_main() {
     // barrier. Repeat it at exit so the firmware's dynamic-NoC handoff check
     // sees an idle command buffer on every path.
     noc_async_write_set_trid(0);
-
-    cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }

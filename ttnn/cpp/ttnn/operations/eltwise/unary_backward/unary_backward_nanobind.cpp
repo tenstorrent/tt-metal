@@ -1153,6 +1153,7 @@ void py_module(nb::module_& mod) {
         mod,
         &ttnn::sqrt_bw,
         R"doc(Performs backward operations for square-root on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(TILE)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
@@ -1298,7 +1299,8 @@ void py_module(nb::module_& mod) {
         &ttnn::rpow_bw,
         R"doc(Performs backward operations for rpow on :attr:`input_tensor`, :attr:`exponent` with given :attr:`grad_tensor`.)doc",
         "exponent",
-        "Exponent value",
+        "The scalar base: rpow computes exponent ** input_tensor, so the gradient is grad * ln(exponent) * "
+        "exponent ** input_tensor",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_backward_op<"round_bw">(

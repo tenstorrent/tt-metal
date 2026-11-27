@@ -126,7 +126,9 @@ enum class SfpuType {
     isclose,
     unused,
     reshuffle_rows,
+    triangle_solve,
     cumsum,
+    cumprod,
     fill,
     prelu,
     alt_complex_rotate90,
@@ -178,4 +180,5 @@ enum class SfpuType {
     expm1_cw,
     softcap,
     situ_glu,
+    quick_gelu,
 };

@@ -26,11 +26,13 @@ import ttnn
 from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
 from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
 from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
-from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp, vision_cu_seqlens
+from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, pad_patches_for_sp
+from ....encoders.vision import vision_cu_seqlens
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
@@ -132,7 +134,7 @@ def _conditioner_dir() -> str:
         elif not ref and os.path.isdir(_LOCAL_MIRROR):
             root = _LOCAL_MIRROR
         else:
-            repo_id = ref or _HF_REPO
+            repo_id = ensure_cached(ref or _HF_REPO)
             logger.info(f"MiniMax-H3 conditioner not local; fetching {_PATTERNS} from {repo_id}")
             root = snapshot_download(repo_id=repo_id, allow_patterns=_PATTERNS)
         return os.path.join(root, _SUBFOLDER)
@@ -251,8 +253,8 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
             pos_embeds=bf16_tensor(p_pos, **sp),
             rope=(bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)),
             cu_seqlens=p_cu,
-            logical_patches=logical,
         )
+        real_tokens = logical // tower.spatial_merge_size**2
     else:
         tokens, deepstack = tower.forward(
             bf16_tensor(pixel_values.float(), device=submesh),
@@ -260,13 +262,16 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
             rope=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
             cu_seqlens=vision_cu_seqlens(grid),
         )
+        real_tokens = pixel_values.shape[0] // tower.spatial_merge_size**2
 
     tag = "two_refs" if size == "two_refs" else f"{size[0]}x{size[1]}"
     logger.info(f"minimax-h3 vision tower [real, sharded={sharded}] {tag} grid={grid.tolist()}:")
-    assert_quality(ref_out.pooler_output.float(), tensor.to_torch(tokens, mesh_axes=[None, None]), pcc=0.99)
+    assert_quality(
+        ref_out.pooler_output.float(), tensor.to_torch(tokens, mesh_axes=[None, None])[:real_tokens], pcc=0.99
+    )
     for i, (feature, golden) in enumerate(zip(deepstack, ref_out.deepstack_features)):
         logger.info(f"  deepstack {i} (vision layer {vc.deepstack_visual_indexes[i]}):")
-        assert_quality(golden.float(), tensor.to_torch(feature, mesh_axes=[None, None]), pcc=0.99)
+        assert_quality(golden.float(), tensor.to_torch(feature, mesh_axes=[None, None])[:real_tokens], pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -620,7 +625,7 @@ def test_fused_conditioner_two_refs_real_weights(
             t1 = t2 = time.time()
         else:
             vc, vs = tower.prepare_rope(grid)
-            p_patches, p_pos, (p_cos, p_sin), p_cu, logical = pad_patches_for_sp(
+            p_patches, p_pos, (p_cos, p_sin), p_cu, _ = pad_patches_for_sp(
                 pixel_values.float(),
                 tower.prepare_pos_embeds(grid),
                 (vc, vs),
@@ -632,9 +637,7 @@ def test_fused_conditioner_two_refs_real_weights(
             tt_vcos, tt_vsin = bf16_tensor(p_cos, **sp), bf16_tensor(p_sin, **sp)
             ttnn.synchronize_device(submesh)
             t1 = time.time()
-            merged, deepstack = tower.forward(
-                tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=p_cu, logical_patches=logical
-            )
+            merged, deepstack = tower.forward(tt_patches, pos_embeds=tt_pos, rope=(tt_vcos, tt_vsin), cu_seqlens=p_cu)
             ttnn.synchronize_device(submesh)
             t2 = time.time()
         dcos, dsin = create_rope_tensors(
@@ -722,11 +725,12 @@ def test_fused_conditioner_two_refs_real_weights(
 )
 # Decoder-only parallel configs: `sp_on` shards the sequence, `is_fsdp` the weights, on the non-TP axis.
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links"),
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_on", "is_fsdp", "num_links", "dynamic_length"),
     [
-        pytest.param((4, 8), (4, 8), 0, False, True, 2, id="tp4_fsdp8"),
-        pytest.param((4, 8), (4, 8), 0, True, True, 2, id="tp4_sp8_fsdp8"),
-        pytest.param((4, 8), (4, 8), 1, True, False, 2, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, False, True, 2, False, id="tp4_fsdp8"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, False, id="tp4_sp8_fsdp8"),
+        pytest.param((4, 8), (4, 8), 1, True, False, 2, False, id="tp8_sp4"),
+        pytest.param((4, 8), (4, 8), 0, True, True, 2, True, id="tp4_sp8_fsdp8_dynamic"),
     ],
     indirect=["mesh_device"],
 )
@@ -734,10 +738,13 @@ def test_fused_conditioner_two_refs_real_weights(
 # 512 is a whole number of SEQ_BUCKET_SIZE=128 buckets, so the encoder pads nothing.
 @pytest.mark.parametrize("seq_len", [512], ids=["prompt_512"])
 def test_fused_conditioner_t2va_real_weights(
-    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, check_pcc, seq_len
+    conditioner, mesh_device, submesh_shape, tp_axis, sp_on, is_fsdp, num_links, dynamic_length, check_pcc, seq_len
 ):
-    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only."""
+    """The `t2va` conditioner: text-only presentation on released weights; no vision tower, decoder only.
+    `dynamic_length` takes the row count at run time, which needs SP and two K heads per chip (TP=4)."""
     path, reference = conditioner
+    if dynamic_length and mesh_device.arch() != ttnn.device.Arch.BLACKHOLE:
+        pytest.skip("dynamic_length is Blackhole only")
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     shape = tuple(submesh.shape)
     tp_factor = shape[tp_axis]
@@ -748,6 +755,7 @@ def test_fused_conditioner_t2va_real_weights(
     torch.manual_seed(0)
     ids = torch.randint(0, cfg.vocab_size, (1, seq_len))
     tag = f"tp{tp_factor}" + (f"_sp{sp_factor}" if sp_on else "") + (f"_fsdp{shape[1 - tp_axis]}" if is_fsdp else "")
+    tag += "_dynamic" if dynamic_length else ""
     logger.info(f"[t2va] presentation built: seq={seq_len}, text only, config {tag}.")
 
     golden = None
@@ -773,6 +781,8 @@ def test_fused_conditioner_t2va_real_weights(
         is_fsdp=is_fsdp,
         num_layers=TAP,
         load_weights=False,
+        kv_gather_capacity=seq_len if dynamic_length else None,
+        dynamic_length=dynamic_length,
     )
     layer_re = re.compile(r"^layers\.(\d+)\.")
     truncated = {
@@ -790,8 +800,7 @@ def test_fused_conditioner_t2va_real_weights(
         dcos, dsin = create_rope_tensors(
             1, seq_len, None, head_dim, rope_params["rope_theta"], rope_params["mrope_section"]
         )
-        tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh)
-        tt_dcos, tt_dsin = bf16_tensor(dcos, device=submesh), bf16_tensor(dsin, device=submesh)
+        tt_ids, (tt_dcos, tt_dsin) = encoder.upload_inputs(ids, dcos, dsin)
         ttnn.synchronize_device(submesh)
         t1 = time.time()
         out = encoder.forward(tt_ids, attention_mask=None, pos_embeds=(tt_dcos, tt_dsin))[0]

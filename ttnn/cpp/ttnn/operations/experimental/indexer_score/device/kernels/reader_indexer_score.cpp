@@ -3,14 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Reader for indexer_score (DMA bottleneck). Walks this core's (group-phase x k-band) rectangle: per
-// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [diag, full]
-// -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
+// group pushes resident w + (if all heads fit) q, per band pushes the k chunk. Builds the [per-residue
+// causal, full] -inf mask tiles once, plus a 1.0 reduce-scaler when block-max-pooling. G-agnostic.
 //
 // Banded-product multicast: a grid ROW shares q/w (q-mcast), a COLUMN shares the k-band (k-mcast). role
 // sender reads DRAM + mcasts; receiver takes the L1->L1 copy; none is a plain DRAM read. q/w (row) and k
 // (column) mcast are independent; either may be off.
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "indexer_score_runtime_args.hpp"
 #include "indexer_schedule.hpp"
@@ -73,7 +73,8 @@ constexpr uint32_t bc_chunk_local = get_compile_time_arg_val(bc_ct_base + 1);
 constexpr uint32_t bc_sp = get_compile_time_arg_val(bc_ct_base + 2);
 constexpr uint32_t bc_shard_stride_gap = get_compile_time_arg_val(bc_ct_base + 3);
 constexpr uint32_t bc_slab_stride_gap = get_compile_time_arg_val(bc_ct_base + 4);
-constexpr bool full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5) != 0;
+// 0 = axis ring, 1 = full mesh with row-major tensor ranks, 2 = full mesh with column-major tensor ranks.
+constexpr uint32_t full_mesh_rank_mapping = get_compile_time_arg_val(bc_ct_base + 5);
 constexpr auto snake_orientation =
     static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(bc_ct_base + 6));
 constexpr uint32_t rank_mapping_mesh_rows = get_compile_time_arg_val(bc_ct_base + 7);
@@ -149,20 +150,20 @@ struct McastDir {
     uint32_t ndst;            // number of receivers
 };
 
-/** Sender: data already at `addr` from DRAM; wait all receivers ready, mcast the block,
+/** Sender: data already at `cb`'s write pointer from DRAM; wait all receivers ready, mcast the block,
  *  then relay the valid flag into their recv semaphore. Mirrors chain_link. */
 template <uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem>
-inline void mcast_send(Noc noc, const McastDir& d, uint32_t addr, uint32_t bytes) {
+inline void mcast_send(Noc noc, const McastDir& d, const CircularBuffer& cb, uint32_t bytes) {
     Semaphore<> s(send_sem);
     s.wait(d.ndst);  // all receivers reserved their slot and signaled ready
     s.set(0);
     noc.async_write_multicast(
-        CoreLocalMem<uint32_t>(addr),
-        MulticastEndpoint{},
+        CoreLocalMem<uint32_t>(cb.get_write_ptr()),
+        cb,
         bytes,
         d.ndst,
         {},
-        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye, .addr = addr},
+        {.noc_x_start = d.xs, .noc_y_start = d.ys, .noc_x_end = d.xe, .noc_y_end = d.ye},
         /*linked=*/true);
     // back-to-back after the linked data write (a flush/barrier between would deadlock)
     Semaphore<>(valid_sem).relay_multicast(
@@ -198,17 +199,61 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
     noc.async_read_barrier();
     if constexpr (mcast_on) {
         if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
-            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
+            mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, cb, bytes);
         }
     }
     cb.push_back(ntiles);
 }
 
+/** -inf over columns [first_masked, 16) of ONE face row, in 32-bit stores (low half = even column).
+ *  Word-granular on purpose: this fill sits at the head of run(), before any q/k read, so its cost is
+ *  serial startup on every core -- an element-at-a-time loop here cost ~4 us/dispatch, which the short
+ *  perf-band shapes (minimax_m3, glm5_tp1) cannot amortize. */
+inline void mask_face_row_suffix(
+    volatile tt_l1_ptr uint32_t* ptr, uint32_t face_base_words, uint32_t face_row, uint32_t first_masked) {
+    constexpr uint32_t words_per_face_row = tt::constants::FACE_WIDTH / 2;
+    if (first_masked >= tt::constants::FACE_WIDTH) {
+        return;
+    }
+    const uint32_t row_base = face_base_words + face_row * words_per_face_row;
+    uint32_t word = first_masked / 2;
+    if (first_masked % 2 != 0) {
+        ptr[row_base + word] = 0xFF800000u;  // low half = column first_masked-1, still valid (zero)
+        ++word;
+    }
+    for (; word < words_per_face_row; ++word) {
+        ptr[row_base + word] = 0xFF80FF80u;
+    }
+}
+
+/** Build one partial causal mask for each compressed-key residue represented by a query tile. */
+inline void fill_compressed_causal_mask_tile(Noc noc, uint32_t tile_id) {
+    fill_tile_zeros<bf16_tile_bytes>(noc, cb_mask, tile_id);
+    CircularBuffer cb(cb_mask);
+    volatile tt_l1_ptr uint32_t* ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * bf16_tile_bytes);
+    constexpr uint32_t face_h = tt::constants::FACE_HEIGHT;
+    constexpr uint32_t face_w = tt::constants::FACE_WIDTH;
+    constexpr uint32_t face_words = (face_h * face_w) / 2;
+    const uint32_t residue = tile_id * (tt::constants::TILE_WIDTH / key_compression_ratio);
+    for (uint32_t row = 0; row < tt::constants::TILE_HEIGHT; ++row) {
+        const uint32_t first_masked = residue + (row + 1) / key_compression_ratio;
+        // A tile row spans the left face (columns 0-15) and its right neighbour (columns 16-31).
+        const uint32_t left_face = (row / face_h) * 2;
+        const uint32_t face_row = row % face_h;
+        mask_face_row_suffix(ptr, left_face * face_words, face_row, first_masked);
+        mask_face_row_suffix(
+            ptr, (left_face + 1) * face_words, face_row, first_masked > face_w ? first_masked - face_w : 0);
+    }
+}
+
 inline void build_mask_tiles(Noc noc) {
     CircularBuffer cb(cb_mask);
     cb.reserve_back(num_mask_tiles);
-    fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
-    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
+    for (uint32_t tile_id = 0; tile_id < key_compression_ratio; ++tile_id) {
+        fill_compressed_causal_mask_tile(noc, tile_id);
+    }
+    fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/key_compression_ratio);
     cb.push_back(num_mask_tiles);
 }
 
@@ -261,7 +306,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row down the grid row
-                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, row_addr, row_tiles * q_tile_bytes);
+                mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, row_tiles * q_tile_bytes);
             }
         }
         cb.push_back(row_tiles);
@@ -353,7 +398,7 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
         }
         noc.async_read_barrier();
         if (q_mcast_on && q_dir.role == iscore::mcast_role_sender) {
-            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, addr, input_tiles * bf16_tile_bytes);
+            mcast_send<q_send_sem, q_recv_sem, q_valid_sem>(noc, q_dir, cb, input_tiles * bf16_tile_bytes);
         }
     }
     if constexpr (stream_heads || fuse_single) {
@@ -796,14 +841,14 @@ void kernel_main() {
         constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 &&
-            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles);
+            chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles * key_compression_ratio);
         // Undo the key-stripe split so this matches device_causal_geometry's (unsplit) arguments exactly.
         // Identity when key_stripe_split == 1, which is every non-dedup path.
         // Guard the divisor: the non-fused factory zero-fills this block (it rejects the metadata path),
         // and `bc_sp / 0` is an ill-formed constant expression even in a discarded branch.
         constexpr uint32_t geom_split = meta_key_stripe_split != 0 ? meta_key_stripe_split : 1;
         constexpr uint32_t geom_sp = bc_sp / geom_split;
-        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split;
+        constexpr uint32_t geom_chunk_local_elems = bc_chunk_local * 32 * geom_split * key_compression_ratio;
         const auto geom = ttnn::operations::experimental::indexer_score::causal_geometry_tiles(
             chunk_start_idx,
             block_cyclic,
@@ -813,14 +858,17 @@ void kernel_main() {
             get_common_arg_val<uint32_t>(meta_rt_base + 1),  // device_index
             get_common_arg_val<uint32_t>(meta_rt_base + 2),  // tp_index
             meta_Sq);
-        // Derive kv_len from the same position used for causal geometry.
-        uint32_t derived_kv_len_tiles = chunk_start_idx / 32 + chunk_global_tiles;
+        // Derive kv_len from the same position used for causal geometry. Round compressed history up to a
+        // whole K tile; any padded rows in that boundary tile remain future-masked by the exact causal mask.
+        uint32_t derived_kv_len_tiles =
+            (chunk_start_idx + 32 * key_compression_ratio - 1) / (32 * key_compression_ratio) + chunk_global_tiles;
         // Cap at the REAL token end when the host supplied it. Uncapped, this is the padded-window end, so
         // on a partial chunk the score covers columns this request never wrote: harmless for real query
         // rows (those keys sit at s > t and the causal edge masks them) but NOT for pad rows, whose top-k
         // then differs from the scalar path's. Reading actual_end here reproduces the scalar bound exactly,
         // and narrows the scored extent at the same time. ceil to the 32-row write grid, matching
-        // write_k's clamp and the scalar path's own rounding.
+        // write_k's clamp and the scalar path's own rounding. Tokens equal cache rows only at ratio 1,
+        // which validate_chunk_start_metadata enforces on this path.
         // 0 = no bound supplied (full chunk): the host zeroes this slot rather than compiling a second
         // variant, so presence costs a compare here instead of a program hash split.
         const uint32_t valid_end_addr = get_common_arg_val<uint32_t>(vend_rt_base);

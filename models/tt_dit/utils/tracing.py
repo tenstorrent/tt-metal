@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.utils import tensor
+from models.tt_dit.utils import tensor, trace_store
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -32,6 +32,7 @@ class StateTensor:
 
     def __init__(self) -> None:
         self._data: ttnn.Tensor | None = None
+        self._bound_before_traces = False
 
     @property
     def data(self) -> ttnn.Tensor | None:
@@ -40,6 +41,15 @@ class StateTensor:
     @property
     def value(self) -> ttnn.Tensor | None:
         return self._data
+
+    @property
+    def keeps_value(self) -> bool:
+        """Whether the buffer still holds what the last ``update`` wrote.
+
+        A trace replay may overwrite any buffer allocated after that trace's capture, so only a buffer
+        bound while no trace was live is trusted; a caller that skips an ``update`` checks this first.
+        """
+        return self._data is not None and self._bound_before_traces
 
     def update(
         self,
@@ -64,8 +74,15 @@ class StateTensor:
             value = tensor.from_torch(value, device=device, mesh_axes=mesh_axes, dtype=dtype)
         if self._data is None or not traced:
             self._data = value
+            self._bound_before_traces = not any(tracer.trace_captured for tracer in live_tracers())
         else:
             ttnn.copy(value, self._data)
+
+    def release(self) -> None:
+        """Free the device buffer (a host tensor is only dropped); the next ``update`` allocates."""
+        data, self._data = self._data, None
+        if isinstance(data, ttnn.Tensor) and data.storage_type() == ttnn.StorageType.DEVICE:
+            ttnn.deallocate(data)
 
 
 # Set by the kernel-prewarm in-process cold-start around its capture pass. When active, a traced call
@@ -101,6 +118,8 @@ class Tracer:
     """
 
     _traces_live: ClassVar[dict[int, int]] = {}
+    # Every live tracer, for live_tracers() (shape resets and DRAM accounting); weak, so it keeps none alive.
+    _instances: ClassVar[weakref.WeakSet[Tracer]] = weakref.WeakSet()
 
     @overload
     def __init__(
@@ -111,6 +130,7 @@ class Tracer:
         device: ttnn.MeshDevice,
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         ...
 
@@ -123,6 +143,7 @@ class Tracer:
         devices: Sequence[ttnn.MeshDevice],
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         ...
 
@@ -135,6 +156,7 @@ class Tracer:
         devices: Sequence[ttnn.MeshDevice] | None = None,
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         """Initialize the tracer.
 
@@ -151,6 +173,10 @@ class Tracer:
             devices: Multiple devices on which to capture and execute the trace simultaneously.
             prep_run: Whether to run the function once before capturing the trace.
             clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
+            hold_capture_frees: Keep the DRAM the function frees during capture reserved until the
+                trace is released (``ttnn.set_trace_capture_hold``), so buffers allocated after
+                capture (a later job's) cannot land on the trace's intermediates and be overwritten
+                by a replay. Costs those intermediates without reuse, for the trace's lifetime.
         """
         if (device is None) == (devices is None):
             msg = "exactly one of 'device' or 'devices' must be provided"
@@ -164,14 +190,45 @@ class Tracer:
             if d.id() not in Tracer._traces_live:
                 Tracer._traces_live[d.id()] = 0
 
+        Tracer._instances.add(self)
         self._function = function
         self._devices: tuple[ttnn.MeshDevice, ...] = tuple(devices)
         self._prep_run = prep_run
         self._clone_prep_inputs = clone_prep_inputs
+        self._hold_capture_frees = hold_capture_frees
+        # Per-bank DRAM bytes the last capture holds (0 when the hold is off or unsupported).
+        self.capture_hold_bytes = 0
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        self.capture_count = 0
+        self.restore_count = 0
+        self.replay_count = 0
+        # Set by prepare(): inputs are on device and the prep run is done; capture_prepared() records.
+        self._prepared = False
+
+    def prepare(self, *args: Any, **kwargs: Any) -> Any:
+        """Allocate the input buffers and run the prep run now, but capture later.
+
+        Lets a caller put a trace's inputs and everything its first run allocates below other
+        traces, and record the trace itself after every other persistent allocation, so no later
+        allocation sits in its activation region. Returns the prep run's outputs (``None`` without
+        ``prep_run``). Follow with ``capture_prepared()``."""
+        if self._trace_ids is not None or self._prepared:
+            msg = "prepare() must come before the capture, once"
+            raise RuntimeError(msg)
+        self._stage_inputs(args, kwargs)
+        outputs = self._run_prep()
+        self._prepared = True
+        return outputs
+
+    def capture_prepared(self, *, cq_id: int = 0, execute: bool = False) -> None:
+        """Capture the trace of a ``prepare()``d tracer on its stored inputs."""
+        if not self._prepared or self._trace_ids is not None:
+            msg = "capture_prepared() needs a prepared, uncaptured tracer"
+            raise RuntimeError(msg)
+        self._record(cq_id=cq_id, blocking_execution=True, execute=execute)
 
     def __call__(
         self,
@@ -252,10 +309,15 @@ class Tracer:
             msg = "tracer cannot be reused after the trace was released"
             raise RuntimeError(msg)
 
-        args = _tree_map(_verify_value, args, path_label="args")
-        kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
-        self._args = _tree_map(self._tensor_to_device, args, path_label="args")
-        self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+        if self._prepared:
+            # Inputs already sit in their buffers from prepare(): copy this call's values in.
+            _tree_map(self._update_input, self._args, args, path_label="args")
+            for name, new in kwargs.items():
+                _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
+            self._record(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
+            return
+
+        self._stage_inputs(args, kwargs)
 
         if _kernel_prewarm_capturing:
             # Record the trace-variant kernels by running the forward once (program construction writes
@@ -264,20 +326,47 @@ class Tracer:
             self._outputs = self._function(*self._args, **self._kwargs)
             return
 
-        if self._prep_run:
-            if self._clone_prep_inputs:
-                prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
-                prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
-            else:
-                prep_args = self._args
-                prep_kwargs = self._kwargs
+        self._run_prep()
+        self._record(cq_id=cq_id, blocking_execution=blocking_execution, execute=execute)
 
-            self._function(*prep_args, **prep_kwargs)
-            del prep_args, prep_kwargs
+    def _stage_inputs(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        args = _tree_map(_verify_value, args, path_label="args")
+        kwargs = _tree_map(_verify_value, kwargs, path_label="kwargs")
+        self._args = _tree_map(self._tensor_to_device, args, path_label="args")
+        self._kwargs = _tree_map(self._tensor_to_device, kwargs, path_label="kwargs")
+
+    def _run_prep(self) -> Any:
+        if not self._prep_run:
+            return None
+        if self._clone_prep_inputs:
+            prep_args = _tree_map(_clone_tensor, self._args, path_label="args")
+            prep_kwargs = _tree_map(_clone_tensor, self._kwargs, path_label="kwargs")
+        else:
+            prep_args = self._args
+            prep_kwargs = self._kwargs
+        return self._function(*prep_args, **prep_kwargs)
+
+    def _record(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
+        # Trace store (TT_DIT_TRACE_STORE=1): install a stored trace in place of a capture.
+        store_key = None
+        if trace_store.enabled() and len(self._devices) == 1 and not self._hold_capture_frees:
+            d = self._devices[0]
+            store_pre = trace_store.live_buffers(d)
+            store_key = trace_store.key_for(self, d, cq_id, store_pre)
+            restored = trace_store.restore(self, d, cq_id, store_key, store_pre)
+            if restored is not None:
+                trace_id, self._outputs = restored
+                Tracer._traces_live[d.id()] += 1
+                self._trace_ids = (trace_id,)
+                self.capture_hold_bytes = 0
+                self.restore_count += 1
+                if execute:
+                    ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
+                return
 
         # capture trace
         logger.debug("capturing trace...")
-        trace_ids = tuple(ttnn.begin_trace_capture(d, cq_id=cq_id) for d in self._devices)
+        trace_ids = self._begin_capture(cq_id)
         try:
             try:
                 outputs = self._function(*self._args, **self._kwargs)
@@ -286,7 +375,7 @@ class Tracer:
                     ttnn.end_trace_capture(d, trace_id, cq_id=cq_id)
 
             outputs = _tree_map(_verify_value, outputs, path_label="outputs")
-        except Exception:
+        except BaseException:
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.release_trace(d, trace_id)
             raise
@@ -294,13 +383,44 @@ class Tracer:
         for d in self._devices:
             Tracer._traces_live[d.id()] += 1
         self._trace_ids = trace_ids
+        if self._hold_capture_frees and hasattr(ttnn, "trace_capture_hold_bytes"):
+            self.capture_hold_bytes = max(
+                ttnn.trace_capture_hold_bytes(d, t) for d, t in zip(self._devices, trace_ids, strict=True)
+            )
         self._outputs = outputs
+        self.capture_count += 1
+        if store_key is not None:
+            trace_store.dump(self, self._devices[0], trace_ids[0], store_key, store_pre, outputs)
+            trace_store.note_captured(store_key)
 
         if execute:
             # Trace capture records commands but does not execute them. Execute the trace to
             # actually compute outputs.
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
+
+    def _begin_capture(self, cq_id: int) -> tuple[ttnn.MeshTraceId, ...]:
+        hold = self._hold_capture_frees
+        if hold and not hasattr(ttnn, "set_trace_capture_hold"):
+            msg = "hold_capture_frees needs ttnn.set_trace_capture_hold (ltx-rt task #6000)"
+            raise RuntimeError(msg)
+        trace_ids: list[ttnn.MeshTraceId] = []
+        try:
+            for d in self._devices:
+                # The hold binds to the capture begun while it is set; clear it right after.
+                if hold:
+                    ttnn.set_trace_capture_hold(d, True)
+                try:
+                    trace_ids.append(ttnn.begin_trace_capture(d, cq_id=cq_id))
+                finally:
+                    if hold:
+                        ttnn.set_trace_capture_hold(d, False)
+        except BaseException:
+            for d, trace_id in zip(self._devices, trace_ids):
+                ttnn.end_trace_capture(d, trace_id, cq_id=cq_id)
+                ttnn.release_trace(d, trace_id)
+            raise
+        return tuple(trace_ids)
 
     def _execute(
         self,
@@ -328,6 +448,8 @@ class Tracer:
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
 
+        self.replay_count += 1
+
     @property
     def trace_captured(self) -> bool:
         """Whether a trace has been captured and is ready for execution."""
@@ -348,16 +470,30 @@ class Tracer:
     def release_trace(self) -> None:
         """Release the captured trace and clear inputs and outputs."""
         trace_ids = self._trace_ids
-        if trace_ids is None:
-            return
-
+        # Failed capture and kernel-prewarm calls also retain input/output buffers.
         self._trace_ids = None
+        self._prepared = False
         self._args = ()
         self._kwargs = {}
         self._outputs = None
+        if trace_ids is None:
+            return
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             Tracer._traces_live[d.id()] -= 1
             ttnn.release_trace(d, trace_id)
+
+    def release_inputs(self) -> None:
+        """Drop the references to the last call's inputs, freeing the device memory they hold.
+
+        Only meaningful before a trace has been captured: afterwards the stored inputs are the
+        trace's own input buffers, which every execution writes through.
+        """
+        if self._trace_ids is not None:
+            msg = "inputs cannot be released once the trace has been captured"
+            raise RuntimeError(msg)
+
+        self._args = ()
+        self._kwargs = {}
 
     def release_function(self) -> None:
         """Drop the reference to the wrapped function.
@@ -451,7 +587,7 @@ def _clone_tensor(value: Any, *, path_label: str) -> Any:
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
-    Recursively traverses nested structures (tuples, lists, dicts) and applies
+    Recursively traverses nested structures (tuples, named ones included, lists, dicts) and applies
     the given function to corresponding leaf elements across all input structures.
 
     Args:
@@ -483,9 +619,10 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
                 raise ValueError(msg)
 
-        return tuple(
+        items = [
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
-        )
+        ]
+        return type(x)(*items) if hasattr(type(x), "_fields") else tuple(items)
 
     if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
@@ -505,6 +642,49 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
     raise AssertionError  # unreachable
 
 
+def live_tracers() -> list[Tracer]:
+    """Every Tracer still referenced anywhere (captured or not)."""
+    return list(Tracer._instances)
+
+
+def tracer_io_tensors(tracer: Tracer) -> list[ttnn.Tensor]:
+    """The device tensors a tracer holds: its stored inputs (the trace's input buffers once
+    captured) and its outputs."""
+    out: list[ttnn.Tensor] = []
+
+    def take(value: Any, *, path_label: str) -> Any:
+        if isinstance(value, ttnn.Tensor) and value.storage_type() == ttnn.StorageType.DEVICE:
+            out.append(value)
+        return value
+
+    for tree in (tracer._args, tracer._kwargs, tracer._outputs):
+        _tree_map(take, tree, path_label="io")
+    return out
+
+
+def release_traced_functions(context: Any) -> int:
+    """Release every trace the @traced_function methods hold for ``context`` (keyed or not) and
+    drop the entries, so the next traced call captures afresh. Returns how many were captured."""
+    released = 0
+    try:
+        weakref.ref(context)
+    except TypeError:
+        return 0  # never a key of the per-instance stores
+    for wrapper in list(_TRACED_WRAPPERS):
+        stores = [wrapper._tracers.get(context)] + list(wrapper._tracers_keyed.get(context, {}).values())
+        for tracer in stores:
+            if tracer is not None:
+                released += tracer.trace_captured
+                tracer.release_trace()
+        wrapper._tracers.pop(context, None)
+        wrapper._tracers_keyed.pop(context, None)
+    return released
+
+
+# Every @traced_function wrapper, for release_traced_functions().
+_TRACED_WRAPPERS: weakref.WeakSet[Callable[..., Any]] = weakref.WeakSet()
+
+
 _TRACER_CALL_KWARGS = frozenset(
     name
     for name, param in inspect.signature(Tracer.__call__).parameters.items()
@@ -519,6 +699,7 @@ def traced_function(
     inject_mesh_device: bool = False,
     prep_run: bool = True,
     clone_prep_inputs: bool = True,
+    hold_capture_frees: bool | Callable[..., bool] = False,
 ) -> Any:
     """Decorator that adds optional tracing to any function or method via the ``Tracer`` class.
 
@@ -608,7 +789,18 @@ def traced_function(
             function. Mutually exclusive with ``device=``.
         prep_run: Forwarded to ``Tracer.__init__``.
         clone_prep_inputs: Forwarded to ``Tracer.__init__``.
+        hold_capture_frees: Forwarded to ``Tracer.__init__``. A callable is resolved on the bound
+            context when the tracer is made (e.g. ``lambda self: self.hold_capture_frees``), so a
+            module can opt in per instance; it needs the context-bound path.
     """
+
+    def _resolve_hold(context: Any) -> bool:
+        if not callable(hold_capture_frees):
+            return bool(hold_capture_frees)
+        if context is None:
+            msg = "@traced_function: a callable hold_capture_frees needs a bound context (self)"
+            raise TypeError(msg)
+        return bool(hold_capture_frees(context))
 
     def _resolve_device(context: Any) -> ttnn.MeshDevice:
         if device is None:
@@ -731,6 +923,7 @@ def traced_function(
                         device=mesh_device_val,
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
+                        hold_capture_frees=_resolve_hold(None),
                     )
                 return _tracers_auto[key](*bound.args, **bound.kwargs, **tracer_call_kwargs)
 
@@ -749,6 +942,7 @@ def traced_function(
                         device=_resolve_device(context),
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
+                        hold_capture_frees=_resolve_hold(context),
                     )
                 return store[store_key](*rest, **kwargs)
 
@@ -767,6 +961,7 @@ def traced_function(
         wrapper._tracers = _tracers  # type: ignore[attr-defined]
         wrapper._tracers_keyed = _tracers_keyed  # type: ignore[attr-defined]
         wrapper._tracers_auto = _tracers_auto  # type: ignore[attr-defined]
+        _TRACED_WRAPPERS.add(wrapper)
         return wrapper
 
     if _fn is not None:

@@ -8,10 +8,14 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <unordered_map>
+#include <vector>
 
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/shard_data_transfer.hpp>
 
 namespace tt {
 class Cluster;
@@ -26,6 +30,20 @@ class MeshCoordinateRangeSet;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::experimental {
+
+// One shard of a write to be copied into the per-mesh hugepage staging ring.
+struct StagingSource {
+    distributed::MeshCoordinate coord;
+    const void* data = nullptr;
+    size_t size = 0;
+};
+
+// Transfers that read from the staging ring. `hold` keeps the ring locked until
+// the (blocking) write that uses `transfers` has finished.
+struct StagedWrite {
+    std::unique_lock<std::mutex> hold;
+    std::vector<distributed::ShardDataTransfer> transfers;
+};
 
 /**
  * @brief LRU cache for PinnedMemory objects, keyed by host buffer address.
@@ -96,6 +114,12 @@ public:
      */
     size_t num_entries() const;
 
+    // Copy the sources into this mesh's staging ring (hugetlb memory pinned once for every local chip
+    // on first use) and return transfers that DMA from it. nullopt: no ring (TT_METAL_PIN_STAGING=0,
+    // no free hugepages, pin failed) or the write is larger than the ring; use the per-tensor pin path.
+    std::optional<StagedWrite> stage_for_write(
+        distributed::MeshDevice& mesh_device, const std::vector<StagingSource>& sources);
+
 private:
     PinnedMemoryCache() = default;
 
@@ -140,6 +164,23 @@ private:
     // `target_mmio_ids` and is still referenced externally (use_count > 1),
     // which would prevent the kernel driver from accepting a new pin.
     bool has_conflicting_entry(const void* host_addr, const std::set<int>& target_mmio_ids) const;
+
+    struct StagingRing {
+        std::mutex mutex;
+        void* base = nullptr;
+        size_t size = 0;
+        std::shared_ptr<PinnedMemory> pinned;
+        uint64_t writes = 0;
+        uint64_t bytes = 0;
+        uint64_t too_big = 0;
+        double copy_s = 0.0;
+        ~StagingRing();
+    };
+
+    StagingRing* get_staging_ring(distributed::MeshDevice& mesh_device);
+
+    std::unordered_map<const distributed::MeshDevice*, std::unique_ptr<StagingRing>> staging_rings_;
+    std::set<const distributed::MeshDevice*> staging_unavailable_;
 
     mutable std::mutex mutex_;
     std::list<CacheEntry> lru_entries_;  // front = oldest (LRU candidate)

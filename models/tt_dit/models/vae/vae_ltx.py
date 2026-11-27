@@ -9,12 +9,11 @@ from __future__ import annotations
 import json
 import math
 import os
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import torch
 from einops import rearrange
 from loguru import logger
-from safetensors import safe_open
 from safetensors.torch import load_file
 
 import ttnn
@@ -25,9 +24,11 @@ from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
+from ...utils import timing_tree
 from ...utils.conv3d import (
     ConvDims,
     _ntuple,
+    _walk_conv3d_modules,
     aligned_channels,
     conv3d_blocking_hash,
     conv_pad_height,
@@ -35,17 +36,33 @@ from ...utils.conv3d import (
     conv_pad_width,
     get_conv3d_config,
 )
-from ...utils.ltx import pad_hw_replicate
-from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.ltx import pad_hw_replicate, read_vae_per_channel_stats
+from ...utils.tensor import (
+    depth_to_space_channels_last,
+    fast_device_to_host,
+    float_to_uint8,
+    math_fidelity_from_env,
+    prepare_depth_to_space_channels,
+    typed_tensor,
+    typed_tensor_2dshard,
+)
 from ...utils.tracing import Tracer
 from ...utils.yuv_d2h import fast_device_to_host_yuv, rgb_chwt_to_yuv_device, yuv_planes_to_host
+from .diffvae_ltx import DiffVAEDecoder, DiffVAEOptions
+from .diffvae_ltx import decoder_config as diffvae_config
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 
 
+def _exact_shard_enabled() -> bool:
+    # On by default: bit-identical output, ~50 ms faster 1080p 4x8 decode. LTX_VAE_EXACT_SHARD=0 restores
+    # the padded shards.
+    return os.environ.get("LTX_VAE_EXACT_SHARD", "1") != "0"
+
+
 def _get_w_mask(cache, x_BTHWC, logical_w, parallel_config, mesh_device, dtype):
-    """Cached mask that zeros width-padding columns beyond logical_w (neighbor_pad has no W mask)."""
+    """Cached mask that zeros width-padding columns beyond logical_w (when neighbor_pad does not mask them)."""
     sharded_w = x_BTHWC.shape[3]
     key = (sharded_w, logical_w)
     if key not in cache:
@@ -88,7 +105,7 @@ class LTXCausalConv3d(Module):
         super().__init__()
 
         # When set, output channels are reordered at load to (p1,p2,p3,C); see
-        # _depth_to_space_channels_last.
+        # depth_to_space_channels_last.
         self.depth_to_space_stride = depth_to_space_stride
 
         if temporal_padding_mode not in ("repeat", "zeros"):
@@ -134,6 +151,26 @@ class LTXCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        # On by default (LTX_VAE_FOLD_TIME_PAD=0 turns it off): conv3d repeats the edge frames itself, replacing the slice+concat copy of the whole
+        # activation. Its "replicate" mode clamps every dim, so this is exact only when H/W carry no
+        # internal pad (both sharded: the halo exchange pads them). Symmetric T pad only, so causal
+        # calls keep the concat.
+        self.fold_time_pad = (
+            os.environ.get("LTX_VAE_FOLD_TIME_PAD", "1") != "0"
+            and self.time_pad > 0
+            and self.time_pad % 2 == 0
+            and internal_padding[1] == 0
+            and internal_padding[2] == 0
+        )
+        # On by default (LTX_VAE_FOLD_W_MASK=0 turns it off): neighbor_pad zeros the W pad columns itself
+        # (logical_w), replacing the mask multiply over the whole activation. Only the fused 2D halo (H and W
+        # both sharded) supports it.
+        self.fold_w_mask = os.environ.get("LTX_VAE_FOLD_W_MASK", "1") != "0"
+        # On by default (LTX_VAE_HALO_ONLY=0 turns it off): exchange only the halo into a compact buffer that
+        # conv3d reads next to the unpadded input, skipping neighbor_pad's interior copy. conv3d masks the
+        # logical H/W pad itself. Only the 2D halo (H and W both sharded) supports it.
+        self.halo_only = os.environ.get("LTX_VAE_HALO_ONLY", "1") != "0"
+
         dims_T, dims_H, dims_W = (conv_dims.T, conv_dims.H, conv_dims.W) if conv_dims is not None else (0, 0, 0)
         self.conv_config = get_conv3d_config(
             self.in_channels,
@@ -163,6 +200,35 @@ class LTXCausalConv3d(Module):
         self.bias = Parameter(total_shape=[1, self.out_channels], device=mesh_device, pad_value=0, dtype=dtype)
 
         self._w_mask_cache: dict[tuple, ttnn.Tensor] = {}
+        self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
+
+    def set_math_fidelity(self, math_fidelity: ttnn.MathFidelity) -> None:
+        """Override the conv3d matmul fidelity."""
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=math_fidelity,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def _get_pad_offset(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
+        """Per-device [h_start, w_start] of the local shard, which conv3d needs to place its logical-pad mask."""
+        h_dev, w_dev = x_BTHWC.shape[2], x_BTHWC.shape[3]
+        key = (h_dev, w_dev)
+        if key not in self._pad_offset_cache:
+            hp, wp = self.parallel_config.height_parallel, self.parallel_config.width_parallel
+            offsets = torch.zeros(hp.factor, wp.factor, 2, dtype=torch.int32)
+            offsets[:, :, 0] = torch.arange(hp.factor)[:, None] * h_dev
+            offsets[:, :, 1] = torch.arange(wp.factor)[None, :] * w_dev
+            self._pad_offset_cache[key] = typed_tensor_2dshard(
+                offsets,
+                self.mesh_device,
+                shard_mapping={hp.mesh_axis: 0, wp.mesh_axis: 1},
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+            )
+        return self._pad_offset_cache[key]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -190,9 +256,9 @@ class LTXCausalConv3d(Module):
                     bias = torch.nn.functional.pad(bias, (0, self.out_channels - self.unpadded_out_channels))
 
             if self.depth_to_space_stride is not None:
-                weight = _prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
+                weight = prepare_depth_to_space_channels(weight, self.depth_to_space_stride)
                 if bias is not None:
-                    bias = _prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
+                    bias = prepare_depth_to_space_channels(bias, self.depth_to_space_stride)
                     state["bias"] = bias
 
             weight_tt = ttnn.from_torch(weight, dtype=self.dtype, pad_value=0)
@@ -209,13 +275,26 @@ class LTXCausalConv3d(Module):
         causal: bool = True,
         logical_h: int = 0,
         logical_w: int = 0,
+        output_depth_to_space: tuple[int, int, int] | None = None,
+        output_trim_t_front: int = 0,
+        residual: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         # x_BTHWC: (B, T, H_per_device, W_per_device, C) ROW_MAJOR, H/W fractured on the mesh.
         # logical_h/logical_w: pre-pad full spatial dims for pad masking (0 = no masking).
+        # output_depth_to_space: conv3d writes each (p1, p2, p3) channel group to its depth-to-space
+        # slot (per device), dropping the first output_trim_t_front frames.
+        # residual: added to the output in the conv3d epilogue (see can_fuse_residual).
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT
 
+        fold_time_pad = self.fold_time_pad and not causal
+        conv_padding = self.internal_padding
+        conv_padding_mode = "zeros"
+        if fold_time_pad:
+            conv_padding = (self.time_pad // 2, *self.internal_padding[1:])
+            conv_padding_mode = "replicate"
+
         # Temporal padding (T is not sharded — local op on every device).
-        if self.time_pad > 0:
+        if self.time_pad > 0 and not fold_time_pad:
             first_frame = x_BTHWC[:, :1, :, :, :]
             if causal:
                 padding_frames = [first_frame] * self.time_pad
@@ -232,17 +311,21 @@ class LTXCausalConv3d(Module):
         h_pad_needed = self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1
         w_pad_needed = self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
 
-        # Width pre-conv mul-mask: zero pad columns before the halo (neighbor_pad has no W-mask).
-        if (
+        # Width pre-conv mul-mask: zero pad columns before the halo, unless neighbor_pad masks them.
+        w_mask_needed = (
             logical_w > 0
             and self.parallel_config.width_parallel.factor > 1
             and x_BTHWC.shape[3] * self.parallel_config.width_parallel.factor > logical_w
-        ):
+        )
+        halo_only = self.halo_only and h_pad_needed and w_pad_needed
+        fold_w_mask = w_mask_needed and (self.fold_w_mask or halo_only) and h_pad_needed and w_pad_needed
+        if w_mask_needed and not fold_w_mask:
             x_BTHWC = ttnn.mul(
                 x_BTHWC,
                 _get_w_mask(self._w_mask_cache, x_BTHWC, logical_w, self.parallel_config, self.mesh_device, self.dtype),
             )
 
+        halo_kwargs = {}
         if h_pad_needed or w_pad_needed:
             dims, pad_left, pad_right = [], [], []
             axes, neighbor_sems, links = [], [], []
@@ -265,17 +348,51 @@ class LTXCausalConv3d(Module):
                 )
                 links.append(_neighbor_pad_num_links(self.ccl_manager, x_BTHWC, 3))
 
-            x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
-                x_BTHWC,
-                dims=dims,
-                pad_left=pad_left,
-                pad_right=pad_right,
-                padding_mode="zeros",
-                axes=axes,
-                neighbor_sems=neighbor_sems,
-                num_links=links,
-                logical_h=(logical_h if h_pad_needed else 0),
-                t_front_pad=0,
+            if halo_only:
+                halo_buf = self.ccl_manager.neighbor_pad_halo_only(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    padding_mode="zeros",
+                    # Ring deadlocks the neighbor-pad barrier, as in neighbor_pad_persistent_buffer.
+                    topology=ttnn.Topology.Linear,
+                )
+                h_mask = (
+                    logical_h
+                    if logical_h > 0 and x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h
+                    else 0
+                )
+                w_mask = logical_w if fold_w_mask else 0
+                halo_kwargs = dict(
+                    halo_buffer=halo_buf,
+                    logical_h_mask=h_mask,
+                    logical_w_mask=w_mask,
+                    pad_offset_tensor=self._get_pad_offset(x_BTHWC) if (h_mask or w_mask) else None,
+                )
+                conv_padding = (conv_padding[0], self.external_padding[1], self.external_padding[2])
+            else:
+                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                    x_BTHWC,
+                    dims=dims,
+                    pad_left=pad_left,
+                    pad_right=pad_right,
+                    padding_mode="zeros",
+                    axes=axes,
+                    neighbor_sems=neighbor_sems,
+                    num_links=links,
+                    logical_h=(logical_h if h_pad_needed else 0),
+                    t_front_pad=0,
+                    logical_w=(logical_w if fold_w_mask else 0),
+                )
+
+        d2s_kwargs = {}
+        if output_depth_to_space is not None:
+            d2s_kwargs = dict(
+                output_depth_to_space=list(output_depth_to_space), output_trim_t_front=output_trim_t_front
             )
 
         x_BTHWC = ttnn.experimental.conv3d(
@@ -287,28 +404,40 @@ class LTXCausalConv3d(Module):
             output_channels=self.out_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
-            padding=self.internal_padding,
-            padding_mode="zeros",
+            padding=conv_padding,
+            padding_mode=conv_padding_mode,
             dtype=self.dtype,
             compute_kernel_config=self.compute_kernel_config,
+            **halo_kwargs,
+            **d2s_kwargs,
+            **({} if residual is None else dict(residual_tensor=residual)),
         )
 
         return x_BTHWC
 
+    def can_fuse_residual(self, residual: ttnn.Tensor) -> bool:
+        """conv3d's residual epilogue reads bf16 row-major DRAM rows laid out like its output."""
+        mem = residual.memory_config()
+        return (
+            self.dtype == ttnn.bfloat16
+            and self.out_channels == self.unpadded_out_channels
+            and self.out_channels % 32 == 0
+            and residual.dtype == ttnn.bfloat16
+            and residual.layout == ttnn.ROW_MAJOR_LAYOUT
+            and mem.buffer_type == ttnn.BufferType.DRAM
+            and mem.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        )
 
-def _prepare_depth_to_space_channels(t: torch.Tensor, stride: tuple[int, int, int]) -> torch.Tensor:
-    """Reorder the output-channel dim (dim 0) from (C,p1,p2,p3) grouping to (p1,p2,p3,C).
-
-    Out channels must be divisible by p1*p2*p3.
-    """
-    p1, p2, p3 = stride
-    out = t.shape[0]
-    assert out % (p1 * p2 * p3) == 0, f"out_channels {out} not divisible by {p1 * p2 * p3}"
-    C = out // (p1 * p2 * p3)
-    rest = t.shape[1:]
-    t = t.reshape(C, p1, p2, p3, *rest)
-    t = t.permute(1, 2, 3, 0, *range(4, t.ndim))
-    return t.reshape(out, *rest)
+    def can_fold_depth_to_space(self, stride: tuple[int, int, int]) -> bool:
+        """conv3d's depth-to-space output needs tile-aligned groups that nest with C_out_block."""
+        group = self.out_channels // math.prod(stride)
+        c_out_block = self.conv_config.C_out_block or self.out_channels
+        return (
+            group % 32 == 0
+            and self.out_channels % c_out_block == 0
+            and (c_out_block % group == 0 or group % c_out_block == 0)
+            and c_out_block // group <= 8
+        )
 
 
 def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, dim: int) -> int:
@@ -317,6 +446,17 @@ def _neighbor_pad_num_links(ccl_manager: CCLManager, input_tensor: ttnn.Tensor, 
     for i in range(dim):
         upper_dims *= input_tensor.shape[i]
     return min(upper_dims, ccl_manager.num_links)
+
+
+def _set_halo_only(module: Module, on: bool) -> int:
+    """Set ``halo_only`` on every LTXCausalConv3d under ``module``; returns how many."""
+    n = 0
+    for _, child in module.named_children():
+        if isinstance(child, LTXCausalConv3d):
+            child.halo_only = on
+            n += 1
+        n += _set_halo_only(child, on)
+    return n
 
 
 class LTXResnetBlock3D(Module):
@@ -376,6 +516,10 @@ class LTXResnetBlock3D(Module):
             out_channels, out_channels, kernel_size=3, stride=1, conv_dims=conv_dims, **conv_kwargs
         )
 
+        # On by default (LTX_VAE_FUSE_RESIDUAL=0 turns it off): conv2 adds the skip in its epilogue
+        # instead of a separate add over the whole activation.
+        self.fuse_residual = os.environ.get("LTX_VAE_FUSE_RESIDUAL", "1") != "0"
+
         self.has_shortcut = in_channels != out_channels
         if self.has_shortcut:
             # 1x1x1 channel-projection conv
@@ -413,15 +557,14 @@ class LTXResnetBlock3D(Module):
     ) -> ttnn.Tensor:
         residual = x_BTHWC
 
-        # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm outputs
-        # TILE; conv3d needs ROW_MAJOR.
+        # Main path: (norm+silu fused) → conv → (norm+silu fused) → conv. The fused norm tilizes and
+        # untilizes in-kernel, so ROW_MAJOR in gives ROW_MAJOR out and these to_layout calls are no-ops.
         h = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
         h = self.conv1(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         h = self.norm2(h, compute_kernel_config=self.norm_compute_kernel_config)
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
         # Skip connection
         if self.has_shortcut:
@@ -433,6 +576,10 @@ class LTXResnetBlock3D(Module):
             )
             residual = self.conv_shortcut(residual, causal=causal, logical_h=logical_h, logical_w=logical_w)
 
+        self.fused = self.fuse_residual and self.conv2.can_fuse_residual(residual)
+        if self.fused:
+            return self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w, residual=residual)
+        h = self.conv2(h, causal=causal, logical_h=logical_h, logical_w=logical_w)
         return ttnn.add(residual, h)
 
 
@@ -511,27 +658,21 @@ class LTXDepthToSpaceUpsample(Module):
             conv_dims=conv_dims,
             depth_to_space_stride=stride,
         )
+        # On by default (LTX_VAE_FOLD_D2S=0 turns it off): conv3d writes its output straight to the
+        # depth-to-space layout and drops the causal first frame, replacing reshape+permute+reshape+slice.
+        self.fold_d2s = os.environ.get("LTX_VAE_FOLD_D2S", "1") != "0" and self.conv.can_fold_depth_to_space(stride)
 
     def _depth_to_space_bthwc(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
         """Depth-to-space in BTHWC, channel order C,p1,p2,p3: (B,T,H,W,C*p1*p2*p3) -> (B,T*p1,H*p2,W*p3,C).
 
         For the residual path, whose input is not channel-reordered; conv output uses
-        _depth_to_space_channels_last.
+        depth_to_space_channels_last.
         """
         p1, p2, p3 = self.stride
         total_c = x.shape[-1]
         C = total_c // (p1 * p2 * p3)
         x = ttnn.reshape(x, (B, T, H, W, C, p1, p2, p3))
         x = ttnn.permute(x, (0, 1, 5, 2, 6, 3, 7, 4))
-        x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
-        return x
-
-    def _depth_to_space_channels_last(self, x: ttnn.Tensor, B: int, T: int, H: int, W: int) -> ttnn.Tensor:
-        """Depth-to-space for conv output in channel order p1,p2,p3,C (keeps C as the last dim)."""
-        p1, p2, p3 = self.stride
-        C = x.shape[-1] // (p1 * p2 * p3)
-        x = ttnn.reshape(x, (B, T, H, W, p1, p2, p3, C))
-        x = ttnn.permute(x, (0, 1, 4, 2, 5, 3, 6, 7))
         x = ttnn.reshape(x, (B, T * p1, H * p2, W * p3, C))
         return x
 
@@ -555,14 +696,24 @@ class LTXDepthToSpaceUpsample(Module):
             if p1 == 2:
                 x_in = x_in[:, 1:, :, :, :]
 
-        x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
-
-        # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
-        x = self._depth_to_space_channels_last(x_BTHWC, B, T, H, W)
-
         # Remove first frame if temporal upsampling (causal padding artifact)
-        if p1 == 2:
-            x = x[:, 1:, :, :, :]
+        trim_t = 1 if p1 == 2 else 0
+        if self.fold_d2s:
+            x = self.conv(
+                x_BTHWC,
+                causal=causal,
+                logical_h=logical_h,
+                logical_w=logical_w,
+                output_depth_to_space=self.stride,
+                output_trim_t_front=trim_t,
+            )
+        else:
+            x_BTHWC = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+
+            # Depth-to-space on conv output (channels reordered to p1,p2,p3,C by self.conv).
+            x = depth_to_space_channels_last(x_BTHWC, self.stride)
+            if trim_t:
+                x = x[:, trim_t:, :, :, :]
 
         if self.residual:
             x = ttnn.add(x, x_in)
@@ -600,8 +751,10 @@ def _compute_ltx_decoder_dims(
     if num_frames is None or height is None or width is None:
         return None
 
-    # H/W that don't divide the mesh factor are zero-padded up to the next multiple at
-    # runtime (conv_pad_height/width), per stage, so the per-device shard is ceil(full/factor).
+    # Per-device shard is ceil(full/factor) at every stage. That is the runtime shape with
+    # LTX_VAE_EXACT_SHARD=1. Without it the latent's mesh padding doubles at each upsample
+    # (1080p on 4x8: 18x16 per chip from s1 on, not 17x15), so the runtime shard is larger than
+    # these keys. The swept blockings are keyed on these exact dims.
     spatial_compression = 32
     full_H = height // spatial_compression
     full_W = width // spatial_compression
@@ -633,8 +786,45 @@ def _compute_ltx_decoder_dims(
     return dims
 
 
+def _reshard_exact_hw(
+    x_BTHWC: ttnn.Tensor,
+    logical_h: int,
+    logical_w: int,
+    parallel_config: VaeHWParallelConfig,
+    ccl_manager: CCLManager,
+) -> ttnn.Tensor:
+    """Drop the tail mesh padding from the H/W shards once the logical dims divide the mesh.
+
+    The latent's mesh padding doubles at each upsample (1080p on 4x8: 18x16 per chip holding 17x15),
+    so every later op works on the dead rows/cols. Per axis: all_gather, crop to the logical extent,
+    re-partition. Axes that are already exact or still do not divide are left alone.
+    """
+    B, T, _, _, C = x_BTHWC.shape
+    for axis_config, dim, logical in (
+        (parallel_config.height_parallel, 2, logical_h),
+        (parallel_config.width_parallel, 3, logical_w),
+    ):
+        factor = axis_config.factor
+        if factor == 1 or logical <= 0 or logical % factor or x_BTHWC.shape[dim] * factor == logical:
+            continue
+        H, W = x_BTHWC.shape[2], x_BTHWC.shape[3]
+        # all_gather_async takes rank 4: fold B*T.
+        x = ttnn.reshape(x_BTHWC, (B * T, H, W, C))
+        x = ccl_manager.all_gather(x, dim=dim - 1, mesh_axis=axis_config.mesh_axis, use_hyperparams=False)
+        x = x[:, :logical, :, :] if dim == 2 else x[:, :, :logical, :]
+        x = ttnn.mesh_partition(x, dim=dim - 1, cluster_axis=axis_config.mesh_axis)
+        x_BTHWC = ttnn.reshape(x, (B, T, x.shape[1], x.shape[2], C))
+    return x_BTHWC
+
+
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
+
+    #: This decoder can convert and gather YUV 4:2:0 on device (``output_type="yuv"``), which the
+    #: mp4 export path prefers. DiffVAE cannot, so the pipeline checks before asking.
+    supports_yuv = True
+    #: ``forward`` takes ``defer_yuv``; the pipeline passes it only when this is set.
+    supports_defer_yuv = True
 
     def __init__(
         self,
@@ -664,8 +854,11 @@ class LTXVideoDecoder(Module):
         # dims it stashes for forward's crop. Only used when forward(traced=True).
         self._decode_tracer = None
         self._yuv_output_tracer = None
-        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "0") == "1"
+        self.fuse_yuv_output = os.environ.get("LTX_FUSE_YUV_OUTPUT", "1") == "1"
+        # rgb_to_yuv reads conv_out's patchified output directly instead of after a reshape + permute.
+        self.fuse_unpatch = os.environ.get("LTX_VAE_FUSE_UNPATCH", "1") == "1"
         self.trace_yuv_output = os.environ.get("LTX_TRACE_YUV_OUTPUT", "0") == "1"
+        self.exact_shard = _exact_shard_enabled()
         self._decode_logical_hw = (0, 0)
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
@@ -752,6 +945,13 @@ class LTXVideoDecoder(Module):
             else:
                 raise ValueError(f"Unknown decoder block: {block_name}")
 
+        # Opt-in lower fidelity for the up-block conv3d layers; conv_in/conv_out keep the defaults.
+        # bf8 weights were tried too: conv3d gave garbage output (PSNR 10 dB) for ~1% speed, so they were dropped.
+        math_fidelity = math_fidelity_from_env("LTX_VAE_CONV_FIDELITY")
+        if math_fidelity is not None:
+            for conv in _walk_conv3d_modules(self.up_blocks):
+                conv.set_math_fidelity(math_fidelity)
+
         # Output: RMSNorm+SiLU fused → conv_out
         self.norm_out_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -820,6 +1020,11 @@ class LTXVideoDecoder(Module):
                 sample_tt, logical_h, logical_w = up_block(
                     sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w
                 )
+                if self.exact_shard:
+                    # Exact shards make the convs' logical-pad masks no-ops from here on.
+                    sample_tt = _reshard_exact_hw(
+                        sample_tt, logical_h, logical_w, self.parallel_config, self.ccl_manager
+                    )
             else:
                 sample_tt = up_block(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
 
@@ -846,14 +1051,20 @@ class LTXVideoDecoder(Module):
         b, t, h, w, channels = tuple(sample_tt.shape)
         q = r = self.patch_size
         assert b == 1 and channels == 3 * q * r
-        # Existing unpatch is (c,p,r,q)->B,C,T,p,H,q,W,r with p=1;
-        # composing its following BCTHW->BCHWT gives B,C,H,q,W,r,T,p.
-        expanded = ttnn.reshape(sample_tt, (b, t, h, w, 3, 1, r, q))
-        chwt = ttnn.permute(expanded, (0, 4, 2, 7, 3, 6, 1, 5))
+        if self.fuse_unpatch:
+            return rgb_chwt_to_yuv_device(sample_tt, input_patch_size=q)
+        # Channels are (c,p,r,q) with p=1; the output order is C,H,q,W,r,T. The p axis is left out so T
+        # is the permute's innermost dim: a trailing size-1 axis makes the RM permute move 1-element
+        # rows and turns the final reshape into a copy instead of a view.
+        expanded = ttnn.reshape(sample_tt, (b, t, h, w, 3, r, q))
+        chwt = ttnn.permute(expanded, (0, 4, 2, 6, 3, 5, 1))
         chwt = ttnn.reshape(chwt, (3, h * q, w * r, t))
         return rgb_chwt_to_yuv_device(chwt)
 
-    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False) -> torch.Tensor:
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)
+    def forward(
+        self, sample_BCTHW: torch.Tensor, *, output_type: str = "float", traced: bool = False, defer_yuv: bool = False
+    ) -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
 
         output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar;
@@ -861,31 +1072,35 @@ class LTXVideoDecoder(Module):
         traced: capture the device decode once and replay it from a resident ttnn trace, dropping per-op
             host dispatch. A single decode does not amortize the capture, so this pays off only when the
             decoder is reused across generations; the mesh must be opened with a trace_region_size.
+        defer_yuv: with "yuv", return a ``DeferredYuvPlanar`` once the device reads have
+            landed; the host assembly runs when its ``result()`` is called.
         """
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
-        sample_tt = typed_tensor_2dshard(
-            sample,
-            self.mesh_device,
-            shard_mapping={
-                self.parallel_config.height_parallel.mesh_axis: 2,
-                self.parallel_config.width_parallel.mesh_axis: 3,
-            },
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-        )
+        with timing_tree.span(self.mesh_device, "latent upload", category=timing_tree.HOST_XFER):
+            sample_tt = typed_tensor_2dshard(
+                sample,
+                self.mesh_device,
+                shard_mapping={
+                    self.parallel_config.height_parallel.mesh_axis: 2,
+                    self.parallel_config.width_parallel.mesh_axis: 3,
+                },
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
 
-        if traced:
-            if self._decode_tracer is None:
-                self._decode_tracer = Tracer(
-                    self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
-                )
-            sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
-        else:
-            sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        with timing_tree.span(self.mesh_device, "decode (device)"):
+            if traced:
+                if self._decode_tracer is None:
+                    self._decode_tracer = Tracer(
+                        self.decode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True
+                    )
+                sample_tt = self._decode_tracer(sample_tt, logical_h, logical_w)
+            else:
+                sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
         # decode_device threads logical_h/logical_w through the upsamples; read back the final dims.
         logical_h, logical_w = self._decode_logical_hw
 
@@ -897,16 +1112,17 @@ class LTXVideoDecoder(Module):
             and self.parallel_config.width_parallel.mesh_axis == 1
             and sample_tt.shape[0] == 1
         ):
-            if self.trace_yuv_output:
-                if self._yuv_output_tracer is None:
-                    self._yuv_output_tracer = Tracer(
-                        self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
-                    )
-                planes = self._yuv_output_tracer(sample_tt)
-            else:
-                planes = self._unpatch_yuv_device(sample_tt)
+            with timing_tree.span(self.mesh_device, "unpatch + rgb->yuv (device)"):
+                if self.trace_yuv_output:
+                    if self._yuv_output_tracer is None:
+                        self._yuv_output_tracer = Tracer(
+                            self._unpatch_yuv_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
+                        )
+                    planes = self._yuv_output_tracer(sample_tt)
+                else:
+                    planes = self._unpatch_yuv_device(sample_tt)
             h_out, w_out = logical_h * self.patch_size, logical_w * self.patch_size
-            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out)
+            planar = yuv_planes_to_host(planes, self.mesh_device, logical_h=h_out, logical_w=w_out, defer=defer_yuv)
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
@@ -926,6 +1142,7 @@ class LTXVideoDecoder(Module):
                 ccl_manager=self.ccl_manager,
                 logical_h=h_out,
                 logical_w=w_out,
+                defer=defer_yuv,
             )
             # Reshape flat (T, H*W*3//2) -> self-describing
             return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
@@ -989,6 +1206,8 @@ class LTXSpaceToDepthDownsample(Module):
         self.out_channels = out_channels
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Set by a traced encoder while it captures: gather on device instead of the host round-trip.
+        self.device_gather = False
         prod = math.prod(stride)
         # Skip path groups (in_channels * prod) channels down to out_channels by mean-pooling.
         self.group_size = in_channels * prod // out_channels
@@ -1101,6 +1320,8 @@ class LTXSpaceToDepthDownsample(Module):
 
         if pc.height_parallel.factor <= 1 and pc.width_parallel.factor <= 1:
             return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        if self.device_gather or os.environ.get("LTX_ENC_DEVICE_GATHER", "0") == "1":
+            return self._all_gather_hw_device(x)
 
         if _loc:
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW pre in_shape={tuple(x.shape)} dtype={x.get_dtype()}")
@@ -1118,6 +1339,15 @@ class LTXSpaceToDepthDownsample(Module):
             ttnn.synchronize_device(mesh_device)
             logger.warning(f"LTX_ENC_LOCALIZE: host-gather HW done out_shape={tuple(x.shape)}")
         return x
+
+    def _all_gather_hw_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device gather of the H/W shards (LTX_ENC_DEVICE_GATHER=1)."""
+        pc = self.parallel_config
+        if pc.height_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
+        if pc.width_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=3, mesh_axis=pc.width_parallel.mesh_axis, use_hyperparams=False)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
     def _reshard_hw(self, x: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
         """Re-shard a replicated (B, d, h, w, C) tensor back across the mesh, zero-padding each
@@ -1228,6 +1458,10 @@ def _compute_ltx_encoder_dims(
 
     dims.append(res_dims())  # conv_out
     return dims
+
+
+def _eager_stages() -> set[str]:
+    return {s.strip() for s in os.environ.get("LTX_GEN_EAGER_STAGES", "").split(",") if s.strip()}
 
 
 class LTXVideoEncoder(Module):
@@ -1378,6 +1612,24 @@ class LTXVideoEncoder(Module):
             conv_dims=_pop_dims(),
             **conv_kwargs,
         )
+        # The 2D halo-only exchange corrupts the latent next to the pixel-shard corners on 4x8 (mean error
+        # 0.086 there vs 0.016 elsewhere, max 0.57 at 1088x1920): dots at the tile corners of first-frame
+        # clips. The full neighbor_pad exchange is as fast here (0.2 s warm either way), so the encoder uses
+        # it; LTX_VAE_ENC_HALO_ONLY=1 opts back in.
+        if os.environ.get("LTX_VAE_ENC_HALO_ONLY", "0") != "1":
+            _set_halo_only(self, False)
+
+        # Traced encode: the pipeline sets ``traced`` on a static traced mesh. One capture per input
+        # shape (the pipeline encodes at both stage resolutions); each gen copies its pixels into the
+        # captured input buffer and replays. "enc" in LTX_GEN_EAGER_STAGES runs it eager at runtime.
+        self.traced = False
+        # While the pipeline holds this open (its early warmup, before any capture), a new shape gets
+        # its trace input and prep run; capture_traces() records them after every other capture. A
+        # shape first seen later runs eager: a capture then would allocate under live traces.
+        self.capture_open = False
+        self._encode_tracers: dict[tuple, Tracer] = {}
+        self._encode_logical_hw: dict[tuple, tuple[int, int]] = {}
+        self._last_logical_hw = (0, 0)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # Map per_channel_statistics (dash keys) -> per_channel_mean/std.
@@ -1394,7 +1646,7 @@ class LTXVideoEncoder(Module):
         for k in keys_to_remove:
             del state[k]
 
-    def forward(self, sample_BCTHW: torch.Tensor) -> torch.Tensor:
+    def forward(self, sample_BCTHW: torch.Tensor, traced: bool | None = None) -> torch.Tensor:
         """Encode video (B, 3, F, H, W) in [-1, 1] -> normalized latent means (B, 128, F', H', W')."""
         # Crop trailing frames so F == 1 + 8*k (mirrors the reference encoder).
         frames_count = sample_BCTHW.shape[2]
@@ -1417,6 +1669,10 @@ class LTXVideoEncoder(Module):
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
         sample, logical_w = conv_pad_width(sample, self.parallel_config.width_parallel.factor)
 
+        if traced is None:
+            traced = self.traced and "enc" not in _eager_stages()
+        # Traced: keep the upload on host so the replay copies it into the captured input buffer
+        # (no device allocation after capture).
         sample_tt = typed_tensor_2dshard(
             sample,
             self.mesh_device,
@@ -1426,8 +1682,69 @@ class LTXVideoEncoder(Module):
             },
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
+            on_host=traced,
         )
 
+        if traced:
+            key = (tuple(sample_tt.shape), logical_h, logical_w)
+            tracer = self._encode_tracers.get(key)
+            if tracer is None and self.capture_open:
+                # Allocate the trace input and run the prep run now (below every capture); the trace
+                # itself is recorded later by capture_traces(), after every other persistent allocation.
+                tracer = Tracer(self.encode_device, device=self.mesh_device, prep_run=True, clone_prep_inputs=True)
+                # A host round-trip cannot be captured: the downsample gathers on device inside the trace.
+                try:
+                    self._set_device_gather(True)
+                    try:
+                        sample_tt = tracer.prepare(sample_tt, logical_h, logical_w)
+                    finally:
+                        self._set_device_gather(False)
+                except BaseException:
+                    # Staging can retain inputs even when prepare() never completes. Do not cache
+                    # the failed tracer or let a secondary release failure replace the original error.
+                    try:
+                        tracer.release_trace()
+                    except BaseException:
+                        logger.exception("image encoder: failed to release interrupted preparation")
+                    raise
+                self._encode_tracers[key] = tracer
+                self._encode_logical_hw[key] = self._last_logical_hw
+                logger.info(f"image encoder: trace input + prep run for {key}, capture deferred")
+            elif tracer is not None and tracer.trace_captured:
+                sample_tt = tracer(sample_tt, logical_h, logical_w)
+            else:
+                logger.warning(f"image encoder: no capture for {key}, encoding eager")
+                traced = False
+                sample_tt = ttnn.to_device(sample_tt, self.mesh_device)
+        if traced:
+            logical_h, logical_w = self._encode_logical_hw[key]
+        else:
+            sample_tt = self.encode_device(sample_tt, logical_h, logical_w)
+            logical_h, logical_w = self._last_logical_hw
+
+        concat_dims = [None, None]
+        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
+        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
+        result = fast_device_to_host(
+            sample_tt,
+            self.mesh_device,
+            concat_dims,
+            ccl_manager=self.ccl_manager,
+        )  # (B, F', H', W', 128)
+
+        result = result[:, :, :logical_h, :logical_w, :]
+        # (B, F', H', W', C) -> (B, C, F', H', W')
+        return result.permute(0, 4, 1, 2, 3)
+
+    def _set_device_gather(self, on: bool) -> None:
+        for block in self.down_blocks:
+            if isinstance(block, LTXSpaceToDepthDownsample):
+                block.device_gather = on
+
+    def encode_device(self, sample_tt: ttnn.Tensor, logical_h: int, logical_w: int) -> ttnn.Tensor:
+        """Device-only encode (conv_in -> down_blocks -> norm_out -> conv_out -> normalize) of an
+        already-sharded input, so the whole region can be captured as one trace. Stashes the final
+        logical dims: the returned tensor still carries mesh padding."""
         _loc = os.environ.get("LTX_ENC_LOCALIZE")
 
         def _mark(tag):
@@ -1463,20 +1780,35 @@ class LTXVideoEncoder(Module):
         mean = self.per_channel_mean.data
         std = self.per_channel_std.data
         sample_tt = ttnn.multiply(ttnn.subtract(sample_tt, mean), ttnn.reciprocal(std))
+        self._last_logical_hw = (logical_h, logical_w)
+        return sample_tt
 
-        concat_dims = [None, None]
-        concat_dims[self.parallel_config.height_parallel.mesh_axis] = 2
-        concat_dims[self.parallel_config.width_parallel.mesh_axis] = 3
-        result = fast_device_to_host(
-            sample_tt,
-            self.mesh_device,
-            concat_dims,
-            ccl_manager=self.ccl_manager,
-        )  # (B, F', H', W', 128)
+    def capture_traces(self) -> None:
+        """Capture every prepared encode trace. The pipeline calls this after its last other capture
+        and persistent allocation, so nothing allocated later sits in an encode trace's activation
+        region and no encode replay overwrites a live buffer (#3354: the stage-1 hang)."""
+        pending = [t for t in self._encode_tracers.values() if not t.trace_captured]
+        if not pending:
+            return
+        self._set_device_gather(True)
+        try:
+            for tracer in pending:
+                tracer.capture_prepared()
+        finally:
+            self._set_device_gather(False)
+        logger.info(f"image encoder: captured {len(pending)} encode trace(s) after every other capture")
 
-        result = result[:, :, :logical_h, :logical_w, :]
-        # (B, F', H', W', C) -> (B, C, F', H', W')
-        return result.permute(0, 4, 1, 2, 3)
+    def release_trace(self) -> None:
+        """Release every encode capture before rebuilding or unloading weights."""
+        self.capture_open = False
+        for tracer in self._encode_tracers.values():
+            tracer.release_trace()
+        self._encode_tracers.clear()
+        self._encode_logical_hw.clear()
+
+    def deallocate_weights(self) -> None:
+        self.release_trace()
+        super().deallocate_weights()
 
 
 # =============================================================================
@@ -1485,13 +1817,31 @@ class LTXVideoEncoder(Module):
 # =============================================================================
 
 
-def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
-    """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
-    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
-    with safe_open(checkpoint_path, framework="pt") as f:
-        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
-        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
-    return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
+    """Return ``key`` with the first matching prefix removed, else ``None``."""
+    for prefix in prefixes:
+        if key.startswith(prefix):
+            return key[len(prefix) :]
+    return None
+
+
+def vae_key_map(keys: Iterable[str], part: str) -> dict[str, str]:
+    """Map checkpoint keys to ``part`` module keys (``part`` is ``decoder`` or ``encoder``), plus the
+    two per-channel statistics the module also holds.
+
+    Monolith checkpoints prefix the VAE with ``vae.``; split VAE files (LTX-2.5) store bare keys. The
+    prefix is chosen per file, so a monolith's other components can never match the bare form.
+    """
+    keys = list(keys)
+    root = "vae." if any(k.startswith("vae.") for k in keys) else ""
+    mapping = {}
+    for k in keys:
+        short = _strip_vae_prefix(k, f"{root}{part}.")
+        if short is not None:
+            mapping[k] = short
+        elif k in (f"{root}per_channel_statistics.mean-of-means", f"{root}per_channel_statistics.std-of-means"):
+            mapping[k] = k.removeprefix(root)
+    return mapping
 
 
 class LTXVideoVAEAdapter:
@@ -1517,6 +1867,8 @@ class LTXVideoVAEAdapter:
         num_frames: int,
         height: int,
         width: int,
+        diffusion_decoder: bool = False,
+        diffvae_options: DiffVAEOptions | None = None,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
@@ -1540,8 +1892,23 @@ class LTXVideoVAEAdapter:
         if self.encoder_blocks:
             logger.info(f"VAE encoder config: {len(self.encoder_blocks)} blocks")
 
-        self._decoder: LTXVideoDecoder | None = None
-        if self.decoder_blocks:
+        # LTX-2.5's own video-VAE file ships the diffusion decoder in place of conv
+        # ``decoder_blocks``, so which decoder is built is a property of the request, not of the
+        # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
+        self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
+        if diffusion_decoder:
+            # How the decoder runs (executors, shard axes, fusions, host boundaries) is the
+            # caller's decision, carried in ``diffvae_options``; the default is replicated on the
+            # linear-order executor.
+            options = diffvae_options or DiffVAEOptions()
+            self._decoder = DiffVAEDecoder(
+                diffvae_config(checkpoint_path),
+                mesh_device=mesh_device,
+                ccl_manager=vae_ccl_manager,
+                options=options,
+            )
+            logger.info(f"VAE config: DiffVAE diffusion decoder {options}")
+        elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,
                 causal=self._causal,
@@ -1569,7 +1936,7 @@ class LTXVideoVAEAdapter:
             )
 
     @property
-    def decoder(self) -> "LTXVideoDecoder | None":
+    def decoder(self) -> "LTXVideoDecoder | DiffVAEDecoder | None":
         return self._decoder
 
     @property
@@ -1590,17 +1957,36 @@ class LTXVideoVAEAdapter:
         if self._decoder is None or self._decoder.is_loaded():
             return
 
+        if isinstance(self._decoder, DiffVAEDecoder):
+            # No conv3d blocking to key on, and the remapping (folded statistics, permuted
+            # upsample projections) lives on the decoder itself. The parameter layout is keyed
+            # because the deterministic block options change which parameters exist (see parameter_layout).
+            decoder = self._decoder
+            cache_module.load_model(
+                decoder,
+                model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+                subfolder=f"diffvae/{decoder.parameter_layout()}",
+                parallel_config=self._dit_parallel_config,
+                mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
+                get_torch_state_dict=lambda: decoder.torch_state_from_checkpoint(self._checkpoint_path),
+            )
+            logger.info("Loaded TTNN DiffVAE decoder")
+            return
+
         def _state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE cache miss — loading safetensors: {self._checkpoint_path}")
             raw = load_file(self._checkpoint_path)
             vae_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
+                # Monolith ``vae.decoder.*`` and split-file bare ``decoder.*``.
+                short = _strip_vae_prefix(k, "vae.decoder.", "decoder.")
+                if short is not None:
+                    vae_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    vae_state[f"per_channel_statistics.{pcs}"] = v
             return vae_state
 
         blocking_key = conv3d_blocking_hash(self._decoder)
@@ -1627,12 +2013,13 @@ class LTXVideoVAEAdapter:
             raw = load_file(self._checkpoint_path)
             enc_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
+                short = _strip_vae_prefix(k, "vae.encoder.", "encoder.")
+                if short is not None:
+                    enc_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    enc_state[f"per_channel_statistics.{pcs}"] = v
             return enc_state
 
         blocking_key = conv3d_blocking_hash(self._encoder)

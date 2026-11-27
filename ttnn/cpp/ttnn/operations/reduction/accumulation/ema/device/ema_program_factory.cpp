@@ -7,8 +7,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -23,7 +23,7 @@ constexpr auto ema_buffer_depth = 2;
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The constants below carry a per-factory prefix so this file and the sibling accumulation factory
 // can safely share a translation unit: both are sources of the unity-built ttnn_op_reduction
@@ -47,11 +47,11 @@ const TensorParamName EMA_OUTPUT{"output"};
 
 ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::create_program_artifacts(
     const EmaParams& operation_attributes, const EmaInputs& tensor_args, Tensor& tensor_return_value) {
-    using namespace tt::tt_metal::experimental;
+    using namespace tt::tt_metal;
 
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& output = tensor_return_value.mesh_tensor();
-    tt::tt_metal::distributed::MeshDevice& device = input.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = input.device();
 
     // Grid sizing
     // -----------
@@ -263,6 +263,18 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
     };
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings EmaDeviceOperation::EmaProgramFactory::map_cmd_list_parameters(
+    const EmaDeviceOperation::operation_attributes_t&,
+    const EmaDeviceOperation::tensor_args_t&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"out", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    // alpha is a compile-time argument, so it is part of the program hash and cannot be a CmdListParam.
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

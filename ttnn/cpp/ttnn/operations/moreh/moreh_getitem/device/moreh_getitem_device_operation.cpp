@@ -19,7 +19,7 @@ void MorehGetItemOperation::validate_inputs(
     const auto& index_tensors = tensor_args.index_tensors;
     const auto& output_tensor = tensor_args.output;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to getitem need to be allocated in buffers on device!");
     auto dtype = input_tensor.dtype();
     TT_FATAL(
         dtype == DataType::INT32 || dtype == DataType::BFLOAT16, "Input tensor must be of type INT32 or BFLOAT16!");
@@ -30,7 +30,7 @@ void MorehGetItemOperation::validate_inputs(
     uint32_t index_size = index_tensors[0].logical_shape()[-1];
     for (const auto& index_tensor : index_tensors) {
         TT_FATAL(index_tensor.storage_type() == StorageType::DEVICE, "Operands to getitem need to be on device!");
-        TT_FATAL(index_tensor.buffer() != nullptr, "Operands to getitem need to be allocated in buffers on device!");
+        TT_FATAL(index_tensor.is_allocated(), "Operands to getitem need to be allocated in buffers on device!");
         TT_FATAL(index_tensor.dtype() == DataType::INT32, "Index tensor must be of type INT32!");
 
         auto index_shape = index_tensor.logical_shape();
@@ -66,7 +66,7 @@ void MorehGetItemOperation::validate_inputs(
         // If the user decided to not use any optional output tensors, then this would be empty or would be a nullptr.
         return;
     }
-    TT_ASSERT(output_tensor->buffer() != nullptr, "Must have 1 output tensor.");
+    TT_ASSERT(output_tensor->is_allocated(), "Must have 1 output tensor.");
     TT_FATAL(dtype == output_tensor.value().dtype(), "Output tensor must have the same dtype as input tensor!");
 }
 MorehGetItemOperation::program_factory_t MorehGetItemOperation::select_program_factory(

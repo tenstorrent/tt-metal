@@ -18,9 +18,9 @@
 #include "impl/context/metal_context.hpp"
 
 // Metal 2.0 host API (DFB tests)
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <algorithm>
 #include <vector>
@@ -43,7 +43,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -108,8 +108,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessIssue) {
 
         // Writer core (source of the NOC writes) should have been flagged for writing to a locked buffer
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(locked_issues.empty())
@@ -138,7 +138,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -211,8 +211,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockMultipleL1Issues) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_GE(locked_issues.size(), 2u)
@@ -252,7 +252,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -316,11 +316,10 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessNoIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         // No write-to-locked issues should be reported (writes happen only when buffer is not locked)
-        for (IDevice* device : mesh_device->get_devices()) {
-            ChipId chip_id = device->id();
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, writer_virtual_core, 0))
                 << "Unexpected write-to-locked-buffer issue on writer core; writes were outside lock scope.";
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, locker_virtual_core, 0))
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, locker_virtual_core, 0))
                 << "Unexpected write-to-locked-buffer issue on locker core.";
         }
     }
@@ -339,7 +338,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
 
         Program& program = workload.get_programs().at(device_range);
         auto& mc = MetalContext::instance();
@@ -413,8 +412,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBIssue) {
         ASSERT_GT(cb_base, 0u) << "locker did not publish its locked CB base";
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(locked_issues.empty())
@@ -445,7 +444,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
 
         Program& program = workload.get_programs().at(device_range);
         auto& mc = MetalContext::instance();
@@ -510,11 +509,10 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessCBNoIssue) {
         distributed::Finish(mesh_device->mesh_command_queue());
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
-            ChipId chip_id = device->id();
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, writer_virtual_core, 0))
                 << "Unexpected write-to-locked-CB issue on writer core; writes were outside lock scope.";
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, locker_virtual_core, 0))
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, locker_virtual_core, 0))
                 << "Unexpected write-to-locked-CB issue on locker core.";
         }
     }
@@ -557,8 +555,8 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
     const SubRangeLockSetup& setup,
     uint32_t write_target_addr,
     CoreCoord& writer_virtual_core_out) {
-    const experimental::NodeCoord locker_core{0, 0};
-    const experimental::NodeCoord writer_core{1, 0};
+    const NodeCoord locker_core{0, 0};
+    const NodeCoord writer_core{1, 0};
 
     auto& mc = MetalContext::instance();
     const uint32_t alignment = mc.hal().get_alignment(HalMemType::L1);
@@ -568,25 +566,23 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
     auto writer_vc = mesh_device->worker_core_from_logical_core(CoreCoord{writer_core.x, writer_core.y});
     writer_virtual_core_out = writer_vc;
 
-    const experimental::KernelSpecName LOCKER{"locker"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::SemaphoreSpecName SEM_LOCKED{"sem_locked"};
-    const experimental::SemaphoreSpecName SEM_WRITTEN{"sem_written"};
+    const KernelSpecName LOCKER{"locker"};
+    const KernelSpecName WRITER{"writer"};
+    const SemaphoreSpecName SEM_LOCKED{"sem_locked"};
+    const SemaphoreSpecName SEM_WRITTEN{"sem_written"};
 
-    experimental::SemaphoreSpec sem_locked{
-        .unique_id = SEM_LOCKED, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
-    experimental::SemaphoreSpec sem_written{
-        .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0 = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::NOC_0,
             },
     };
 
-    experimental::KernelSpec locker_spec{
+    KernelSpec locker_spec{
         .unique_id = LOCKER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_locker.cpp",
         .num_threads = 1,
@@ -597,7 +593,7 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
             {.runtime_arg_names = {"region_base", "offset_elements", "num_elements", "writer_noc_x", "writer_noc_y"}},
         .hw_config = dm_rv0,
     };
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
         .num_threads = 1,
@@ -610,29 +606,29 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
         .hw_config = dm_rv0,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "scoped_lock_sub_range",
         .kernels = {locker_spec, writer_spec},
         .semaphores = {sem_locked, sem_written},
         .work_units =
-            {experimental::WorkUnitSpec{.name = "locker_wu", .kernels = {LOCKER}, .target_nodes = locker_core},
-             experimental::WorkUnitSpec{.name = "writer_wu", .kernels = {WRITER}, .target_nodes = writer_core}},
+            {WorkUnitSpec{.name = "locker_wu", .kernels = {LOCKER}, .target_nodes = locker_core},
+             WorkUnitSpec{.name = "writer_wu", .kernels = {WRITER}, .target_nodes = writer_core}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs locker_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs locker_params{};
     locker_params.kernel = LOCKER;
-    locker_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    locker_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         locker_core,
         {{"region_base", setup.region_base},
          {"offset_elements", setup.offset_elements},
          {"num_elements", setup.num_elements},
          {"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
          {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)}});
-    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    writer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         writer_core,
         {{"src_buffer_addr", writer_buffer_addr},
          {"write_size", setup.extent_bytes},
@@ -641,7 +637,7 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
          {"inbox", 0u},  // 0 -> take target_addr directly; the host picks the address here
          {"target_addr", write_target_addr}});
     run_args.kernel_run_args = {locker_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0));
@@ -651,8 +647,8 @@ std::vector<NOCDebugIssueType> run_sub_range_lock(
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     std::vector<NOCDebugIssueType> locked_issues;
-    for (IDevice* device : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_locked_issues(device->id(), writer_vc, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_locked_issues(device_id, writer_vc, 0);
         locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
     }
     return locked_issues;
@@ -706,7 +702,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -744,8 +740,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToOwnLockNoIssue) {
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
-            EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, virtual_core, 0))
                 << "Writing into your OWN locked region is legitimate (ownership-aware); must not flag.";
         }
     }
@@ -756,7 +752,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -794,8 +790,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockSelfWriteToUnlockedNoIssue) {
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
-            EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, virtual_core, 0))
                 << "Unexpected write-to-locked issue; NOC write targeted an unlocked region.";
         }
     }
@@ -806,7 +802,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
         log_info(tt::LogMetal, "Running on mesh device {}", mesh_device->id());
 
         const CoreCoord core = {0, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -836,8 +832,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockNoWritesNoIssue) {
 
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
-            EXPECT_FALSE(this->has_write_to_locked_issue(device->id(), virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, virtual_core, 0))
                 << "Unexpected write-to-locked issue; kernel only locked and unlocked with no NOC writes.";
         }
     }
@@ -860,7 +856,7 @@ void run_dfb_scoped_lock_test(
     NOC producer_noc = NOC::NOC_0,
     DataMovementProcessor producer_processor = DataMovementProcessor::RISCV_0,
     uint32_t publish_ring_base_addr = 0) {
-    const experimental::NodeCoord core = {0, 0};
+    const NodeCoord core = {0, 0};
     auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
     const bool producer_is_rv0 = (producer_processor == DataMovementProcessor::RISCV_0);
@@ -879,11 +875,11 @@ void run_dfb_scoped_lock_test(
     uint32_t src_buffer_addr = unreserved_addr + 0x10000;  // producer's own L1 source, clear of the DFB
     uint32_t target_entry_offset = target_entry_index * entry_size;
 
-    const experimental::DFBSpecName DFB_NAME{"lock_dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const DFBSpecName DFB_NAME{"lock_dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = num_entries,
@@ -892,26 +888,26 @@ void run_dfb_scoped_lock_test(
 
     // The two DM kernels claim different NOCs, so the consumer takes whichever one the producer did not.
     const NOC consumer_noc = (producer_noc == NOC::NOC_0) ? NOC::NOC_1 : NOC::NOC_0;
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = producer_processor,
                 .noc = producer_noc,
             },
     };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_consumer_cfg = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = consumer_processor,
                 .noc = consumer_noc,
             },
     };
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_producer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"src_buffer_addr",
@@ -924,32 +920,32 @@ void run_dfb_scoped_lock_test(
                   "publish_ring_base_addr"}},
         .hw_config = dm_producer_cfg,
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_consumer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DFB_NAME, "in")},
+        .dfb_bindings = {ConsumerOf(DFB_NAME, "in")},
         .hw_config = dm_consumer_cfg,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_scoped_lock",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
-    producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    producer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         core,
         {{"src_buffer_addr", src_buffer_addr},
          {"write_size", write_size},
@@ -959,10 +955,10 @@ void run_dfb_scoped_lock_test(
          {"write_after_unlock", static_cast<uint32_t>(write_after_unlock)},
          {"skip_lock", static_cast<uint32_t>(skip_lock)},
          {"publish_ring_base_addr", publish_ring_base_addr}});
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {producer_params, consumer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -974,8 +970,8 @@ void run_dfb_scoped_lock_test(
 
     if (expected == ExpectedDfbIssue::Locked) {
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = fixture->get_write_to_locked_issues(device->id(), virtual_core, producer_proc_id);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = fixture->get_write_to_locked_issues(device_id, virtual_core, producer_proc_id);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(locked_issues.empty()) << "Expected WRITE_TO_LOCKED_DFB; NOC debug did not report the violation.";
@@ -990,8 +986,8 @@ void run_dfb_scoped_lock_test(
         }
     } else if (expected == ExpectedDfbIssue::Unlocked) {
         std::vector<NOCDebugIssueType> unlocked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = fixture->get_write_to_unlocked_dfb_issues(device->id(), virtual_core, producer_proc_id);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = fixture->get_write_to_unlocked_dfb_issues(device_id, virtual_core, producer_proc_id);
             unlocked_issues.insert(unlocked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(unlocked_issues.empty())
@@ -1006,10 +1002,10 @@ void run_dfb_scoped_lock_test(
             EXPECT_EQ(issue.dst_y, virtual_core.y);
         }
     } else {
-        for (IDevice* device : mesh_device->get_devices()) {
-            EXPECT_FALSE(fixture->has_write_to_locked_issue(device->id(), virtual_core, producer_proc_id))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(fixture->has_write_to_locked_issue(device_id, virtual_core, producer_proc_id))
                 << "Unexpected write-to-locked-DFB issue.";
-            EXPECT_FALSE(fixture->has_write_to_unlocked_dfb_issue(device->id(), virtual_core, producer_proc_id))
+            EXPECT_FALSE(fixture->has_write_to_unlocked_dfb_issue(device_id, virtual_core, producer_proc_id))
                 << "Unexpected write-to-unlocked-DFB issue.";
         }
     }
@@ -1019,7 +1015,7 @@ void run_dfb_scoped_lock_test(
 // program that reuses the same L1 for something else gets false WRITE_TO_UNLOCKED_DFB reports.
 void run_dfb_region_cleared_between_launches_test(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const experimental::NodeCoord core = {0, 0};
+    const NodeCoord core = {0, 0};
     auto virtual_core = mesh_device->worker_core_from_logical_core(core);
 
     auto& mc = MetalContext::instance();
@@ -1049,30 +1045,29 @@ void run_dfb_region_cleared_between_launches_test(
     ASSERT_GT(ring_base, 0u) << "launch 1 did not publish its DFB ring base";
 
     // Launch 2: a program with NO DFB binding, writing entry 0.
-    const experimental::KernelSpecName WRITER{"writer"};
-    experimental::KernelSpec writer_spec{
+    const KernelSpecName WRITER{"writer"};
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_l1_writer.cpp",
         .num_threads = 1,
         .runtime_arg_schema =
             {.runtime_arg_names = {"src_buffer_addr", "write_size", "self_noc_x", "self_noc_y", "target_addr"}},
         .hw_config =
-            experimental::DataMovementHardwareConfig{
+            DataMovementHardwareConfig{
                 .config_1xx =
-                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = DataMovementProcessor::RISCV_0,
                     },
             },
     };
-    experimental::WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
-    experimental::ProgramSpec writer_program_spec{
-        .name = "dfb_free_l1_write", .kernels = {writer_spec}, .work_units = {writer_wu}};
+    WorkUnitSpec writer_wu{.name = "main", .kernels = {WRITER}, .target_nodes = core};
+    ProgramSpec writer_program_spec{.name = "dfb_free_l1_write", .kernels = {writer_spec}, .work_units = {writer_wu}};
 
-    Program writer_program = experimental::MakeProgramFromSpec(*mesh_device, writer_program_spec);
-    experimental::ProgramRunArgs writer_run_args;
-    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    Program writer_program(*mesh_device, writer_program_spec);
+    ProgramRunArgs writer_run_args;
+    ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    writer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         core,
         {{"src_buffer_addr", src_buffer_addr},
          {"write_size", write_size},
@@ -1080,7 +1075,7 @@ void run_dfb_region_cleared_between_launches_test(
          {"self_noc_y", static_cast<uint32_t>(virtual_core.y)},
          {"target_addr", ring_base}});
     writer_run_args.kernel_run_args = {writer_params};
-    experimental::SetProgramRunArgs(writer_program, writer_run_args);
+    writer_program.set_program_run_args(writer_run_args);
 
     distributed::MeshWorkload writer_workload;
     const auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1090,8 +1085,8 @@ void run_dfb_region_cleared_between_launches_test(
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     std::vector<NOCDebugIssueType> unlocked_issues;
-    for (IDevice* dev : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_unlocked_dfb_issues(dev->id(), virtual_core, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_unlocked_dfb_issues(device_id, virtual_core, 0);
         unlocked_issues.insert(unlocked_issues.end(), issues.begin(), issues.end());
     }
     EXPECT_EQ(unlocked_issues.size(), 1u)
@@ -1101,8 +1096,8 @@ void run_dfb_region_cleared_between_launches_test(
 // Cross-core variant: a WRITER on a different core NOC-writes into the locker's locked DFB ring
 void run_dfb_scoped_lock_xcore_test(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const experimental::NodeCoord locker_core = {0, 0};
-    const experimental::NodeCoord writer_core = {1, 0};
+    const NodeCoord locker_core = {0, 0};
+    const NodeCoord writer_core = {1, 0};
     auto locker_vc = mesh_device->worker_core_from_logical_core(locker_core);
     auto writer_vc = mesh_device->worker_core_from_logical_core(writer_core);
 
@@ -1116,58 +1111,56 @@ void run_dfb_scoped_lock_xcore_test(
     uint32_t src_buffer_addr = unreserved_addr + 0x10000;  // writer's payload source (on the writer core)
     uint32_t scratch_addr = unreserved_addr + 0x20000;     // locker stages / writer receives the entry addr
 
-    const experimental::DFBSpecName DFB_NAME{"lock_dfb"};
-    const experimental::KernelSpecName LOCKER{"locker"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::SemaphoreSpecName SEM_LOCKED{"sem_locked"};
-    const experimental::SemaphoreSpecName SEM_WRITTEN{"sem_written"};
+    const DFBSpecName DFB_NAME{"lock_dfb"};
+    const KernelSpecName LOCKER{"locker"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const KernelSpecName WRITER{"writer"};
+    const SemaphoreSpecName SEM_LOCKED{"sem_locked"};
+    const SemaphoreSpecName SEM_WRITTEN{"sem_written"};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::SemaphoreSpec sem_locked{
-        .unique_id = SEM_LOCKED, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
-    experimental::SemaphoreSpec sem_written{
-        .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0 = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0,
             },
     };
-    const experimental::DataMovementHardwareConfig dm_rv1 = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_rv1 = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::NOC_1,
             },
     };
 
-    experimental::KernelSpec locker_spec{
+    KernelSpec locker_spec{
         .unique_id = LOCKER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_xcore_locker.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .semaphore_bindings =
             {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
              {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
         .runtime_arg_schema = {.runtime_arg_names = {"writer_noc_x", "writer_noc_y", "local_scratch", "writer_inbox"}},
         .hw_config = dm_rv0,
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_consumer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DFB_NAME, "in")},
+        .dfb_bindings = {ConsumerOf(DFB_NAME, "in")},
         .hw_config = dm_rv1,
     };
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_xcore_writer.cpp",
         .num_threads = 1,
@@ -1180,17 +1173,17 @@ void run_dfb_scoped_lock_xcore_test(
         .hw_config = dm_rv0,
     };
 
-    experimental::WorkUnitSpec wu_locker{
+    WorkUnitSpec wu_locker{
         .name = "locker_wu",
         .kernels = {LOCKER, CONSUMER},
         .target_nodes = locker_core,
     };
-    experimental::WorkUnitSpec wu_writer{
+    WorkUnitSpec wu_writer{
         .name = "writer_wu",
         .kernels = {WRITER},
         .target_nodes = writer_core,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_scoped_lock_xcore",
         .kernels = {locker_spec, consumer_spec, writer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -1198,20 +1191,20 @@ void run_dfb_scoped_lock_xcore_test(
         .work_units = {wu_locker, wu_writer},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs locker_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs locker_params{};
     locker_params.kernel = LOCKER;
-    locker_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    locker_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         locker_core,
         {{"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
          {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)},
          {"local_scratch", scratch_addr},   // this-core (locker) word to stage the entry addr
          {"writer_inbox", scratch_addr}});  // writer-core word to publish the entry addr into
-    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    writer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         writer_core,
         {{"src_buffer_addr", src_buffer_addr},
          {"write_size", write_size},
@@ -1219,10 +1212,10 @@ void run_dfb_scoped_lock_xcore_test(
          {"target_noc_y", static_cast<uint32_t>(locker_vc.y)},
          {"inbox", scratch_addr},  // local word the locker published the entry addr into
          {"target_addr", 0u}});    // unused: inbox != 0 selects the published address
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1234,8 +1227,8 @@ void run_dfb_scoped_lock_xcore_test(
 
     // The violation is recorded on the WRITER core (source of the NOC writes), with src = writer, dst = locker.
     std::vector<NOCDebugIssueType> locked_issues;
-    for (IDevice* device : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_locked_issues(device->id(), writer_vc, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_locked_issues(device_id, writer_vc, 0);
         locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
     }
     ASSERT_FALSE(locked_issues.empty())
@@ -1256,9 +1249,9 @@ void run_dfb_scoped_lock_xcore_test(
 // it) can the tracker attribute the self-write and flag WRITE_TO_UNLOCKED_DFB.
 void run_dfb_mcast_loopback_unlocked_test(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const experimental::NodeCoord producer_core = {1, 0};  // middle of the row -> never a rectangle corner
-    const experimental::NodeCoord rect_lo = {0, 0};
-    const experimental::NodeCoord rect_hi = {2, 0};
+    const NodeCoord producer_core = {1, 0};  // middle of the row -> never a rectangle corner
+    const NodeCoord rect_lo = {0, 0};
+    const NodeCoord rect_hi = {2, 0};
     auto producer_vc = mesh_device->worker_core_from_logical_core(producer_core);
     auto vc_lo = mesh_device->worker_core_from_logical_core(rect_lo);
     auto vc_hi = mesh_device->worker_core_from_logical_core(rect_hi);
@@ -1276,36 +1269,36 @@ void run_dfb_mcast_loopback_unlocked_test(
     uint32_t write_size = alignment;
     uint32_t src_buffer_addr = unreserved_addr + 0x10000;  // producer's own L1 source, clear of the DFB
 
-    const experimental::DFBSpecName DFB_NAME{"lock_dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const DFBSpecName DFB_NAME{"lock_dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    const experimental::DataMovementHardwareConfig dm_producer_cfg = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_producer_cfg = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0,
             },
     };
-    const experimental::DataMovementHardwareConfig dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_consumer_cfg = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::NOC_1,
             },
     };
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_mcast_loopback_producer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"src_buffer_addr",
@@ -1317,32 +1310,32 @@ void run_dfb_mcast_loopback_unlocked_test(
                   "num_dests"}},
         .hw_config = dm_producer_cfg,
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_consumer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DFB_NAME, "in")},
+        .dfb_bindings = {ConsumerOf(DFB_NAME, "in")},
         .hw_config = dm_consumer_cfg,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = producer_core,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_mcast_loopback",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs producer_params{};
     producer_params.kernel = PRODUCER;
-    producer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    producer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         producer_core,
         {{"src_buffer_addr", src_buffer_addr},
          {"write_size", write_size},
@@ -1351,10 +1344,10 @@ void run_dfb_mcast_loopback_unlocked_test(
          {"mcast_noc_x_end", mcast_x_end},
          {"mcast_noc_y_end", mcast_y},
          {"num_dests", num_dests}});
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;
     run_args.kernel_run_args = {producer_params, consumer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1366,8 +1359,8 @@ void run_dfb_mcast_loopback_unlocked_test(
 
     // The violation is recorded on the producer core (source == destination for a loopback write).
     std::vector<NOCDebugIssueType> unlocked_issues;
-    for (IDevice* device : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_unlocked_dfb_issues(device->id(), producer_vc, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_unlocked_dfb_issues(device_id, producer_vc, 0);
         unlocked_issues.insert(unlocked_issues.end(), issues.begin(), issues.end());
     }
     ASSERT_FALSE(unlocked_issues.empty())
@@ -1388,10 +1381,10 @@ void run_dfb_mcast_loopback_unlocked_test(
 // rectangle flags WRITE_TO_LOCKED_DFB.
 void run_dfb_mcast_xcore_locked_test(
     NOCDebuggingFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const experimental::NodeCoord locker_core = {1, 0};  // middle of the row -> never a rectangle corner
-    const experimental::NodeCoord writer_core = {1, 1};  // different row -> outside the mcast rectangle
-    const experimental::NodeCoord rect_lo = {0, 0};
-    const experimental::NodeCoord rect_hi = {2, 0};
+    const NodeCoord locker_core = {1, 0};  // middle of the row -> never a rectangle corner
+    const NodeCoord writer_core = {1, 1};  // different row -> outside the mcast rectangle
+    const NodeCoord rect_lo = {0, 0};
+    const NodeCoord rect_hi = {2, 0};
     auto locker_vc = mesh_device->worker_core_from_logical_core(locker_core);
     auto writer_vc = mesh_device->worker_core_from_logical_core(writer_core);
     auto vc_lo = mesh_device->worker_core_from_logical_core(rect_lo);
@@ -1411,58 +1404,56 @@ void run_dfb_mcast_xcore_locked_test(
     uint32_t src_buffer_addr = unreserved_addr + 0x10000;  // writer's payload source (on the writer core)
     uint32_t scratch_addr = unreserved_addr + 0x20000;     // locker stages / writer receives the entry addr
 
-    const experimental::DFBSpecName DFB_NAME{"lock_dfb"};
-    const experimental::KernelSpecName LOCKER{"locker"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::SemaphoreSpecName SEM_LOCKED{"sem_locked"};
-    const experimental::SemaphoreSpecName SEM_WRITTEN{"sem_written"};
+    const DFBSpecName DFB_NAME{"lock_dfb"};
+    const KernelSpecName LOCKER{"locker"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const KernelSpecName WRITER{"writer"};
+    const SemaphoreSpecName SEM_LOCKED{"sem_locked"};
+    const SemaphoreSpecName SEM_WRITTEN{"sem_written"};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::SemaphoreSpec sem_locked{
-        .unique_id = SEM_LOCKED, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
-    experimental::SemaphoreSpec sem_written{
-        .unique_id = SEM_WRITTEN, .target_nodes = experimental::NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_locked{.unique_id = SEM_LOCKED, .target_nodes = NodeRange{locker_core, writer_core}};
+    SemaphoreSpec sem_written{.unique_id = SEM_WRITTEN, .target_nodes = NodeRange{locker_core, writer_core}};
 
-    const experimental::DataMovementHardwareConfig dm_rv0 = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_rv0 = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_0,
             },
     };
-    const experimental::DataMovementHardwareConfig dm_rv1 = experimental::DataMovementHardwareConfig{
+    const DataMovementHardwareConfig dm_rv1 = DataMovementHardwareConfig{
         .config_1xx =
-            experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+            DataMovementHardwareConfig::DataMovement1XXConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = NOC::NOC_1,
             },
     };
 
-    experimental::KernelSpec locker_spec{
+    KernelSpec locker_spec{
         .unique_id = LOCKER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_xcore_locker.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .semaphore_bindings =
             {{.semaphore_spec_name = SEM_LOCKED, .accessor_name = "locked"},
              {.semaphore_spec_name = SEM_WRITTEN, .accessor_name = "written"}},
         .runtime_arg_schema = {.runtime_arg_names = {"writer_noc_x", "writer_noc_y", "local_scratch", "writer_inbox"}},
         .hw_config = dm_rv0,
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_consumer.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(DFB_NAME, "in")},
+        .dfb_bindings = {ConsumerOf(DFB_NAME, "in")},
         .hw_config = dm_rv1,
     };
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_mcast_xcore_writer.cpp",
         .num_threads = 1,
@@ -1484,17 +1475,17 @@ void run_dfb_mcast_xcore_locked_test(
         .hw_config = dm_rv0,
     };
 
-    experimental::WorkUnitSpec wu_locker{
+    WorkUnitSpec wu_locker{
         .name = "locker_wu",
         .kernels = {LOCKER, CONSUMER},
         .target_nodes = locker_core,
     };
-    experimental::WorkUnitSpec wu_writer{
+    WorkUnitSpec wu_writer{
         .name = "writer_wu",
         .kernels = {WRITER},
         .target_nodes = writer_core,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_mcast_xcore",
         .kernels = {locker_spec, consumer_spec, writer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -1502,20 +1493,20 @@ void run_dfb_mcast_xcore_locked_test(
         .work_units = {wu_locker, wu_writer},
     };
 
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
-    experimental::ProgramRunArgs run_args;
-    experimental::ProgramRunArgs::KernelRunArgs locker_params{};
+    ProgramRunArgs run_args;
+    ProgramRunArgs::KernelRunArgs locker_params{};
     locker_params.kernel = LOCKER;
-    locker_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    locker_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         locker_core,
         {{"writer_noc_x", static_cast<uint32_t>(writer_vc.x)},
          {"writer_noc_y", static_cast<uint32_t>(writer_vc.y)},
          {"local_scratch", scratch_addr},
          {"writer_inbox", scratch_addr}});
-    experimental::ProgramRunArgs::KernelRunArgs writer_params{};
+    ProgramRunArgs::KernelRunArgs writer_params{};
     writer_params.kernel = WRITER;
-    writer_params.runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+    writer_params.runtime_arg_values = MakeRuntimeArgsForSingleNode(
         writer_core,
         {{"src_buffer_addr", src_buffer_addr},
          {"write_size", write_size},
@@ -1527,10 +1518,10 @@ void run_dfb_mcast_xcore_locked_test(
          {"mcast_noc_y_end", mcast_y},
          {"num_dests", num_dests},
          {"inbox", scratch_addr}});
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    ProgramRunArgs::KernelRunArgs consumer_params{};
     consumer_params.kernel = CONSUMER;  // no runtime args
     run_args.kernel_run_args = {locker_params, consumer_params, writer_params};
-    experimental::SetProgramRunArgs(program, run_args);
+    program.set_program_run_args(run_args);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -1542,8 +1533,8 @@ void run_dfb_mcast_xcore_locked_test(
 
     // The violation is recorded on the WRITER core (source of the mcast), with src = writer, dst = locker.
     std::vector<NOCDebugIssueType> locked_issues;
-    for (IDevice* device : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_locked_issues(device->id(), writer_vc, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_locked_issues(device_id, writer_vc, 0);
         locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
     }
     ASSERT_FALSE(locked_issues.empty())
@@ -1768,7 +1759,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
         Program& program = workload.get_programs().at(device_range);
 
         constexpr uint32_t remote_cb_index = 31;
@@ -1839,8 +1830,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         ASSERT_FALSE(locked_issues.empty())
@@ -1880,7 +1871,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        workload.add_program(device_range, CreateProgram());
+        workload.add_program(device_range, CreateProgram(*mesh_device));
         Program& program = workload.get_programs().at(device_range);
 
         constexpr uint32_t remote_cb_index = 31;
@@ -1945,12 +1936,11 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
         distributed::Finish(mesh_device->mesh_command_queue());
         ReadMeshDeviceProfilerResults(*mesh_device);
 
-        for (IDevice* device : mesh_device->get_devices()) {
-            ChipId chip_id = device->id();
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, writer_virtual_core, 0))
+        for (auto device_id : mesh_device->get_device_ids()) {
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, writer_virtual_core, 0))
                 << "Unexpected write-to-locked-CB issue on writer core; writes were outside the "
                    "RemoteCircularBuffer lock scope.";
-            EXPECT_FALSE(this->has_write_to_locked_issue(chip_id, receiver_virtual_core, 0))
+            EXPECT_FALSE(this->has_write_to_locked_issue(device_id, receiver_virtual_core, 0))
                 << "Unexpected write-to-locked-CB issue on receiver core.";
         }
     }
@@ -1971,7 +1961,7 @@ void RunScopedLockStatefulWriteTest(
 
     const CoreCoord locker_core = {0, 0};
     const CoreCoord writer_core = {1, 0};
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
     distributed::MeshWorkload workload;
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -2038,8 +2028,8 @@ void RunScopedLockStatefulWriteTest(
     ReadMeshDeviceProfilerResults(*mesh_device);
 
     std::vector<NOCDebugIssueType> locked_issues;
-    for (IDevice* device : mesh_device->get_devices()) {
-        auto issues = fixture->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+    for (auto device_id : mesh_device->get_device_ids()) {
+        auto issues = fixture->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
         locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
     }
     ASSERT_FALSE(locked_issues.empty())
@@ -2132,7 +2122,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
 
         const CoreCoord locker_core = {0, 0};
         const CoreCoord writer_core = {1, 0};
-        Program program = CreateProgram();
+        Program program = CreateProgram(*mesh_device);
         distributed::MeshWorkload workload;
 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -2197,8 +2187,8 @@ TEST_F(NOCDebuggingFixture, ScopedLockStatefulWriteLargeDestinationAddressRecord
         ReadMeshDeviceProfilerResults(*mesh_device);
 
         std::vector<NOCDebugIssueType> locked_issues;
-        for (IDevice* device : mesh_device->get_devices()) {
-            auto issues = this->get_write_to_locked_issues(device->id(), writer_virtual_core, 0);
+        for (auto device_id : mesh_device->get_device_ids()) {
+            auto issues = this->get_write_to_locked_issues(device_id, writer_virtual_core, 0);
             locked_issues.insert(locked_issues.end(), issues.begin(), issues.end());
         }
         // Fails today: the recorded write address is truncated to its low 24 bits and the recorded lock address is

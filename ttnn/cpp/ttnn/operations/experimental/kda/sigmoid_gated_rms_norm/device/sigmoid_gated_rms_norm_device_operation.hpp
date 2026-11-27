@@ -17,6 +17,7 @@ struct SigmoidGatedRmsNormOperation {
     using program_factory_t = std::variant<SigmoidGatedRmsNormProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -32,6 +33,7 @@ Tensor sigmoid_gated_rms_norm(
     float epsilon,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    tt::tt_metal::DataType output_dtype);
+    tt::tt_metal::DataType output_dtype,
+    uint32_t gate_column_offset);
 
 }  // namespace ttnn::experimental::prim

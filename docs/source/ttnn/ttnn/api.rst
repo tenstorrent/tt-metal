@@ -91,6 +91,7 @@ Core
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
    ttnn.copy_host_to_device_tensor_partial
+   ttnn.cpu_shards
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
@@ -106,6 +107,7 @@ Core
    ttnn.to_memory_config
    ttnn.to_torch
    ttnn.typecast
+   ttnn.verify_shards_match_topology
 
 Tensor Creation
 ===============
@@ -525,6 +527,7 @@ Transformer
    ttnn.transformer.concatenate_heads
    ttnn.transformer.flash_mla_prefill
    ttnn.transformer.flash_multi_latent_attention_decode
+   ttnn.transformer.fused_recurrent_gated_delta_rule
    ttnn.transformer.gated_delta_attn_seq
    ttnn.transformer.joint_scaled_dot_product_attention
    ttnn.transformer.paged_flash_multi_latent_attention_decode
@@ -534,6 +537,7 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_ring_sdpa
    ttnn.transformer.sparse_sdpa
    ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads

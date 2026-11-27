@@ -43,6 +43,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
@@ -72,6 +73,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
             is_sequence_parallel=False,
+            use_persistent_ccl_buffers=use_persistent_ccl_buffers,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -117,7 +119,7 @@ class MiniMaxH3TokenRefinerBlock(Module):
         # row-parallel and reduce-scatters back to TP-fractured.
         if not self.use_fused_agmm and self.tp_factor > 1:
             normed = self.ccl_manager.all_gather(normed, dim=3, mesh_axis=self.tp_mesh_axis, use_hyperparams=False)
-        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2])
+        ff1_block_size = agmm_block_size(*self._ff1_kn, normed.padded_shape[-2]) if self.use_fused_agmm else None
         ff_out = self.ff(
             normed,
             compute_kernel_config=self.mm_compute_kernel_config,
@@ -146,6 +148,7 @@ class MiniMaxH3TokenRefiner(Module):
         ccl_manager: CCLManager,
         parallel_config: DiTParallelConfig,
         is_fsdp: bool = False,
+        use_persistent_ccl_buffers: bool = True,
     ) -> None:
         super().__init__()
 
@@ -162,6 +165,7 @@ class MiniMaxH3TokenRefiner(Module):
                     ccl_manager=ccl_manager,
                     parallel_config=parallel_config,
                     is_fsdp=is_fsdp,
+                    use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                 )
                 for _ in range(num_layers)
             ]

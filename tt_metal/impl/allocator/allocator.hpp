@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
@@ -76,11 +78,30 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
+    // Capture hold (ltx-rt). A trace bakes its intermediates' addresses and rewrites them on every
+    // replay; a buffer allocated after capture must not land on one. While a hold is open, freed DRAM
+    // returns to the free list as usual (so the capture reuses it, as eager does) and its range is
+    // recorded. end_capture_hold reserves the part of those ranges that is free at that point and
+    // returns a token for it; a buffer still live there then is kept allocated when freed later, until
+    // the token is released. The hold is thus at most the union of the capture's frees, never their
+    // sum. release_capture_hold frees what the token holds (when the trace is released).
+    void begin_capture_hold();
+    std::uint64_t end_capture_hold();
+    void release_capture_hold(std::uint64_t token);
+    std::size_t capture_hold_bytes(std::uint64_t token) const;
+
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
+    // Live DRAM allocations as disjoint per-bank [begin, end) ranges in address order. Scans every allocation.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_dram_allocations() const;
+    // Whether the buffer with this Buffer::unique_id() is allocated at address. Scans every allocated buffer.
+    bool is_buffer_allocated_at(size_t unique_id, DeviceAddr address) const;
 
     std::uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;
+
+    // Check an addressed buffer against its ordinary or small SRAM allocation region.
+    void validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type = BufferType::L1) const;
 
     std::uint32_t get_dram_channel_from_bank_id(std::uint32_t bank_id) const;
     CoreCoord get_logical_core_from_bank_id(std::uint32_t bank_id) const;
@@ -222,6 +243,18 @@ private:
 
     // Keep tracker-only state after the allocator's original fields so the
     // compiled-in feature does not perturb their cache layout when tracking is disabled.
+    // Capture hold state (see begin_capture_hold), guarded by mutex_.
+    struct CaptureHold {
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> freed;  // merged [begin, end) of the capture's frees
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> held;   // (address, size) kept allocated for the trace
+    };
+    // Keeps a buffer freed after capture allocated when it overlaps a live hold's ranges.
+    bool defer_into_capture_hold(DeviceAddr address, DeviceAddr size);
+    int capture_hold_depth_ = 0;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> capture_freed_dram_;  // [begin, end) freed during capture
+    std::uint64_t next_capture_hold_token_ = 1;
+    std::unordered_map<std::uint64_t, CaptureHold> held_dram_by_token_;
+
     bool allocations_unsafe_ = false;
     const bool tracking_enabled_;
     const bool traceback_capture_enabled_;

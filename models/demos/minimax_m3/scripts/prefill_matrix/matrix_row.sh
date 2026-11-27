@@ -5,7 +5,7 @@
 #  2. RESET=1: tt-smi -glx_reset every host in parallel (do this for the first row of a session)
 #  3. launch matrix_runner.sh on rank 0's host with this row's KV capacity, wait for STAGES x "setup complete"
 #  4. run matrix_producer.py: idle-pipeline TTFT per cell, then (USERS>0) the LOADED aggregate-throughput pass
-# WORK holds this session's mutable state (last_runner_log, last_timing_dir): one WORK per session, never shared.
+# WORK holds this session's mutable state (last_runner_log, last_producer_log): one WORK per session, never shared.
 # Optional: OUT (results JSONL), CHUNK (PREFILL_CHUNK_SIZE, default 5120; CACHED is rounded DOWN to a multiple),
 # LAYER_COUNTS (layers per stage, e.g. 1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4 -> PREFILL_PP_LAYER_COUNTS; default even split),
 # MAX_NEW (capacity = CACHED + MAX_NEW, default 51200), REQS (requests per user),
@@ -28,7 +28,7 @@ RANKS_PER_HOST=4
   || { echo "STAGES=$STAGES needs exactly $((STAGES / RANKS_PER_HOST)) hosts (bindings are $RANKS_PER_HOST trays/host), got ${#HOST_ARR[@]}: $HOSTS"; exit 2; }
 for h in "${HOST_ARR[@]}"; do [ -n "$h" ] || { echo "empty host in HOSTS=$HOSTS"; exit 2; }; done
 HOSTLIST=$(printf "%s:$RANKS_PER_HOST," "${HOST_ARR[@]}"); HOSTLIST=${HOSTLIST%,}
-[ "$MATRIX_CHUNK" -ge 2048 ] && [ $((MATRIX_CHUNK % 32)) -eq 0 ] || { echo "CHUNK=$MATRIX_CHUNK must be a multiple of 32 and >= 2048"; exit 2; }
+[ "$MATRIX_CHUNK" -ge 1024 ] && [ $((MATRIX_CHUNK % 32)) -eq 0 ] || { echo "CHUNK=$MATRIX_CHUNK must be a multiple of 32 and >= 1024"; exit 2; }
 [ $((MAX_NEW % MATRIX_CHUNK)) -eq 0 ] || { echo "MAX_NEW=$MAX_NEW is not a multiple of CHUNK=$MATRIX_CHUNK"; exit 2; }
 if [ $((CACHED % MATRIX_CHUNK)) -ne 0 ]; then   # the default cached values are 5120 multiples; snap for other chunks
   C_ROUNDED=$(( CACHED / MATRIX_CHUNK * MATRIX_CHUNK )); echo "[row C=$CACHED] rounding cached $CACHED down to $C_ROUNDED (multiple of CHUNK=$MATRIX_CHUNK)"; CACHED=$C_ROUNDED
@@ -77,13 +77,11 @@ for _ in $(seq 1 600); do
 done
 [ "${n:-0}" -ge "$STAGES" ] || { log "runner not ready after 20 min"; exit 2; }
 log "runner ready ($n/$STAGES)"
-# 4. producer (on rank 0's host, same host as rank 0 so the chunk-index alignment check in the producer holds)
+# 4. producer (on rank 0's host: the H2D service and the layer-completion ring are shared memory there)
 PLOG=$WORK/producer${STAGES}_c${CACHED}_$(date +%Y%m%d_%H%M%S).log; echo "$PLOG" > "$WORK/last_producer_log"
-TIMING_DIR=$(grep -o 'timing_dir=[^ ]*' "$LOG" | head -1 | cut -d= -f2-)
-[ -n "$TIMING_DIR" ] || { log "runner log has no timing_dir= token"; exit 2; }
 log "producer -> $PLOG (out $OUT)"
 matrix_srun "$JOB" "$R0" "cd $(matrix_q "$TT_METAL_HOME") && source python_env/bin/activate && env $(matrix_producer_env "$CAP") \
-  python3 $(matrix_q "$PKG_DIR/matrix_producer.py") --cached $CACHED --new $(matrix_q "$NEW") --iters $ITERS --timing-dir $(matrix_q "$TIMING_DIR") \
+  python3 $(matrix_q "$PKG_DIR/matrix_producer.py") --cached $CACHED --new $(matrix_q "$NEW") --iters $ITERS \
   --out $(matrix_q "$OUT") --last-rank $LAST --label ${STAGES}stage_c${MATRIX_CHUNK}${MATRIX_LAYER_COUNTS:+_split} --users $USERS ${REQS:+--reqs $REQS} ${TARGET_CHUNKS:+--target-chunks $TARGET_CHUNKS} ${SKIP_IDLE:+--skip-idle}" > "$PLOG"; rc=$?; echo "EXIT=$rc" >> "$PLOG"
 log "producer exit=$rc"; grep -E '\[matrix\] (CELL|LOADED cached)' "$PLOG" | sed 's/.*\[matrix\]/[matrix]/'
 exit "$rc"

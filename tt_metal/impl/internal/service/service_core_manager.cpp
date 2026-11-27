@@ -12,12 +12,14 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/math.hpp>
 #include "impl/allocator/algorithms/free_list_opt.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 #include <llrt/hal.hpp>
 #include "llrt/llrt.hpp"
@@ -60,6 +62,9 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
         state.fd_compute_grid = device->compute_with_storage_grid_size();
     }
 
+    // Bump before the loop below: a duplicate core TT_FATALs midway, after earlier cores are claimed.
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
+
     // Init per-core allocator
     auto [base, size] = l1_service_range(env_.get_hal());
     const DeviceAddr dram_align = env_.get_hal().get_alignment(HalMemType::DRAM);
@@ -91,6 +96,7 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
                 device->id());
         }
     }
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
@@ -136,7 +142,10 @@ std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* devi
     return available;
 }
 
-void ServiceCoreManagerImpl::on_device_close(ChipId device_id) { devices_.erase(device_id); }
+void ServiceCoreManagerImpl::on_device_close(ChipId device_id) {
+    devices_.erase(device_id);
+    claims_generation_.fetch_add(1, std::memory_order_acq_rel);
+}
 
 bool ServiceCoreManagerImpl::has_any_claims() const {
     for (const auto& [id, state] : devices_) {
@@ -285,6 +294,9 @@ void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimp
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
 
-ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
+// Returns the ServiceCoreManager of the MetalContext that owns `mesh_device`.
+ServiceCoreManager& service_core_manager(distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().metal_context().get_service_core_manager();
+}
 
 }  // namespace tt::tt_metal::internal

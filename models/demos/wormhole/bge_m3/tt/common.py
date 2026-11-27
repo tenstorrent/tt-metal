@@ -53,6 +53,7 @@ def create_tt_model(
         intermediate_size=bge_m3_model_args.intermediate_size,
         data_parallel=bge_m3_model_args.data_parallel,
         quality_mode=quality_mode,
+        mlp_wi_output_dtype=mlp_wi_output_dtype,
     )
 
     model = BgeM3Model(

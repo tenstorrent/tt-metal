@@ -16,9 +16,10 @@
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-logger/tt-logger.hpp>
 
-#include "tools/profiler/perf_counters.hpp"
+#include "internal/profiler/perf_counters.hpp"
 
 namespace tt::tt_metal::profiler_perf_counters {
+using namespace llk::perf;  // main moved the perf-counter enum into llk::perf (tt-llk perf_counters/types.h)
 
 namespace {
 

@@ -85,7 +85,7 @@ ALWI void copy_init(
  * | Template | Shape          | Tile geometry (deduced from LLKOperand)           | TensorShape |         | True |
  * | Function | src            | The source L1 operand (format+shape+buffer base)  | LLKOperand  |         | True |
  * | Function | itile          | Index of the tile within `src`, relative to its base | uint32_t | N/A     | True |
- * | Function | dst_tile_index | Tile index in the DST register                    | uint32_t    | 0 to 15 | True |
+ * | Function | dst_tile_index | Tile index in the DST register                    | uint32_t    | Must be less than the acquired size of DST REG | True |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
@@ -126,8 +126,8 @@ ALWI void copy_tile(LLKOperand<Format, Shape> src, std::uint32_t itile, std::uin
  * | Template | Shape                | Tile geometry (deduced from LLKOperand)                    | TensorShape |         | True |
  * | Function | src                  | The source L1 operand (format+shape+base address)          | LLKOperand  |         | True |
  * | Function | start_in_tile_index  | Index of the first source tile, relative to src base        | uint32_t    | N/A     | True |
- * | Function | start_dst_tile_index | Index of the first destination tile in the DST register     | uint32_t    | 0 to 15 | True |
- * | Function | ntiles               | Number of consecutive tiles to copy                         | uint32_t    | start_dst_tile_index + ntiles <= 16 | True |
+ * | Function | start_dst_tile_index | Index of the first destination tile in the DST register     | uint32_t    | Must be less than the acquired size of DST REG | True |
+ * | Function | ntiles               | Number of consecutive tiles to copy                         | uint32_t    | start_dst_tile_index + ntiles <= acquired size of DST REG | True |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>

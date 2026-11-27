@@ -13,6 +13,10 @@ description: |
   each pattern, and opens draft PRs (it cannot build tt-metal locally, and its PRs need a
   maintainer's approval before CI runs anyway). Never merges its own PRs.
 
+  Now supporting auto lock generation: editing this file regenerates silencer.lock.yml
+  automatically via the compile-agentic-workflows pre-commit hook, so contributors no
+  longer need to run `gh aw compile` by hand.
+
 on:
   # Scan twice a day (warnings live in *successful* runs too, so we do not wait
   # for failures the way ci-doctor does), plus on demand. Two explicit cron
@@ -123,7 +127,7 @@ safe-outputs:
     # single hardcoded list of workflows Silencer tracks — *Scan procedure* step 2 scans
     # exactly this same list, so there is only one place to update when a tracked
     # workflow is added or removed. Entries are bare filename stems, no extension
-    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 34 are confirmed to
+    # (`pr-gate` resolves `.github/workflows/pr-gate.yaml`). All 33 are confirmed to
     # declare a `workflow_dispatch` trigger, which this safe-output requires.
     workflows:
       - sanity-tests
@@ -134,7 +138,6 @@ safe-outputs:
       - models-t1-device-perf-tests
       - galaxy-stress-tests
       - t3000-tests
-      - t3000-dispatch-tests
       - t3000-profiler-tests
       - single-card-profiler-tests
       - pipeline-select-profiler

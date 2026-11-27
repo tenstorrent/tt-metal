@@ -1,9 +1,9 @@
 name: "Verify changed tests"
 description: >-
-  Scope tests/pipeline_reorg changes, narrow the matrix, and enforce owner
-  review for highly contended SKUs. Pinned to @main by every caller so a PR
-  branch always runs the current version of this gate, never a stale or
-  missing copy from its own head. Runs .github/scripts/utils/verify_changed_tests.py
+  Scope tests/pipeline_reorg changes and narrow the matrix to them. Pinned to
+  @main by every caller so a PR branch always runs the current version of this
+  gate, never a stale or missing copy from its own head. Runs
+  .github/scripts/utils/verify_changed_tests.py
   in place -- that script is not duplicated here, so pinning this action to a
   ref pins that script to the same ref.
 
@@ -14,13 +14,6 @@ inputs:
   base:
     description: "Base ref or sha to diff against"
     required: true
-  repo:
-    description: "owner/repo, for the reviews API"
-    required: true
-  pr:
-    description: "PR number"
-    required: false
-    default: ""
   output:
     description: "Path to also write the JSON scope result to"
     required: false
@@ -28,14 +21,13 @@ inputs:
 
 outputs:
   status:
-    description: "Gate status: no_op, blocked, or run"
+    description: "Gate status: no_op or run"
     value: ${{ steps.gate.outputs.status }}
   expected-leg-count:
     value: ${{ steps.gate.outputs.expected-leg-count }}
-  review-leg-count:
-    value: ${{ steps.gate.outputs.review-leg-count }}
-  review-met:
-    value: ${{ steps.gate.outputs.review-met }}
+  dropped-leg-count:
+    description: "Legs skipped because their SKU is in UNSUPPORTED_SKUS"
+    value: ${{ steps.gate.outputs.dropped-leg-count }}
   leg-digest:
     value: ${{ steps.gate.outputs.leg-digest }}
   needs-default:
@@ -52,7 +44,7 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Scope the changed tests, narrow the matrix, enforce owner review
+    - name: Scope the changed tests and narrow the matrix
       id: gate
       shell: bash
       run: |
@@ -64,6 +56,4 @@ runs:
         python3 "${GITHUB_ACTION_PATH}/../../scripts/utils/verify_changed_tests.py" \
           --event "${{ inputs.event }}" \
           --base "${{ inputs.base }}" \
-          --repo "${{ inputs.repo }}" \
-          --pr "${{ inputs.pr }}" \
           --output "${{ inputs.output }}"

@@ -22,7 +22,7 @@ class DeepSeekV4FlashConfig:
     # shape the fused op wins 64-128 by 25-37%, 192 and 256 are ties inside 0.7%, and the composite
     # takes 320 onward by 6.7% and more. 256 is the top of that tie band, so the cut costs nothing
     # either way inside it.
-    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
+    # Not enabled: only Kimi K2.6/K2.7 and GLM 5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 256
@@ -31,6 +31,9 @@ class DeepSeekV4FlashConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 6
+    # Depth of the MoE forwarding buffers. Any value would make model functional,
+    # but larger values make it faster and consume more DRAM, so it's a compromise.
+    MOE_FWD_VC_PAGES = 64
     NUM_SHARED_EXPERTS = 1
     # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
     NUM_EXPERT_GROUPS = 1
@@ -47,6 +50,9 @@ class DeepSeekV4FlashConfig:
     NUM_LAYERS = 43
     NUM_DENSE_LAYERS = 0  # first_k_dense_replace - every layer is MoE
     NUM_HASH_LAYERS = 3
+    # Per-layer attention kind as config.json's compress_ratios encodes it: 0 sliding, 4 CSA, 128 HCA.
+    # Two bootstrap layers, then CSA / HCA alternating from layer 2.
+    COMPRESS_RATIOS = (0, 0) + tuple(4 if i % 2 == 0 else 128 for i in range(NUM_LAYERS - 2))
     VOCAB_SIZE = 129280
     SLIDING_WINDOW = 128
 

@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -43,6 +43,9 @@ void kernel_main() {
 
 #ifdef CAUSAL_MASK
     constexpr std::uint32_t num_tiles_causal_mask = get_arg(args::num_tiles_causal_mask);
+    // The host repeats the mask every mask_Ht tile rows and starts each core at curr_ht % mask_Ht;
+    // mask_Ht differs from Wt whenever the mask is not square.
+    const std::uint32_t mask_Ht = num_tiles_causal_mask / Wt;
 
     std::uint32_t mask_ht = mask_start_ht;
 #endif
@@ -51,22 +54,23 @@ void kernel_main() {
     std::uint32_t mask_id = start_mask_id;
     bool read_mask = true;
     constexpr auto dfb_fused_scale = dfb::fused_scale;
-    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
+    DataflowBuffer dfb_fused_scale_obj(dfb_fused_scale);
+    generate_bcast_unary_scalar(dfb_fused_scale_obj, pre_scale);
 #endif
 
     const auto src_a = TensorAccessor(tensor::src);
 
+    constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
+    constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
+    DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
+    DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
     {
-        constexpr std::uint32_t dfb_max_scaler = dfb::max_scaler;
-        constexpr std::uint32_t dfb_sum_scaler = dfb::sum_scaler;
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_max_scaler,
-            ckernel::PoolType::MAX,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            dfb_sum_scaler,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<dfb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+                dfb_max_scaler_obj);
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<dfb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                dfb_sum_scaler_obj);
     }
 
     const Noc noc;
@@ -79,7 +83,12 @@ void kernel_main() {
     constexpr std::uint32_t total_passes = 2;
 #endif
 #ifdef FUSED_SCALE_MASK
+#ifdef CAUSAL_MASK
+    // Causal: mask_id is the current tile-row's first mask tile, mask_id_offset the batch base.
+    std::uint32_t mask_id_offset = mask_offset;
+#else
     std::uint32_t mask_id_offset = mask_id;
+#endif
     std::uint32_t mask_index = mask_id;
 #endif
 
@@ -88,7 +97,9 @@ void kernel_main() {
         for (std::uint32_t cur_pass = 0; cur_pass < total_passes; cur_pass++) {
             // We want to fill up the CB for input, and do so in chunks of blk
             std::uint32_t tile_index = tile_offset + (ncht * Wt);
-#ifdef FUSED_SCALE_MASK
+#ifdef CAUSAL_MASK
+            mask_index = mask_id;
+#elif defined(FUSED_SCALE_MASK)
             mask_index = mask_id_offset;
 #endif
             for (std::uint32_t wt = 0; wt < Wt; wt += blk) {
@@ -139,13 +150,14 @@ void kernel_main() {
             }
         }
 #ifdef CAUSAL_MASK
+        mask_id += Wt;
         ++ht;
         ++mask_ht;
         if (ht == Ht) {
             ht = 0;
             mask_ht = 0;
             mask_id_offset += num_tiles_causal_mask;
-        } else if (mask_ht == Wt) {
+        } else if (mask_ht == mask_Ht) {
             mask_ht = 0;
             mask_id = mask_id_offset;
         }

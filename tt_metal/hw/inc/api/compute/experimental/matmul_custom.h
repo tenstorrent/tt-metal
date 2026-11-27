@@ -19,6 +19,17 @@
 
 namespace ckernel {
 
+/**
+ * Set the distance, in tiles, between streamed columns of matmul's second input.
+ * Use after matmul init/reinit, with ct_dim >= rt_dim and no in1 kernel broadcast.
+ * Does not change tile geometry or the starting tile index of a matmul call.
+ * The tile-size times stride must fit the 16-bit unpacker address-step register.
+ * Restore with stride_tiles=1 before another operation uses the unpacker.
+ */
+ALWI void matmul_set_in1_column_stride(uint32_t in1_cb_id, uint32_t stride_tiles) {
+    UNPACK((llk_unpack_AB_matmul_set_in1_column_stride(in1_cb_id, stride_tiles)));
+}
+
 // clang-format off
 /**
  * Short initialization for the no-MOP matmul block operation. Configures only the unpacker and math
@@ -106,6 +117,47 @@ ALWI void mm_no_mop_reinit_short(
     // Both arches now re-derive operand tile geometry in reinit so 16x32 tiny-tile addrmods are
     // restored (previously the Blackhole branch dropped the cb ids and reset to full-32x32 addrmods).
     MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+}
+
+// Fidelity-explicit variants of the three calls above, for a kernel that runs a matmul at a fidelity other than
+// MATH_FIDELITY. The replay image depends on the fidelity, so switching needs the full init.
+template <MathFidelity math_fidelity>
+ALWI void mm_no_mop_init_short_fidelity(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const bool transpose = false,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+}
+
+template <MathFidelity math_fidelity>
+ALWI void matmul_block_no_mop_fidelity(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    const bool transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, idst, ct_dim, rt_dim)));
+}
+
+template <MathFidelity math_fidelity>
+ALWI void mm_no_mop_reinit_short_fidelity(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const bool transpose = false,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_reinit_no_mop<math_fidelity, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 }
 
 }  // namespace ckernel

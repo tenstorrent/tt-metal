@@ -18,7 +18,7 @@ columns = [
     "fast_kernel_cycles",
     "slow_kernel_cycles",
     "kgs",
-    "cbs",
+    "dfbs",
     "rtas",
     "crtas",
     "sems",
@@ -26,7 +26,6 @@ columns = [
     "ncrisc_enabled",
     "trisc_enabled",
     "erisc_enabled",
-    "cb_gs",
 ]
 print("name,time (us)," + ",".join(columns))
 for benchmark in result["benchmarks"]:

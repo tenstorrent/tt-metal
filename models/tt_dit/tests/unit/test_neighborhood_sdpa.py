@@ -1,0 +1,1057 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""PCC tests for the neighborhood attention device op against the torch reference.
+
+The op consumes tensors in BRICKED site order. Bricking is done here in torch, using the
+index formula already pinned to `neighborhood_permute` by test_neighborhood_permute.py, so a
+failure here is the OP rather than the ordering.
+"""
+
+import math
+
+import pytest
+import torch
+
+import ttnn
+from models.tt_dit.layers.neighborhood_attention_plan import _query_chunk_bricks
+from models.tt_dit.layers.neighborhood_reference import neighborhood_attention_3d
+
+SITES_PER_BRICK = 32
+
+
+def bricked_index_table(volume, brick):
+    """Natural site index for each bricked slot; ghost slots get -1."""
+    volume_time, volume_height, volume_width = volume
+    brick_time, brick_height, brick_width = brick
+    bricks = [-(-volume_axis // brick_axis) for volume_axis, brick_axis in zip(volume, brick)]
+
+    table = torch.full((bricks[0] * bricks[1] * bricks[2] * SITES_PER_BRICK,), -1, dtype=torch.long)
+    for site_time in range(volume_time):
+        for site_height in range(volume_height):
+            for site_width in range(volume_width):
+                brick_index = (
+                    (site_time // brick_time) * (bricks[1] * bricks[2])
+                    + (site_height // brick_height) * bricks[2]
+                    + (site_width // brick_width)
+                )
+                site_index_in_brick = (
+                    (site_time % brick_time) * (brick_height * brick_width)
+                    + (site_height % brick_height) * brick_width
+                    + (site_width % brick_width)
+                )
+                natural_index = (site_time * volume_height + site_height) * volume_width + site_width
+                table[brick_index * SITES_PER_BRICK + site_index_in_brick] = natural_index
+    return table
+
+
+def to_bricked(natural, table):
+    """[batch, sites_natural, heads, head_dim] -> [batch, sites_bricked, heads, head_dim]."""
+    batch, _, head_count, head_dim = natural.shape
+    bricked = torch.zeros(batch, table.numel(), head_count, head_dim, dtype=natural.dtype)
+    present = table >= 0
+    bricked[:, present] = natural[:, table[present]]
+    return bricked
+
+
+def pearson(left, right):
+    left_flat = left.flatten().float()
+    right_flat = right.flatten().float()
+    return torch.corrcoef(torch.stack([left_flat, right_flat]))[0, 1].item()
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "volume, context_window, stride",
+    [
+        ((4, 8, 8), (3, 3, 3), (1, 1, 1)),
+        ((4, 8, 8), (3, 5, 5), (2, 4, 4)),
+        # 256 bricks x 2 heads = 512 work items over ~130 cores, so several per core. The two
+        # cases above give exactly ONE item per core, which cannot expose a per-item circular
+        # buffer leak -- the running max leaked a tile per item and jammed on the third.
+        # 64 bricks x 2 heads = 128 items, about one per core -- but the gather is a genuine
+        # SUB-volume here. In the two cases above the gather covers the whole volume, so the
+        # reader's brick addressing is never exercised: any enumeration order works because the
+        # union is complete and the mask does all the filtering.
+        ((8, 16, 16), (3, 3, 3), (1, 1, 1)),
+        # 256 bricks x 2 heads = 512 work items over ~130 cores, so several per core. The first
+        # two cases give exactly ONE item per core, which cannot expose a per-item circular
+        # buffer leak -- the running max leaked a tile per item and jammed on the third.
+        ((8, 32, 32), (3, 3, 3), (1, 1, 1)),
+        # A stride of several bricks, which is the only shape that gives a MULTI-BRICK query
+        # chunk: 2x2x2 bricks = 256 queries sharing one gather and one broadcast mask. Every
+        # case above derives a one-brick chunk, so none of them exercise the chunk path at all.
+        ((8, 16, 16), (4, 8, 8), (4, 8, 8)),
+        # The same, on a volume whose bricks do NOT divide by the chunk: 3 brick-rows in time
+        # against a chunk 2 deep, so the last chunk hangs half outside the volume. Those rows
+        # have no queries to read and no home to write to, and getting that wrong corrupts the
+        # final time slice while leaving every other one correct.
+        ((6, 16, 16), (4, 8, 8), (4, 8, 8)),
+    ],
+    ids=[
+        "stride_one",
+        "stride_equals_brick",
+        "partial_gather",
+        "many_items_per_core",
+        "multi_brick_chunk",
+        "chunk_overhangs_volume",
+    ],
+)
+@pytest.mark.parametrize(
+    # head_dim 32 is ONE tile per query row; 64 is two. Everything that walks a row -- the Q and
+    # K/V reads, the QK^T inner dimension, the PV output width -- is indexed by head_dim_tiles,
+    # and none of it was covered while every case used a single tile.
+    "head_dim",
+    [32, 64],
+    ids=["one_tile_row", "two_tile_row"],
+)
+@pytest.mark.parametrize(
+    # A chunk's score tiles are live in DST, so it can never exceed 8 tiles. "widest" is the
+    # largest legal chunk (a single chunk when the gather is small enough, which isolates
+    # QK -> mask -> softmax -> PV -> normalize from the running-max bookkeeping); "narrow"
+    # forces several chunks so the online rescale runs.
+    "chunking",
+    ["widest_chunk", "narrow_chunk"],
+)
+def test_matches_torch_reference(mesh_device, volume, context_window, stride, chunking, head_dim):
+    torch.manual_seed(0)
+    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    # Derived, never chosen: the chunk is one query group measured in bricks. Same call the
+    # executor makes, so the test cannot drift from what the model runs.
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    )
+
+    head_count = 2
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    )
+
+    gather_brick_count = plan["gather_brick_count"]
+    DST_CAPACITY_TILES = 8
+    widest_chunk = min(gather_brick_count, DST_CAPACITY_TILES)
+    tiles_per_kv_chunk = widest_chunk if chunking == "widest_chunk" else max(1, widest_chunk // 3)
+
+    table = bricked_index_table(volume, brick)
+
+    # Op layout: [batch, 1, sites_bricked, heads*head_dim] -- sites are the tile ROW axis, so one
+    # tile row is one brick and heads never have to move.
+    def upload(tensor):
+        bricked = to_bricked(tensor, table).contiguous()
+        bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+        return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+        1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+    )
+    origin_on_device = ttnn.from_torch(
+        origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+
+    actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+        upload(query),
+        upload(key),
+        upload(value),
+        origin_on_device,
+        volume=volume,
+        context_window=context_window,
+        stride=stride,
+        brick=brick,
+        query_chunk_bricks=query_chunk_bricks,
+        head_count=head_count,
+        scale=1.0,
+        tiles_per_kv_chunk=tiles_per_kv_chunk,
+    )
+
+    actual_bricked = ttnn.to_torch(actual_device).float()  # [batch, 1, sites_bricked, heads*head_dim]
+    actual_bricked = actual_bricked.reshape(1, -1, head_count, head_dim)
+    present = table >= 0
+    actual = torch.zeros_like(expected)
+    actual[:, table[present]] = actual_bricked[:, present]
+
+    correlation = pearson(actual, expected)
+    assert correlation > 0.99, f"PCC {correlation:.5f} against the torch reference"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+def test_program_cache_keys_on_compile_time_inputs(mesh_device):
+    """Calls differing only in a compile-time input must not share a cached program.
+
+    Fidelity, approx exp, the presence of an interior mask, the query chunk shape and the shard
+    origin (it sets the compiled gather_bricks) all shape the program. If one is missing from the
+    hash, the second call silently reruns the first call's kernel: the output still passes PCC, it
+    just is not what was asked for.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks
+
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    torch.manual_seed(0)
+    volume, context_window, stride = (8, 16, 16), (3, 3, 3), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    query_chunk_bricks = _query_chunk_bricks(stride, brick)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=query_chunk_bricks
+    )
+    one_brick_chunk = (1, 1, 1)
+    assert tuple(query_chunk_bricks) != one_brick_chunk
+    one_brick_plan = ttnn.transformer.neighborhood_plan(
+        volume, context_window, stride, brick, query_chunk_bricks=one_brick_chunk
+    )
+    # One width shard (owned 8 + a one-brick halo) at two origins: the shape of every call matches,
+    # only shard_origin differs.
+    owned_width = 8
+    resident = (volume[0], volume[1], owned_width + brick[2])
+    shard_plans = {
+        origin: ttnn.transformer.neighborhood_plan(
+            volume,
+            context_window,
+            stride,
+            brick,
+            query_chunk_bricks=one_brick_chunk,
+            shard_extent=resident,
+            shard_origin=origin,
+        )
+        for origin in ((0, 0, 0), (0, 0, owned_width - brick[2]))
+    }
+    # Hashed, so it must not change between the calls each step compares.
+    tiles_per_kv_chunk = min(8, *(p["gather_brick_count"] for p in (plan, one_brick_plan, *shard_plans.values())))
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    )
+    table = bricked_index_table(volume, brick)
+
+    def upload(tensor, index_table=table):
+        bricked = to_bricked(tensor, index_table).contiguous().reshape(1, 1, -1, head_count * head_dim)
+        return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def upload_origins(chunk_plan):
+        origin_table = torch.tensor(chunk_plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, chunk_plan["chunk_count"], chunk_plan["gather_origin_columns"]
+        )
+        return ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    inputs = (upload(query), upload(key), upload(value), upload_origins(plan))
+    interior_mask = ttnn.from_torch(
+        _build_relative_masks(context_window, brick), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+    def compute_config(fidelity, approx):
+        return ttnn.WormholeComputeKernelConfig(
+            math_fidelity=fidelity, math_approx_mode=approx, fp32_dest_acc_en=False, packer_l1_acc=False
+        )
+
+    high = compute_config(ttnn.MathFidelity.HiFi4, False)
+    low = compute_config(ttnn.MathFidelity.LoFi, True)
+
+    def run(config, mask=None, tensors=inputs, chunk=query_chunk_bricks, **shard):
+        return ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            *tensors,
+            interior_mask=mask,
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=chunk,
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=tiles_per_kv_chunk,
+            compute_kernel_config=config,
+            **shard,
+        )
+
+    entries = [device.num_program_cache_entries()]
+    outputs = {}
+    for name, config, mask in (("high", high, None), ("low", low, None), ("high_masked", high, interior_mask)):
+        outputs[name] = run(config, mask)
+        entries.append(device.num_program_cache_entries())
+    # A repeat of the first call must hit the cache, or the hash is keyed on something per-call.
+    run(high)
+    entries.append(device.num_program_cache_entries())
+    outputs["high_one_brick_chunk"] = run(
+        high, tensors=(*inputs[:3], upload_origins(one_brick_plan)), chunk=one_brick_chunk
+    )
+    entries.append(device.num_program_cache_entries())
+
+    resident_table = bricked_index_table(resident, brick)
+    resident_sites = resident[0] * resident[1] * resident[2]
+    resident_inputs = [upload(torch.randn(1, resident_sites, head_count, head_dim), resident_table) for _ in range(3)]
+    for origin, shard_plan in shard_plans.items():
+        run(
+            high,
+            tensors=(*resident_inputs, upload_origins(shard_plan)),
+            chunk=one_brick_chunk,
+            shard_extent=resident,
+            shard_origin=origin,
+        )
+        entries.append(device.num_program_cache_entries())
+    assert entries == [entries[0] + step for step in (0, 1, 2, 3, 3, 4, 5, 6)], f"program cache entries {entries}"
+
+    def unbrick(device_tensor):
+        bricked = ttnn.to_torch(ttnn.get_device_tensors(device_tensor)[0]).float().reshape(1, -1, head_count, head_dim)
+        present = table >= 0
+        natural = torch.zeros_like(expected)
+        natural[:, table[present]] = bricked[:, present]
+        return natural
+
+    actual = {name: unbrick(output) for name, output in outputs.items()}
+    for name, output in actual.items():
+        correlation = pearson(output, expected)
+        assert correlation > 0.99, f"{name}: PCC {correlation:.5f} against the torch reference"
+    assert not torch.equal(actual["high"], actual["low"]), "LoFi + approx exp matched HiFi4 bit for bit"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_shards_match_the_whole_volume(mesh_device):
+    """Two shards with DIFFERENT origins reproduce the unsharded answer.
+
+    This is the property the mesh needs and the one a zero origin cannot show. Window placement
+    is GLOBAL -- a query half a window from a shard seam must still see a full window, clamped
+    only at the true volume boundary. If the shard origin were compile-time (it was), every
+    device of a mesh would share one value, believe it sat at the origin, and clamp at its own
+    seam: plausible output, wrong receptive field along every internal boundary.
+
+    Each shard reads its origin out of its gather origin table, which is how one program serves
+    every device of a mesh.
+    """
+    torch.manual_seed(0)
+    volume, context_window, stride = (4, 8, 16), (3, 3, 3), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query,
+        key,
+        value,
+        volume=volume,
+        context_window=context_window,
+        stride=stride,
+        brick=brick,
+        scale=1.0,
+    ).reshape(1, *volume, head_count, head_dim)
+
+    volume_form = [tensor.reshape(1, *volume, head_count, head_dim) for tensor in (query, key, value)]
+
+    # Each shard holds what it owns PLUS the halo its windows reach into. The halo is a whole
+    # number of bricks so the shard bricks the same way the global volume would.
+    owned_width, halo_width = 8, brick[2]
+    shards = [
+        {"origin": (0, 0, 0), "resident_width": owned_width + halo_width, "owned": (0, owned_width)},
+        {
+            "origin": (0, 0, owned_width - halo_width),
+            "resident_width": owned_width + halo_width,
+            "owned": (halo_width, halo_width + owned_width),
+        },
+    ]
+
+    for shard in shards:
+        origin_width = shard["origin"][2]
+        resident = (volume[0], volume[1], shard["resident_width"])
+        plan = ttnn.transformer.neighborhood_plan(
+            volume, context_window, stride, brick, shard_extent=resident, shard_origin=shard["origin"]
+        )
+        table = bricked_index_table(resident, brick)
+
+        def upload(tensor):
+            window = tensor[:, :, :, origin_width : origin_width + shard["resident_width"]]
+            flat = window.reshape(1, resident[0] * resident[1] * resident[2], head_count, head_dim)
+            bricked = to_bricked(flat, table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+        )
+        actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            *(upload(tensor) for tensor in volume_form),
+            ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            shard_extent=resident,
+            shard_origin=shard["origin"],
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+        )
+
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
+        present = table >= 0
+        resident_out = torch.zeros(1, resident[0] * resident[1] * resident[2], head_count, head_dim)
+        resident_out[:, table[present]] = bricked_out[:, present]
+        resident_out = resident_out.reshape(1, *resident, head_count, head_dim)
+
+        owned_start, owned_end = shard["owned"]
+        actual_owned = resident_out[:, :, :, owned_start:owned_end]
+        global_start = origin_width + owned_start
+        expected_owned = expected[:, :, :, global_start : global_start + (owned_end - owned_start)]
+
+        correlation = pearson(actual_owned, expected_owned)
+        assert correlation > 0.99, f"shard at width {origin_width}: PCC {correlation:.5f} against the unsharded volume"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "volume, context_window, brick, owned_width",
+    [
+        ((4, 8, 24), (3, 3, 3), None, 8),
+        # Brick width 1 with an owned width of 15: the deterministic stages' shard at 1080p. The
+        # middle shard's origin (15 - 3 = 12) is not even, so no even-width brick could plan it;
+        # width 1 is what the planner accepts, and the halo is 3 whole (1-wide) bricks.
+        ((8, 8, 45), (3, 7, 7), (8, 4, 1), 15),
+    ],
+    ids=["even_brick_owned8", "width1_brick_owned15"],
+)
+def test_symmetric_halo_shards_match_the_whole_volume(mesh_device, volume, context_window, brick, owned_width):
+    """Three shards with a UNIFORM symmetric halo, including negative origins.
+
+    A mesh runs one program, so every device must hold the same resident extent. A symmetric
+    halo gives that, at the cost of the end devices' halo hanging off the volume: shard 0 sits at
+    origin -halo. Those columns are storage the volume does not contain -- no query owns them and
+    no window reaches them -- which is why the origin has to be able to say "below zero" rather
+    than being clamped to it. Clamping would silently renumber every column of that device.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import halo_sites
+
+    torch.manual_seed(0)
+    stride = (1, 1, 1)
+    head_count, head_dim = 2, 64
+    if brick is None:
+        brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+    halo_width = halo_sites(context_window[2], brick[2])
+    resident = (volume[0], volume[1], owned_width + 2 * halo_width)
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query,
+        key,
+        value,
+        volume=volume,
+        context_window=context_window,
+        stride=stride,
+        brick=brick,
+        scale=1.0,
+    ).reshape(1, *volume, head_count, head_dim)
+    volume_form = [tensor.reshape(1, *volume, head_count, head_dim) for tensor in (query, key, value)]
+
+    table = bricked_index_table(resident, brick)
+    resident_sites = resident[0] * resident[1] * resident[2]
+
+    for shard_index in range(volume[2] // owned_width):
+        origin_width = shard_index * owned_width - halo_width  # NEGATIVE for shard 0
+        # The op computes queries for the OWNED bricks only (contract: no query may start below
+        # the volume, which the halo does on shard 0), so the plan and the call carry the query
+        # region and the output covers just that band.
+        query_extent = (volume[0], volume[1], owned_width)
+        query_origin = (0, 0, halo_width)
+        plan = ttnn.transformer.neighborhood_plan(
+            volume,
+            context_window,
+            stride,
+            brick,
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
+        )
+        query_table = bricked_index_table(query_extent, brick)
+
+        def upload(tensor):
+            # Columns outside the volume are real storage holding nothing meaningful. Zeros
+            # stand in for whatever the halo exchange would leave there; nothing reads them.
+            window = torch.zeros(1, *resident, head_count, head_dim)
+            for local in range(resident[2]):
+                source = origin_width + local
+                if 0 <= source < volume[2]:
+                    window[:, :, :, local] = tensor[:, :, :, source]
+            flat = window.reshape(1, resident_sites, head_count, head_dim)
+            bricked = to_bricked(flat, table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        def upload_query(tensor):
+            # Q carries only the OWNED bricks (the query region); K/V stay resident-wide.
+            owned_start = shard_index * owned_width
+            window = tensor[:, :, :, owned_start : owned_start + owned_width]
+            flat = window.reshape(1, query_extent[0] * query_extent[1] * query_extent[2], head_count, head_dim)
+            bricked = to_bricked(flat, query_table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+        )
+        query_form, key_form, value_form = volume_form
+        actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            upload_query(query_form),
+            upload(key_form),
+            upload(value_form),
+            ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+        )
+
+        # The output is the owned band, bricked over the query region.
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
+        present = query_table >= 0
+        actual_owned = torch.zeros(1, query_extent[0] * query_extent[1] * query_extent[2], head_count, head_dim)
+        actual_owned[:, query_table[present]] = bricked_out[:, present]
+        actual_owned = actual_owned.reshape(1, *query_extent, head_count, head_dim)
+        global_start = shard_index * owned_width
+        expected_owned = expected[:, :, :, global_start : global_start + owned_width]
+
+        correlation = pearson(actual_owned, expected_owned)
+        assert correlation > 0.99, f"shard {shard_index} at global origin {origin_width}: PCC {correlation:.5f}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    # A negative origin puts local column 0 BELOW the volume, which is what the production halo
+    # does and what the interior gate has to survive: it must still admit the bricks that sit
+    # comfortably inside the global volume, not reject the whole shard.
+    "owned_width",
+    [None, 12],
+    ids=["unsharded", "w_sharded_negative_origin"],
+)
+@pytest.mark.parametrize(
+    # (2,4,4) is what `neighborhood_choose_brick` returns for an 11^3 window; (8,2,2) is what
+    # `_choose_sharded_brick` returns for the 1080p decode, because it gathers 147 bricks rather
+    # than 175. Its W brick of 2 also puts the relative span at 3x7x7 instead of 7x5x5, so it is a
+    # different table, a different slot linearisation and a different halo -- none of which the
+    # (2,4,4) case exercises. It also does not divide the time axis, so it carries ghost bricks.
+    "brick",
+    [None, (8, 2, 2)],
+    ids=["chosen_brick", "brick_822"],
+)
+def test_interior_table_matches_generated_masks(mesh_device, owned_width, brick):
+    """The UPLOADED relative mask table, on a volume large enough to have interior bricks.
+
+    Every other case here passes no ``interior_mask`` at all, on a volume small enough that every
+    brick clamps at an edge -- so the uploaded table is never consulted and the kernel generates
+    every tile. This is the path the 1080p decode spends ~75% of its bricks on, and the one where
+    cb_mask holds a whole work item so those tiles are written once and then reused; getting the
+    slot -> table page permutation wrong shows up here and nowhere else.
+
+    Volume (16, 24, 24) with an 11^3 window is the smallest shape that has genuine interior
+    bricks on all three axes -- at (12, 16, 16) the time axis has none, since a brick-aligned
+    origin cannot land on the single unclamped time site.
+    """
+    _run_interior_table_case(mesh_device, owned_width, brick, volume=(16, 24, 24))
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+@pytest.mark.parametrize(
+    # Deep enough in T that a 2-brick T-column chunk can sit with every brick's window inside the
+    # volume: (2,4,4) bricks need chunk sites [8,16) of 24; (8,2,2) bricks need [16,32) of 40.
+    "brick, volume",
+    [(None, (24, 24, 24)), ((8, 2, 2), (40, 24, 24))],
+    ids=["chosen_brick", "brick_822"],
+)
+def test_interior_table_per_brick_persistence(mesh_device, owned_width, brick, volume, monkeypatch):
+    """The uploaded table under the PER-BRICK mask layout (a 2-brick T-column chunk), on a volume
+    deep enough that some chunks are fully interior.
+
+    This is the shipped stage-5 configuration. The reader keeps the whole per-brick mask block
+    resident in cb_mask and skips rewriting it for a run of interior chunks; an edge chunk dirties
+    the pages and the next interior chunk refills them. Every core here sees edge -> interior ->
+    edge sequences, so a wrong skip, a wrong refill, or a block that is not actually identical
+    across chunks shows up as a PCC miss. test_matches_torch_reference cannot catch any of this:
+    it passes no table, so the persistent path never runs there.
+    """
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+    _run_interior_table_case(mesh_device, owned_width, brick, volume)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+def test_kv_ring_is_bit_identical(mesh_device, owned_width, monkeypatch):
+    """DIFFVAE_NA_KV_RING only changes where K/V tiles come from, never which tiles compute sees or
+    in what order, so its output must equal the default path's bit for bit."""
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+    monkeypatch.setenv("DIFFVAE_NA_KV_RING", "0")
+    plain = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=plain)
+    monkeypatch.setenv("DIFFVAE_NA_KV_RING", "1")
+    ringed = []
+    _run_interior_table_case(mesh_device, owned_width, None, (24, 24, 24), outputs=ringed)
+    assert len(plain) == len(ringed)
+    for shard_index, (left, right) in enumerate(zip(plain, ringed)):
+        assert torch.equal(left, right), f"shard {shard_index}: ring output differs"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], ids=["4x8"], indirect=["mesh_device"])
+@pytest.mark.parametrize("owned_width", [None, 12], ids=["unsharded", "w_sharded_negative_origin"])
+def test_edge_order_is_bit_identical(mesh_device, owned_width, monkeypatch):
+    """DIFFVAE_NA_EDGE_ORDER only changes the order a core visits its work items in; every item
+    still sees the same tiles in the same order, so its output must equal index order bit for bit.
+
+    The flag is part of the program hash, so the cache shows which program an unset flag gets: the
+    default must compile apart from =0 and share its programs with =1, i.e. edge order is on."""
+    device = mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    monkeypatch.setenv("DIFFVAE_NA_CHUNK_BRICKS", "2,1,1")
+
+    def run(flag):
+        if flag is None:
+            monkeypatch.delenv("DIFFVAE_NA_EDGE_ORDER", raising=False)
+        else:
+            monkeypatch.setenv("DIFFVAE_NA_EDGE_ORDER", flag)
+        outputs = []
+        entries = device.num_program_cache_entries()
+        _run_interior_table_case(device, owned_width, None, (24, 24, 24), outputs=outputs)
+        return outputs, device.num_program_cache_entries() - entries
+
+    default_order, default_programs = run(None)
+    index_order, index_programs = run("0")
+    _, edge_programs = run("1")
+    assert (
+        default_programs > 0 and index_programs == default_programs
+    ), f"unset flag compiled {default_programs} programs, =0 added {index_programs}: =0 must not reuse them"
+    assert edge_programs == 0, f"=1 compiled {edge_programs} new programs: the unset default is not edge order"
+    assert len(index_order) == len(default_order)
+    for shard_index, (left, right) in enumerate(zip(index_order, default_order)):
+        assert torch.equal(left, right), f"shard {shard_index}: edge-grouped output differs"
+
+
+def _run_interior_table_case(mesh_device, owned_width, brick, volume, outputs=None):
+    from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks, halo_sites
+
+    torch.manual_seed(0)
+    context_window, stride = (11, 11, 11), (1, 1, 1)
+    head_count, head_dim = 2, 64
+    if brick is None:
+        brick = tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
+
+    site_count = volume[0] * volume[1] * volume[2]
+    query, key, value = (torch.randn(1, site_count, head_count, head_dim) for _ in range(3))
+    expected = neighborhood_attention_3d(
+        query, key, value, volume=volume, context_window=context_window, stride=stride, brick=brick, scale=1.0
+    ).reshape(1, *volume, head_count, head_dim)
+    volume_form = [tensor.reshape(1, *volume, head_count, head_dim) for tensor in (query, key, value)]
+
+    interior_mask = ttnn.from_torch(
+        _build_relative_masks(context_window, brick),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+    halo = 0 if owned_width is None else halo_sites(context_window[2], brick[2])
+    owned = volume[2] if owned_width is None else owned_width
+    resident = (volume[0], volume[1], owned + 2 * halo)
+    resident_sites = resident[0] * resident[1] * resident[2]
+    table = bricked_index_table(resident, brick)
+
+    # Sharded: queries are the OWNED bricks only (contract: no query may start below the volume,
+    # which shard 0's halo does). Unsharded: the whole volume, no query region.
+    query_extent = None if owned_width is None else (volume[0], volume[1], owned)
+    query_origin = None if owned_width is None else (0, 0, halo)
+    output_table = table if owned_width is None else bricked_index_table(query_extent, brick)
+    output_extent = resident if owned_width is None else query_extent
+
+    for shard_index in range(volume[2] // owned):
+        origin_width = shard_index * owned - halo  # NEGATIVE for shard 0 when sharded
+        plan = ttnn.transformer.neighborhood_plan(
+            volume,
+            context_window,
+            stride,
+            brick,
+            # Must match what the op is handed below. The table carries one row per query CHUNK,
+            # so letting the planner default this while the op gets an explicit (possibly forced,
+            # via DIFFVAE_NA_CHUNK_BRICKS) chunk builds a table of the wrong length -- 288 rows
+            # against the 72 the op expects at chunk (2,1,2) -- and fails op validation before any
+            # kernel runs. The other call sites here pass it to both or to neither.
+            query_chunk_bricks=_query_chunk_bricks(stride, brick),
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
+        )
+
+        def upload(tensor):
+            window = torch.zeros(1, *resident, head_count, head_dim)
+            for local in range(resident[2]):
+                source = origin_width + local
+                if 0 <= source < volume[2]:
+                    window[:, :, :, local] = tensor[:, :, :, source]
+            bricked = to_bricked(window.reshape(1, resident_sites, head_count, head_dim), table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        def upload_query(tensor):
+            # Q carries only the query region: the OWNED bricks when sharded, everything otherwise.
+            if owned_width is None:
+                return upload(tensor)
+            owned_start = shard_index * owned
+            window = tensor[:, :, :, owned_start : owned_start + owned]
+            flat = window.reshape(1, output_extent[0] * output_extent[1] * output_extent[2], head_count, head_dim)
+            bricked = to_bricked(flat, output_table).contiguous()
+            bricked = bricked.reshape(1, 1, bricked.shape[1], head_count * head_dim)
+            return ttnn.from_torch(bricked, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+        origin_table = torch.tensor(plan["gather_origin_table"], dtype=torch.uint32).reshape(
+            1, 1, plan["chunk_count"], plan["gather_origin_columns"]
+        )
+        query_form, key_form, value_form = volume_form
+        actual_device = ttnn.transformer.neighborhood_scaled_dot_product_attention(
+            upload_query(query_form),
+            upload(key_form),
+            upload(value_form),
+            ttnn.from_torch(origin_table, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
+            interior_mask=interior_mask,
+            volume=volume,
+            context_window=context_window,
+            stride=stride,
+            brick=brick,
+            query_chunk_bricks=_query_chunk_bricks(stride, brick),
+            shard_extent=resident,
+            shard_origin=(0, 0, origin_width),
+            query_extent=query_extent,
+            query_origin=query_origin,
+            head_count=head_count,
+            scale=1.0,
+            tiles_per_kv_chunk=min(plan["gather_brick_count"], 8),
+        )
+
+        # The output covers the query region: the whole resident tensor unsharded, the owned band
+        # sharded (so no halo columns to slice off).
+        bricked_out = ttnn.to_torch(ttnn.get_device_tensors(actual_device)[0]).float()
+        bricked_out = bricked_out.reshape(1, -1, head_count, head_dim)
+        if outputs is not None:
+            outputs.append(bricked_out)
+        present = output_table >= 0
+        actual_owned = torch.zeros(1, output_extent[0] * output_extent[1] * output_extent[2], head_count, head_dim)
+        actual_owned[:, output_table[present]] = bricked_out[:, present]
+        actual_owned = actual_owned.reshape(1, *output_extent, head_count, head_dim)
+        expected_owned = expected[:, :, :, shard_index * owned : shard_index * owned + owned]
+        correlation = pearson(actual_owned, expected_owned)
+        assert correlation > 0.99, f"shard {shard_index} at origin {origin_width}: PCC {correlation:.5f}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "volume, context_window, width_local, shard_count, expected_brick, expected_gather",
+    [
+        # 1080p decode: the brick production stage 5 runs with (W over 8 chips). Gather counts are
+        # per query chunk, which at stride 1 is two bricks along T.
+        ((84, 272, 480), (11, 11, 11), 60, 8, (2, 8, 2), 168),
+        # Deterministic stages at 1080p, W over the size-8 axis. W_local 15 admits only brick
+        # width 1 (shard origins must be brick-aligned and 15 has no even divisor), so these pin
+        # that odd widths are searched at all; W_local 30 admits widths 1 and 2 and picks 2.
+        ((21, 68, 120), (3, 7, 7), 15, 8, (8, 4, 1), 63),
+        ((41, 68, 120), (3, 5, 5), 15, 8, (16, 2, 1), 45),
+        ((81, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 36),
+        # The same stages at test_diffvae_ltx.py's arms tests' shorter T, where the deep-in-time bricks
+        # exceed the volume and the chooser has to settle for shallower ones.
+        ((6, 68, 120), (3, 7, 7), 15, 8, (4, 8, 1), 42),
+        ((11, 68, 120), (3, 5, 5), 15, 8, (8, 4, 1), 30),
+        ((21, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 27),
+    ],
+    ids=["1080p_decode", "det_stage2", "det_stage3", "det_stage4", "arms_stage2", "arms_stage3", "arms_stage4"],
+)
+def test_choose_sharded_brick_regression(
+    mesh_device, volume, context_window, width_local, shard_count, expected_brick, expected_gather
+):
+    """Pin the brick choice and gather count for known production geometries.
+
+    ``_choose_sharded_brick`` searches all valid 32-site bricks and picks the one that minimises
+    the gather brick count as measured by the real planner.  A change to the search, the scoring,
+    or the planner's alignment handling can silently shift the choice and the downstream gather
+    size -- which changes kernel runtime without any code in the kernel itself changing.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        _choose_sharded_brick,
+        _query_chunk_bricks,
+        halo_sites,
+    )
+
+    _BRICK_CHOICE_CACHE.clear()
+
+    stride = (1, 1, 1)
+    brick = _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
+    assert brick == expected_brick, (
+        f"expected brick {expected_brick} for volume={volume} window={context_window} "
+        f"width_local={width_local} shard_count={shard_count}, got {brick}"
+    )
+
+    # Verify the gather count -- the metric the function optimises. A planner change that
+    # increases it (even with the same brick) is a perf regression worth catching.
+    halo = halo_sites(min(context_window[2], volume[2]), brick[2])
+    resident = (volume[0], volume[1], width_local + 2 * halo)
+    plan = ttnn.transformer.neighborhood_plan(
+        volume,
+        context_window,
+        stride,
+        brick,
+        query_chunk_bricks=_query_chunk_bricks(stride, brick),
+        shard_extent=resident,
+        shard_origin=(0, 0, -halo),
+        # Owned bricks only: a query region that starts below the volume is refused.
+        query_extent=(volume[0], volume[1], width_local),
+        query_origin=(0, 0, halo),
+    )
+    assert (
+        plan["gather_brick_count"] == expected_gather
+    ), f"expected gather_brick_count={expected_gather} for brick {brick}, got {plan['gather_brick_count']}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_choose_sharded_brick_delegates_at_stride_gt_one(mesh_device):
+    """stride > (1,1,1) delegates to ``neighborhood_choose_brick`` unconditionally."""
+    from models.tt_dit.layers.neighborhood_attention_plan import _choose_sharded_brick
+
+    brick = _choose_sharded_brick(
+        volume=(8, 16, 16),
+        context_window=(3, 5, 5),
+        stride=(2, 4, 4),
+        width_local=8,
+        shard_count=2,
+    )
+    expected = tuple(ttnn.transformer.neighborhood_choose_brick((3, 5, 5)))
+    assert brick == expected, f"stride > 1 should return {expected}, got {brick}"
+
+
+def test_choose_sharded_brick_refuses_stride_with_h_split(expect_error):
+    """A strided stage 5 under the 2-D split fails with a clear error, not the H-shard assert."""
+    from models.tt_dit.layers.neighborhood_attention_plan import _choose_sharded_brick
+
+    with expect_error(ValueError, "DIFFVAE_S5_2D"):
+        _choose_sharded_brick((145, 272, 480), (11, 11, 11), (2, 4, 4), 60, 8, height_local=68, h_shard_count=4)
+
+
+@pytest.mark.parametrize(
+    "s5_2d, stride, expected",
+    [
+        (None, (1, 1, 1), True),
+        ("1", (1, 1, 1), True),
+        ("0", (1, 1, 1), False),
+        ("false", (1, 1, 1), False),
+        ("False", (1, 1, 1), False),
+        (None, (2, 4, 4), False),
+        ("1", (2, 4, 4), True),
+    ],
+)
+def test_s5_2d_default_on(monkeypatch, s5_2d, stride, expected):
+    """The 2-D split is the default; DIFFVAE_S5_2D=0 or an unset flag with a config GNA stride keeps 1-D."""
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import s5_2d_enabled
+
+    monkeypatch.delenv("DIFFVAE_GNA_STRIDE", raising=False)
+    if s5_2d is None:
+        monkeypatch.delenv("DIFFVAE_S5_2D", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_S5_2D", s5_2d)
+    assert s5_2d_enabled(stride) is expected
+
+
+def test_s5_2d_decided_from_config_stride(monkeypatch):
+    """A config stride alone (env unset, as pytest --diffvae-gna-stride and time_module pass it) keeps 1-D."""
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import DiffVAEStage5Config, s5_2d_enabled
+
+    monkeypatch.delenv("DIFFVAE_S5_2D", raising=False)
+    monkeypatch.delenv("DIFFVAE_GNA_STRIDE", raising=False)
+    assert s5_2d_enabled(DiffVAEStage5Config(gna_stride=(2, 4, 4)).gna_stride) is False
+    assert s5_2d_enabled(DiffVAEStage5Config().gna_stride) is True
+
+
+def test_key_phase_pins_brick_and_gather(monkeypatch):
+    """``DIFFVAE_NA_KEY_PHASE=1`` on the 1080p 2-D split: brick (2, 4, 4), phase (1, 1, 1) and 112
+    gathered bricks per chunk on every shard, against 200 for the same brick on the query grid."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        _choose_sharded_brick,
+        _query_chunk_bricks,
+        key_phase_geometry,
+    )
+
+    volume, context_window, stride = (145, 272, 480), (11, 11, 11), (1, 1, 1)
+    owned_height, owned_width = 68, 60
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "1")
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(
+        volume, context_window, stride, owned_width, 8, height_local=owned_height, h_shard_count=4
+    )
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick == (2, 4, 4)
+
+    resident, low = key_phase_geometry(volume, context_window, brick, owned_height, owned_width)
+    assert resident == (146, 80, 72) and low == (1, 5, 5)
+    for h_index in range(4):
+        for w_index in range(8):
+            plan = ttnn.transformer.neighborhood_plan(
+                volume,
+                context_window,
+                stride,
+                brick,
+                query_chunk_bricks=_query_chunk_bricks(stride, brick),
+                shard_extent=resident,
+                shard_origin=(-low[0], h_index * owned_height - low[1], w_index * owned_width - low[2]),
+                query_extent=(volume[0], owned_height, owned_width),
+                query_origin=low,
+            )
+            assert plan["gather_brick_count"] == 112, (h_index, w_index, plan["gather_bricks"])
+
+
+@pytest.mark.parametrize("time_extent", [8, 9])
+def test_key_phase_gather_index_matches_rebrick(time_extent):
+    """The key-phase gather index reproduces to_natural, the phased cut, the zero frames and
+    to_bricked on every frame a window can reach; the zero frames read real sites."""
+    from models.tt_dit.layers.neighborhood_attention_plan import halo_sites, key_phase_gather_index, key_phase_geometry
+
+    volume, context_window, brick = (time_extent, 24, 24), (11, 11, 11), (2, 4, 4)
+    owned_height, owned_width = 8, 8
+    halo = halo_sites(context_window[2], brick[2])
+    resident = (time_extent, owned_height + 2 * halo, owned_width + 2 * halo)
+    phased, (front, low_h, low_w) = key_phase_geometry(volume, context_window, brick, owned_height, owned_width)
+    cut_h, cut_w = halo - low_h, halo - low_w
+    back = phased[0] - front - time_extent
+    assert front == 1 and back == (1 if time_extent % 2 == 0 else 0)
+
+    natural = torch.randn(1, math.prod(resident), 1, 3)
+    resident_bricked = to_bricked(natural, bricked_index_table(resident, brick))
+    cut = natural.reshape(1, *resident, 3)[:, :, cut_h : cut_h + phased[1], cut_w : cut_w + phased[2]]
+    padded = torch.cat(
+        [torch.zeros(1, front, *phased[1:], 3), cut, torch.zeros(1, back, *phased[1:], 3)], dim=1
+    ).reshape(1, -1, 1, 3)
+    expected = to_bricked(padded, bricked_index_table(phased, brick))
+
+    index = key_phase_gather_index(resident, phased, brick, front, cut_h, cut_w).long()
+    gathered = resident_bricked[:, index]
+    real = bricked_index_table(phased, brick) // (phased[1] * phased[2])
+    real = (real >= front) & (real < front + time_extent)
+    assert torch.equal(gathered[:, real], expected[:, real])
+    assert torch.all(gathered[:, ~real].abs().sum(-1) > 0)
+    assert int(index.max()) < resident_bricked.shape[1]
+
+
+def test_key_phase_gather_index_production_geometry():
+    """1080p stage 5: 146 x 80 x 72 phased sites, every one a real row of the 145 x 84 x 76 resident."""
+    from models.tt_dit.layers.neighborhood_attention_plan import key_phase_gather_index, key_phase_geometry
+
+    phased, (front, low_h, low_w) = key_phase_geometry((145, 272, 480), (11, 11, 11), (2, 4, 4), 68, 60)
+    resident = (145, 84, 76)
+    index = key_phase_gather_index(resident, phased, (2, 4, 4), front, 8 - low_h, 8 - low_w)
+    assert index.numel() == math.prod(phased) == 146 * 80 * 72
+    assert int(index.min()) >= 0 and int(index.max()) < 73 * 21 * 19 * SITES_PER_BRICK
+    assert index.unique().numel() == 145 * 80 * 72
+
+
+@pytest.mark.parametrize("flag, expected", [(None, True), ("1", True), ("0", False)])
+def test_key_phase_default_on(monkeypatch, flag, expected):
+    """The key phase is the default on the 1080p 2-D split; ``DIFFVAE_NA_KEY_PHASE=0`` turns it off.
+
+    The brick is (2, 4, 4) either way: the search picks it on the query grid too."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        KEY_PHASE_BRICK,
+        _choose_sharded_brick,
+        key_phase_applies,
+    )
+
+    if flag is None:
+        monkeypatch.delenv("DIFFVAE_NA_KEY_PHASE", raising=False)
+    else:
+        monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", flag)
+    volume, context_window = (145, 272, 480), (11, 11, 11)
+    assert key_phase_applies(volume, context_window, 60, 8, 68, 4) is expected
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(volume, context_window, (1, 1, 1), 60, 8, height_local=68, h_shard_count=4)
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick == KEY_PHASE_BRICK
+
+
+def test_key_phase_skipped_where_brick_does_not_fit(monkeypatch):
+    """A 45-row H shard (720p, 4-way H split) is not whole 4-site bricks: even when asked for, the
+    key phase stays off and the search picks a brick that divides the shard."""
+    from models.tt_dit.layers.neighborhood_attention_plan import (
+        _BRICK_CHOICE_CACHE,
+        KEY_PHASE_BRICK,
+        _choose_sharded_brick,
+        key_phase_applies,
+    )
+
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "1")
+    volume, context_window = (145, 180, 320), (11, 11, 11)
+    assert not key_phase_applies(volume, context_window, 40, 8, 45, 4)
+    _BRICK_CHOICE_CACHE.clear()
+    brick = _choose_sharded_brick(volume, context_window, (1, 1, 1), 40, 8, height_local=45, h_shard_count=4)
+    _BRICK_CHOICE_CACHE.clear()
+    assert brick != KEY_PHASE_BRICK and 45 % brick[1] == 0 and 40 % brick[2] == 0
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
+def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
+    """A volume with few time frames must not select a brick deeper than the volume.
+
+    Without the ``brick > volume`` filter, a 12-frame volume picks (16, 1, 2) -- a brick that
+    exceeds the time axis.  That scores excellently (77 gathered bricks against the 147 a real
+    brick needs) because the degenerate axis contributes a single slot to the gather, but the op
+    wedges on the resulting ghost-heavy grid.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import _BRICK_CHOICE_CACHE, _choose_sharded_brick
+
+    _BRICK_CHOICE_CACHE.clear()
+
+    # 12 time frames: small enough that (16, 1, 2) exceeds it on the time axis.
+    volume = (12, 272, 480)
+    context_window = (11, 11, 11)
+    stride = (1, 1, 1)
+    width_local = 60
+    shard_count = 8
+
+    brick = _choose_sharded_brick(volume, context_window, stride, width_local, shard_count)
+
+    assert all(b <= v for b, v in zip(brick, volume)), (
+        f"brick {brick} exceeds volume {volume} on at least one axis -- " f"the oversized-brick filter is not working"
+    )
+
+
+def test_choose_sharded_brick_divides_h_shard(monkeypatch):
+    """Under the 2-D split the brick must divide the H shard as well as the W shard.
+
+    Host only: the planner needs no device. At 1080p stage 5 the W-only search picks (2, 8, 2),
+    whose 8-site H extent does not divide the 68-row H shard of a 4-way H split. The key phase
+    is off so the search itself runs.
+    """
+    from models.tt_dit.layers.neighborhood_attention_plan import _BRICK_CHOICE_CACHE, _choose_sharded_brick
+
+    monkeypatch.setenv("DIFFVAE_NA_KEY_PHASE", "0")
+    _BRICK_CHOICE_CACHE.clear()
+    volume, context_window, stride = (145, 272, 480), (11, 11, 11), (1, 1, 1)
+    width_local, shard_count, h_shard_count = 60, 8, 4
+    height_local = volume[1] // h_shard_count
+
+    brick = _choose_sharded_brick(
+        volume,
+        context_window,
+        stride,
+        width_local,
+        shard_count,
+        height_local=height_local,
+        h_shard_count=h_shard_count,
+    )
+    assert height_local % brick[1] == 0, f"brick {brick} does not divide the {height_local}-row H shard"
+    assert width_local % brick[2] == 0, f"brick {brick} does not divide the {width_local}-column W shard"
+    assert all(b <= v for b, v in zip(brick, volume)), f"brick {brick} exceeds volume {volume}"

@@ -4,16 +4,28 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/operations/data_movement/common/fold_common.hpp"
 
 namespace ttnn::operations::data_movement {
 
-// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op.
+// Re-export shared tile-native-fold gate symbols; single source of truth in common/fold_common.hpp.
+using fold_common::fold_output_dtype;
+using fold_common::is_tile_native_fold_supported;
+using fold_common::kFoldL1CodeStackReserveBytes;
+using fold_common::kFoldSrcCbDepthPerCTile;
+using fold_common::tile_native_fold_rejection_reason;
+using fold_common::tile_native_fold_scratch_bytes;
+
+// Fast path: L1 + HS + RM + concrete shard_spec. Shared by composite and device_op. The shard may be wider than the
+// logical channels; the kernel copies only the channels.
 bool is_fast_path_input(const Tensor& t);
 
 // Fresh shard-spec for specless sharded outputs, sized to the populated shard count (not the
@@ -28,6 +40,8 @@ struct Fold {
         uint32_t stride_w{};
         // true → emit collapsed (1,1,N·H'·W',C·sh·sw); false → folded_4d.
         bool collapse_output{};
+        // Output memory config; std::nullopt derives it from the input's.
+        std::optional<tt::tt_metal::MemoryConfig> output_mem_config = std::nullopt;
     };
 
     struct tensor_args_t {

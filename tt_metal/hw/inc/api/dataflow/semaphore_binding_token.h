@@ -6,14 +6,16 @@
 
 #include <cstdint>
 
+#include "internal/debug/node_range.h"
+
 /**
  * @brief Physical path a semaphore's accesses take. The host picks it automatically while
  *        building the program, from where the semaphore's binder kernels run; there is no user
  *        intervention needed. The kernel gets the pick inside its binding token. The pick is
  *        the fastest path that keeps the semaphore's operations atomic.
  *        The cached and NoC tiers are Quasar (tt-2xx) only. Gen1 (Wormhole, Blackhole) DM
- *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole compute binding resolves to
- *        COMPUTE_ATOMIC.
+ *        bindings always resolve to LOCAL_NONATOMIC; a Blackhole or Quasar compute binding
+ *        resolves to COMPUTE_ATOMIC.
  *
  *  - LOCAL_NONATOMIC: Stored in L1 and accessed by read-modify-write. Picked only when at most
  *                     one binder instance exists.
@@ -24,7 +26,7 @@
  *                     in dev_mem_map.h.
  *  - EXTERNAL:        Stored in L1 and accessed through atomic operations via the NOC. Picked
  *                     whenever the semaphore is reachable beyond a single node.
- *  - COMPUTE_ATOMIC:  Blackhole only. The Tensix hardware (Sync Unit) semaphore, updated atomically
+ *  - COMPUTE_ATOMIC:  Blackhole and Quasar. The Tensix hardware (Sync Unit) semaphore, updated atomically
  *                     by SEMPOST/SEMGET. Picked when every binder is a compute kernel (UNPACK <-> PACK
  *                     only, core-local). Rules and limits: api/semaphore.h.
  *
@@ -58,17 +60,9 @@ inline constexpr bool always_false = false;
 struct SemaphoreBindingToken {
     std::uint32_t id;
     SemScope scope;
+    // Watcher builds only: the rectangles the semaphore exists on, so multicasts can be checked against them. Either
+    // nullptr with num_node_ranges 0, or num_node_ranges ranges that outlive the token; the generated bindings header
+    // passes a constexpr array.
+    const DebugNodeRange* node_ranges = nullptr;
+    std::uint32_t num_node_ranges = 0;
 };
-
-namespace sem_internal {
-
-/**
- * @brief One entry in the generated header's list of cached semaphores: which semaphore, and
- *        how many harts on this core use it.
- */
-struct CachedSemaphore {
-    std::uint32_t id;
-    std::uint32_t binder_harts;
-};
-
-}  // namespace sem_internal

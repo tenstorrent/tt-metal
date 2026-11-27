@@ -21,7 +21,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
@@ -42,7 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombine2dModule, TtCombineModule
+from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_output_shape,
     log_combine_mismatch_details,
@@ -66,7 +66,7 @@ def run_combine(
     dispatched_buffer_layout,
     use_fp8_output,
     num_links=2,
-    cmb_version=1,
+    sp_axis=0,
 ):
     """Run the TTNN combine op in isolation against the torch reference. Shared body for the
     per-model test entrypoints below — they differ only on the (emb_dim, num_routed_experts,
@@ -78,12 +78,13 @@ def run_combine(
     # Log fabric config
     logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
 
-    mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
+    mesh_config = extract_mesh_config(mesh_device, sp_axis)
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(
+        f"Testing with {sp_axis=}, {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}"
+    )
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -177,7 +178,7 @@ def run_combine(
     dispatched_buffer, dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Use different sharding: shard both dimensions
-    mesh_mapper = get_ep_mesh_mapper(mesh_device)
+    mesh_mapper = get_ep_mesh_mapper(mesh_device, sp_axis)
 
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
@@ -187,8 +188,14 @@ def run_combine(
         dtype=ttnn.bfloat16,
     )
 
+    # The combine kernel reads each token's source as a row-major mesh index; at sp1 the reference's
+    # encoding would send tokens off the SP ring and hang the op. The torch combine keeps the original.
+    device_metadata = ExpertMapping.metadata_source_for_sp_axis(
+        dispatched_metadata, num_dispatch_groups, dispatch_group_size, sp_axis
+    )
+
     tt_dispatched_metadata = ttnn.from_torch(
-        dispatched_metadata,
+        device_metadata,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
@@ -197,14 +204,14 @@ def run_combine(
 
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device, sp_axis),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
     )
     tt_expert_region_offsets = ttnn.from_torch(
         expert_region_offsets,
-        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device, sp_axis),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -227,56 +234,26 @@ def run_combine(
         torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
 
     # Run ttnn combine
-    if cmb_version == 1:
-        tt_combine = TtCombineModule(
-            mesh_device=mesh_device,
-            dispatch_group_size=dispatch_group_size,
-            num_dispatch_groups=num_dispatch_groups,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=sp_axis,
-            num_links=num_links,
-            topology=topology,
-            init_zeros=False,
-            fp8_output=use_fp8_output,
-        )
+    tt_combine = TtCombineModule(
+        mesh_device=mesh_device,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        cluster_axis=sp_axis,
+        num_links=num_links,
+        topology=topology,
+        init_zeros=False,
+        fp8_output=use_fp8_output,
+    )
 
-        tt_output = tt_combine(
-            tt_dispatched_buffer,
-            tt_dispatched_metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
-    else:
-        tt_expert_offsets = ttnn.from_torch(
-            expert_offsets,
-            # expert_offsets has to be replicated along the ring axis: every chip needs every origin
-            # chip's run boundaries for the experts it hosts, which is what lets each kernel walk the
-            # token sequence locally instead of exchanging addresses.
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            dtype=ttnn.int32,
-        )
-
-        tt_combine = TtCombine2dModule(
-            mesh_device=mesh_device,
-            experts_per_chip=experts_per_chip,
-            num_experts_per_tok=num_experts_per_tok,
-            seq_len_per_chip=seq_len_per_chip,
-            cluster_axis=sp_axis,
-            num_links=num_links,
-            topology=topology,
-        )
-
-        tt_output = tt_combine(
-            tt_dispatched_buffer,
-            tt_dispatched_metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-            tt_expert_offsets,
-        )
+    tt_output = tt_combine(
+        tt_dispatched_buffer,
+        tt_dispatched_metadata,
+        tt_expert_token_counts,
+        tt_expert_region_offsets,
+    )
 
     if not run_pcc_check:
         ttnn.synchronize_device(mesh_device)
@@ -284,7 +261,7 @@ def run_combine(
         return
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = get_ep_mesh_composer(mesh_device)
+    mesh_composer = get_ep_mesh_composer(mesh_device, sp_axis)
 
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
     if use_fp8_output:
@@ -356,6 +333,8 @@ SINGLE_GLX_AND_PROXY_MESHES = _Test_Mesh(
         (4, 1): ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         (4, 2): ttnn.FabricConfig.FABRIC_2D,
         (2, 2): ttnn.FabricConfig.FABRIC_2D,
+        # One 4x4 prefill stage (a Galaxy tray half): only the axis-1 ring survives.
+        (4, 4): ttnn.FabricConfig.FABRIC_2D_TORUS_X,
     },
 )
 
@@ -375,7 +354,7 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
-    ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
+    ("glm_53", GLM53Config, ONLY_PROXY_QB_MESH),
     ("kimi_k2_7", KimiK27Config, ONLY_PROXY_QB_MESH),
     ("minimax_m27", MiniMaxM27Config, ONLY_PROXY_QB_MESH),
     ("dsv4_pro", DeepSeekV4ProConfig, ONLY_PROXY_QB_MESH),
@@ -423,6 +402,7 @@ def _topo_marker(mesh, fabric_cfg):
 def _mesh_id(mesh, fabric_cfg):
     profile = {
         ttnn.FabricConfig.FABRIC_2D: "fabric2d",
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: "torus-x",
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y: "torus-y",
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY: "torus-xy",
     }[fabric_cfg]
@@ -504,8 +484,8 @@ def _unsupported_param_combos(**params):
     if use_fp8_output and not is_bh:
         return True
 
-    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
-    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+    # Production combine consumes a TILE dispatched buffer, so ROW_MAJOR (pcc and perf) has no CI coverage value.
+    if (is_ci_env or is_ci_v2_env) and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         return True
 
     # Otherwise don't uncollect the test case. Keep it.
@@ -543,9 +523,12 @@ def _unsupported_param_combos(**params):
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+# The SP (dispatch) axis. sp1 is the 4x4-stage layout, where the SP ring runs along mesh axis 1.
+@pytest.mark.parametrize("sp_axis", [0, 1], ids=["sp0", "sp1"])
 def test_ttnn_combine(
     mesh_device,
     device_params,
+    sp_axis,
     seq_len_per_chip,
     emb_dim,
     num_routed_experts,
@@ -558,7 +541,9 @@ def test_ttnn_combine(
     is_ci_env,
     is_ci_v2_env,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])[0]
+    if mesh_device.shape[sp_axis] == 1:
+        pytest.skip(f"mesh {tuple(mesh_device.shape)} has no extent along sp_axis={sp_axis}")
+    topology = per_axis_topology(device_params["fabric_config"])[sp_axis]
     run_combine(
         mesh_device,
         seq_len_per_chip,
@@ -571,6 +556,7 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
+        sp_axis=sp_axis,
     )
 
 
@@ -644,72 +630,4 @@ def test_externally_owned_cases(
         dispatched_buffer_layout=ttnn.TILE_LAYOUT,
         use_fp8_output=False,
         num_links=num_links,
-    )
-
-
-def _cmb_fabric2d_dimensions():
-    """The (mesh, device_params, ...) tuples the fabric2d case runs on.
-
-    Same two scenarios the direct op carries: a small pcc run that checks the op computes the
-    right thing, and the seq-640 perf run this op's development has been measured against.
-    """
-    mesh = SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh
-    fabric_cfg = SINGLE_GLX_AND_PROXY_MESHES.target_meshes[mesh]
-    marks = pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=_topo_marker(mesh, fabric_cfg))
-
-    params = []
-    for scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in (
-        ("pcc", 128, 4, True),
-        ("perf_no_pcc", 640, 8, False),
-    ):
-        model_config = _model_scaledown(
-            DeepSeekV3Config(), SINGLE_GLX_AND_PROXY_MESHES.full_model_mesh, mesh, pcc_only=run_pcc
-        )
-        params.append(
-            pytest.param(
-                mesh,
-                fabric_to_device_params(fabric_cfg),
-                per_axis_topology(fabric_cfg)[0],  # sp axis; the op rings along cluster_axis=sp_axis
-                seq_len_per_chip,
-                model_config.EMB_SIZE,
-                model_config.NUM_ROUTED_EXPERTS,
-                model_config.NUM_EXPERTS_PER_TOKEN,
-                dispatch_buffer_capacity_factor,
-                run_pcc,
-                marks=marks,
-                id=f"dsv3-fabric2d-{_mesh_id(mesh, fabric_cfg)}-row_major-2link-{scenario_id}",
-            )
-        )
-    return params
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    _cmb_fabric2d_dimensions(),
-    indirect=["mesh_device", "device_params"],
-)
-def test_ttnn_combine_fabric2d(
-    mesh_device,
-    seq_len_per_chip,
-    emb_dim,
-    num_routed_experts,
-    num_experts_per_tok,
-    dispatch_buffer_capacity_factor,
-    topology,
-    run_pcc_check,
-):
-    run_combine(
-        mesh_device,
-        seq_len_per_chip,
-        emb_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        num_links=2,
-        topology=topology,
-        use_predictable_data=False,
-        run_pcc_check=run_pcc_check,
-        dispatched_buffer_layout=ttnn.ROW_MAJOR_LAYOUT,
-        use_fp8_output=False,
-        cmb_version=2,
     )

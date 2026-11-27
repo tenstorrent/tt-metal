@@ -15,7 +15,7 @@ from helpers.llk_params import (
     StochasticRounding,
     Transpose,
 )
-from helpers.param_config import get_max_dst_index
+from helpers.param_config import get_max_dst_index, max_dest_tiles
 
 
 # =========================
@@ -93,9 +93,9 @@ DEST_RT_CT_BLOCKS = (
     (4, 2),
 )
 
-DEST_HALF_BFP_PACK_HANG_REASON = (
-    "Dest Half + dest_acc=No + BFP pack hangs in _llk_pack_dest_section_done_ (#56073)"
-)
+# Odd t_dim (rt, ct >= 3 with min(rt, ct) odd): 16-tile dest blocks the sweeps above never reach.
+ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
+ODD_REUSE_KT_DIMS = (1, 2)
 
 
 def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
@@ -105,26 +105,6 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     return [
         (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
     ]
-
-
-def is_dest_half_bfp_pack_hang(
-    dest_sync: DestSync,
-    dest_acc: DestAccumulation,
-    formats: FormatConfig,
-) -> bool:
-    """True when Dest Half + dest_acc=No + BFP pack can hang (#56073).
-
-    BFP pack from 16-bit dest still holds dest on THCON after PACK looks idle.
-    Dest Half + LOOP_FACTOR>1 ping-pongs: ZEROACC CLR_HALF then races math
-    writing the other half. Dest Full serializes math off dest during the
-    clear; dest_acc=Yes uses a different packer dest-read path. Functional
-    tests at LOOP_FACTOR(1) never start the second half. Unskip after #56073.
-    """
-    return (
-        dest_sync == DestSync.Half
-        and dest_acc == DestAccumulation.No
-        and formats.output_format.is_block_float()
-    )
 
 
 def unpack_matmul_fits_perf_ring(
@@ -463,7 +443,6 @@ def sweep_matmul(
     fpu_stochastic_modes = {StochasticRounding.Fpu, StochasticRounding.All}
 
     for fmt in formats_list:
-        base_max_tiles = 4 if is_dest_acc_needed(fmt) else 8
         is_fpu_bfloat16 = (
             fmt.input_format in bfloat16_formats
             and fmt.output_format in bfloat16_formats
@@ -473,7 +452,9 @@ def sweep_matmul(
             if is_dest_acc_needed(fmt) and dest_acc == DestAccumulation.No:
                 continue
 
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else base_max_tiles
+            max_tiles = max_dest_tiles(
+                dest_acc == DestAccumulation.Yes or is_dest_acc_needed(fmt)
+            )
 
             # Use cached or newly generated dimensions
             dimensions_list = dimensions_cache.setdefault(

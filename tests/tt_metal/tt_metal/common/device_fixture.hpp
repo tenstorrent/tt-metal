@@ -137,7 +137,6 @@ protected:
         }
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
 public:
@@ -219,6 +218,7 @@ protected:
         if (this->arch_ != tt::ARCH::QUASAR) {
             GTEST_SKIP() << "Not a Quasar device";
         }
+        this->DetectDispatchMode();
         this->create_devices();
         init_max_dfbs();
     }

@@ -14,7 +14,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 #include "indexer_score_metadata.hpp"
@@ -36,6 +36,24 @@ constexpr uint32_t cb_meta_writer = get_compile_time_arg_val(metadata_args_base 
 
 constexpr uint32_t frag_bytes = tt::constants::TILE_WIDTH * sizeof(uint16_t);  // one bf16 tile row
 
+// Non-posted writes can hang the chip under other DRAM traffic, so writes to DRAM are posted, and write barriers are
+// replaced by waiting for the posted writes to be flushed. Posted writes return no acks, so to make sure the output
+// has landed in DRAM at the end of the op, the kernel ends with a fence: one non-posted write per DRAM bank (the last
+// strip's rows rewritten with their own first word), whose acks cover every earlier posted write to that bank.
+constexpr bool posted_out = decltype(writer_out_args_probe)::is_dram;
+constexpr NocOptions out_opts = posted_out ? NocOptions::POSTED : NocOptions::DEFAULT;
+static_assert(!posted_out || NUM_DRAM_BANKS <= tt::constants::TILE_HEIGHT, "fence must reach every DRAM bank");
+uint32_t fence_page0, fence_offset, fence_bytes, fence_words[tt::constants::TILE_HEIGHT];  // no initializers allowed
+
+// Copy the fence words of the strip being written: row rr's first bytes at src + rr * pitch, to page page0 + rr.
+inline void fence_note(uint32_t src, uint32_t pitch, uint32_t page0, uint32_t offset, uint32_t bytes) {
+    invalidate_l1_cache();
+    for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+        fence_words[rr] = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + rr * pitch);
+    }
+    fence_page0 = page0, fence_offset = offset, fence_bytes = bytes < 4 ? bytes : 4;
+}
+
 /** Scatter one KC-wide strip into 32 output rows from page `page_row_start`, col tile k_tile_start (1
  *  async_write/row). `valid_w` = in-bounds tiles (< KC on a partial last unit); the CB always pops full KC. */
 template <typename OutAcc>
@@ -47,8 +65,9 @@ inline void write_strip(
         uint32_t src = cb.get_read_ptr();
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;  // strip row stride (full KC)
         const uint32_t write_bytes = valid_w * frag_bytes;         // only in-bounds columns
+        fence_note(src, row_pitch, page_row_start, k_tile_start * frag_bytes, write_bytes);
         for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-            noc.async_write(
+            noc.async_write<out_opts>(
                 CoreLocalMem<uint32_t>(src),
                 out_acc,
                 write_bytes,
@@ -56,7 +75,7 @@ inline void write_strip(
                 {.page_id = page_row_start + rr, .offset_bytes = k_tile_start * frag_bytes});
             src += row_pitch;
         }
-        noc.async_write_barrier();
+        noc.async_writes_flushed<out_opts>();
     }
     cb.pop_front(k_tiles_per_unit);
 }
@@ -108,9 +127,17 @@ inline void write_shard_major_strip(
 
         uint32_t src = cb.get_read_ptr();
         const uint32_t row_pitch = k_tiles_per_unit * frag_bytes;
+        if (num_fragments != 0) {
+            fence_note(
+                src + fragment_col[0] * frag_bytes,
+                row_pitch,
+                page_row_start,
+                fragment_logical[0] * frag_bytes,
+                fragment_width[0] * frag_bytes);
+        }
         for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
             for (uint32_t fragment = 0; fragment < num_fragments; ++fragment) {
-                noc.async_write(
+                noc.async_write<out_opts>(
                     CoreLocalMem<uint32_t>(src + fragment_col[fragment] * frag_bytes),
                     out_acc,
                     fragment_width[fragment] * frag_bytes,
@@ -119,7 +146,7 @@ inline void write_shard_major_strip(
             }
             src += row_pitch;
         }
-        noc.async_write_barrier();
+        noc.async_writes_flushed<out_opts>();
     }
     cb.pop_front(k_tiles_per_unit);
 }
@@ -199,19 +226,21 @@ inline void write_pooled_strip(
 
     const uint32_t row_bytes = valid_blocks * sizeof(uint16_t);
     const uint32_t col_off_bytes = col_off_blocks * sizeof(uint16_t);
+    fence_note(scratch_addr, POOL_SCRATCH_ROW_BYTES, page_row_start, col_off_bytes, row_bytes);
     for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
-        noc.async_write(
+        noc.async_write<out_opts>(
             CoreLocalMem<uint32_t>(scratch_addr + rr * POOL_SCRATCH_ROW_BYTES),
             out_acc,
             row_bytes,
             {},
             {.page_id = page_row_start + rr, .offset_bytes = col_off_bytes});
     }
-    noc.async_write_barrier();  // drain before scratch / the CB page is reused
+    noc.async_writes_flushed<out_opts>();  // sent before scratch / the CB page is reused
     cb.pop_front(blocks_per_unit);
 }
 
 void kernel_main() {
+    fence_bytes = 0;
     constexpr uint32_t schedule_blocks = get_named_compile_time_arg_val("schedule_blocks");
     constexpr uint32_t schedule_cols = get_named_compile_time_arg_val("schedule_cols");
     constexpr uint32_t schedule_groups = get_named_compile_time_arg_val("schedule_groups");
@@ -337,4 +366,19 @@ void kernel_main() {
             }
         }
     }
+    // The fence (see posted_out). Its words are staged in cb_out_strip, which is free once the last strip is drained.
+    if (posted_out && fence_bytes != 0) {
+        const uint32_t stage = CircularBuffer(cb_out_strip).get_read_ptr();
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            const uint32_t word = stage + rr * NOC_L1_WRITE_ALIGNMENT_BYTES;
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = fence_words[rr];
+            noc.async_write(
+                CoreLocalMem<uint32_t>(word),
+                out_acc,
+                fence_bytes,
+                {},
+                {.page_id = fence_page0 + rr, .offset_bytes = fence_offset});
+        }
+    }
+    noc.async_write_barrier();
 }

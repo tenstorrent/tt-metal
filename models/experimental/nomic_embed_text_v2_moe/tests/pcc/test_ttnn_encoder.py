@@ -9,7 +9,8 @@ a layer norm, so randn matches its statistics. The encoder's input has not: it i
 lookup followed by emb_ln, and feeding randn there is out of domain in a way that changes the
 answer.
 
-Measured, at B=2 S=128, comparing the two inputs at the same shapes:
+Measured at B=2 S=128 on the bring-up code, before the matmul precision changes of
+tt/model_config.py, comparing the two inputs at the same shapes:
 
   input               reference absmax    encoder PCC     pooled cosine
   embedding output         11 to 13       0.9937+         0.99950+
@@ -23,9 +24,10 @@ on activations the model can actually see. The per-operator gates in
 test_ttnn_operators.py cover fc2 itself.
 
 Two statistics are asserted, because they fail differently. The pooled cosine is what the model
-actually emits and is stable to four decimal places across draws. All-token PCC is the looser of
-the two on purpose: a handful of rerouted tokens are legitimately different, and with only a few
-hundred tokens that moves the aggregate more than it moves the embedding.
+actually emits and is stable to about three decimal places across draws, routing cascades aside.
+All-token PCC is the looser of the two on purpose: a handful of rerouted tokens are legitimately
+different, and with only a few hundred tokens that moves the aggregate more than it moves the
+embedding.
 """
 
 import pytest
@@ -41,6 +43,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.postprocessing import
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     from_block_layout,
     keep_mask,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import (
@@ -50,19 +53,27 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
     to_device,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.encoder import TtNomicBertEncoder
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device, pytest.mark.needs_weights]
 
-# All-token PCC over the full stack. Measured 0.99366 to 0.99834 in domain over six seeds at each
-# of 2x128 and 2x512, so this holds the standard 0.99 module line with about 0.37% to spare. The
-# statistic still moves with how many tokens happened to reroute, which is why the pooled cosine
-# below is the tighter gate rather than this one.
-MODULE_PCC = 0.99
+# All-token PCC over the full stack, on the kept tokens. With the large-input precision, over seeds
+# 0..15 at each of 2x128 and 2x512, padded or not: 0.9884 to 0.9977 outside one routing cascade
+# (0.9703 at 2x512 padded), medians 0.9939 to 0.9962. Seed 0 at 2x128 padded measures 0.9894, under
+# the standard 0.99 module line this was; before, the same sweep read 0.9900 to 0.9974 outside two
+# cascades (0.9800, 0.9831). The statistic moves with how many tokens happened to reroute, which is
+# why the pooled cosine below is the tighter gate.
+MODULE_PCC = 0.985
 
-# The pooled, normalized embedding: what the model emits, and the tight gate. Measured 0.99950 to
-# 0.99978 across draws and both sequence lengths.
-POOLED_COSINE = 0.999
+# The pooled, normalized embedding: what the model emits, and the tight gate. With the large-input
+# precision (HiFi2 QKV, fc2 and routed w1, the polynomial GELUs, a bfloat8_b dense intermediate),
+# over seeds 0..15 at both shapes, padded and not, 1 - cos is at most 3.5e-3 in 61 of 64 draws, and
+# the other three are routing cascades: 6.1e-3 and 7.0e-3 at 2x128, padded and not, and 1.5e-2 at
+# 2x512 padded. Short sequences moved: over 2e-3 on 5 of 32 draws at 2x128 against 3 before, at
+# 2x512 on 1 against 2. The 0.998 gate this replaced failed seed 0 at 2x128 padded (3.5e-3). These
+# tests run seed 0; the seed sweep of the pooled embedding is test_ttnn_model.py's, at its own
+# tolerance.
+POOLED_COSINE = 0.995
 
 # Minimum per-layer PCC across the ladder. Measured 0.9937 to 0.9981.
 LADDER_PCC = 0.99
@@ -126,7 +137,7 @@ def test_encoder(device, config, reference_model, reference, tt_encoder, batch, 
 
 
 @pytest.mark.parametrize("batch, seqlen", STACK_SHAPES)
-def test_encoder_with_ragged_padding(device, config, reference_model, reference, tt_encoder, batch, seqlen):
+def test_encoder_with_ragged_padding(device, config, tt_config, reference_model, reference, tt_encoder, batch, seqlen):
     """The whole stack with 25% of each row padded, compared on the kept positions.
 
     The pooled embedding is taken with the same mask, so padded positions are excluded from it
@@ -139,7 +150,7 @@ def test_encoder_with_ragged_padding(device, config, reference_model, reference,
     out = tt_encoder(
         to_device(to_block_layout(x), device),
         rotary_tables(device, config, seqlen),
-        additive_attention_mask(mask, device),
+        additive_attention_mask(mask, device, mask_dtype=tt_config.attention_mask_dtype),
     )
 
     with torch.no_grad():
@@ -222,9 +233,11 @@ def test_routing_agreement_holds_at_depth(device, config, reference_model, refer
             # block input: the block input is one sub-block short of where routing happens, so
             # measuring there would report decisions the model never makes.
             tt_attn = layer.attn(tensor, rot_mats)
-            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1_weight, layer.norm1_bias)
-            _, _, indices = layer.mlp.router.select(flatten_tokens(tt_hidden))
-            selected = ttnn.to_torch(indices).long().reshape(tokens, config.moe_top_k)
+            tt_hidden = layer._norm(tt_attn, tensor, layer.norm1)
+            routing, rows = layer.mlp.router(flatten_tokens(tt_hidden))
+            ttnn.deallocate(rows)
+            _, selected = selection_of(routing, config.moe_top_k, config.num_experts)
+            routing.deallocate()
             with torch.no_grad():
                 block = reference.layers[idx]
                 ref_hidden = block.norm1(block.attn(reference_input, attention_mask=None) + reference_input)

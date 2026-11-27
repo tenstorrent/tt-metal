@@ -4,6 +4,9 @@
 
 import torch
 
+import ttnn
+from tests.ttnn.utils_for_testing import merge_gate_subset
+
 
 def _plain_function(x):
     return x
@@ -32,3 +35,76 @@ def test_parametrize_id_for_python_function_has_no_memory_address(request):
         config=request.config, val=_plain_function, argname="torch_op"
     )
     assert made_id == "torch_op=_plain_function", made_id
+
+
+class _Opaque:
+    """Has the default object repr, "<module._Opaque object at 0x...>"."""
+
+
+def _make_id(request, val, argname="cfg"):
+    return request.config.hook.pytest_make_parametrize_id(config=request.config, val=val, argname=argname)
+
+
+def test_parametrize_id_for_default_repr_object_has_no_memory_address(request):
+    """A default-repr object keeps its type name without the address, the same for every instance."""
+    first, second = _make_id(request, _Opaque()), _make_id(request, _Opaque())
+    assert first == second, (first, second)
+    assert "0x" not in first and first.startswith("cfg=<") and first.endswith("_Opaque object>"), first
+
+
+def test_parametrize_id_for_local_class_has_no_memory_address(request):
+    """A class defined in a function has a "<locals>" qualname, e.g. "<mod.f.<locals>.C object at 0x...>"."""
+
+    class _Local:
+        pass
+
+    first, second = _make_id(request, _Local()), _make_id(request, _Local())
+    assert first == second, (first, second)
+    assert "0x" not in first and first.endswith(".<locals>._Local object>"), first
+
+
+def test_parametrize_id_for_nested_default_repr_objects_has_no_memory_address(request):
+    """Default-repr objects inside a dict or list, e.g. device_params, are normalized in place."""
+    first = _make_id(request, {"router": _Opaque(), "configs": [_Opaque(), 1]}, argname="device_params")
+    second = _make_id(request, {"router": _Opaque(), "configs": [_Opaque(), 1]}, argname="device_params")
+    assert first == second, (first, second)
+    assert "0x" not in first and first.count("_Opaque object>") == 2, first
+    assert first.startswith("device_params={'router': <") and first.endswith(", 1]}"), first
+
+
+def test_parametrize_id_without_addresses_is_unchanged(request):
+    """Values with no embedded address keep their usual ID."""
+    assert _make_id(request, {"num_links": 1, "dims": [0, 0x10]}) == "cfg={'num_links': 1, 'dims': [0, 16]}"
+    assert _make_id(request, "0xdeadbeef") == "cfg=0xdeadbeef"
+
+
+def test_merge_gate_subset_ids_match_stacked_parametrize(request):
+    """merge_gate_subset IDs must match stacked parametrize, and only keep() cases are marked."""
+    hook = request.config.hook.pytest_make_parametrize_id
+    axes = {"dim": [-2, 0], "w": [64, 22], "h": [15]}
+    _, params = merge_gate_subset(axes, keep=lambda dim, **_: dim < 0)
+
+    expected = [
+        "-".join(
+            hook(config=request.config, val=value, argname=name) for name, value in [("dim", dim), ("w", w), ("h", h)]
+        )
+        for dim in axes["dim"]
+        for w in axes["w"]
+        for h in axes["h"]
+    ]
+    assert [param.id for param in params] == expected
+    assert [param.id for param in params if param.marks] == ["dim=-2-w=64-h=15", "dim=-2-w=22-h=15"]
+
+
+def test_merge_gate_subset_ids_for_ttnn_op_have_no_memory_address(request):
+    """merge_gate_subset sets id=, so it must use the same conversion as the hook.
+
+    str(ttnn.std) embeds a process address. pytest-xdist -n 4 then aborts because
+    workers collect different node IDs. Passing the op as a list (not a dict of
+    hand-written IDs) is the case a future caller would write.
+    """
+    hook = request.config.hook.pytest_make_parametrize_id
+    _, params = merge_gate_subset({"op": [ttnn.std, ttnn.var]}, keep=lambda **_: False)
+    expected = [hook(config=request.config, val=op, argname="op") for op in (ttnn.std, ttnn.var)]
+    assert [param.id for param in params] == expected
+    assert expected == ["op=ttnn.std", "op=ttnn.var"]

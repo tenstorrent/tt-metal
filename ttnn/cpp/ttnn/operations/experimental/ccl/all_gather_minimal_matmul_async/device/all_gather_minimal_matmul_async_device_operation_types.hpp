@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <utility>
 
 #include <optional>
@@ -53,6 +54,16 @@ struct AllGatherMinimalMatmulAsyncParams {
     // fused_activation / ternary.
     bool fuse_swiglu = false;
 
+    // Core-grid orientation: nullopt keeps the legacy `force_transpose || M > N` rule, a value pins it
+    // so the program (and its cache entry) does not depend on M. Neither this nor force_transpose is in
+    // attribute_values(): the program hash keys on the resolved orientation (resolve_transpose_core_grid),
+    // so a pinned and an unpinned call that resolve alike share one program.
+    std::optional<bool> transpose_core_grid;
+
+    // Input blocks reach their whole row or column of the matmul grid in one NoC multicast instead of a core-to-core
+    // relay. Independent of the fabric config.
+    bool use_mcast = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -78,7 +89,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool using_persistent_weight_buffer,
         ttnn::ccl::Topology fsdp_topology,
         bool fuse_swiglu = false,
-        std::vector<uint32_t> chunk_sizes = {}) :
+        std::vector<uint32_t> chunk_sizes = {},
+        std::optional<bool> transpose_core_grid = std::nullopt,
+        bool use_mcast = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -103,7 +116,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_semaphore(std::move(fsdp_semaphore)),
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology),
-        fuse_swiglu(fuse_swiglu) {}
+        fuse_swiglu(fuse_swiglu),
+        transpose_core_grid(transpose_core_grid),
+        use_mcast(use_mcast) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -112,7 +127,6 @@ struct AllGatherMinimalMatmulAsyncParams {
         "output_mem_config",
         "topology",
         "cluster_axis",
-        "force_transpose",
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
@@ -125,7 +139,12 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer",
-        "fuse_swiglu");
+        "fuse_swiglu",
+        "use_mcast",
+        "fused_activation",
+        "output_dtype",
+        // Selects DST_SYNC_MODE and the other compile-time compute settings.
+        "compute_kernel_config");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -134,7 +153,6 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->output_mem_config,
             this->topology,
             this->cluster_axis,
-            this->force_transpose,
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
@@ -147,7 +165,11 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer,
-            this->fuse_swiglu);
+            this->fuse_swiglu,
+            this->use_mcast,
+            this->fused_activation,
+            this->output_dtype,
+            this->compute_kernel_config);
     }
 };
 
@@ -163,6 +185,20 @@ static_assert(
     std::tuple_size_v<decltype(AllGatherMinimalMatmulAsyncParams::attribute_names)> ==
         std::tuple_size_v<decltype(std::declval<const AllGatherMinimalMatmulAsyncParams>().attribute_values())>,
     "AGMM attribute_names and attribute_values() must stay in lockstep");
+// The orientation the program is built with. M and N are the matmul padded row count and weight width. Fabric2D
+// only runs the untransposed grid, so it is not picked there automatically.
+inline bool resolve_transpose_core_grid(
+    const AllGatherMinimalMatmulAsyncParams& params, uint32_t M, uint32_t N, bool fabric_2d) {
+    return params.transpose_core_grid.value_or(params.force_transpose || (M > N && !fabric_2d));
+}
+inline bool resolve_transpose_core_grid(
+    const AllGatherMinimalMatmulAsyncParams& params,
+    uint32_t M,
+    uint32_t N,
+    const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return resolve_transpose_core_grid(
+        params, M, N, tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
+}
 
 // Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
 inline std::vector<uint32_t> resolve_chunk_sizes(const AllGatherMinimalMatmulAsyncParams& params, uint32_t N) {

@@ -40,7 +40,7 @@ Initializing Metalium is almost the same as before. To recap, we need to
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
 
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     constexpr CoreCoord core = {0, 0};
     constexpr uint32_t n_tiles = 64;
@@ -128,15 +128,15 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 .. code-block:: cpp
 
     std::vector<uint32_t> reader_args;
-    TensorAccessorArgs(*src0_dram_buffer->get_backing_buffer()).append_to(reader_args);
-    TensorAccessorArgs(*src1_dram_buffer->get_backing_buffer()).append_to(reader_args);
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader = CreateKernel(
         program,
         "eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
     std::vector<uint32_t> writer_args;
-    TensorAccessorArgs(*dst_dram_buffer->get_backing_buffer()).append_to(writer_args);
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer = CreateKernel(
         program,
         "eltwise_binary/kernels/dataflow/write_tile.cpp",
@@ -146,7 +146,7 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
         program,
         "eltwise_binary/kernels/compute/tiles_add.cpp",
         core,
-        ComputeConfig{.math_fidelity = MathFidelity::HiFi4});
+        ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4});
 
 Notice the ``ComputeConfig`` object. This indicates to the framework that a compute kernel should be created. There's a plethora of settings that can be set here. The most important one is the ``math_fidelity`` setting. This controls how accurate certain floating point operations are on the FPU specifically. Other operations (like the ones in the vector engine) are _not_ affected by this setting.
 

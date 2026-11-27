@@ -1,6 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
+import os
+
+
+def simulator_path() -> str:
+    """TT_METAL_SIMULATOR, or its alias TT_UMD_SIMULATOR_PATH; empty without a simulator."""
+    return (
+        os.environ.get("TT_METAL_SIMULATOR")
+        or os.environ.get("TT_UMD_SIMULATOR_PATH")
+        or ""
+    )
+
+
+def is_ttsim(path: str | None) -> bool:
+    """ttsim is a shared library run in process; RTL simulators run behind a simulation server."""
+    return bool(path) and path.endswith(".so")
+
 
 class TestTargetConfig:
     """TestTargetConfig class represents where the test will be run: simulator or silicon."""
@@ -16,7 +32,6 @@ class TestTargetConfig:
     def __init__(
         self,
         run_simulator=False,
-        simulator_port=5555,
         device_id=0,
         log_level="INFO",
     ):
@@ -24,23 +39,23 @@ class TestTargetConfig:
             Initializes the test configuration in regards to using the simulator.
         Args:
             run_simulator (bool): True if the test is run on simulator, False if on silicon
-            simulator_port (int): Simulator server port number
             device_id (int): ID number of the device to send message to.
             log_level (str): Log level
         """
         # Only initialize once
         if not TestTargetConfig._initialized:
             self.run_simulator: bool = run_simulator
-            self.simulator_port: int = simulator_port
             self.device_id: int = device_id
             self.log_level: str = log_level
             self.reset_simulator_per_test: bool = False
             TestTargetConfig._initialized = True
 
+    def runs_on_ttsim(self) -> bool:
+        return self.run_simulator and is_ttsim(simulator_path())
+
     def update_from_pytest_config(self, config):
         """Update only the simulator related settings from pytest config"""
         self.run_simulator = config.getoption("--run-simulator", default=False)
-        self.simulator_port = config.getoption("--port", default=5555)
         self.reset_simulator_per_test = config.getoption(
             "--reset-simulator-per-test", default=False
         )

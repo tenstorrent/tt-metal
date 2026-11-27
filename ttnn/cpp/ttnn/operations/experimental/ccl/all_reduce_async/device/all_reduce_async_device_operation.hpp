@@ -6,6 +6,7 @@
 
 #include "all_reduce_async_device_operation_types.hpp"
 #include "all_reduce_async_program_factory.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -46,6 +47,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc = false);
+    bool fp32_dest_acc = false,
+    const std::optional<Tensor>& residual_tensor = std::nullopt,
+    bool one_shot = false);
 
 }  // namespace ttnn::prim

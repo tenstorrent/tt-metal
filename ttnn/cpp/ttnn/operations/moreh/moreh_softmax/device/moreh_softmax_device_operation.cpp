@@ -12,6 +12,13 @@ namespace ttnn::operations::moreh::moreh_softmax {
 
 #define L1_512KB (512 * 1024)
 
+tt::DataFormat get_intermed_data_format(tt::DataFormat data_format, bool fp32_dest_acc_en) {
+    if (fp32_dest_acc_en) {
+        return tt::DataFormat::Float32;
+    }
+    return data_format == tt::DataFormat::Bfp8_b ? tt::DataFormat::Float16_b : data_format;
+}
+
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
     auto w = tensor.logical_shape()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
@@ -21,15 +28,18 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Same formats as the small factories.
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Wt * tile_size;  // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 1 * tile_size;   // scaler;
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Wt * tile_size;             // input;
+    cb_usage += 1 * mask_scaler_tile_size;  // mask;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Wt * tile_size;  // output;
 
@@ -51,15 +61,18 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Same formats as the small factories.
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
+    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
+    auto mask_scaler_tile_size = tt::tile_size(mask_scaler_format);
 
-    int32_t cb_usage = 0;        // bytes
-    cb_usage += Ht * tile_size;  // input;
-    cb_usage += 1 * tile_size;   // mask;
-    cb_usage += 1 * tile_size;   // scaler;
+    int32_t cb_usage = 0;                   // bytes
+    cb_usage += Ht * tile_size;             // input;
+    cb_usage += 1 * mask_scaler_tile_size;  // mask;
+    cb_usage += 2 * mask_scaler_tile_size;  // max and sum scalers;
 
     cb_usage += Ht * tile_size;  // output;
 
@@ -89,7 +102,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-    TT_FATAL(input.buffer() != nullptr, "Operands to softmax need to be allocated in buffers on device!");
+    TT_FATAL(input.is_allocated(), "Operands to softmax need to be allocated in buffers on device!");
     TT_FATAL((input.layout() == Layout::TILE), "Inputs to softmax must be tilized");
     TT_FATAL(
         input.dtype() == DataType::BFLOAT16 || input.dtype() == DataType::BFLOAT8_B ||
@@ -99,6 +112,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+    TT_FATAL(input.logical_volume() > 0, "Input to softmax must be non-empty, got shape {}", input.logical_shape());
 }
 
 void MorehSoftmaxOperation::validate_on_program_cache_miss(

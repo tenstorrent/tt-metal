@@ -535,6 +535,10 @@ class OpenVLALanguageModel(GenerationMixin):
                 page_table=self.page_table,
                 kv_cache=self.tt_kv_cache,
                 sampling_params=device_sampling_params,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             # decode_forward returns (logits, log_probs) tuple
             logits = decode_output[0] if isinstance(decode_output, tuple) else decode_output
@@ -702,6 +706,10 @@ class OpenVLALanguageModel(GenerationMixin):
                 kv_cache=[self.tt_kv_cache[0]],
                 sampling_params=None,
                 enable_trace=False,
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
             # decode_forward returns (logits, log_probs) tuple
             logits = decode_output[0] if isinstance(decode_output, tuple) else decode_output

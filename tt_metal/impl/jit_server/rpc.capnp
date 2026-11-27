@@ -52,6 +52,11 @@ struct CompileRequest {
 
     # Generated files to write before compiling (shared by all targets).
     generatedFiles @4 :List(GeneratedFile);
+
+    # Full commit of the source tree that captured this request. Filled only for kernel_prewarm
+    # manifest entries (the JIT RPC leaves it empty): a tree path reused across commits keeps the
+    # same build_key, so the prewarm needs the commit to tell its own entries from an older one's.
+    treeCommit @5 :Text;
 }
 
 struct ElfBlob {

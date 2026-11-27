@@ -16,7 +16,7 @@ from models.experimental.nomic_embed_text_v2_moe.reference.loader import (
     load_pretrained_reference_model,
     load_state_dict_from_safetensors,
 )
-from models.experimental.nomic_embed_text_v2_moe.tt.model_config import TtModelConfig
+from models.experimental.nomic_embed_text_v2_moe.tt.model_config import TtModelConfig, UnsupportedDeviceError
 
 
 def pytest_configure(config):
@@ -76,12 +76,15 @@ def tokenizer():
 
 @pytest.fixture
 def tt_config(device):
-    """TTNN dtypes, layout and the compute kernel config bound to the test device.
+    """TTNN dtypes, layout and the per-op-group compute kernel configs bound to the test device.
 
     Function-scoped and cheap: it only reads the grid and architecture off an already-open
     device. Requesting it is what makes a test device-bound.
     """
-    return TtModelConfig.from_device(device)
+    try:
+        return TtModelConfig.from_device(device)
+    except UnsupportedDeviceError as exc:
+        pytest.skip(str(exc))
 
 
 @pytest.fixture(autouse=True)

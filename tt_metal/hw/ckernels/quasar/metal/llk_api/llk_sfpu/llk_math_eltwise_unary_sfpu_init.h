@@ -8,10 +8,34 @@
 
 namespace ckernel {
 
-// sfpu_op template parameter is unused, but kept for backwards compatibility
-template <SfpuType sfpu_op /*maybe_unused*/>
+namespace sfpu {
+void abs_init();
+void hardmish_init();
+void heaviside_init();
+void i0_init();
+void softcap_init();
+}  // namespace sfpu
+
+// The bare init runs the common SFPU init, plus the op's own init for the ops whose Compute API
+// calls the bare form (as on Blackhole).
+template <SfpuType sfpu_op>
 inline void llk_math_eltwise_unary_sfpu_init() {
     _llk_math_eltwise_sfpu_init_();
+    if constexpr (sfpu_op == SfpuType::abs || sfpu_op == SfpuType::abs_int32) {
+        // calculate_abs_int32 advances Dest through the ADDR_MOD_6 abs_init programs (ttnn reaches it
+        // through abs_tile_init).
+        sfpu::abs_init();
+    } else if constexpr (sfpu_op == SfpuType::hardmish) {
+        // hardmish reads 0.5 from vConstFloatPrgm0 and advances Dest through ADDR_MOD_6, both set here.
+        sfpu::hardmish_init();
+    } else if constexpr (sfpu_op == SfpuType::heaviside) {
+        // calculate_heaviside advances Dest through the ADDR_MOD_6 heaviside_init programs.
+        sfpu::heaviside_init();
+    } else if constexpr (sfpu_op == SfpuType::i0) {
+        sfpu::i0_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
+        sfpu::softcap_init();
+    }
 }
 
 // sfpu_op template parameter is unused, but kept for backwards compatibility

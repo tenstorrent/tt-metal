@@ -7,8 +7,8 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 
 #include <filesystem>
 
@@ -16,7 +16,7 @@ namespace ttnn::prim {
 
 using namespace tt;
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 using ttnn::device_operation::ProgramArtifacts;
 
 ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_artifacts(
@@ -43,8 +43,10 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const uint32_t single_tile_size = tile_size(cb_data_format);
+    const auto in_cb_data_format = datatype_to_dataformat_converter(input.dtype());
+    const auto out_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    const uint32_t in_single_tile_size = tile_size(in_cb_data_format);
+    const uint32_t out_single_tile_size = tile_size(out_cb_data_format);
 
     const auto& input_shape = input.padded_shape();
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
@@ -96,15 +98,15 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     constexpr uint32_t out0_t = 2;  // output
     m2::DataflowBufferSpec input_dfb{
         .unique_id = INPUT_DFB,
-        .entry_size = single_tile_size,
+        .entry_size = in_single_tile_size,
         .num_entries = in0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = in_cb_data_format,
     };
     m2::DataflowBufferSpec output_dfb{
         .unique_id = OUTPUT_DFB,
-        .entry_size = single_tile_size,
+        .entry_size = out_single_tile_size,
         .num_entries = out0_t,
-        .data_format_metadata = cb_data_format,
+        .data_format_metadata = out_cb_data_format,
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -126,7 +128,7 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     };
     // Compute consumes INPUT_DFB; with enable_32_bit_dest an explicit unpack mode is required for a
     // Float32-formatted consumed DFB. Legacy set no unpack_to_dest_mode (default -> UnpackToSrc).
-    if (cb_data_format == DataFormat::Float32) {
+    if (in_cb_data_format == DataFormat::Float32) {
         compute_hw.unpack_modes.insert({INPUT_DFB, UnpackMode::UnpackToSrc});
     }
 
@@ -265,6 +267,17 @@ ProgramArtifacts ProdNcDeviceOperation::ProdNcProgramFactory::create_program_art
     }
 
     return ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+ttnn::command_list::CmdListBindings ProdNcDeviceOperation::ProdNcProgramFactory::map_cmd_list_parameters(
+    const ProdNcDeviceOperation::operation_attributes_t&,
+    const ProdNcDeviceOperation::tensor_args_t&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

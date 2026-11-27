@@ -29,8 +29,16 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
         "dst_index_out exceeds max dest tiles");
     LLK_ASSERT(
         vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
-            vector_mode == VectorMode::None,
-        "Quasar binary SFPU supports vector modes R, C, RC, None");
+            vector_mode == VectorMode::None || vector_mode == VectorMode::RC_custom,
+        "Quasar binary SFPU supports vector modes R, C, RC, None, RC_custom");
+}
+
+// The form the Compute API calls directly (as on BH/WH), naming only the sync mode. The Dest bound is
+// the 16-bit one, the larger, so a valid index is never rejected.
+template <DstSync DST_SYNC>
+inline __attribute__((always_inline)) void _sfpu_binary_check_(
+    std::uint32_t dst_index_in0, std::uint32_t dst_index_in1, std::uint32_t dst_index_out, VectorMode vector_mode) {
+    _sfpu_binary_check_<DST_SYNC, false /*DST_ACCUM*/>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
 }
 
 }  // namespace ckernel

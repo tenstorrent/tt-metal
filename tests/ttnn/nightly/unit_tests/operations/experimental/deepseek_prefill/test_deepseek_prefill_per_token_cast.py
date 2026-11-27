@@ -10,12 +10,14 @@ Mirrors DeepEP's reference (deepseek-ai/DeepEP deep_ep/utils/math.py):
 - per_token_cast_back: out = decode(e4m3) * scale
 """
 
+import functools
+
 import pytest
 import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
@@ -231,13 +233,51 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
     y = ttnn.to_torch(y_tt).float()
-    # The hardware packer truncates instead of rounding to nearest. Values can
-    # therefore land one E4M3FN ULP below the mathematical result.
-    expected_output = torch.tensor([224.0, 240.0, 416.0, 448.0])
+    # Power-of-two scales and their reciprocals are exact, so every boundary
+    # value is representable after scaling and must round-trip exactly.
+    expected_output = (block_maxima / expected_scale).to(torch.float8_e4m3fn).float() * expected_scale
     actual_output = y[0, ::BLOCK_W]
     assert torch.equal(
         actual_output, expected_output
     ), f"Unexpected E4M3FN boundary outputs: got {actual_output.tolist()}, expected {expected_output.tolist()}"
+
+
+@pytest.mark.parametrize("round_scale_to_power_of_two", [True, False], ids=["pow2_scale", "fp32_scale"])
+def test_cast_to_fp8_rounds_to_nearest(device, round_scale_to_power_of_two):
+    """The e4m3 output rounds to nearest even, as torch's float8_e4m3fn cast does, not toward zero.
+
+    Toward-zero rounding shrinks every magnitude by ~4% on average. The error is one-sided, so it does
+    not average out over a reduction: in the scaled-FP8 MLA KV cache it acts like a softmax temperature
+    change on every attended key.
+    """
+    torch.manual_seed(5)
+    x = torch.randn(64, 512).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt, round_scale_to_power_of_two=round_scale_to_power_of_two
+    )
+    y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
+    y = ttnn.to_torch(y_tt).float()
+    scale = ttnn.to_torch(scale_tt).float().repeat_interleave(BLOCK_W, dim=-1)
+
+    xf = x.float()
+    normalized = xf / scale
+    normal = normalized.abs() >= 2.0**-6  # e4m3 subnormals are out of scope here
+    err = (y - xf)[normal]
+    # Signed error along each value's own sign, relative to the mean magnitude: ~-0.04 when truncating.
+    bias = ((err * xf[normal].sign()).mean() / xf[normal].abs().mean()).item()
+    msg = f"bias {bias:+.5f}"
+    if round_scale_to_power_of_two:
+        # Power-of-two scales make x / scale exact, so every normal value must match the RNE golden.
+        golden = normalized.to(torch.float8_e4m3fn).float() * scale
+        exact = (y[normal] == golden[normal]).float().mean().item()
+        msg += f", exact match vs float8_e4m3fn golden {exact:.4f}"
+    logger.info(f"round to nearest ({'pow2' if round_scale_to_power_of_two else 'fp32'} scale): {msg}")
+    assert abs(bias) < 0.005, f"e4m3 cast is biased: {msg}"
+    if round_scale_to_power_of_two:
+        assert exact >= 0.999, f"e4m3 cast does not round to nearest even: {msg}"
 
 
 # ---------------------------------------------------------------------------
@@ -358,6 +398,32 @@ def create_u32_tensor(device, values):
 
 MAX_DISPATCH_BUFFER_TOKENS = 5 * 1024 * 8
 
+
+@functools.lru_cache(maxsize=1)
+def _cached_cast_back_inputs(capacity, H):
+    """The cast-back case's e4m3 input and its per-block scales, plus the trailing RNG state.
+
+    Drawn from seed 0 as the first thing in the test, so they depend only on the buffer capacity
+    and H -- both constants here. Every label/counts, scales_from_metadata and output_dtype
+    variation therefore rebuilt an identical pair, and the e4m3 draw alone profiled as 27% of this
+    file (a 1.2GB fp32 temporary cast down to 293MB). One entry serves every variation.
+    """
+    torch.manual_seed(0)
+    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0
+    return input_e4m3, input_scale, torch.get_rng_state()
+
+
+def cast_back_inputs(capacity, H):
+    """Cached cast-back inputs; leaves the RNG where drawing them inline would have.
+
+    Both tensors are shared between callers: read them, and copy before any in-place write.
+    """
+    input_e4m3, input_scale, rng_state = _cached_cast_back_inputs(capacity, H)
+    torch.set_rng_state(rng_state)
+    return input_e4m3, input_scale
+
+
 # Metadata scale path: the dispatch metadata row is [METADATA_HEADER routing ints][H/128 fp32-bit scales].
 METADATA_HEADER = 3  # This may change in the future, but the actual number is not important for the test
 # The number is just used to set the starting offset when reading the scales from the metadata row
@@ -398,8 +464,7 @@ def test_token_count_aware_cast_back(device, label, counts, scales_from_metadata
     # The op clamps its swept region to the buffer capacity, so rows past it are dropped (overflow case).
     total_valid_rows = min(running_offset, capacity)
 
-    input_e4m3 = (torch.randn(capacity, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
-    input_scale = torch.rand(capacity, H // BLOCK_W) * 4.0 - 2.0
+    input_e4m3, input_scale = cast_back_inputs(capacity, H)
 
     e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
     # Feed the scales either as a plain (M, H/128) fp32 tensor or packed into the int32 metadata tail;

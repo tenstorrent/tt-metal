@@ -1,0 +1,155 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Local invariants of DFBAdvancedOptions (advanced_options.hpp).
+
+#include <gtest/gtest.h>
+#include <gmock/gmock.h>
+#include <stdexcept>
+#include <vector>
+
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+
+#include "metal2_host_api/test_helpers/test_helpers.hpp"
+#include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
+#include "metal2_host_api/test_helpers/prefetcher_pipe_test_helpers.hpp"
+
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
+namespace tt::tt_metal::experimental {
+namespace {
+
+using test_helpers::MakeFullPipeSpec;
+using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalGen2ComputeKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
+using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::pipe_param_name;
+using test_helpers::PrefetcherPipeSpecTestQuasar;
+using test_helpers::ProgramSpecTestQuasar;
+
+TEST_F(ProgramSpecTestQuasar, CPU_MultiBindingFlagOnGen2Fails) {
+    // allow_instance_multi_binding is a Gen1-only escape hatch. Setting it on a Gen2 target is a hard
+    // error regardless of whether any instance is actually multi-bound — here the DFB is a plain
+    // single-producer/single-consumer buffer that would otherwise be perfectly valid.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto producer = MakeMinimalGen2DMKernel("producer");
+    auto consumer = MakeMinimalGen2ComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.advanced_options.allow_instance_multi_binding = true;
+
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayListsSamePipeTwiceFails) {
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.dataflow_buffers[0].advanced_options.prefetcher_pipe_relays = {pipe_param_name, pipe_param_name};
+    EXPECT_SPEC_REJECTED(spec, "lists PrefetcherPipeParameter 'weights' more than once");
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithBorrowedFromFails) {
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.tensor_parameters = {test_helpers::MakeMinimalTensorParameter("t", BufferType::L1)};
+    spec.dataflow_buffers[0].borrowed_from = TensorParamName{"t"};
+    EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and borrowed_from");
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBWithBorrowedTensorFails) {
+    // A DFB cannot combine a tensor view with an arena allocation override, even at offset zero.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = test_helpers::MakeBorrowedDFBProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("sets both borrowed_from and allocation_override")));
+}
+
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayWithAllocationOverrideFails) {
+    // A relay DFB cannot also allocate its storage in an SRAM arena.
+    ProgramSpec spec = MakeFullPipeSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"},
+         .properties = LockstepSRAMArenaProperties{test_helpers::pipe_ring_size}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+    EXPECT_SPEC_REJECTED(spec, "sets both prefetcher_pipe_relays and allocation_override");
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsEmpty) {
+    // An empty placement override is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet{};
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsOutOfBounds) {
+    // A placement override outside the worker grid is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    const CoreCoord outside = fixture_device.compute_with_storage_grid_size();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange(outside));
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("out of bounds")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsPrefetcherRelay) {
+    // A placement override combined with a prefetcher relay is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeFullPipeSpec();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(test_helpers::pipe_receiver_nodes);
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
+}
+
+// Endpoint kernels run on (0,0)-(1,0); the DFB placement override keeps only (0,0).
+ProgramSpec MakeQuasarSubsetPlacementSpecForTest() {
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units[0].target_nodes = NodeRange({0, 0}, {1, 0});
+    spec.dataflow_buffers[0].advanced_options.override_placement = NodeRangeSet(NodeRange({0, 0}));
+    return spec;
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsSubsetOnGen2) {
+    // A placement override on a strict subset of the endpoint nodes is accepted on Gen2.
+    EXPECT_NO_THROW(Program(*mesh_device_, MakeQuasarSubsetPlacementSpecForTest()));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesGen2MultiBindingRestriction) {
+    // Gen2 rejects allow_instance_multi_binding even with a valid placement override.
+    // The spec is otherwise valid (CPU_DFBPlacementAcceptsSubsetOnGen2), so the flag causes the rejection.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = MakeQuasarSubsetPlacementSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
+    EXPECT_THAT(
+        [&] { Program(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("allow_instance_multi_binding")));
+}
+
+}  // namespace
+}  // namespace tt::tt_metal::experimental

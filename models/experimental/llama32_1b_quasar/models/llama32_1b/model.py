@@ -618,16 +618,24 @@ def _build_lm_head(
     lm_head_core_grid = _dram_shard_core_grid(mcfg.dim)
     tile = ttnn.TILE_SIZE
     tile_padded_batch_rows = tile * math.ceil(mcfg.max_batch_size / tile)
-    lm_prog_configs = [
-        _dram_matmul_config(tile_padded_batch_rows, mcfg.dim, ss, lm_head_core_grid.num_cores) for ss in lm_split_sizes
-    ]
-    lm_input_memcfg = ttnn.create_sharded_memory_config(
-        (tile_padded_batch_rows, _nearest_32(mcfg.dim // lm_head_core_grid.num_cores)),
-        lm_head_core_grid,
-        ttnn.ShardStrategy.WIDTH,
-        ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
+    # Quasar runs the LM head matmuls with no program config (the unified matmul), so neither they nor the
+    # width-sharded input the DRAM-sharded matmul takes are built there: the input stays interleaved. The splits and
+    # the concatenated logits go to DRAM there: 16 x 512 KB of splits exceed the 2-node emulator's L1.
+    if is_quasar():
+        lm_prog_configs, lm_input_memcfg, lm_output_memcfg = None, None, ttnn.DRAM_MEMORY_CONFIG
+    else:
+        lm_output_memcfg = None
+        lm_prog_configs = [
+            _dram_matmul_config(tile_padded_batch_rows, mcfg.dim, ss, lm_head_core_grid.num_cores)
+            for ss in lm_split_sizes
+        ]
+        lm_input_memcfg = ttnn.create_sharded_memory_config(
+            (tile_padded_batch_rows, _nearest_32(mcfg.dim // lm_head_core_grid.num_cores)),
+            lm_head_core_grid,
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
     return LMHead1D.from_config(
         LMHead1DConfig(
             output_weights=lm_splits,
@@ -638,6 +646,7 @@ def _build_lm_head(
             program_configs=lm_prog_configs,
             compute_kernel_config=None,
             input_memcfg=lm_input_memcfg,
+            output_memcfg=lm_output_memcfg,
             weights_memcfgs=lm_weights_memcfgs,
         )
     )

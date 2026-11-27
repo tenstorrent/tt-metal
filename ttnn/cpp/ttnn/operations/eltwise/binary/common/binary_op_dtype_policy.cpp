@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::operations::binary::dtype_policy {
 
@@ -14,8 +15,8 @@ using tt::tt_metal::DataType;
 std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
     using namespace dtype_sets;
     switch (op) {
+        case BinaryOpType::SUB: return arithmetic_fpu_and_int8;
         case BinaryOpType::ADD:
-        case BinaryOpType::SUB:
         case BinaryOpType::MUL:
         case BinaryOpType::RSUB:
         case BinaryOpType::SQUARED_DIFFERENCE:
@@ -54,10 +55,12 @@ std::span<const DataType> supported_tensor_a_dtypes(BinaryOpType op) {
         case BinaryOpType::POWER:
         case BinaryOpType::XLOGY:
         case BinaryOpType::ATAN2:
-        case BinaryOpType::HYPOT: return float_only;
+        case BinaryOpType::HYPOT:
+        case BinaryOpType::SITU_GLU: return float_only;
         case BinaryOpType::NEXTAFTER: return ulp_step_float;
         case BinaryOpType::WHERE_TST:
         case BinaryOpType::WHERE_TTS: return where;
+        case BinaryOpType::GEGLU_TANH: return fused_activation_bf16;
         case BinaryOpType::ADDALPHA:
         case BinaryOpType::SUBALPHA: return unsupported;
         default: TT_THROW("Binary op type {} is missing from dtype policy", op);

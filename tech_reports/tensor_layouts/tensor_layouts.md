@@ -41,7 +41,7 @@ To create a tensor with row-major layout, you can pass layout=ttnn.ROW_MAJOR_LAY
 
 ```python3
 ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+ttnn_tensor = ttnn.full([64, 64], 42, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 ```
 
 
@@ -70,7 +70,7 @@ To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in m
 
 ```python3
 ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT)
-ttnn_tensor = ttnn.full(42, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+ttnn_tensor = ttnn.full([64, 64], 42, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 ttnn_tensor = ttnn.to_layout(ttnn_rm_tensor, ttnn.TILE_LAYOUT)
 ```
 
@@ -86,7 +86,7 @@ If transpose_tile==true, then the faces' order is transposed, i.e. they are plac
 ## 4. Memory Layout
 This describes how the pages of a tensor are distributed across the memory of a device. Device memory is physically partitioned into units called banks. For example, Grayskull chips have 8 DRAM banks, while Wormhole chips have 12 DRAM banks.
 
-Each core also has L1 memory, which is divided into banks. Most worker cores have a single bank, whereas some storage cores have 2 banks.
+Each core also has L1 memory, which is divided into banks. Each worker core has a single L1 bank.
 
 There are two storage mechanisms that describe how a tensor is mapped to its respective banks: `Interleaved` and `Sharding`.
 

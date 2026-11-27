@@ -393,19 +393,18 @@ int main(int argc, char* argv[]) {
             input_args.deployment_descriptor_path,
             input_args.fsd_path,
             physical_system_descriptor.get_all_hostnames());
-        bring_down_cross_host_ethernet_ports(fsd_proto, physical_system_descriptor);
-        return 0;
+        return bring_down_cross_host_ethernet_ports(fsd_proto, physical_system_descriptor) ? 0 : 1;
     }
 
     // Handle link_reset subcommand
     if (input_args.mode == CommandMode::LINK_RETRAIN) {
-        perform_link_reset(
+        const bool reset_ok = perform_link_reset(
             input_args.reset_host.value(),
             input_args.reset_tray_id.value(),
             input_args.reset_asic_location.value(),
             input_args.reset_channel.value(),
             physical_system_descriptor);
-        return 0;
+        return reset_ok ? 0 : 1;
     }
 
     AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);

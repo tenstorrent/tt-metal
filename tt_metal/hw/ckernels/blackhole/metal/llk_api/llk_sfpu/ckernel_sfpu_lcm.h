@@ -28,8 +28,8 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);  // a
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);  // b
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);  // a
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);  // b
 
         // Binary GCD algorithm; assumes abs(a) < 2^15 and abs(b) < 2^15, hence gcd(a, b) < 2^15
         calculate_sfpu_gcd_body<15>();
@@ -62,20 +62,20 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
 
         // Load a and multiply by 1/gcd(a, b)
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG3, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, 3, dst_index_in1 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
         TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
 	// Convert a/gcd(a, b) to int32
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, 6);
+        TTI_SFP_STOCH_RND(0, 0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
-	// Finally, compute lcm(a, b) = a/gcd(a, b) * b
+        // Finally, compute lcm(a, b) = a/gcd(a, b) * b
         calculate_sfpu_mul_u16_to_u32_body();
 
-        TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, 3, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_out * dst_tile_size);
         dst_reg++;
     }
 }

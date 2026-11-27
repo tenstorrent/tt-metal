@@ -55,5 +55,9 @@ void kernel_main() {
 
         output_transpose_dfb.pop_front(input0_num_tiles_width + input1_num_tiles_width);
         output_dfb.push_back(input0_num_tiles_width + input1_num_tiles_width);
+        // This kernel is the output's only producer and consumer; pop the row it just pushed so the buffer
+        // is left balanced (the data stays in the resident shard).
+        output_dfb.wait_front(input0_num_tiles_width + input1_num_tiles_width);
+        output_dfb.pop_front(input0_num_tiles_width + input1_num_tiles_width);
     }
 }

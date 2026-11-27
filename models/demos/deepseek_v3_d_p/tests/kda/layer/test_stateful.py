@@ -8,13 +8,14 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
+    decode_tail,
     make_actual_start,
 )
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_small_kda_test_config, random_weights
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 
 pytestmark = run_for_blackhole()
 
@@ -53,19 +54,25 @@ def test_segmented_prefill_matches_reference_and_reuses_program(
     golden_convolution = torch.cat(
         (golden_state.q_convolution, golden_state.k_convolution, golden_state.v_convolution), dim=-1
     ).to(torch.bfloat16)
-    assert_accurate(golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.999)
-    assert_accurate(golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.999)
+    assert_accurate(
+        golden_first, actual_first, name="first prefill segment output", pcc_threshold=0.999, nrmse_threshold=0.015
+    )
+    assert_accurate(
+        golden_second, actual_second, name="second prefill segment output", pcc_threshold=0.999, nrmse_threshold=0.02
+    )
     assert_accurate(
         golden_state.recurrent,
         ttnn.to_torch(state.recurrent),
         name="segmented recurrent state",
         pcc_threshold=0.999,
+        nrmse_threshold=0.025,
     )
     assert_accurate(
         golden_convolution,
-        ttnn.to_torch(state.convolution),
+        decode_tail(ttnn.to_torch(state.convolution), layer.convolution_page_channels),
         name="segmented convolution state",
         pcc_threshold=0.999,
+        nrmse_threshold=0.004,
     )
 
 

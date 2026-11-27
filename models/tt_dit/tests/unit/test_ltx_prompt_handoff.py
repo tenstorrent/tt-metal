@@ -66,13 +66,13 @@ def load(path, names, namespace):
 class PromptHandoffTest(unittest.TestCase):
     def setUp(self):
         self.ops = DeviceOperations()
-        self.traces = SimpleNamespace(_traces_live={})
+        self.traces = SimpleNamespace(_traces_live={}, _instances=[])
         ns = {"ttnn": self.ops, "torch": SimpleNamespace(is_tensor=lambda _: False), "Tracer": self.traces}
-        state_type = load(ROOT / "utils/tracing.py", {"StateTensor"}, ns)["StateTensor"]
+        state_type = load(ROOT / "utils/tracing.py", {"StateTensor", "live_tracers"}, ns)["StateTensor"]
         allocate = load(ROOT / "pipelines/ltx/pipeline_ltx_distilled.py", {"_allocate_device_prompt_buffers"}, ns)[
             "_allocate_device_prompt_buffers"
         ]
-        handoff = load(ROOT / "encoders/gemma/encoder_pair.py", {"encode_to_device_buffers"}, ns)[
+        handoff = load(ROOT / "encoders/gemma3/encoder_pair.py", {"encode_to_device_buffers"}, ns)[
             "encode_to_device_buffers"
         ]
         self.video = Tensor((1, 1024, 4096), [0.0])

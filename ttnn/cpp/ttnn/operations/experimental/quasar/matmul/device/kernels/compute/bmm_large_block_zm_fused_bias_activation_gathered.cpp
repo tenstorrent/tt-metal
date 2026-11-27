@@ -27,6 +27,8 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    // Undo the MxFp4 2x src format matmul_init latched (see mm_uninit); no-op otherwise.
+    mm_uninit(in0_cb_id, in1_cb_id);
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);
@@ -289,6 +291,11 @@ void kernel_main() {
 
         if constexpr (batch > 1) {
             pack_reconfig_data_format(mm_partials_cb_id);
+#ifdef ARCH_QUASAR
+            // Quasar: the pack destination (BFD) is baked at pack_init; pack_reconfig_data_format is gasket-only,
+            // so every output switch needs a pack_init (same idiom as the metal2 kernel).
+            pack_init(mm_partials_cb_id);
+#endif
         }
 
         // Wait to receive in1
@@ -406,6 +413,14 @@ void kernel_main() {
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                         pack_reconfig_data_format(mm_out_cb_id);
+#endif
+#ifdef ARCH_QUASAR
+                        // Quasar: retarget the pack BFD to mm_out_cb for the final block (reconfig is gasket-only).
+                        // untilize_out re-inits via pack_untilize_dest_init above, so only the tiled path needs this.
+                        if constexpr (!untilize_out) {
+                            pack_reconfig_data_format(mm_out_cb_id);
+                            pack_init(mm_out_cb_id);
+                        }
 #endif
 
 #ifdef PACKER_L1_ACC

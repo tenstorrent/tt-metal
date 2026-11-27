@@ -6,8 +6,8 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include <bit>
@@ -17,7 +17,7 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::normalization;
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // Kernel identities within the ProgramSpec. Names are file-local: CMake gives every source in a
 // unity-build target its own CMAKE_UNIQUE_NAMESPACE, so the sibling running-statistics factory can
@@ -179,7 +179,6 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     tensor_return_value_t& output) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input_tensor = tensor_args.input.mesh_tensor();
@@ -189,7 +188,7 @@ ttnn::device_operation::ProgramArtifacts BatchNormOperation::BatchNormFactory::c
     const auto& weight_tensor = tensor_args.weight;
     const auto& bias_tensor = tensor_args.bias;
 
-    tt::tt_metal::distributed::MeshDevice& device = input_tensor.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = input_tensor.device();
 
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();

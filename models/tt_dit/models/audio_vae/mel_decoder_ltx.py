@@ -463,7 +463,15 @@ class MelDecoder(Module):
             sample_bhwc_padded, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    # hold_capture_frees: per instance (task #6623). H3 opts in so a later job's buffers cannot land
+    # on this trace's intermediates (task #6000); LTX keeps it off, since the hold reserves the
+    # capture's intermediates without reuse and its cold warm-up then runs out of DRAM on cs04.
+    @traced_function(
+        device=lambda self: self.mesh_device,
+        prep_run=False,
+        clone_prep_inputs=False,
+        hold_capture_frees=lambda self: getattr(self, "hold_capture_frees", False),
+    )
     def _forward_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """The pure on-device decode graph (conv_in → conv_out). Captured for trace replay."""
         x = self.conv_in(x)

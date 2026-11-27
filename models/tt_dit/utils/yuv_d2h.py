@@ -10,14 +10,19 @@ d2h internals; reuses the shard-extraction primitives it already exposes.
 
 from __future__ import annotations
 
+import math
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
+from . import timing_tree
+from .host_buffers import empty_uint8
 from .planar_concat import HAS_CPP_PLANAR_CONCAT
 from .planar_concat import planar_concat_cpp as _planar_concat_cpp_impl
 from .tensor import _get_inter_host_axis, _host_buffer_to_torch, _to_torch_zero_copy
@@ -37,18 +42,52 @@ def _get_default_reassemble_pool() -> ThreadPoolExecutor:
     return _DEFAULT_REASSEMBLE_POOL
 
 
-# Persistent output buffer for the C++ planar-concat fast path
-_PLANAR_OUT_BUF: np.ndarray | None = None
-_PLANAR_OUT_SHAPE: tuple[int, int] | None = None
+_FALLBACK_WARNED = False
 
 
-def _get_planar_out_buf(T: int, row_stride: int) -> np.ndarray:
-    global _PLANAR_OUT_BUF, _PLANAR_OUT_SHAPE
-    shape = (T, row_stride)
-    if _PLANAR_OUT_SHAPE != shape:
-        _PLANAR_OUT_BUF = np.empty(shape, dtype=np.uint8)
-        _PLANAR_OUT_SHAPE = shape
-    return _PLANAR_OUT_BUF
+def _warn_once_about_the_fallback() -> None:
+    """Warn once that the AVX2 concat is missing."""
+    global _FALLBACK_WARNED
+    if _FALLBACK_WARNED:
+        return
+    _FALLBACK_WARNED = True
+    logger.warning(
+        "yuv readback is using the torch scatter: the AVX2 planar concat is not built "
+        "(run models/tt_dit/utils/cpp/build.sh to get it; ~1.7x on this step)"
+    )
+
+
+def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
+    """(1,h,w*T) -> (1,h,w,T)."""
+    if shard.dim() == 4:
+        return shard
+    return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
+
+
+def _local_range(view) -> ttnn.MeshCoordinateRange | None:
+    """This host's devices as one range, for an event it can wait on: `event_synchronize` visits every device in
+    the event's range and throws on a remote one. None (the whole mesh) on a single host."""
+    if view is None:
+        return None
+    # The range iterator yields one coordinate object that it mutates in place, so copy each out as it passes.
+    local = [tuple(int(x) for x in c) for c in ttnn.MeshCoordinateRange(view.shape()) if view.is_local(c)]
+    lo = [min(c[d] for c in local) for d in range(len(local[0]))]
+    hi = [max(c[d] for c in local) for d in range(len(local[0]))]
+    assert len(local) == math.prod(h - l + 1 for l, h in zip(lo, hi)), f"local devices are not one rectangle: {local}"
+    return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(lo), ttnn.MeshCoordinate(hi))
+
+
+def _all_contiguous(*shard_groups) -> bool:
+    """All C-contiguous?"""
+    for group in shard_groups:
+        for shard in group:
+            flags = getattr(shard, "flags", None)
+            if flags is not None:
+                if not flags.c_contiguous:
+                    return False
+            elif not shard.is_contiguous():
+                return False
+    return True
 
 
 def _bt601_yuv_coefficients():
@@ -56,15 +95,19 @@ def _bt601_yuv_coefficients():
     return ttnn.experimental.yuv_bt601_coefficients()
 
 
-def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None):
-    """Pure device region, preserving RGB clip before every color/chroma operation."""
+def rgb_chwt_to_yuv_device(tt_CHWT: ttnn.Tensor, *, coefficients=None, input_patch_size: int = 0):
+    """Pure device region, preserving RGB clip before every color/chroma operation.
+
+    input_patch_size: 0 for CHWT input; p for a patchified (1, T, H/p, W/p, 3*p*p) tensor, which
+    rgb_to_yuv unpatchifies while reading.
+    """
     if coefficients is None:
         coefficients = _bt601_yuv_coefficients()
     tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
-    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+    return ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, input_patch_size=input_patch_size)
 
 
-def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
+def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int, defer: bool = False):
     """Single-host H/W-sharded planes to the existing asynchronous DMA/reassembly path."""
     if ttnn.using_distributed_env():
         raise ValueError("direct YUV planes currently require a single host")
@@ -75,7 +118,7 @@ def yuv_planes_to_host(planes, mesh_device, *, logical_h: int, logical_w: int):
     h, w = h_per * mesh_device.shape[0], w_per * mesh_device.shape[1]
     if not (0 < logical_h <= h and logical_h % 2 == 0 and 0 < logical_w <= w and logical_w % 2 == 0):
         raise ValueError("YUV crop must be positive, even, and inside the assembled planes")
-    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w)
+    return _yuv_planar_d2h(y, cb, cr, mesh_device, h, w, frames, out_H=logical_h, out_W=logical_w, defer=defer)
 
 
 def _yuv_planar_d2h(
@@ -91,7 +134,8 @@ def _yuv_planar_d2h(
     out_W: int | None = None,
     view=None,
     pool: ThreadPoolExecutor | None = None,
-) -> np.ndarray:
+    defer: bool = False,
+) -> "np.ndarray | DeferredYuvPlanar":
     """Batched D2H of three YUV ttnn tensors into ffmpeg yuv420p planar uint8.
 
     Per-shard input shapes (kernel-native BHWT with C=1):
@@ -103,14 +147,18 @@ def _yuv_planar_d2h(
     ``[Y plane | Cb plane | Cr plane]`` in row-major.
 
     Kicks off all three ``cpu(blocking=False)`` calls before a single
-    ``synchronize_device`` so the reads overlap.  Per-shard scatters then
-    take one of two paths:
+    ``synchronize_device`` so the reads overlap.  With ``defer=True`` the
+    transfer still completes here and everything after it comes back as a
+    callable instead: pulling each device's shards out of the host tensors
+    and scattering them into the planar frame is host work, and both halves
+    release the GIL, so a caller can run it while the device moves on to the
+    next frame.  Per-shard scatters take one of two paths:
 
       * **C++/AVX2 fast path** (when ``HAS_CPP_PLANAR_CONCAT`` is True and
-        the local mesh is rectangular): one ``planar_concat_cpp`` call into
-        a module-level persistent output buffer.  ~2× faster than the
-        Python path on warm calls, but the returned buffer is **reused
-        across calls** — copy out (or feed ffmpeg) before the next call.
+        the local mesh is rectangular): one ``planar_concat_cpp`` call,
+        ~1.7× the Python path at the H3 chunk shape (43 MB: 10.4 -> 6.3 ms).
+        Allocates per call, so the result is the caller's, exactly as the
+        fallback's is.
       * **Python fallback**: per-shard ``_write`` tasks on the shared
         reassembly ThreadPoolExecutor (torch's strided-copy backend).
         Each scatter is a strided->strided copy; allocates a fresh output
@@ -132,127 +180,180 @@ def _yuv_planar_d2h(
     out_H = H if out_H is None else out_H
     out_W = W if out_W is None else out_W
 
-    # Async D2H all 3 outputs, single sync — overlaps three D2H reads.
-    host_Y = tt_Y.cpu(blocking=False)
-    host_Cb = tt_Cb.cpu(blocking=False)
-    host_Cr = tt_Cr.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    with timing_tree.span(mesh_device, "yuv readback (3 planes)", category=timing_tree.HOST_XFER):
+        host_Y = tt_Y.cpu(blocking=False)
+        host_Cb = tt_Cb.cpu(blocking=False)
+        host_Cr = tt_Cr.cpu(blocking=False)
+        read_event = None
+        if defer:
+            read_event = ttnn.record_event(mesh_device, 0, device_range=_local_range(view))
+        else:
+            ttnn.synchronize_device(mesh_device)
 
-    if view is not None:
-        # --- Multi-host: extract local shards via host_buffer/get_shard ---
-        def _extract_local(host_tensor):
-            host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
-            distributed_buf = host_tensor.host_buffer()
-            tt_dtype = host_tensor.dtype
-            padded_shape = list(host_tensor.padded_shape)
-            logical_shape = list(host_tensor.shape)
-            trim = tuple(slice(0, d) for d in logical_shape)
+    def _host_half():
+        if read_event is not None:
+            ttnn.event_synchronize(read_event)
+        if view is not None:
 
-            coords_and_shards = []
-            for c in host_mesh_coords:
-                if not view.is_local(c):
-                    continue
-                buf = distributed_buf.get_shard(c)
-                if buf is not None:
-                    coords_and_shards.append((c, _host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim]))
-            return coords_and_shards
+            def _extract_local(host_tensor):
+                host_mesh_coords = list(host_tensor.tensor_topology().mesh_coords())
+                distributed_buf = host_tensor.host_buffer()
+                tt_dtype = host_tensor.dtype
+                padded_shape = list(host_tensor.padded_shape)
+                logical_shape = list(host_tensor.shape)
+                trim = tuple(slice(0, d) for d in logical_shape)
 
-        Y_coords_shards = _extract_local(host_Y)
-        Cb_coords_shards = _extract_local(host_Cb)
-        Cr_coords_shards = _extract_local(host_Cr)
+                coords_and_shards = []
+                for c in host_mesh_coords:
+                    if not view.is_local(c):
+                        continue
+                    buf = distributed_buf.get_shard(c)
+                    if buf is not None:
+                        coords_and_shards.append(
+                            (c, _as_hwt(_host_buffer_to_torch(buf, padded_shape, tt_dtype)[trim], T))
+                        )
+                return coords_and_shards
 
-        # Remap global mesh coordinates to 0-based local coordinates.
-        all_local_coords = [c for c, _ in Y_coords_shards]
-        local_row_positions = sorted({int(c[0]) for c in all_local_coords})
-        local_col_positions = sorted({int(c[1]) for c in all_local_coords})
-        row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
-        col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
-        TP_eff = len(local_row_positions)
-        SP_eff = len(local_col_positions)
+            Y_coords_shards = _extract_local(host_Y)
+            Cb_coords_shards = _extract_local(host_Cb)
+            Cr_coords_shards = _extract_local(host_Cr)
 
-        h_per_y, w_per_y = H // TP_eff, W // SP_eff
-        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
+            all_local_coords = [c for c, _ in Y_coords_shards]
+            local_row_positions = sorted({int(c[0]) for c in all_local_coords})
+            local_col_positions = sorted({int(c[1]) for c in all_local_coords})
+            row_remap = {pos: i for i, pos in enumerate(local_row_positions)}
+            col_remap = {pos: i for i, pos in enumerate(local_col_positions)}
+            TP_eff = len(local_row_positions)
+            SP_eff = len(local_col_positions)
 
-        mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
-        Y_shards = [s for _, s in Y_coords_shards]
-        Cb_shards = [s for _, s in Cb_coords_shards]
-        Cr_shards = [s for _, s in Cr_coords_shards]
-    else:
-        # --- Single-host: extract all shards via get_device_tensors ---
-        TP_eff, SP_eff = tuple(mesh_device.shape)
-        h_per_y, w_per_y = H // TP_eff, W // SP_eff
-        h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
+            h_per_y, w_per_y = H // TP_eff, W // SP_eff
+            h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
-        mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
+            mesh_coords = [(row_remap[int(c[0])], col_remap[int(c[1])]) for c in all_local_coords]
+            Y_shards = [s for _, s in Y_coords_shards]
+            Cb_shards = [s for _, s in Cb_coords_shards]
+            Cr_shards = [s for _, s in Cr_coords_shards]
+        else:
+            TP_eff, SP_eff = tuple(mesh_device.shape)
+            h_per_y, w_per_y = H // TP_eff, W // SP_eff
+            h_per_uv, w_per_uv = Hu // TP_eff, Wu // SP_eff
 
-        def _extract(host_tensor):
-            host_shards = ttnn.get_device_tensors(host_tensor)
-            logical_shape = list(host_shards[0].shape)
-            trim = tuple(slice(0, d) for d in logical_shape)
-            return [_to_torch_zero_copy(s)[trim] for s in host_shards]
+            mesh_coords = list(tt_Y.tensor_topology().mesh_coords())
 
-        Y_shards = _extract(host_Y)  # each (1, h_per_y, w_per_y, T)
-        Cb_shards = _extract(host_Cb)  # each (1, h_per_uv, w_per_uv, T)
-        Cr_shards = _extract(host_Cr)
+            def _extract(host_tensor):
+                host_shards = ttnn.get_device_tensors(host_tensor)
+                logical_shape = list(host_shards[0].shape)
+                trim = tuple(slice(0, d) for d in logical_shape)
+                return [_as_hwt(_to_torch_zero_copy(s)[trim], T) for s in host_shards]
 
-    # --- C++/AVX2 fast path --------------------------------------------- Drop-in replacement for the torch_threaded
-    if HAS_CPP_PLANAR_CONCAT and len(mesh_coords) == TP_eff * SP_eff:
-        triples = sorted(
-            zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
-            key=lambda t: (int(t[0][0]), int(t[0][1])),
+            Y_shards = _extract(host_Y)
+            Cb_shards = _extract(host_Cb)
+            Cr_shards = _extract(host_Cr)
+
+        use_cpp = (
+            HAS_CPP_PLANAR_CONCAT
+            and len(mesh_coords) == TP_eff * SP_eff
+            and _all_contiguous(Y_shards, Cb_shards, Cr_shards)
         )
+        if use_cpp:
+            triples = sorted(
+                zip(mesh_coords, Y_shards, Cb_shards, Cr_shards),
+                key=lambda t: (int(t[0][0]), int(t[0][1])),
+            )
+            assembled = _planar_concat_cpp_impl(
+                [t[1] for t in triples],
+                [t[2] for t in triples],
+                [t[3] for t in triples],
+                "CHWT",
+                (TP_eff, SP_eff),
+                out_H=out_H,
+                out_W=out_W,
+            )
+            return assembled
+
+        _warn_once_about_the_fallback()
+
         out_Hu, out_Wu = out_H // 2, out_W // 2
-        out_row = out_H * out_W + 2 * out_Hu * out_Wu
-        out = _get_planar_out_buf(T, out_row)
-        return _planar_concat_cpp_impl(
-            [t[1] for t in triples],
-            [t[2] for t in triples],
-            [t[3] for t in triples],
-            "CHWT",
-            (TP_eff, SP_eff),
-            out=out,
-            out_H=out_H,
-            out_W=out_W,
-        )
+        out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
+        out_row = out_hw + 2 * out_uv
 
-    # --- Python fallback (torch_threaded scatter) ------------------------ Assemble directly into the logical-sized
-    out_Hu, out_Wu = out_H // 2, out_W // 2
-    out_hw, out_uv = out_H * out_W, out_Hu * out_Wu
-    out_row = out_hw + 2 * out_uv
+        out = empty_uint8((T, out_row))
+        out_t = torch.from_numpy(out)
+        y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
+        u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
+        v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
 
-    out = np.empty((T, out_row), dtype=np.uint8)
-    out_t = torch.from_numpy(out)
-    y_view = out_t.as_strided((T, out_H, out_W), (out_row, out_W, 1), 0)
-    u_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw)
-    v_view = out_t.as_strided((T, out_Hu, out_Wu), (out_row, out_Wu, 1), out_hw + out_uv)
+        reassemble_pool = pool if pool is not None else _get_default_reassemble_pool()
 
-    if pool is None:
-        pool = _get_default_reassemble_pool()
+        def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
+            r0, c0 = r * h_per, c * w_per
+            vh = min(h_per, bound_h - r0)
+            vw = min(w_per, bound_w - c0)
+            if vh <= 0 or vw <= 0:
+                return
+            src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
+            view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
 
-    def _write(view, shard, r, c, h_per, w_per, bound_h, bound_w):
-        r0, c0 = r * h_per, c * w_per
-        vh = min(h_per, bound_h - r0)
-        vw = min(w_per, bound_w - c0)
-        if vh <= 0 or vw <= 0:
-            return  # shard lies entirely in the padded tail
-        # shard (1, h_per, w_per, T) -> squeeze(0).permute(2, 0, 1) -> (T, h_per, w_per).
-        src = shard.squeeze(0).permute(2, 0, 1)[:, :vh, :vw]
-        view[:, r0 : r0 + vh, c0 : c0 + vw].copy_(src)
+        futures = []
+        for coord, shard in zip(mesh_coords, Y_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(reassemble_pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y, out_H, out_W))
+        for coord, shard in zip(mesh_coords, Cb_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(reassemble_pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
+        for coord, shard in zip(mesh_coords, Cr_shards):
+            r, c = int(coord[0]), int(coord[1])
+            futures.append(reassemble_pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
+        for f in futures:
+            f.result()
 
-    futures = []
-    for coord, shard in zip(mesh_coords, Y_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, y_view, shard, r, c, h_per_y, w_per_y, out_H, out_W))
-    for coord, shard in zip(mesh_coords, Cb_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, u_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
-    for coord, shard in zip(mesh_coords, Cr_shards):
-        r, c = int(coord[0]), int(coord[1])
-        futures.append(pool.submit(_write, v_view, shard, r, c, h_per_uv, w_per_uv, out_Hu, out_Wu))
-    for f in futures:
-        f.result()
+        return out
 
-    return out
+    if defer:
+        out_row = out_H * out_W + 2 * (out_H // 2) * (out_W // 2)
+        return DeferredYuvPlanar(_host_half, (T, out_row))
+    path = "C++ planar concat" if HAS_CPP_PLANAR_CONCAT else "torch fallback"
+    with timing_tree.span(mesh_device, f"yuv host assemble ({path})", category=timing_tree.HOST_COMPUTE):
+        return _host_half()
+
+
+class DeferredYuvPlanar:
+    """Planar YUV whose host assembly runs on the first :meth:`result` call.
+
+    Exposes ``shape`` and the leading-axis slicing and ``reshape`` the pipeline applies to the eager
+    array, so it can stand in for one until a consumer needs the bytes.
+    """
+
+    def __init__(self, produce, shape: tuple[int, ...]) -> None:
+        self._produce = produce
+        self.shape = tuple(shape)
+
+    def result(self) -> np.ndarray:
+        out = self._produce()
+        if tuple(out.shape) != self.shape:
+            msg = f"deferred YUV produced {tuple(out.shape)}, expected {self.shape}"
+            raise RuntimeError(msg)
+        return out
+
+    def __call__(self) -> np.ndarray:
+        """Callable form: the H3 VAE calls the deferred readback directly."""
+        return self.result()
+
+    def reshape(self, *shape) -> "DeferredYuvPlanar":
+        new_shape = tuple(int(d) for d in (shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape))
+        if any(d < 0 for d in new_shape) or int(np.prod(new_shape)) != int(np.prod(self.shape)):
+            msg = f"cannot reshape deferred YUV {self.shape} to {shape}"
+            raise ValueError(msg)
+        produce = self._produce
+        return DeferredYuvPlanar(lambda: produce().reshape(new_shape), new_shape)
+
+    def __getitem__(self, key) -> "DeferredYuvPlanar":
+        if not isinstance(key, slice):
+            msg = "deferred YUV supports only a leading-axis slice"
+            raise TypeError(msg)
+        n = len(range(*key.indices(self.shape[0])))
+        produce = self._produce
+        return DeferredYuvPlanar(lambda: produce()[key], (n,) + self.shape[1:])
 
 
 def fast_device_to_host_yuv(
@@ -267,7 +368,9 @@ def fast_device_to_host_yuv(
     logical_h: int | None = None,
     logical_w: int | None = None,
     use_persistent_buffer: bool = True,
-) -> np.ndarray | None:
+    defer: bool = False,
+    input_patch_size: int = 0,
+) -> np.ndarray | Callable[[], np.ndarray] | None:
     """On-device YUV 4:2:0 conversion + batched D2H + planar uint8 concat.
 
     Takes a sharded BCTHW bf16 row-major tensor with values in ``[-1, 1]`` —
@@ -323,6 +426,16 @@ def fast_device_to_host_yuv(
         logical_w: Optional logical (un-padded) width of the output, trimming
             the right columns of each plane exactly as ``logical_h`` trims the
             bottom rows.  Must be even and ``<= W``.  Defaults to ``None``.
+        defer: Return a zero-argument callable that finishes the readback
+            rather than the frame itself.  The transfer is complete when it
+            returns; what is left is host work the caller can overlap with the
+            next frame's device work.  Calling it yields the frame.
+
+        input_patch_size: ``0`` (default) for BCTHW input.  An even ``p >= 2``
+            takes the patchified ``(1, T, H/p, W/p, 3*p*p)`` tensor instead, with
+            channels ordered ``(c, w_in_patch, h_in_patch)`` (the LTX VAE
+            ``conv_out`` layout), and ``rgb_to_yuv`` unpatchifies it while
+            reading, which skips the reshape + permute to CHWT.  Single-host only.
 
     Returns:
         ``np.ndarray`` of shape ``(T, H'*W' + 2*(H'/2 * W'/2))``, dtype uint8,
@@ -340,7 +453,16 @@ def fast_device_to_host_yuv(
 
     # NOTE: ttnn ``.shape`` on a multi-device sharded tensor returns the per-shard (local) shape
     mesh_shape = tuple(mesh_device.shape)
-    B, C, T, h_per, w_per = tt_video_BCTHW.shape
+    if input_patch_size:
+        if ttnn.using_distributed_env():
+            msg = "fast_device_to_host_yuv: input_patch_size is single-host only"
+            raise ValueError(msg)
+        p = input_patch_size
+        B, T, hp_per, wp_per, Cp = tt_video_BCTHW.shape
+        assert Cp == 3 * p * p, f"patchified input needs 3*p*p={3 * p * p} channels, got {Cp}"
+        C, h_per, w_per = 3, hp_per * p, wp_per * p
+    else:
+        B, C, T, h_per, w_per = tt_video_BCTHW.shape
     assert B == 1, f"fast_device_to_host_yuv requires B=1, got {B}"
     assert C == 3, f"fast_device_to_host_yuv requires C=3 (RGB), got {C}"
 
@@ -426,20 +548,32 @@ def fast_device_to_host_yuv(
         h_per % 2 == 0 and w_per % 2 == 0
     ), f"per-shard H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
 
-    # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
-    tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
-    if debug:
-        print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
-
-    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
-    if debug:
-        print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
-
-    # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
     # Match the float export, which clamps RGB to [0, 255] before ffmpeg converts it: the kernel converts first
     # and clips [0, 255] after, so the VAE's out-of-range extremes would otherwise land outside the limited
-    # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels).
-    tt_Y, tt_Cb, tt_Cr = rgb_chwt_to_yuv_device(tt_CHWT, coefficients=coefficients)
+    # range (Y 0-255 instead of 16-235; measured ~3 Y levels RMS on 10 % of the pixels). The clip is
+    # elementwise, so it applies to the patchified input as well.
+    if input_patch_size:
+        # 1+2. The kernel reads the patchified shard directly.
+        tt_video_BCTHW = ttnn.clip(tt_video_BCTHW, -1.0, 1.0)
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(
+            tt_video_BCTHW, coefficients=coefficients, wide_rows=T <= 32, input_patch_size=input_patch_size
+        )
+    else:
+        # 1. Reorder BCTHW -> CHWT for the YUV kernel.  Shapes here are per-shard.
+        tt_BCHWT = ttnn.permute(tt_video_BCTHW, (0, 1, 3, 4, 2))
+        if debug:
+            print(f"  [yuv-d2h] after permute(0,1,3,4,2) per-shard: {list(tt_BCHWT.shape)}")
+
+        tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+        if debug:
+            print(f"  [yuv-d2h] after reshape to (C,h_per,w_per,T) per-shard: {list(tt_CHWT.shape)}")
+
+        # 2. On-device YUV 4:2:0 -> 3 uint8 tensors.
+        tt_CHWT = ttnn.clip(tt_CHWT, -1.0, 1.0)
+        # wide_rows takes one T tile per unit (T <= 32): H3 decodes in chunks that fit, but LTX reads back a whole
+        # clip (T=145 for 6 s), which TT_FATALs at pipeline build. Above 32 frames use the plain kernel, as ltx-rt
+        # did before the H3 merge; both give the same planes (test_rgb_to_yuv_wide_minimax_h3).
+        tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients, wide_rows=T <= 32)
     if debug:
         print(f"  [yuv-d2h] yuv outputs per-shard:")
         print(f"  [yuv-d2h]   Y : {list(tt_Y.shape)}")
@@ -449,6 +583,89 @@ def fast_device_to_host_yuv(
     # 3+4
     new_H = logical_h if logical_h is not None else H
     new_W = logical_w if logical_w is not None else W
-    out = _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, out_H=new_H, out_W=new_W, view=d2h_view, pool=pool)
+    out = _yuv_planar_d2h(
+        tt_Y,
+        tt_Cb,
+        tt_Cr,
+        mesh_device,
+        H,
+        W,
+        T,
+        out_H=new_H,
+        out_W=new_W,
+        view=d2h_view,
+        pool=pool,
+        defer=defer,
+    )
 
     return out
+
+
+def replicated_to_host_yuv(
+    tt_video_BCTHW: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    *,
+    coefficients=None,
+    pool: ThreadPoolExecutor | None = None,
+) -> np.ndarray:
+    """YUV 4:2:0 readback of a video every device already holds in full.
+
+    ``fast_device_to_host_yuv`` takes a sharded frame and, on multi-host, gathers across
+    hosts so each host can read a whole frame. A replicated input needs no collective:
+    each device slices out the slab it would have ended up with after that gather. The
+    spatial dim on the inter-host mesh axis is repeated once per host before that axis is
+    partitioned, so local index ``j`` on every host holds slab ``j`` of the full frame --
+    the layout ``_yuv_planar_d2h`` assembles, byte for byte the same as the gather path
+    produces. Like the gather path, this assumes each host owns a contiguous block of the
+    inter-host axis.
+
+    Args:
+        tt_video_BCTHW: ``(1, 3, T, H, W)`` bfloat16 ROW_MAJOR, replicated on every device,
+            values in ``[-1, 1]``.
+        mesh_device: The mesh device.
+        coefficients: ``ttnn.experimental.YUVCoefficients``; defaults to BT.601 limited range.
+        pool: Optional ``ThreadPoolExecutor`` for the host-side reassembly.
+
+    Returns:
+        ``np.ndarray`` of shape ``(T, H*W + 2*(H/2 * W/2))``, dtype uint8, planar yuv420p.
+    """
+    if coefficients is None:
+        coefficients = _bt601_yuv_coefficients()
+
+    B, C, T, H, W = tt_video_BCTHW.shape
+    assert B == 1, f"replicated_to_host_yuv requires B=1, got {B}"
+    assert C == 3, f"replicated_to_host_yuv requires C=3 (RGB), got {C}"
+    # A tiled input would make `ttnn.repeat` wrap itself in an untilize/retilize.
+    assert tt_video_BCTHW.layout == ttnn.ROW_MAJOR_LAYOUT, "replicated_to_host_yuv requires ROW_MAJOR input"
+
+    mesh_shape = tuple(mesh_device.shape)
+    distributed = ttnn.using_distributed_env()
+    n_hosts = int(ttnn.distributed_context_get_size()) if distributed else 1
+    view = mesh_device.get_view() if distributed else None
+    inter_host_axis = _get_inter_host_axis(mesh_device, view, mesh_shape) if n_hosts > 1 else None
+
+    # Mesh axis 0 splits H (dim 3), axis 1 splits W (dim 4).
+    spatial = [H, W]
+    repeats = [n_hosts if axis == inter_host_axis else 1 for axis in (0, 1)]
+    assert all(
+        (spatial[a] * repeats[a]) % mesh_shape[a] == 0 for a in (0, 1)
+    ), f"({H}, {W}) does not split over mesh {mesh_shape}"
+    h_per, w_per = (spatial[a] * repeats[a] // mesh_shape[a] for a in (0, 1))
+    assert (
+        h_per % 2 == 0 and w_per % 2 == 0
+    ), f"per-device H and W must be even for 4:2:0 (got h_per={h_per}, w_per={w_per})"
+
+    # Host-local axis first, so the repeat only copies that axis's slab rather than the full canvas.
+    tt_video = tt_video_BCTHW
+    for axis in sorted((0, 1), key=lambda a: a == inter_host_axis):
+        if repeats[axis] > 1:
+            repeat_dims = [1] * 5
+            repeat_dims[3 + axis] = repeats[axis]
+            tt_video = ttnn.repeat(tt_video, repeat_dims)
+        tt_video = ttnn.mesh_partition(tt_video, dim=3 + axis, cluster_axis=axis)
+
+    tt_BCHWT = ttnn.permute(tt_video, (0, 1, 3, 4, 2))
+    tt_CHWT = ttnn.reshape(tt_BCHWT, (C, h_per, w_per, T))
+    tt_Y, tt_Cb, tt_Cr = ttnn.experimental.rgb_to_yuv(tt_CHWT, coefficients=coefficients)
+
+    return _yuv_planar_d2h(tt_Y, tt_Cb, tt_Cr, mesh_device, H, W, T, view=view, pool=pool)

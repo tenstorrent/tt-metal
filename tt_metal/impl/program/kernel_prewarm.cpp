@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "impl/program/kernel_prewarm.hpp"
+#include "impl/program/prewarm_failure.hpp"
+#include "common/stable_hash.hpp"
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -10,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -17,12 +20,15 @@
 #include <future>
 #include <iterator>
 #include <mutex>
+#include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <capnp/message.h>
@@ -73,6 +79,9 @@ bool prewarm_globally_disabled() { return !env_truthy("TT_METAL_KERNEL_PREWARM")
 // with the same truthy spelling as TT_METAL_KERNEL_PREWARM so 0/false/off disables it.
 std::atomic<bool> g_capture_only{env_truthy("TT_METAL_KERNEL_CAPTURE_ONLY")};
 
+// Build-only warm-up flag (see program_build_only() in the header).
+std::atomic<bool> g_program_build_only{env_truthy("TT_METAL_PROGRAM_BUILD_ONLY")};
+
 // out_kernel_root is "<cache_root>/<build_key>/kernels/"; the manifest lives at the cache root so a
 // single file serves every build_key (arch + compile config) on this machine -- entries are
 // build_key-tagged and filtered on read. The cache root already moves with TT_METAL_CACHE, so this is
@@ -83,6 +92,27 @@ std::string default_manifest_path(const std::string& out_kernel_root) {
         p = p.parent_path();
     }
     return (p.parent_path().parent_path() / "kernel_prewarm.manifest").string();
+}
+
+// "<cache_root><build_key>/kernel_prewarm.live": touched each time a device opens with that build_key
+// (maybe_launch_prewarm), so the offline prewarm can tell the build keys this machine still uses
+// from ones a past mesh or firmware config left in the shared manifest. Those old keys never get
+// asked for again, and against today's sources most of their kernels fail to compile (cs04, 11-16:
+// 19192 entries of a 09-29 key held the offline pass for 15 min after the live key built in 90 s).
+std::string live_stamp_path(const std::string& out_kernel_root) {
+    fs::path p(out_kernel_root);
+    if (p.filename().empty()) {
+        p = p.parent_path();
+    }
+    return (p.parent_path() / "kernel_prewarm.live").string();
+}
+
+void touch_live_stamp(const std::string& out_kernel_root) {
+    const fs::path stamp = live_stamp_path(out_kernel_root);
+    std::error_code ec;
+    fs::create_directories(stamp.parent_path(), ec);
+    std::ofstream(stamp, std::ios::trunc).flush();
+    fs::last_write_time(stamp, fs::file_time_type::clock::now(), ec);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -98,17 +128,6 @@ std::string default_manifest_path(const std::string& out_kernel_root) {
 // .o/.elf/.dephash is enough to turn the later op-by-op build into a cache hit.
 // ------------------------------------------------------------------------------------------------
 
-void build_failure(
-    const std::string& target, const std::string& op, const std::string& cmd, const std::string& log_file) {
-    std::ifstream file{log_file};
-    if (file.is_open()) {
-        std::string log_contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        throw std::runtime_error(fmt::format("{} {} failure -- cmd: {}\nLog: {}", target, op, cmd, log_contents));
-    }
-    throw std::runtime_error(
-        fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file));
-}
-
 bool need_compile(const std::string& out_dir, const std::string& obj) {
     return !fs::exists(out_dir + obj) || !jit_build::dependencies_up_to_date(out_dir, obj);
 }
@@ -118,15 +137,18 @@ bool need_link(const std::string& out_dir, const std::string& target_name) {
     return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
-std::string format_args(const std::vector<std::string>& args) {
-    std::string result;
-    for (const auto& a : args) {
-        if (!result.empty()) {
-            result += ' ';
-        }
-        result += a;
+// True when build_target() has nothing to compile or link: every object and the ELF are present and
+// their recorded dependency hashes still match.
+bool target_is_current(const std::string& out_dir, const jit_build::TargetRecipe& target) {
+    if (target.srcs.size() != target.objs.size()) {
+        return false;
     }
-    return result;
+    for (const auto& obj : target.objs) {
+        if (need_compile(out_dir, obj)) {
+            return false;
+        }
+    }
+    return !need_link(out_dir, target.target_name);
 }
 
 void append_tokenized(std::vector<std::string>& args, const std::string& flags) {
@@ -157,10 +179,9 @@ void compile_one(
     args.push_back(temp_d_path);
     args.insert(args.end(), target.defines.begin(), target.defines.end());
 
-    jit_build::utils::FileRenamer log_file(obj_path + ".log");
-    fs::remove(log_file.path());
-    if (!jit_build::utils::exec_command(args, out_dir, log_file.path())) {
-        build_failure(target.target_name, "compile", format_args(args), log_file.path());
+    const auto result = failure::command(args, out_dir);
+    if (!result.success()) {
+        throw failure::CompileFailure(result, /*compiling=*/true);
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
     fs::remove(temp_d_path);
@@ -193,10 +214,9 @@ void link_one(
     args.push_back("-o");
     args.push_back(elf_file.path());
 
-    jit_build::utils::FileRenamer log_file(elf_name + ".log");
-    fs::remove(log_file.path());
-    if (!jit_build::utils::exec_command(args, out_dir, log_file.path())) {
-        build_failure(target.target_name, "link", format_args(args), log_file.path());
+    const auto result = failure::command(args, out_dir);
+    if (!result.success()) {
+        throw failure::CompileFailure(result, /*compiling=*/false);
     }
 
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
@@ -315,6 +335,10 @@ std::mutex g_capture_mutex;
 // Seeded from the on-disk manifest at init so warm runs re-append only genuinely new kernels.
 std::unordered_set<std::string> g_captured_keys;
 
+// Full commit of the tree this process runs from, stamped on every captured entry (empty: unknown).
+// Set once at device init, before capture is enabled.
+std::string g_tree_commit;
+
 void fill_target_recipe(jit_server::rpc::TargetRecipe::Builder builder, const jit_build::TargetRecipe& t) {
     builder.setTargetName(t.target_name);
     builder.setCflags(t.cflags);
@@ -385,6 +409,7 @@ std::vector<jit_server::CompileRequest> read_manifest(const std::string& path) {
             req.build_key = r.getBuildKey();
             req.kernel_name = r.getKernelName().cStr();
             req.gpp = r.getGpp().cStr();
+            req.tree_commit = r.getTreeCommit().cStr();
             for (auto t : r.getTargets()) {
                 req.targets.push_back(read_target_recipe(t));
             }
@@ -466,6 +491,287 @@ bool is_device_init_kernel(const std::string& base_name) {
     return base_name.starts_with("cq_") || base_name.find("fabric") != std::string::npos;
 }
 
+void hash_field(tt::StableHasher& hash, std::string_view value) {
+    hash.update(static_cast<uint64_t>(value.size()));
+    hash.update(value);
+}
+
+void hash_file(tt::StableHasher& hash, const fs::path& path) {
+    hash_field(hash, fs::canonical(path).string());
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        throw std::runtime_error("unreadable context file");
+    }
+    std::array<char, 65536> buffer{};
+    while (file) {
+        file.read(buffer.data(), buffer.size());
+        hash.update(buffer.data(), file.gcount());
+    }
+    if (!file.eof()) {
+        throw std::runtime_error("incomplete context file");
+    }
+    hash.update(static_cast<uint64_t>(fs::file_size(path)));
+}
+
+// Like compiler_version's process cache, this snapshot requires a stable toolchain during a pass.
+// Hash the entire SFPI installation (not just the driver/version: cc1plus, libraries, specs, etc.).
+// Unknown wrappers/installations remain retryable rather than guessing their identity.
+std::optional<std::string> toolchain_context(const std::string& gpp) {
+    try {
+        auto args = jit_build::utils::tokenize_flags(gpp);
+        if (args.size() != 1 || !fs::path(args[0]).is_absolute()) {
+            return std::nullopt;
+        }
+        const auto compiler = fs::canonical(args[0]);
+        const auto root = compiler.parent_path().parent_path();
+        if (compiler.parent_path().filename() != "bin" || root.string().find("/sfpi/") == std::string::npos) {
+            return std::nullopt;
+        }
+        // GCC's environment and flags can redirect its internal executable/spec/plugin search.
+        for (const char* name : {"GCC_EXEC_PREFIX", "COMPILER_PATH", "LD_PRELOAD"}) {
+            if (env_or_null(name)) {
+                return std::nullopt;
+            }
+        }
+        std::vector<fs::path> files;
+        for (const auto& item : fs::recursive_directory_iterator(root)) {
+            if (item.is_symlink() && item.is_directory()) {
+                return std::nullopt;
+            }
+            if (item.is_regular_file()) {
+                files.push_back(item.path());
+            }
+        }
+        if (const char* search = env_or_null("LD_LIBRARY_PATH")) {
+            std::istringstream paths(search);
+            std::string directory;
+            while (std::getline(paths, directory, ':')) {
+                if (directory.empty() || !fs::path(directory).is_absolute()) {
+                    return std::nullopt;
+                }
+                if (!fs::exists(directory)) {
+                    continue;
+                }
+                for (const auto& item : fs::directory_iterator(directory)) {
+                    if (item.is_regular_file()) {
+                        files.push_back(item.path());
+                    }
+                }
+            }
+        }
+        std::sort(files.begin(), files.end());
+        tt::StableHasher hash;
+        hash_field(hash, "prewarm-failure-context-v2");
+        hash_field(hash, jit_build::utils::compiler_version(gpp));
+        for (const auto& file : files) {
+            hash_file(hash, file);
+        }
+        std::vector<std::string> environment;
+        for (auto entry = ::environ; *entry; ++entry) {
+            const std::string_view variable(*entry);
+            const auto name = variable.substr(0, variable.find('='));
+            // Session/service metadata cannot affect the directly invoked SFPI compiler. Keep
+            // every other variable (even unknown ones) so compiler search, locale and injected
+            // flags retain conservative invalidation; unsupported toolchains still retry.
+            constexpr std::string_view ignored[] = {
+                "TT_METAL_KERNEL_PREWARM_RETRY_FAILED",
+                "INVOCATION_ID",
+                "SYSTEMD_EXEC_PID",
+                "SSH_CONNECTION",
+                "SSH_CLIENT",
+                "SSH_TTY",
+                "JOURNAL_STREAM",
+                "XDG_SESSION_ID",
+                "XDG_SESSION_TYPE",
+                "XDG_SEAT",
+                "XDG_VTNR",
+                "SHLVL",
+                "_"};
+            if (std::find(std::begin(ignored), std::end(ignored), name) != std::end(ignored)) {
+                continue;
+            }
+            environment.emplace_back(*entry);
+        }
+        std::sort(environment.begin(), environment.end());
+        for (const auto& entry : environment) {
+            hash_field(hash, entry);
+        }
+        return std::to_string(hash.digest());
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+}
+
+std::optional<std::string> failure_context(
+    const jit_server::CompileRequest& request,
+    const jit_build::TargetRecipe& target,
+    const std::string& out_dir,
+    const std::optional<std::string>& toolchain) {
+    if (!toolchain) {
+        return std::nullopt;
+    }
+    tt::StableHasher hash;
+    hash_field(hash, *toolchain);
+    hash_field(hash, out_dir);
+    hash_field(hash, request.gpp);
+    hash_field(hash, request.kernel_name);
+    hash.update(request.build_key);
+    for (const auto* field :
+         {&target.target_name,
+          &target.cflags,
+          &target.includes,
+          &target.pch_umbrella,
+          &target.compiler_opt_level,
+          &target.lflags,
+          &target.extra_link_objs,
+          &target.linker_script,
+          &target.weakened_firmware_name,
+          &target.linker_opt_level}) {
+        hash_field(hash, *field);
+    }
+    for (const auto* values : {&target.defines, &target.srcs, &target.objs}) {
+        hash.update(static_cast<uint64_t>(values->size()));
+        for (const auto& value : *values) {
+            hash_field(hash, value);
+        }
+    }
+    hash.update(static_cast<uint64_t>(target.firmware_is_kernel_object));
+    hash.update(target.build_state_hash);
+    for (const auto& file : request.generated_files) {
+        hash_field(hash, file.name);
+        hash.update(static_cast<uint64_t>(file.content.size()));
+        hash.update(file.content.data(), file.content.size());
+    }
+    for (const auto& src : target.srcs) {
+        std::vector<std::string> args;
+        append_tokenized(args, request.gpp);
+        args.push_back("-" + target.compiler_opt_level);
+        append_tokenized(args, target.cflags);
+        append_tokenized(args, target.includes);
+        args.insert(args.end(), target.defines.begin(), target.defines.end());
+        // These may inject dependencies outside normal preprocessing; fail open (retry).
+        for (const auto& arg : args) {
+            if (arg.starts_with("@") || arg.starts_with("-fplugin") || arg.starts_with("-specs") ||
+                arg.starts_with("--specs") || arg.starts_with("-B")) {
+                return std::nullopt;
+            }
+        }
+        args.insert(args.end(), {"-M", "-MF", "-", "-MT", "prewarm", src});
+        // Resolve includes afresh on EVERY comparison: a newly added/shadowing header invalidates
+        // even when old .d/.dephash files and build_key are unchanged. -M includes system headers.
+        const auto deps = failure::command(args, out_dir, std::chrono::minutes(1), 512 * 1024);
+        if (!deps.success() || deps.bytes > deps.head.size() + deps.tail.size()) {
+            return std::nullopt;
+        }
+        std::istringstream input(deps.diagnostic());
+        const auto parsed = jit_build::parse_dependency_file(input);
+        const auto found = parsed.find("prewarm");
+        if (found == parsed.end() || found->second.empty()) {
+            return std::nullopt;
+        }
+        hash_field(hash, deps.diagnostic());
+        for (const auto& dep : found->second) {
+            const fs::path path(dep);
+            hash_file(hash, path.is_absolute() ? path : fs::path(out_dir) / path);
+        }
+    }
+    if (target.srcs.empty()) {
+        return std::nullopt;
+    }
+    return std::to_string(hash.digest());
+}
+
+// Full commit of the source tree at root_dir, or empty when it cannot be told. A tree path reused
+// across commits (a deploy slot rebuilt in place) keeps its build_key, so a manifest entry carries the
+// commit that captured it and run_prewarm replays only the current tree's own. Sources, in order:
+// TT_METAL_KERNEL_PREWARM_TREE_COMMIT, <root>/.git (HEAD, through a loose or packed ref, also for a
+// worktree's gitdir file), then the first word of <root>/.ltx-build-stamp (written after each deploy).
+bool is_commit_id(const std::string& s) {
+    return (s.size() == 40 || s.size() == 64) && std::all_of(s.begin(), s.end(), [](unsigned char c) {
+               return std::isxdigit(c) != 0;
+           });
+}
+
+std::string read_first_line(const fs::path& path) {
+    std::ifstream in(path);
+    std::string line;
+    std::getline(in, line);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) {
+        line.pop_back();
+    }
+    return line;
+}
+
+std::string resolve_git_ref(const fs::path& git_dir, const std::string& ref) {
+    std::error_code ec;
+    std::vector<fs::path> dirs{git_dir};
+    if (fs::exists(git_dir / "commondir", ec)) {  // linked worktree: refs live in the common dir
+        dirs.push_back((git_dir / read_first_line(git_dir / "commondir")).lexically_normal());
+    }
+    for (const auto& dir : dirs) {
+        if (std::string id = read_first_line(dir / ref); is_commit_id(id)) {
+            return id;
+        }
+        std::ifstream packed(dir / "packed-refs");
+        for (std::string line; std::getline(packed, line);) {
+            const auto sp = line.find(' ');
+            if (sp != std::string::npos && line.compare(sp + 1, std::string::npos, ref) == 0 &&
+                is_commit_id(line.substr(0, sp))) {
+                return line.substr(0, sp);
+            }
+        }
+    }
+    return {};
+}
+
+std::string current_tree_commit(const std::string& root_dir) {
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_TREE_COMMIT")) {
+        std::string id(v);
+        std::transform(id.begin(), id.end(), id.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return is_commit_id(id) ? id : std::string();
+    }
+    if (root_dir.empty()) {
+        return {};
+    }
+    const fs::path root(root_dir);
+    std::error_code ec;
+    fs::path git_dir = root / ".git";
+    if (fs::is_regular_file(git_dir, ec)) {  // "gitdir: <path>" of a linked worktree or submodule
+        const std::string line = read_first_line(git_dir);
+        git_dir = line.starts_with("gitdir: ") ? (root / line.substr(8)).lexically_normal() : fs::path();
+    }
+    if (!git_dir.empty() && fs::is_directory(git_dir, ec)) {
+        const std::string head = read_first_line(git_dir / "HEAD");
+        if (is_commit_id(head)) {
+            return head;
+        }
+        if (head.starts_with("ref: ")) {
+            if (std::string id = resolve_git_ref(git_dir, head.substr(5)); !id.empty()) {
+                return id;
+            }
+        }
+    }
+    std::ifstream stamp(root / ".ltx-build-stamp");
+    std::string id;
+    stamp >> id;
+    return is_commit_id(id) ? id : std::string();
+}
+
+// An entry captured by another commit of this tree path. Entries without a commit (manifests from
+// before the field) and an unknown current commit never match: those keep the path filter plus the
+// live-stamp and stale-limit logic.
+bool from_other_commit(const std::string& entry_commit, const std::string& tree_commit) {
+    return !entry_commit.empty() && !tree_commit.empty() && entry_commit != tree_commit;
+}
+
+// TT_METAL_KERNEL_PREWARM_STOP_FILE names a file whose existence stops the batch: a worker that
+// gives its device back to a waiting job creates it (ltx-server, worker._prewarm_stop). The batch
+// otherwise runs to its end (13517 kernels, 37-39 s on blx06) and every join waits for it: the
+// compile barrier in ProgramImpl::compile and the exit-time wait_for_prewarm. Once the file exists
+// the pool threads take no new kernel or target, so a join returns after the builds in flight.
+// One access() per kernel and per target (about a microsecond each) against builds of milliseconds.
+bool stop_file_present(const char* stop_file) { return stop_file != nullptr && ::access(stop_file, F_OK) == 0; }
+
 std::size_t run_prewarm(
     const std::vector<jit_server::CompileRequest>& requests,
     const std::string& out_kernel_root,
@@ -482,17 +788,73 @@ std::size_t run_prewarm(
     const auto fw_map = build_firmware_filename_map(firmware_root);
 
     std::vector<std::shared_future<void>> events;
-    size_t launched = 0;
+    std::atomic<size_t> successful{0}, failed{0}, previously_failed{0};
+    std::atomic<size_t> deferred{0}, genfiles_failed{0};
+    std::unordered_map<std::string, std::optional<std::string>> toolchains;
+    const bool retry_failed = env_truthy("TT_METAL_KERNEL_PREWARM_RETRY_FAILED");
+    // A shared manifest keeps every build_key this cache root has seen, and the foreign-tree filter
+    // below keys on the tree's path only. A build_key last captured by an older commit of the SAME
+    // path passes both filters, and its recipes (old compile-time args, defines, generated bindings)
+    // replayed against the new sources mostly fail: on cs04 (2026-11-16, ltx-rt 6796f8d2b3e) a 09-29
+    // build_key's 26200 targets gave 21409 failures and 4791 successes in ~10 min after the live
+    // build_key built clean in 90 s. Once this many targets have failed (or were skipped as
+    // previously failed) and failures are at least twice the successes, the build_key is stale: stop
+    // queueing its work. A live build_key fails a handful at most. 0 disables the cutoff.
+    std::size_t stale_limit = 256;
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_STALE_LIMIT")) {
+        stale_limit = std::strtoull(v, nullptr, 10);
+    }
+    std::atomic<bool> stale{false};
+    const std::string tree_commit = current_tree_commit(root_dir);
+    std::atomic<size_t> abandoned{0};
+    const char* stop_file = env_or_null("TT_METAL_KERNEL_PREWARM_STOP_FILE");
+    std::atomic<bool> stop{false};
+    std::atomic<size_t> stopped{0}, kernels_started{0};
+    // Latched: once seen, no thread stats the file again.
+    const auto stop_requested = [&]() {
+        if (stop.load(std::memory_order_relaxed)) {
+            return true;
+        }
+        if (stop_file_present(stop_file)) {
+            stop.store(true, std::memory_order_relaxed);
+            return true;
+        }
+        return false;
+    };
+    const auto note_failure = [&]() {
+        const size_t fails = failed.load() + previously_failed.load();
+        if (stale_limit != 0 && fails >= stale_limit && fails >= 2 * successful.load() && !stale.exchange(true)) {
+            log_warning(
+                tt::LogMetal,
+                "kernel prewarm: build_key {} abandoned after {} failed and {} built targets; its manifest "
+                "entries were captured by an older source tree and mostly no longer compile. Set "
+                "TT_METAL_KERNEL_PREWARM_STALE_LIMIT=0 to disable this cutoff.",
+                build_key,
+                fails,
+                successful.load());
+        }
+    };
     size_t skipped_build_key = 0;
     size_t skipped_dup = 0;
     size_t skipped_device_init = 0;
     size_t skipped_foreign_tree = 0;
+    size_t skipped_foreign_commit = 0;
     // A kernel is captured once per program instance, so shared kernels (dispatch, fabric, reused
     // ops) appear many times with the SAME out_dir. FileRenamer temp names are per-process, so two
     // concurrent builds of one out_dir collide on the temp .o and destructively corrupt the final
     // .elf (leaving "no ELF magic" for the op-by-op reader). Build each unique out_dir exactly once.
     std::unordered_set<std::string> built_out_dirs;
-    std::unordered_set<std::string> written_kernel_dirs;
+    struct TargetWork {
+        const jit_server::CompileRequest* request;
+        jit_build::TargetRecipe target;
+    };
+    struct KernelWork {
+        const jit_server::CompileRequest* request;
+        std::string directory;
+        std::vector<TargetWork> targets;
+    };
+    std::vector<KernelWork> kernels;
+    std::unordered_map<std::string, size_t> kernel_indices;
     for (const auto& req : requests) {
         if (req.build_key != build_key) {
             ++skipped_build_key;
@@ -510,6 +872,13 @@ std::size_t run_prewarm(
             ++skipped_foreign_tree;
             continue;
         }
+        // The path matches, but a slot path reused across commits (tt-metal-ltx-rt-b) matches every
+        // commit it ever held. Replaying an older commit's recipe against today's sources mostly
+        // fails (cs04, 09-29 key: 21409 of 26200), so skip entries another commit captured.
+        if (from_other_commit(req.tree_commit, tree_commit)) {
+            ++skipped_foreign_commit;
+            continue;
+        }
         // Device-init dispatch/fabric kernels are compiled concurrently by device init (disjoint
         // out_dirs); skip them here so the batch overlaps device init instead of racing it. The
         // offline pass (no device to overlap) clears skip_device_init so the reservation later does no
@@ -521,13 +890,12 @@ std::size_t run_prewarm(
         // Generated files live in the kernel dir (parent of the per-target dirs); target srcs
         // reference them via "../". Write once per kernel dir (stable wrappers, identical content).
         const std::string kernel_dir = out_kernel_root + req.kernel_name + "/";
-        if (written_kernel_dirs.insert(kernel_dir).second) {
-            try {
-                write_generated_files(kernel_dir, req.generated_files);
-            } catch (const std::exception& e) {
-                log_warning(tt::LogMetal, "kernel prewarm: genfiles for {} failed: {}", req.kernel_name, e.what());
-                continue;
-            }
+        const auto [kernel_it, inserted] = kernel_indices.try_emplace(kernel_dir, kernels.size());
+        if (inserted) {
+            kernels.push_back({&req, kernel_dir, {}});
+        }
+        if (!toolchains.contains(req.gpp)) {
+            toolchains.emplace(req.gpp, toolchain_context(req.gpp));
         }
         for (const auto& target : req.targets) {
             const std::string out_dir = kernel_dir + target.target_name + "/";
@@ -542,38 +910,145 @@ std::size_t run_prewarm(
                     resolved.weakened_firmware_name = it->second;
                 }
             }
-            const std::string gpp = req.gpp;
-            launch_build_step(
-                [gpp, resolved, out_dir]() {
-                    try {
-                        build_target(gpp, resolved, out_dir);
-                    } catch (const std::exception& e) {
-                        // A single kernel's failure must not abort the batch. Wipe this target dir:
-                        // a failed link can still leave a truncated .elf behind, which the op-by-op
-                        // path would treat as a cache HIT and then crash on ("no ELF magic"). Removing
-                        // it forces a clean op-by-op rebuild of just this target.
-                        std::error_code ec;
-                        fs::remove_all(out_dir, ec);
-                        log_warning(tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, e.what());
-                    }
-                },
-                events);
-            ++launched;
+            kernels[kernel_it->second].targets.push_back({&req, std::move(resolved)});
         }
     }
+    // Queue data only, never lock descriptors. Each active worker owns one kernel through
+    // genfiles, all distinct targets (including split manifest entries), and failure publication.
+    // Completion, skip and exceptions release the lock before the future becomes ready.
+    for (const auto& kernel : kernels) {
+        launch_build_step(
+            [&, kernel]() {
+                const auto& kernel_dir = kernel.directory;
+                if (stale.load()) {
+                    abandoned += kernel.targets.size();
+                    return;
+                }
+                if (stop_requested()) {
+                    stopped += kernel.targets.size();
+                    return;
+                }
+                ++kernels_started;
+                std::optional<failure::KernelLock> lock;
+                try {
+                    lock.emplace(kernel_dir + ".prewarm.lock");
+                    if (!lock->acquired()) {
+                        deferred += kernel.targets.size();
+                        return;
+                    }
+                    write_generated_files(kernel_dir, kernel.request->generated_files);
+                } catch (const std::exception& e) {
+                    ++genfiles_failed;
+                    deferred += kernel.targets.size();
+                    log_warning(
+                        tt::LogMetal,
+                        "kernel prewarm: genfiles/lock failed for {}: {}",
+                        kernel.request->kernel_name,
+                        e.what());
+                    return;
+                }
+                for (size_t index = 0; index != kernel.targets.size(); ++index) {
+                    if (stale.load()) {
+                        abandoned += kernel.targets.size() - index;
+                        break;
+                    }
+                    if (stop_requested()) {
+                        stopped += kernel.targets.size() - index;
+                        break;
+                    }
+                    const auto& work = kernel.targets[index];
+                    const auto& req = *work.request;
+                    const auto& resolved = work.target;
+                    const auto& toolchain = std::as_const(toolchains).at(req.gpp);
+                    const std::string out_dir = kernel_dir + resolved.target_name + "/";
+                    if (resolved.target_name.empty() || resolved.target_name == "." || resolved.target_name == ".." ||
+                        resolved.target_name.find('/') != std::string::npos) {
+                        ++failed;
+                        log_warning(tt::LogMetal, "kernel prewarm: invalid target name");
+                        note_failure();
+                        continue;
+                    }
+                    const std::string failed_state = kernel_dir + ".prewarm-failed-" + resolved.target_name;
+                    // A target that is already built and has no recorded failure cannot fail: skip the
+                    // failure fingerprint, whose include scan costs one g++ -M per target (about 11 ms,
+                    // 27 s for 2342 built targets). build_target() still runs, to refresh .build_state.
+                    std::error_code state_ec;
+                    if (!fs::exists(failed_state, state_ec) && !state_ec && target_is_current(out_dir, resolved)) {
+                        try {
+                            build_target(req.gpp, resolved, out_dir);
+                            ++successful;
+                            continue;
+                        } catch (const std::exception&) {
+                            // fall through: the regular path records the failure
+                        }
+                    }
+                    const auto result = failure::target(
+                        failed_state,
+                        retry_failed,
+                        [&]() {
+                            fs::create_directories(out_dir);
+                            return failure_context(req, resolved, out_dir, toolchain);
+                        },
+                        [&]() { build_target(req.gpp, resolved, out_dir); },
+                        [&]() { fs::remove_all(out_dir); });
+                    switch (result.outcome) {
+                        case failure::Outcome::Successful: ++successful; break;
+                        case failure::Outcome::PreviouslyFailed:
+                            ++previously_failed;
+                            note_failure();
+                            break;
+                        case failure::Outcome::Failed:
+                            ++failed;
+                            log_warning(
+                                tt::LogMetal, "kernel prewarm: build {} failed: {}", out_dir, result.diagnostic);
+                            note_failure();
+                            break;
+                    }
+                }
+            },
+            events);
+    }
     sync_build_steps(events);
+    if (stop.load()) {
+        log_info(
+            tt::LogMetal,
+            "kernel prewarm: stopped by TT_METAL_KERNEL_PREWARM_STOP_FILE after {} of {} kernels; {} targets "
+            "not built",
+            kernels_started.load(),
+            kernels.size(),
+            stopped.load());
+    }
     auto elapsed_ms =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
     log_info(
         tt::LogMetal,
-        "kernel prewarm: built {} unique targets in {}ms ({} dup targets skipped, {} device-init entries "
-        "skipped, {} entries skipped for build_key mismatch, {} entries skipped as foreign-tree)",
-        launched,
+        "kernel prewarm: attempted={} successful={} failed={} previously-failed-skipped={} in {}ms "
+        "(duplicate-targets={} device-init-entries={} build-key-mismatch-entries={} foreign-tree-entries={} "
+        "deferred-targets={} genfiles-or-lock-failures={} stale-abandoned-targets={} "
+        "stop-file-targets={}); best-effort",
+        successful.load() + failed.load(),
+        successful.load(),
+        failed.load(),
+        previously_failed.load(),
         elapsed_ms,
         skipped_dup,
         skipped_device_init,
         skipped_build_key,
-        skipped_foreign_tree);
+        skipped_foreign_tree,
+        deferred.load(),
+        genfiles_failed.load(),
+        abandoned.load(),
+        stopped.load());
+    if (skipped_foreign_commit > 0) {
+        log_info(
+            tt::LogMetal,
+            "kernel prewarm: {} manifest entries for build_key {} were captured by another commit of this "
+            "tree ({}) and were skipped; the current commit is {}.",
+            skipped_foreign_commit,
+            build_key,
+            root_dir,
+            tree_commit);
+    }
     if (skipped_foreign_tree > 0) {
         log_warning(
             tt::LogMetal,
@@ -583,7 +1058,7 @@ std::size_t run_prewarm(
             skipped_foreign_tree,
             root_dir);
     }
-    return launched;
+    return successful.load();
 }
 
 void initialize_prewarm_shutdown_dependencies() {
@@ -616,6 +1091,10 @@ bool capture_only() { return g_capture_only.load(std::memory_order_acquire); }
 
 void set_capture_only(bool enabled) { g_capture_only.store(enabled, std::memory_order_release); }
 
+bool program_build_only() { return g_program_build_only.load(std::memory_order_acquire); }
+
+bool set_program_build_only(bool enabled) { return g_program_build_only.exchange(enabled, std::memory_order_acq_rel); }
+
 bool capture_only_skip_gcc(const std::string& kernel_base_name) {
     // Device-init (cq_/fabric) kernels are compiled + loaded during CreateDevice/fabric bring-up via
     // the slow-dispatch configure() path, before any pipeline op; they MUST have real binaries or the
@@ -635,6 +1114,7 @@ void append_manifest_entry(const jit_server::CompileRequest& request) {
     root.setBuildKey(request.build_key);
     root.setKernelName(request.kernel_name);
     root.setGpp(request.gpp);
+    root.setTreeCommit(g_tree_commit);
     auto targets = root.initTargets(request.targets.size());
     for (std::size_t i = 0; i < request.targets.size(); ++i) {
         fill_target_recipe(targets[i], request.targets[i]);
@@ -674,6 +1154,13 @@ void maybe_launch_prewarm(
         return;
     }
     std::call_once(g_launch_once, [&]() {
+        // Best effort: an unwritable cache only costs the offline pass its live-key filter.
+        touch_live_stamp(out_kernel_root);
+        const std::string tree_commit = current_tree_commit(root_dir);
+        {
+            std::lock_guard<std::mutex> lk(g_capture_mutex);
+            g_tree_commit = tree_commit;
+        }
         // Enable capture unconditionally (explicit override else cache-root default). On a cold cache
         // this run's op-by-op compiles populate the manifest; that reuse is what makes the *next* run
         // fast with no manual setup.
@@ -699,9 +1186,14 @@ void maybe_launch_prewarm(
         bool have_this_build_key = false;
         {
             // Seed the capture dedup set with everything already on disk so warm runs append only
-            // genuinely new kernels, keeping the manifest at the working-set size.
+            // genuinely new kernels, keeping the manifest at the working-set size. Entries another
+            // commit captured do not count: this commit has to record its own, or the commit filter
+            // in run_prewarm would find none of them on the next run.
             std::lock_guard<std::mutex> lk(g_capture_mutex);
             for (const auto& req : requests) {
+                if (from_other_commit(req.tree_commit, tree_commit)) {
+                    continue;
+                }
                 g_captured_keys.insert(std::to_string(req.build_key) + "/" + req.kernel_name);
                 if (req.build_key != build_key) {
                     continue;
@@ -722,6 +1214,12 @@ void maybe_launch_prewarm(
             return;
         }
 
+        if (stop_file_present(env_or_null("TT_METAL_KERNEL_PREWARM_STOP_FILE"))) {
+            // The worker already decided to give the device back (it set the file before or during
+            // the open): launching would only make its close wait. Capture stays armed above.
+            log_info(tt::LogMetal, "kernel prewarm: not launched, TT_METAL_KERNEL_PREWARM_STOP_FILE exists");
+            return;
+        }
         g_batch_launched.store(true, std::memory_order_release);
         // These function-local statics must be registered for teardown before the prewarm exit
         // handler. The handler is then newer and runs first in the shared LIFO atexit queue.
@@ -749,15 +1247,57 @@ std::size_t prewarm_manifest_offline(const std::string& out_root, const std::str
     // while "<X>/tt-metal-cache" makes it a suffix ("<X>/tt-metal-cache<bk>/") whose manifest dir is
     // "<X>". Do not "normalize" the trailing slash away: that breaks the former.
     const std::string manifest_path = (fs::path(out_root).parent_path() / "kernel_prewarm.manifest").string();
+    const auto read_start = std::chrono::steady_clock::now();
     std::vector<jit_server::CompileRequest> requests = read_manifest(manifest_path);
     if (requests.empty()) {
         log_warning(tt::LogMetal, "kernel prewarm (offline): no entries in {} (cold cache or empty)", manifest_path);
         return 0;
     }
+    log_info(
+        tt::LogMetal,
+        "kernel prewarm (offline): read {} manifest entries in {} ms",
+        requests.size(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - read_start).count());
 
-    std::unordered_set<std::uint64_t> build_keys;
+    std::unordered_map<std::uint64_t, std::size_t> entries_per_key;
     for (const auto& req : requests) {
-        build_keys.insert(req.build_key);
+        entries_per_key[req.build_key]++;
+    }
+
+    // Build only the keys a device opened here within live_days (their kernel_prewarm.live stamp).
+    // A cache from before the stamps existed has none: build every key then, as before; the first
+    // device run stamps its key. TT_METAL_KERNEL_PREWARM_ALL_KEYS=1 builds every key regardless.
+    std::uint64_t live_days = 14;
+    if (const char* v = env_or_null("TT_METAL_KERNEL_PREWARM_LIVE_DAYS"); v != nullptr && *v != '\0') {
+        live_days = std::strtoull(v, nullptr, 10);
+    }
+    const auto now = fs::file_time_type::clock::now();
+    std::vector<std::uint64_t> stamped;
+    for (const auto& [bk, n] : entries_per_key) {
+        std::error_code ec;
+        const auto t = fs::last_write_time(live_stamp_path(out_root + std::to_string(bk) + "/kernels/"), ec);
+        if (!ec && now - t <= std::chrono::hours(24 * live_days)) {
+            stamped.push_back(bk);
+        }
+    }
+    std::vector<std::uint64_t> build_keys;
+    if (stamped.empty() || env_truthy("TT_METAL_KERNEL_PREWARM_ALL_KEYS")) {
+        for (const auto& [bk, n] : entries_per_key) {
+            build_keys.push_back(bk);
+        }
+    } else {
+        build_keys = stamped;
+        for (const auto& [bk, n] : entries_per_key) {
+            if (std::find(stamped.begin(), stamped.end(), bk) == stamped.end()) {
+                log_info(
+                    tt::LogMetal,
+                    "kernel prewarm (offline): build_key {} skipped ({} entries): no device opened it here in {} "
+                    "days (no fresh kernel_prewarm.live)",
+                    bk,
+                    n,
+                    live_days);
+            }
+        }
     }
 
     std::size_t total = 0;

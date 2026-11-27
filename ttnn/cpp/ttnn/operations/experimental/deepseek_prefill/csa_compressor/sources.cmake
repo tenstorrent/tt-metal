@@ -1,0 +1,9 @@
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_CSA_COMPRESSOR_API_HEADERS csa_compressor.hpp)
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_CSA_COMPRESSOR_SRCS
+    csa_compressor.cpp
+    device/csa_compressor_device_operation.cpp
+    device/csa_compressor_program_factory.cpp
+)
+
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_CSA_COMPRESSOR_NANOBIND_SRCS csa_compressor_nanobind.cpp)

@@ -9,7 +9,8 @@ Usage:
 Description:
     Per-device hardware report: tray/board grouping, ASIC position, architecture,
     board type, PCI bus id and BDF, unique id, ARC firmware version, and ARC
-    postcode state. One row per device.
+    postcode state. One row per device. An unhealthy device has no row; a
+    warning names it and says why.
 
     Groups multiple chips that share a physical sub-unit through the `Tray/Board`
     column - UBB tray (1..4) on Wormhole/Blackhole Galaxy boards, board id on
@@ -24,12 +25,13 @@ from dataclasses import dataclass
 
 from tt_umd import ClusterDescriptor
 
-from triage import ScriptConfig, triage_field, run_script
+from triage import ScriptConfig, log_warning, triage_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 from run_checks import run as get_run_checks
+from triage_hw_utils import device_has_firmware
 
 script_config = ScriptConfig(depends=["run_checks"])
 
@@ -62,10 +64,22 @@ def _bus_id_label(cd: ClusterDescriptor, chip_id: int) -> str:
 
 
 def get_device_info(device: Device, cd: ClusterDescriptor, pci_bdfs: dict) -> DeviceInfoRow:
-    fw = device.firmware_version
     chip_id = device.id
 
-    if not device.is_blackhole():
+    # ARC firmware version and postcode both come from the device firmware. Where there is none,
+    # report them as absent rather than letting the read fail and take the whole row -- the
+    # remaining fields are still useful.
+    has_firmware = device_has_firmware(device)
+    if has_firmware:
+        fw = device.firmware_version
+        arc_fw = f"{fw.major}.{fw.minor}.{fw.patch}"
+    else:
+        arc_fw = "N/A"
+
+    if not has_firmware or device.is_blackhole():
+        # Postcode check is skipped for blackhole due to https://github.com/tenstorrent/tt-exalens/issues/535
+        postcode = "N/A"
+    else:
         try:
             raw = device.arc_block.get_register_store().read_register("ARC_RESET_SCRATCH0")
             postcode = hex(raw)
@@ -73,8 +87,6 @@ def get_device_info(device: Device, cd: ClusterDescriptor, pci_bdfs: dict) -> De
             raise
         except Exception as e:
             postcode = f"error: {e}"
-    else:
-        postcode = "N/A"
 
     return DeviceInfoRow(
         tray_or_board=_tray_or_board_label(cd, chip_id),
@@ -85,7 +97,7 @@ def get_device_info(device: Device, cd: ClusterDescriptor, pci_bdfs: dict) -> De
         bus_id=_bus_id_label(cd, chip_id),
         pci_bdf=pci_bdfs.get(chip_id, ""),
         unique_id=hex(device.unique_id),
-        arc_fw=f"{fw.major}.{fw.minor}.{fw.patch}",
+        arc_fw=arc_fw,
         postcode=postcode,
     )
 
@@ -99,6 +111,11 @@ def _row_sort_key(per_device_result) -> tuple:
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
     cd = context.cluster_descriptor
+    # No script shows an unhealthy device, so name it here
+    for chip_id in cd.get_unhealthy_devices():
+        errors = cd.get_health_errors()[chip_id]
+        reasons = ", ".join(f"{type(error).__name__}: {error.message()}" for error in errors)
+        log_warning(f"Device {chip_id} is unhealthy: {reasons or 'reason unavailable'}")
     pci_bdfs = cd.get_chip_pci_bdfs()
     results = run_checks.run_per_device_check(lambda device: get_device_info(device, cd, pci_bdfs))
     if results:

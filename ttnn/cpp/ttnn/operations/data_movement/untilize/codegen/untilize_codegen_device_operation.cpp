@@ -14,6 +14,7 @@
 #include "untilize_codegen_cb_plan.hpp"
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::prim {
 
@@ -25,7 +26,7 @@ void UntilizeCodegenDeviceOperation::validate_on_program_cache_miss(
     // and input.buffer() first and fail on a null instead of on the established error.
     TT_FATAL(
         tensor_args.input.storage_type() == ttnn::StorageType::DEVICE, "Operands to untilize need to be on device!");
-    TT_FATAL(tensor_args.input.buffer() != nullptr, "Operands to untilize need to be allocated in buffers on device!");
+    TT_FATAL(tensor_args.input.is_allocated(), "Operands to untilize need to be allocated in buffers on device!");
     TT_FATAL(
         ttnn::operations::data_movement::untilize_codegen::supported_by_codegen(
             tensor_args.input, operation_attributes.output_mem_config),
@@ -56,7 +57,7 @@ UntilizeCodegenDeviceOperation::spec_return_value_t UntilizeCodegenDeviceOperati
     // tile-rows), with only the logical_shape metadata cropping it back down on read.
     return TensorSpec(
         logical_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             output_dtype,
             PageConfig(Layout::ROW_MAJOR),
             operation_attributes.output_mem_config,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "neighbor_pad_async_device_operation.hpp"
+#include "ttnn/device_operation.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -64,6 +65,18 @@ void NeighborPadAsyncDeviceOperation::validate_on_program_cache_miss(
             input_tensor_shape[0] == 1,
             "t_front_pad only supports B=1 tensors, got B={}",
             input_tensor_shape[0]);
+    }
+
+    if (args.logical_w > 0) {
+        // The kernels treat a row's sticks as W columns, which holds only for a fused 2D pad on [H, W].
+        TT_FATAL(
+            args.pad_dim2.has_value() && args.dim >= 1 && args.dim == input_rank - 3 &&
+                args.pad_dim2.value() == input_rank - 2,
+            "logical_w needs a fused 2D pad on dims [{}, {}], got dim={} pad_dim2={}",
+            input_rank - 3,
+            input_rank - 2,
+            args.dim,
+            args.pad_dim2.has_value() ? static_cast<int64_t>(args.pad_dim2.value()) : -1);
     }
 
     // Validate secondary padding dimension (2D padding)
@@ -172,7 +185,8 @@ Tensor neighbor_pad_async(
     std::optional<size_t> pad2_num_links,
     const std::optional<Tensor>& persistent_output_buffer,
     uint32_t logical_h,
-    uint32_t t_front_pad) {
+    uint32_t t_front_pad,
+    uint32_t logical_w) {
     using OperationType = ttnn::experimental::prim::NeighborPadAsyncDeviceOperation;
 
     auto* mesh_device = input_tensor.device();
@@ -203,7 +217,8 @@ Tensor neighbor_pad_async(
         pad2_num_links.value_or(0),
         persistent_output_buffer.has_value(),
         logical_h,
-        t_front_pad);
+        t_front_pad,
+        logical_w);
 
     auto tensor_args =
         OperationType::tensor_args_t{.input_tensor = input_tensor, .preallocated_output = persistent_output_buffer};

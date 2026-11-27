@@ -115,6 +115,7 @@ void kernel_main() {
     // Alignment
     constexpr uint32_t l1_alignment = get_named_compile_time_arg_val("l1_alignment");
     constexpr uint32_t e_t_entry_size = get_named_compile_time_arg_val("e_t_entry_size");
+    static_assert(e_t_entry_size >= 2 * sizeof(uint32_t), "an e_t entry holds the token id and the k slot");
 
     // Number of pages
     constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
@@ -369,10 +370,14 @@ void kernel_main() {
                     brisc_activation_l1_ptr[1 + e] = k;
                     brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
 
-                    // Write to BRISC's e_t buffer (16B aligned entries)
+                    // Write to BRISC's e_t buffer (16B aligned entries): word 0 token id, word 1 the
+                    // token's k slot for this expert (same entry format as the NCRISC buffer; the
+                    // merge copies whole entries).
                     const uint32_t brisc_e_t_offset =
                         (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
-                    *reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset) = t;
+                    uint32_t* brisc_e_t_entry = reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset);
+                    brisc_e_t_entry[0] = t;
+                    brisc_e_t_entry[1] = k;
                     brisc_num_tokens_per_expert[e]++;
                     break;
                 }

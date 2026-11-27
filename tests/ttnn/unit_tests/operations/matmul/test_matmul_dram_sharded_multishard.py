@@ -16,7 +16,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 def _dram_sharded_matmul(device, k, n, in1_dtype, num_storage_cores, in0_block_w, fp32_acc, k_logical=None):
@@ -120,6 +120,63 @@ def test_dram_sharded_multishard_block_padded_k(device, k_logical, in0_block_w, 
     out, ref = _dram_sharded_matmul(device, 4096, 4096, ttnn.bfloat8_b, 32, in0_block_w, True, k_logical=k_logical)
     passed, pcc = comp_pcc(ref, out, 0.999)
     assert passed, pcc
+
+
+def _dram_width_sharded_2d_matmul(device, m, k, n, grid_x, in0_block_w):
+    """2D-mcast matmul (MatmulMultiCoreReuseMultiCastProgramConfig) with in1 DRAM width-sharded and
+    per_core_N narrower than one DRAM shard -- the configuration from issue #57732."""
+    dram_x = device.dram_grid_size().x
+    grid_size = (grid_x, 1)
+    per_core_M = m // 32
+    per_core_N = math.ceil(n / 32 / grid_x)
+    out_subblock_w = math.gcd(per_core_N, 4)
+    out_subblock_h = 1
+
+    torch.manual_seed(0)
+    in0 = ttnn.from_torch(torch.randn(1, 1, m, k), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    padded_n = math.ceil(n / (32 * dram_x)) * 32 * dram_x
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_x - 1, 0))})
+    in1_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, (k, padded_n // dram_x), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    in1 = ttnn.from_torch(
+        torch.randn(k, n), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in1_mc
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    out = ttnn.matmul(in0, in1, program_config=program_config)
+    ref = ttnn.to_torch(in0).float().reshape(m, k) @ ttnn.to_torch(in1).float()
+    return ttnn.to_torch(out).float().reshape(m, n), ref
+
+
+@pytest.mark.parametrize(
+    "n, grid_x",
+    [
+        (6144, 9),  # per_core_N (22 tiles) < one DRAM shard (24 tiles): issue #57732 regression
+        (6144, 13),  # per_core_N (15 tiles) < one DRAM shard (24 tiles), narrower still
+        (6144, 8),  # per_core_N == shard width: control, must already pass
+    ],
+)
+def test_dram_width_sharded_2d_mcast_narrow_worker_block(device, n, grid_x):
+    """A worker's per_core_N block narrower than a DRAM bank's shard width must not read into the
+    next worker's tiles (issue #57732: the unclamped first read corrupted every later column)."""
+    if grid_x > device.compute_with_storage_grid_size().x:
+        pytest.skip("grid_x larger than the device compute grid")
+    out, ref = _dram_width_sharded_2d_matmul(device, 128, 4096, n, grid_x, in0_block_w=8)
+    passed, pcc = comp_pcc(ref, out, 0.999)
+    assert passed, pcc
+    assert torch.isfinite(out).all(), "non-finite output indicates the narrow-block clamp regressed"
 
 
 @pytest.mark.parametrize("in0_block_w", [8, 16])

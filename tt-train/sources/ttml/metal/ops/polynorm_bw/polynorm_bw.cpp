@@ -7,8 +7,8 @@
 #include <tt-metalium/constants.hpp>
 #include <vector>
 
-#include "core/compute_kernel_config.hpp"
 #include "device/polynorm_bw_device_operation.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::metal {
 
@@ -34,12 +34,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> polynorm3_bw(
 
     auto& dL_dx = fused_outputs[0];
     auto& packed_partials = fused_outputs[1];
-    auto reduced_partials = ttnn::sum(
-        packed_partials,
-        /*dim_arg=*/ttsl::SmallVector<int>{0, 1, 2},
-        /*keep_dim=*/true,
-        /*output_mem_config=*/std::nullopt,
-        /*compute_kernel_config=*/core::ComputeKernelConfig::precise());
+    auto reduced_partials = ttnn_fixed::sum_over_leading_dims(packed_partials);  // [B,1,S,128] -> [1,1,1,128]
 
     // Extract dw0, dw1, dw2, db from the reduced partials on-device (no host roundtrip).
     // The reduced tensor is always (1,1,1,128) = 4 scalar tiles regardless of input size,
