@@ -103,8 +103,8 @@ def test_open_fails_on_a_missing_or_other_version_chain(tmp_path, expect_error) 
 
 
 def test_layer_weights_reads_the_chain_tensor_set(tmp_path, expect_error) -> None:
-    """Layer 3 (DSA): the AttnRes, router and DSA weights, under the checkpoint's key root, digested by name; no
-    other layer's set is supported."""
+    """Layer 3 (DSA): the AttnRes, router and DSA weights, under the checkpoint's key root, digested by name; layer 0
+    (dense FFN) is not supported."""
     names = chain.ATTN_RES_WEIGHTS + chain.ROUTER_WEIGHTS + chain.DSA_WEIGHTS
     assert len(set(names)) == len(names) == 6 + 2 + 13
     tensors = {f"model.layers.3.{n}": torch.full((2,), float(i), dtype=torch.bfloat16) for i, n in enumerate(names)}
@@ -118,5 +118,32 @@ def test_layer_weights_reads_the_chain_tensor_set(tmp_path, expect_error) -> Non
     assert digest == {"layers.3": chain.tensor_digest(got)}
     got["self_attn.o_proj.weight"] = got["self_attn.o_proj.weight"] + 1
     assert chain.tensor_digest(got) != digest["layers.3"]
-    with expect_error(ValueError, "DSA layer 3"):
-        chain.layer_weights(tmp_path, 2)
+    with expect_error(ValueError, "not layer 0"):
+        chain.layer_weights(tmp_path, 0)
+
+
+def test_layer_weights_of_a_moe_layer_add_kda_and_the_non_routed_moe(tmp_path) -> None:
+    """Layers 1 and 2 (KDA + MoE): the AttnRes weights, the KDA weights of the checkpoint's config (here a low-rank
+    gate), the router and the MoE's shared expert and latent pair; not the routed experts."""
+    linear = {"head_dim": 4, "num_heads": 2, "short_conv_kernel_size": 4}
+    config = {"hidden_size": 8, "rms_norm_eps": 1e-6, "linear_attn_config": linear}
+    (tmp_path / "config.json").write_text(json.dumps({"text_config": config}))
+    kda = (
+        "q_proj.weight k_proj.weight v_proj.weight q_conv1d.weight k_conv1d.weight v_conv1d.weight A_log "
+        "f_a_proj.weight f_b_proj.weight dt_bias b_proj.weight o_norm.weight o_proj.weight g_a_proj.weight "
+        "g_b_proj.weight"
+    ).split()
+    moe = (
+        "routed_expert_down_proj routed_expert_up_proj routed_expert_norm shared_experts.gate_proj "
+        "shared_experts.up_proj shared_experts.down_proj"
+    ).split()
+    want = [
+        *chain.ATTN_RES_WEIGHTS,
+        *(f"self_attn.{n}" for n in kda),
+        "block_sparse_moe.gate.weight",
+        "block_sparse_moe.gate.e_score_correction_bias",
+        *(f"block_sparse_moe.{n}.weight" for n in moe),
+    ]
+    assert len(want) == 6 + 15 + 2 + 6
+    assert chain.layer_weight_names(tmp_path, 1) == want
+    assert chain.layer_weight_names(tmp_path, 2) == want

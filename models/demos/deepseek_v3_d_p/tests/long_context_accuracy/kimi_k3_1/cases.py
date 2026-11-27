@@ -12,7 +12,95 @@ from __future__ import annotations
 from models.demos.common.prefill.long_context_accuracy.block import LongContextCase
 
 # ==== MoE (m06n.11.4) ===============================================================================================
-MOE_CASES: tuple[LongContextCase, ...] = ()
+# isort: split
+# The production K3.1 MoE (``blocks.KimiK31MoeBlock``) of layers 1 and 2 on one 4x4 stage (a Galaxy tray half), fed the
+# chain's ``moe_input_L`` (after ``post_attention_layernorm``, rounded once to bf16) in 2560-row chunks and scored by
+# ``MoeScorer`` against ``moe_output_L`` and the FP64 top-16 ``routing_ids_L`` / ``routing_weights_L``.
+#
+# Identity: the digest of the layer's non-routed weights as the chain read them (``golden.layer_weights``: AttnRes,
+# KDA, router, shared expert and latent pair) from the checkpoint the Block reads its router, shared expert and latent
+# pair from (``moe_block_checkpoint``) must be the golden's ``layers.L``. The routed experts come from the TTNN weight
+# cache and stay unchecked: the chain's ``layers.L.experts`` digest covers the checkpoint's experts, not the cache.
+#
+# Bars (``MOE_BARS``), on every 16K window of the run and on every chunk: the study's MoE teacher-feed bars
+# (``moe_teacher_feed.BARS``, branch ``mvasilijevic/k31/accuracy-harness-consumers``), proposed there against the vLLM
+# trace over 9 layers at 128K. Its growth bar is left out: the MoE carries no state across chunks (a reverse-order run
+# is bit-identical), so its error versus position follows the input statistics, not accumulation; it is gated by the
+# absolute per-window bars instead. Measured at 1M (commit 9bf2a291b5b, one 4x4 tray half), layer 1 / layer 2: pooled
+# NRMSE 0.088 / 0.078, median row NRMSE 0.083 / 0.071, mean recall 0.994 / 0.992 (worst 16K window 0.9939 / 0.9916),
+# mean dropped weight 0.0038 / 0.0053 (worst window 0.0041 / 0.0059), no missed expert in the top half; the RMS error's
+# worst window is 1.02x / 1.03x its first. A chunk (2560 rows) is a smaller sample than a window, so the same bars on
+# it stop only a run well past them.
+from pathlib import Path
+
+import pytest
+import torch
+
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
+from models.demos.common.prefill.long_context_accuracy.block import ContextBars, GoldenIdentity, PreparedCase
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
+from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31MoeBlock
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import (
+    K31_CHAIN_1M,
+    MODEL,
+    KimiK31ChainGolden,
+    layer_weights,
+)
+
+MOE_WINDOW = 16384  # rows per scored window, aligned to row 0 (a shorter run is one partial window)
+MOE_BARS = (
+    AcceptanceBar("moe_row_nrmse_median", "max", 0.20),
+    AcceptanceBar("recall_mean", "min", 0.98),
+    AcceptanceBar("miss_top_half_fraction", "max", 0.01),
+    AcceptanceBar("dropped_weight_mean", "max", 0.01),
+)
+# Context lengths in rows, the last the golden's whole prompt (408 chunks); 256k ends in a partial chunk. Measured on
+# one tray half: 1M ~4 min a layer (~50 s weight load, then ~0.45 s a chunk), 256k ~100 s, 5k-20k ~15 s warm.
+MOE_CONTEXT_LENGTHS = (5120, 20480, 262144, 1044480)
+MOE_PLACEMENT = next(p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1")
+
+
+def moe_checkpoint() -> Path:
+    """The K3.1 checkpoint the MoE block reads its non-routed weights from; skips without one."""
+    path = Path(k31_stage.ADAPTER.moe_block_checkpoint())
+    if not (path / "model.safetensors.index.json").is_file():
+        pytest.skip(f"no K3.1 checkpoint at {path}")
+    return path
+
+
+def _prepare_moe(layer: int, golden: Fp64Golden, checkpoint: Path, context_len: int) -> PreparedCase:
+    _, digest = layer_weights(checkpoint, layer)  # (the tensors are only digested; the Block reads its own)
+    moe_input = f"moe_input_{layer}"
+    return PreparedCase(
+        identity=GoldenIdentity({"model": MODEL}, digest),
+        scorer=MoeScorer(
+            output=f"moe_output_{layer}",
+            expert_ids=f"routing_ids_{layer}",
+            expert_weights=f"routing_weights_{layer}",
+            window=MOE_WINDOW,
+        ),
+        input_tensors=(moe_input,),
+        block_input=lambda lo, hi, rows: rows[moe_input].to(torch.bfloat16),
+        device_block=KimiK31MoeBlock(layer),
+    )
+
+
+def moe_case(layer: int) -> LongContextCase:
+    return LongContextCase(
+        id=f"k31-moe-layer{layer}",
+        golden_id=K31_CHAIN_1M,
+        golden_reader=KimiK31ChainGolden,
+        placement=MOE_PLACEMENT,
+        chunk=k31_stage.STAGE_LAYOUTS[k31_stage.MESH_4X4].chunk,
+        bars={n: ContextBars(chunk=MOE_BARS, run=MOE_BARS) for n in MOE_CONTEXT_LENGTHS},
+        checkpoint=moe_checkpoint,
+        prepare=lambda golden, checkpoint, context_len: _prepare_moe(layer, golden, checkpoint, context_len),
+    )
+
+
+MOE_CASES: tuple[LongContextCase, ...] = (moe_case(1), moe_case(2))
 # ==== end of MoE ====================================================================================================
 
 # ==== DSA (m06n.11.5) ===============================================================================================

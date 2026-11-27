@@ -24,8 +24,8 @@ and ``state_<i>.pt`` (``keys``: the DSA keys; ``kda``: the KDA states after the 
 reader serves no segment-end product). Files are memory-mapped and only the requested rows are copied.
 
 The chain's ``identity.weights_sha256`` holds one digest per layer's non-routed weights (``layers.<l>``) as the chain
-read them. ``layer_weights`` reads DSA layer 3's set from a checkpoint with its digest, for
-``Fp64Golden.require(weights_sha256=...)``; no consumer digests layers 0-2.
+read them. ``layer_weights`` reads the set of MoE layers 1 and 2 or DSA layer 3 from a checkpoint with its digest, for
+``Fp64Golden.require(weights_sha256=...)``; no consumer digests layer 0 or the routed experts (``layers.<l>.experts``).
 """
 
 from __future__ import annotations
@@ -45,6 +45,7 @@ PRODUCER_VERSION = 2  # 2: buffered indexer blocks of 4096 keys (FP64 summation 
 MODEL = "Kimi-K3.1"
 STATE_ROW_PRODUCTS = ("latent", "kpe", "index_key")  # per-row products held in the state files, under "keys"
 SAMPLED_PRODUCTS = ("sampled_rows", "attn_output_3")
+MOE_LAYERS = (1, 2)  # the chain's KDA + MoE layers
 DSA_LAYER = 3  # the chain's DSA layer; its FFN is not run, but its router is read (a cross-check), so digested
 ATTN_RES_WEIGHTS = (
     "input_layernorm.weight",
@@ -55,6 +56,17 @@ ATTN_RES_WEIGHTS = (
     "self_attention_res_proj.weight",
 )
 ROUTER_WEIGHTS = ("block_sparse_moe.gate.weight", "block_sparse_moe.gate.e_score_correction_bias")
+MOE_NON_ROUTED_WEIGHTS = tuple(
+    f"block_sparse_moe.{n}.weight"
+    for n in (
+        "routed_expert_down_proj",
+        "routed_expert_up_proj",
+        "routed_expert_norm",
+        "shared_experts.gate_proj",
+        "shared_experts.up_proj",
+        "shared_experts.down_proj",
+    )
+)
 DSA_WEIGHTS = tuple(
     f"self_attn.{n}.weight"
     for n in (
@@ -135,14 +147,28 @@ def tensor_digest(tensors: dict[str, torch.Tensor]) -> str:
     return h.hexdigest()
 
 
+def layer_weight_names(checkpoint: Path, layer: int) -> list[str]:
+    """The layer-local checkpoint names of the weights the chain digests as ``layers.<layer>``: ``ATTN_RES_WEIGHTS``
+    and ``ROUTER_WEIGHTS``, plus the KDA weights (of the checkpoint's config) and ``MOE_NON_ROUTED_WEIGHTS`` on
+    ``MOE_LAYERS``, or ``DSA_WEIGHTS`` on ``DSA_LAYER``. Layer 0 (dense FFN) is not supported."""
+    if layer == DSA_LAYER:
+        return list(ATTN_RES_WEIGHTS + ROUTER_WEIGHTS + DSA_WEIGHTS)
+    if layer not in MOE_LAYERS:
+        raise ValueError(f"layer_weights reads MoE layers {MOE_LAYERS} or DSA layer {DSA_LAYER}, not layer {layer}")
+    from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+    from models.demos.deepseek_v3_d_p.reference.kda.weights import required_kda_weight_names
+
+    config = KDAConfig.from_model_config(json.loads((Path(checkpoint) / "config.json").read_text()))
+    kda = [f"self_attn.{n}" for n in required_kda_weight_names(config)]
+    return [*ATTN_RES_WEIGHTS, *kda, *ROUTER_WEIGHTS, *MOE_NON_ROUTED_WEIGHTS]
+
+
 def layer_weights(checkpoint: Path, layer: int) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
-    """DSA layer ``layer``'s weights as the chain read them (``ATTN_RES_WEIGHTS``, ``ROUTER_WEIGHTS``,
-    ``DSA_WEIGHTS``) in their checkpoint dtype, keyed by layer-local name, and their digest as
-    ``{"layers.<layer>": sha256}`` (for ``Fp64Golden.require(weights_sha256=...)``). Only ``DSA_LAYER`` is supported."""
-    if layer != DSA_LAYER:
-        raise ValueError(f"layer_weights reads the chain's DSA layer {DSA_LAYER}'s weight set, not layer {layer}'s")
+    """Layer ``layer``'s weights as the chain read them (``layer_weight_names``) in their checkpoint dtype, keyed by
+    layer-local name, and their digest as ``{"layers.<layer>": sha256}`` (for
+    ``Fp64Golden.require(weights_sha256=...)``)."""
     checkpoint = Path(checkpoint)
-    names = list(ATTN_RES_WEIGHTS + ROUTER_WEIGHTS + DSA_WEIGHTS)
+    names = layer_weight_names(checkpoint, layer)
     weight_map = json.loads((checkpoint / "model.safetensors.index.json").read_text())["weight_map"]
     roots = [r for r in ("model.", "language_model.model.") if f"{r}layers.{layer}.{names[0]}" in weight_map]
     if not roots:
