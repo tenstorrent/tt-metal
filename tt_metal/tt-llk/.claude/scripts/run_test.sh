@@ -557,7 +557,7 @@ _do_count() {
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    CHIP_ARCH="${ARCH}" pytest --co -q ${solflag+"${solflag[@]}"} \
+    LLK_HARDWARE_FREE=1 CHIP_ARCH="${ARCH}" pytest --co -q ${solflag+"${solflag[@]}"} \
       ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILE}" 2>&1
   ) || runtime_exit=$?
 
