@@ -2,53 +2,73 @@
 # SPDX-License-Identifier: Apache-2.0
 """Kimi-K3.1 long-context accuracy cases (``block.LongContextCase``) against the FP64 chain golden ``k31-l0-3-fp64-1m``
 (reader ``golden.KimiK31ChainGolden``), run by ``test_long_context_accuracy.py`` and checked against the golden by
-``test_cases_match_goldens.py``: the MoE layer 1 and 2 cases (m06n.11.4) and the DSA layer 3 case (m06n.11.5).
+``test_cases_match_goldens.py``: MoE layers 1 and 2 (``moe_case``) and DSA layer 3 (``DSA_CASE``).
 
-Each block's cases, including their imports, stay inside their own section below.
+Every case runs its production device Block (``blocks.py``) on one 4x4 K3.1 stage (``K31_PLACEMENT``, a Galaxy tray
+half) in the stage's ``K31_CHUNK``-row chunks, teacher-fed from the chain's products. Identity: the digest of the
+layer's non-routed weights as the chain read them (``golden.layer_weights``) from ``k31_checkpoint()`` must be the
+golden's ``layers.L``.
 """
 
 from __future__ import annotations
 
-from models.demos.common.prefill.long_context_accuracy.block import LongContextCase
-
-# ==== MoE (m06n.11.4) ===============================================================================================
-# isort: split
-# The production K3.1 MoE (``blocks.KimiK31MoeBlock``) of layers 1 and 2 on one 4x4 stage (a Galaxy tray half), fed the
-# chain's ``moe_input_L`` (after ``post_attention_layernorm``, rounded once to bf16) in 2560-row chunks and scored by
-# ``MoeScorer`` against ``moe_output_L`` and the FP64 top-16 ``routing_ids_L`` / ``routing_weights_L``.
-#
-# Identity: the digest of the layer's non-routed weights as the chain read them (``golden.layer_weights``: AttnRes,
-# KDA, router, shared expert and latent pair) from the checkpoint the Block reads its router, shared expert and latent
-# pair from (``moe_block_checkpoint``) must be the golden's ``layers.L``. The routed experts come from the TTNN weight
-# cache and stay unchecked: the chain's ``layers.L.experts`` digest covers the checkpoint's experts, not the cache.
-#
-# Bars (``MOE_BARS``), on every 16K window of the run (none per chunk: a chunk's 2560 rows are a smaller sample, so
-# the window values would stop runs whose windows pass; ``check_chunk`` stops only on a broken contract): the study's MoE teacher-feed bars
-# (``moe_teacher_feed.BARS``, branch ``mvasilijevic/k31/accuracy-harness-consumers``), proposed there against the vLLM
-# trace over 9 layers at 128K. Its growth bar is left out: the MoE carries no state across chunks (a reverse-order run
-# is bit-identical), so its error versus position follows the input statistics, not accumulation; it is gated by the
-# absolute per-window bars instead. Measured at 1M (commit 9bf2a291b5b, one 4x4 tray half), layer 1 / layer 2: pooled
-# NRMSE 0.088 / 0.078, median row NRMSE 0.083 / 0.071, mean recall 0.994 / 0.992 (worst 16K window 0.9939 / 0.9916),
-# mean dropped weight 0.0038 / 0.0053 (worst window 0.0041 / 0.0059), no missed expert in the top half; the RMS error's
-# worst window is 1.02x / 1.03x its first.
+import math
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
-from models.demos.common.prefill.long_context_accuracy.block import ContextBars, GoldenIdentity, PreparedCase
+from models.demos.common.prefill.long_context_accuracy.block import (
+    ContextBars,
+    GoldenIdentity,
+    LongContextCase,
+    PreparedCase,
+)
+from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import WEIGHTS, Dims
+from models.demos.common.prefill.long_context_accuracy.dsa.scorer import DsaScorer, GoldenNames
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
 from models.demos.common.prefill.long_context_accuracy.moe.scorer import MoeScorer
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31MoeBlock
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31DsaBlock, KimiK31MoeBlock
 from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import (
+    DSA_LAYER,
     K31_CHAIN_1M,
     MODEL,
     KimiK31ChainGolden,
     layer_weights,
 )
 
+K31_PLACEMENT = next(p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1")
+K31_CHUNK = k31_stage.CHUNK_4X4
+
+
+def k31_checkpoint() -> Path:
+    """The K3.1 checkpoint the cases digest and the MoE Block reads its router, shared expert and latent pair from
+    (``moe_block_checkpoint``: ``$KIMI_K31_HF_MODEL``, then ``$PREFILL_HF_MODEL``, then the adapter's default); skips
+    without one."""
+    path = Path(k31_stage.ADAPTER.moe_block_checkpoint())
+    if not (path / "model.safetensors.index.json").is_file():
+        pytest.skip(f"no K3.1 checkpoint at {path} (set ${k31_stage.ADAPTER.env_var})")
+    return path
+
+
+# MoE layers 1 and 2: the production K3.1 MoE (``blocks.KimiK31MoeBlock``) fed the chain's ``moe_input_L`` (after
+# ``post_attention_layernorm``, rounded once to bf16) and scored by ``MoeScorer`` against ``moe_output_L`` and the FP64
+# top-16 ``routing_ids_L`` / ``routing_weights_L``. The routed experts come from the TTNN weight cache and stay
+# unchecked: the chain's ``layers.L.experts`` digest covers the checkpoint's experts, not the cache.
+#
+# Bars (``MOE_BARS``), on every 16K window of the run (none per chunk: a chunk's 2560 rows are a smaller sample, so
+# the window values would stop runs whose windows pass; a chunk stops only on a broken contract): the study's MoE
+# teacher-feed bars (``moe_teacher_feed.BARS``, branch ``mvasilijevic/k31/accuracy-harness-consumers``), proposed there
+# against the vLLM trace over 9 layers at 128K. Its growth bar is left out: the MoE carries no state across chunks (a
+# reverse-order run is bit-identical), so its error versus position follows the input statistics, not accumulation; it
+# is gated by the absolute per-window bars instead. Measured at 1M (commit 9bf2a291b5b, one 4x4 tray half), layer 1 /
+# layer 2: pooled NRMSE 0.088 / 0.078, median row NRMSE 0.083 / 0.071, mean recall 0.994 / 0.992 (worst 16K window
+# 0.9939 / 0.9916), mean dropped weight 0.0038 / 0.0053 (worst window 0.0041 / 0.0059), no missed expert in the top
+# half; the RMS error's worst window is 1.02x / 1.03x its first.
 MOE_WINDOW = 16384  # rows per scored window, aligned to row 0 (a shorter run is one partial window)
 MOE_BARS = (
     AcceptanceBar("moe_row_nrmse_median", "max", 0.20),
@@ -59,15 +79,6 @@ MOE_BARS = (
 # Context lengths in rows, the last the golden's whole prompt (408 chunks); 256k ends in a partial chunk. Measured on
 # one tray half: 1M ~4 min a layer (~50 s weight load, then ~0.45 s a chunk), 256k ~100 s, 5k-20k ~15 s warm.
 MOE_CONTEXT_LENGTHS = (5120, 20480, 262144, 1044480)
-MOE_PLACEMENT = next(p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1")
-
-
-def moe_checkpoint() -> Path:
-    """The K3.1 checkpoint the MoE block reads its non-routed weights from; skips without one."""
-    path = Path(k31_stage.ADAPTER.moe_block_checkpoint())
-    if not (path / "model.safetensors.index.json").is_file():
-        pytest.skip(f"no K3.1 checkpoint at {path}")
-    return path
 
 
 def _prepare_moe(layer: int, golden: Fp64Golden, checkpoint: Path, context_len: int) -> PreparedCase:
@@ -92,41 +103,17 @@ def moe_case(layer: int) -> LongContextCase:
         id=f"k31-moe-layer{layer}",
         golden_id=K31_CHAIN_1M,
         golden_reader=KimiK31ChainGolden,
-        placement=MOE_PLACEMENT,
-        chunk=k31_stage.STAGE_LAYOUTS[k31_stage.MESH_4X4].chunk,
+        placement=K31_PLACEMENT,
+        chunk=K31_CHUNK,
         bars={n: ContextBars(run=MOE_BARS) for n in MOE_CONTEXT_LENGTHS},
-        checkpoint=moe_checkpoint,
+        checkpoint=k31_checkpoint,
         prepare=lambda golden, checkpoint, context_len: _prepare_moe(layer, golden, checkpoint, context_len),
     )
 
 
-MOE_CASES: tuple[LongContextCase, ...] = (moe_case(1), moe_case(2))
-# ==== end of MoE ====================================================================================================
-
-# ==== DSA (m06n.11.5) ===============================================================================================
-import math
-import os
-from collections.abc import Mapping
-from pathlib import Path
-
-import pytest
-
-from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
-from models.demos.common.prefill.long_context_accuracy.block import ContextBars, GoldenIdentity, PreparedCase
-from models.demos.common.prefill.long_context_accuracy.dsa.fp64_attention import WEIGHTS, Dims
-from models.demos.common.prefill.long_context_accuracy.dsa.scorer import DsaScorer, GoldenNames
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31DsaBlock
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.golden import (
-    DSA_LAYER,
-    K31_CHAIN_1M,
-    MODEL,
-    KimiK31ChainGolden,
-    layer_weights,
-)
-
+# DSA layer 3: ``ttMLA`` (``blocks.KimiK31DsaBlock``) fed the FP64 ``input_layernorm`` of the chain's ``dsa_input_3``
+# rounded once to bf16, and scored by ``DsaScorer`` against the chain's FP64 selection and keys and an FP64 attention
+# recompute (``dsa/fp64_attention.py``, from the layer's checkpoint weights).
 DSA_DIMS = Dims(
     heads=KimiK31Config.NUM_ATTENTION_HEADS,
     nope=KimiK31Config.QK_NOPE_HEAD_DIM,
@@ -167,7 +154,7 @@ DSA_BARS: dict[int, dict[str, float]] = {
 
 def dsa_context_bars(maxima: Mapping[str, float]) -> ContextBars:
     """Run bars of one context length: each metric at most its value in every window. A non-finite value (a bar not
-    yet set) raises: ``check`` would pass it, since no comparison with NaN fails. ``DSA_CASES`` builds its bars at
+    yet set) raises: ``check`` would pass it, since no comparison with NaN fails. ``DSA_CASE`` builds its bars at
     import, so an unset bar fails the collection of every registered case."""
     unset = [metric for metric, value in maxima.items() if not math.isfinite(value)]
     if unset:
@@ -175,23 +162,14 @@ def dsa_context_bars(maxima: Mapping[str, float]) -> ContextBars:
     return ContextBars(run=tuple(AcceptanceBar(metric, "max", value) for metric, value in maxima.items()))
 
 
-def dsa_checkpoint() -> Path:
-    """The K3.1 checkpoint (``$KIMI_K31_HF_MODEL`` or the adapter's default); skips without one."""
-    adapter = k31_stage.ADAPTER
-    path = Path(os.environ.get(adapter.env_var) or adapter.hf_model_path)
-    if not (path / "model.safetensors.index.json").is_file():
-        pytest.skip(f"no K3.1 checkpoint at {path} (set ${adapter.env_var})")
-    return path
-
-
-def prepare_dsa(golden: Fp64Golden, checkpoint: Path, context_len: int) -> PreparedCase:
+def _prepare_dsa(golden: Fp64Golden, checkpoint: Path, context_len: int) -> PreparedCase:
     """Layer 3's FP64 attention weights and the digest of the tensor set the chain read for the layer; the scorer,
     which reads the golden's sampled rows."""
     tensors, digest = layer_weights(checkpoint, DSA_LAYER)
     weights = {n: tensors[n].double() for n in WEIGHTS}
     scorer = DsaScorer(golden, context_len, DSA_GOLDEN_NAMES, weights, DSA_DIMS)
     return PreparedCase(
-        identity=GoldenIdentity(identity={"model": MODEL}, weights_sha256=digest),
+        identity=GoldenIdentity({"model": MODEL}, digest),
         scorer=scorer,
         input_tensors=(DSA_GOLDEN_NAMES.input,),
         block_input=lambda lo, hi, rows: scorer.device_input(rows),
@@ -199,18 +177,16 @@ def prepare_dsa(golden: Fp64Golden, checkpoint: Path, context_len: int) -> Prepa
     )
 
 
-DSA_CASES: tuple[LongContextCase, ...] = (
-    LongContextCase(
-        id=f"k31-l{DSA_LAYER}-dsa",
-        golden_id=K31_CHAIN_1M,
-        golden_reader=KimiK31ChainGolden,
-        placement=next(p for p in k31_stage.PLACEMENT if p.id == "4x4-sp1"),
-        chunk=k31_stage.CHUNK_4X4,
-        bars={rows: dsa_context_bars(maxima) for rows, maxima in DSA_BARS.items()},
-        checkpoint=dsa_checkpoint,
-        prepare=prepare_dsa,
-    ),
+DSA_CASE = LongContextCase(
+    id=f"k31-l{DSA_LAYER}-dsa",
+    golden_id=K31_CHAIN_1M,
+    golden_reader=KimiK31ChainGolden,
+    placement=K31_PLACEMENT,
+    chunk=K31_CHUNK,
+    bars={rows: dsa_context_bars(maxima) for rows, maxima in DSA_BARS.items()},
+    checkpoint=k31_checkpoint,
+    prepare=_prepare_dsa,
 )
-# ==== end of DSA ====================================================================================================
 
-CASES = MOE_CASES + DSA_CASES
+MOE_CASES: tuple[LongContextCase, ...] = (moe_case(1), moe_case(2))
+CASES: tuple[LongContextCase, ...] = (*MOE_CASES, DSA_CASE)

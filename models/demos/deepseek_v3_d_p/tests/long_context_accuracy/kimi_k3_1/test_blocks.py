@@ -1,21 +1,39 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Host contracts of the Kimi-K3.1 device Blocks' readbacks (``blocks.py``): the per-chip readback both Blocks use
-(m06n.15), the MoE routing readback (m06n.11.4) and the DSA selection readback (m06n.11.5). CPU only.
-
-Each section's tests, including their imports, stay inside their own section below.
-"""
+"""Host contracts of the Kimi-K3.1 device Blocks' readbacks (``blocks.py``) and cases (``cases.py``): the per-chip
+readback both Blocks use, the MoE routing readback, the DSA selection readback, and each case's weights and bars.
+CPU only."""
 
 from __future__ import annotations
 
-# ==== Shared: per-chip readback =====================================================================================
-# isort: split
+import json
+import math
 from dataclasses import dataclass
 
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import sp_tp_rows
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
+    MANIFEST,
+    ROOT_ENV,
+    GoldenMismatch,
+    golden_root,
+    open_golden,
+)
+from models.demos.common.prefill.long_context_accuracy.run import run_case
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import (
+    KimiK31MoeBlock,
+    device_selection,
+    owner_positions,
+    sp_tp_rows,
+    topk_rows,
+)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import (
+    DSA_CASE,
+    DSA_DIMS,
+    MOE_CASES,
+    dsa_context_bars,
+)
 
 
 @dataclass
@@ -48,25 +66,6 @@ def test_sp_tp_rows_places_each_chip_by_its_sp_and_tp_position(monkeypatch, sp_a
     expected = [[10 * s + t for t in range(tp)] for s in range(sp)]
     assert sp_tp_rows(_GridMesh((2, 3)), None, sp_axis, sp).tolist() == expected
     assert sp_tp_rows(_GridMesh((2, 3)), None, sp_axis, sp - 1).tolist() == expected[:-1]
-
-
-# ==== end of shared =================================================================================================
-
-# ==== MoE (m06n.11.4) ===============================================================================================
-# isort: split
-import json
-from dataclasses import dataclass
-
-from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
-    MANIFEST,
-    ROOT_ENV,
-    GoldenMismatch,
-    golden_root,
-    open_golden,
-)
-from models.demos.common.prefill.long_context_accuracy.run import run_case
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import KimiK31MoeBlock, owner_positions
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import MOE_CASES
 
 
 def test_owner_positions_hand_case() -> None:
@@ -113,22 +112,6 @@ def test_a_moe_weight_digest_mismatch_fails_before_device_work(tmp_path, monkeyp
     assert built == []
 
 
-# ==== end of MoE ====================================================================================================
-
-# ==== DSA (m06n.11.5) ===============================================================================================
-# isort: split
-import math
-
-import torch
-
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.blocks import device_selection, topk_rows
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3_1.cases import (
-    DSA_CASES,
-    DSA_DIMS,
-    dsa_context_bars,
-)
-
-
 def test_dsa_selection_readback_marks_the_no_key_sentinel() -> None:
     """The indexer's uint32 no-key sentinel (read back as 0xFFFFFFFF) becomes -1; real keys stay int64."""
     got = device_selection(torch.tensor([[0xFFFFFFFF, 3], [0, 2**31]], dtype=torch.int64))
@@ -150,7 +133,7 @@ def test_topk_rows_reads_tp_split_and_tp_replicated_chunks(monkeypatch) -> None:
 def test_dsa_case_runs_whole_chunks_past_top_k() -> None:
     """Every DSA context length is a multiple of the chunk (no zero-padded chunk) and spans rows past top-k (every
     window has scored rows)."""
-    (case,) = DSA_CASES
+    case = DSA_CASE
     assert all(rows % case.chunk == 0 and rows > DSA_DIMS.topk for rows in case.context_lengths), case.context_lengths
 
 
@@ -159,6 +142,3 @@ def test_dsa_unset_bar_is_refused(expect_error) -> None:
     refused."""
     with expect_error(ValueError, "no bar value"):
         dsa_context_bars({"attn_nrmse": math.nan})
-
-
-# ==== end of DSA ====================================================================================================

@@ -4,20 +4,23 @@
 each fed host rows from the FP64 chain golden ``k31-l0-3-fp64-1m`` and returning host ``BlockOutputs`` in global
 row order:
 
-* ``KimiK31MoeBlock`` (m06n.11.4): ``TtMoEBlockFfn`` of layer 1 or 2 on one 4x4 stage; ``extras`` hold the routing
-  (expert ids and weights); no carried state.
-* ``KimiK31DsaBlock`` (m06n.11.5): ``ttMLA`` of layer 3 with the adapter's caches, sized from the context length;
-  ``extras`` hold the indexer top-k; the carried state is the KV and index caches.
+* ``KimiK31MoeBlock``: ``TtMoEBlockFfn`` of layer 1 or 2 on one 4x4 stage; ``extras`` hold the routing (expert ids
+  and weights); no carried state.
+* ``KimiK31DsaBlock``: ``ttMLA`` of layer 3 with the adapter's caches, sized from the context length; ``extras`` hold
+  the indexer top-k; the carried state is the KV and index caches.
 
-Each Block's code, including its imports, stays inside its own section below; the per-chip readback both use is in
-the shared section first.
+Both read their outputs back per chip (``shard_grid``, ``sp_tp_rows``).
 """
 
 from __future__ import annotations
 
-# ==== Shared: per-chip readback =====================================================================================
-# isort: split
 import torch
+
+import ttnn
+from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
+from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows
 
 
 def shard_grid(mesh, tensor, sp_axis: int) -> list[list[torch.Tensor]]:
@@ -25,8 +28,6 @@ def shard_grid(mesh, tensor, sp_axis: int) -> list[list[torch.Tensor]]:
     (mr, mc) = divmod(i, columns) in ``ttnn.get_device_tensors`` order, is (sp, tp) = (mr, mc) with SP on mesh axis 0,
     (mc, mr) with SP on axis 1. Reading each chip's shard gives the same tensor as a ``ConcatMesh2dToTensor`` composer,
     ~10x faster for a chunk's [2560, 7168] bf16 output (0.03 vs 0.29 s) and ~3-4x for its DSA top-k (m06n.15)."""
-    import ttnn
-
     R, C = tuple(mesh.shape)
     sp, tp = (R, C) if sp_axis == 0 else (C, R)
     grid = [[None] * tp for _ in range(sp)]
@@ -43,15 +44,6 @@ def sp_tp_rows(mesh, tensor, sp_axis: int, rows: int) -> torch.Tensor:
     grid = shard_grid(mesh, tensor, sp_axis)
     return torch.cat([torch.cat([t.reshape(t.shape[-2], t.shape[-1]) for t in row], dim=-1) for row in grid])[:rows]
 
-
-# ==== end of shared =================================================================================================
-
-# ==== MoE: KimiK31MoeBlock (m06n.11.4) ==============================================================================
-import torch
-
-from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 
 MOE_TOP_K = KimiK31Config.NUM_EXPERTS_PER_TOKEN  # 16
 MOE_NUM_EXPERTS = KimiK31Config.NUM_ROUTED_EXPERTS  # 896
@@ -115,7 +107,6 @@ class KimiK31MoeBlock:
         self.chunk = self.sp_axis = 0
 
     def build(self, mesh, context_len: int, chunk: int) -> None:
-        import ttnn
         from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
         from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_impl_of
 
@@ -136,8 +127,6 @@ class KimiK31MoeBlock:
         self.mesh, self.chunk, self.sp_axis = mesh, chunk, layout.sp_axis
 
     def forward(self, x: torch.Tensor, lo: int, hi: int) -> BlockOutputs:
-        import ttnn
-
         rows = hi - lo
         x_rows = torch.zeros(self.chunk, KimiK31Config.EMB_SIZE, dtype=torch.bfloat16)
         x_rows[:rows] = x
@@ -165,18 +154,6 @@ class KimiK31MoeBlock:
         if self.mesh is not None:
             release_blocks(self.mesh)
         self.ffn = self.mapper = None
-
-
-# ==== end of MoE ====================================================================================================
-
-# ==== DSA: KimiK31DsaBlock (m06n.11.5) ==============================================================================
-# isort: split
-import torch
-
-import ttnn
-from models.demos.common.prefill.long_context_accuracy.block import BlockOutputs
-from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows
 
 
 def topk_rows(mesh, indices, rows: int, sp_axis: int) -> torch.Tensor:
@@ -297,6 +274,3 @@ class KimiK31DsaBlock:
             if self._caches.index is not None:
                 ttnn.deallocate(self._caches.index)
             self._caches = None
-
-
-# ==== end of DSA ====================================================================================================
