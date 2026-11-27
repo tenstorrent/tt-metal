@@ -471,20 +471,23 @@
   # hang to be detected and triaged (the 120 s operation timeout, then about 95 s of triage, measured in CI). MoE
   # layer 2, sharing layer 1's process, adds 1 min before its first chunk (13 s measured locally). The chunk interval
   # is the slower of two lanes, each at the 99th percentile over chunks 2..N of the run_case LC_CHUNK lines:
-  #   main lane: device + score, measured locally at this head, x the case's CI/local ratio of device + score at
-  #              4a0f499bd5f when above 1 (DSA 1.26: CI scores slower; KDA and MoE 1);
-  #   golden lane: the golden read on the prefetch thread, measured in CI (run 45959911370, at 4a0f499bd5f); it binds
-  #              once the main lane is faster, since the prefetch can then no longer hide it.
-  #   KDA layer 0, 8x4:  204 chunks x max(0.22, golden 0.98) s -> 3 + 5.0 + 0.1 + 4 = 13 min
-  #   MoE layers 1, 2, 4x4, one process:  408 chunks x max(0.12, golden 0.39) s and 408 x max(0.12, golden 0.25) s
-  #                      -> 3 + 4.0 + 0.1 + 1 + 2.6 + 0.1 + 4 = 15 min
-  #   DSA layer 3, 4x4:  408 chunks x max(0.36 x 1.26 = 0.46, golden 0.53) s -> 3 + 5.4 + 0.5 (cache readback,
-  #                      run score, exit) + 4 = 13 min
-  # Measured locally at this head (warm, page-cached goldens): KDA 49 s, MoE layers 1-2 132 s, DSA 166 s of run_case
-  # time. Each case skips without its checkpoint or TTNN weight cache, so each run must pass all its cases.
+  #   main lane: device + score, measured locally at this head, x the case's CI/local ratio of device + score on the
+  #              same code (CI run 45985277505 vs local, both at e59a2590b45's model code; KDA 3.18, MoE layer 1 3.39,
+  #              layer 2 3.20, DSA 2.01);
+  #   golden lane: the golden read on the prefetch thread (parallel reads of the needed bytes), measured locally cold
+  #              (page cache evicted) x the CI/local ratio of the previous reader's read, when above 1 (KDA 1.16,
+  #              MoE layer 2 1.80, DSA 1.08: CI p99 of runs 45959911370 and 45985277505 over local cold at
+  #              4a0f499bd5f). An estimate until a CI run measures this reader; it binds no case.
+  #   KDA layer 0, 8x4:  204 chunks x max(0.237 x 3.18 = 0.75, golden 0.28) s -> 3 + 3.8 + 0.1 + 4 = 11 min
+  #   MoE layers 1, 2, 4x4, one process:  408 chunks x max(0.106 x 3.39 = 0.36, golden 0.07) s and
+  #                      408 x max(0.098 x 3.20 = 0.31, golden 0.11) s -> 3 + 3.7 + 0.1 + 1 + 3.2 + 0.1 + 4 = 16 min
+  #   DSA layer 3, 4x4:  408 chunks x max(0.368 x 2.01 = 0.74, golden 0.20) s -> 3 + 7.6 + 0.3 (carried state, score
+  #                      run) + 4 = 15 min
+  # Measured locally at this head (cold goldens): KDA 54 s, MoE layers 1-2 125 s, DSA 178 s of run_case time. Each
+  # case skips without its checkpoint or TTNN weight cache, so each run must pass all its cases.
   fabric_profile: torus_xy
   cmd: |
-    timeout -k 2m 36m mpirun --bind-to none --pernode --tag-output bash -lc '
+    timeout -k 2m 37m mpirun --bind-to none --pernode --tag-output bash -lc '
       set -eo pipefail
       export OMP_NUM_THREADS=$(nproc)
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
@@ -498,11 +501,11 @@
         [[ "$summary" =~ " $want passed" && ! "$summary" =~ (skipped|failed|error) ]] || { echo "::error::expected $want passed and none skipped, got: $summary"; exit 1; }
       }
       echo "===== [1/3] (Kimi-K3-2.8T) KDA layer 0, 1M, SP8xTP4 ====="
-      passes 1 timeout -k 1m 13m python3 -m pytest $TEST -k "k3-l0-kda-1044480" -s -vvv --tb=short
+      passes 1 timeout -k 1m 11m python3 -m pytest $TEST -k "k3-l0-kda-1044480" -s -vvv --tb=short
       echo "===== [2/3] (Kimi-K3.1) MoE layers 1 and 2, 1M, 4x4 top tray half, one process ====="
-      passes 2 timeout -k 1m 15m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer1-1044480 or k31-moe-layer2-1044480" -x -s -vvv --tb=short
+      passes 2 timeout -k 1m 16m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-moe-layer1-1044480 or k31-moe-layer2-1044480" -x -s -vvv --tb=short
       echo "===== [3/3] (Kimi-K3.1) DSA layer 3, 1M, 4x4 top tray half ====="
-      passes 1 timeout -k 1m 13m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-l3-dsa-1044480" -s -vvv --tb=short
+      passes 1 timeout -k 1m 15m $T/run_4x4_stage_tests.sh --half top -- $TEST -k "k31-l3-dsa-1044480" -s -vvv --tb=short
       echo "===== all 4 cases passed ====="
     '
   test_type: long_context_accuracy_1m
@@ -512,8 +515,8 @@
   skus:
     bh_sc1:
       # The job stops at its first failed case (the MoE invocation runs pytest with -x), so one hang allowance
-      # covers it: the cases without theirs (9 + 11 + 9) + 4 for one hang + 3 x 1 min kill grace.
-      timeout: 36
+      # covers it: the cases without theirs (7 + 12 + 11) + 4 for one hang + 3 x 1 min kill grace.
+      timeout: 37
       tier: 2
       release_ready: false
   owner_id: U0A5RDWPYF5 # Momcilo Vasilijevic
