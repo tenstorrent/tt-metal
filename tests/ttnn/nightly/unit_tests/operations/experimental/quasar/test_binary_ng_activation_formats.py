@@ -4,7 +4,8 @@
 
 """Format-state regressions for the experimental Quasar API.
 
-Every case runs on Quasar and on WH/BH. See
+Every case runs on Quasar and on WH/BH, except the cases that use a block-float
+format (bfloat8_b, bfloat4_b). Quasar has no block-float formats. See
 QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
 cases that the native gate admits run on the Quasar-native factory, unless
 TTNN_QSR_NATIVE=0: the no-broadcast tensor-tensor cases, and the bf16 ROW, COL,
@@ -19,6 +20,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
@@ -38,6 +40,11 @@ _SHAPES = [
     ((1, 1, 1, 96), (1, 1, 96, 1)),
     ((1, 1, 96, 1), (1, 1, 1, 96)),
 ]
+
+_BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(
+    is_quasar(), reason="Quasar does not support block-float formats (bfloat8_b, bfloat4_b)"
+)
 
 _SHARED_DFB_CASES = [(ttnn.bfloat16, ttnn.bfloat16, shapes) for shapes in _SHAPES] + [
     (dtype, dtype, (_FULL, _FULL)) for dtype in (ttnn.float32, ttnn.bfloat8_b)
@@ -61,7 +68,14 @@ def _activations(side):
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 @pytest.mark.parametrize(
     "a_dtype,b_dtype,shapes",
-    [pytest.param(*case, id=f"shared_dfb-{i}") for i, case in enumerate(_SHARED_DFB_CASES)],
+    [
+        pytest.param(
+            *case,
+            id=f"shared_dfb-{i}",
+            marks=_SKIP_BLOCK_FLOAT_ON_QUASAR if case[0] in _BLOCK_FLOAT_DTYPES else [],
+        )
+        for i, case in enumerate(_SHARED_DFB_CASES)
+    ],
 )
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, side):
@@ -121,6 +135,7 @@ def test_fused_activation_sharded_chunks(device, op_name, dtype, side):
     assert_equal(expected, ttnn.to_torch(out).float())
 
 
+@_SKIP_BLOCK_FLOAT_ON_QUASAR
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize(
     "shapes",

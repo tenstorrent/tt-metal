@@ -10,11 +10,16 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from tests.ttnn.utils_for_testing import assert_reshape as _assert_reshape
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Every test in this module takes the function-scoped `device` fixture without
 # parametrizing device_params, so the device is opened once per module rather than
 # once per test.
 pytestmark = pytest.mark.use_module_device
+
+_SKIP_BLOCK_FLOAT_ON_QUASAR = pytest.mark.skipif(
+    is_quasar(), reason="Quasar does not support block-float formats (bfloat8_b, bfloat4_b)"
+)
 
 _LAYOUTS = [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]
 _LAYOUT_IDS = ["TILE", "RM"]
@@ -258,6 +263,7 @@ def test_quasar_slice_preallocated_output_dtype_mismatch_fatal(device, expect_er
 
 # The fallback returns BFLOAT16 for a BFLOAT8_B input (untilize promotes it); a preallocated output may
 # match either that result or the input.
+@_SKIP_BLOCK_FLOAT_ON_QUASAR
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16_out", "bf8_out"])
 def test_quasar_slice_bfloat8_b_unaligned_begin_preallocated_output(device, out_dtype):
     torch.manual_seed(0)
@@ -938,7 +944,17 @@ def test_quasar_s2i_oversized_grid(device, memory_layout, layout, shape, shard_s
     assert_equal(torch_guard, ttnn.to_torch(guard))
 
 
-@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8_b"])
+@pytest.mark.parametrize(
+    "input_dtype",
+    [
+        pytest.param(ttnn.bfloat16, id="bf16"),
+        pytest.param(
+            ttnn.bfloat8_b,
+            id="bf8_b",
+            marks=_SKIP_BLOCK_FLOAT_ON_QUASAR,
+        ),
+    ],
+)
 def test_quasar_untilize_with_unpadding_l1_output_reserved_in_budget(device, input_dtype):
     """The L1 budget must reserve the op's own interleaved-L1 output and size it (and the output DFB)
     by the output dtype. The prim emits BFLOAT16 for a BFLOAT8_B input.

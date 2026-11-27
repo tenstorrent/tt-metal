@@ -753,6 +753,8 @@ def test_l1_interleaved_everything(device):
     ids=["bfp8_inputs", "bfp8_weights_only", "bfp8_out"],
 )
 def test_bfp8(device, in0_dtype, in1_dtype, out_dtype, rtol):
+    if _on_quasar(device):
+        pytest.skip("Quasar does not support block-float formats (bfloat8_b)")
     M, K, N = 4 * TILE, 8 * TILE, 4 * TILE
     torch.manual_seed(9)
     a, b = _randn(1, 1, M, K), _randn(1, 1, K, N)
@@ -931,6 +933,8 @@ def test_bias_with_fp32_dest_acc_is_added_separately(device):
 
 
 def test_fused_bias_bfp8(device):
+    if _on_quasar(device):
+        pytest.skip("Quasar does not support block-float formats (bfloat8_b)")
     M, K, N = 2 * TILE, 2 * TILE, 4 * TILE
     torch.manual_seed(7)
     a, b, bias = _randn(1, 1, M, K), _randn(1, 1, K, N), _bias_row(N)
