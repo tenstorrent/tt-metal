@@ -101,3 +101,28 @@
 - Tests added:
   - `test_g6_reshape_perf_sweep.py`: guard-set correctness pin by default; `G6_PERF_SWEEP=1` / `G6_PERF_SWEEP2=1` run the knob sweeps under `--profile`.
   - `test_g6_reshape_row_major.py` knob matrix: `bank_fold`, `bank_fold_block5` and `linear_block7` settings, plus an fp32 `(2,33,40)→(66,40)` case (3 atoms per page; blocks start/end mid-page and span > NB pages). 66/66 pass under `--dev` (kernel ASSERTs on).
+
+## Refinement 3 — Speed up the perf-flagged profile, phase 2 (per-unit mover cost)
+- Date: 2026-11-27
+- What was done (rm_row_gather, linear fold; tile kernel behaviour unchanged):
+  - **Floor check** (Done-when clause): an empty kernel on the same 110 cores measures ≈ 290 ns; a reads-only ablation (R2's per-mover covering reads + barrier, then return) ≈ 1600 ns. R2's ≈ 2900 ns was far from it, so code changed.
+  - **Lever 1 — plan-free permute ("store realization"/per-unit cost)**: under the linear fold the staged range is the input stream at a uniform row pitch (row r0's run starts at `lo0`, later rows at 0, every run but the last ends at the pitch), so stream element (r, c) sits at `stage − lo0 + (r − r0)·pitch + c·e`. The gather walk, the plan entries written to L1 and read back, and the plan CB are deleted; the copies run directly off the fold cursor after the barrier, bank group by bank group, each group fenced and written as soon as it is copied. A compile-time fast path for whole-page atoms inside one input row (`[1,W]→[W,1]` family) does one compile-time-sized copy per atom with an incremental in-row index (no per-atom division). Group write addresses are computed between issue and barrier (in the read-latency shadow). Effect: flagged ≈ −5% (the walk had already been overlapped with the DRAM latency by R2), `[1,3844]` −7%. An incremental-cursor variant for the general path measured slower than recomputing divmod per atom and was dropped; a single-fence-before-all-writes variant was within noise and dropped in favour of per-group write/copy overlap.
+  - **Lever 2 — shared per-core read (`RM_SHARED_READ`, "mover roles" lamp)**: per-core await profiles showed a strong spatial gradient (90 ns near → 1.4 µs far) and, with NoC1's reads removed, NoC0's await was unchanged: the tail is a per-NoC request queue at the single DRAM bank holding the 16 KB input page. Now one mover per core issues the covering read of the whole core range into a pooled staging CB (mover 0's stage CB, both slots; mover 1's not allocated), and hands it to its partner through a local semaphore. Readers alternate NoCs by core checkerboard → 55 requests per NoC instead of 110. Applies when every mover has a single block (else falls back to per-mover reads). −25%.
+  - **Lever 3 — bank split (`RM_BANK_SPLIT`)**: with the core's range staged once, mover m takes bank groups m, m+2, … of the whole core range instead of a stream half, so each issues ≤ NB/2 writes (4 instead of 8 on Blackhole) with the same atom count (exact for even NB; kernel static_assert + ASSERT). Whole-page atoms only. −8%.
+  - Shared code: `copy_run`, `begin_image`, `fence_image` factored out of `permute_block` in `g6_reshape_permute.hpp` (tile kernel calls the same `permute_block`, unchanged semantics).
+  - Reused: the RM mover skeleton, linear fold / bank-group image layout, `_split_atoms`, `_fit_block_atoms`, `_rm_slot_bytes`, the knob/cache-key plumbing, `describe_plan`. Added: `stream_range`/`issue_range` lambdas, the plan-free copy loop, CT args 17–21 (shared read, semaphore id, bank split, mover index, movers), RT args 2–4 under the shared read (core range, role), `_RmPlan.mover_runtime_args`, knobs `RM_SHARED_READ`, `RM_BANK_SPLIT` (both in the cache key, both reported by `describe_plan`), a semaphore descriptor.
+- Perf (device kernel ns, profiler build, 110 cores, warm call, same session):
+
+  | Shape | R2 | + lever 1 | + lever 2 | + lever 3 (shipped) |
+  |---|---|---|---|---|
+  | `[1,4096]→[4096,1]` int32 (flagged) | 2915 | ≈ 2750–2880 | 2036 | **1878** |
+  | `[1,3844]→[3844,1]` int32 | 2897 | 2691 | 2010 | **1844** |
+  | bf16 `(16,1,5120)→(1,1,16,5120)` | 8561 | — | — | 8516 (unchanged path) |
+  | bf16 `(1,1,16,4608)→(16,1,4608)` | 6821 | — | — | 6812 (unchanged path) |
+
+  Incumbent 362.12 µs.
+- Remaining profile (flagged, per mover, median / max ns): issue ≈ 115 (readers only), await 450 / 900 (NoC0 readers' hot-bank tail), permute+store ≈ 490 (19 one-word copies, 4 fences, 4 writes), drain ≈ 190. Remaining headroom is the hot-bank tail: next lever would be fewer readers per NoC (core-pair read + L1→L1 forward) or spreading requests over the bank's alternate NoC endpoints; not attempted (separate scheme change, uncertain net win).
+- Accuracy achieved: bit-exact (exact gate) on every case: `int32_extremes`, the `-1` variant, uint32 high bit, bf16/fp32 RM, int32/uint32 TILE.
+- Golden test progress: targeted slice (`EVAL_CAPTURE_L1=0`, `-k "ROW_MAJOR or 16x1x5120 or loose"`) 35/35 pass; the full suite is left to the harness gate.
+- Issues encountered: the Tracy capture tool intermittently exits with code 3 (no CSV); re-running is enough. `G6_ABLATION=1` added to the perf-sweep harness so stubbed-kernel ablation runs record timing without the bit-exact assert.
+- Tests added: `test_g6_reshape_row_major.py` knob matrix += `per_mover_read`, `no_bank_split`, `shared_8_cores` settings and two cases (`(3,10)→(5,6)` int32: whole-page atoms straddling input rows under the bank split; `(1,4095)→(1365,3)` bf16: 6-byte half-word copies); the flagged-plan pin asserts `shared_read` and `bank_split`. 100/100 under `--dev`; unit directory 173 passed.

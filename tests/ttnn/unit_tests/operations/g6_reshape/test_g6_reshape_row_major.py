@@ -142,6 +142,8 @@ def test_flagged_plan_and_extremes(device):
     assert plan["regime"] == "rm_row_gather"
     assert plan["num_cores"] > 1
     assert plan["l1_bytes_per_core"] <= L1_OP_BUDGET
+    # Refinement 3: one covering read per core, movers split the bank groups.
+    assert plan["shared_read"] and plan["bank_split"]
     _run_and_check(torch_input, (4096, 1), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, device)
     _run_and_check(torch_input, (-1, 1), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, device)
 
@@ -168,6 +170,11 @@ KNOB_SETTINGS = {
     "bank_fold_block5": {"RM_FOLD": "bank", "MAX_CORES": 8, "MAX_BLOCK_ATOMS": 5},
     # Linear fold with blocks that start / end mid-page and span more than NB pages.
     "linear_block7": {"MAX_CORES": 3, "MAX_BLOCK_ATOMS": 7},
+    # Refinement 3: the shared per-core read and the bank split are defaults; keep the per-mover read and the
+    # stream-half split covered, and run the shared read on core ranges that cross many input rows.
+    "per_mover_read": {"RM_SHARED_READ": False},
+    "no_bank_split": {"RM_BANK_SPLIT": False},
+    "shared_8_cores": {"MAX_CORES": 8},
 }
 
 
@@ -179,6 +186,10 @@ KNOB_SETTINGS = {
         ((3, 5, 7), (7, 15), ttnn.bfloat16),
         ((4096, 1), (1, 4096), ttnn.uint32),
         ((2, 33, 40), (66, 40), ttnn.float32),
+        # Whole-page atoms whose pages straddle input rows (general copy path under the bank split), and
+        # 6-byte bf16 pages (half-word copies).
+        ((3, 10), (5, 6), ttnn.int32),
+        ((1, 4095), (1365, 3), ttnn.bfloat16),
     ],
     ids=_case_id,
 )

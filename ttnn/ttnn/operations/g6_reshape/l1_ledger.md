@@ -91,6 +91,12 @@ cap (via the shared `_fit_block_atoms`), the CB sizes and `describe_plan()["l1_b
 | `cb_dst_image_m{0,1}` | 1 page of `image_depth · align_up(block_atoms·A + A, 64)` B | exactly `block_atoms` A-byte slot chunks (valid bytes + the slot's alignment padding, written as-is) + `A` alignment slack. Linear fold (default, Refinement 2): laid out BANK-GROUPED — pages `p0+g, p0+g+NB, …` consecutively per group `g` — so each group is consecutive bytes of one bank; bank fold: DRAM byte order | `{out_atom: spans → block_atoms, movers: one per mover}` | input dtype | mover m (CPU stores) | mover m (NoC writes, one per (block, bank)) | permute → writes_flushed at the next block's permute | cannot alias staging (concurrent in permute); capacity = live set + slack |
 | `cb_move_plan_m{0,1}` | 1 page of `align_up(8·S_rm·block_atoms, 64)` B | one copy entry per piece; no tile table (the store derives its ≤ NB group writes from the block's first page/chunk under the linear fold, or re-walks the bank-affine cursor) | `{out_atom: spans → block_atoms, elem: one entry per piece}` | UInt32 | mover m | mover m | gather → permute | cannot share with staging (written while reads land) |
 
+**Refinement 3 (default `RM_FOLD="linear"`):**
+- `cb_move_plan_m{0,1}`: **deleted** under the linear fold. Its forcing mechanism ("the walk that discovers the copies runs before the read barrier") is gone: the staged range is the input stream at a uniform row pitch, so every copy source is closed-form (`stage_base − lo0 + (r − r0)·pitch + c·e`) and the copies run straight off the fold cursor after the barrier. `_rm_slot_bytes` returns plan = 0 and the descriptor skips the CB. The bank fold keeps it.
+- Shared read (`RM_SHARED_READ`, default on when every mover has one block, two movers per core, depth 1): `cb_src_stage_m0` pools both movers' staging slots (`movers_per_core × stage slot`, same total as before) and holds the core's whole stream range, read by ONE mover per core; `cb_src_stage_m1` is not allocated. Producer: the core's reader mover (NoC reads); consumers: both movers (CPU loads), ordered by a local semaphore (`SHARED_READ_SEM`, reader sets after its read barrier, the waiter resets after seeing it). This is a raw-L1 scratch shared under semaphore handoff, not a push/pop CB stream, so the single-producer/single-consumer CB rule is not exercised (no CB pointer ops on it).
+- Bank split (`RM_BANK_SPLIT`, whole-page atoms): unchanged image sizing — mover m takes bank groups `m, m+2, …` of the core range, which is exactly its linear share (`ceil`/`floor` of the core count, NB even; kernel ASSERT).
+- `l1_bytes_per_core` drops by the plan term: `[1,4096]→[4096,1]` int32 17920 → 17280 B (host plan).
+
 Worked values (Blackhole, `A = 64`, 110 cores, `G = A`): `[1,4096]→[4096,1]` int32: 4096 atoms, ≤ 19 per mover,
 `S_rm = 1` → 17920 B per core. `[1,3844]→[3844,1]`: 17024 B. `[8,1]→[8]` int32 (`S_rm = 16`, one atom): 6784 B.
 `[4096,1]→[1,4096]` int32: 13312 B. All ≥ 75× under 1347776.
@@ -103,3 +109,8 @@ int32 that is ~19·4 B + ≤ 128 B per mover, ≈ 28 KB total from the single in
 flagged shape, all from one hot bank — the await bottleneck Refinement 2 removed). The gap `G` applies only
 to the bank fold. Output — every output slot byte (valid + alignment padding) crosses DRAM exactly once,
 one write per (block, bank): ≤ NB writes per block under the linear fold. Cross-core traffic 0.
+Refinement 3 (shared read): one covering read per CORE (not per mover) of the core's contiguous stream range —
+the same input bytes cross DRAM once, plus `< 2A` rounding per input row per core instead of per mover
+(flagged shape: 110 reads of 192–256 B instead of 220 of 128 B, split 55/55 over the two NoCs). Under the bank
+split each mover writes ≤ NB/2 groups, so a core still issues ≤ NB writes per (core, bank). Output crossings
+unchanged (1).

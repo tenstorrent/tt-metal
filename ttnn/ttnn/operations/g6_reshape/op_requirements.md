@@ -83,7 +83,7 @@ Several T1/T2 levers fit in one phase. No SUPPORTED change.
   - Co-tune: full grid, 2 movers and one block per mover remain best. Native `MOVER_NOCS` beats swapped by ~6%; it is now a cache-keyed knob.
   - Now bound by the mover's per-unit RISC-V work (walk ≈ 500 ns + permute ≈ 620 ns for 19 atoms) on top of ≈ 500 ns launch. That is Refinement 3's scope, so it was not attempted here.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile, phase 2 (per-unit mover cost)
+### [x] Refinement 3 — Speed up the perf-flagged profile, phase 2 (per-unit mover cost)
 
 **Type**: perf
 
@@ -101,3 +101,4 @@ Catalog: `ttnn/ttnn/operations/examples/master.md` (`split_reader`, `trid_double
 - The exact gate holds and the golden suite is green.
 - No regression across the guard set named in Refinement 2.
 - If Refinement 2's result is already within 3% of the floor measured on this board (an empty-kernel program on the same core set plus one DRAM round trip), record that measurement in `changelog.md` and close `[x]` with no code change.
+- **Outcome**: landed. Flagged `[1,4096]→[4096,1]` int32 **2915 → ≈ 1880 ns (−36%)**, `[1,3844]→[3844,1]` 2897 → ≈ 1845 ns (−36%), same-session device kernel ns, 110 cores, exact; tile guards unchanged (8.5 µs / 6.8 µs). Not near the floor (empty kernel ≈ 290 ns; R2-structure reads-only ≈ 1600 ns), so code changed. Levers: (1) plan-free linear-fold permute — closed-form copy sources, gather walk and plan CB deleted, whole-page fast path with compile-time copy size, write addresses computed in the read-latency shadow (flagged ≈ −5%, `[1,3844]` −7%: the walk was already overlapped with DRAM, so this mostly cut post-barrier work); (2) shared per-core covering read (`RM_SHARED_READ`): the per-mover zone map showed the await tail is a per-NoC request queue at the single hot input bank (await 90 ns → 1.4 µs by distance; removing NoC1's reads left NoC0's unchanged), so one mover per core reads for both, readers alternating NoCs by checkerboard (55 per NoC instead of 110) — −25%; (3) bank split (`RM_BANK_SPLIT`): the movers take alternate bank groups of the shared range, 4 writes each instead of 8 — −8%. Now bound by: the hot-bank read tail (NoC0 await max ≈ 0.9 µs) + ≈ 0.5 µs of post-barrier copy/fence/write issue + ≈ 0.19 µs write drain. Next would be cutting readers per NoC below 55 (one DRAM read per core pair forwarded L1→L1, or spreading requests across the bank's alternate NoC endpoints) — not tried: it needs a cross-core handoff (remote semaphore + extra L1 hop latency) whose net win against a ~0.3 µs tail reduction is unclear, and it is a separate scheme change.

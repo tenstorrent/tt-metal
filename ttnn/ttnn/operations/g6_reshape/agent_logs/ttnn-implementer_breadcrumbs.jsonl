@@ -8,3 +8,4 @@
 {"event":"test_run","refinement":1,"result":"pass","detail":"harness runner 54/59 0 hangs; 25/25 new cells pass; flagged 4610 ns; fixed precompile trace-capture hang in up_front_collect plugin","ts":"2026-11-27T21:50:02+01:00"}
 {"event":"test_run","refinement":2,"result":"pass","detail":"RM linear fold + bank-grouped image + pre-issued reads; flagged 4320->2988 ns; row_major 66/66 --dev","ts":"2026-11-27T21:58:11+01:00"}
 {"event":"test_run","refinement":2,"result":"pass","detail":"unit dir 139/139; golden slice ROW_MAJOR+16x1x5120 26/26; flagged ~2900 ns warm (bank fold ~4300); MOVER_NOCS native kept","ts":"2026-11-27T22:04:07+01:00"}
+{"event":"test_run","refinement":3,"status":"pass","test":"unit dir + golden slice","note":"flagged 2915->1878 ns, 3844 2897->1844; levers plan-free permute, shared read, bank split","ts":"2026-11-27T22:29:09+01:00"}
