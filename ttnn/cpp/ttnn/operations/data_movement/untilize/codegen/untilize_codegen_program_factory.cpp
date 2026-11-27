@@ -427,8 +427,8 @@ ProgramDescriptor UntilizeCodegenProgramFactory::create_descriptor(
     DataType out_dtype = output.dtype();
     a.fp32 = needs_dst_accum(in_dtype);
     a.max_bct = max_block_ct(a.fp32);
-    a.in_fmt = tt::tt_metal::datatype_to_dataformat_converter(in_dtype);
-    a.out_fmt = tt::tt_metal::datatype_to_dataformat_converter(out_dtype);
+    a.in_fmt = tt::tt_metal::cb_dataformat_for(in_dtype);
+    a.out_fmt = tt::tt_metal::cb_dataformat_for(out_dtype);
     a.in_tile_size = tt::tile_size(a.in_fmt);
     a.out_tile_size = tt::tile_size(a.out_fmt);
     a.tile_size_for_planning = planning_tile_size(in_dtype, out_dtype);

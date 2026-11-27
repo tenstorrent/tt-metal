@@ -1,5 +1,5 @@
 ---
-# Shadow of the PR Gate's ASan build (build-artifact.yaml); never required.
+# The ASan build the shadow test jobs install from; never required.
 jobs:
   - id: asan-build
     name: ASan build
@@ -10,20 +10,32 @@ jobs:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        image:
+          from-job: ci-build-image
+          image: ci-build
         resources:
           # Measured: 16 jobs peak at 13.2 GiB; a CPU limit throttled 53% of periods.
-          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
-          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+          requests:
+            cpu: '16'
+            memory: 24Gi
+            ephemeral-storage: 100Gi
+          limits:
+            memory: 32Gi
+            ephemeral-storage: 150Gi
     env:
-      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - name: CMAKE_BUILD_PARALLEL_LEVEL
+        value: '16'
       # Hash the compiler, not its mtime, so hits survive image rebuilds.
-      - {name: CCACHE_COMPILERCHECK, value: content}
-      # Keeps cache keys path-independent; remove once TorrentCI sets it by default.
-      - {name: CCACHE_BASEDIR, value: /workspace}
-      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - name: CCACHE_COMPILERCHECK
+        value: content
+      # Keeps cache keys path-independent.
+      - name: CCACHE_BASEDIR
+        value: /workspace
+      - name: CPM_SOURCE_CACHE
+        value: /workspace/.cpmcache
       # Keep git in cached sources (no .git) from finding tt-metal's repo.
-      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+      - name: GIT_CEILING_DIRECTORIES
+        value: /workspace/.cpmcache
     # CPM source cache: configure takes 25 s warm, 162 s cold.
     cache:
       key: 'cpm-v1-${ref_name}-${commit_sha}'
@@ -106,7 +118,7 @@ jobs:
         kind: shell
         shell:
           run:
-            # TT_FROM_PRECOMPILED_DIR layout, as the PR Gate stages it.
+            # The TT_FROM_PRECOMPILED_DIR layout build-docs imports.
             - rm -rf ttnn-import
             - mkdir -p ttnn-import/build/lib
             - cp -a build/lib/*.so* ttnn-import/build/lib/

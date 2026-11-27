@@ -399,11 +399,11 @@ Tensor gather_dispatch(
     }
 
     // The native RM factories need every BLOCK/WIDTH-sharded shard row, and every ND shard row narrower than
-    // the tensor row, to be a multiple of the buffer alignment (see has_subaligned_shard_row and
-    // has_subaligned_split_row). An input or index tensor whose shard row fails this
-    // check is moved to interleaved memory of the same buffer type. An output whose shard row fails
-    // this check is computed in interleaved memory and then moved to the memory config the device op
-    // would have given it.
+    // the tensor row, to be a multiple of the buffer alignment (see has_subaligned_shard_row), and a page grid
+    // that keeps each row's pages in its own dim (see needs_interleaved_row_staging). An input or index tensor
+    // that fails these checks is moved to interleaved memory of the same buffer type. An output that fails
+    // them is computed in interleaved memory and then moved to the memory config the device op would have
+    // given it.
     auto native_memory_config = memory_config_value;
     auto native_output_tensor = optional_output_tensor_value;
     std::optional<tt::tt_metal::MemoryConfig> rerouted_output_memory_config;
@@ -428,19 +428,19 @@ Tensor gather_dispatch(
                 native_memory_config = output_spec.memory_config();
             }
             if (has_subaligned_shard_row(output_spec.memory_config(), output_elem_size) ||
-                has_subaligned_split_row(output_spec)) {
+                needs_interleaved_row_staging(output_spec)) {
                 rerouted_output_memory_config = output_spec.memory_config();
                 native_memory_config = interleaved_same_buffer_type(output_spec.memory_config());
                 native_output_tensor = std::nullopt;
             }
         }
         if (has_subaligned_shard_row(padded_input_tensor.memory_config(), padded_input_tensor.element_size()) ||
-            has_subaligned_split_row(padded_input_tensor.tensor_spec())) {
+            needs_interleaved_row_staging(padded_input_tensor.tensor_spec())) {
             padded_input_tensor = ttnn::to_memory_config(
                 padded_input_tensor, interleaved_same_buffer_type(padded_input_tensor.memory_config()));
         }
         if (has_subaligned_shard_row(padded_index_tensor.memory_config(), padded_index_tensor.element_size()) ||
-            has_subaligned_split_row(padded_index_tensor.tensor_spec())) {
+            needs_interleaved_row_staging(padded_index_tensor.tensor_spec())) {
             padded_index_tensor = ttnn::to_memory_config(
                 padded_index_tensor, interleaved_same_buffer_type(padded_index_tensor.memory_config()));
         }

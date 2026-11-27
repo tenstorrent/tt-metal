@@ -119,7 +119,10 @@ constexpr uint32_t kTableCbBytes = plan_table::kBitmapOff * sizeof(uint32_t) + k
 // ---------------------------------------------------------------------------------------------------------------------
 namespace sparse_push_plan {
 
-constexpr uint32_t kWorkers = 2;  // BRISC and NCRISC of a core
+// The RISC-Vs of a core that share the plan's L1 loops: BRISC (0) and NCRISC (1), which also do the NoC work, and the
+// three TRISCs (2, 3, 4), which only run L1 loops.
+constexpr uint32_t kWorkers = 5;
+constexpr uint32_t kFirstTrisc = 2;
 
 // Where the plan gets the chunk start (the prefix ends at the block holding it) from.
 enum SplitSource : uint32_t {
