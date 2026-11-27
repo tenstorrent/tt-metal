@@ -695,7 +695,8 @@ jobs:
       baseline_pipeline: merge_baseline
       baseline_match_ref: ${{ github.event.merge_group.base_sha || github.sha }}
       # No wait, so the queue never waits for the warehouse: a missing baseline
-      # falls back to the newest older one in the base's history, marked stale.
+      # falls back to the newest older one in the base's history, marked stale. Stage 1
+      # then takes the perf data of the queue run at the missing one, when it has measured.
       baseline_wait_minutes: "0"
       speed_of_light: "false"
       run_types: L1_TO_L1
