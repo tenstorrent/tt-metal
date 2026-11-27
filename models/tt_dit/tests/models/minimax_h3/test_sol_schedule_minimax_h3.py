@@ -19,7 +19,7 @@ def test_off_switch_is_dense(env):
 
 def test_defaults_keep_first_step_and_two_layers_dense():
     schedule = sol_schedule({"H3_SOL_ATTN": "1"})
-    assert schedule == SolSchedule(tau=1.0, dense_steps=1, dense_layers=2)
+    assert schedule == SolSchedule(tau=1.0, dense_steps=1, dense_layers=2, sinks=True)
     assert [schedule.is_dense_step(i) for i in range(4)] == [True, False, False, False]
 
 
@@ -29,6 +29,11 @@ def test_env_sets_the_schedule():
     assert schedule == SolSchedule(tau=0.5, dense_steps=2, dense_layers=0)
     assert [schedule.is_dense_step(i) for i in range(4)] == [True, True, False, False]
     assert not any(SolSchedule(dense_steps=0).is_dense_step(i) for i in range(4))
+
+
+def test_sinks_switch_drops_the_dense_prefix():
+    assert not sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "0"}).sinks
+    assert sol_schedule({"H3_SOL_ATTN": "1", "H3_SOL_SINKS": "1"}).sinks
 
 
 @pytest.mark.parametrize("name", ["H3_SOL_DENSE_STEPS", "H3_SOL_DENSE_LAYERS"])

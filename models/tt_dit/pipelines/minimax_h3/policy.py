@@ -63,11 +63,13 @@ MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
 @dataclass(frozen=True)
 class SolSchedule:
     """Where one generation's ring attention runs Sol-Attn: the first `dense_steps` denoise steps and the first
-    `dense_layers` blocks stay dense, the rest route with threshold `tau`."""
+    `dense_layers` blocks stay dense, the rest route with threshold `tau`. `sinks` keeps the prefix in front of the
+    target video (text, condition and audio rows) exact for every query; without it only the routing rule decides."""
 
     tau: float = 1.0
     dense_steps: int = 1
     dense_layers: int = 2
+    sinks: bool = True
 
     def is_dense_step(self, step: int) -> bool:
         return step < self.dense_steps
@@ -77,7 +79,8 @@ def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
     `H3_SOL_ATTN=1` turns it on (default off; anything else is the off switch). `H3_SOL_TAU` (default 1.0),
-    `H3_SOL_DENSE_STEPS` (default 1) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule.
+    `H3_SOL_DENSE_STEPS` (default 1) and `H3_SOL_DENSE_LAYERS` (default 2) set the schedule; `H3_SOL_SINKS=0`
+    drops the dense prefix.
     """
     if env.get("H3_SOL_ATTN", "0") != "1":
         return None
@@ -85,6 +88,7 @@ def sol_schedule(env: Mapping[str, str]) -> SolSchedule | None:
         tau=float(env.get("H3_SOL_TAU", "1.0")),
         dense_steps=int(env.get("H3_SOL_DENSE_STEPS", "1")),
         dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", "2")),
+        sinks=env.get("H3_SOL_SINKS", "1") != "0",
     )
     if schedule.dense_steps < 0 or schedule.dense_layers < 0:
         raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")

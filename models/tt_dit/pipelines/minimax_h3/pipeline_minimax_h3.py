@@ -3423,14 +3423,14 @@ class MiniMaxH3Pipeline:
 
         The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
-        rows, everything in front of the target video. The sparse op compiles `logical_n` into its kernels, so each
+        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The sparse op compiles `logical_n` into its kernels, so each
         new packed length pays a compile, and the pre-pass buffers change with it: a change of request or schedule
         releases the denoise traces and marks every bucket cold, so the gen runs eager and recaptures.
         """
         sol = None
         schedule = None if self.dynamic_length else sol_schedule(os.environ)
         if schedule is not None:
-            sol = (rung // self.sp_factor, logical_n, sink_tokens, schedule)
+            sol = (rung // self.sp_factor, logical_n, sink_tokens if schedule.sinks else 0, schedule)
         if sol == self._sol_key:
             return
         self._release_denoise_traces()
