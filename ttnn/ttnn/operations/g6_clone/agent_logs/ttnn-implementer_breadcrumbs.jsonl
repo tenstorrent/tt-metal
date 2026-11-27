@@ -3,3 +3,4 @@
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T06:43:31-05:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_clone/test_g6_clone.py","mode":"--dev","detail":"11/11","ts":"2026-11-27T06:47:57-05:00"}
 {"event":"test_run","status":"pass","test":"test_g6_clone.py plain + eval/golden_tests/g6_clone/","detail":"acceptance 11/11 plain; golden 10 passed 28 xfailed","ts":"2026-11-27T06:48:24-05:00"}
+{"event":"test_run","status":"pass","mode":"--profile --no-py-zones","test":"test_g6_clone.py::test_g6_clone","detail":"device kernel ns: p1 (16,12,128,128) 62466 on 110 cores; p2 32896; (1,12,128,128) 4661; (1,1) 1043. p1 target <68320 (stock) and <=73720 (1.35x roofline 54610)","ts":"2026-11-27T06:50:14-05:00"}
