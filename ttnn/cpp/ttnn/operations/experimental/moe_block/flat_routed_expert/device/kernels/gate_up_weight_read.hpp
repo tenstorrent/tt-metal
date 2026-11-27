@@ -42,10 +42,39 @@ struct GateUpWeightReads {
         const volatile tt_l1_ptr uint32_t* loads_,
         volatile tt_l1_ptr uint32_t* grant_,
         volatile tt_l1_ptr uint32_t* data_) {
-        base = moe_block_args::arg(a0) + moe_block_args::arg(a0 + 2);
-        bank = moe_block_args::arg(a0 + 1);
-        chunk = moe_block_args::arg(a0 + 3);
-        land = moe_block_args::arg(a0 + 4);
+        init_from(
+            moe_block_args::arg(a0),
+            moe_block_args::arg(a0 + 1),
+            moe_block_args::arg(a0 + 2),
+            moe_block_args::arg(a0 + 3),
+            moe_block_args::arg(a0 + 4),
+            blk_bytes,
+            per_e_,
+            depth_,
+            n_load,
+            loads_,
+            grant_,
+            data_);
+    }
+
+    // the same from the five args' values (flat_features noc1: the receiver reads with its NCRISC's args)
+    void init_from(
+        uint32_t w_addr,
+        uint32_t bank_,
+        uint32_t first,
+        uint32_t chunk_,
+        uint32_t land_,
+        uint32_t blk_bytes,
+        uint32_t per_e_,
+        uint32_t depth_,
+        uint32_t n_load,
+        const volatile tt_l1_ptr uint32_t* loads_,
+        volatile tt_l1_ptr uint32_t* grant_,
+        volatile tt_l1_ptr uint32_t* data_) {
+        base = w_addr + first;
+        bank = bank_;
+        chunk = chunk_;
+        land = land_;
         blk = blk_bytes;
         per_e = per_e_;
         depth = depth_;

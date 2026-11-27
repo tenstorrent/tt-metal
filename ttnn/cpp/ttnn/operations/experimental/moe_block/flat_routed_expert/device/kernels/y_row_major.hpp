@@ -43,6 +43,10 @@ constexpr uint32_t kArgDestinations = 0;      // destinations (0: nothing to han
 constexpr uint32_t kArgSlotStride = 1;        // bytes between a destination's slots
 constexpr uint32_t kArgTable = 2;             // the row table's address (DRAM, flat_acc::y_table)
 constexpr uint32_t kArgWords = 3;             // this core's words (layout below)
+// W > 0: writer w writes the trailers of the rows r with r % W == w (0: the column-0 writer writes them all). One
+// writer writing every trailer is the hand-off's slowest writer, and a row is taken only once every writer has landed
+// it. (host: FLAT_FEATURES trailers)
+constexpr uint32_t kArgTrailerWriters = 4;
 constexpr uint32_t kArgZeroGateXY = 5;        // the combine's zero gate core: noc x | noc y << 16
 constexpr uint32_t kArgZeroGateWords = 6;     // its words' address (combine_zero_gate.hpp)
 constexpr uint32_t kArgZeroBytes = 7;         // bytes of this core's words to zero each call (0: none)
@@ -51,6 +55,8 @@ constexpr uint32_t kDestinationArgs = 5;      // noc x, noc y, first slot addres
 
 // This core's words: grants received (cumulative), grants of earlier calls, the row table page, the trailers in flight.
 constexpr uint32_t kMaxDestinations = 32;
+// the per-row issue without a division or an address build per row (host: FLAT_FEATURES lean)
+constexpr bool lean_handoff = flat_options::lean_handoff;
 constexpr uint32_t kWordsGrantsBefore = kMaxDestinations;  // (uint32 index)
 constexpr uint32_t kWordsTablePageBytes = 256;             // (byte offset of the cached table page)
 constexpr uint32_t kTablePageBytes = 256;                  // a 32-row tile's table page: 2 words a row
@@ -66,11 +72,14 @@ struct State {};  // (not running with the combine: nothing)
 
 template <uint32_t in_flight>
 struct State<true, in_flight> {
-    uint32_t destinations = 0, slot_stride = 0, words = 0, writer_index = 0, table_address = 0;
+    uint32_t destinations = 0, slot_stride = 0, words = 0, writer_index = 0, table_address = 0, trailer_writers = 0;
     uint32_t cached_table_page = 0xFFFFFFFF;
     uint32_t dest_x[kMaxDestinations], dest_y[kMaxDestinations], dest_first_slot[kMaxDestinations];
     uint32_t dest_slots[kMaxDestinations], dest_landed[kMaxDestinations];
     uint32_t rows_issued[kMaxDestinations];          // rows issued per destination this call
+    uint64_t dest_noc[kMaxDestinations];             // (lean_handoff) the destination's NoC address, no local address
+    uint32_t slot_off[kMaxDestinations];             // (lean_handoff) the next slot's offset from the first (wraps)
+    uint32_t slot_end[kMaxDestinations];             // (lean_handoff) slots x stride: where the offset wraps
     uint8_t unit_rows[in_flight][kMaxDestinations];  // rows per destination of each unit in flight
     uint8_t unit_ends_tile[in_flight];               // 1: the unit completes its row tile
     uint32_t tile_rows_issued = 0;                   // rows of the current row tile already issued
@@ -84,6 +93,7 @@ struct State<true, in_flight> {
         slot_stride = moe_block_args::arg(args + kArgSlotStride);
         table_address = moe_block_args::arg(args + kArgTable);
         words = moe_block_args::arg(args + kArgWords);
+        trailer_writers = moe_block_args::arg(args + kArgTrailerWriters);
         writer_index = moe_block_args::arg(flat_options::combine_writer_index_arg);
         for (uint32_t d = 0; d < destinations; ++d) {
             const uint32_t at = args + kArgFirstDestination + kDestinationArgs * d;
@@ -93,6 +103,9 @@ struct State<true, in_flight> {
             dest_slots[d] = moe_block_args::arg(at + 3);
             dest_landed[d] = moe_block_args::arg(at + 4);
             rows_issued[d] = 0;
+            slot_off[d] = 0;
+            slot_end[d] = dest_slots[d] * slot_stride;
+            dest_noc[d] = get_noc_addr(dest_x[d], dest_y[d], 0, noc_index);
         }
         grants = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
         grants_before = grants + kWordsGrantsBefore;
@@ -312,10 +325,31 @@ private:
         if (unit_end == state.tile_rows_issued) {
             return UnitIssued::None;
         }
-        // the trailers in flight (column-0 writer): 32 rows of a unit each
+        // the trailers in flight (the column-0 writer's, or with trailer_writers W writer r % W's): 32 rows of a unit
+        // each. The trailer owner of a row: with lean_handoff a counter from one division a unit, else a division a
+        // row.
+        const uint32_t first = state.tile_rows_issued;
+        const uint32_t tw0 = state.trailer_writers != 0 ? (first_row + first) % state.trailer_writers : 0;
+        auto next_tw = [&](uint32_t tw) { return tw + 1 == state.trailer_writers ? 0 : tw + 1; };
+        auto owns = [&](uint32_t row, uint32_t tw) {
+            if (state.trailer_writers == 0) {
+                return column_offset == 0;
+            }
+            if constexpr (lean_handoff) {
+                return tw == state.writer_index;
+            } else {
+                return (first_row + row) % state.trailer_writers == state.writer_index;
+            }
+        };
         const uint32_t stage = state.words + kWordsTrailerStageBytes + unit * 32 * fmt::kTrailerBytes;
-        if (column_offset == 0) {
+        if (state.trailer_writers != 0 || column_offset == 0) {
+            uint32_t tw = tw0;
             for (uint32_t row = state.tile_rows_issued; row < unit_end; ++row) {
+                const bool mine = owns(row, tw);
+                tw = next_tw(tw);
+                if (!mine) {
+                    continue;
+                }
                 volatile tt_l1_ptr uint32_t* trailer =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + row * fmt::kTrailerBytes);
                 for (uint32_t word = 0; word < fmt::kTrailerBytes / 4; ++word) {
@@ -331,23 +365,38 @@ private:
             // taken at its home: the combine hangs)
             asm volatile("fence" ::: "memory");
         }
-        for (uint32_t row = state.tile_rows_issued; row < unit_end; ++row) {
+        // (lean_handoff: no division and no NoC address build per row - the slot offset as a counter, the destination's
+        // NoC base from init; a row is one small write, so its per-row instructions are the hand-off's cost)
+        uint32_t tw = tw0;
+        for (uint32_t row = first; row < unit_end; ++row) {
             const uint32_t d = table_destination(table_rows[2 * row]);
-            const uint32_t slot =
-                state.dest_first_slot[d] + (state.rows_issued[d] % state.dest_slots[d]) * state.slot_stride;
+            const bool trailer = owns(row, tw);
+            tw = next_tw(tw);
+            uint32_t slot;
+            uint64_t dst_noc;
+            if constexpr (lean_handoff) {
+                slot = state.dest_first_slot[d] + state.slot_off[d];
+                state.slot_off[d] = state.slot_off[d] + state.slot_stride == state.slot_end[d]
+                                        ? 0
+                                        : state.slot_off[d] + state.slot_stride;
+                dst_noc = state.dest_noc[d];
+            } else {
+                slot = state.dest_first_slot[d] + (state.rows_issued[d] % state.dest_slots[d]) * state.slot_stride;
+                dst_noc = get_noc_addr(state.dest_x[d], state.dest_y[d], 0, y_noc);
+            }
             ++state.rows_issued[d];
             noc_async_write_one_packet_with_trid(
                 source + row * segment_bytes,
-                get_noc_addr(state.dest_x[d], state.dest_y[d], slot + column_offset, y_noc),
+                dst_noc | (slot + column_offset),
                 segment_bytes,
                 trid,
                 write_cmd_buf,
                 y_noc,
                 y_vc);
-            if (column_offset == 0) {  // its trailer, staged above, after the row's H bf16
+            if (trailer) {  // its trailer, staged above, after the row's H bf16
                 noc_async_write_one_packet_with_trid(
                     stage + row * fmt::kTrailerBytes,
-                    get_noc_addr(state.dest_x[d], state.dest_y[d], slot + hidden_tiles * 64, y_noc),
+                    dst_noc | (slot + hidden_tiles * 64),
                     fmt::kTrailerBytes,
                     trid,
                     write_cmd_buf,

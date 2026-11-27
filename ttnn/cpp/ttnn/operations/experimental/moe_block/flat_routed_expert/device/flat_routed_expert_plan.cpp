@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flat_routed_expert_plan.hpp"
+#include "flat_features.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -458,6 +459,59 @@ FlatRoutedExpertPlan make_plan(
         p.relay_cores.push_back(b);
         taken.insert({a.x, a.y});
         taken.insert({b.x, b.y});
+    }
+    // (Galaxy A/B, flat_features noc1: x snakes on NOC1, mirrored - each starts on its rectangle's east column, on the
+    // primary's row. Each primary one NOC1 hop (north / west first) from its snake head: just east of the rectangle on
+    // its row, or, at the grid's east edge, just south of the rectangle's south-east corner; each helper one NOC0 hop
+    // (east / south first) from its primary: north of it, else west of it. GLM-5.3 4x4 on a p150: primaries (6, 4)
+    // (10, 8), helpers (6, 3) (9, 8).)
+    if (flat_features::on("noc1")) {
+        const uint32_t nr = p.gate_up_rectangles.size();
+        for (uint32_t k = 0; k < nr; ++k) {
+            const auto [x0, x1, y0, y1] = p.gate_up_rectangles[k];
+            (void)x0;
+            auto free_at = [&](uint32_t x, uint32_t y) {
+                return x < grid.x && y >= row0 && y <= row1 && !taken.contains({x, y});
+            };
+            Core& prim = p.relay_cores[k];
+            Core& help = p.relay_cores[nr + k];
+            taken.erase({prim.x, prim.y});
+            taken.erase({help.x, help.y});
+            const uint32_t yr = std::clamp<uint32_t>(prim.y, y0, y1);
+            bool placed = false;
+            for (uint32_t d = 0; d <= y1 - y0 && !placed; ++d) {  // (east of the rectangle: the relay's row first)
+                for (const int32_t y : {int32_t(yr) - int32_t(d), int32_t(yr) + int32_t(d)}) {
+                    if (!placed && y >= int32_t(y0) && y <= int32_t(y1) && free_at(x1 + 1, y)) {
+                        prim = Core(x1 + 1, y);
+                        placed = true;
+                    }
+                }
+            }
+            if (!placed && free_at(x1, y1 + 1)) {
+                prim = Core(x1, y1 + 1);
+                placed = true;
+            }
+            TT_FATAL(placed, "flat_features noc1: no core one NOC1 hop from rectangle {}'s snake head", k);
+            taken.insert({prim.x, prim.y});
+            if (prim.y > row0 && free_at(prim.x, prim.y - 1)) {
+                help = Core(prim.x, prim.y - 1);
+            } else if (prim.x > 0 && free_at(prim.x - 1, prim.y)) {
+                help = Core(prim.x - 1, prim.y);
+            }
+            TT_FATAL(!taken.contains({help.x, help.y}), "flat_features noc1: no helper core next to primary {}", k);
+            taken.insert({help.x, help.y});
+        }
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert noc1: primaries ({}, {}) ({}, {}), helpers ({}, {}) ({}, {})",
+            p.relay_cores[0].x,
+            p.relay_cores[0].y,
+            p.relay_cores[1].x,
+            p.relay_cores[1].y,
+            p.relay_cores[2].x,
+            p.relay_cores[2].y,
+            p.relay_cores[3].x,
+            p.relay_cores[3].y);
     }
     for (uint32_t y = row0; y <= row1; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {

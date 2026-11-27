@@ -34,6 +34,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
+#include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
 #include "flat_options.hpp"
@@ -83,8 +84,13 @@ FORCE_INLINE uint32_t h_tile_dest(uint32_t h_tile) { return h_tile == 0 ? 0 : 2 
 
 uint32_t matmul_rows = row_tiles;  // the row tiles the matmul is set up for
 
+// (Galaxy A/B, flat_features cmm) the gate/up matmul on custom_mm with a full [32, 32] in0 tile: bit-identical to
+// matmul_block_k, 16.65 vs 18.14 cycles a tile matmul for the 2 x 2 x 8 block (GLM-5.3 4x4 M 320 / 480 -2.5 / -7.2%);
+// LoFi only; its init does not depend on the row count
+constexpr bool custom_mm = get_named_compile_time_arg_val("gate_up_custom_mm") != 0;
+
 FORCE_INLINE void matmul_rows_init(uint32_t rows) {
-    if (rows != matmul_rows) {
+    if (!custom_mm && rows != matmul_rows) {
         matmul_block_init(x_cb, weight_cb, false, row_width, rows, x_block_k_tiles);
         matmul_rows = rows;
     }
@@ -117,15 +123,33 @@ FORCE_INLINE void free_weight_block() {
 // so the LLK can unroll its loops; a short last one uses the runtime count in an out-of-line copy, which keeps the
 // common path's code small for the TRISCs' instruction fetch.
 __attribute__((noinline)) void matmul_x_block_short(uint32_t x_index, uint32_t w_index, uint32_t rows) {
-    matmul_block_k(
-        x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);
+    if constexpr (custom_mm) {
+        custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, rows);
+    } else {
+        matmul_block_k(
+            x_cb, weight_cb, x_index, w_index, 0, false, row_width, rows, x_block_k_tiles, x_block_k_tiles, row_width);
+    }
 }
 
 template <uint32_t FULL>
 FORCE_INLINE void matmul_x_block(uint32_t x_index, uint32_t w_index, uint32_t rows) {
     if (rows == FULL) [[likely]] {
-        matmul_block_k(
-            x_cb, weight_cb, x_index, w_index, 0, false, row_width, FULL, x_block_k_tiles, x_block_k_tiles, row_width);
+        if constexpr (custom_mm) {
+            custom_mm_block(x_cb, weight_cb, x_index, w_index, 0, x_block_k_tiles, row_width, FULL);
+        } else {
+            matmul_block_k(
+                x_cb,
+                weight_cb,
+                x_index,
+                w_index,
+                0,
+                false,
+                row_width,
+                FULL,
+                x_block_k_tiles,
+                x_block_k_tiles,
+                row_width);
+        }
     } else {
         matmul_x_block_short(x_index, w_index, rows);
     }
@@ -252,7 +276,11 @@ void kernel_main() {
         first_unit_offset = get_arg_val<uint32_t>(0);
     }
     compute_kernel_hw_startup<SrcOrder::Reverse>(x_cb, weight_cb, out_cb);
-    matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
+    if constexpr (custom_mm) {
+        custom_mm_block_init(x_cb, weight_cb, out_cb, row_width);
+    } else {
+        matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
+    }
     if constexpr (half_width) {  // (every face-wise activation uses SiTU's sigmoid: its init)
         PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
     } else {

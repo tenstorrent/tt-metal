@@ -7,6 +7,7 @@
 #include "flat_routed_expert_program_factory.hpp"
 
 #include "flat_routed_expert_plan.hpp"
+#include "flat_features.hpp"
 #include "ttnn/operations/experimental/moe_block/common/chip_program.hpp"
 #include "ttnn/operations/experimental/moe_block/common/moe_block_config.hpp"
 
@@ -212,6 +213,11 @@ FlatProgramHandles add_flat_routed_expert_program(
     };
     std::vector<XLink> xlink(ngu);
     std::vector<uint32_t> x_head(NR, 0);  // each rectangle's snake head (gate/up index)
+    // (Galaxy A/B, flat_features noc1) the snakes on NOC1 (north / west first): mirrored - from the relay's row up a
+    // column (wrapping inside the rectangle), one column west, from the rectangle's east edge. The gate/up NCRISC
+    // forwards x on NOC1, the BRISC on NOC0 reads the gate/up weights and sends h; the primaries inject from their
+    // BRISC on NOC1, placed one NOC1 hop from the head (the plan, flat_features noc1)
+    const bool noc1 = flat_features::on("noc1");
     for (uint32_t k = 0; k < NR; ++k) {
         const auto [x0, x1, y0, y1] = p.gate_up_rectangles[k];
         std::map<std::pair<uint32_t, uint32_t>, uint32_t> at;
@@ -227,8 +233,8 @@ FlatProgramHandles add_flat_routed_expert_program(
         uint32_t row = yr;
         for (uint32_t i = 0; i < W; ++i) {
             for (uint32_t r = 0; r < H; ++r) {
-                const uint32_t y = y0 + (row - y0 + r) % H;
-                seq.push_back(at.at({x0 + i, y}));
+                const uint32_t y = noc1 ? y0 + (row - y0 + H - r) % H : y0 + (row - y0 + r) % H;
+                seq.push_back(at.at({noc1 ? x1 - i : x0 + i, y}));
                 if (r + 1 == H) {
                     row = y;  // the next column starts on this row
                 }
@@ -326,6 +332,27 @@ FlatProgramHandles add_flat_routed_expert_program(
     options["x_ring_blocks"] = p.x_ring_blocks * (MT / XR);  // (in x blocks of XR row tiles)
     options["x_row_tiles"] = XR;
     options["y_row_major"] = cfg.y_row_major ? 1 : 0;
+    // (Galaxy A/B, flat_features.hpp - all off by default) gate/up matmul on custom_mm with full [32, 32] in0 tiles
+    // (LoFi only, bit-identical to matmul_block_k); the down matmul on the Blackhole row MOP (matmul_block_k<true>,
+    // with row-major y); the combine hand-off's per-row diet
+    const bool lofi = cfg.math_fidelity == static_cast<uint32_t>(MathFidelity::LoFi);
+    options["gate_up_custom_mm"] = lofi && flat_features::on("cmm") ? 1u : 0u;
+    options["down_row_mop"] = flat_features::on("rowmop") ? 1u : 0u;
+    options["lean_handoff"] = flat_features::on("lean") ? 1u : 0u;
+    options["gate_up_w_brisc"] = flat_features::on("noc1") ? 1u : 0u;  // (noc1: the gate/up weights from the BRISC)
+    {
+        std::string active;
+        for (const char* key : {"cmm", "rowmop", "lean", "trailers", "noc1"}) {
+            if (flat_features::on(key)) {
+                active += active.empty() ? key : std::string(",") + key;
+            }
+        }
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert: features [{}]{}",
+            active.empty() ? "none" : active,
+            flat_features::on("cmm") && !lofi ? " (cmm asked, not taken: not LoFi)" : "");
+    }
     options["y_row_major_rows"] = 0;  // (the down kernels': their column width's)
     options["down_core_count"] = ND;
     options["h_arrived_sem"] = HARR;
@@ -489,8 +516,8 @@ FlatProgramHandles add_flat_routed_expert_program(
             k_x_injectors.push_back(
                 dm("x_injector_writer.cpp",
                    {p.relay_cores[q]},
-                   DataMovementProcessor::RISCV_1,
-                   NOC::NOC_0,
+                   noc1 ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1,
+                   noc1 ? NOC::NOC_1 : NOC::NOC_0,
                    with(options, {{"x_credit_sem", 5 + q}})));
         }
         // one kernel per helper k: its arrivals are semaphore {4, 7}[k] on both primaries, its credits come back on 5
@@ -566,13 +593,17 @@ FlatProgramHandles add_flat_routed_expert_program(
             "flat_routed_expert: x pieces {} of a {} B x block must be 16 B aligned",
             x_pieces,
             x_bytes);
-        const KernelHandle kr = dm(
-            "gate_up_core_reader.cpp", p.gate_up_cores, DataMovementProcessor::RISCV_0, NOC::NOC_1, gu_reader_options);
+        const KernelHandle kr =
+            dm("gate_up_core_reader.cpp",
+               p.gate_up_cores,
+               DataMovementProcessor::RISCV_0,
+               noc1 ? NOC::NOC_0 : NOC::NOC_1,
+               gu_reader_options);
         const KernelHandle k_x_forwarder =
             dm("gate_up_x_forwarder.cpp",
                p.gate_up_cores,
                DataMovementProcessor::RISCV_1,
-               NOC::NOC_0,
+               noc1 ? NOC::NOC_1 : NOC::NOC_0,
                with_added(
                    options,
                    {{"x_forward_depth", X_FWD_DEPTH},
@@ -857,6 +888,11 @@ void set_flat_combine_report(
         a[r + 3] = 0;  // (unused)
         for (uint32_t j = 0; j < report.l1_args.size(); ++j) {
             a[r + kFlatReportArgs + j] = report.l1_args[j];
+        }
+        // (Galaxy A/B, flat_features trailers) the trailers spread over the writers: writer w writes rows r % W == w
+        // (y_row_major.hpp kArgTrailerWriters; the combine's l1 arg there is an unused 0)
+        if (cfg.y_l1 && report.l1_args.size() > 4 && flat_features::on("trailers")) {
+            a[r + kFlatReportArgs + 4] = static_cast<uint32_t>(handles.y_writers.size());
         }
         if (cfg.y_l1 && !report.l1_args.empty()) {
             a[handles.y_widx_arg] = widx++;

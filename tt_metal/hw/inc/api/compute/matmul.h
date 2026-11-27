@@ -333,6 +333,7 @@ ALWI void matmul_block(
  * | kt_dim         | The inner dimension of block A (its row stride in tiles).               | uint32_t | Must be equal to block A column dimension      | True     |
  * | k_steps        | The number of inner-dimension steps to accumulate.                      | uint32_t | >= 1                                           | True     |
  * | in1_k_stride   | The tile stride between consecutive inner-dimension rows of block B.    | uint32_t | Any                                            | True     |
+ * | in0_k_stride   | The tile stride between consecutive inner-dimension steps of block A.   | uint32_t | Any (default 1: in0 row-major)                 | False    |
  */
 // clang-format on
 template <bool row_mop = false>
@@ -348,6 +349,7 @@ ALWI void matmul_block_k(
     std::uint32_t kt_dim,
     std::uint32_t k_steps,
     std::uint32_t in1_k_stride,
+    std::uint32_t in0_k_stride = 1,
     std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
@@ -355,7 +357,13 @@ ALWI void matmul_block_k(
     UNPACK(({
         for (std::uint32_t k = 0; k < k_steps; k++) {
             llk_unpack_AB_matmul(
-                in0_cb_id, in1_cb_id, in0_tile_index + k, in1_tile_index + k * in1_k_stride, ct_dim, rt_dim, kt_dim);
+                in0_cb_id,
+                in1_cb_id,
+                in0_tile_index + k * in0_k_stride,
+                in1_tile_index + k * in1_k_stride,
+                ct_dim,
+                rt_dim,
+                kt_dim);
         }
     }));
 #ifdef ARCH_BLACKHOLE
@@ -370,7 +378,7 @@ ALWI void matmul_block_k(
         matmul_block<row_mop>(
             in0_cb_id,
             in1_cb_id,
-            in0_tile_index + k,
+            in0_tile_index + k * in0_k_stride,
             in1_tile_index + k * in1_k_stride,
             idst,
             transpose,

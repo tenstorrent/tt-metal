@@ -74,7 +74,21 @@ void kernel_main() {
     bool g_done = true;
     volatile tt_l1_ptr uint32_t* mailbox =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc));
-    {
+    // (flat_features noc1: this RISC is on NOC1 and forwards x only; the receiver (BRISC, NOC0) reads the weights with
+    // these args - handed over in this RISC's second scratch buffer, mailbox word 2)
+    constexpr bool w_brisc = get_named_compile_time_arg_val("gate_up_w_brisc") != 0;
+    if constexpr (w_brisc) {
+        volatile tt_l1_ptr uint32_t* mailbox_set = sem(flat_options::gate_up_mailbox_sem);
+        while (*mailbox_set == 0) {
+            invalidate_l1_cache();
+        }
+        volatile tt_l1_ptr uint32_t* wa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            schedule_scratch(ScratchOwner::Ncrisc) + flat_options::schedule_scratch_bytes);
+        for (uint32_t i = 0; i < 5; ++i) {
+            wa[i] = moe_block_args::arg(6 + i);
+        }
+        *mailbox_set = 2;
+    } else {
         volatile tt_l1_ptr uint32_t* mailbox_set = sem(flat_options::gate_up_mailbox_sem);
         while (*mailbox_set == 0) {
             invalidate_l1_cache();

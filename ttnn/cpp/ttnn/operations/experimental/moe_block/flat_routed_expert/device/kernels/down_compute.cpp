@@ -81,6 +81,11 @@ FORCE_INLINE uint32_t weight_block_in_region(uint32_t block, uint32_t ring_slot)
            block_tiles;
 }
 
+// (Galaxy A/B, flat_features rowmop) the down matmul a weight block per call on the Blackhole row MOP: one
+// matmul_block_k<true> over the block's K steps, h stepped by its row tiles a K step (h is k-tile-major) - no
+// per-K-step call overhead. Taken with row-major y, whose passes have rt 1. (pseudo combine, GLM-5.3 4x4 M 480: -4.3%)
+constexpr bool down_row_mop = get_named_compile_time_arg_val("down_row_mop") != 0;
+
 template <bool row_major_y>
 void compute_schedule() {
     // y columns per pass (DST holds dest_tiles outputs; the K loop runs once per pass over the same h and weights).
@@ -90,7 +95,8 @@ void compute_schedule() {
     static_assert(!row_major_y || columns % pass_columns == 0);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(h_cb, weight_cb, out_cb);
-    matmul_block_init(h_cb, weight_cb, false, pass_columns, 1, in0_block_k_tiles);
+    constexpr bool rmop = down_row_mop && row_major_y;
+    matmul_block_init<rmop>(h_cb, weight_cb, false, pass_columns, 1, in0_block_k_tiles);
     if constexpr (row_major_y) {
         pack_untilize_dest_init<pass_columns, columns>(out_cb);
     }
@@ -129,11 +135,36 @@ void compute_schedule() {
                 const uint32_t width = columns - first_column < pass_columns ? columns - first_column : pass_columns;
                 const bool last_pass = first_column + width == columns;
                 if constexpr (columns > pass_columns) {
-                    matmul_block_init(h_cb, weight_cb, false, width, 1, in0_block_k_tiles);
+                    matmul_block_init<rmop>(h_cb, weight_cb, false, width, 1, in0_block_k_tiles);
                 }
                 tile_regs_acquire();
+                if constexpr (rmop) {
+                    for (uint32_t block = 0; block < blocks_per_expert; ++block) {
+                        const uint32_t block_offset =
+                            reads_per_load
+                                ? weight_block_in_region(load * blocks_per_expert + block, region_first_slot + block)
+                                : weight_block(entry * blocks_per_expert + block);
+                        matmul_block_k<true>(
+                            h_cb,
+                            weight_cb,
+                            row + block * k_tiles_per_block * row_tiles,
+                            block_offset + first_column,
+                            0,
+                            false,
+                            width,
+                            1,
+                            in0_block_k_tiles,
+                            k_tiles_per_block,
+                            columns,
+                            row_tiles);
+                        if (frees_weights && last_pass && row == rows - 1) {
+                            cb_pop_front(weight_cb, block_tiles);
+                            ++blocks_freed;
+                        }
+                    }
+                }
                 uint32_t block_offset = 0;
-                for (uint32_t k = 0; k < k_tiles; ++k) {
+                for (uint32_t k = 0; !rmop && k < k_tiles; ++k) {
                     const uint32_t block = k / k_tiles_per_block;
                     if (k % k_tiles_per_block == 0) {
                         block_offset = reads_per_load ? weight_block_in_region(

@@ -38,6 +38,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "expert_schedule.hpp"
 #include "flat_options.hpp"
+#include "gate_up_weight_read.hpp"
 
 // The h exchange's unicast VC (gate/up -> down heads, the down chains): its own, off the default write VC (1)
 constexpr uint8_t h_vc = 0;
@@ -122,6 +123,34 @@ void kernel_main() {
         }
         *sem(flat_options::gate_up_mailbox_sem) = 1;
     }
+    // (flat_features noc1: this RISC - NOC0 - reads the gate/up weights, with the NCRISC's args; the NCRISC - NOC1 -
+    // forwards x along the NOC1 snake)
+    constexpr bool w_brisc = get_named_compile_time_arg_val("gate_up_w_brisc") != 0;
+    GateUpWeightReads gr;
+    bool g_done = true;
+    if constexpr (w_brisc) {
+        while (*sem(flat_options::gate_up_mailbox_sem) != 2) {
+            invalidate_l1_cache();
+        }
+        const volatile tt_l1_ptr uint32_t* mb =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(schedule_scratch(ScratchOwner::Ncrisc));
+        const volatile tt_l1_ptr uint32_t* wa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            schedule_scratch(ScratchOwner::Ncrisc) + flat_options::schedule_scratch_bytes);
+        gr.init_from(
+            wa[0],
+            wa[1],
+            wa[2],
+            wa[3],
+            wa[4],
+            flat_options::gate_up_block_bytes,
+            flat_options::gate_up_blocks_per_expert,
+            flat_options::gate_up_reads_in_flight,
+            mb[0],
+            mb + 1,
+            sem(flat_options::gate_up_grant_sem),
+            sem(flat_options::gate_up_data_sem));
+        g_done = gr.total == 0;
+    }
     // Start-up cap: grant at most gate_up_w_start landing slots (0: the whole ring), keeping the weight reads off the
     // NoC while x ramps up, until the first x row group is in - its nk_gu x blocks (one a K block), or as many as the
     // x ring holds if fewer: the compute may keep its first weight blocks until it has the rest of them, so the cap
@@ -135,8 +164,11 @@ void kernel_main() {
     uint32_t granted = w_first, pushed = 0;
     uint32_t h_sent = 0, h_pending = 0;
 
-    while (h_sent < num_v || pushed < total_w) {
+    while (h_sent < num_v || pushed < total_w || !g_done) {
         invalidate_l1_cache();
+        if (w_brisc && !g_done) {
+            g_done = gr.step();
+        }
         // (granted and not yet freed <= the cap: the ring's free space from the write pointer leaves w_slots - cap)
         while (granted < total_w &&
                cb_pages_reservable_at_back(in1_cb, (granted - pushed + 1 + w_slots - w_cap()) * slot)) {
@@ -229,6 +261,9 @@ void kernel_main() {
     }
     *sem(flat_options::x_consumed_sem) = x_cons;
     *sem(flat_options::x_end_sem) = x_cons + 1;
+    if constexpr (w_brisc) {
+        gr.finish();
+    }
     noc_async_write_barrier();
     noc_async_atomic_barrier();
     // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean

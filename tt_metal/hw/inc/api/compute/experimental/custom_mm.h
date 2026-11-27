@@ -30,9 +30,10 @@ namespace ckernel {
  * For initializing custom_mm_block in the middle of the kernel, please use custom_mm_block_init_short.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
- * in0 tile shape: [{1, 2, 4, 8}, 32]
+ * in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (with a [32, 32] in1, no transpose, the Default layout, no finalize)
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
- * rt_dim: 1
+ * rt_dim: 1, or 1 or more with a [32, 32] in0 tile (in0 [rt_dim, kt_dim] tiles row-major, output tile (r, c) at dst_index + r * ct_dim + c)
+ * in0_k_step (custom_mm_block / custom_mm_block_unpack): in0 tiles between consecutive k-tiles, default 1; above 1 with a [32, 32] in0 tile only: in0 k-tile-major, tile-row r's k-tile k at in0_tile_index + r + k * in0_k_step
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
@@ -82,9 +83,10 @@ ALWI void custom_mm_block_init(
  * For initializing custom_mm_block at the beginning of the kernel, please use custom_mm_block_init.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
- * in0 tile shape: [{1, 2, 4, 8}, 32]
+ * in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (with a [32, 32] in1, no transpose, the Default layout, no finalize)
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
- * rt_dim: 1
+ * rt_dim: 1, or 1 or more with a [32, 32] in0 tile (in0 [rt_dim, kt_dim] tiles row-major, output tile (r, c) at dst_index + r * ct_dim + c)
+ * in0_k_step (custom_mm_block / custom_mm_block_unpack): in0 tiles between consecutive k-tiles, default 1; above 1 with a [32, 32] in0 tile only: in0 k-tile-major, tile-row r's k-tile k at in0_tile_index + r + k * in0_k_step
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
@@ -124,9 +126,10 @@ ALWI void custom_mm_block_init_short(
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
- * in0 tile shape: [{1, 2, 4, 8}, 32]
+ * in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (with a [32, 32] in1, no transpose, the Default layout, no finalize)
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
- * rt_dim: 1
+ * rt_dim: 1, or 1 or more with a [32, 32] in0 tile (in0 [rt_dim, kt_dim] tiles row-major, output tile (r, c) at dst_index + r * ct_dim + c)
+ * in0_k_step (custom_mm_block / custom_mm_block_unpack): in0 tiles between consecutive k-tiles, default 1; above 1 with a [32, 32] in0 tile only: in0 k-tile-major, tile-row r's k-tile k at in0_tile_index + r + k * in0_k_step
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
@@ -159,10 +162,12 @@ ALWI void custom_mm_block(
     const std::uint32_t in1_tile_index,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1,
+    const std::uint32_t in0_k_step = 1) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
-    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, rt_dim, in0_k_step)));
+    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, rt_dim)));
 }
 
 // clang-format off
@@ -173,9 +178,10 @@ ALWI void custom_mm_block(
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
- * in0 tile shape: [{1, 2, 4, 8}, 32]
+ * in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (with a [32, 32] in1, no transpose, the Default layout, no finalize)
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
- * rt_dim: 1
+ * rt_dim: 1, or 1 or more with a [32, 32] in0 tile (in0 [rt_dim, kt_dim] tiles row-major, output tile (r, c) at dst_index + r * ct_dim + c)
+ * in0_k_step (custom_mm_block / custom_mm_block_unpack): in0 tiles between consecutive k-tiles, default 1; above 1 with a [32, 32] in0 tile only: in0 k-tile-major, tile-row r's k-tile k at in0_tile_index + r + k * in0_k_step
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
@@ -201,9 +207,11 @@ ALWI void custom_mm_block_unpack(
     const std::uint32_t in0_tile_index,
     const std::uint32_t in1_tile_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1,
+    const std::uint32_t in0_k_step = 1) {
     UNPACK((llk_unpack_AB_custom_mm<read_transposed>(
-        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim)));
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, rt_dim, in0_k_step)));
 }
 
 // clang-format off
@@ -214,9 +222,10 @@ ALWI void custom_mm_block_unpack(
  * is only available on the compute engine.
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
- * in0 tile shape: [{1, 2, 4, 8}, 32]
+ * in0 tile shape: [{1, 2, 4, 8}, 32], or [32, 32] (with a [32, 32] in1, no transpose, the Default layout, no finalize)
  * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
- * rt_dim: 1
+ * rt_dim: 1, or 1 or more with a [32, 32] in0 tile (in0 [rt_dim, kt_dim] tiles row-major, output tile (r, c) at dst_index + r * ct_dim + c)
+ * in0_k_step (custom_mm_block / custom_mm_block_unpack): in0 tiles between consecutive k-tiles, default 1; above 1 with a [32, 32] in0 tile only: in0 k-tile-major, tile-row r's k-tile k at in0_tile_index + r + k * in0_k_step
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
  * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
@@ -241,8 +250,9 @@ ALWI void custom_mm_block_math(
     const std::uint32_t in1_cb_id,
     const std::uint32_t dst_index,
     const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim = 1) {
-    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim)));
+    const std::uint32_t ct_dim = 1,
+    const std::uint32_t rt_dim = 1) {
+    MATH((llk_math_custom_mm<layout, finalize>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, rt_dim)));
 }
 
 // clang-format off

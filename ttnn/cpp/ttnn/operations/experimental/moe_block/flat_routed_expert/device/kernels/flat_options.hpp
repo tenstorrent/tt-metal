@@ -133,6 +133,8 @@ constexpr uint32_t down_blocks_per_expert =
 // y is written row major (bf16 rows), not as bfp8 tiles: the down compute pack-untilizes, and down_weight_reader
 // (NCRISC, NoC 0) writes the rows (y_row_major.hpp) - not down_core_writer (BRISC), whose NoC 1 carries the h chain
 constexpr bool y_row_major = get_named_compile_time_arg_val("y_row_major") != 0;
+// the combine hand-off issues a row without a division or a NoC address build (y_row_major.hpp; FLAT_FEATURES lean)
+constexpr bool lean_handoff = get_named_compile_time_arg_val("lean_handoff") != 0;
 // row tiles of y in flight per down core (the row-major out CB's capacity)
 constexpr uint32_t y_row_major_rows = get_named_compile_time_arg_val("y_row_major_rows");
 // DRAM banks the down weight blocks are spread over (block k of a core in the bank of its pattern's entry k % banks)
