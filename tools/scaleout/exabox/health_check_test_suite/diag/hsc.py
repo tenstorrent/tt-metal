@@ -24,6 +24,7 @@ from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 HSC_BUS = {1: 0x11, 2: 0x13, 3: 0x0D, 4: 0x0F}
 HSC_ADDRS = (0x40, 0x42)
 TRAY_CPLD = 0x80  # on the same bus as the tray's HSCs
+CPLD_ALIVE_REG, CPLD_ALIVE = 0x1E, 0xFF  # the tray's chip-alive byte: 0xFF while the tray is up
 
 # PMBus registers: name -> (code, bytes). The two peaks clear when read.
 _R = """STATUS_WORD 79 2 STATUS_VOUT 7A 1 STATUS_IOUT 7B 1 STATUS_INPUT 7C 1 STATUS_TEMPERATURE 7D 1 STATUS_CML 7E 1
@@ -168,7 +169,8 @@ class Bmc:
 def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str, int | None]]:
     """The named registers of every HSC of *trays*; an HSC that does not answer the first is not read further (each
     miss costs a timeout); STATUS_INPUT, which holds the VIN_UV latches, is asked a second time when it
-    fails (not by timeout) after STATUS_WORD answered. Under sudo a VIN limit is read only where its exact command is listed."""
+    fails (not by timeout) after STATUS_WORD answered. Under sudo a VIN limit is read only where its exact command is listed.
+    """
     out = {}
     for t in trays:
         for a in HSC_ADDRS:
@@ -179,7 +181,13 @@ def read_regs(bmc: Bmc, names, trays=HSC_BUS) -> dict[tuple[int, int], dict[str,
                 listed = n not in VIN_LIMITS or bmc.listed(*cmd)
                 ask = listed and (n == names[0] or r[names[0]] is not None)
                 r[n] = bmc.hsc(t, a, n) if ask else None
-                if ask and r[n] is None and n == "STATUS_INPUT" and bmc.failed != "ipmitool rc 124" and bmc.listed(*cmd):
+                if (
+                    ask
+                    and r[n] is None
+                    and n == "STATUS_INPUT"
+                    and bmc.failed != "ipmitool rc 124"
+                    and bmc.listed(*cmd)
+                ):
                     r[n] = bmc.hsc(t, a, n)  # not after a timeout (5 s each) or a read sudo does not list
     return out
 
@@ -355,3 +363,66 @@ def judge_hsc(before: HscStatus, after: HscStatus, phase: Phase) -> None:
             ip="board",
         )
     )
+
+
+def judge_tray_feed(status: HscStatus, alive: dict[int, int | None], phase: Phase) -> None:
+    """Add one ``tray{N}_12v_feed`` check per tray from its HSC latches and CPLD alive byte, read before any reset
+    cleared the latches: FAIL POWER for a latched flag, WARN CHIP/BOARD for a tray down with clean latches, WARN for a
+    read that is missing, else PASS. When nothing answered at all, one SKIP ``tray_12v_feed``."""
+    if not any(status.values()) and all(v is None for v in alive.values()):
+        phase.add(
+            Check(
+                name="tray_12v_feed",
+                status=SKIP,
+                details="no HSC or CPLD answered (needs ipmitool and root or sudo -n); tray 12 V feed not judged",
+                ip="board",
+            )
+        )
+        return
+    for tray, up in alive.items():
+        where = f"tray {tray} ({tray_bdfs(tray)})"
+        latched, unread = [], [] if up is not None else ["CPLD"]
+        for addr in HSC_ADDRS:
+            if (reading := status.get((tray, addr))) is None:
+                unread.append(f"HSC {addr:#04x}")
+            elif flags := _flags(reading):
+                latched.append(
+                    f"HSC {addr:#04x}: {flag_names(flags)} latched (STATUS_WORD {reading[0]:#06x}, STATUS_INPUT {reading[1]:#04x})"
+                )
+        down = up is not None and up != CPLD_ALIVE
+        if latched:
+            cause, head = "POWER", f"{where}: POWER: check bus bar / tray 12 V feed"
+        elif down and not unread:
+            cause, head = "CHIP/BOARD", f"{where}: CHIP/BOARD: tray down with no 12 V feed latch set, not the feed"
+        else:
+            cause = head = None
+        body = latched + ([f"CPLD reg {CPLD_ALIVE_REG:#04x}={up:#04x}: tray down"] if down else [])
+        if unread:
+            body.append(f"not read: {', '.join(unread)}")
+        if not body:
+            verdict, lines = PASS, [f"{where}: no 12 V latch set, tray up"]
+        else:
+            verdict = FAIL if latched else WARN
+            lines = [head, *body] if cause else [f"{where}: {body[0]}", *body[1:]]
+        phase.add(
+            Check(
+                name=f"tray{tray}_12v_feed",
+                status=verdict,
+                details="\n".join(lines),
+                data={"tray": tray, "cause": cause, "cpld_reg1e": up},
+                ip="board",
+            )
+        )
+
+
+def run_tray_feed(phase: Phase, bmc: Bmc | None = None) -> None:
+    """Read every tray's HSC latches (read_hsc_status) and CPLD alive byte, and judge them into *phase*. An alive
+    byte that is not 0xFF is read twice and counts only when both reads agree."""
+    bmc = bmc or Bmc()
+    status = read_hsc_status(bmc)
+
+    def alive(tray: int) -> int | None:
+        first = bmc.cpld(tray, CPLD_ALIVE_REG)
+        return first if first in (None, CPLD_ALIVE) or bmc.cpld(tray, CPLD_ALIVE_REG) == first else None
+
+    judge_tray_feed(status, {t: alive(t) for t in HSC_BUS}, phase)

@@ -59,8 +59,8 @@ Tiers:
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
   full            weekly with the galaxy load at full length + AER errors over the run
                   + ETH status + sys-triage: everything, for the logs on a DIIM ticket
-  pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
-                  + sys-triage. No resets, no tests.
+  pre_bmc_reboot  Data collection before a BMC reboot: snapshot + tray 12 V feed latches
+                  + triage + QSFP tests + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
 
 The old names still work and print a deprecation warning: light and medium run daily,
@@ -116,6 +116,7 @@ Forwarded options (see diag_runner.py --help for details):
                          topology table; only the cabling checks narrow, and they say so
                          rather than reporting coverage they don't have
   --skip-sys-triage      Skip the sys-triage bundle
+  --skip-tray-power      Skip the tray 12 V feed latch reads
   --sys-triage-path PATH Override the sys-triage binary
   --bmc-ip IP            BMC address for sys-triage (default: \$BMC_IP)
   --bmc-user USER        BMC user for sys-triage (default: \$BMC_USER)

@@ -7,7 +7,7 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage -> pcie_aer
+    snapshot -> tray_power -> resets -> tests -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage -> pcie_aer
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
@@ -97,6 +97,10 @@ class Tier:
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
+    # Read each tray's HSC latches and CPLD alive byte (diag/hsc.py) right after the snapshot, before any reset
+    # clears the latches, and say per tray whether its 12 V feed or the tray itself is the suspect.
+    tray_power: bool = False
+
     @property
     def galaxy_load(self) -> bool:
         """Whether the tests include the galaxy load, the only tests the bus-bar overrides set."""
@@ -161,6 +165,7 @@ TIERS: dict[str, Tier] = {
         triage=("host_side", "device_side"),
         qsfp_tests=True,
         sys_triage=True,
+        tray_power=True,
     ),
     # Data collection after a BMC reboot. The same steps as pre_bmc_reboot for
     # now, as its own entry so the two can change independently.
@@ -168,6 +173,7 @@ TIERS: dict[str, Tier] = {
         triage=("host_side", "device_side"),
         qsfp_tests=True,
         sys_triage=True,
+        tray_power=True,
     ),
 }
 

@@ -51,7 +51,7 @@ from diag import links  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.firmware import firmware_check  # noqa: E402
-from diag.hsc import judge_hsc, read_hsc_status  # noqa: E402
+from diag.hsc import judge_hsc, read_hsc_status, run_tray_feed  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag import report  # noqa: E402
@@ -148,6 +148,11 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
             "--triage-gating: findings are recorded either way, but a tool still bedding in "
             "cannot ticket the fleet."
         ),
+    )
+    ap.add_argument(
+        "--skip-tray-power",
+        action="store_true",
+        help="Skip the tray 12 V feed latch reads (pre_bmc_reboot and post_bmc_reboot).",
     )
     ap.add_argument(
         "--skip-sys-triage",
@@ -353,6 +358,7 @@ def run_diag(
     qsfp_descriptor: Path | None = None,
     qsfp_gating: bool = False,
     skip_sys_triage: bool = False,
+    skip_tray_power: bool = False,
     sys_triage_path: str | None = None,
     bmc_ip: str | None = None,
     bmc_user: str | None = None,
@@ -442,6 +448,16 @@ def run_diag(
         fw_dir = output.resolve().parent / "logs" / "firmware"
         _guarded(snap_phase, "firmware_reads", WARN, lambda: snap_phase.add(firmware_check(fw_dir)))
     _finish(report, snap_phase, t0, summary=True)
+
+    if plan.tray_power:
+        tray_power_phase = Phase(name="tray_power", gates=False)
+        t0 = time.time()
+        if skip_tray_power or not live:
+            why = "--skip-tray-power" if skip_tray_power else "(dry or replayed snapshot) ipmitool raw 0x06 0x52 reads"
+            tray_power_phase.add(Check(name="tray_12v_feed", status=SKIP, details=why, ip="board"))
+        else:
+            _guarded(tray_power_phase, "tray_12v_feed", SKIP, lambda: run_tray_feed(tray_power_phase))
+        _finish(report, tray_power_phase, t0, summary=True, all_skip_stays_skip=True)
 
     # Where every phase drops its raw tool output. Derived once: the reset
     # and gtest phases both write here, and collect_run_artifacts() attaches
@@ -757,6 +773,7 @@ def main() -> int:
         skip_triage=args.skip_triage,
         skip_eth_status=args.skip_eth_status,
         skip_qsfp_tests=args.skip_qsfp_tests,
+        skip_tray_power=args.skip_tray_power,
         input_snapshot=args.input_snapshot,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,

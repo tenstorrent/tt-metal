@@ -126,6 +126,7 @@ Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail)
       --qsfp-tool-path PATH  In-container path to the tt-bh-glx-cluster-debug
                              binary
       --skip-sys-triage      Skip the sys-triage bundle
+      --skip-tray-power      Skip the tray 12 V feed latch reads
       --sys-triage-path PATH In-container path to the sys-triage binary
       --input-snapshot PATH  Host tt-smi snapshot JSON; mounted read-only
       --tt-smi-path PATH     In-container tt-smi binary or repo path
@@ -216,7 +217,7 @@ while (( $# )); do
             SKIP_QSFP=true; FORWARD+=("$1"); shift ;;
         --skip-sys-triage)
             SKIP_SYS_TRIAGE=true; FORWARD+=("$1"); shift ;;
-        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating)
+        --skip-tests|--skip-triage|--triage-gating|--skip-eth-status|--qsfp-gating|--skip-tray-power)
             FORWARD+=("$1"); shift ;;
 
         # Forwarded, in-container value.

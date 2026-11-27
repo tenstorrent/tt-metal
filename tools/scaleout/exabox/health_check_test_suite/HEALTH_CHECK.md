@@ -91,8 +91,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 | `daily` | `tt-smi -glx_reset`, then `-glx_reset` and the end sequence after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1) + the [galaxy load](#the-galaxy-load) at `smoke`: `busbar` (the `qb`, `mix`, `step`, `heavy` and `code` steps, ~1 min planned) + `links` (pair link test, sweep on a fault, fabric open/close) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~5 min + galaxy load (~10 min at `smoke`, estimated) + triage + ~7 min | The scheduled fleet run |
 | `weekly` | `tt-smi -glx_reset` × 2, then `-glx_reset` and the end sequence after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, bf16 and bf8 variants, ~12 min measured) + fabric_all_gather_matmul_galaxy (pytest, ~1 min measured) + the galaxy load at `plain` (~19 min planned) + HSC input-voltage and chip recount around the tests | host_side + device_side | — | yes, if installed | — | ~17 min measured + galaxy load (~30 min at `plain`, estimated) + triage + ~7 min | Every test, less often |
 | `full` | as `weekly` | as `weekly`, with the galaxy load at `full` (~56 min planned) | host_side + device_side, then the AER diff over the whole run (`pcie_aer`, the last phase) | yes | yes, if installed | yes, if installed and BMC credentials set | `weekly`'s other tests + galaxy load (~65 min at `full`, estimated) + triage + ~7 min + ETH status + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
-| `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
-| `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
+| `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + 12 V feed + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
+| `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + 12 V feed + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
 The [sys-triage phase](#sys-triage-phase) runs last on `full`, `pre_bmc_reboot`
 and `post_bmc_reboot` only; it collects a bundle for the ticket and never gates
@@ -658,6 +658,23 @@ timeout is 1200 s as a backstop. That has to stay well inside
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
+## tray 12 V feed phase
+
+A tray that loses its 12 V feed (a weak bus bar, a tripped tray hot-swap controller) leaves latches in the tray's two
+HSCs, and a re-power or `glx_reset` clears them. So `pre_bmc_reboot` and `post_bmc_reboot` read them right after the
+snapshot, before anything resets, with the same reader as `hsc_input_status` (reads only, as root or `sudo -n`),
+plus the tray CPLD's chip-alive byte. The phase **never gates** the run.
+
+One check per tray, `tray{N}_12v_feed`, its line naming the tray's chips by BDF:
+
+| Result | Line | Meaning |
+|---|---|---|
+| PASS | `tray N (BDF): no 12 V latch set, tray up` | no `VIN_UV_WARN`, `VIN_UV_FAULT`, `IOUT_OC_FAULT` or OFF flag, tray alive |
+| **FAIL** | `tray N (BDF): POWER: check bus bar / tray 12 V feed` | an HSC latched a flag; the feed is the suspect |
+| WARN | `tray N (BDF): CHIP/BOARD: tray down with no 12 V feed latch set, not the feed` | the CPLD says the tray is down and every latch read clean |
+| WARN | `not read: HSC 0x40, CPLD` | a read is missing; no cause is given |
+| SKIP | `tray_12v_feed` | no HSC or CPLD answered at all, or `--skip-tray-power`, a dry run or an input snapshot |
+
 ## sys-triage phase
 
 The last phase runs `sys-triage`, the syseng tool that collects a Blackhole
@@ -766,6 +783,7 @@ FAIL or WARN check of a phase that gates, go to `findings.txt` and `finding_stag
 | `--qsfp-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
 | `--qsfp-gating` | off | Report QSFP findings at their real severity and let them gate the run. Off records every finding in `details`/`data` but holds the status at PASS. |
 | `--skip-sys-triage` | off | Skip the sys-triage bundle entirely |
+| `--skip-tray-power` | off | Skip the tray 12 V feed latch reads (`pre_bmc_reboot`, `post_bmc_reboot`) |
 | `--sys-triage-path PATH` | `sys-triage` on PATH | Override the sys-triage binary. A path that doesn't resolve is reported as its own SKIP. |
 | `--bmc-ip IP` | `$BMC_IP` | BMC address for sys-triage |
 | `--bmc-user USER` | `$BMC_USER` | BMC user for sys-triage |
