@@ -488,11 +488,11 @@ TEST(KernelPrewarmShutdownChild, StartsRealBatchAndReturnsWithoutBarrier) {
     constexpr std::uint64_t build_key = 24680;
     const fs::path kernel_dir = out_root / std::to_string(build_key) / "kernels" / "shutdown_probe" / "hash";
     const fs::path source = root / "shutdown_probe.cpp";
-    const fs::path object = kernel_dir / "shutdown_probe.o";
+    const fs::path object = kernel_dir / "shutdown_probe" / "shutdown_probe.o";
     const fs::path dependency = root / "dependency.hpp";
     const fs::path compiler = root / "blocking-compiler.sh";
 
-    fs::create_directories(kernel_dir);
+    fs::create_directories(object.parent_path());
     fs::create_directories(out_root);
     std::ofstream(source) << "void kernel_main() {}\n";
     std::ofstream(dependency) << "#pragma once\n";
