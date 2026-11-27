@@ -378,16 +378,16 @@ class _RmPlan(_CoreRangesMixin):
         return _core_bytes(self.stage_slot_bytes, self.image_slot_bytes, self.plan_bytes)
 
 
-def _rm_slot_bytes(atoms, s_bound, dram_align, read_gap):
+def _rm_slot_bytes(atoms, s_bound, dram_align, read_gap, linear_fold):
     """Unrounded (staging slot, image slot, plan) bytes of one rm_row_gather mover for a block of `atoms`.
     A piece is <= A bytes; it opens an A-aligned run (< 3A staged) or extends the open one by at most
     gap + piece + A. The image is A bytes per atom. Staging and image carry A bytes of slack so the kernel
-    can start them DRAM-aligned."""
+    can start them DRAM-aligned. The linear fold copies plan-free (closed-form sources), so it has no plan."""
     per_piece = 2 * dram_align + max(dram_align, read_gap)
     return (
         atoms * s_bound * per_piece + dram_align,
         atoms * dram_align + dram_align,
-        atoms * s_bound * COPY_ENTRY_BYTES,
+        0 if linear_fold else atoms * s_bound * COPY_ENTRY_BYTES,
     )
 
 
@@ -408,7 +408,7 @@ def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
 
     num_cores, roles, max_mover_atoms = _split_atoms(atoms_total, grid)
     block_atoms, (stage_slot, image_slot, plan_bytes) = _fit_block_atoms(
-        max_mover_atoms, lambda n: _rm_slot_bytes(n, s_bound, dram_align, read_gap)
+        max_mover_atoms, lambda n: _rm_slot_bytes(n, s_bound, dram_align, read_gap, RM_FOLD == "linear")
     )
     return _RmPlan(
         elem=elem,
@@ -553,6 +553,8 @@ def _build_descriptor(plan, input_tensor, output_tensor):
             (cb_image, plan.image_bytes, input_tensor.dtype),
             (cb_plan, plan.plan_bytes, ttnn.uint32),
         ):
+            if size == 0:  # no plan (rm linear fold): the kernel never touches the CB
+                continue
             cbs.append(
                 ttnn.CBDescriptor(
                     total_size=size,

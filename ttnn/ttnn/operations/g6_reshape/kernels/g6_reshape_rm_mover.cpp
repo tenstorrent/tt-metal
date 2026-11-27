@@ -10,7 +10,10 @@
 //  - linear (default): atoms in stream order (page, chunk), so a block is ONE contiguous range of the input
 //    stream (each input byte read once, no stride amplification on a hot input bank); the permute lays the
 //    image out BANK-GROUPED (pages p0+g, p0+g+NB, ... consecutively), so the block still stores as one write
-//    per (block, bank) — at most NB writes.
+//    per (block, bank) — at most NB writes. Plan-free (Refinement 3): the staged range is the input stream at
+//    a uniform row pitch, so every copy source is closed-form; no gather walk and no plan in L1. The copies
+//    run group by group and each group's write is issued as soon as its image bytes are fenced, so the
+//    stores overlap the remaining copies.
 //  - bank-affine: ordered by (bank, page / NB, chunk); a mover's consecutive atoms are consecutive bytes of
 //    one DRAM bank (fewest writes), but its input elements are NB pages apart in the stream. Reads are A-aligned
 //    covering runs inside one input page (gaps up to kReadGap bytes are read
@@ -75,7 +78,9 @@ void kernel_main() {
     // The CBs carry kAlign bytes of slack so the slots start DRAM-aligned whatever the CB base.
     const uint32_t stage_cb_base = (get_write_ptr(cb_stage) + kAlign - 1) & ~(kAlign - 1);
     const uint32_t image_cb_base = (get_write_ptr(cb_image) + kAlign - 1) & ~(kAlign - 1);
-    volatile tt_l1_ptr uint32_t* copies = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_plan));
+    // The move plan exists only for the bank fold (the linear fold has no plan CB).
+    volatile tt_l1_ptr uint32_t* copies =
+        kLinearFold ? nullptr : reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_plan));
 
     // Fold cursor: output page `page`, chunk `chunk` of its slot; `bank` is the bank-affine fold's outer index
     // (unused by the linear fold).
@@ -98,16 +103,13 @@ void kernel_main() {
         page = bank + kNumBanks * (rem / kAtomsPerPage);
         chunk = rem % kAtomsPerPage;
     }
-    // Steps the cursor to the next atom in fold order; returns true when it left the bank.
+    // Bank fold: steps the cursor to the next atom in fold order; returns true when it left the bank. (The
+    // linear fold steps its cursor a whole block at a time.)
     auto advance = [&](uint32_t& b, uint32_t& p, uint32_t& k) -> bool {
         if (++k < kAtomsPerPage) {
             return false;
         }
         k = 0;
-        if constexpr (kLinearFold) {
-            ++p;
-            return true;
-        }
         p += kNumBanks;
         if (p < kROut) {
             return false;
@@ -127,159 +129,205 @@ void kernel_main() {
         const uint32_t blk_bank = bank;
         const uint32_t blk_page = page;
         const uint32_t blk_chunk = chunk;
-        uint32_t num_copies = 0;
-        // Linear fold: the block's pages blk_page + j land in bank group g = j mod NB; the image holds group 0,
-        // then group 1, ... (each group = consecutive bytes of one bank). group_off[g] is the group's image
-        // offset, advanced as its atoms are placed; group_bytes[g] its store length.
-        constexpr uint32_t kGroups = kLinearFold ? kNumBanks : 1;
-        uint32_t group_off[kGroups];
-        uint32_t group_bytes[kGroups];
-        uint32_t num_groups = 1;
+
         if constexpr (kLinearFold) {
-            const uint32_t last = blk_chunk + n_atoms - 1;  // chunk index of the block's last atom, from blk_page
+            // The block: chunks blk_chunk .. last of pages blk_page .. blk_page + num_pages - 1, i.e. the stream
+            // range [s0, s1).
+            const uint32_t last = blk_chunk + n_atoms - 1;
             const uint32_t num_pages = last / kAtomsPerPage + 1;
             const uint32_t last_page_atoms = last % kAtomsPerPage + 1;
-            num_groups = min_u32(kNumBanks, num_pages);
-            uint32_t off = 0;
-            for (uint32_t g = 0; g < num_groups; ++g) {
-                uint32_t atoms = ((num_pages - g + kNumBanks - 1) / kNumBanks) * kAtomsPerPage;
-                if (g == 0) {
-                    atoms -= blk_chunk;
-                }
-                if (g == (num_pages - 1) % kNumBanks) {
-                    atoms -= kAtomsPerPage - last_page_atoms;
-                }
-                group_off[g] = off;
-                group_bytes[g] = atoms * kAlign;
-                off += atoms * kAlign;
-            }
-        }
-
-        // Linear fold: the block is one contiguous stream range, so its covering reads (one A-aligned run per
-        // input row it crosses, staged back to back) are known before the walk — issue them first and let the
-        // walk below overlap their DRAM latency. The walk lays staging out identically (runs only extend
-        // contiguously in stream order) and only checks it.
-        uint32_t issued_stage_end = stage_base;
-        if constexpr (kLinearFold) {
-            DeviceZoneScopedN("g6.issue");
-            const uint32_t last = blk_chunk + n_atoms - 1;
             const uint32_t s0 = blk_page * kWOut + blk_chunk * kAtomElems;
-            const uint32_t s1 =
-                (blk_page + last / kAtomsPerPage) * kWOut + min_u32(kWOut, (last % kAtomsPerPage + 1) * kAtomElems);
-            uint32_t r = s0 / kWIn;
-            uint32_t c = s0 % kWIn;
-            for (uint32_t pos = s0; pos < s1;) {
-                const uint32_t len = min_u32(s1 - pos, kWIn - c);
-                const uint32_t lo = (c * kElem) & ~(kAlign - 1);
-                const uint32_t hi = ((c + len) * kElem + kAlign - 1) & ~(kAlign - 1);
-                noc_async_read(in.get_noc_addr(r, lo, noc), issued_stage_end, hi - lo, noc);
-                issued_stage_end += hi - lo;
-                pos += len;
-                c = 0;
-                ++r;
-            }
-            ASSERT(issued_stage_end <= stage_base + kStageSlotBytes);
-        }
-
-        {
-            DeviceZoneScopedN("g6.gather");
-            // Open covering read run: bytes [run_lo, run_hi) of input page run_page (both A-aligned),
-            // landing at run_stage.
-            uint32_t run_page = kNoRun;
-            uint32_t run_lo = 0;
-            uint32_t run_hi = 0;
-            uint32_t run_stage = stage_base;
-
-            auto close_run = [&]() {
-                if (!kLinearFold && run_page != kNoRun) {
-                    noc_async_read(in.get_noc_addr(run_page, run_lo, noc), run_stage, run_hi - run_lo, noc);
-                }
-            };
-
-            // Staging address of input bytes [off, off + bytes) of input page r.
-            auto stage_piece = [&](uint32_t r, uint32_t off, uint32_t bytes) -> uint32_t {
-                if (r == run_page && off >= run_lo && off <= run_hi + kReadGap) {
-                    const uint32_t end = (off + bytes + kAlign - 1) & ~(kAlign - 1);
-                    if (end > run_hi) {
-                        run_hi = end;
-                        ASSERT(run_stage + (run_hi - run_lo) <= stage_base + kStageSlotBytes);
-                    }
-                    return run_stage + (off - run_lo);
-                }
-                const uint32_t cursor = run_page == kNoRun ? stage_base : run_stage + (run_hi - run_lo);
-                close_run();
-                run_page = r;
-                run_lo = off & ~(kAlign - 1);
-                run_hi = (off + bytes + kAlign - 1) & ~(kAlign - 1);
-                run_stage = cursor;
-                ASSERT(run_stage + (run_hi - run_lo) <= stage_base + kStageSlotBytes);
-                return run_stage + (off - run_lo);
-            };
-
-            uint32_t image_off = 0;
-            uint32_t group = 0;
-            for (uint32_t i = 0; i < n_atoms; ++i) {
-                if constexpr (kLinearFold) {
-                    image_off = group_off[group];
-                    group_off[group] += kAlign;
-                }
-                // Valid elements of this chunk: [first, first + n) of the output stream.
-                const uint32_t chunk_elem = chunk * kAtomElems;
-                const uint32_t n = min_u32(kAtomElems, kWOut - chunk_elem);
-                const uint32_t first = page * kWOut + chunk_elem;
-                uint32_t r = first / kWIn;
-                uint32_t c = first % kWIn;
-                uint32_t k = 0;
-                while (k < n) {
-                    const uint32_t len = min_u32(n - k, kWIn - c);
-                    const uint32_t src = stage_piece(r, c * kElem, len * kElem);
-                    ASSERT(num_copies < kMaxCopies);
-                    copies[2 * num_copies] = src;
-                    copies[2 * num_copies + 1] = ((image_off + k * kElem) << 8) | (len * kElem);
-                    ++num_copies;
-                    k += len;
+            const uint32_t s1 = (blk_page + num_pages - 1) * kWOut + min_u32(kWOut, last_page_atoms * kAtomElems);
+            const uint32_t r0 = s0 / kWIn;
+            const uint32_t lo0 = ((s0 % kWIn) * kElem) & ~(kAlign - 1);
+            // Covering reads: one A-aligned run per input row the range crosses, staged back to back. Row r0's run
+            // starts at byte lo0, every later row's at byte 0, and every run but the last ends at the row pitch,
+            // so stream element (r, c) is staged at stage_row0 + (r - r0)·kInPitch + c·e (closed form: the copies
+            // below need no plan).
+            constexpr uint32_t kInPitch = (kInPageBytes + kAlign - 1) & ~(kAlign - 1);
+            const uint32_t stage_row0 = stage_base - lo0;
+            // Fast-path predicate: one atom per output page, and output pages never straddle an input row.
+            constexpr bool kPageAtoms = kAtomsPerPage == 1 && kWIn % kWOut == 0;
+            constexpr uint32_t kPagesPerRow = kWIn / kWOut;
+            // Word count of a whole-page copy when it is word-aligned on both sides (0: byte-length copy).
+            constexpr uint32_t kPageWords = kOutPageBytes % 4 == 0 ? kOutPageBytes / 4 : 0;
+            uint32_t stage_end = stage_base;
+            {
+                DeviceZoneScopedN("g6.issue");
+                uint32_t r = r0;
+                uint32_t c = s0 % kWIn;
+                for (uint32_t pos = s0; pos < s1;) {
+                    const uint32_t len = min_u32(s1 - pos, kWIn - c);
+                    const uint32_t lo = (c * kElem) & ~(kAlign - 1);
+                    const uint32_t hi = ((c + len) * kElem + kAlign - 1) & ~(kAlign - 1);
+                    ASSERT(stage_end == stage_row0 + (r - r0) * kInPitch + lo);
+                    noc_async_read(in.get_noc_addr(r, lo, noc), stage_end, hi - lo, noc);
+                    stage_end += hi - lo;
+                    pos += len;
                     c = 0;
                     ++r;
                 }
-                if constexpr (kLinearFold) {
-                    if (advance(bank, page, chunk)) {
-                        group = group + 1 == kNumBanks ? 0 : group + 1;
+                ASSERT(stage_end <= stage_base + kStageSlotBytes);
+            }
+
+            {
+                DeviceZoneScopedN("g6.await");
+                noc_async_read_barrier(noc);
+            }
+
+            {
+                // Permute + store, bank group by bank group: group g holds the block's pages blk_page + g,
+                // + g + NB, ... (consecutive slots of one bank) in page then chunk order; its write goes out as
+                // soon as its image bytes are fenced, overlapping the next group's copies.
+                DeviceZoneScopedN("g6.permute_store");
+                g6_reshape::begin_image(noc);
+                const uint32_t num_groups = min_u32(kNumBanks, num_pages);
+                uint32_t img = image_base;
+                for (uint32_t g = 0; g < num_groups; ++g) {
+                    const uint32_t group_img = img;
+                    uint32_t last_byte = img;
+                    if constexpr (kPageAtoms) {
+                        // Whole-page atoms inside one input row (e.g. [1, W] -> [W, 1]): each atom is one
+                        // compile-time-sized copy; the group's pages step NB pages through the stream, so the
+                        // in-row page index advances incrementally (no per-atom division).
+                        const uint32_t p0 = blk_page + g;
+                        uint32_t q = p0 % kPagesPerRow;
+                        uint32_t src_row = stage_row0 + (p0 / kPagesPerRow - r0) * kInPitch;
+                        for (uint32_t j = g; j < num_pages; j += kNumBanks) {
+                            const uint32_t src = src_row + q * kOutPageBytes;
+                            ASSERT(src >= stage_base && src + kOutPageBytes <= stage_end);
+                            g6_reshape::copy_run<kElem, kPageWords>(src, img, kOutPageBytes);
+                            last_byte = img + kOutPageBytes - 1;
+                            img += kAlign;
+                            q += kNumBanks;
+                            if (q >= kPagesPerRow) {
+                                if constexpr (kNumBanks < kPagesPerRow) {
+                                    q -= kPagesPerRow;
+                                    src_row += kInPitch;
+                                } else {
+                                    src_row += (q / kPagesPerRow) * kInPitch;
+                                    q %= kPagesPerRow;
+                                }
+                            }
+                        }
+                    } else {
+                        for (uint32_t j = g; j < num_pages; j += kNumBanks) {
+                            const uint32_t k_begin = j == 0 ? blk_chunk : 0;
+                            const uint32_t k_end = j == num_pages - 1 ? last_page_atoms : kAtomsPerPage;
+                            const uint32_t page_first = (blk_page + j) * kWOut;
+                            for (uint32_t k = k_begin; k < k_end; ++k) {
+                                // Valid elements of this chunk: [pos, pos + n) of the stream, copied to the chunk's
+                                // image slot one input-row piece at a time.
+                                const uint32_t chunk_elem = k * kAtomElems;
+                                uint32_t n = min_u32(kAtomElems, kWOut - chunk_elem);
+                                const uint32_t pos = page_first + chunk_elem;
+                                uint32_t r = pos / kWIn;
+                                uint32_t c = pos % kWIn;
+                                uint32_t dst = img;
+                                while (n > 0) {
+                                    const uint32_t len = min_u32(n, kWIn - c);
+                                    const uint32_t src = stage_row0 + (r - r0) * kInPitch + c * kElem;
+                                    ASSERT(src >= stage_base && src + len * kElem <= stage_end);
+                                    g6_reshape::copy_run<kElem>(src, dst, len * kElem);
+                                    dst += len * kElem;
+                                    n -= len;
+                                    c = 0;
+                                    ++r;
+                                }
+                                last_byte = dst - 1;
+                                img += kAlign;
+                            }
+                        }
                     }
-                } else {
+                    g6_reshape::fence_image(last_byte);
+                    noc_async_write(
+                        group_img,
+                        out.get_noc_addr(blk_page + g, (g == 0 ? blk_chunk : 0) * kAlign, noc),
+                        img - group_img,
+                        noc);
+                }
+                ASSERT(img - image_base == n_atoms * kAlign);
+                ASSERT(img - image_base <= kImageSlotBytes);
+            }
+            page = blk_page + (last + 1) / kAtomsPerPage;
+            chunk = (last + 1) % kAtomsPerPage;
+        } else {
+            uint32_t num_copies = 0;
+            {
+                DeviceZoneScopedN("g6.gather");
+                // Open covering read run: bytes [run_lo, run_hi) of input page run_page (both A-aligned),
+                // landing at run_stage.
+                uint32_t run_page = kNoRun;
+                uint32_t run_lo = 0;
+                uint32_t run_hi = 0;
+                uint32_t run_stage = stage_base;
+
+                auto close_run = [&]() {
+                    if (run_page != kNoRun) {
+                        noc_async_read(in.get_noc_addr(run_page, run_lo, noc), run_stage, run_hi - run_lo, noc);
+                    }
+                };
+
+                // Staging address of input bytes [off, off + bytes) of input page r.
+                auto stage_piece = [&](uint32_t r, uint32_t off, uint32_t bytes) -> uint32_t {
+                    if (r == run_page && off >= run_lo && off <= run_hi + kReadGap) {
+                        const uint32_t end = (off + bytes + kAlign - 1) & ~(kAlign - 1);
+                        if (end > run_hi) {
+                            run_hi = end;
+                            ASSERT(run_stage + (run_hi - run_lo) <= stage_base + kStageSlotBytes);
+                        }
+                        return run_stage + (off - run_lo);
+                    }
+                    const uint32_t cursor = run_page == kNoRun ? stage_base : run_stage + (run_hi - run_lo);
+                    close_run();
+                    run_page = r;
+                    run_lo = off & ~(kAlign - 1);
+                    run_hi = (off + bytes + kAlign - 1) & ~(kAlign - 1);
+                    run_stage = cursor;
+                    ASSERT(run_stage + (run_hi - run_lo) <= stage_base + kStageSlotBytes);
+                    return run_stage + (off - run_lo);
+                };
+
+                uint32_t image_off = 0;
+                for (uint32_t i = 0; i < n_atoms; ++i) {
+                    // Valid elements of this chunk: [first, first + n) of the output stream.
+                    const uint32_t chunk_elem = chunk * kAtomElems;
+                    const uint32_t n = min_u32(kAtomElems, kWOut - chunk_elem);
+                    const uint32_t first = page * kWOut + chunk_elem;
+                    uint32_t r = first / kWIn;
+                    uint32_t c = first % kWIn;
+                    uint32_t k = 0;
+                    while (k < n) {
+                        const uint32_t len = min_u32(n - k, kWIn - c);
+                        const uint32_t src = stage_piece(r, c * kElem, len * kElem);
+                        ASSERT(num_copies < kMaxCopies);
+                        copies[2 * num_copies] = src;
+                        copies[2 * num_copies + 1] = ((image_off + k * kElem) << 8) | (len * kElem);
+                        ++num_copies;
+                        k += len;
+                        c = 0;
+                        ++r;
+                    }
                     image_off += kAlign;
                     advance(bank, page, chunk);
                 }
+                ASSERT(image_off <= kImageSlotBytes);
+                close_run();
             }
-            ASSERT(kLinearFold || image_off <= kImageSlotBytes);
-            close_run();
-            ASSERT(!kLinearFold || run_stage + (run_hi - run_lo) == issued_stage_end);
-        }
 
-        {
-            DeviceZoneScopedN("g6.await");
-            noc_async_read_barrier(noc);
-        }
+            {
+                DeviceZoneScopedN("g6.await");
+                noc_async_read_barrier(noc);
+            }
 
-        {
-            DeviceZoneScopedN("g6.permute");
-            g6_reshape::permute_block<kElem, 0>(copies, num_copies, image_base, noc);
-        }
+            {
+                DeviceZoneScopedN("g6.permute");
+                g6_reshape::permute_block<kElem, 0>(copies, num_copies, image_base, noc);
+            }
 
-        {
-            DeviceZoneScopedN("g6.store");
-            // One write per (block, bank): the block's atoms of one bank are consecutive bytes of that bank.
-            if constexpr (kLinearFold) {
-                // Group g starts at page blk_page + g (chunk blk_chunk for group 0) and its pages are NB apart,
-                // i.e. consecutive slots of one bank.
-                uint32_t img = image_base;
-                for (uint32_t g = 0; g < num_groups; ++g) {
-                    const uint32_t first_chunk = g == 0 ? blk_chunk : 0;
-                    noc_async_write(
-                        img, out.get_noc_addr(blk_page + g, first_chunk * kAlign, noc), group_bytes[g], noc);
-                    img += group_bytes[g];
-                }
-                ASSERT(img - image_base == n_atoms * kAlign);
-            } else {
+            {
+                DeviceZoneScopedN("g6.store");
+                // One write per (block, bank): the block's atoms of one bank are consecutive bytes of that bank.
                 uint32_t b = blk_bank;
                 uint32_t p = blk_page;
                 uint32_t k = blk_chunk;

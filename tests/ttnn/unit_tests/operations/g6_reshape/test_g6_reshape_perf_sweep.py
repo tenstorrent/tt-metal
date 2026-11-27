@@ -57,4 +57,6 @@ def test_perf_sweep(case, knobs, device, monkeypatch):
         x = torch.randn(src).to(torch.bfloat16)
     t = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
     y = ttnn.to_torch(g6_reshape(t, list(dst)))
+    if os.environ.get("G6_ABLATION"):  # stubbed-kernel ablation runs: timing only, output is garbage
+        return
     assert torch.equal(y.reshape(dst), x.reshape(dst))
