@@ -1,0 +1,36 @@
+{
+  "dtype": [
+    "BFLOAT16",
+    "FLOAT32",
+    "INT32",
+    "UINT32",
+    "UINT16"
+  ],
+  "output_dtype": [
+    "FLOAT32",
+    "BFLOAT16",
+    "BFLOAT8_B",
+    "INT32",
+    "UINT32",
+    "UINT8"
+  ],
+  "layout": [
+    "TILE",
+    "ROW_MAJOR"
+  ],
+  "buffer": [
+    "dram",
+    "l1"
+  ],
+  "alignment": [
+    "tile_aligned",
+    "w_non_aligned",
+    "h_non_aligned"
+  ],
+  "rank": [
+    1,
+    2,
+    3,
+    4
+  ]
+}

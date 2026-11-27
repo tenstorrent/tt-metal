@@ -1,0 +1,35 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "output_dtype": [
+      "FLOAT32",
+      "BFLOAT8_B",
+      "INT32"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "buffer": [
+      "dram",
+      "l1"
+    ],
+    "alignment": [
+      "tile_aligned",
+      "w_non_aligned",
+      "h_non_aligned"
+    ],
+    "rank": [
+      3,
+      4
+    ]
+  },
+  "exclusions": [],
+  "invalid": [
+    {
+      "output_dtype": "BFLOAT8_B",
+      "layout": "ROW_MAJOR"
+    }
+  ]
+}
