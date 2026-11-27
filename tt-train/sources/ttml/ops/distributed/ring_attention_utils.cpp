@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -39,6 +40,10 @@ ttnn::Tensor slice_seq(const ttnn::Tensor& tensor, uint32_t begin, uint32_t end,
 SeqHalves split_seq(const ttnn::Tensor& tensor) {
     const uint32_t seq_len = tensor.logical_shape()[2];
     return {slice_seq(tensor, 0U, seq_len / 2U), slice_seq(tensor, seq_len / 2U, seq_len)};
+}
+
+ttnn::Tensor concat_seq(const SeqHalves& halves) {
+    return ttnn::concat(std::vector<ttnn::Tensor>{halves.first, halves.second}, /*dim=*/2);
 }
 
 SeqHalves ring_shift_halves(

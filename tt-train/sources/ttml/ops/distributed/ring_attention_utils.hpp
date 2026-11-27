@@ -31,6 +31,8 @@ struct SeqHalves {
 
 SeqHalves split_seq(const ttnn::Tensor& tensor);
 
+ttnn::Tensor concat_seq(const SeqHalves& halves);
+
 SeqHalves ring_shift_halves(
     const SeqHalves& tensor, uint32_t cp_axis, ttnn_fixed::distributed::RingShiftDirection direction);
 
