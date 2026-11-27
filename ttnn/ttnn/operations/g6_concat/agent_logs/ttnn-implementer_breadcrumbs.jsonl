@@ -19,3 +19,4 @@
 {"event":"test_run","result":"pass","mode":"dev+prod","detail":"acceptance 47/47; page_copy + row_gather readers, shared writer, 110-core output-page split","ts":"2026-11-27T08:14:36-05:00"}
 {"event":"plan_check","detail":"qwen79 row_gather 110 cores block 18 staging 38912B; qwen23 page_copy 110 cores block 64 (7 blocks/core); dram read alignment 64","ts":"2026-11-27T08:14:36-05:00"}
 {"event":"perf_classification","case":"qwen79 row_gather","detail":"device kernel 124.5us@110 cores, 136.4us@55, 150.9us@28: shared DRAM/NoC small-transaction bound (62080 x 32B reads), not per-core issue; FETCH zone avg 67us max 116us, PLACE 7.5us. page_copy p4 455us = ~442 GB/s","ts":"2026-11-27T08:17:22-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T15:37:17-05:00"}
