@@ -15,6 +15,7 @@
 
 #include "../utils/gpr.h"
 #include "../utils/helpers.h"
+#include "../utils/operation.h"
 #include "../utils/validate.h"
 #include "ckernel.h"
 
@@ -145,13 +146,13 @@ public:
      * During constant evaluation, selection follows set<Descriptor>(). Otherwise, selection uses
      * only the action and supplied fields, as in the runtime set() overload.
      *
-     * @return One encoded 32-bit Tensix instruction, suitable for an instruction emitter or MOP slot.
+     * @return One encoded Tensix instruction, to issue later with hal::run or use in a MOP slot.
      * @note Supply valid clients and action, select at least one counter, and supply values that
      *       fit the selected instruction. Use set<Descriptor>() for updates needing multiple instructions.
      * @note Invalid values and multi-instruction updates are rejected during constant evaluation.
      *       Runtime checks use LLK_ASSERT; the preconditions still apply when assertions are disabled.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 namespace detail
@@ -520,17 +521,6 @@ constexpr Sequence plan(const AddrCounter& descriptor)
 }
 
 /**
- * @brief Issue one compile-time instruction through TTI_INSN.
- *
- * @tparam Word: Validated 32-bit instruction encoding.
- */
-template <std::uint32_t Word>
-inline __attribute__((always_inline)) void emit()
-{
-    TTI_INSN(Word);
-}
-
-/**
  * @brief Issue selected words of a compile-time descriptor in index order.
  *
  * @tparam Descriptor: Valid counter update whose plan is evaluated at compile time.
@@ -540,7 +530,7 @@ template <auto Descriptor, std::size_t... Indices>
 inline __attribute__((always_inline)) void emit(const std::index_sequence<Indices...>)
 {
     constexpr auto sequence = plan(Descriptor);
-    (emit<sequence.words[Indices]>(), ...);
+    (hal::detail::run_immediate<sequence.words[Indices]>(), ...);
 }
 
 /**
@@ -550,20 +540,20 @@ inline __attribute__((always_inline)) void emit(const std::index_sequence<Indice
  * @param clients: Destination client bitmask.
  * @param action: Counter effect to issue.
  * @param group: Sparse values satisfying runtime_operation()'s encoding limits.
- * @note An empty group issues nothing; a nonempty group is written through TT_INSN.
+ * @note An empty group issues nothing; a nonempty group is issued with hal::run.
  */
 template <bool ZW>
 inline __attribute__((always_inline)) void emit_runtime(const std::uint8_t clients, const Action action, const Group& group)
 {
     if (group.mask() != EmptyCounterMask)
     {
-        TT_INSN(runtime_operation(clients, ZW, action, group));
+        hal::run(hal::detail::make_operation(runtime_operation(clients, ZW, action, group)));
     }
 }
 
 } // namespace detail
 
-inline constexpr __attribute__((always_inline)) std::uint32_t AddrCounter::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation AddrCounter::operation() const
 {
     if (!__builtin_is_constant_evaluated())
     {
@@ -575,11 +565,11 @@ inline constexpr __attribute__((always_inline)) std::uint32_t AddrCounter::opera
         const bool is_zw = xy.mask() == detail::EmptyCounterMask;
         hal::detail::require(
             is_zw || zw.mask() == detail::EmptyCounterMask, "AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()");
-        return detail::runtime_operation(clients, is_zw, action, is_zw ? zw : xy);
+        return hal::detail::make_operation(detail::runtime_operation(clients, is_zw, action, is_zw ? zw : xy));
     }
     const auto sequence = detail::plan(*this);
     hal::detail::require(sequence.count == 1, "AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()");
-    return sequence.words[0];
+    return hal::detail::make_operation(sequence.words[0]);
 }
 
 /**

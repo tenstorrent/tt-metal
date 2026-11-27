@@ -9,6 +9,7 @@
 
 #include "ckernel.h"
 #include "llk_assert.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::mop
@@ -552,7 +553,7 @@ struct Runner;
  * @brief Issue a Template 0 MOP expansion, or describe one and encode it with @ref operation.
  *
  * `Runner<MopTemplate::Template0> {.count = 3, .mask = faces}.operation()` returns the MOP instruction
- * the matching run would issue, for issuing later with TT_INSN.
+ * the matching run would issue, for issuing later with hal::run.
  */
 template <>
 struct Runner<MopTemplate::Template0>
@@ -583,7 +584,7 @@ public:
      * @note With @ref MaskHigh::Auto, count must be at most 16 and mask must fit in 16 bits, since the
      *       encoding cannot carry the MOP_CFG that writes the high mask bits.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const
+    [[nodiscard]] constexpr hal::Operation operation() const
     {
         hal::detail::require(is_valid_count(count), "MOP encoded count must fit in 7 bits");
         if (mask_high == MaskHigh::Auto)
@@ -592,7 +593,7 @@ public:
                 !reads_mask_high(count, mask),
                 "Template 0 MOP operation cannot write the high mask bits; write them with configure_mask_high and set mask_high to MaskHigh::Preset");
         }
-        return TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        return hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO));
     }
 
     /**
@@ -603,7 +604,7 @@ public:
     template <std::uint32_t Mask>
     inline __attribute__((always_inline)) static void configure_mask_high()
     {
-        TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
+        hal::detail::run_immediate<TT_OP_MOP_CFG(Mask >> MASK_LO_WIDTH)>();
     }
 
     /**
@@ -613,7 +614,7 @@ public:
      */
     inline __attribute__((always_inline)) static void configure_mask_high(const std::uint32_t mask)
     {
-        TT_MOP_CFG(mask >> MASK_LO_WIDTH);
+        hal::run(hal::detail::make_operation(TT_OP_MOP_CFG(mask >> MASK_LO_WIDTH)));
     }
 
     /**
@@ -633,7 +634,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TTI_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO);
+        hal::detail::run_immediate<TT_OP_MOP(0 /*mop_type*/, Count - 1, Mask & MASK_LO)>();
     }
 
     /**
@@ -653,7 +654,7 @@ public:
         {
             configure_mask_high<Mask>();
         }
-        TT_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, Mask & MASK_LO)));
     }
 
     /**
@@ -674,7 +675,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, Count - 1, mask & MASK_LO)));
     }
 
     /**
@@ -694,7 +695,7 @@ public:
         {
             configure_mask_high(mask);
         }
-        TT_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+        hal::run(hal::detail::make_operation(TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO)));
     }
 };
 
@@ -711,13 +712,13 @@ struct Runner<MopTemplate::Template1>
      */
     inline __attribute__((always_inline)) static void run()
     {
-        TTI_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        hal::detail::run_immediate<TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/)>();
     }
 
     /** @brief Encode @ref run as a MOP instruction. */
-    [[nodiscard]] static constexpr std::uint32_t operation()
+    [[nodiscard]] static constexpr hal::Operation operation()
     {
-        return TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
+        return hal::detail::make_operation(TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/));
     }
 };
 

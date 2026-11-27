@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "lltt.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::replay
@@ -167,27 +168,27 @@ inline __attribute__((always_inline)) void run(const BufferRange range)
  * @brief Encode a compile-time-selected replay operation without issuing it.
  *
  * @tparam Range: Buffer range the encoded operation will replay.
- * @note Use the result where another expander accepts an encoded operation, such as a MOP field.
+ * @note Use the result where another expander accepts an encoded operation, such as a MOP field, or issue it later with hal::run.
  */
 template <BufferRange Range>
-constexpr std::uint32_t get_operation()
+constexpr hal::Operation get_operation()
 {
     static_assert(detail::is_valid(Range), "Replay range requires count >= 1 and start + count <= 32");
 
-    return detail::get_operation(Range);
+    return hal::detail::make_operation(detail::get_operation(Range));
 }
 
 /**
  * @brief Encode a runtime-selected replay operation without issuing it.
  *
  * @param range: Buffer range the encoded operation will replay.
- * @note Use the result where another expander accepts an encoded operation, such as a MOP field.
+ * @note Use the result where another expander accepts an encoded operation, such as a MOP field, or issue it later with hal::run.
  * @note Usable in constant expressions, where an invalid range is a compile error.
  */
-constexpr __attribute__((always_inline)) std::uint32_t get_operation(const BufferRange range)
+constexpr __attribute__((always_inline)) hal::Operation get_operation(const BufferRange range)
 {
     hal::detail::require(detail::is_valid(range), "Replay range requires count >= 1 and start + count <= 32");
-    return detail::get_operation(range);
+    return hal::detail::make_operation(detail::get_operation(range));
 }
 
 } // namespace hal::replay

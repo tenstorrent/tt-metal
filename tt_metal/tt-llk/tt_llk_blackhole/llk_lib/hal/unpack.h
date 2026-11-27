@@ -8,6 +8,7 @@
 
 #include "ckernel.h"
 #include "utils/helpers.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::unpack
@@ -465,18 +466,6 @@ constexpr std::uint32_t row_start_cache_flush_operation(const Engine engine, con
         0 /*Last*/);
 }
 
-// Known encodings issue as immediates; runtime-selected ones go through the instruction buffer.
-inline __attribute__((always_inline)) void issue(const std::uint32_t encoding)
-{
-    if (__builtin_constant_p(encoding))
-    {
-        TTI_INSN(encoding);
-    }
-    else
-    {
-        TT_INSN(encoding);
-    }
-}
 } // namespace detail
 
 /** @brief Return whether data-transfer options can be encoded without truncation on some unpacker. */
@@ -522,7 +511,7 @@ public:
          * @tparam Options: Data-transfer options.
          */
         template <Transfer Options>
-        [[nodiscard]] constexpr std::uint32_t transfer() const;
+        [[nodiscard]] constexpr hal::Operation transfer() const;
 
         /**
          * @brief Encode a runtime-selected data transfer.
@@ -530,7 +519,7 @@ public:
          * @param options: Data-transfer options.
          * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
          */
-        [[nodiscard]] constexpr std::uint32_t transfer(Transfer options) const;
+        [[nodiscard]] constexpr hal::Operation transfer(Transfer options) const;
 
         /**
          * @brief Encode a source-bank clear.
@@ -538,7 +527,7 @@ public:
          * @tparam Options: Clear value, source handoff and wait.
          */
         template <Clear Options>
-        [[nodiscard]] constexpr std::uint32_t clear() const;
+        [[nodiscard]] constexpr hal::Operation clear() const;
 
         /**
          * @brief Encode a runtime-selected source-bank clear.
@@ -546,10 +535,10 @@ public:
          * @param options: Clear value, source handoff and wait.
          * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
          */
-        [[nodiscard]] constexpr std::uint32_t clear(Clear options) const;
+        [[nodiscard]] constexpr hal::Operation clear(Clear options) const;
 
         /** @brief Encode an increment of the issuing thread's configuration context counter. */
-        [[nodiscard]] constexpr std::uint32_t increment_context_counter() const;
+        [[nodiscard]] constexpr hal::Operation increment_context_counter() const;
 
         /**
          * @brief Encode a flush of the compressed-row-start cache.
@@ -557,14 +546,14 @@ public:
          * @tparam Scope: Cache entries to clear.
          */
         template <CacheScope Scope>
-        [[nodiscard]] constexpr std::uint32_t flush_row_start_cache() const;
+        [[nodiscard]] constexpr hal::Operation flush_row_start_cache() const;
 
         /**
          * @brief Encode a runtime-selected flush of the compressed-row-start cache.
          *
          * @param scope: Cache entries to clear.
          */
-        [[nodiscard]] constexpr std::uint32_t flush_row_start_cache(CacheScope scope) const;
+        [[nodiscard]] constexpr hal::Operation flush_row_start_cache(CacheScope scope) const;
     };
 
     Engine engine; ///< Unpacker that executes the operations.
@@ -583,7 +572,7 @@ public:
     template <Transfer Options>
     inline __attribute__((always_inline)) void transfer() const
     {
-        detail::issue(operation().transfer<Options>());
+        hal::run(operation().transfer<Options>());
     }
 
     /**
@@ -594,7 +583,7 @@ public:
      */
     inline __attribute__((always_inline)) void transfer(const Transfer options) const
     {
-        detail::issue(operation().transfer(options));
+        hal::run(operation().transfer(options));
     }
 
     /**
@@ -605,7 +594,7 @@ public:
     template <Clear Options>
     inline __attribute__((always_inline)) void clear() const
     {
-        detail::issue(operation().clear<Options>());
+        hal::run(operation().clear<Options>());
     }
 
     /**
@@ -616,13 +605,13 @@ public:
      */
     inline __attribute__((always_inline)) void clear(const Clear options) const
     {
-        detail::issue(operation().clear(options));
+        hal::run(operation().clear(options));
     }
 
     /** @brief Increment the issuing thread's configuration context counter. */
     inline __attribute__((always_inline)) void increment_context_counter() const
     {
-        detail::issue(operation().increment_context_counter());
+        hal::run(operation().increment_context_counter());
     }
 
     /**
@@ -633,7 +622,7 @@ public:
     template <CacheScope Scope>
     inline __attribute__((always_inline)) void flush_row_start_cache() const
     {
-        detail::issue(operation().flush_row_start_cache<Scope>());
+        hal::run(operation().flush_row_start_cache<Scope>());
     }
 
     /**
@@ -643,7 +632,7 @@ public:
      */
     inline __attribute__((always_inline)) void flush_row_start_cache(const CacheScope scope) const
     {
-        detail::issue(operation().flush_row_start_cache(scope));
+        hal::run(operation().flush_row_start_cache(scope));
     }
 };
 
@@ -654,58 +643,58 @@ inline constexpr Unpacker Unpacker0 {Engine::Unpacker0};
 inline constexpr Unpacker Unpacker1 {Engine::Unpacker1};
 
 template <Transfer Options>
-constexpr std::uint32_t Unpacker::Operations::transfer() const
+constexpr hal::Operation Unpacker::Operations::transfer() const
 {
     static_assert(is_valid(Options), "invalid UNPACR data-transfer options");
     detail::validate(engine);
     detail::validate(engine, Options);
-    return detail::transfer_operation(engine, Options);
+    return hal::detail::make_operation(detail::transfer_operation(engine, Options));
 }
 
-constexpr std::uint32_t Unpacker::Operations::transfer(const Transfer options) const
+constexpr hal::Operation Unpacker::Operations::transfer(const Transfer options) const
 {
     detail::validate(engine);
     detail::validate(options);
     detail::validate(engine, options);
-    return detail::transfer_operation(engine, options);
+    return hal::detail::make_operation(detail::transfer_operation(engine, options));
 }
 
 template <Clear Options>
-constexpr std::uint32_t Unpacker::Operations::clear() const
+constexpr hal::Operation Unpacker::Operations::clear() const
 {
     static_assert(is_valid(Options), "invalid UNPACR_NOP source-clear options");
     detail::validate(engine);
     detail::validate(engine, Options);
-    return detail::clear_operation(engine, Options);
+    return hal::detail::make_operation(detail::clear_operation(engine, Options));
 }
 
-constexpr std::uint32_t Unpacker::Operations::clear(const Clear options) const
+constexpr hal::Operation Unpacker::Operations::clear(const Clear options) const
 {
     detail::validate(engine);
     detail::validate(options);
     detail::validate(engine, options);
-    return detail::clear_operation(engine, options);
+    return hal::detail::make_operation(detail::clear_operation(engine, options));
 }
 
-constexpr std::uint32_t Unpacker::Operations::increment_context_counter() const
+constexpr hal::Operation Unpacker::Operations::increment_context_counter() const
 {
     detail::validate(engine);
-    return detail::context_counter_increment_operation(engine);
+    return hal::detail::make_operation(detail::context_counter_increment_operation(engine));
 }
 
 template <CacheScope Scope>
-constexpr std::uint32_t Unpacker::Operations::flush_row_start_cache() const
+constexpr hal::Operation Unpacker::Operations::flush_row_start_cache() const
 {
     static_assert(detail::is_valid(Scope), "UNPACR row-start-cache scope must be CurrentThread or AllEntries");
     detail::validate(engine);
-    return detail::row_start_cache_flush_operation(engine, Scope);
+    return hal::detail::make_operation(detail::row_start_cache_flush_operation(engine, Scope));
 }
 
-constexpr std::uint32_t Unpacker::Operations::flush_row_start_cache(const CacheScope scope) const
+constexpr hal::Operation Unpacker::Operations::flush_row_start_cache(const CacheScope scope) const
 {
     detail::validate(engine);
     hal::detail::require(detail::is_valid(scope), "UNPACR row-start-cache scope must be CurrentThread or AllEntries");
-    return detail::row_start_cache_flush_operation(engine, scope);
+    return hal::detail::make_operation(detail::row_start_cache_flush_operation(engine, scope));
 }
 
 /**
@@ -753,10 +742,10 @@ inline constexpr __attribute__((always_inline)) std::uint32_t clear_both_banks_o
  * @param unpacker: Unpacker whose source register is cleared.
  */
 template <BothBanksClear Options>
-[[nodiscard]] constexpr std::uint32_t clear_both_banks_operation(const Unpacker unpacker)
+[[nodiscard]] constexpr hal::Operation clear_both_banks_operation(const Unpacker unpacker)
 {
     static_assert(unpack::detail::is_valid(Options.value), "invalid UNPACR_NOP both-bank clear options");
-    return detail::clear_both_banks_operation(unpacker.engine, Options);
+    return hal::detail::make_operation(detail::clear_both_banks_operation(unpacker.engine, Options));
 }
 
 /**
@@ -766,9 +755,9 @@ template <BothBanksClear Options>
  * @param options: Clear value.
  * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
-[[nodiscard]] inline constexpr __attribute__((always_inline)) std::uint32_t clear_both_banks_operation(const Unpacker unpacker, const BothBanksClear options)
+[[nodiscard]] inline constexpr __attribute__((always_inline)) hal::Operation clear_both_banks_operation(const Unpacker unpacker, const BothBanksClear options)
 {
-    return detail::clear_both_banks_operation(unpacker.engine, options);
+    return hal::detail::make_operation(detail::clear_both_banks_operation(unpacker.engine, options));
 }
 
 /**
@@ -780,7 +769,7 @@ template <BothBanksClear Options>
 template <BothBanksClear Options>
 inline __attribute__((always_inline)) void clear_both_banks(const Unpacker unpacker)
 {
-    unpack::detail::issue(clear_both_banks_operation<Options>(unpacker));
+    hal::run(clear_both_banks_operation<Options>(unpacker));
 }
 
 /**
@@ -792,7 +781,7 @@ inline __attribute__((always_inline)) void clear_both_banks(const Unpacker unpac
  */
 inline __attribute__((always_inline)) void clear_both_banks(const Unpacker unpacker, const BothBanksClear options)
 {
-    unpack::detail::issue(clear_both_banks_operation(unpacker, options));
+    hal::run(clear_both_banks_operation(unpacker, options));
 }
 } // namespace experimental
 

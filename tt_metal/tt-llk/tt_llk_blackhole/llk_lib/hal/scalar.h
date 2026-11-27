@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "utils/gpr.h"
 #include "utils/helpers.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 /**
@@ -338,12 +339,11 @@ inline __attribute__((always_inline)) void emit_binary(const hal::Gpr<Destinatio
 {
     if constexpr (all_static_operands<Destination, Lhs, Rhs>)
     {
-        constexpr std::uint32_t operation = static_binary_operation<Operation, Destination, Lhs, Rhs>();
-        TTI_INSN(operation);
+        hal::detail::run_immediate<static_binary_operation<Operation, Destination, Lhs, Rhs>()>();
     }
     else
     {
-        TT_INSN(binary_operation<Operation>(destination, lhs, rhs));
+        hal::run(hal::detail::make_operation(binary_operation<Operation>(destination, lhs, rhs)));
     }
 }
 
@@ -403,9 +403,9 @@ public:
     {
     }
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
-        return binary_operation<Operation>(destination, lhs, rhs);
+        return hal::detail::make_operation(binary_operation<Operation>(destination, lhs, rhs));
     }
 
     hal::Gpr<Destination> destination;
@@ -419,10 +419,10 @@ public:
 template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set(const hal::Gpr<Index>)
 {
-    TTI_SETDMAREG(
-        detail::DMAReg::Payload::IMMEDIATE, Value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
-    TTI_SETDMAREG(
-        detail::DMAReg::Payload::IMMEDIATE, Value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
+    hal::detail::run_immediate<TT_OP_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/))>();
+    hal::detail::run_immediate<TT_OP_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/))>();
 }
 
 /** @brief Set a GPR to a runtime 32-bit value. */
@@ -431,8 +431,10 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
 {
     detail::validate_gpr(destination);
     const std::uint32_t index = detail::OperandTraits<hal::Gpr<Index>>::value(destination);
-    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u /*RegIndex16b*/);
-    TT_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u /*RegIndex16b*/);
+    hal::run(hal::detail::make_operation(
+        TT_OP_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value & 0xffffu /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u /*RegIndex16b*/)));
+    hal::run(hal::detail::make_operation(
+        TT_OP_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, value >> 16 /*Payload_SigSel*/, detail::DMAReg::Mode::IMMEDIATE, index * 2u + 1u /*RegIndex16b*/)));
 }
 
 /** @brief Set the low half of a GPR to a compile-time 16-bit value. */
@@ -440,14 +442,15 @@ template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index>)
 {
     static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/));
+    hal::detail::run_immediate<TT_OP_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(false /*high*/))>();
 }
 
 /** @brief Set the low half of a GPR to a runtime 16-bit value. */
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_low(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    TT_INSN(detail::set_half_operation<false /*High*/>(destination, immediate(value)));
+    hal::run(hal::detail::make_operation(detail::set_half_operation<false /*High*/>(destination, immediate(value))));
 }
 
 /** @brief Set the high half of a GPR to a compile-time 16-bit value. */
@@ -455,14 +458,15 @@ template <std::uint32_t Value, std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index>)
 {
     static_assert(Value < (1u << 16), "GPR half value must fit in 16 bits");
-    TTI_SETDMAREG(detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/));
+    hal::detail::run_immediate<TT_OP_SETDMAREG(
+        detail::DMAReg::Payload::IMMEDIATE, Value, detail::DMAReg::Mode::IMMEDIATE, detail::half_index<Index>(true /*high*/))>();
 }
 
 /** @brief Set the high half of a GPR to a runtime 16-bit value. */
 template <std::uint32_t Index>
 inline __attribute__((always_inline)) void set_high(const hal::Gpr<Index> destination, const std::uint32_t value)
 {
-    TT_INSN(detail::set_half_operation<true /*High*/>(destination, immediate(value)));
+    hal::run(hal::detail::make_operation(detail::set_half_operation<true /*High*/>(destination, immediate(value))));
 }
 
 /** @brief Add two operands with unsigned 32-bit wraparound. */
@@ -540,9 +544,9 @@ public:
     {
     }
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
-        return detail::set_half_operation<false /*High*/>(destination, value);
+        return hal::detail::make_operation(detail::set_half_operation<false /*High*/>(destination, value));
     }
 
     hal::Gpr<Index> destination;
@@ -558,9 +562,9 @@ public:
     {
     }
 
-    constexpr std::uint32_t operation() const
+    constexpr hal::Operation operation() const
     {
-        return detail::set_half_operation<true /*High*/>(destination, value);
+        return hal::detail::make_operation(detail::set_half_operation<true /*High*/>(destination, value));
     }
 
     hal::Gpr<Index> destination;

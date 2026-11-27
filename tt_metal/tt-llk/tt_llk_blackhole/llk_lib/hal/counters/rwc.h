@@ -12,6 +12,7 @@
 #include <cstdint>
 
 #include "../utils/helpers.h"
+#include "../utils/operation.h"
 #include "../utils/validate.h"
 #include "ckernel.h"
 
@@ -168,7 +169,7 @@ public:
      *       need SETRWC and INCRWC, so issue them with set(). Invalid descriptors fail constant
      *       evaluation, or LLK_ASSERT at runtime.
      */
-    [[nodiscard]] constexpr std::uint32_t operation() const;
+    [[nodiscard]] constexpr hal::Operation operation() const;
 };
 
 namespace detail
@@ -383,14 +384,14 @@ inline __attribute__((always_inline)) constexpr std::uint32_t incrwc(const MathC
 
 } // namespace detail
 
-inline constexpr __attribute__((always_inline)) std::uint32_t MathCounter::operation() const
+inline constexpr __attribute__((always_inline)) hal::Operation MathCounter::operation() const
 {
     const detail::Instr issued = detail::plan(*this);
     hal::detail::require(
         issued != (detail::Instr::Setrwc | detail::Instr::Incrwc),
         "MathCounter::operation() encodes one instruction, but this descriptor needs SETRWC and INCRWC; issue it with counters::set()");
     hal::detail::require(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
-    return issued == detail::Instr::Setrwc ? detail::setrwc(*this, issued) : detail::incrwc(*this, issued);
+    return hal::detail::make_operation(issued == detail::Instr::Setrwc ? detail::setrwc(*this, issued) : detail::incrwc(*this, issued));
 }
 
 /**
@@ -406,13 +407,11 @@ inline __attribute__((always_inline)) void set()
     static_assert(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
     if constexpr (detail::issues(issued, detail::Instr::Setrwc))
     {
-        constexpr std::uint32_t word = detail::setrwc(Descriptor, issued);
-        TTI_INSN(word);
+        hal::detail::run_immediate<detail::setrwc(Descriptor, issued)>();
     }
     if constexpr (detail::issues(issued, detail::Instr::Incrwc))
     {
-        constexpr std::uint32_t word = detail::incrwc(Descriptor, issued);
-        TTI_INSN(word);
+        hal::detail::run_immediate<detail::incrwc(Descriptor, issued)>();
     }
 }
 
@@ -430,11 +429,11 @@ inline __attribute__((always_inline)) void set(const MathCounter descriptor)
     hal::detail::require(issued != detail::Instr::None, "math-counter descriptor must update a counter, flip a bank, or clear the fidelity phase");
     if (detail::issues(issued, detail::Instr::Setrwc))
     {
-        TT_INSN(detail::setrwc(descriptor, issued));
+        hal::run(hal::detail::make_operation(detail::setrwc(descriptor, issued)));
     }
     if (detail::issues(issued, detail::Instr::Incrwc))
     {
-        TT_INSN(detail::incrwc(descriptor, issued));
+        hal::run(hal::detail::make_operation(detail::incrwc(descriptor, issued)));
     }
 }
 
