@@ -45,6 +45,8 @@ import ttnn
 
 VERSION = "v0"
 CAPTURE = None  # the active TeacherCapture, None when K3_CAPTURE_DIR is unset
+LM_HEAD = "lm_head"  # the lm_head_in point's "layer" (written to <run>/lm_head/)
+PAUSED = False  # inside `paused()`: the runtime's warm-up, recorded by no hook (capture or logits)
 
 # Layouts of a tapped device tensor (per chip: [..., rows, cols]):
 RES = "res"  # [1, 1, S/SP, K/TP]: rows over SP, columns over TP
@@ -104,13 +106,12 @@ class paused:
     """`with capture.paused():` - forwards inside record nothing (the runtime's warm-up)."""
 
     def __enter__(self):
-        self.cap = CAPTURE
-        if self.cap is not None:
-            self.prev, self.cap.paused = self.cap.paused, True
+        global PAUSED
+        self.prev, PAUSED = PAUSED, True
 
     def __exit__(self, *exc):
-        if self.cap is not None:
-            self.cap.paused = self.prev
+        global PAUSED
+        PAUSED = self.prev
 
 
 def finish():
@@ -122,6 +123,10 @@ def finish():
 
 
 atexit.register(finish)
+
+
+def _key(layer_idx):
+    return layer_idx if layer_idx == LM_HEAD else int(layer_idx)
 
 
 def _commit() -> str:
@@ -166,13 +171,14 @@ class TeacherCapture:
         self.chunk = int(cfg.chunk_size)
         self.first, self.num = int(cfg.first_layer_idx), int(cfg.num_layers)
         self.model_cfg = cfg.model_cfg
-        want = [int(x) for x in os.environ.get("K3_CAPTURE_LAYERS", "").split(",") if x.strip()]
-        self.layers = set(want) if want else set(range(self.first, self.first + self.num))
+        want = [x.strip() for x in os.environ.get("K3_CAPTURE_LAYERS", "").split(",") if x.strip()]
+        self.layers = {x if x == LM_HEAD else int(x) for x in want} if want else set(range(self.first, self.first + self.num))
+        if not want and cfg.is_last_rank:
+            self.layers.add(LM_HEAD)
         self.run_id = os.environ.get("K3_CAPTURE_RUN") or time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         self.dir = root / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
         self.raw = os.environ.get("K3_CAPTURE_RAW", "") not in ("", "0")
-        self.paused = False
         self.grams: dict = {}  # (layer, point) -> _Gram
         self.moe_files: dict = {}  # layer -> {name: open file}
         self.counts: dict = {}  # layer -> int64 [E]
@@ -213,7 +219,7 @@ class TeacherCapture:
         self.valid = None
 
     def wants(self, layer_idx) -> bool:
-        return self.valid is not None and layer_idx is not None and int(layer_idx) in self.layers
+        return self.valid is not None and layer_idx is not None and _key(layer_idx) in self.layers
 
     # --- device -> host ---
 
@@ -255,7 +261,7 @@ class TeacherCapture:
         t0 = time.time()
         x = self.to_host(t, layout)
         self._t_host_chunk += time.time() - t0
-        self._add(int(layer_idx), point, x, str(t.dtype))
+        self._add(_key(layer_idx), point, x, str(t.dtype))
 
     def tap_q_nope(self, layer_idx, tt_q, head_dim: int, nope_dim: int):
         """mla_kvb1_in: q_b's output [1, 1, S/SP, H/TP * head_dim] (each head's nope columns first) as the per-head
@@ -271,7 +277,7 @@ class TeacherCapture:
     def tap_host(self, layer_idx, point: str, x: torch.Tensor, src_dtype: str):
         """A capture point computed on the host (already [valid rows, K])."""
         if self.wants(layer_idx):
-            self._add(int(layer_idx), point, x, src_dtype)
+            self._add(_key(layer_idx), point, x, src_dtype)
 
     def _add(self, layer: int, point: str, x: torch.Tensor, src_dtype: str):
         key = (layer, point)
@@ -284,8 +290,11 @@ class TeacherCapture:
         if len(self._pending) > 8:  # (bounded host memory: wait for the oldest)
             self._pending.pop(0).result()
 
-    def _layer_tmp(self, layer: int) -> Path:
-        d = self.dir / f"layer_{layer:02d}.tmp"
+    def _name(self, layer) -> str:
+        return LM_HEAD if layer == LM_HEAD else f"layer_{layer:02d}"
+
+    def _layer_tmp(self, layer) -> Path:
+        d = self.dir / f"{self._name(layer)}.tmp"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -306,6 +315,20 @@ class TeacherCapture:
             from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import block_order_perm
 
             self._perm = block_order_perm(self.mesh, ffn.dims.num_experts // (R * C), ffn.options.sp_axis)
+        if os.environ.get("K3_CAPTURE_DEBUG") and not getattr(self, "_debug_done", set()) & {layer}:
+            # (debug: the raw per-chip MoE head / combine outputs of this layer's first chunk)
+            self._debug_done = getattr(self, "_debug_done", set()) | {layer}
+            torch.save(
+                {
+                    "dispatch": [ttnn.to_torch(d) for d in ttnn.get_device_tensors(head.dispatch_buffer)],
+                    "routing_rows": [ttnn.to_torch(d) for d in ttnn.get_device_tensors(head.routing_rows)],
+                    "y_own": self._y_own_raw,
+                    "row_blocks": int(block.row_blocks),
+                    "pad_rows": int(block.pad_rows),
+                    "mesh": self.shape,
+                },
+                self.dir / f"debug_moe_L{layer}.pt",
+            )
         words = self._owner_rows(head.routing_rows, block, 2 * K)  # [chunk, 2K] uint16 (ids | bf16 weights)
         ids_b = words[:, :K].to(torch.int64) & 0xFFFF
         ids = self._perm[ids_b.clamp(max=self._perm.numel() - 1)].to(torch.int16)
@@ -341,6 +364,8 @@ class TeacherCapture:
         if self.moe_layer is None or not self.wants(self.moe_layer):
             return
         t0 = time.time()
+        if os.environ.get("K3_CAPTURE_DEBUG"):
+            self._y_own_raw = [ttnn.to_torch(d) for d in ttnn.get_device_tensors(y_own)]
         self._y_own = (self._owner_rows(y_own, block, int(y_own.shape[-1])), str(y_own.dtype))
         self._t_host_chunk += time.time() - t0
 
@@ -425,7 +450,7 @@ class TeacherCapture:
         for files in self.moe_files.values():
             for f in files.values():
                 f.close()
-        layers = sorted({k[0] for k in self.grams} | set(self.moe_files))
+        layers = sorted({k[0] for k in self.grams} | set(self.moe_files), key=lambda l: (isinstance(l, str), str(l).zfill(3)))
         written = []
         for layer in layers:
             d = self._layer_tmp(layer)
@@ -470,7 +495,7 @@ class TeacherCapture:
                 width = (d / "moe_x.bf16").stat().st_size // (2 * max(n, 1))
                 meta["files"]["moe_x.bf16"]["shape"] = [n, int(width)]
             (d / "meta.json").write_text(json.dumps(meta, indent=1))
-            final = self.dir / f"layer_{layer:02d}"
+            final = self.dir / self._name(layer)
             if final.exists():
                 shutil.rmtree(final)
             d.rename(final)
@@ -499,12 +524,16 @@ class TeacherCapture:
         (self.dir / "run.json").write_text(json.dumps(run, indent=1))
         logger.warning(f"K3_CAPTURE: wrote layers {written} to {self.dir}")
 
-    def _kind(self, layer: int) -> str:
+    def _kind(self, layer) -> str:
+        if layer == LM_HEAD:
+            return LM_HEAD
         if layer in self.model_cfg.mla_layer_ids():
             return "mla"
         return "kda_dense0" if layer < self.model_cfg.NUM_DENSE_LAYERS else "kda"
 
-    def _tensor_map(self, layer: int) -> dict:
+    def _tensor_map(self, layer) -> dict:
+        if layer == LM_HEAD:
+            return {"lm_head.weight": "lm_head_in"}
         m = dict(_MLA_MAP if self._kind(layer) == "mla" else _KDA_MAP)
         m.update(_MLP0_MAP if layer < self.model_cfg.NUM_DENSE_LAYERS else _MOE_MAP)
         return {f"model.layers.{layer}.{k}": v for k, v in m.items()}

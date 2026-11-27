@@ -41,6 +41,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
 
         capture.start(self)  # (K3_CAPTURE_DIR set: the GPTQ teacher capture; else nothing)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import logits
+
+        logits.start(self)  # (K3_LOGITS_DIR set, last rank: every position's logits; else nothing)
 
     def _accuracy_state_dict(self) -> dict:
         """K3_ACC_BF16_WEIGHTS (tt/kimi_k3/accuracy.py): a cache built without the knob holds no bf16 attention
@@ -372,13 +375,23 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         # Validate before replaying a trace. Device-only metadata must satisfy the same
         # aligned-start, nonempty-interval contract.
         validate_kda_bounds(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture, logits
 
-        if capture.CAPTURE is None or capture.CAPTURE.paused:
+        cap, lg = (None, None) if capture.PAUSED else (capture.CAPTURE, logits.LOGITS)
+        if cap is None and lg is None:
             return super().prefill_chunk(*args, **kwargs)
-        capture.CAPTURE.begin_chunk(bound.arguments.get("actual_start"), bound.arguments.get("actual_end"))
+        start, end = bound.arguments.get("actual_start"), bound.arguments.get("actual_end")
+        for hook in (cap, lg):
+            if hook is not None:
+                hook.begin_chunk(start, end)
         out = super().prefill_chunk(*args, **kwargs)
-        capture.CAPTURE.end_chunk()
+        if self.config.is_last_rank and self.model.norm is not None:
+            if cap is not None:  # lm_head_in: the final norm's output
+                cap.tap(capture.LM_HEAD, "lm_head_in", out)
+            if lg is not None:
+                lg.write(out)
+        if cap is not None:
+            cap.end_chunk()
         return out
 
     def prefill_forward(self, input_tensor, kv_caches, chunks, *args, **kwargs):
