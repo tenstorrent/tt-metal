@@ -449,7 +449,7 @@ class Flux2Pipeline:
         resolutions: Sequence[tuple[int, int]] = _DEFAULT_RESOLUTIONS,
         is_fsdp: bool = False,
         dynamic_load: bool = False,
-        trace_warmup: bool = True,
+        trace_warmup: bool = False,
         checkpoint_name: str = "black-forest-labs/FLUX.2-dev",
         vae_use_conv3d: bool = False,
         shard_prompt: bool = True,
