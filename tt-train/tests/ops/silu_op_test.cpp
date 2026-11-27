@@ -96,12 +96,17 @@ static void CompareKernelVsReferenceWithShape(const std::vector<uint32_t>& shape
 }  // namespace
 
 // ============================================================================
-// Section 2: ops::silu vs the float64 reference on a multi-core shape
+// Section 2: ops::silu vs the float64 reference on a multi-core shape and a padded one
 // ============================================================================
 
 // NanoLlama-like shape, [B, N, S, C] = [2, 1, 64, 512]: 64 tiles, spread over several cores.
 TEST_F(SiLUOpTest, SiLU_Compare_NanoLlama_Shape) {
     CompareKernelVsReferenceWithShape({2, 1, 64, 512});
+}
+
+// [B, N, S, C] = [4, 1, 20, 5]: neither S nor C is a multiple of 32, so every tile is mostly padding.
+TEST_F(SiLUOpTest, SiLU_Compare_Padded_Shape) {
+    CompareKernelVsReferenceWithShape({4, 1, 20, 5});
 }
 
 // ============================================================================

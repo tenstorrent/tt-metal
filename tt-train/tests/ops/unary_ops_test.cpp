@@ -63,17 +63,6 @@ void load_random_data_from_os(std::span<float> data) {
     });
 }
 
-// SiLU: x * sigmoid(x)
-xt::xarray<float> silu_reference(const xt::xarray<float>& x) {
-    return x / (1.0F + xt::exp(-x));
-}
-
-// d/dx of SiLU: sigmoid(x) * (1 + x * sigmoid(-x))
-xt::xarray<float> silu_grad_reference(const xt::xarray<float>& x) {
-    xt::xarray<float> sigmoid = 1.0F / (1.0F + xt::exp(-x));
-    return sigmoid * (1.0F + x / (1.0F + xt::exp(x)));
-}
-
 // GELU-related constants (compare to the ones in sfpu kernels)
 constexpr float kSqrt2 = 1.41421356237309504880F;
 constexpr float kInvSqrt2Pi = 0.3989422804014327F;   // 1 / sqrt(2 * pi)
@@ -198,26 +187,6 @@ TEST_F(UnaryOpsTest, Clip) {
     // grad passes through where lo <= x <= hi, zero otherwise
     xt::xarray<float> expected_grad = {{{{0.F, 1.F, 1.F, 0.F}}}};
     EXPECT_TRUE(xt::allclose(grad, expected_grad));
-}
-
-TEST_F(UnaryOpsTest, Silu) {
-    auto* device = &autograd::ctx().get_device();
-
-    auto N = 4;
-    auto C = 1;
-    auto H = 20;
-    auto W = 5;
-
-    // Load random data from OS using getrandom and copy into tensor
-    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
-    load_random_data_from_os(std::span{data.data(), data.size()});
-
-    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
-    auto result = silu(tensor_ptr);
-    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), silu_reference(data), 8e-3F, 2e-2F));
-
-    result->backward();
-    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), silu_grad_reference(data), 8e-3F, 2e-2F));
 }
 
 TEST_F(UnaryOpsTest, Gelu) {
