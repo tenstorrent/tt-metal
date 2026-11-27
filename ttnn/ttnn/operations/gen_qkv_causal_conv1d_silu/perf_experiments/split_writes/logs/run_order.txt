@@ -1,0 +1,14 @@
+# one program run per test, in this order (test_perf[variant-case] / test_ablation_writes_only[variant-case])
+r1_004_sweep      004: base sw0 s2 s4 s6 s8 s4np s6np
+r2_004_quartic    004: base_q s2_q s4_q s6_q s8_q base
+r3_004_quartic    004: s5_q s4_q s3_q base_q
+r4_004_dyn        004: dyn_q base_q dynnp_q dyn base
+r5_004_grad       004: g26_q g36_q g17_q g35_q s4_q base_q
+r6_004_split      004: s4sp16_q base_sp16_q s4sp20_q s4sp12_q s3sp16_q s5sp16_q s2sp8_q
+r7_004_ovf        004: ovf_q base_q s4_q ovf
+r8_domain         see r8_domain.labels (base s4 ovf per case)
+r9_band_pass2     per case s4 base: 001 002 005 003 006 011 019
+r9_band_pass3     per case base s4: 001 002 005 003 006 011 019
+r10_001           001: sw0 s4np base s4
+r11_writes_only   writes-only ablation: 004 base s4 s2 s6 ovf g26, then 020 same order
+r12_grad_parity   grad/004 base/004 base_q/004 grad_q/004 grad/003 base/003 base/001 grad/001

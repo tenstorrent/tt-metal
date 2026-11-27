@@ -209,3 +209,130 @@
 - **Tests added**:
   - `test_silu_body.py` (7): the default-body rule, including fp32 DEST, and an isolated-SiLU accuracy test (taps 0,0,0,1, so y = x exactly) for both bodies on a one-row (001) and a multi-row (020) plan, with clamp extremes.
   - `test_perf_r3.py`: the measurement harness (skipped unless `GQKV_PERF_R3=1`; `GQKV_ZONES=1` adds DM zones).
+
+## Perf 1 — Perf tournament round 1: measured breakdown, 2 experiments, none graduated
+- **Date**: 2026-11-26/27. BH 11×10 (110 cores), device kernel µs, one fresh-cache profiled run per variant unless noted. Raw tables: `perf_experiments/perf1_coordinator_measurements.md`.
+- **Focus shape**: all four `target` cases carry a PERF FOCUS note.
+  - **conv1d-004** (prefill 4096) is the primary target. It is the only one with an unmet numeric goal: stretch 117.13 µs against ~124–131 µs today. Its target, 164 µs, is met.
+  - 001, 002 and 003 are already ~3× under target; they were measured as secondary targets and must not regress.
+  - Every config was measured exactly as flagged: RM input, all DRAM, `compute_kernel_config=None` (HiFi4, 16-bit DEST), bf16.
+- **What shipped**: instrumentation only. The op's math, dataflow and plan are unchanged.
+  - **`ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`** was absent in this tree. It was added with the same content other branches carry (`MaybeDeviceZoneScope` = `DeviceZoneScopedN`), plus a `MAYBE_DEVICE_ZONE_SCOPE_OFF` kernel define that compiles the zones out of a profiled build.
+  - **Permanent stage zones** in every kernel:
+    - reader: `reader_taps_issue`, then per block `reader_rows_reserve` and `reader_halo_issue`, then per tile-row `reader_rows_issue`, `reader_rows_barrier` and `reader_split_wait`; TILE regime `reader_tile_issue`, `reader_untilized_wait`, `reader_slot_copy`;
+    - writer: per served row `writer_split_req_wait`, `writer_split_issue`, `writer_split_barrier`; per output group `writer_out_wait`, `writer_out_issue`, `writer_out_flush`;
+    - compute: per block `compute_rows_wait`, `compute_tilize`, `compute_windows_wait`, `compute_conv_silu`; `compute_untilize` (TILE regime); `compute_taps_wait` once.
+    - Wait, issue and barrier are separate zones throughout. They replace the define-gated `GQKV_ZONES` R_*/W_* zones.
+    - The marker budget holds: at most 108 user markers per RISC on 004, against a budget of 250.
+  - **Measurement-only ablation switches**, compiled out by default: `GQKV_ABLATE_TILIZE` and `GQKV_ABLATE_MAC` (compute), `GQKV_ABLATE_READS` (reader + writer), `GQKV_ABLATE_WRITES` (writer). These join the existing `GQKV_ABLATE_SILU` / `GQKV_SILU_REPEAT`.
+  - **Harness**: `test_perf_t1.py` (env `GQKV_PERF_T1=1`: ablation, `nozones*` and descriptor-constant variants) and `zone_stages.py` (per-RISC span max/p50, per-zone summed duration, marker count).
+- **Zone cost under the profiler (measured; production builds are unaffected)**:
+  - The zones compile to nothing without `PROFILE_KERNEL`, but every device-ns figure is taken with the profiler on.
+  - Same kernels, zones on vs `MAYBE_DEVICE_ZONE_SCOPE_OFF`: 001 6.03 vs 5.71 (+5.4%), 002 6.90 vs 6.49, 003 9.70 vs 9.15 (+6%), 006 5.54 vs 5.10 (+8%), 010 7.27 vs 6.90, 013 6.12 vs 5.83, 005 6.53 vs 6.28, 020 60.8 vs 59.5 (+2%); 016 and 004 within noise.
+  - The cost is ~20–40 ns per zone on the critical path, spread over all three kernels (001: compute 0.09, reader 0.11, writer 0.02 µs).
+  - With the zones off, the op reproduces Refinement 3 (001 5.70 vs 5.80, 003 9.15 vs 9.30, 020 59.5 vs 59.6).
+  - **Compare profiled numbers across this boundary only with the switch.**
+- **Measured breakdown, conv1d-004** (cumulative peel; µs):
+
+  | Variant | µs |
+  |---|---|
+  | full | 131.0 |
+  | − SiLU | 122.9 |
+  | − SiLU − MAC | 110.7 |
+  | − all compute (DM only) | 111.0 |
+  | DM only − reads (writes only) | 75.1 |
+  | sync only | 8.4 |
+  | compute only (no DM) | 108.6 |
+  | compute only − SiLU | 40.4 |
+  | compute only − SiLU − MAC (tilize) | 18.3 |
+  | no reads / no writes | 114.6 / 123.0 |
+  | **faster compute**: − tilize / − MAC / quartic body | **149.2 / 151.2 / 148.8** |
+  | quartic, compute only | 91.9 |
+
+  - **Compute (108.6) and DM (111.0) are balanced**, and the overlapped op is 131.
+  - The pack thread is the busiest compute thread: `compute_conv_silu` 93 µs + `compute_tilize` 24 µs per core. That is SiLU's SFPU pass (68 µs, library body), 4 window packs per output tile, and the output pack.
+  - **Every variant that makes compute faster makes the op slower** (~150). DM is not at its roofline, and its slack depends on compute pacing it.
+- **Core balance and where DM time goes (004)**:
+  - `*-KERNEL` max/p50: full 1.13, DM-only **1.42** (per-core end 29 → 111 µs), writes-only **1.60** (12.8 µs at the top-left and the bottom row, 75 µs at the bottom-right).
+  - In the writes-only run, `writer_out_issue` spans 4.9 → 65 µs across cores: **the NoC1 DRAM write path is strongly position-unfair**.
+  - The writer RISC (NoC1) also carries 24 of the 32 input rows per tile-row, and serves them only between its output groups. So the reader waits `reader_split_wait` 71 µs (p50) of its ~84 µs span.
+  - The reader's own 8 NoC0 rows (`reader_rows_barrier`) are uniform at 7–12 µs everywhere.
+  - In the full run, the unpack thread's input starvation (`compute_rows_wait`) grows from ~7 µs at the left to 55–58 µs at the bottom-right corner (physical x 14–15, y 8–10).
+- **Other shapes**:
+
+  | Cell | Full | DM only | Writes only | Compute only | Sync only | DM max/p50 |
+  |---|---|---|---|---|---|---|
+  | 020 | 60.8 | 51.8 | 33.3 | 52.5 | 6.2 | 1.34 (writes-only 1.57) |
+  | 003 | 9.69 | 6.75 | 3.86 | 6.05 | 2.62 | — |
+  | 001 | 6.05 | 4.73 | 2.34 | 3.27 | 2.13 | — |
+
+  On the one-tile-row cells, read → compute → write serialize through the single tile-row, behind a ~2.1–2.6 µs sync/launch floor.
+- **Roofline gate**: the `noc_estimate` CLI is not built in this tree (it is a `--build-tests` target), so the gate used the spec's DRAM floor.
+  - 004 moves 42 MB, so the floor is 82 µs at 512 GB/s, or ~89–100 µs at the practical 82–92% of peak.
+  - DM-only (111) and writes-only (75 µs, 280 GB/s against a ~41 µs write floor) are **not** at their roofline. Their p50 cores finish at 78 / 47 µs; it is the tail that sets the time.
+- **Ranked bottleneck**:
+  1. NoC1 DRAM writes: position-unfair, and they gate the split reads.
+  2. The writer RISC's input share, serialized behind its writes.
+  3. Pack-thread compute (SiLU SFPU 68 µs, window packs). This is blocked behind DM: faster compute measured slower.
+  4. Decode read request rate (001: 2.4 µs over a 2.1 µs sync floor).
+- **Portfolio floated** (cap: 2 experiments):
+  - **A `split_writes`** (tested): the NCRISC (NoC0), idle ~71 µs per core on 004, writes a share of the q/k/v tiles, so DRAM writes use both NoCs' link sets.
+  - **B `dynamic_split_reads`** (tested): the reader (NoC0) and writer (NoC1) claim each tile-row's sticks dynamically instead of the static 8/24 split.
+  - **C** cross-core tile-row work stealing within a channel group: not tested. The only fetch-and-add is the internal `noc_atomic_read_and_increment`, with no dataflow-API wrapper.
+  - **D** fused tilize + MAC (`unpack_tilizeA_B` into the row-bcast multiply; the deferred `tilize_fused_mac` regime): not tested. It is compute, which measured blocked behind DM.
+  - **E** quartic body on multi-row plans: to re-measure after any DM graduation.
+  - **F** read-wide / compute-narrow pairs for decode: not tested; small absolute gain.
+- **A — `split_writes`** (`perf_experiments/split_writes/`)
+  - **Mechanism**: tile (r, cg) is written by the NCRISC iff `((r + cg)·S) % 8 < S`, with S = 4. The writer stays the single popper of `cb_output_tiles`. The NCRISC shadow-reads the CB's `tiles_received` counter and keeps its own read pointer, flushes its writes, then hands over a token in a new CB 8. Every reader wait becomes a poll that serves ready groups.
+  - Bit-identical on 14 cells; clean under `--dev`.
+  - **Optimizer, on 004**:
+    - library body 123.8 → 123.6 (flat);
+    - quartic body 149.6 → ~130;
+    - the share menu with quartic: S=2 145.7, S=3 143.3, S=5 141.7, S=6 162.1, S=8 175.3;
+    - dynamic and overflow variants 134–170;
+    - writes-only 74.4 → 68.2 (S=2: 61.2).
+  - **Coordinator whole-op A/B in the real op** (two sessions, alternating order; `perf1_coordinator_measurements.md`):
+    - wins: 003 −6.1%, 006 −5.0%, 011 −4.5%;
+    - 004 with the quartic body −14% (129 vs 147–152), but still slower than the library body (~123);
+    - flat: 004 default, 005, 013, 019, 020;
+    - **measured regressions: 016 +6.7%, 012 +5.2%, 001 +3.3%, 010 +2.9%**; 002 +2.2% and 014 +2.3% are at the noise edge.
+  - **Mechanism of the regressions**: on 016 the NCRISC's NoC0 writes are slow only on the top four core rows (3–5 µs vs 0.4 µs elsewhere); on 003 they are 0.2 µs on every core. This is position-dependent NoC0 congestion of the single-row output burst.
+  - **Verdict**: mixed domain, **not graduated**. Wins and regressions are all single-row plans. By tiles per core: w=1 regresses, w=2 is mixed (006 wins, 010 regresses), w=4 wins, w=8 regresses. No predicate that tracks the mechanism separates them. The only principled carve-out (single-row plans) removes every measured win and leaves a change that is flat everywhere it would apply. A guard keyed to the measured cells would be an allow-list of shapes, and graduating unguarded regresses four cells. The graduated version was applied and then reverted; `graduate/split_writes_graduation.diff` holds it.
+- **B — `dynamic_split_reads`** (`perf_experiments/dynamic_split_reads/`)
+  - **Mechanism**: shared L1 claim words per core; the reader claims from the front, the writer from the back while it waits on compute; NoC1 issue/response counters replace the writer's barrier. Bit-identical 76/76.
+  - **Best variant on 004** (reader window 32, writer 8, writer counts its writes): library 124.1 → 127.0 (NULL, noise), quartic 148.7 → 126.4.
+  - **Regressions**: 001 +22%, 002 +15%, 006 +15%, 010 +13%, 013 +15%, 003 +4%; 011, 012 and 020 +2.5–3%. The decode-friendly window (8/8) loses 7–10% on 004.
+  - **Mechanism**: `reader_split_wait` fell 70 → 0.3 µs (p50), but the far corner moved to the NoC1 output writes (packer stalls behind the writer), and the top rows became NoC0 read-starved.
+  - **Verdict**: NULL on the focus shape, REGRESSION on single-row plans; **not graduated**.
+- **Graduated**: none. Whole-op before/after is unchanged by construction: the kernels differ from Refinement 3 only by zones that compile out without the profiler, and zones-off profiled runs reproduce Refinement 3 (see above).
+  - Current profiled numbers with zones on:
+
+    | Cell | µs |
+    |---|---|
+    | 001 | 6.01–6.06 |
+    | 002 | 6.87–6.90 |
+    | 003 | 9.56–9.75 |
+    | 004 | 122.8–131.0 (bimodal: ~123.5 / ~130.5) |
+    | 005 | 6.53–6.68 |
+    | 006 | 5.53–5.62 |
+    | 010 | 7.27–7.33 |
+    | 011 | 11.7 |
+    | 012 | 14.7–14.8 |
+    | 013 | 6.12–6.24 |
+    | 014 | 8.4–8.5 |
+    | 016 | 14.4–14.7 |
+    | 019 | 19.5–19.6 |
+    | 020 | 60.5–60.8 |
+- **Guard set and golden**: golden 21/21 and the op's unit directory (112 passed) are green, with the instrumentation and with the zone kill switch in the header. The guard set covers one representative per path: RM DRAM multi-row (004, 020); RM single-row (001–003, 014, 016); TILE (005, 019); L1 input (006); L1 output (010); fp32 DEST (011); channel-paged history (012); column window (013).
+- **Accuracy**: unchanged (no math or dataflow change shipped). Both experiments were bit-identical to the op.
+- **Round-2 leads**:
+  - **(1)** Combine A and B on multi-row plans with the quartic body. Each optimizer found the other's stage is what remains at the far corner: after split writes, the NoC1 split reads; after dynamic reads, the NoC1 output writes. Each alone takes 004-quartic from ~149 to ~126–130, against ~123 for the library body. Neither helps single-row plans uniformly, so the combination should be designed for the multi-row DM path.
+  - **(2)** A topology-agnostic fairness lever for the spatial tail: cross-core tile-row stealing (idea C).
+  - **(3)** Once DM stops being the tail, the pack-thread compute (idea D, quartic body on multi-row plans).
+  - Note for any round-2 comparison: compare profiled numbers with zones on against zones on.
+
+### Helper bypasses — none
+No raw-LLK or helper-bypassing path graduated this round: the shipped change is instrumentation only.
+For the record, the two non-graduated experiments went below the helpers in data movement, with no helper covering the protocol:
+- A read `cb_output_tiles`' `tiles_received` counter and advanced a private copy of its read pointer. That is a read-only observer of a CB another RISC consumes; no helper offers one, and the single-consumer rule needs it.
+- B read the NoC status registers (read responses received, write acks, issue counters) to track the other RISC's reads.

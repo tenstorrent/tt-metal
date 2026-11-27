@@ -10,8 +10,9 @@ One GenericOpDeviceOperation row per test, in the order given (device kernel ns:
 generated/profiler/reports/<ts>/ops_perf_results_*.csv, or generated/profiler/.logs/cpp_device_perf_report.csv).
 
 A variant is (plan_limits pins incl. the SiLU body, descriptor-constant overrides, kernel defines).
-GQKV_ZONES=1 adds the reader / writer DM-timeline zones (R_* / W_*) to any variant; per-core timelines
-come from generated/profiler/.logs/profile_log_device.csv. Defines enter the
+GQKV_ZONES=1 is a no-op since Perf 1: every kernel carries permanent MaybeDeviceZoneScope stage zones
+(recorded whenever the device profiler is on); per-core timelines come from
+generated/profiler/.logs/profile_log_device.csv (zone_stages.py summarizes them). Defines enter the
 kernel hash, so define-gated ablations never leave stale binaries in the JIT cache. Ablation variants
 produce wrong results by construction and skip the correctness check; every other variant is checked
 against the float64 reference.

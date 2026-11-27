@@ -41,12 +41,19 @@
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
-// Perf diagnosis only (test_perf_r3.py, define GQKV_ZONES): device-profiler zones on the DM timeline.
-#ifdef GQKV_ZONES
-#include "api/debug/kernel_profiler.hpp"
-#define GQKV_ZONE(name) DeviceZoneScopedN(name)
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (MaybeDeviceZoneScope, PERMANENT — perf tournaments rank stages from them; free when the
+// profiler is off): reader_taps_issue (group sender, once), per block reader_rows_reserve (back-pressure
+// from compute), reader_halo_issue; per tile-row reader_rows_issue, reader_rows_barrier (incl. the tap
+// publish on the first row), reader_split_wait (the writer's NoC1 share); TILE regime reader_tile_issue,
+// reader_untilized_wait, reader_slot_copy.
+// Measurement-only ablation (compiled out unless defined; wrong results by construction):
+// GQKV_ABLATE_READS drops the input / history / halo DRAM reads (taps, CB sync and barriers stay).
+#ifdef GQKV_ABLATE_READS
+#define GQKV_READ(...)
 #else
-#define GQKV_ZONE(name)
+#define GQKV_READ(...) noc_async_read(__VA_ARGS__)
 #endif
 
 namespace {
@@ -104,14 +111,14 @@ FORCE_INLINE void read_history_halo(const Accessor& history_acc, uint32_t slot_b
     for (uint32_t r = 0; r < HALO_ROWS; ++r) {
         const uint32_t dst_row = slot_base + r * stick_bytes;
         if constexpr (history_page_channels == 0) {
-            noc_async_read(history_acc.get_noc_addr(r, c0 * elem_bytes), dst_row, stick_bytes);
+            GQKV_READ(history_acc.get_noc_addr(r, c0 * elem_bytes), dst_row, stick_bytes);
         } else {
             constexpr uint32_t P = history_page_channels;
             for (uint32_t c = c0; c < c0 + group_channels;) {
                 const uint32_t page = c / P;
                 const uint32_t in_page = c - page * P;
                 const uint32_t run_end = (page + 1) * P < c0 + group_channels ? (page + 1) * P : c0 + group_channels;
-                noc_async_read(
+                GQKV_READ(
                     history_acc.get_noc_addr(page, (r * P + in_page) * elem_bytes),
                     dst_row + (c - c0) * elem_bytes,
                     (run_end - c) * elem_bytes);
@@ -183,6 +190,7 @@ void kernel_main() {
     cb_reserve_back(cb_tap_tiles, block_ch_tiles);
     const uint32_t tap_base = get_write_ptr(cb_tap_tiles);  // same L1 address on every core of the group
     if (tap_sender) {
+        MaybeDeviceZoneScope("reader_taps_issue");
         issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
             TensorAccessor(tap0_args, tap0_addr), 0, tap_base, ch_group_tile_start);
         issue_tap_rows<block_ch_tiles, tile_bytes, elem_bytes>(
@@ -215,29 +223,33 @@ void kernel_main() {
 
         // ---- load_rows_block: one slot ----
         {
-            GQKV_ZONE("R_RSV");
+            MaybeDeviceZoneScope("reader_rows_reserve");
             cb_reserve_back(cb_rows, slot_sticks);
         }
         const uint32_t slot_base = get_write_ptr(cb_rows);
 
         // Halo sticks [0, 3): tokens block_t0 - 3 .. block_t0 - 1.
         bool halo_from_untilized = false;
-        if (block_seq_start == 0) {
-            read_history_halo<block_ch_tiles, history_page_channels, elem_bytes>(
-                history_acc, slot_base, ch_group_tile_start);
-        } else if (block_idx > 0) {
-            // The previous block is full-height: its last 3 body sticks sit at [32*block_rows, +3).
-            copy_local(noc, prev_slot_base + TILE_DIM * block_rows * stick_bytes, slot_base, HALO_ROWS * stick_bytes);
-        } else if constexpr (!tile_input) {
-            const uint32_t first_token = block_seq_start * TILE_DIM - HALO_ROWS;
-            for (uint32_t r = 0; r < HALO_ROWS; ++r) {
-                noc_async_read(
-                    input_acc.get_noc_addr(first_token + r, input_byte_offset),
-                    slot_base + r * stick_bytes,
-                    stick_bytes);
+        {
+            MaybeDeviceZoneScope("reader_halo_issue");
+            if (block_seq_start == 0) {
+                read_history_halo<block_ch_tiles, history_page_channels, elem_bytes>(
+                    history_acc, slot_base, ch_group_tile_start);
+            } else if (block_idx > 0) {
+                // The previous block is full-height: its last 3 body sticks sit at [32*block_rows, +3).
+                copy_local(
+                    noc, prev_slot_base + TILE_DIM * block_rows * stick_bytes, slot_base, HALO_ROWS * stick_bytes);
+            } else if constexpr (!tile_input) {
+                const uint32_t first_token = block_seq_start * TILE_DIM - HALO_ROWS;
+                for (uint32_t r = 0; r < HALO_ROWS; ++r) {
+                    GQKV_READ(
+                        input_acc.get_noc_addr(first_token + r, input_byte_offset),
+                        slot_base + r * stick_bytes,
+                        stick_bytes);
+                }
+            } else {
+                halo_from_untilized = true;  // rows 29..31 of the extra untilized tile-row t0/32 - 1
             }
-        } else {
-            halo_from_untilized = true;  // rows 29..31 of the extra untilized tile-row t0/32 - 1
         }
 
         if constexpr (!tile_input) {
@@ -251,12 +263,15 @@ void kernel_main() {
                     cb_push_back(cb_split_requests, 1);
                 }
                 {
-                    GQKV_ZONE("R_RD");
+                    MaybeDeviceZoneScope("reader_rows_issue");
                     for (uint32_t j = 0; j < own_rows; ++j) {
                         const uint32_t i = stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % own_rows : j;
-                        noc_async_read(
+                        GQKV_READ(
                             input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
                     }
+                }
+                {
+                    MaybeDeviceZoneScope("reader_rows_barrier");
                     if (taps_pending) {
                         publish_taps_and_barrier();
                     } else {
@@ -264,7 +279,7 @@ void kernel_main() {
                     }
                 }
                 if constexpr (split_rows > 0) {
-                    GQKV_ZONE("R_SPLW");
+                    MaybeDeviceZoneScope("reader_split_wait");
                     cb_wait_front(cb_split_done, 1);
                     cb_pop_front(cb_split_done, 1);
                 }
@@ -276,11 +291,12 @@ void kernel_main() {
             const uint32_t rows_to_untilize = rows_this_block + extra_rows;
             const uint32_t first_tile_row = block_seq_start - extra_rows;
             auto issue_input_tile_row = [&](uint32_t tile_row) {
+                MaybeDeviceZoneScope("reader_tile_issue");
                 cb_reserve_back(cb_input_tiles, block_ch_tiles);
                 const uint32_t dst = get_write_ptr(cb_input_tiles);
                 const uint32_t first_page = tile_row * input_width_tiles + input_col_offset_tiles + ch_group_tile_start;
                 for (uint32_t c = 0; c < block_ch_tiles; ++c) {
-                    noc_async_read(input_acc.get_noc_addr(first_page + c), dst + c * tile_bytes, tile_bytes);
+                    GQKV_READ(input_acc.get_noc_addr(first_page + c), dst + c * tile_bytes, tile_bytes);
                 }
             };
 
@@ -296,7 +312,11 @@ void kernel_main() {
                 if (next_pending) {
                     issue_input_tile_row(first_tile_row + j + 1);  // in flight while we wait on row j
                 }
-                cb_wait_front(cb_untilized_rows, block_ch_tiles);
+                {
+                    MaybeDeviceZoneScope("reader_untilized_wait");
+                    cb_wait_front(cb_untilized_rows, block_ch_tiles);
+                }
+                MaybeDeviceZoneScope("reader_slot_copy");
                 const uint32_t src = get_read_ptr(cb_untilized_rows);
                 if (j < extra_rows) {
                     copy_local(noc, src + (TILE_DIM - HALO_ROWS) * stick_bytes, slot_base, HALO_ROWS * stick_bytes);

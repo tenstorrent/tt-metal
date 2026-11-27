@@ -27,12 +27,22 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-// Perf diagnosis only (test_perf_r3.py, define GQKV_ZONES): device-profiler zones on the DM timeline.
-#ifdef GQKV_ZONES
-#include "api/debug/kernel_profiler.hpp"
-#define GQKV_ZONE(name) DeviceZoneScopedN(name)
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+// Stage zones (MaybeDeviceZoneScope, PERMANENT — perf tournaments rank stages from them; free when the
+// profiler is off): per served split row writer_split_req_wait, writer_split_issue, writer_split_barrier;
+// per output group writer_out_wait (starved on compute), writer_out_issue, writer_out_flush.
+// Measurement-only ablations (compiled out unless defined; wrong results by construction):
+// GQKV_ABLATE_READS drops the split reader's DRAM reads, GQKV_ABLATE_WRITES the q / k / v writes.
+#ifdef GQKV_ABLATE_READS
+#define GQKV_READ(...)
 #else
-#define GQKV_ZONE(name)
+#define GQKV_READ(...) noc_async_read(__VA_ARGS__)
+#endif
+#ifdef GQKV_ABLATE_WRITES
+#define GQKV_WRITE(...)
+#else
+#define GQKV_WRITE(...) noc_async_write(__VA_ARGS__)
 #endif
 
 namespace {
@@ -79,11 +89,11 @@ void kernel_main() {
     // store_tile: global channel tile cg of tile-row r -> its q / k / v page.
     auto store_tile = [&](uint32_t src, uint32_t r, uint32_t cg) {
         if (cg < q_tiles) {
-            noc_async_write(src, q_acc.get_noc_addr(r * q_tiles + cg), tile_bytes);
+            GQKV_WRITE(src, q_acc.get_noc_addr(r * q_tiles + cg), tile_bytes);
         } else if (cg < q_tiles + k_tiles) {
-            noc_async_write(src, k_acc.get_noc_addr(r * k_tiles + (cg - q_tiles)), tile_bytes);
+            GQKV_WRITE(src, k_acc.get_noc_addr(r * k_tiles + (cg - q_tiles)), tile_bytes);
         } else {
-            noc_async_write(src, v_acc.get_noc_addr(r * v_tiles + (cg - q_tiles - k_tiles)), tile_bytes);
+            GQKV_WRITE(src, v_acc.get_noc_addr(r * v_tiles + (cg - q_tiles - k_tiles)), tile_bytes);
         }
     };
 
@@ -95,18 +105,28 @@ void kernel_main() {
             const uint32_t input_byte_offset =
                 (input_col_offset_tiles + ch_group_tile_start) * (stick_bytes / block_ch_tiles);
             for (; rows_served < end; ++rows_served) {
-                cb_wait_front(cb_split_requests, 1);
+                {
+                    MaybeDeviceZoneScope("writer_split_req_wait");
+                    cb_wait_front(cb_split_requests, 1);
+                }
                 invalidate_l1_cache();  // the address was stored by the reader RISC
                 const uint32_t dst = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_split_requests));
                 cb_pop_front(cb_split_requests, 1);
                 const uint32_t token0 = (core_seq_start + rows_served) * TILE_DIM;
-                for (uint32_t j = 0; j < split_rows; ++j) {
-                    const uint32_t i = TILE_DIM - split_rows +
-                                       (stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % split_rows : j);
-                    noc_async_read(
-                        input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
+                {
+                    MaybeDeviceZoneScope("writer_split_issue");
+                    for (uint32_t j = 0; j < split_rows; ++j) {
+                        const uint32_t i =
+                            TILE_DIM - split_rows +
+                            (stagger_row_walk ? (j + ch_group_tile_start + core_seq_start) % split_rows : j);
+                        GQKV_READ(
+                            input_acc.get_noc_addr(token0 + i, input_byte_offset), dst + i * stick_bytes, stick_bytes);
+                    }
                 }
-                noc_async_read_barrier();
+                {
+                    MaybeDeviceZoneScope("writer_split_barrier");
+                    noc_async_read_barrier();
+                }
                 cb_reserve_back(cb_split_done, 1);
                 cb_push_back(cb_split_done, 1);
             }
@@ -117,21 +137,25 @@ void kernel_main() {
         if constexpr (split_rows > 0) {
             const uint32_t m = r - core_seq_start;
             const uint32_t next_block_end = (m / block_rows + 2) * block_rows;
-            GQKV_ZONE("W_SERVE");
             serve_split_rows_through(next_block_end < core_seq_tiles ? next_block_end : core_seq_tiles);
         }
         for (uint32_t c0 = 0; c0 < block_ch_tiles; c0 += out_group_tiles) {
             const uint32_t group = (block_ch_tiles - c0 < out_group_tiles) ? (block_ch_tiles - c0) : out_group_tiles;
             {
-                GQKV_ZONE("W_WOUT");
+                MaybeDeviceZoneScope("writer_out_wait");
                 cb_wait_front(cb_output_tiles, group);
             }
-            GQKV_ZONE("W_WR");
             const uint32_t src = get_read_ptr(cb_output_tiles);
-            for (uint32_t i = 0; i < group; ++i) {
-                store_tile(src + i * tile_bytes, r, ch_group_tile_start + c0 + i);
+            {
+                MaybeDeviceZoneScope("writer_out_issue");
+                for (uint32_t i = 0; i < group; ++i) {
+                    store_tile(src + i * tile_bytes, r, ch_group_tile_start + c0 + i);
+                }
             }
-            noc_async_writes_flushed();
+            {
+                MaybeDeviceZoneScope("writer_out_flush");
+                noc_async_writes_flushed();
+            }
             cb_pop_front(cb_output_tiles, group);
         }
     }

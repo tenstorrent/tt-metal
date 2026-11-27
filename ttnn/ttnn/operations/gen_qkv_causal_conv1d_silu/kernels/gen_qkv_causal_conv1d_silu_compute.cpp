@@ -42,6 +42,15 @@
 //   for ~99.4% of inputs vs ~90%. A 32-bit DEST always runs the library body. Gap closer: an
 //   apply_activation_from_pack overload taking a caller SFPU functor.
 
+// Stage zones (MaybeDeviceZoneScope, PERMANENT — perf tournaments rank stages from them; free when the
+// profiler is off). Per block (= one tile-row at the default block_rows): compute_rows_wait (unpack
+// starved on the reader), compute_tilize (4 windows), compute_windows_wait, compute_conv_silu (MACs on
+// math, SiLU + pack on the packer, incl. the packer's cb_output_tiles reservations); TILE regime:
+// compute_untilize; once: compute_taps_wait.
+// Measurement-only ablations (compiled out unless defined; wrong results by construction):
+// GQKV_ABLATE_SILU, GQKV_SILU_REPEAT, GQKV_ABLATE_TILIZE (windows: CB sync only),
+// GQKV_ABLATE_MAC (no products; DEST stays zero).
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -52,6 +61,7 @@
 #include "api/compute/reg_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -240,8 +250,15 @@ using compute_kernel_lib::tilize_config::WaitMode;
 // One window: tilize 32 sticks from the slot's read pointer, then pop `pages` sticks.
 template <uint32_t block_ch_tiles, InitUninitMode init_mode, ReconfigureRegisterDatatypeMode reconfig>
 ALWI void tilize_window(DataflowBuffer& rows, DataflowBuffer& windows, uint32_t pages) {
+#ifdef GQKV_ABLATE_TILIZE
+    // Perf ablation only: the helper's CB sequence (reserve, push, pop) without the tilize.
+    windows.reserve_back(block_ch_tiles);
+    windows.push_back(block_ch_tiles);
+    rows.pop_front(pages);
+#else
     compute_kernel_lib::tilize<block_ch_tiles, cb_rows, cb_window_tiles, init_mode, WaitMode::NoWait, reconfig>(
         rows, windows, 1, pages);
+#endif
 }
 
 // windowed_tilize_block: rows_this_block tile-rows x 4 windows x block_ch_tiles tiles, layout
@@ -250,7 +267,11 @@ template <uint32_t block_ch_tiles>
 void windowed_tilize_block(DataflowBuffer& rows, DataflowBuffer& windows, uint32_t rows_this_block) {
     constexpr auto Keep = ReconfigureRegisterDatatypeMode::NoReconfigure;
     for (uint32_t m = 0; m < rows_this_block; ++m) {
-        rows.wait_front(WINDOW_STICKS);
+        {
+            MaybeDeviceZoneScope("compute_rows_wait");
+            rows.wait_front(WINDOW_STICKS);
+        }
+        MaybeDeviceZoneScope("compute_tilize");
         // p = 0
         if (m == 0) {
             tilize_window<
@@ -286,7 +307,11 @@ void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t 
         "an output group is one DEST acquire");
     constexpr uint32_t dest_group = out_group_tiles;
     const uint32_t window_tiles = TAP_COUNT * block_ch_tiles * rows_this_block;
-    windows.wait_front(window_tiles);
+    {
+        MaybeDeviceZoneScope("compute_windows_wait");
+        windows.wait_front(window_tiles);
+    }
+    MaybeDeviceZoneScope("compute_conv_silu");
 
     reconfig_data_format(cb_window_tiles, cb_tap_tiles);
     pack_reconfig_data_format(cb_output_tiles);
@@ -303,10 +328,12 @@ void conv_silu_block(DataflowBuffer& windows, DataflowBuffer& outputs, uint32_t 
             tile_regs_acquire();
             for (uint32_t i = 0; i < group; ++i) {
                 const uint32_t c = c0 + i;
+#ifndef GQKV_ABLATE_MAC
                 for (uint32_t p = 0; p < TAP_COUNT; ++p) {
                     mul_tiles_bcast_rows(
                         cb_window_tiles, cb_tap_tiles, row_base + p * block_ch_tiles + c, c, i, TAP_ROW_STRIDE * p);
                 }
+#endif
             }
             tile_regs_commit();
             // Replaces tile_regs_wait(): math->pack handshake, SiLU on each tile in DEST from the
@@ -327,6 +354,7 @@ template <uint32_t block_ch_tiles>
 void untilize_rows_block(uint32_t tile_rows) {
     DataflowBuffer input_tiles(cb_input_tiles);
     DataflowBuffer untilized_rows(cb_untilized_rows);
+    MaybeDeviceZoneScope("compute_untilize");
     compute_kernel_lib::untilize<block_ch_tiles, cb_input_tiles, cb_untilized_rows>(
         input_tiles, untilized_rows, tile_rows);
 }
@@ -367,6 +395,7 @@ void kernel_main() {
         }
         windowed_tilize_block<block_ch_tiles>(rows, windows, rows_this_block);
         if (block_idx == 0) {
+            MaybeDeviceZoneScope("compute_taps_wait");
             taps.wait_front(block_ch_tiles);  // first use: the tap fetch hid behind the first tilize
         }
         conv_silu_block<block_ch_tiles, out_group_tiles, silu_variant, silu_tile_stall>(

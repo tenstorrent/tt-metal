@@ -199,6 +199,15 @@ Named boundary for "minimum": **DRAM/L1-bank traffic of the interleaved tensors 
 >   MATH_PACK semaphore wait but measured null (parked `SILU_TILE_STALL = True`).
 > - The next 004 lever is the dataflow side: NoC/DRAM fairness across the grid (see changelog).
 
+> **Perf 1 as built (2026-11-27).** No dataflow or math change; every kernel carries permanent
+> `MaybeDeviceZoneScope` stage zones (wait / issue / barrier split; list in the changelog) and compiled-out
+> ablation switches (`GQKV_ABLATE_{SILU,MAC,TILIZE,READS,WRITES}`). Measured on 004: compute-only 108.6 µs,
+> DM-only 111.0 µs (max/p50 1.42), writes-only 75.1 µs (max/p50 1.60 — the NoC1 DRAM write path is
+> position-unfair), full 131; faster compute measured slower (~150). Two NoC-balancing experiments
+> (`perf_experiments/split_writes`, `perf_experiments/dynamic_split_reads`) were measured and not graduated
+> (mixed / null-and-regression on single-row plans). Under the profiler the zones cost ~2–8% on the small
+> cells; `MAYBE_DEVICE_ZONE_SCOPE_OFF` compiles them out for apples-to-apples comparisons.
+
 Regime selection function (exact, host): `regime = "rm_staged_window" if input.layout == ttnn.ROW_MAJOR_LAYOUT else "tile_untilize_staged_window"`. The intra-regime paths that only some grids/shapes trigger (multi-block cores → L1 halo copy; core-first block with `t0 > 0` → DRAM halo / extra untilized tile-row; ragged last block) are pinned by `plan_limits` tests in the acceptance test (both regimes).
 
 ### Traffic ranking
