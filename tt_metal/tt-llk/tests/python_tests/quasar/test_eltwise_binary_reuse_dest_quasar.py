@@ -7,7 +7,6 @@ import pytest
 import torch
 from helpers.constraints import (
     REUSE_DEST_MATH_OPS,
-    get_perf_math_operations,
     get_valid_math_fidelities,
 )
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -98,17 +97,6 @@ def reuse_dest_input_dimensions(tile_dimensions) -> list:
     return [[INPUT_TILE_COUNT * tile_rows, tile_cols]]
 
 
-def reuse_dest_mathops(formats, *, is_perf=False):
-    supported_mathops = REUSE_DEST_MATH_OPS
-    if is_perf:
-        return [
-            mathop
-            for mathop in get_perf_math_operations()
-            if mathop in supported_mathops
-        ]
-    return supported_mathops
-
-
 def valid_output_dimensions(formats, dest_sync, tile_dimensions) -> list:
     # Multi-block output accumulates wrongly: the kernel uses block-relative indexing.
     tile_rows, tile_cols = tile_dimensions
@@ -132,7 +120,7 @@ def valid_output_dimensions(formats, dest_sync, tile_dimensions) -> list:
 @pytest.mark.quasar
 @parametrize(
     formats=REUSE_DEST_FORMATS,
-    mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
+    mathop=REUSE_DEST_MATH_OPS,
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     reuse_dest_type=[
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
@@ -413,7 +401,7 @@ REUSE_DEST_FLOAT32_FORMATS = [
 @pytest.mark.quasar
 @parametrize(
     formats=REUSE_DEST_FLOAT32_FORMATS,
-    mathop=lambda formats: reuse_dest_mathops(formats, is_perf=False),
+    mathop=REUSE_DEST_MATH_OPS,
     math_fidelity=lambda formats, mathop: [
         fidelity
         for fidelity in get_valid_math_fidelities(formats, mathop)
