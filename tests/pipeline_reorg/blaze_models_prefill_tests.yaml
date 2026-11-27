@@ -418,7 +418,7 @@
         TEST=$T/long_context_accuracy/test_long_context_accuracy.py
         passes() {  # passes <count> <command...>: the command passes exactly <count> tests and skips none
           local want=$1 && shift
-          "$@" 2>&1 | tee /tmp/lc_accuracy.out
+          "$@" 2>&1 | tee /tmp/lc_accuracy.out || { local status=$?; echo "::error::exit $status (124: over its time bound): $*"; exit $status; }
           local summary
           summary=$(sed "s/\x1b\[[0-9;]*m//g" /tmp/lc_accuracy.out | grep -E "^=+ .* in [0-9.]+s" | tail -1)
           [[ "$summary" =~ " $want passed" && ! "$summary" =~ (skipped|failed|error) ]] || { echo "::error::expected $want passed and none skipped, got: $summary"; exit 1; }
@@ -482,9 +482,9 @@
       TEST=$T/long_context_accuracy/test_long_context_accuracy.py
       passes() {  # passes <count> <command...>: the command passes exactly <count> tests and skips none
         local want=$1 && shift
-        "$@" 2>&1 | tee /tmp/lc_accuracy_1m.out || { local status=$?; echo "::error::exit $status (124: over its time bound): $*"; exit $status; }
+        "$@" 2>&1 | tee /tmp/lc_accuracy.out || { local status=$?; echo "::error::exit $status (124: over its time bound): $*"; exit $status; }
         local summary
-        summary=$(sed "s/\x1b\[[0-9;]*m//g" /tmp/lc_accuracy_1m.out | grep -E "^=+ .* in [0-9.]+s" | tail -1)
+        summary=$(sed "s/\x1b\[[0-9;]*m//g" /tmp/lc_accuracy.out | grep -E "^=+ .* in [0-9.]+s" | tail -1)
         [[ "$summary" =~ " $want passed" && ! "$summary" =~ (skipped|failed|error) ]] || { echo "::error::expected $want passed and none skipped, got: $summary"; exit 1; }
       }
       echo "===== [1/4] (Kimi-K3-2.8T) KDA layer 0, 1M, SP8xTP4 ====="
