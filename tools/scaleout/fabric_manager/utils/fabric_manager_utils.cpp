@@ -13,10 +13,10 @@
 
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <enchantum/enchantum.hpp>
 #include <llrt/tt_cluster.hpp>

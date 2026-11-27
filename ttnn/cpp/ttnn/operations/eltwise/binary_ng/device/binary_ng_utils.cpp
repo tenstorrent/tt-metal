@@ -4,7 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -430,6 +430,13 @@ OpConfig::OpConfig(
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::SILU_GLU:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::SILU_GLU;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -611,6 +618,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case ISCLOSE: return {"isclose_binary_tile_init();", "isclose_binary_tile<(bool)ISCLOSE_EQUAL_NAN>"};
         case SITU_GLU: return {"situ_glu_tile_init();", "situ_glu_tile"};
         case GEGLU_TANH: return {"geglu_tanh_tile_init();", "geglu_tanh_tile"};
+        case SILU_GLU: return {"silu_glu_tile_init();", "silu_glu_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -632,6 +640,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
     // kernels compile it only for the op that calls it.
     switch (std::get<SfpuBinaryOp>(binary_op)) {
         case SfpuBinaryOp::GEGLU_TANH: defines["SFPU_OP_GEGLU_TANH_INCLUDE"] = "1"; break;
+        case SfpuBinaryOp::SILU_GLU: defines["SFPU_OP_SILU_GLU_INCLUDE"] = "1"; break;
         default: break;
     }
     return defines;

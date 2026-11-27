@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_nanobind.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 #include <array>
 #include <string>
@@ -117,7 +117,7 @@ constexpr auto kDivideFastApproxPostNote =
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.)doc";
 constexpr auto kDivFastApproxPostNote =
     R"doc(With INT32 tensor operands or an INT32 tensor and an integer scalar, rounding_mode `None` produces a FLOAT32 output and output datatype conversion is not supported, while `floor` and `trunc` produce an INT32 output.
-        For these INT32 operands with rounding_mode `floor` or `trunc`, division by zero and INT32_MIN / -1 are undefined, regardless of :attr:`fast_and_approximate_mode`.
+        For these INT32 operands with rounding_mode `floor` or `trunc`, division by zero is undefined and INT32_MIN / -1 wraps to INT32_MIN, regardless of :attr:`fast_and_approximate_mode`.
         For floating-point division (including promoted INT32 inputs), when :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero for fast approximation.
         When :attr:`fast_and_approximate_mode` is `False` (default), floating-point division properly handles division by zero (accurate mode).)doc";
 constexpr auto kMultiplyInplaceFastApproxPostNote =

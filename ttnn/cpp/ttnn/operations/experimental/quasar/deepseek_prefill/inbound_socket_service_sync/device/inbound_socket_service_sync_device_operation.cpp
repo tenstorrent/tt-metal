@@ -6,8 +6,8 @@
 
 #include <type_traits>
 
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"

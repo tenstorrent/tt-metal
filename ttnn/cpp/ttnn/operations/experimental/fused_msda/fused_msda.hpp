@@ -30,6 +30,17 @@ enum class MSDAReferenceMode : uint8_t {
     Pillar = 1,
 };
 
+// How the caller lays out value.
+//
+//   Auto:      canonical (B, S, H, D) or packed (B, S, H*D), told apart by rank.
+//   HeadMajor: (B, H, ceil(S/32), 32*D), 32 keys of one head per page, as
+//              untilize_and_split_heads builds it. Declared, never inferred:
+//              that rank-4 shape can coincide with a canonical one.
+enum class MSDAValueLayout : uint8_t {
+    Auto = 0,
+    HeadMajor = 1,
+};
+
 // Generic multi-scale deformable attention, all feature levels in one kernel.
 //
 // For each (b, q, h):
@@ -44,6 +55,11 @@ enum class MSDAReferenceMode : uint8_t {
 //                                            head h at byte offset h*D*2, which
 //                                            must be a multiple of the buffer's
 //                                            alignment when H > 1)
+//                    or (B, H, ceil(S/32), 32*D)  head-major, with
+//                                            value_layout = HeadMajor (keys back
+//                                            to back, so D*2 must be a multiple
+//                                            of the buffer's alignment); see
+//                                            untilize_and_split_heads
 //   sampling_locations  (B, Q, H, L, P, 2)   canonical
 //                    or (B, Q, H, L*P*2)     packed (one DRAM page per (b,q,h);
 //                                            8x less padding and L*P fewer NoC
@@ -70,7 +86,8 @@ ttnn::Tensor fused_msda(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     bool align_corners = false,
     bool locations_in_grid_space = false,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    MSDAValueLayout value_layout = MSDAValueLayout::Auto);
 
 // V2: the same operator with sampling-location generation fused into the op.
 // No (B, Q, H, L, P, 2) location tensor is materialized.
@@ -118,13 +135,21 @@ ttnn::Tensor fused_msda_from_offsets(
     bool align_corners = false,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<std::vector<uint32_t>>& num_valid_queries = std::nullopt,
-    const std::optional<ttnn::Tensor>& num_valid_queries_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor = std::nullopt,
+    MSDAValueLayout value_layout = MSDAValueLayout::Auto);
 
 // Whether fused_msda_from_offsets can stage value (ROW_MAJOR, interleaved L1)
 // and its bf16 output in L1 alongside its circular buffers. Set
 // device_valid_counts when the op will get num_valid_queries_tensor, which adds
-// circular buffers. value may still be TILE or in DRAM. Reads the allocator's current state, so call it right before
-// the op and do not cache the answer.
+// circular buffers. value may still be TILE or in DRAM.
+//
+// value_layout is the layout the op will read. With HeadMajor, value is either
+// already head-major or the packed (B, S, H*D) a caller will convert with
+// untilize_and_split_heads; the check charges the head-major tensor, whose
+// pages pad S to a multiple of 32 per head.
+//
+// Reads the allocator's current state, so call it right before the op and do
+// not cache the answer.
 bool can_use_fused_msda_from_offsets_l1_value(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -133,6 +158,7 @@ bool can_use_fused_msda_from_offsets_l1_value(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     MSDAReferenceMode reference_mode = MSDAReferenceMode::Level,
     bool align_corners = false,
-    bool device_valid_counts = false);
+    bool device_valid_counts = false,
+    MSDAValueLayout value_layout = MSDAValueLayout::Auto);
 
 }  // namespace ttnn::experimental

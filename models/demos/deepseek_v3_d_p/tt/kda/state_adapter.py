@@ -5,8 +5,12 @@
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
 TILE and ``convolution`` ``[1, SEG, (K-1)*64]`` BF16 ROW_MAJOR, channel-paged with 64-channel pages (the layer's
 ``KDAProgramConfig.convolution_page_channels`` set to ``KDA_CONVOLUTION_PAGE_CHANNELS``), both interleaved DRAM, heads
-sharded across TP and the complete state replicated across SP. A model layer instead runs on the *contract* form,
-the carries' only store and what migration reads.
+sharded across TP and the complete state replicated across SP. The contract form, the carries' only store and what
+migration reads, stores every head once on the mesh: SP row ``r`` of TP column ``c`` stores only the column's local
+heads ``[r * H_store, (r + 1) * H_store)``, ``H_store = num_heads / (SP * TP)``. A model layer's ops read and write
+the slabs in place (``KdaStates.entry``): only the chronologically first SP rank of a chunk reads the old carry, so the
+other ranks send it their heads of the slot's entry over the fabric inside the ops (``relay_chunk_scan``,
+``qkv_causal_conv1d_silu``), and each rank writes back only its own heads of the replacement.
 
 The contract fixes what one migration segment is and requires every segment to be one contiguous
 DRAM span, round-robin over the DRAM banks exactly like the kvpe cache:
@@ -21,29 +25,39 @@ them apart:
 
 * a single-layer ND-sharded tensor whose shard IS the segment (``[1, 1, D, 32]`` / ``[1, 1, (K-1)*64]``),
   the form PR #56443 measured and the one ``to_memory_config`` produces from a native tensor;
-* the consolidated per-rank slabs the engine owns (``KdaStates``): the recurrent slab keeps the ND
-  form over ``[slots * layers, H_local, D, D]``;
-  the convolution slab is an INTERLEAVED row-major ``[slots * layers, SEG, (K-1)*64]`` tensor whose
-  384-byte pages are the segments. Interleaved page ``p`` lives at bank ``p % N``, offset
-  ``(p // N) * 384``, which is where ND shard ``s = p`` would live, so the bytes and the table math
-  are the same. The native convolution tail has the same pages.
+* the consolidated per-chip slabs the engine owns (``KdaStates``): the recurrent slab keeps the ND
+  form over ``[slots * layers, H_store, D, D]``; the convolution slab is an INTERLEAVED row-major
+  ``[slots * layers, 3 * H_store * halves, (K-1)*64]`` tensor whose 384-byte pages are the segments.
+  Interleaved page ``p`` lives at bank ``p % N``, offset ``(p // N) * 384``, which is where ND shard
+  ``s = p`` would live, so the bytes and the table math are the same. The native convolution tail has the
+  same pages, so a slab batch holds the chip's pages of the native tail.
+
+(The single-layer form describes one chip's whole native carry; it is not the slabs' per-chip layout.)
 
 The KDA ops take the slot as a replicated one-element UINT32 device tensor (``device_scalar``, or the traced
-metadata's slot word) and address slab batch ``slot * L + layer_position`` on device (``SlabEntry``).
+metadata's slot word) and address slab batch ``slot * L + layer_position`` on device (``SlabEntry``), so a captured
+layer follows the slot written before each replay.
 
 Segment numbering (``g`` is the GLOBAL head ``tp_col * H_local + h_local``, ``branch`` is q/k/v =
 0/1/2, the golden's ``[all q | all k | all v]`` order):
 
-    recurrent   G = g * bands + band          local shard s = (batch * H_local + h_local) * bands + band
+    recurrent   G = g * bands + band
     convolution G = (branch * num_heads + g) * halves + half
-                local shard s = batch * shards_per_layer + (branch * H_local + h_local) * halves + half
+
+The numbering, segment bytes and table positions depend only on the model, never on how the mesh
+stores the state. A stored head is addressed as ``(sp_row, j)`` with ``h_local = sp_row * H_store + j``, and its
+segments live on the one device ``(sp_row, tp_col)``:
+
+    recurrent   local shard s = (batch * H_store + j) * bands + band
+    convolution local shard s = batch * shards_per_layer + (branch * H_store + j) * halves + half
     bank = s % num_banks ; offset = base + (s // num_banks) * segment_bytes
-    owner = TP column g // H_local ; replicas = every SP row of that column
 
 ``batch`` is the slab's leading index, ``slot * num_layers + layer_position`` (user-major, the kvpe
-cache convention). The per-chip convolution channel order is ``[q_local | k_local | v_local]`` with
-``D`` channels per head inside each branch, so the ``64``-wide column slice ``j`` of a chip's row is
-``(branch * H_local + h_local) * halves + half`` -- the same expression as the local shard index.
+cache convention). The per-chip native convolution channel order is ``[q_local | k_local | v_local]``
+with ``D`` channels per head inside each branch, so native page ``(branch * H_local + h_local) * halves + half``
+holds (branch, head, half). A stored convolution layer keeps the same branch-major order over its own
+``H_store`` heads: per branch, SP row ``r`` stores the branch's channel slice ``[r * W_b / SP, (r + 1) * W_b / SP)``,
+the layout ``qkv_causal_conv1d_silu`` reads and writes as an SP-sharded slab.
 """
 
 from __future__ import annotations
@@ -70,28 +84,41 @@ _FACE = 16
 
 @dataclass(frozen=True)
 class KdaContractGeometry:
-    """Segment geometry of one model's KDA state on one mesh."""
+    """Segment geometry of one model's KDA state on one mesh. ``sequence_parallel_axis`` is the mesh axis the SP rows
+    lie on (TP on the other): where each stored head lives, and the axis the KDA ops move heads along."""
 
     num_heads: int
     head_dim: int
     conv_history: int
     sequence_parallel_size: int
     tensor_parallel_size: int
+    sequence_parallel_axis: int
 
     def __post_init__(self) -> None:
         if self.num_heads <= 0 or self.head_dim <= 0 or self.conv_history <= 0:
             raise ValueError("KDA contract geometry needs positive heads, head_dim and conv_history")
         if self.sequence_parallel_size <= 0 or self.tensor_parallel_size <= 0:
             raise ValueError("KDA contract geometry needs positive SP and TP sizes")
+        if self.sequence_parallel_axis not in (0, 1):
+            raise ValueError(f"sequence_parallel_axis must be mesh axis 0 or 1, got {self.sequence_parallel_axis}")
         if self.num_heads % self.tensor_parallel_size != 0:
             raise ValueError(f"{self.num_heads} heads cannot be divided over TP{self.tensor_parallel_size}")
+        if self.local_heads % self.sequence_parallel_size != 0:
+            raise ValueError(
+                f"{self.local_heads} heads per TP column cannot be sharded over SP{self.sequence_parallel_size}"
+            )
         # Whole convolution pages per head; this also gives whole recurrent bands.
         if self.head_dim % KDA_CONVOLUTION_PAGE_CHANNELS != 0:
             raise ValueError(f"head_dim {self.head_dim} must be a multiple of {KDA_CONVOLUTION_PAGE_CHANNELS}")
 
     @classmethod
     def from_kda_config(
-        cls, config: KDAConfig, *, mesh_shape: tuple[int, int], sp_axis: int, tp_axis: int
+        cls,
+        config: KDAConfig,
+        *,
+        mesh_shape: tuple[int, int],
+        sp_axis: int,
+        tp_axis: int,
     ) -> "KdaContractGeometry":
         """The geometry of a GLOBAL ``KDAConfig`` (``num_heads`` is the model's, not the TP-local count)."""
         if sp_axis == tp_axis or sp_axis not in (0, 1) or tp_axis not in (0, 1):
@@ -104,6 +131,7 @@ class KdaContractGeometry:
             conv_history=config.conv_kernel_size - 1,
             sequence_parallel_size=mesh_shape[sp_axis],
             tensor_parallel_size=mesh_shape[tp_axis],
+            sequence_parallel_axis=sp_axis,
         )
 
     # --- native shapes ---
@@ -146,7 +174,7 @@ class KdaContractGeometry:
 
     @property
     def recurrent_segments_per_layer(self) -> int:
-        """Unique segments per layer across the whole mesh (SP replicas not counted)."""
+        """Unique segments per layer across the whole mesh, however it stores them."""
         return self.num_heads * self.bands
 
     @property
@@ -155,17 +183,39 @@ class KdaContractGeometry:
 
     @property
     def recurrent_shards_per_layer(self) -> int:
-        """Segments one device holds per layer."""
-        return self.local_heads * self.bands
+        """Segments one device stores per layer."""
+        return self.stored_heads * self.bands
 
     @property
     def convolution_shards_per_layer(self) -> int:
-        return 3 * self.local_heads * self.halves
+        return 3 * self.stored_heads * self.halves
 
     @property
     def convolution_slab_row_width(self) -> int:
         """Elements per convolution slab row: one segment, the native tail's page."""
         return self.convolution_shape[-1]
+
+    # --- storage: each head stored once on the mesh ---
+    @property
+    def stored_heads(self) -> int:
+        """``H_store``: heads one device stores per layer, its SP row's share of the TP column's ``H_local``."""
+        return self.local_heads // self.sequence_parallel_size
+
+    @property
+    def stored_recurrent_shape(self) -> tuple[int, int, int, int]:
+        """One layer of one device's recurrent store."""
+        return (1, self.stored_heads, self.head_dim, self.head_dim)
+
+    @property
+    def stored_convolution_shape(self) -> tuple[int, int, int]:
+        """One layer of one device's convolution store: one segment per row."""
+        return (1, self.convolution_shards_per_layer, self.convolution_slab_row_width)
+
+    def local_head(self, sp_row: int, j: int) -> int:
+        """The TP column's local head that SP row ``sp_row`` stores at ``j``."""
+        self._check(sp_row, self.sequence_parallel_size, "sp_row")
+        self._check(j, self.stored_heads, "j")
+        return sp_row * self.stored_heads + j
 
     # --- segment maps ---
     def recurrent_segment(self, tp_col: int, h_local: int, band: int) -> int:
@@ -194,15 +244,21 @@ class KdaContractGeometry:
         tp_col, h_local = divmod(global_head, self.local_heads)
         return branch, tp_col, h_local, half
 
-    def recurrent_local_shard(self, batch: int, h_local: int, band: int) -> int:
-        return (batch * self.local_heads + h_local) * self.bands + band
+    def recurrent_local_shard(self, batch: int, j: int, band: int) -> int:
+        """Shard index of stored head ``j``'s ``band`` in slab batch ``batch``."""
+        self._check(j, self.stored_heads, "j")
+        self._check(band, self.bands, "band")
+        return (batch * self.stored_heads + j) * self.bands + band
 
-    def convolution_local_column(self, branch: int, h_local: int, half: int) -> int:
-        """The 64-wide column slice of a chip's convolution row holding (branch, head, half)."""
-        return (branch * self.local_heads + h_local) * self.halves + half
+    def convolution_stored_page(self, branch: int, j: int, half: int) -> int:
+        """The row of one stored convolution layer holding (branch, stored head ``j``, half)."""
+        self._check(branch, 3, "branch")
+        self._check(j, self.stored_heads, "j")
+        self._check(half, self.halves, "half")
+        return (branch * self.stored_heads + j) * self.halves + half
 
-    def convolution_local_shard(self, batch: int, branch: int, h_local: int, half: int) -> int:
-        return batch * self.convolution_shards_per_layer + self.convolution_local_column(branch, h_local, half)
+    def convolution_local_shard(self, batch: int, branch: int, j: int, half: int) -> int:
+        return batch * self.convolution_shards_per_layer + self.convolution_stored_page(branch, j, half)
 
     @staticmethod
     def _check(value: int, limit: int, name: str) -> None:
@@ -253,11 +309,12 @@ def device_scalar(device: ttnn.Device | ttnn.MeshDevice, value: int) -> ttnn.Ten
 
 @dataclass
 class KdaStates:
-    """The engine-owned store of every KDA layer's state on this rank, in the contract form.
+    """The engine-owned store of every KDA layer's state on this mesh, in the contract form.
 
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
-    single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
-    this rank's GLOBAL KDA layer indices in ascending order and fix the layer axis of both slabs.
+    single allocations so a ``KvCacheStage`` can name each by one base address. Each chip's slabs hold its
+    ``H_store`` heads. ``layer_ids`` are this rank's GLOBAL KDA layer indices in ascending order and fix the
+    layer axis of both slabs.
 
     The slabs are never cleared; at a request's head (``actual_start == 0``) the layer's ops start from zeros
     instead of the slot's carry.
@@ -274,12 +331,9 @@ class KdaStates:
             raise ValueError(f"layer_ids must be non-empty, unique and ascending, got {self.layer_ids}")
         if self.num_slots < 1:
             raise ValueError(f"num_slots must be at least 1, got {self.num_slots}")
-        expected_recurrent = (self.num_slots * self.num_layers, *self.geometry.recurrent_shape[1:])
-        expected_convolution = (
-            self.num_slots * self.num_layers,
-            self.geometry.convolution_shards_per_layer,
-            self.geometry.convolution_slab_row_width,
-        )
+        batches = self.num_slots * self.num_layers
+        expected_recurrent = (batches, *self.geometry.stored_recurrent_shape[1:])
+        expected_convolution = (batches, *self.geometry.stored_convolution_shape[1:])
         if tuple(self.recurrent.shape) != expected_recurrent:
             raise ValueError(f"recurrent slab shape {tuple(self.recurrent.shape)} != {expected_recurrent}")
         if tuple(self.convolution.shape) != expected_convolution:
@@ -306,25 +360,25 @@ class KdaStates:
     @classmethod
     def allocate(
         cls,
-        mesh_device: ttnn.Device | ttnn.MeshDevice,
+        mesh_device: ttnn.MeshDevice,
         geometry: KdaContractGeometry,
         *,
         layer_ids: tuple[int, ...],
         num_slots: int,
     ) -> "KdaStates":
-        """Allocate both slabs, uninitialized. The recurrent slab keeps the ND contract form; the convolution
-        slab is the interleaved row form (see the module docstring). Neither is ever reallocated:
-        a trace capture bakes their addresses in."""
+        """Allocate both slabs, uninitialized. The recurrent slab keeps the ND contract form; the convolution slab is
+        the interleaved row form (see the module docstring). Neither is ever reallocated: a trace capture bakes their
+        addresses in."""
         batches = num_slots * len(layer_ids)
         recurrent = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batches, *geometry.recurrent_shape[1:]]),
+            ttnn.Shape([batches, *geometry.stored_recurrent_shape[1:]]),
             KDA_RECURRENT_DTYPE,
             ttnn.TILE_LAYOUT,
             mesh_device,
             nd_dram_memory_config(mesh_device, [1, 1, geometry.head_dim, KDA_RECURRENT_BAND_WIDTH]),
         )
         convolution = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batches, geometry.convolution_shards_per_layer, geometry.convolution_slab_row_width]),
+            ttnn.Shape([batches, *geometry.stored_convolution_shape[1:]]),
             KDA_CONVOLUTION_DTYPE,
             ttnn.ROW_MAJOR_LAYOUT,
             mesh_device,
@@ -355,7 +409,8 @@ class KdaStates:
             )
 
     def entry(self, slot: ttnn.Tensor, layer_idx: int) -> KdaState:
-        """Layer ``layer_idx``'s carry at the device ``slot`` scalar, as ``ttKDA.forward`` state (SP > 1 only)."""
+        """Layer ``layer_idx``'s carry at the device ``slot`` scalar, as ``ttKDA.forward`` state (SP > 1 only): this
+        chip's ``H_store`` heads, which the layer's ops read and replace in place."""
         entry = {"index": slot, "scale": self.num_layers, "offset": self.layer_position(layer_idx)}
         return KdaState(recurrent=SlabEntry(self.recurrent, **entry), convolution=SlabEntry(self.convolution, **entry))
 

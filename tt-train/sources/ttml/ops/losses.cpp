@@ -14,9 +14,9 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
-#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss.hpp"
 #include "ttnn/operations/moreh/moreh_nll_loss_backward/moreh_nll_loss_backward.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -79,14 +79,17 @@ autograd::TensorPtr cross_entropy_loss(
     } else {
         auto shape = ttnn::Shape({1, 1, 1, 1});
         out = autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), loss.memory_config()));
-        ttnn::moreh_mean(
+        ttnn::mean(
             loss,
-            std::nullopt,
-            true,
-            std::nullopt,
-            out->get_value(),
-            std::nullopt,
-            /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+            /* dim */ std::nullopt,
+            /* keepdim */ true,
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+            /* scalar */ 1.0F,
+            /* sub_core_grids */ std::nullopt,
+            /* fast_and_approximate_mode */ false,
+            /* output_layout */ std::nullopt,
+            /* output */ out->get_value());
     }
     autograd::GradFunction grad = [target, prediction, out, reduce]() {
         float scaler = 1.0F;

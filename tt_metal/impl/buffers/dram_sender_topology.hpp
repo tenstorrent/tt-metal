@@ -18,9 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device_types.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/device_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 
 #include "impl/context/context_types.hpp"
 
@@ -74,6 +74,13 @@ uint64_t dram_sender_l1_noc_addr(const distributed::MeshDevice& mesh_device, Dev
 // descriptor, so device init can name this core in the firmware's tensor_prefetcher_signal_noc_xy table before
 // any MeshDevice exists.
 CoreCoord pick_unused_dram_logical_core(const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
+
+// The two DRISC sender cores of DRAM view `bank_id`, as logical DRAM coords: element 0 is the free
+// non-endpoint subchannel (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
+// subchannel. Throws when `bank_id` is out of range, the bank has no free subchannel, the NOC1 endpoint cannot be
+// resolved, or the two roles do not sit at logical y = 1 and above it. `device_id` only names the device in errors.
+std::vector<CoreCoord> dram_sender_logical_cores(
+    const metal_SocDescriptor& soc_desc, uint32_t bank_id, ChipId device_id);
 
 // How many DRISC sender cores drive one DRAM bank. TwoPerBank splits a bank's receivers across
 // both of its senders; OnePerBank is what a shard feeding more than one receiver requires.

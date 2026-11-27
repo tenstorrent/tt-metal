@@ -11,4 +11,5 @@ namespace nb = nanobind;
 void bind_generic_operation(nb::module_& mod);
 void bind_generic_operation_preparation(nb::module_& mod);
 void bind_generic_operation_program_spec(nb::module_& mod);
+void bind_generic_operation_compilation(nb::module_& mod);
 }  // namespace ttnn::operations::generic

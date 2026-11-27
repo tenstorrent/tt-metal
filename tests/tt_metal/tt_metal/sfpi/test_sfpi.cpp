@@ -6,17 +6,17 @@
 
 #include "command_queue_fixture.hpp"
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
 #include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <string>
 #include <gtest/gtest.h>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include "impl/context/metal_context.hpp"
 
 namespace {

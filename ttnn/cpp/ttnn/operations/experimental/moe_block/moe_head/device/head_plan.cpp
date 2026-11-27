@@ -7,7 +7,7 @@
 #include "ttnn/operations/experimental/moe_block/common/kernels/combine_plan_words.hpp"
 #include "ttnn/operations/experimental/moe_block/moe_head/device/kernels/head_shared_words.hpp"
 
-#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
 
 #include <algorithm>
 #include <cmath>
