@@ -46,12 +46,16 @@ constexpr int OP_EXP_ACCURATE = 2; // calculate_exponential_first_column<true,  
 constexpr int OP_EXP_POLY     = 3; // calculate_exponential_first_column<false, EXP_SCALE_BF16>
 constexpr int OP_SOFTPLUS     = 4; // calculate_softplus_first_column
 constexpr int OP_CORRECTION   = 5; // calculate_fused_max_sub_exp_add_tile
-constexpr int OP_EXP_POLY_DEG = 6; // calculate_exponential_polynomial<true, 4, EXP_POLY_DEGREE, ...>
+constexpr int OP_EXP_POLY_DEG1 = 6; // calculate_exponential_polynomial<true, 4, 1, ...>; DEG2..DEG4 follow as 7..9
+constexpr int OP_EXP_POLY_DEG4 = 9;
 
-static_assert(SDPA_OP >= OP_RECIP_ITER && SDPA_OP <= OP_EXP_POLY_DEG, "unhandled SDPA_OP");
+static_assert(SDPA_OP >= OP_RECIP_ITER && SDPA_OP <= OP_EXP_POLY_DEG4, "unhandled SDPA_OP");
 
-constexpr bool SDPA_OP_IS_EXP      = (SDPA_OP == OP_EXP_ACCURATE || SDPA_OP == OP_EXP_POLY || SDPA_OP == OP_EXP_POLY_DEG);
-constexpr bool SDPA_OP_IS_EXP_POLY = (SDPA_OP == OP_EXP_POLY || SDPA_OP == OP_EXP_POLY_DEG);
+constexpr bool SDPA_OP_IS_EXP_POLY_DEG = (SDPA_OP >= OP_EXP_POLY_DEG1 && SDPA_OP <= OP_EXP_POLY_DEG4);
+constexpr int EXP_POLY_DEGREE          = SDPA_OP_IS_EXP_POLY_DEG ? SDPA_OP - OP_EXP_POLY_DEG1 + 1 : 0;
+
+constexpr bool SDPA_OP_IS_EXP      = (SDPA_OP == OP_EXP_ACCURATE || SDPA_OP == OP_EXP_POLY || SDPA_OP_IS_EXP_POLY_DEG);
+constexpr bool SDPA_OP_IS_EXP_POLY = (SDPA_OP == OP_EXP_POLY || SDPA_OP_IS_EXP_POLY_DEG);
 
 // Derived from the op rather than passed in, so the tile count cannot disagree with the body.
 // Only the correction body works on more than one tile.
@@ -186,7 +190,7 @@ inline void sdpa_op(const std::uint32_t dst_index)
         _llk_math_eltwise_unary_sfpu_params_(
             sfpu::calculate_exponential_first_column<false /* SDPA_EXP_APPROX_MODE */, EXP_SCALE_BF16, is_fp32_dest_acc_en>, dst_index, VectorMode::C);
     }
-    else if constexpr (SDPA_OP == OP_EXP_POLY_DEG)
+    else if constexpr (SDPA_OP_IS_EXP_POLY_DEG)
     {
         // The polynomial body on its own, at a degree the first-column wrapper may not pick.
         _llk_math_eltwise_unary_sfpu_params_(

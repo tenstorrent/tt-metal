@@ -34,7 +34,6 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     DEST_SYNC,
-    SDPA_EXP_POLY_DEGREE,
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
@@ -49,11 +48,16 @@ TILE_DIMENSIONS = [TILE_DIM, TILE_DIM]
 RECIP_OPS = (SdpaOp.RecipIter,)
 # The calculate_exponential_first_column bodies, which pick their own polynomial degree.
 FIRST_COLUMN_EXP_OPS = (SdpaOp.ExpAccurate, SdpaOp.ExpPoly)
-EXP_OPS = FIRST_COLUMN_EXP_OPS + (SdpaOp.ExpPolyDegree,)
 
 # calculate_exponential_polynomial supports degrees 1 to 4. The first-column wrapper only picks
 # 2 (bf16 Dest) or 4 (fp32 Dest); test_sfpu_sdpa_exp_polynomial drives every degree directly.
-EXP_POLY_DEGREES = (1, 2, 3, 4)
+EXP_POLY_DEGREE_OPS = {
+    1: SdpaOp.ExpPolyDeg1,
+    2: SdpaOp.ExpPolyDeg2,
+    3: SdpaOp.ExpPolyDeg3,
+    4: SdpaOp.ExpPolyDeg4,
+}
+EXP_OPS = FIRST_COLUMN_EXP_OPS + tuple(EXP_POLY_DEGREE_OPS.values())
 
 # The exp bodies take their scale as a uint16_t bf16 pattern, so only bf16-exact values
 # keep the golden aligned with the kernel. 0xBF80 is -1.0, which ttnn's sigmoid_sub passes;
@@ -131,22 +135,19 @@ _TOLERANCES = {
     (SdpaOp.ExpAccurate, None): ((4.0e-6, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.ExpPoly, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
     # calculate_exponential_polynomial by degree. Degree 1 is ~4.3% off even before packing.
-    (SdpaOp.ExpPolyDegree, 1): ((4.0e-6, 8.6e-2), (4.0e-6, 8.6e-2)),
-    (SdpaOp.ExpPolyDegree, 2): ((4.0e-6, 1.2e-2), (4.0e-6, 4.8e-3)),
-    (SdpaOp.ExpPolyDegree, 3): ((4.0e-6, 1.2e-2), (4.0e-6, 2.0e-4)),
-    (SdpaOp.ExpPolyDegree, 4): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
+    (SdpaOp.ExpPolyDeg1, None): ((4.0e-6, 8.6e-2), (4.0e-6, 8.6e-2)),
+    (SdpaOp.ExpPolyDeg2, None): ((4.0e-6, 1.2e-2), (4.0e-6, 4.8e-3)),
+    (SdpaOp.ExpPolyDeg3, None): ((4.0e-6, 1.2e-2), (4.0e-6, 2.0e-4)),
+    (SdpaOp.ExpPolyDeg4, None): ((4.0e-6, 1.2e-2), (4.0e-6, 8.0e-6)),
     (SdpaOp.Softplus, None): ((3.0e-8, 1.0e-2), (3.0e-8, 3.2e-4)),
     (SdpaOp.RecipIter, False): ((2.5e-3, 1.2e-2), (1.2e-7, 2.5e-7)),
     (SdpaOp.RecipIter, True): ((2.5e-3, 1.2e-2), (2.5e-3, 1.2e-2)),
 }
 
 
-def _tolerance(op, precision, approx_mode, poly_degree=None):
+def _tolerance(op, precision, approx_mode):
     """(atol, rtol) for one path."""
-    if op == SdpaOp.ExpPolyDegree:
-        approx = poly_degree
-    else:
-        approx = approx_mode == ApproximationMode.Yes if op in RECIP_OPS else None
+    approx = approx_mode == ApproximationMode.Yes if op in RECIP_OPS else None
     bf16_packed, fp32_e2e = _TOLERANCES[(op, approx)]
     return fp32_e2e if precision == Precision.Fp32E2E else bf16_packed
 
@@ -167,12 +168,9 @@ class Variant(NamedTuple):
     approx_mode: ApproximationMode = ApproximationMode.No
     softplus: SoftplusParams = SOFTPLUS_CONFIGS[0]
     dest_sync: DestSync = DestSync.Half
-    poly_degree: int = 2
 
     def __str__(self):
         parts = [self.op.name]
-        if self.op == SdpaOp.ExpPolyDegree:
-            parts.append(f"deg{self.poly_degree}")
         if self.op in EXP_OPS:
             parts.append(f"scale{_bf16_to_float(self.exp_scale_bf16):g}")
         elif self.op == SdpaOp.Softplus:
@@ -225,7 +223,6 @@ def _templates(variant: Variant):
         APPROX_MODE(variant.approx_mode),
         DEST_SYNC(variant.dest_sync),
         SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
-        SDPA_EXP_POLY_DEGREE(poly_degree=variant.poly_degree),
         SDPA_SOFTPLUS_PARAMS(
             softplus_beta_bits=fp32_bits(variant.softplus.beta),
             softplus_beta_reciprocal_bits=fp32_bits(1.0 / variant.softplus.beta),
@@ -256,7 +253,7 @@ def _variants():
     variants += [
         Variant(op, dest_sync=DestSync.Full)
         for op in SdpaOp
-        if op not in (SdpaOp.Correction, SdpaOp.ExpPolyDegree)
+        if op != SdpaOp.Correction and op not in EXP_POLY_DEGREE_OPS.values()
     ]
     return variants
 
@@ -337,7 +334,7 @@ def _run_sfpu_sdpa(
         f"but only {list(SdpaSfpuGolden.TRANSFORMED_COLS)} should be written"
     )
 
-    atol, rtol = _tolerance(op, precision, variant.approx_mode, variant.poly_degree)
+    atol, rtol = _tolerance(op, precision, variant.approx_mode)
     assert passed_test(
         golden_tensor,
         res_tensor,
@@ -351,7 +348,7 @@ def _run_sfpu_sdpa(
 
 
 @parametrize(
-    poly_degree=list(EXP_POLY_DEGREES),
+    poly_degree=list(EXP_POLY_DEGREE_OPS),
     exp_scale_bf16=list(EXP_SCALE_BF16_VALUES),
     precision=list(Precision),
 )
@@ -362,11 +359,7 @@ def test_sfpu_sdpa_exp_polynomial(poly_degree, exp_scale_bf16, precision):
     iteration, so between them they cover both sides of sdpa_can_preload_ln2_constants.
     """
     _run_sfpu_sdpa(
-        Variant(
-            SdpaOp.ExpPolyDegree,
-            exp_scale_bf16=exp_scale_bf16,
-            poly_degree=poly_degree,
-        ),
+        Variant(EXP_POLY_DEGREE_OPS[poly_degree], exp_scale_bf16=exp_scale_bf16),
         precision,
     )
 
