@@ -107,7 +107,8 @@ SUPPORTED = {
     "buffer": ["dram", "l1"],
     "rank": [4, 6],
     # rows_tile_scatter keeps W, so padding columns land in output padding columns at every alignment;
-    # ROW_MAJOR pages carry no padding.
+    # ROW_MAJOR pages carry no padding; nhwc_tile_bfp8_transpose zeroes the input padding rows that
+    # become padding columns of live output groups, so they never raise a shared exponent.
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "dims": [(0, 2, 1, 3), (0, 1, 4, 2, 5, 3), (0, 3, 1, 2)],
 }
@@ -125,9 +126,6 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat8_b, "dims": (0, 1, 4, 2, 5, 3)},
     {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "dims": (0, 3, 1, 2)},
     {"layout": ttnn.ROW_MAJOR_LAYOUT, "dims": (0, 3, 1, 2)},
-    # Input padding rows (W not a multiple of 32) become padding columns inside output bfloat8_b
-    # groups, where a garbage value would raise the group's shared exponent.
-    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 
