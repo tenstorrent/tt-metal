@@ -92,8 +92,10 @@ class OpTestBase:
             vf_sweep_start_step = OpTestBase.vf_sweep_defaults.get("start_step") or 0
         if vf_sweep_results_path is None:
             vf_sweep_results_path = OpTestBase.vf_sweep_defaults.get("results_path")
-        # Resuming a sweep (e.g. after a hang) skips its first vf_start_step steps; the reference outputs are still
-        # taken at the lowest sweep clock. Every sweep event is appended to vf_results_path as one JSON line.
+        # Resuming a sweep (e.g. after a hang) skips its first vf_start_step steps. The reference outputs are taken at
+        # the clock and VDD of the first step that runs (the lowest clock at +0 mV on a fresh sweep), so a point that
+        # hangs while taking the reference can be skipped like any other. Every sweep event is appended to
+        # vf_results_path as one JSON line.
         self.vf_start_step = vf_sweep_start_step
         self.vf_results_path = vf_sweep_results_path
         self.vf_sweep_freqs = list(vf_sweep_freqs) if vf_sweep_freqs else None
@@ -326,8 +328,15 @@ class OpTestBase:
             if self.determinism_check_enabled:
                 if clock is not None:
                     # A chip that is non-deterministic at its default clock can also corrupt the reference, which
-                    # would then fail every sweep step. Take the reference at the lowest sweep clock instead.
-                    self._set_sweep_clock(clock, min(self.vf_sweep_freqs), "reference outputs")
+                    # would then fail every sweep step. Take the reference at the first sweep step's clock and VDD
+                    # instead (the lowest clock at +0 mV on a fresh sweep). reference_start goes out first, so a hang
+                    # while setting that point or taking the reference is charged to that step.
+                    ref_step = self.vf_start_step
+                    ref_mhz, ref_offset = self.vf_steps[0]
+                    self._record_sweep_event("reference_start", step=ref_step, mhz=ref_mhz, offset=ref_offset)
+                    ref_vcore = self._set_sweep_clock(clock, ref_mhz, "reference outputs")
+                    if ref_offset:
+                        self._set_sweep_vdd(clock, ref_vcore, ref_offset, "reference outputs")
                 # One reference run per activation; we then cycle through them and compare output to
                 # reference_out[act]. Deallocate only for L1 due to memory constraints.
                 # For DRAM we keep all a_t[act] live; we still switch self.activations each time, so
@@ -360,7 +369,11 @@ class OpTestBase:
                         self.deallocate_activations()
                 if clock is not None:
                     self._record_sweep_event(
-                        "reference", mhz=min(self.vf_sweep_freqs), failed=sorted(int(d) for d in reference_failed)
+                        "reference",
+                        step=ref_step,
+                        mhz=ref_mhz,
+                        offset=ref_offset,
+                        failed=sorted(int(d) for d in reference_failed),
                     )
 
             current_act_tensor = 0

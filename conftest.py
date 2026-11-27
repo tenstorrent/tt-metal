@@ -1070,13 +1070,13 @@ def pytest_addoption(parser):
         type=int,
         default=0,
         help="With --didt-vf-sweep: skip the first N (clock, VDD offset) steps, to resume a sweep after a hang. "
-        "The reference outputs are still taken at the lowest sweep clock",
+        "The reference outputs are taken at the clock and VDD of the first step that runs",
     )
     parser.addoption(
         "--vf-sweep-results",
         action="store",
         default=None,
-        help="With --didt-vf-sweep: append one JSON line per sweep event (reference, step start, step end) to this "
+        help="With --didt-vf-sweep: append one JSON line per sweep event (reference start/end, step start/end) to this "
         "file as the sweep runs, so a driver can tell which step hung",
     )
     parser.addoption(

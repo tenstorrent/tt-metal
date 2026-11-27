@@ -10,8 +10,10 @@ sweep     Re-run the failing workload (DIDT minimal_matmul, or the NOC integrity
           sweep through ARC, and report at which (AICLK, VDD) points the failure is gone.
 
 The sweep survives hangs: OpTestBase appends one JSON line per sweep event (--vf-sweep-results). When no event arrives
-within the step timeout, the step is marked HANG, pytest is killed, the boards are reset and the sweep resumes at the
-next step (--vf-sweep-start-step). Reference outputs are always taken at the lowest sweep clock.
+within the step timeout, or pytest dies on a device timeout (a chip that stopped answering MMIO), the step is marked
+HANG, pytest is killed, the boards are reset and the sweep resumes at the next step (--vf-sweep-start-step).
+Reference outputs are taken at the clock and VDD of the first step each run starts from (the lowest clock at +0 mV on
+a fresh sweep). A point that hangs while its reference is being taken is marked HANG and skipped like any other.
 
 A point is FIXED when every determinism check at it was bit-exact on every chip and it did not hang. The working
 (clock, Vmin) pairs are, per clock, the lowest VDD offset from which every higher tested offset also passed.
@@ -32,6 +34,9 @@ PYTEST_TIMEOUT = re.compile(r"\+{5,} Timeout \+{5,}|Failed: Timeout")
 UNUSED = re.compile(r"unused Ethernet channel|\[unused channel\]")
 NOC_HANG = re.compile(r"NOC (hang|timeout|not run):|wedged|NOC failure:.*(timeout|not run|kernel never ran)")
 NOC_MISMATCH = re.compile(r"NOC mismatch:")
+# A chip that stopped answering host reads: UMD gives up on the MMIO access (and aborts the process when it happens in a
+# destructor). For the NOC test this is how a wedged NOC shows up on the host.
+DEVICE_TIMEOUT = re.compile(r"MMIO per-op timeout|DeviceTimeoutError")
 
 TESTS = {
     "didt": {
@@ -86,6 +91,8 @@ def classify(kind, log_text, rc):
         return "HANG", "chips left wedged (exit code 2)"
     if hang_lines:
         return "HANG", f"{len(hang_lines)} NOC timeout/hang line(s)"
+    if any(DEVICE_TIMEOUT.search(l) for l in lines):
+        return "HANG", "a chip stopped answering MMIO reads (device timeout)"
     if timed_out:
         return "HANG", "pytest timeout"
     if mismatch_lines:
@@ -151,8 +158,14 @@ def kill_group(proc):
     proc.wait()
 
 
+def attempt_hung(outcome, attempt_log):
+    """Whether a run that ended early hung: killed by the watchdog, or died on a chip that stopped answering MMIO."""
+    return outcome == "hang" or bool(DEVICE_TIMEOUT.search(attempt_log))
+
+
 def run_invocation(a, spec, results, start_step, out):
-    """Run pytest once from start_step. Returns 'done', 'hang' (killed by the watchdog) or 'exit' (ended early)."""
+    """Run pytest once from start_step. Returns (outcome, log): outcome is 'done', 'hang' (killed by the watchdog) or
+    'exit' (ended early), log is what this run wrote to sweep.log."""
     cmd = [
         sys.executable,
         "-m",
@@ -180,8 +193,16 @@ def run_invocation(a, spec, results, start_step, out):
     env = dict(os.environ, PYTHONUNBUFFERED="1", **spec["env"])
     log(f"running from step {start_step}: {' '.join(cmd)}", out)
     seen = len(read_events(results))
+    out.flush()
+    log_start = out.tell()
     proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
     phase_started = time.time()
+
+    def attempt_log():
+        with open(out.name, errors="replace") as f:
+            f.seek(log_start)
+            return f.read()
+
     while True:
         try:
             proc.wait(timeout=5)
@@ -193,8 +214,11 @@ def run_invocation(a, spec, results, start_step, out):
         # A step may take up to 3x the slowest finished step (clocks differ), never less than --step-timeout.
         limit = max([a.step_timeout] + [3 * d for d in step_durations(read_events(results))])
         if last is None:
-            limit, what = a.startup_timeout, "device open, compile and reference outputs"
+            limit, what = a.startup_timeout, "device open"
             since = phase_started
+        elif last["event"] == "reference_start":  # includes the compile, so it gets the startup allowance
+            limit, what = a.startup_timeout, f"reference outputs at {last['mhz']} MHz, +{last['offset']} mV"
+            since = last["time"]
         elif last["event"] == "start":
             what = f"step {last['step']} ({last['mhz']} MHz, +{last['offset']} mV)"
             since = last["time"]
@@ -204,11 +228,16 @@ def run_invocation(a, spec, results, start_step, out):
         if time.time() - since > limit:
             log(f"no progress for {limit} s while waiting for {what}: treating it as a hang, killing pytest", out)
             kill_group(proc)
-            return "hang"
+            return "hang", attempt_log()
     if any(e["event"] == "done" for e in read_events(results)[seen:]):
-        return "done"
-    log(f"pytest exited with {proc.returncode} before the sweep finished", out)
-    return "exit"
+        return "done", attempt_log()
+    text = attempt_log()
+    log(
+        f"pytest exited with {proc.returncode} before the sweep finished"
+        + (" (a chip stopped answering MMIO: device timeout)" if DEVICE_TIMEOUT.search(text) else ""),
+        out,
+    )
+    return "exit", text
 
 
 def run_sweep(a, out):
@@ -227,26 +256,41 @@ def run_sweep(a, out):
     startup_failures = 0
     while start < len(steps):
         before = len(read_events(results))
-        outcome = run_invocation(a, spec, results, start, out)
+        outcome, attempt_log = run_invocation(a, spec, results, start, out)
         events = read_events(results)[before:]
         started = [e for e in events if e["event"] == "start"]
         ended = {e["step"] for e in events if e["event"] == "end"}
+        ref_started = [e for e in events if e["event"] == "reference_start"]
+        ref_done = any(e["event"] == "reference" for e in events)
+        hung = attempt_hung(outcome, attempt_log)
         if outcome == "done":
             break
+        if not started and ref_started and not ref_done and hung:
+            # The reference run hung at this step's clock and VDD: that is the failure under test, at this point.
+            current = ref_started[-1]["step"]
+            status[current] = "HANG"
+            startup_failures = 0
+            log(f"step {current} {steps[current]} marked HANG (hung while taking the reference outputs)", out)
+            start = current + 1
+            if not reset_boards(a.reset_cmd, out):
+                return steps, status, "could not reset the boards after a failed step"
+            continue
         if not started:
-            # Never reached the first step: the reference outputs (lowest clock) or the setup failed.
+            # Never reached the first step and did not hang in the reference: setup failed (or the reference run
+            # failed in some other way). Retry once, then give up.
             startup_failures += 1
-            reason = "hung" if outcome == "hang" else "failed"
-            log(f"the sweep {reason} before its first step (attempt {startup_failures})", out)
+            reason = "hung" if hung else "failed"
+            where = "while taking the reference outputs" if ref_started else "before taking the reference outputs"
+            log(f"the sweep {reason} {where} (attempt {startup_failures})", out)
             if not reset_boards(a.reset_cmd, out) or startup_failures >= 2:
-                return steps, status, f"the sweep {reason} before its first step twice (setup or reference outputs)"
+                return steps, status, f"the sweep {reason} {where} twice (setup problem)"
             continue
         startup_failures = 0
         current = started[-1]["step"]
         if current in ended:  # died between steps: resume after the last one that finished
             current_status = None
         else:
-            current_status = "HANG" if outcome == "hang" else "ERROR"
+            current_status = "HANG" if hung else "ERROR"
             status[current] = current_status
             log(f"step {current} {steps[current]} marked {current_status}", out)
         start = current + 1
@@ -258,8 +302,11 @@ def run_sweep(a, out):
 def summarize(a, steps, status, abort_reason, out):
     events = read_events(Path(a.output) / "events.jsonl")
     ends = {e["step"]: e for e in events if e["event"] == "end"}
-    reference_failed = sorted({d for e in events if e["event"] == "reference" for d in e.get("failed", [])})
-    min_mhz = min(a.freqs)
+    # Reference outputs are taken at the first step of each run; failed devices there count against that step.
+    ref_failed = {}  # step index -> devices whose reference output failed
+    for e in events:
+        if e["event"] == "reference" and e.get("failed"):
+            ref_failed.setdefault(e.get("step", 0), set()).update(e["failed"])
 
     points = {}  # (mhz, off) -> dict(verdict, text, vcore{dev: mV}, bad_devices)
     for idx, (mhz, off) in enumerate(steps):
@@ -270,9 +317,7 @@ def summarize(a, steps, status, abort_reason, out):
         if e is None:
             points[(mhz, off)] = {"verdict": "NOT RUN", "text": "-", "vcore": {}, "bad": []}
             continue
-        bad = sorted(int(d) for d, n in e["nd"].items() if n)
-        if mhz == min_mhz and off == 0:
-            bad = sorted(set(bad) | set(reference_failed))  # reference outputs are taken at this point
+        bad = sorted(set(int(d) for d, n in e["nd"].items() if n) | ref_failed.get(idx, set()))
         if e["checks"] == 0:
             verdict, text = "NO CHECKS", "no checks"
         elif bad:
@@ -301,8 +346,10 @@ def summarize(a, steps, status, abort_reason, out):
     widths = [max(len(r[c]) for r in rows + [header]) for c in range(len(header))]
     fmt = lambda r: "  " + " | ".join(v.ljust(w) for v, w in zip(r, widths))
     lines += ["", "Points (PASS = every check bit-exact on every chip, no hang):", fmt(header)] + [fmt(r) for r in rows]
-    if reference_failed:
-        lines.append(f"  reference outputs at {min_mhz} MHz +0 mV failed on device(s) {reference_failed}")
+    for idx, devs in sorted(ref_failed.items()):
+        if idx < len(steps):
+            mhz, off = steps[idx]
+            lines.append(f"  reference outputs at {mhz} MHz +{off} mV failed on device(s) {sorted(devs)}")
 
     def vrange(v):
         return f"{min(v.values())}-{max(v.values())} mV" if v else "?"
