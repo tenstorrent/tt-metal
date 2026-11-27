@@ -71,7 +71,7 @@ SHARED_MARK = re.compile(r"^BATCH_SHARED\s*=\s*True\b", re.M)
 # check ("full": every layer, in the accept gate's one fresh process with the determinism check) or a performance
 # measurement ("executed": the layers it executes, testing/batch.run_layers, in the resident runner). A model test file
 # declares ``BATCH_LAYERS = "executed"``; the framework's own: EXECUTED_TESTS; anything else is "full".
-LAYERS_MARK = re.compile(r"^BATCH_LAYERS\s*=\s*[\"'](full|executed)[\"']", re.M)
+LAYERS_MARK = re.compile(r"^BATCH_LAYERS\s*=\s*[\"'](full|executed|none)[\"']", re.M)  # F309: none = the mesh only
 EXECUTED_TESTS = ("test_profile.py", "test_positions.py")
 LOADS_METRIC = "model_loads"  # each process: the model loads it made (testing/batch.shared_model)
 GATE_LOADS_METRIC = "gate_model_loads"  # a gate run: the model loads of all its processes (core/gate.run_units)

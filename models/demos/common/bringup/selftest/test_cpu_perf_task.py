@@ -42,3 +42,35 @@ def test_an_ab_side_overrides_an_inline_switch_of_the_gate():
     assert off.count("DS41_X=off") == 2 and "DS41_X=on" not in off and "A=1" in off and "B=2" in off
     assert side_cmd(cmd, {"DS41_X": "on"}) == cmd
     assert side_cmd("XDS41_X=on t", {"DS41_X": "off"}) == "XDS41_X=on t"  # another variable's suffix stays
+
+
+def test_an_op_level_port_task_gets_no_model_determinism():
+    """F309: a perf task gated only (ab_mode: none) whose gate runs only op tests (no shared-model run) gets no injected
+    model determinism check; a model test in its gate still gets one."""
+    from models.demos.common.bringup.core import gate as G
+
+    r = "scripts/run_safe_pytest.sh --run-all --no-precompile"
+    op = {"id": "P.1", "step": "perf", "role": "perf", "device": True, "ab_mode": "none"}
+    units = [("P.1", f"{r} tests/ttnn/unit_tests/operations/x/test_x.py")]
+    assert not G.needs_determinism(op, units)
+    assert G.needs_determinism(dict(op, ab_mode="quick"), units)
+    model = [("P.1", f"{r} models/demos/common/bringup/tests/test_ladder.py")]
+    assert G.needs_determinism(op, model)
+
+
+def test_a_mesh_only_shared_test_is_op_level(tmp_path, monkeypatch):
+    """F309: a BATCH_SHARED op test marked BATCH_LAYERS = "none" (the runner's mesh, no model) keeps a port task
+    op-level; the same test without the mark is a model test."""
+    from models.demos.common.bringup.core import batch as B
+    from models.demos.common.bringup.core import gate as G
+
+    t = tmp_path / "models" / "x" / "tests" / "test_op.py"
+    t.parent.mkdir(parents=True)
+    t.write_text('BATCH_SHARED = True\nBATCH_LAYERS = "none"\n')
+    monkeypatch.setattr(B, "_REPO", tmp_path)
+    r = "scripts/run_safe_pytest.sh --run-all --no-precompile"
+    op = {"id": "P.1", "step": "perf", "role": "perf", "device": True, "ab_mode": "none"}
+    assert B.layer_class("models/x/tests/test_op.py") == "none"
+    assert not G.needs_determinism(op, [("P.1", f"{r} models/x/tests/test_op.py")])
+    t.write_text("BATCH_SHARED = True\n")
+    assert G.needs_determinism(op, [("P.1", f"{r} models/x/tests/test_op.py")])

@@ -3013,3 +3013,11 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
 - Fix: resident.alive() reads /proc/<pid>/stat and treats state Z as not alive. Selftest:
   test_resident_gate.py::test_a_zombie_runner_is_not_alive. (The orchestrator not reaping its children is the root;
   alive() is the check every waiter uses, so it is fixed there.)
+
+## F309 (2026-11-27, DeepSeek-V4.1 NC.1; owner: the C++ port series runs op-level checks only)
+- Seen: NC.1 (port the grouped_matmul fork to a C++ device op; gate = op tests) got the injected model determinism check
+  (a model load, 270 s), because needs_determinism() treats every step 'perf' task as model-level.
+- Fix: a task with `ab_mode: none` whose gate's shared-model runs all name tests marked `BATCH_LAYERS = "none"` (the
+  runner's held mesh only, no model; new value of the mark) or whose gate has no shared-model run gets no injected
+  determinism. A model test in the gate keeps it. Selftests: test_cpu_perf_task.py::test_an_op_level_port_task_gets_no_model_determinism,
+  ::test_a_mesh_only_shared_test_is_op_level.
