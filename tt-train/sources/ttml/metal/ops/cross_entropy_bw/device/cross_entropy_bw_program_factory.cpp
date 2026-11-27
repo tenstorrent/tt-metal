@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
 #include <optional>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "cross_entropy_bw_device_operation.hpp"
 #include "cross_entropy_bw_device_operation_types.hpp"

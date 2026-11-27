@@ -7,7 +7,7 @@
 #include "ttnn/distributed/bidirectional_fabric_socket.hpp"
 #include "ttnn/distributed/fabric_socket.hpp"
 #include "ttnn/distributed/mpi_socket.hpp"
-#include "tt-metalium/distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 
 namespace ttnn::distributed {
 

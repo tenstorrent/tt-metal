@@ -8,10 +8,10 @@
 #include <functional>
 #include <numeric>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
@@ -27,9 +27,7 @@ bool needs_dst_accum(DataType dtype) {
 uint32_t max_block_ct(bool fp32) { return fp32 ? 4 : 8; }
 
 uint32_t planning_tile_size(DataType in_dtype, DataType out_dtype) {
-    return std::max(
-        tt::tile_size(datatype_to_dataformat_converter(in_dtype)),
-        tt::tile_size(datatype_to_dataformat_converter(out_dtype)));
+    return std::max(tt::tile_size(cb_dataformat_for(in_dtype)), tt::tile_size(cb_dataformat_for(out_dtype)));
 }
 
 PaddedGrid padded_grid(const Tensor& input) {

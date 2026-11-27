@@ -5,14 +5,14 @@
 #include "ttnn/operations/transformer/sdpa/device/sparse_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_sdpa_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/work_split.hpp>  // corerange_to_cores
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer_constants.h>  // NUM_CIRCULAR_BUFFERS
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>  // GetCommonRuntimeArgs (cache-hit in-place patch)
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/utils/work_split.hpp>  // corerange_to_cores
 #include <array>
 #include <bit>
 #include <string>
@@ -147,7 +147,9 @@ tt::tt_metal::ProgramDescriptor::CBDescriptors make_cbs(
                 .buffer_index = static_cast<uint8_t>(id), .data_format = df, .page_size = page_size}}},
         });
     };
-    cb(cb_q_rm, d.k_dim * t.q.element_size(), d.H, d.q_df);
+    // Q rows and the untilized output move one 32-head block at a time (the reader pushes, and the writer drains,
+    // TILE_HEIGHT rows per block), so each holds a single block rather than all H heads.
+    cb(cb_q_rm, d.k_dim * t.q.element_size(), tt::constants::TILE_HEIGHT, d.q_df);
     cb(cb_q_in, tt::tile_size(q_in_df), Sqt * DHt, q_in_df);
     if (d.scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
@@ -184,7 +186,7 @@ tt::tt_metal::ProgramDescriptor::CBDescriptors make_cbs(
     cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
     cb(cb_corr, tile_bytes, Sqt, bf);
     cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_rm, tt::tile_size(out_df), Sqt * vDHt, out_df);
+    cb(cb_out_rm, tt::tile_size(out_df), vDHt, out_df);
     cb(cb_idx, d.topk * t.indices.element_size(), 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
@@ -312,6 +314,7 @@ SparseSDPAOperation::SparseSDPAProgramFactory::Plan SparseSDPAOperation::SparseS
     for (const auto& c : make_cbs(attrs, t, SparseSDPAOperation::compute_output_specs(attrs, t).data_type(), true)) {
         cb_bytes += (c.total_size + cb_align - 1) / cb_align * cb_align;
     }
+    // The free L1 already excludes an L1 output: the op's outputs are allocated before its program is hashed or built.
     if (cb_bytes > ttnn::operations::data_movement::get_max_l1_space(t.q)) {
         return Plan{.split_k = false, .num_used = num_cores};
     }

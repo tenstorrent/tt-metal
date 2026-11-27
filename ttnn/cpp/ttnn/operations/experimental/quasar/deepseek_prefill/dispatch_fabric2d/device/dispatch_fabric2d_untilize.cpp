@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "kernels/dataflow/dispatch_fabric2d_untilize_args.hpp"

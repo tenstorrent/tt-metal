@@ -6,8 +6,8 @@
 
 #include <numeric>
 
-#include "tt-metalium/distributed.hpp"
-#include "tt-metalium/math.hpp"
+#include "tt-metalium/execution/distributed.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/experimental/quasar/binary/binary.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/matmul.hpp"

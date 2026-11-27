@@ -87,16 +87,16 @@ inline void for_each_work_item(
         const bool defer_first = defer_first_rows && segment_start == block;
         const uint32_t split = block + split_row;
         const bool defer_split = split_row != 0 && segment_start <= split && split < segment_end;
+        const uint32_t deferred = defer_first + defer_split;
+        // One process() call site, so the kernels inline it; with more, the reader calls it out of line.
         for (uint32_t index = segment_start; index < segment_end; ++index) {
-            if (!(defer_first && index == block) && !(defer_split && index == split)) {
-                process(index);
+            uint32_t work = index + defer_first;
+            if (index + deferred >= segment_end) {
+                work = defer_first && index + deferred == segment_end ? block : split;
+            } else if (defer_split && work >= split) {
+                ++work;
             }
-        }
-        if (defer_first) {
-            process(block);
-        }
-        if (defer_split) {
-            process(split);
+            process(work);
         }
         segment_start = segment_end;
     }
@@ -104,11 +104,14 @@ inline void for_each_work_item(
 
 // Fabric exchange buffer pages. The predecessor writes rows [predecessor_page, +3) and the final segment's owner
 // writes rows [carry_page, +3); the convolution cores stage this rank's outgoing and end rows for the exchange core.
+// With an SP-sharded history slab, every rank writes its channels of the slot's old tail into the chronologically
+// first rank's rows [history_page, +3), the only rank that reads it.
 constexpr uint32_t predecessor_page = 0;
 constexpr uint32_t carry_page = predecessor_page + history_rows;
 constexpr uint32_t outgoing_page = carry_page + history_rows;
 constexpr uint32_t end_page = outgoing_page + history_rows;
-constexpr uint32_t exchange_rows = end_page + history_rows;
+constexpr uint32_t history_page = end_page + history_rows;
+constexpr uint32_t exchange_rows = history_page + history_rows;
 // Compile-time index of a fabric connection the exchange core does not have.
 constexpr uint32_t no_fabric_connection = ~0U;
 // The exchange core's fabric connections: the SP neighbors, and on a turning 2D axis the links peer routes leave on.

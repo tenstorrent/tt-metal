@@ -6,14 +6,14 @@
 // device.hpp is needed for IDevice::arch() in matches_quasar_native_slice. Do NOT rely on it arriving
 // transitively: this target is a unity build, so a missing include here compiles clean in build_Release
 // and only breaks with TT_UNITY_BUILDS=OFF.
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cmath>
@@ -704,11 +704,17 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         op_type != BinaryOpType::DIV && op_type != BinaryOpType::MAXIMUM && op_type != BinaryOpType::MINIMUM) {
         return false;
     }
-    // a and b in one format: bf16, fp32 or one MX format. The output's format is checked below. Mixed formats are not
-    // validated on Quasar.
+    // a and b in one format: bf16, fp32 or one MX format; or one bf16 and one MX operand, either way round (the
+    // unpacker expands each operand to Float16_b on its own, so the compute never sees the mix). Other mixes are not
+    // validated on Quasar. The output's format is checked below.
     const DataType dtype = a.dtype();
-    const bool mx_in = is_mx(dtype);
-    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && !mx_in) || (!is_scalar && b->dtype() != dtype)) {
+    const DataType b_dtype = is_scalar ? dtype : b->dtype();
+    const bool mixed_bf16_mx =
+        !is_scalar && b_dtype != dtype &&
+        ((dtype == DataType::BFLOAT16 && is_mx(b_dtype)) || (is_mx(dtype) && b_dtype == DataType::BFLOAT16));
+    const bool mx_in = is_mx(dtype) || is_mx(b_dtype);
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && !is_mx(dtype)) ||
+        (!is_scalar && b_dtype != dtype && !mixed_bf16_mx)) {
         return false;
     }
     // The factory packs a scalar in a's format into the ring of b, whose format is derived: a's on the SFPU kernel,
@@ -756,12 +762,13 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_dtype != dtype && !mx_to_bf16 && !bf16_to_mx) {
         return false;
     }
-    // MX takes no scalar, no subtile broadcast and no activation: those paths are not validated with MX on Quasar. An
-    // outer-dim broadcast only maps whole tiles, so it stays admitted.
-    const bool has_subtile_broadcast = attributes.subtile_broadcast_type != SubtileBroadcastType::NONE;
+    // MX takes no scalar and no activation: those paths are not validated with MX on Quasar. A subtile broadcast
+    // (ROW, COL, SCALAR and the mixes) is admitted: the compute expands it with unary_bcast, which the LLK supports
+    // for MX sources (the unpacker expands the MX tile to Float16_b), and the expansion rings stay in Float16_b in
+    // the factory. An outer-dim broadcast only maps whole tiles.
     const bool has_activation = !attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
                                 !attributes.post_activations.empty();
-    if ((mx_in || mx_out) && (is_scalar || has_subtile_broadcast || has_activation)) {
+    if ((mx_in || mx_out) && (is_scalar || has_activation)) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.

@@ -90,11 +90,15 @@ jobs:
         run: mkdir -p "$PIPELINE_DIR"
 
       # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
-      # test step so the 60-minute token lifetime starts late.
+      # test step so the 60-minute token lifetime starts late. Only schedule and
+      # workflow_dispatch runs on main get a token; other runs warn and continue without one.
       - name: 🤗 Get Hugging Face token (OIDC)
         id: hf-oidc
         timeout-minutes: 5
-        uses: ./.github/actions/hf-oidc-token
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
+          if-no-token: warn
 
       - name: ${{ matrix.test-group.name }}
         id: run-test

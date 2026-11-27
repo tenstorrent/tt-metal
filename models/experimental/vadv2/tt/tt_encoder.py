@@ -66,10 +66,11 @@ class TtBEVFormerEncoder:
             self.layers.append(TtBEVFormerLayer(self.device, params.layers[f"layer{i}"], **transformer_layers))
 
         # ref_3d, ref_2d, reference_points_cam, bev_mask depend only on (bev_h, bev_w)
-        # and the static lidar2img / img_shape in img_metas. Caching them avoids
-        # re-running get_reference_points_ttnn + point_sampling_ttnn (~50 ops including
-        # reshape/permute/matmul/divide/concat) on every forward call.
-        self._ref_cache = {}
+        # and lidar2img. Caching them avoids re-running get_reference_points_ttnn +
+        # point_sampling_ttnn (~50 ops) on every forward call. One entry: a new camera
+        # rig replaces it, so device memory does not grow with the number of rigs.
+        self._ref_cache_key = None
+        self._ref_cache = None
 
     @staticmethod
     def get_reference_points_ttnn(H, W, Z=8, num_points_in_pillar=4, dim="3d", bs=1, device=None, dtype=ttnn.bfloat16):
@@ -246,11 +247,16 @@ class TtBEVFormerEncoder:
         output = bev_query
         intermediate = []
 
-        cache_key = (bev_h, bev_w, bev_query.shape[1])
-        cached = self._ref_cache.get(cache_key)
-        if cached is not None:
-            ref_3d, ref_2d, reference_points_cam, bev_mask = cached
+        # The camera projection depends on lidar2img and the image size, so both are part of the key.
+        lidar2img = np.asarray([m["lidar2img"] for m in kwargs["img_metas"]])
+        image_hw = tuple(kwargs["img_metas"][0]["img_shape"][0][:2])
+        cache_key = (bev_h, bev_w, bev_query.shape[1], lidar2img.tobytes(), image_hw)
+        if self._ref_cache_key == cache_key:
+            ref_3d, ref_2d, reference_points_cam, bev_mask = self._ref_cache
         else:
+            if self._ref_cache is not None:
+                for t in self._ref_cache:
+                    ttnn.deallocate(t)
             ref_3d = self.get_reference_points_ttnn(
                 bev_h,
                 bev_w,
@@ -264,11 +270,15 @@ class TtBEVFormerEncoder:
             ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
 
             reference_points_cam, bev_mask = self.point_sampling_ttnn(ref_3d, self.pc_range, kwargs["img_metas"])
-            self._ref_cache[cache_key] = (ref_3d, ref_2d, reference_points_cam, bev_mask)
+            self._ref_cache_key = cache_key
+            self._ref_cache = (ref_3d, ref_2d, reference_points_cam, bev_mask)
 
         shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
         shift_ref_2d = shift_ref_2d + shift
+        # Upstream VAD aliases shift_ref_2d to ref_2d, so the current-frame queries are shifted too.
+        # The released weights were trained that way. The cached ref_2d itself stays unshifted.
+        ref_2d = shift_ref_2d
 
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
