@@ -11,6 +11,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/copy_dest_values.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -137,6 +138,40 @@ void kernel_main() {
 
     compute_kernel_hw_startup(in_cb_id_0, in_cb_id_0);
     copy_init(in_cb_id_0);
+#if defined(ARCH_QUASAR)
+    if constexpr (DST_ACCUM_MODE && copy_format == DataFormat::Int32) {
+        // Int32 indices unpack straight to 32-bit Dest, and UnpackToDestEn is kernel-wide, so the bf16 data does too.
+        // A 16-bit unpack into 32-bit Dest writes only the upper half of each datum; the lower half keeps whatever the
+        // previous program left (the pack-side ZEROACC only marks rows zero, it does not clear their bits). That turns
+        // -inf padding into NaN and rounds values up. Write real 32-bit zeros into all of Dest once: the copy gives
+        // each section an Int32 format (an SFPU-only write into a fresh section has none), then the int fill clears 32
+        // bits.
+        // Clear every tile of every Dest section (SyncHalf alternates between two sections).
+        constexpr uint32_t dest_tiles =
+            ckernel::trisc::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
+        constexpr uint32_t dest_sections = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
+        in_idx_cb.wait_front(1);
+        reconfig_data_format_srca(in_idx_cb_id);
+        for (uint32_t section = 0; section < dest_sections; ++section) {
+            tile_regs_acquire();
+            copy_init(in_idx_cb_id);
+            for (uint32_t d = 0; d < dest_tiles; ++d) {
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
+                copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, d);
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
+            }
+            fill_tile_init();
+            for (uint32_t d = 0; d < dest_tiles; ++d) {
+                fill_tile_int<DataFormat::Int32>(d, 0);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            tile_regs_release();
+        }
+        reconfig_data_format_srca(in_idx_cb_id, in_cb_id_0);
+        copy_init(in_cb_id_0);
+    }
+#endif
     max_reduce_with_indices_init<ckernel::DataLayout::ROW_MAJOR>();
 
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
