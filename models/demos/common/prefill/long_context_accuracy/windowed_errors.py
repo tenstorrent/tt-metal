@@ -58,13 +58,16 @@ def row_sums(expected: torch.Tensor, actual: torch.Tensor) -> torch.Tensor:
     )
 
 
+def ratio_nrmse(e2: torch.Tensor, yy: torch.Tensor) -> torch.Tensor:
+    """Elementwise NRMSE ``sqrt(Σe² / Σyy)`` of summed squared errors ``e2`` and summed golden squares ``yy``: 0 for
+    no error (also on an all-zero golden), inf for any error on an all-zero golden, NaN for NaN input."""
+    e2, yy = torch.as_tensor(e2, dtype=torch.float64), torch.as_tensor(yy, dtype=torch.float64)
+    return torch.where(e2 == 0, torch.zeros_like(e2), (e2 / yy).sqrt())
+
+
 def nrmse(sums: torch.Tensor) -> float:
-    """``‖x − y‖ / ‖y‖`` over the rows of ``sums``: 0 for an exact match (also on an all-zero golden), inf for any
-    error on an all-zero golden."""
-    error, norm = float(sums[:, SUM_EE].sum()), float(sums[:, SUM_YY].sum())
-    if error == 0:
-        return 0.0
-    return math.sqrt(error / norm) if norm > 0 else math.inf
+    """``‖x − y‖ / ‖y‖`` over the rows of ``sums`` (``ratio_nrmse`` of the summed columns)."""
+    return float(ratio_nrmse(sums[:, SUM_EE].sum(), sums[:, SUM_YY].sum()))
 
 
 def _centred(sums: torch.Tensor) -> tuple[float, float, float]:
@@ -114,11 +117,16 @@ def golden_floor(slice_norms: torch.Tensor) -> float:
     return NRMSE_FLOOR_FRACTION * float(slice_norms.to(torch.float64).median())
 
 
+def floored_nrmse(e2: torch.Tensor, yy: torch.Tensor, floor: float) -> torch.Tensor:
+    """Per-row NRMSE of per-row Σe² and Σyy with each row's golden norm floored at ``floor`` (the golden's typical
+    scale, so a near-zero row does not report its own magnitude); an exact row is 0."""
+    error = e2.sqrt()
+    return torch.where(error == 0, torch.zeros_like(error), error / yy.sqrt().clamp_min(floor))
+
+
 def row_nrmse(sums: torch.Tensor, floor: float) -> torch.Tensor:
-    """Per-row NRMSE with each row's golden norm floored at ``floor`` (the golden's typical scale, so a near-zero row
-    does not report its own magnitude); an exact row is 0."""
-    error = sums[:, SUM_EE].sqrt()
-    return torch.where(error == 0, torch.zeros_like(error), error / sums[:, SUM_YY].sqrt().clamp_min(floor))
+    """``floored_nrmse`` of each row of ``sums``."""
+    return floored_nrmse(sums[:, SUM_EE], sums[:, SUM_YY], floor)
 
 
 def rms_err(sums: torch.Tensor) -> float:

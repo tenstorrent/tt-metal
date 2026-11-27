@@ -30,7 +30,6 @@ per-head PCC.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -45,26 +44,15 @@ from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     WindowedErrors,
     cross_sums,
     errors,
+    floored_nrmse,
     pcc,
+    ratio_nrmse,
     row_sums,
 )
 
 WINDOW = 1024  # rows per output window
 TAIL_PERCENTILES = (50, 95, 99)
 STATE_PRODUCT = "state.recurrent"  # the golden's recurrent state after each segment, [1, heads, k, v]
-
-
-def _sqrt_ratio(num: float, den: float) -> float:
-    """``sqrt(num / den)``: 0 for no error (also on an all-zero golden), inf for an error on an all-zero golden."""
-    if num == 0:
-        return 0.0
-    return math.sqrt(num / den) if den > 0 else math.inf
-
-
-def ratio_nrmse(num: np.ndarray, den: np.ndarray) -> np.ndarray:
-    """Elementwise ``sqrt(Σe² / Σyy)`` of summed squared errors ``num`` and golden squares ``den``."""
-    with np.errstate(divide="ignore", invalid="ignore"):
-        return np.sqrt(num / den)
 
 
 def _tail(name: str, values: np.ndarray, positions: Sequence) -> dict:
@@ -94,17 +82,17 @@ def kda_tiers(
     if state_sums.ndim != 3 or state_sums.shape[-1] != 3 or len(state_sums) != len(state_ends) or not len(state_ends):
         raise ValueError(f"state sums {state_sums.shape} do not match {len(state_ends)} snapshots of [heads, 3]")
     span = {"start": 0, "end": rows, "rows": rows}
-    whole_e2, whole_yy = float(e2.sum()), float(yy.sum())
+    whole_yy = float(yy.sum())
     window_starts = list(range(0, rows, WINDOW))
-    window_nrmse = np.array(
-        [_sqrt_ratio(float(e2[s : s + WINDOW].sum()), float(yy[s : s + WINDOW].sum())) for s in window_starts]
-    )
-    error = e2.sqrt()
-    token_nrmse = torch.where(error == 0, torch.zeros_like(error), error / yy.sqrt().clamp_min(floor)).numpy()
+    window_nrmse = ratio_nrmse(
+        torch.stack([e2[s : s + WINDOW].sum() for s in window_starts]),
+        torch.stack([yy[s : s + WINDOW].sum() for s in window_starts]),
+    ).numpy()
+    token_nrmse = floored_nrmse(e2, yy, floor).numpy()
 
     s = state_sums
-    head = ratio_nrmse(s[..., 0], s[..., 1])  # [snapshots, heads]
-    pooled = ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1))
+    head = ratio_nrmse(s[..., 0], s[..., 1]).numpy()  # [snapshots, heads]
+    pooled = ratio_nrmse(s[..., 0].sum(-1), s[..., 1].sum(-1)).numpy()
     final_gain = s[-1, :, 2] / s[-1, :, 1]
     heads = list(range(s.shape[1]))
     head_gain = _tail("state_head_gain_final", np.abs(final_gain - 1), heads)
@@ -113,7 +101,7 @@ def kda_tiers(
     worst_call, worst_head = divmod(per_head_call.pop("state_head_window_worst_at"), s.shape[1])
     per_head_call.update(state_head_window_worst_row=state_ends[worst_call], state_head_window_worst_head=worst_head)
     return {
-        0: [{**span, "output_nrmse": _sqrt_ratio(whole_e2, whole_yy), "state_final_nrmse": float(pooled[-1])}],
+        0: [{**span, "output_nrmse": float(ratio_nrmse(e2.sum(), yy.sum())), "state_final_nrmse": float(pooled[-1])}],
         1: [
             {
                 **span,

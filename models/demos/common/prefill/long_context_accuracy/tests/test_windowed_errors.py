@@ -15,6 +15,7 @@ from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     nrmse,
     pcc,
     quantile,
+    ratio_nrmse,
     rms_err,
     rms_ref,
     row_nrmse,
@@ -165,3 +166,12 @@ def test_gain_by_hand() -> None:
     # x = y + 1 on row 0: Σxy = 1*2 + 3*4 + 2*2 + (-2)(-2) = 22, Σyy = 1 + 9 + 4 + 4 = 18
     x = y + torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float64)
     assert gain(row_sums(y, x)) == pytest.approx(22 / 18)
+
+
+def test_ratio_nrmse_edge_cases() -> None:
+    """Exact on an all-zero golden (0/0) is 0, an error on it (x/0) is inf, NaN stays NaN; 1/4 gives 0.5."""
+    got = ratio_nrmse(
+        torch.tensor([0.0, 0.0, 1.0, 1.0, math.nan], dtype=torch.float64),
+        torch.tensor([0.0, 1.0, 0.0, 4.0, 1.0], dtype=torch.float64),
+    ).tolist()
+    assert got[:4] == [0.0, 0.0, math.inf, 0.5] and math.isnan(got[4])
