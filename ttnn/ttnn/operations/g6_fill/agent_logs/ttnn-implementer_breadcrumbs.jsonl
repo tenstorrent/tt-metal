@@ -9,3 +9,5 @@
 {"event":"test_run","test":"test_g6_fill.py + golden","result":"pass","details":"acceptance 12 passed 2 xfailed (dev + prod); golden 16 passed 3 xfailed (int32 RM only)","ts":"2026-11-27T12:00:59-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T12:19:05-05:00"}
 {"event":"fix_applied","detail":"fresh R1 implementation: op file + descriptor + single writer kernel (BRISC/NoC1), common RT args [dst_addr, fill_bits], w_tiles split over min(W, MAX_FILL_CORES) cores","ts":"2026-11-27T12:40:41-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T12:55:58-05:00"}
+{"event":"test_run","result":"pass","test":"test_g6_fill.py (--dev and plain) + eval/golden_tests/g6_fill","details":"12 passed / 2 xfailed (int32 RM, not in SUPPORTED); golden 16 passed / 3 xfailed","ts":"2026-11-27T12:59:32-05:00"}

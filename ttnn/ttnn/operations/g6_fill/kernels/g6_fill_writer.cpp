@@ -1,39 +1,38 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_fill writer (BRISC, NoC1): row-0 segment scatter of one constant element.
+// g6_fill writer (BRISC / NoC1), regime R1: tile row-0 segment scatter.
 //
-// Raw dataflow API, no kernel_lib helper: no helper writes one constant L1 run
-// to a set of (page, in-page offset) destinations of an interleaved tensor.
-// zero_tile / prepare_reduce_scaler fill local L1 with a fixed pattern only;
-// a `scatter_constant_run(accessor, src_l1, first_page, num_pages, offsets,
-// run_bytes)` helper would close the gap.
+// The only kernel of the op. It builds one face row of e in cb_fill_row and writes that run
+// to the row-0 segment of face 0 and face 1 of every tile this core owns. Rows 1-31 and
+// faces 2-3 are padding of the rank-1 tile plane [1, N] and are not written.
 //
-// Only row 0 of each tile holds logical positions of the rank-1 tensor; it
-// spans face 0 (positions 0..15, page offset 0) and face 1 (positions 16..31,
-// page offset face_bytes). Every other byte of the tile is padding and is not
-// written.
-
-#include <cstdint>
+// Raw dataflow API, no kernel_lib helper: no helper writes one constant L1 run to a set of
+// (page, in-page offset) destinations of an interleaved tensor (op_design.md, API Mapping).
+// The row is built with RISC word stores because no helper writes an arbitrary 32-bit
+// constant; it is 16 words, written once per core.
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 namespace {
 
-template <typename Accessor>
-FORCE_INLINE void scatter_row0_block(
-    const Accessor& dst,
-    uint32_t fill_row_addr,
-    uint32_t first_tile,
-    uint32_t num_tiles,
-    uint32_t segments_per_tile,
-    uint32_t segment_bytes,
-    uint32_t face_bytes) {
+// e x (segment_bytes / 4) at the CB base. cb_fill_row is a private source buffer of this
+// thread, so it is never reserved, pushed or popped.
+FORCE_INLINE uint32_t build_fill_row(uint32_t cb_fill_row, uint32_t segment_words, uint32_t fill_bits) {
+    const uint32_t row_addr = get_write_ptr(cb_fill_row);
+    volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_addr);
+    for (uint32_t w = 0; w < segment_words; ++w) {
+        row[w] = fill_bits;
+    }
+    return row_addr;
+}
+
+// Non-posted one-packet writes so the closing barrier waits for every ack.
+template <uint32_t segment_bytes, uint32_t segments_per_tile, uint32_t segment_stride_bytes, typename Accessor>
+FORCE_INLINE void scatter_row0_block(const Accessor& dst, uint32_t row_addr, uint32_t first_tile, uint32_t num_tiles) {
     for (uint32_t tile = first_tile; tile < first_tile + num_tiles; ++tile) {
         for (uint32_t segment = 0; segment < segments_per_tile; ++segment) {
-            noc_async_write_one_packet(fill_row_addr, dst.get_noc_addr(tile, segment * face_bytes), segment_bytes);
+            noc_async_write_one_packet(row_addr, dst.get_noc_addr(tile, segment * segment_stride_bytes), segment_bytes);
         }
     }
 }
@@ -42,46 +41,42 @@ FORCE_INLINE void scatter_row0_block(
 
 void kernel_main() {
     constexpr uint32_t cb_fill_row = get_compile_time_arg_val(0);
-    constexpr uint32_t segment_elems = get_compile_time_arg_val(1);
-    constexpr uint32_t segment_bytes = get_compile_time_arg_val(2);
-    constexpr uint32_t segments_per_tile = get_compile_time_arg_val(3);
-    constexpr uint32_t face_bytes = get_compile_time_arg_val(4);
+    constexpr uint32_t segment_bytes = get_compile_time_arg_val(1);
+    constexpr uint32_t segments_per_tile = get_compile_time_arg_val(2);
+    constexpr uint32_t segment_stride_bytes = get_compile_time_arg_val(3);
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t block_w_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t page_size = get_compile_time_arg_val(6);
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
+    static_assert(segment_bytes % sizeof(uint32_t) == 0, "segment must hold whole 32-bit elements");
+    static_assert(segment_bytes <= NOC_MAX_BURST_SIZE, "a one-packet write cannot exceed one burst");
+    static_assert(block_w_tiles > 0, "block_w_tiles must be positive");
+
+    // fill_bits is a common runtime arg, never a CT arg: the cached program must take a new
+    // value on every call.
     const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t fill_bits = get_common_arg_val<uint32_t>(1);
     const uint32_t start_tile = get_arg_val<uint32_t>(0);
     const uint32_t core_w_tiles = get_arg_val<uint32_t>(1);
 
-    // cb_fill_row is this thread's private source run: no reserve/push/wait/pop.
-    const uint32_t fill_row_addr = get_write_ptr(cb_fill_row);
-
+    uint32_t row_addr;
     {
         DeviceZoneScopedN("G6FILL-BUILD-ROW");
-        // Must land before the first write below reads it, or the NoC sends the
-        // previous call's value left at the same CB address.
-        volatile tt_l1_ptr uint32_t* fill_row = dataflow_kernel_lib::addr_to_l1_ptr(fill_row_addr);
-        for (uint32_t i = 0; i < segment_elems; ++i) {
-            fill_row[i] = fill_bits;
-        }
+        row_addr = build_fill_row(cb_fill_row, segment_bytes / sizeof(uint32_t), fill_bits);
     }
 
     {
         DeviceZoneScopedN("G6FILL-ISSUE");
-        const auto dst = TensorAccessor(dst_args, dst_addr, page_size);
-        const uint32_t end_tile = start_tile + core_w_tiles;
-        for (uint32_t block_first = start_tile; block_first < end_tile; block_first += block_w_tiles) {
-            const uint32_t block_tiles =
-                (end_tile - block_first) < block_w_tiles ? (end_tile - block_first) : block_w_tiles;
-            scatter_row0_block(
-                dst, fill_row_addr, block_first, block_tiles, segments_per_tile, segment_bytes, face_bytes);
+        const auto dst = TensorAccessor(dst_args, dst_addr, page_bytes);
+        for (uint32_t done = 0; done < core_w_tiles; done += block_w_tiles) {
+            const uint32_t remaining = core_w_tiles - done;
+            const uint32_t this_block = remaining < block_w_tiles ? remaining : block_w_tiles;
+            scatter_row0_block<segment_bytes, segments_per_tile, segment_stride_bytes>(
+                dst, row_addr, start_tile + done, this_block);
         }
     }
 
     {
-        // Every write is acked before the kernel returns: the next program starts right after.
         DeviceZoneScopedN("G6FILL-DRAIN");
         noc_async_write_barrier();
     }
