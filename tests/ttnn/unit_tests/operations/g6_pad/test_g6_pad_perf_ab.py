@@ -15,6 +15,7 @@ from ttnn.operations.g6_pad import g6_pad as _g6_pad_fn
 g6 = sys.modules[_g6_pad_fn.__module__]
 
 CASES = [
+    ((5, 12, 128, 128), ((0, 3), (0, 0), (0, 0), (0, 0)), 0, ttnn.float32),  # p1 (PERF FOCUS), new_storage
     ((1, 1, 2, 62080), ((0, 0), (0, 0), (0, 30), (0, 0)), 0.0),  # p2
     ((1, 1, 8, 62080), ((0, 0), (0, 0), (0, 8), (0, 0)), 0.0),  # p3
     ((1, 1, 8, 62080), ((0, 0), (0, 0), (0, 24), (0, 0)), 0.0),  # p4
@@ -33,16 +34,21 @@ def _knobs():
     return k
 
 
-@pytest.mark.parametrize("case", CASES, ids=lambda c: "x".join(map(str, c[0])) + f"-h{c[1][-2][1]}")
+@pytest.mark.parametrize(
+    "case", CASES, ids=lambda c: "x".join(map(str, c[0])) + f"-h{c[1][-2][1] if len(c[1]) > 1 else c[1][-1][1]}"
+)
 def test_ab(device, case, monkeypatch):
     monkeypatch.setattr(g6, "KNOBS", {**g6.KNOBS, **_knobs()})
-    shape, padding, value = case
+    shape, padding, value = case[:3]
+    dtype = case[3] if len(case) > 3 else ttnn.bfloat16
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    view = torch.int32 if dtype == ttnn.float32 else torch.int16
     torch.manual_seed(0)
-    x = (torch.randn(shape) * 100).to(torch.bfloat16)
+    x = (torch.randn(shape) * 100).to(torch_dtype)
     pad = []
     for lo, hi in reversed(padding):
         pad += [lo, hi]
     exp = torch.nn.functional.pad(x, pad, value=value)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     out = g6.g6_pad(xt, padding, value)
-    assert torch.equal(ttnn.to_torch(out).view(torch.int16), exp.view(torch.int16))
+    assert torch.equal(ttnn.to_torch(out).contiguous().view(view), exp.contiguous().view(view))

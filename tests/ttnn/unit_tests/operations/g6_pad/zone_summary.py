@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Summarise G6PAD_* device zones per op run from generated/profiler/.logs/profile_log_device.csv.
+"""Summarise g6_pad device zones per op run from generated/profiler/.logs/profile_log_device.csv.
 
 Usage: python3 zone_summary.py [profile_log_device.csv]
 Prints, per run host ID (one per op call), per RISC and zone: core count, median and max duration
@@ -23,7 +23,7 @@ durations = defaultdict(list)  # (run, risc, zone) -> [ns]
 kernel_span = defaultdict(lambda: [None, None])
 for r in rows:
     zone = r["zone name"]
-    if not (zone.startswith("G6PAD_") or zone.endswith("-KERNEL")):
+    if zone.startswith("BRISC-FW") or zone.startswith("NCRISC-FW"):
         continue
     key = (r["run host ID"], r["core_x"], r["core_y"], r["RISC processor type"], zone)
     t = int(r["time[cycles since reset]"])

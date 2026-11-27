@@ -96,12 +96,16 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    # Verifier drift fix (Phase 0): the TILE kernels are elem_bytes-generic, address through TensorAccessor
+    # (DRAM or L1 interleaved) and fold leading dims for rank 2; every gated TILE cell passed with these
+    # values (17/17 golden TILE cells + int32 TILE in test_g6_pad_dtypes.py). ROW_MAJOR stays out: the
+    # new_storage_rows regime is not built.
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32],
     "layout": [ttnn.TILE_LAYOUT],
-    "memory_config": ["dram"],
-    "alignment": ["w_non_aligned", "h_non_aligned"],
-    "rank": [3, 4],
-    "padded_dims": ["h", "hw"],
+    "memory_config": ["dram", "l1"],
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
+    "rank": [2, 3, 4],
+    "padded_dims": ["leading", "h", "w", "hw"],
 }
 
 
@@ -302,8 +306,10 @@ def make_plan(input_tensor, out_shape, value, knobs):
         plan["edge_col"] = in_shape[-1] % TILE
         plan["block_tiles"] = knobs["block_tiles"]
         plan["input_depth_blocks"] = knobs["input_depth_blocks"]
-        # L1 cap (BB-05): fill page + depth-2 blocks must fit the budget.
-        plan["block_tiles_cap"] = (L1_BUDGET_BYTES - tile_bytes) // (2 * tile_bytes)
+        # L1 cap (BB-05): fill page + input_depth_blocks blocks must fit the budget (depth from the knob,
+        # never restated: a knob change lands here and in the CB sizing together).
+        depth = max(1, knobs["input_depth_blocks"])
+        plan["block_tiles_cap"] = (L1_BUDGET_BYTES - tile_bytes) // (depth * tile_bytes)
     else:
         raise UnsupportedAxisValue(f"g6_pad: regime {regime} is not built")
     plan["ncores"] = min(grid_cores, -(-plan["n_units"] // max(1, knobs["min_units_per_core"])))
