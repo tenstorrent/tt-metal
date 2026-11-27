@@ -1113,15 +1113,16 @@ class Loop:
         a PR from it or to delete it (the next run then gives the group to the agent again)."""
         pr = self.open_pr(branch)
         if pr:
-            return f"fix proposed in an open PR: {pr}"
+            return f"fix proposed in an open PR: [#{pr.rstrip('/').rsplit('/', 1)[-1]}]({pr})"
         repo, base = self.cfg["pr"]["repo"], self.cfg["target"].get("base", "main")
         links = (
-            f"open a draft PR from it: https://github.com/{repo}/compare/{base}...{branch}?expand=1 or delete the "
-            f"branch, and the next run has the agent try again: https://github.com/{repo}/branches/all?query={branch}"
+            f"[open a draft PR](https://github.com/{repo}/compare/{base}...{branch}?expand=1) or "
+            f"[delete the branch](https://github.com/{repo}/branches/all?query={branch}) (the next run then has the "
+            f"agent try again)"
         )
         if pr is None:
-            return f"waiting for a human: fix branch {branch} (GitHub did not say whether it has an open PR); {links}"
-        return f"waiting for a human: fix branch {branch} has no open PR; {links}"
+            return f"waiting for a human: fix branch `{branch}` (GitHub did not say whether it has an open PR): {links}"
+        return f"waiting for a human: fix branch `{branch}` has no open PR: {links}"
 
     def prior_state_for(self, gid: str, kind: str, tests, signature: str) -> tuple[str, dict]:
         """(gid, state) of this group on earlier nights: the same id, or else an open group that is not failing tonight,
@@ -2404,7 +2405,11 @@ class Loop:
             )
             code = EXIT_GREEN
         else:
-            headline = f"FAILURES: {len(open_unknown)} failure group(s) not fixed"
+            waiting = sum(1 for g in open_unknown if g.promote)  # a fix branch of it is on origin
+            tested = self.args.ref or self.cfg["target"].get("base", "main")
+            headline = f"FAILURES: {len(open_unknown)} failure group(s) not fixed on {tested}" + (
+                f" ({waiting} with a fix waiting on a branch or PR)" if waiting else ""
+            )
             code = EXIT_FAILURES
         unpublished = [
             g
