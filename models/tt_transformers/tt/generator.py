@@ -1678,9 +1678,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 prefilled = getattr(self, "_slots_prefilled_since_decode", None)
                 if prefilled:
                     bs = tok_chunk.shape[0]
-                    for slot in prefilled:
-                        if i * bs <= slot < (i + 1) * bs:
-                            use_dev[slot - i * bs] = False
+                    # prefilled holds slots before slot_remap; row j now holds source slot src[j].
+                    src = remap_t + i * bs if slot_remap is not None else torch.arange(i * bs, (i + 1) * bs)
+                    use_dev &= ~torch.tensor([int(s) in prefilled for s in src])
                 merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
                 new_tokens.append(merged.to(tok_chunk.dtype))
                 merged_pos = torch.where(use_dev, dev_pos, host_pos)

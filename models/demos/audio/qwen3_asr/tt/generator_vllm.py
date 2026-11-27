@@ -8,10 +8,15 @@ Prompt construction and audio preprocessing stay in upstream vLLM's Qwen3-ASR
 processors; these classes register them and serve the model through
 ``Qwen3ASRGenerator``. ``Qwen3ASRRealtimeGeneration`` adds /v1/realtime, selected
 as upstream does with ``--hf-overrides '{"architectures": ["Qwen3ASRRealtimeGeneration"]}'``.
+``Qwen3ASRForcedAlignerForTokenClassification`` serves Qwen3-ForcedAligner-0.6B as a
+pooling model (``runner="pooling"``, ``token_classify``), as upstream's class of that name.
 """
 import torch
 from huggingface_hub import snapshot_download
+from vllm.config import get_current_vllm_config
+from vllm.model_executor.layers.pooler.tokwise import pooler_for_token_classify
 from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsRealtime, SupportsTranscription
+from vllm.model_executor.models.interfaces_base import default_pooling_type
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRDummyInputsBuilder
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRForConditionalGeneration as _UpstreamQwen3ASR
 from vllm.model_executor.models.qwen3_asr import Qwen3ASRMultiModalProcessor, Qwen3ASRProcessingInfo
@@ -21,7 +26,8 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 
 from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
 from models.demos.audio.qwen3_asr.tt.audio_encoder import MAX_MEL_FRAMES, MEL_FRAMES_PER_SECOND
-from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator
+from models.demos.audio.qwen3_asr.tt.forced_aligner import Qwen3ForcedAligner
+from models.demos.audio.qwen3_asr.tt.generator import Qwen3ASRGenerator, split_audio_features
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
@@ -107,3 +113,66 @@ class Qwen3ASRRealtimeGeneration(Qwen3ASRForConditionalGeneration, SupportsRealt
     realtime_max_tokens = _UpstreamQwen3ASRRealtime.realtime_max_tokens
     buffer_realtime_audio = classmethod(_UpstreamQwen3ASRRealtime.buffer_realtime_audio.__func__)
     get_speech_to_text_config = classmethod(_UpstreamQwen3ASRRealtime.get_speech_to_text_config.__func__)
+
+
+@default_pooling_type(tok_pooling_type="ALL")
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3ASRMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
+)
+class Qwen3ASRForcedAlignerForTokenClassification(Qwen3ForcedAligner, SupportsMultiModal):
+    """One prefill per request, no decode and no sampling. Its KV cache is the decoder's
+    own single-user cache, so vLLM's paged KV cache is not allocated."""
+
+    is_pooling_model = True
+    model_capabilities = {"supports_prefix_caching": False}
+
+    # vLLM takes a class as a pooling model, rather than wrapping it in a converting
+    # adapter, only if it has the vLLM model interface. The TT runner calls
+    # prefill_forward instead of these.
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def embed_input_ids(self, input_ids):
+        raise NotImplementedError("the TT aligner runs through prefill_forward")
+
+    def forward(self, input_ids, positions, **kwargs):
+        raise NotImplementedError("the TT aligner runs through prefill_forward")
+
+    @classmethod
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
+    ):
+        if tt_data_parallel != 1:
+            raise ValueError(f"the aligner runs on one submesh, got tt_data_parallel={tt_data_parallel}")
+        model_id = getattr(hf_config, "_name_or_path", None) or hf_config.name_or_path
+        aligner = cls.build(mesh_device, max_seq_len=max_seq_len, snap_dir=snapshot_download(model_id))
+        # vLLM reads the supported pooling tasks from the pooler, as for its own class.
+        aligner.pooler = pooler_for_token_classify(get_current_vllm_config().model_config.pooler_config)
+        return aligner
+
+    @classmethod
+    def get_max_tokens_all_users(cls, max_model_len, max_num_seqs, **kwargs) -> int:
+        return max_model_len * max_num_seqs
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        return []
+
+    def warmup_model_prefill(self, *args, **kwargs):
+        pass
+
+    def warmup_model_decode(self, *args, **kwargs):
+        pass
+
+    def prefill_forward(
+        self, tokens, prompt_lens=None, input_audio_features=None, audio_feature_lengths=None, **kwargs
+    ):
+        """Per user, the time-bin logits (prompt_len, classify_num) at every prompt
+        position, float on host. Each prompt holds one audio item."""
+        lens = [tokens.shape[1]] * tokens.shape[0] if prompt_lens is None else [int(n) for n in prompt_lens]
+        out = []
+        for i, n in enumerate(lens):
+            feats = input_audio_features[i] if input_audio_features is not None else None
+            flens = audio_feature_lengths[i] if audio_feature_lengths is not None else None
+            (mel,) = split_audio_features(feats, flens)
+            out.append(self.token_logits(tokens[i, :n], mel))
+        return out
