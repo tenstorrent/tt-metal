@@ -51,9 +51,6 @@ on:
         required: false
         type: string
         default: ""
-    secrets:
-      SLACK_BOT_TOKEN:
-        required: false
 
 permissions:
   actions: read
@@ -69,11 +66,12 @@ env:
   RUNNER_FAILURE_SCAN_CHANNEL: C0BHAKAULEN
 
 jobs:
+  # Builds the report. Runs from any branch and holds no Slack token.
   report:
-    # Runs only from main: Slack posting uses SLACK_BOT_TOKEN.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      has_report: ${{ steps.check.outputs.has_report }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -131,44 +129,37 @@ jobs:
           fi
           python3 .github/scripts/runner_failure_report.py "${args[@]}"
 
-      - name: Post Slack notification
-        if: always() && hashFiles('out/runner_failure_report.json') != ''
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          DEFAULT_SLACK_CHANNEL: ${{ env.RUNNER_FAILURE_SCAN_CHANNEL }}
-          POST_TO_SLACK: ${{ inputs.post_to_slack }}
-          TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
-          TRIGGERING_FAILURES_JSON: ${{ inputs.triggering_failures_json }}
+      - name: Check for report
+        id: check
+        if: always()
         run: |
-          if [[ "$POST_TO_SLACK" != "true" ]]; then
-            echo "Slack posting was not requested."
-            exit 0
+          if [[ -f out/runner_failure_report.json ]]; then
+            echo "has_report=true" >> "$GITHUB_OUTPUT"
           fi
 
-          if [[ -z "$DEFAULT_SLACK_CHANNEL" ]]; then
-            echo "Slack posting requested, but no Slack channel is configured."
-            exit 1
-          fi
-
-          if [[ -z "$SLACK_BOT_TOKEN" ]]; then
-            echo "Slack posting requested, but SLACK_BOT_TOKEN is not configured."
-            exit 1
-          fi
-
+      - name: Preview Slack messages
+        if: always() && steps.check.outputs.has_report == 'true'
+        env:
+          TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
+        run: |
           args=(
+            --dry-run
             --runner-report-json out/runner_failure_report.json
             --runner-name "$TARGET_RUNNER_NAME"
-            --slack-channel "$DEFAULT_SLACK_CHANNEL"
           )
-          if [[ -n "$TRIGGERING_FAILURES_JSON" && "$TRIGGERING_FAILURES_JSON" != "[]" ]]; then
-            if [[ ! -f out/triggering_failures.json ]]; then
-              printf '%s' "$TRIGGERING_FAILURES_JSON" > out/triggering_failures.json
-            fi
-            args+=(
-              --triggering-failures-json out/triggering_failures.json
-            )
+          if [[ -f out/triggering_failures.json ]]; then
+            args+=(--triggering-failures-json out/triggering_failures.json)
           fi
-          python3 .github/scripts/runner_failure_post_slack.py "${args[@]}"
+          python3 .github/scripts/runner_failure_post_slack.py "${args[@]}" | tee out/slack_preview.txt
+          {
+            echo "<details><summary>Slack message preview</summary>"
+            echo
+            echo '```'
+            cat out/slack_preview.txt
+            echo '```'
+            echo "</details>"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Add report to step summary
         if: always() && hashFiles('out/runner_failure_report.md') != ''
@@ -182,4 +173,53 @@ jobs:
           path: |
             out/runner_failure_report.json
             out/runner_failure_report.md
+            out/triggering_failures.json
+            out/slack_preview.txt
           retention-days: 14
+
+  # Posts the report. Only this job reads SLACK_BOT_TOKEN, from the
+  # runner-failure-alerts-slack environment, which allows only main.
+  post-to-slack:
+    needs: report
+    if: always() && needs.report.outputs.has_report == 'true' && inputs.post_to_slack && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: runner-failure-alerts-slack
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download runner failure report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runner-failure-report-${{ inputs.runner_name }}-${{ github.run_id }}
+          path: out
+
+      - name: Post Slack notification
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DEFAULT_SLACK_CHANNEL: ${{ env.RUNNER_FAILURE_SCAN_CHANNEL }}
+          TARGET_RUNNER_NAME: ${{ inputs.runner_name }}
+        run: |
+          if [[ -z "$SLACK_BOT_TOKEN" ]]; then
+            echo "SLACK_BOT_TOKEN is not set in the runner-failure-alerts-slack environment."
+            exit 1
+          fi
+          args=(
+            --runner-report-json out/runner_failure_report.json
+            --runner-name "$TARGET_RUNNER_NAME"
+            --slack-channel "$DEFAULT_SLACK_CHANNEL"
+          )
+          if [[ -f out/triggering_failures.json ]]; then
+            args+=(--triggering-failures-json out/triggering_failures.json)
+          fi
+          python3 .github/scripts/runner_failure_post_slack.py "${args[@]}"

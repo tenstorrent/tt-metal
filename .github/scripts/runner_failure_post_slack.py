@@ -29,12 +29,14 @@ MAX_SLACK_TABLE_ROWS = 100
 MAX_SLACK_TABLE_CHARS = 9500
 SLACK_TABLE_DATA_ROWS_PER_MESSAGE = MAX_SLACK_TABLE_ROWS - 1
 DEFAULT_LOG_DOWNLOAD_FAILURE_RATE_THRESHOLD = 0.10
+DRY_RUN_CHANNEL = "DRY-RUN"
 
 
 @dataclass(frozen=True)
 class SlackConfig:
     token: str
     channel: str
+    dry_run: bool = False
 
 
 @dataclass(frozen=True)
@@ -80,10 +82,17 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_LOG_DOWNLOAD_FAILURE_RATE_THRESHOLD,
         help="Alert when the failed log download fraction is above this value (default: 0.10).",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the Slack message payloads instead of posting them. Needs no token.",
+    )
     return parser.parse_args()
 
 
-def slack_config_from_channel(slack_channel: str | None) -> SlackConfig | None:
+def slack_config_from_channel(slack_channel: str | None, *, dry_run: bool = False) -> SlackConfig | None:
+    if dry_run:
+        return SlackConfig(token="", channel=slack_channel or DRY_RUN_CHANNEL, dry_run=True)
     if not slack_channel:
         return None
     token = os.environ.get("SLACK_BOT_TOKEN") or os.environ.get("RUNNER_FAILURE_SCAN_SLACK_BOT_TOKEN")
@@ -256,6 +265,11 @@ def post_slack_message(
         payload["blocks"] = blocks
     if thread_ts:
         payload["thread_ts"] = thread_ts
+
+    if slack_config.dry_run:
+        print("Slack dry run, message payload:")
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return thread_ts or "dry-run-ts"
 
     slack_request = request.Request(
         SLACK_API_URL,
@@ -653,7 +667,8 @@ def post_runner_report_from_report(
         thread_ts=thread_ts,
         workflow_run_url=workflow_run_url,
     )
-    print(f"Posted Slack runner report for {runner_name}.")
+    action = "Dry run of Slack runner report" if slack_config.dry_run else "Posted Slack runner report"
+    print(f"{action} for {runner_name}.")
 
 
 def main() -> int:
@@ -674,7 +689,7 @@ def main() -> int:
             if not should_post_health_alert(health, args.failure_rate_threshold):
                 return 0
 
-            slack_config = slack_config_from_channel(args.slack_channel)
+            slack_config = slack_config_from_channel(args.slack_channel, dry_run=args.dry_run)
             if slack_config is None:
                 raise RuntimeError(
                     "Log download failure rate exceeded the threshold, but no Slack channel is configured."
@@ -687,10 +702,10 @@ def main() -> int:
                     workflow_run_url_from_env(),
                 ),
             )
-            print("Posted Slack runner-failure scan health alert.")
+            print("Posted Slack runner-failure scan health alert." if not args.dry_run else "Dry run done.")
             return 0
 
-        slack_config = slack_config_from_channel(args.slack_channel)
+        slack_config = slack_config_from_channel(args.slack_channel, dry_run=args.dry_run)
         if slack_config is None:
             return 0
         if args.runner_report_json is None:

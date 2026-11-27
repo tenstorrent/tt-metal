@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: runner-failure-scan
+  group: runner-failure-scan-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -103,13 +103,14 @@ env:
           - "models-device-perf-tests /"
 
 jobs:
+  # Scans for failures. Runs from any branch and holds no Slack token.
+  # Branch runs rescan from scratch and never feed state to main.
   scan:
-    # Runs only from main: Slack posting uses SLACK_BOT_TOKEN.
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
       runner_matrix: ${{ steps.runner_matrix.outputs.runner_matrix }}
+      has_report: ${{ steps.check.outputs.has_report }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -127,7 +128,7 @@ jobs:
         run: python3 -m pip install -r .github/scripts/runner_failure_scan_requirements.txt
 
       - name: Restore previous checked-job state
-        if: github.event.inputs.force-fresh != 'true'
+        if: github.ref == 'refs/heads/main' && github.event.inputs.force-fresh != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -152,7 +153,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
-          FORCE_FRESH: ${{ github.event.inputs.force-fresh == 'true' }}
+          FORCE_FRESH: ${{ github.ref != 'refs/heads/main' || github.event.inputs.force-fresh == 'true' }}
           HOURS: ${{ github.event.inputs.hours || '24' }}
         run: |
           mkdir -p out
@@ -170,20 +171,20 @@ jobs:
           fi
           python3 .github/scripts/runner_failure_scan.py "${args[@]}"
 
-      - name: Post scan health alert
-        if: always() && hashFiles('out/runner_failure_report.json') != ''
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          DEFAULT_SLACK_CHANNEL: ${{ env.RUNNER_FAILURE_SCAN_CHANNEL }}
-          POST_TO_SLACK: ${{ github.event_name == 'schedule' || github.event.inputs.post-to-slack == 'true' }}
+      - name: Check for report
+        id: check
+        if: always()
         run: |
-          if [[ "$POST_TO_SLACK" != "true" ]]; then
-            echo "Slack posting was not requested."
-            exit 0
+          if [[ -f out/runner_failure_report.json ]]; then
+            echo "has_report=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Preview scan health alert
+        if: always() && steps.check.outputs.has_report == 'true'
+        run: |
           python3 .github/scripts/runner_failure_post_slack.py \
-            --scan-health-report-json out/runner_failure_report.json \
-            --slack-channel "$DEFAULT_SLACK_CHANNEL"
+            --dry-run \
+            --scan-health-report-json out/runner_failure_report.json
 
       - name: Build runner report matrix
         id: runner_matrix
@@ -242,6 +243,42 @@ jobs:
           path: out/runner_failure_state.json
           retention-days: 30
 
+  # Posts the scan health alert. Only this job reads SLACK_BOT_TOKEN, from the
+  # runner-failure-alerts-slack environment, which allows only main.
+  post-scan-health:
+    needs: scan
+    if: always() && needs.scan.outputs.has_report == 'true' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event.inputs.post-to-slack == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: runner-failure-alerts-slack
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: true
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Download runner failure scan report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: runner-failure-scan-report-${{ github.run_id }}
+          path: out
+
+      - name: Post scan health alert
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          DEFAULT_SLACK_CHANNEL: ${{ env.RUNNER_FAILURE_SCAN_CHANNEL }}
+        run: |
+          python3 .github/scripts/runner_failure_post_slack.py \
+            --scan-health-report-json out/runner_failure_report.json \
+            --slack-channel "$DEFAULT_SLACK_CHANNEL"
+
   runner-report:
     needs: scan
     if: ${{ always() && needs.scan.outputs.runner_matrix != '' && needs.scan.outputs.runner_matrix != '[]' }}
@@ -261,6 +298,5 @@ jobs:
       enrichment_jobs_json: ${{ toJson(matrix.runner.enrichment_jobs) }}
       run_enrichment: false
       hours: ${{ github.event.inputs.hours || '24' }}
+      # The report workflow posts only from main, whatever this says.
       post_to_slack: ${{ github.event_name == 'schedule' || github.event.inputs.post-to-slack == 'true' }}
-    secrets:
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

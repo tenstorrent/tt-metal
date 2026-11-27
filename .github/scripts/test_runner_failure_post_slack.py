@@ -2,10 +2,13 @@ import pytest
 
 from runner_failure_common import JobScanResult, RecentJob, job_from_dict
 from runner_failure_post_slack import (
+    DRY_RUN_CHANNEL,
     failure_summary_for_slack_cell,
     format_scan_health_alert,
+    post_slack_message,
     scan_health_from_report,
     should_post_health_alert,
+    slack_config_from_channel,
 )
 
 
@@ -135,3 +138,29 @@ def test_real_download_errors_still_alert_with_unavailable_logs() -> None:
     assert health.failures == 2
     assert should_post_health_alert(health, 0.10)
     assert health.failure_statuses == {"gh api timed out": 1, "job scan did not return a result": 1}
+
+
+def test_dry_run_needs_no_token_and_does_not_post(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("RUNNER_FAILURE_SCAN_SLACK_BOT_TOKEN", raising=False)
+
+    def fail_urlopen(*args, **kwargs):
+        raise AssertionError("dry run must not call Slack")
+
+    monkeypatch.setattr("runner_failure_post_slack.request.urlopen", fail_urlopen)
+
+    config = slack_config_from_channel(None, dry_run=True)
+    assert config is not None
+    assert config.channel == DRY_RUN_CHANNEL
+    assert post_slack_message(config, "parent") == "dry-run-ts"
+    assert post_slack_message(config, "reply", thread_ts="123.456") == "123.456"
+    out = capsys.readouterr().out
+    assert '"text": "parent"' in out
+    assert '"thread_ts": "123.456"' in out
+
+
+def test_without_dry_run_channel_needs_token(monkeypatch) -> None:
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("RUNNER_FAILURE_SCAN_SLACK_BOT_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="SLACK_BOT_TOKEN"):
+        slack_config_from_channel("C123")
