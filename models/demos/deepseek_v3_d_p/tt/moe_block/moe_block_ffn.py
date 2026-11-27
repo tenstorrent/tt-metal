@@ -270,10 +270,11 @@ class TtMoEBlockFfn:
             cfg.forward_chunks = int(forward_chunks)
             if opts.combine_snap is not None:  # (else the config's default snap)
                 cfg.combine_snap = opts.combine_snap
-            elif accuracy.fidelity():  # (K3_ACC_FIDELITY: no 2^-14 snap of the routed terms - fp32 sums, any order)
-                # (K3_ACC_COMBINE_SNAP: a snap q instead, e.g. 2^-20: the terms are summed as an int32 count of q,
-                # bit-identical in any order up to |sum| < 2^31 q - 2048 at 2^-20 - so the combine is deterministic)
-                cfg.combine_snap = float(os.environ.get("K3_ACC_COMBINE_SNAP", "0") or 0.0)
+            elif accuracy.fidelity():  # (K3_ACC_FIDELITY: no 2^-14 snap of the routed terms)
+                # (K3_ACC_COMBINE_SNAP, on with K3_ACC=1: a snap q = 2^-20 instead of none - the terms are summed as an
+                # int32 count of q, bit-identical in any order up to |sum| < 2^31 q (2048 at 2^-20), so the combine is
+                # deterministic; off: fp32 sums in arrival order)
+                cfg.combine_snap = accuracy.combine_snap()
             # (the model's slab, the one its mesh opened L1_SMALL for: moe_impl.moe_block_words_slab)
             cfg.words_slab_bytes = self.words_slab
             dtypes = moe_block_utils.MoEDtypes()
