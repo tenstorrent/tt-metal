@@ -29,6 +29,36 @@ from .tile_constants import (
 )
 
 
+def _sign_magnitude_to_int(raw, signed):
+    """Sign-magnitude words as two's complement, with no branch per datum.
+
+    ``-sign`` is 0 or all ones, and xor-then-subtract with it negates exactly
+    the datums whose sign bit is set.
+    """
+    top = raw.dtype.itemsize * 8 - 1
+    negate = -((raw >> top).view(signed))
+    return ((raw & ((1 << top) - 1)).view(signed) ^ negate) - negate
+
+
+#: Every E4M3 byte decoded once, so a buffer decodes with one gather.
+_FP8_E4M3_VALUES = (
+    np.arange(256, dtype=np.uint8).view(ml_dtypes.float8_e4m3fn).astype(np.float32)
+)
+
+#: Both E2M1 nibbles of every byte, low nibble first, as the float64 the MXFP4
+#: scaling works in.
+_FP4_NIBBLE_VALUES = (
+    np.arange(16, dtype=np.uint8).view(ml_dtypes.float4_e2m1fn).astype(np.float64)
+)
+_FP4_BYTE_VALUES = np.stack(
+    [
+        _FP4_NIBBLE_VALUES[np.arange(256) & 0x0F],
+        _FP4_NIBBLE_VALUES[np.arange(256) >> 4],
+    ],
+    axis=1,
+)
+
+
 def _decode_fp16(packed, twos_complement=False):
     return np.frombuffer(packed, dtype=np.float16)
 
@@ -61,10 +91,7 @@ def _decode_int16(packed, twos_complement=False):
         return np.frombuffer(packed, dtype=np.int16)
     # INT16 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 15 = sign, bits 14:0 = magnitude
-    uint16_array = np.frombuffer(packed, dtype=np.uint16)
-    sign = (uint16_array & 0x8000).astype(bool)
-    magnitude = (uint16_array & 0x7FFF).astype(np.int16)
-    return np.where(sign, -magnitude, magnitude)
+    return _sign_magnitude_to_int(np.frombuffer(packed, dtype=np.uint16), np.int16)
 
 
 def _decode_uint16(packed, twos_complement=False):
@@ -72,7 +99,7 @@ def _decode_uint16(packed, twos_complement=False):
 
 
 def _decode_fp8_e4m3(packed, twos_complement=False):
-    return np.frombuffer(packed, dtype=ml_dtypes.float8_e4m3fn).astype(np.float32)
+    return _FP8_E4M3_VALUES.take(np.frombuffer(packed, dtype=np.uint8))
 
 
 def _decode_int8(packed, twos_complement=False):
@@ -80,10 +107,7 @@ def _decode_int8(packed, twos_complement=False):
         return np.frombuffer(packed, dtype=np.int8)
     # INT8 uses sign-magnitude format in hardware (not two's complement)
     # Format: bit 7 = sign, bits 6:0 = magnitude
-    uint8_array = np.frombuffer(packed, dtype=np.uint8)
-    sign = (uint8_array & 0x80).astype(bool)
-    magnitude = (uint8_array & 0x7F).astype(np.int8)
-    return np.where(sign, -magnitude, magnitude)
+    return _sign_magnitude_to_int(np.frombuffer(packed, dtype=np.uint8), np.int8)
 
 
 def _decode_uint8(packed, twos_complement=False):
@@ -487,14 +511,10 @@ def unpack_mxfp4(
     num_blocks *= tile_count
 
     # Each byte packs 2 FP4 values: low nibble then high nibble.
-    nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
-    nibbles_u8[0::2] = packed_u8 & 0x0F
-    nibbles_u8[1::2] = packed_u8 >> 4
-
-    fp4_f32 = (
-        nibbles_u8.view(ml_dtypes.float4_e2m1fn)[: num_blocks * block_size]
+    fp4_values = (
+        _FP4_BYTE_VALUES.take(packed_u8, axis=0)
+        .reshape(-1)[: num_blocks * block_size]
         .reshape(num_blocks, block_size)
-        .astype(np.float32)
     )
 
     nan_blocks = scales_u8 == E8M0_NAN_CODE
@@ -504,8 +524,7 @@ def unpack_mxfp4(
     # decides Inf. In float32 a 0xFE scale with a +-6 element, which the packer
     # emits for Inf-only blocks, overflows; so does the 0xFF NaN scale (2^128).
     scaled_blocks = (
-        fp4_f32.astype(np.float64)
-        * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
+        fp4_values * np.exp2(block_exp_unbiased.astype(np.float64))[:, np.newaxis]
     )
 
     # The range clamp belongs to the destination, not to this format: every MX
@@ -536,6 +555,12 @@ def unpack_mxfp4(
     return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
 
 
+#: The register's range as magnitudes. float64 scalars, so a float32 array is
+#: compared at float64 and 2^128 does not overflow on the way in.
+_REG_SATURATE_MAGNITUDE = np.float64(2.0) ** REG_EXP_SATURATE_AT
+_REG_FLUSH_BELOW_MAGNITUDE = np.float64(2.0) ** (REG_EXP_FLUSH_AT + 1)
+
+
 def _apply_gasket_range(scaled_blocks, nan_blocks):
     """Clamp decoded MX values to what the gasket's register format can hold.
 
@@ -554,20 +579,24 @@ def _apply_gasket_range(scaled_blocks, nan_blocks):
     `nan_blocks` is applied last: a 0xFF block scale NaNs every datum of the
     block, zeros included, and that outranks the range clamp.
     """
-    finite_nonzero = np.isfinite(scaled_blocks) & (scaled_blocks != 0.0)
-    _, exponents = np.frexp(np.where(finite_nonzero, scaled_blocks, 1.0))
-    unbiased = exponents - 1  # value = mantissa * 2^exponent, mantissa in [0.5, 1)
-    scaled_blocks = np.where(
-        finite_nonzero & (unbiased >= REG_EXP_SATURATE_AT),
-        np.copysign(np.inf, scaled_blocks),
-        scaled_blocks,
-    )
-    scaled_blocks = np.where(
-        finite_nonzero & (unbiased <= REG_EXP_FLUSH_AT),
-        np.copysign(0.0, scaled_blocks),
-        scaled_blocks,
-    )
+    # floor(log2|x|) >= k is |x| >= 2^k, and <= k is |x| < 2^(k+1), so the two
+    # exponent tests are two magnitude compares and no exponent is extracted.
+    # Inf passes the first and maps to itself, zero passes the second and maps
+    # to itself, and NaN fails both.
+    magnitude = np.abs(scaled_blocks)
+    saturate = magnitude >= _REG_SATURATE_MAGNITUDE
+    if saturate.any():
+        scaled_blocks = np.where(
+            saturate, np.copysign(np.inf, scaled_blocks), scaled_blocks
+        )
+    flush = magnitude < _REG_FLUSH_BELOW_MAGNITUDE
+    if flush.any():
+        scaled_blocks = np.where(flush, np.copysign(0.0, scaled_blocks), scaled_blocks)
     if np.any(nan_blocks):
+        # A copy, unless one of the clamps above already made one: the caller
+        # keeps its array.
+        if not (saturate.any() or flush.any()):
+            scaled_blocks = scaled_blocks.copy()
         scaled_blocks[nan_blocks] = np.nan
     return scaled_blocks
 
@@ -806,6 +835,17 @@ _MX_TILE_UNPACKERS = {
 }
 
 
+def _has_nan(values) -> bool:
+    """Whether a float array holds a NaN, read off the bits for float16.
+
+    numpy has no native half arithmetic, so ``np.isnan`` on float16 widens
+    every datum first. The bit test is the same predicate without that.
+    """
+    if values.dtype == np.float16:
+        return bool(((values.view(np.uint16) & 0x7FFF) > 0x7C00).any())
+    return bool(np.isnan(values).any())
+
+
 def _unpack_tiles_batched(
     packed_list,
     output_format,
@@ -840,7 +880,9 @@ def _unpack_tiles_batched(
     if not isinstance(raw, (bytes, bytearray)):
         raw = bytes(raw[:span])
     if bytes_per_tile == tile_stride_bytes:
-        tiles = bytes(raw[:span])
+        # No copy when the buffer is exactly the tiles. The decoders only read
+        # it, and the tensor built from the result owns its own memory.
+        tiles = raw if len(raw) == span else bytes(raw[:span])
     else:
         strided = np.frombuffer(raw, dtype=np.uint8, count=span)
         offsets = (
@@ -864,7 +906,7 @@ def _unpack_tiles_batched(
 
     # Sign-magnitude or two's complement only matters to the signed integers.
     values = decoder(tiles, twos_complement)
-    if values.dtype.kind == "f" and np.isnan(values).any():
+    if values.dtype.kind == "f" and _has_nan(values):
         # The bits a NaN lands with depend on the route into torch, and the
         # per-tile path goes through a list of Python floats. Take that route
         # for the rare buffer holding one, so the result is the same tensor.

@@ -28,6 +28,19 @@ from .tile_constants import (
 )
 
 
+def _int_to_sign_magnitude(array, unsigned):
+    """An already-narrow signed array as sign-magnitude bytes.
+
+    The most negative value has no encoding and clips to ``min + 1``. Same
+    bytes as clipping in a wider type and casting, minus the cast.
+    """
+    clipped = np.maximum(array, array.dtype.type(np.iinfo(array.dtype).min + 1))
+    sign_bit = unsigned(1 << (array.dtype.itemsize * 8 - 1))
+    return (
+        (clipped.view(unsigned) & sign_bit) | np.abs(clipped).view(unsigned)
+    ).tobytes()
+
+
 def pack_bfp16(torch_tensor):
     fp32_array = torch_tensor.cpu().to(torch.float32).numpy()
     bfp16_array = fp32_array.astype(ml_dtypes.bfloat16)
@@ -68,6 +81,8 @@ def pack_int16(torch_tensor, twos_complement=False):
     # Sign-magnitude INT16 cannot represent -32768, so clip to [min+1, max]
     iinfo = torch.iinfo(torch.int16)
     array = torch_tensor.cpu().numpy()
+    if array.dtype == np.int16:
+        return _int_to_sign_magnitude(array, np.uint16)
     clipped = np.clip(array, iinfo.min + 1, iinfo.max).astype(np.int16)
     sign = clipped.view(np.uint16) & 0x8000
     magnitude = np.abs(clipped).astype(np.uint16)
@@ -91,6 +106,8 @@ def pack_int8(torch_tensor, twos_complement=False):
     # Sign-magnitude INT8 cannot represent -128, so clip to [min+1, max]
     iinfo = torch.iinfo(torch.int8)
     array = torch_tensor.cpu().numpy()
+    if array.dtype == np.int8:
+        return _int_to_sign_magnitude(array, np.uint8)
     clipped = np.clip(array, iinfo.min + 1, iinfo.max).astype(np.int8)
     sign = clipped.view(np.uint8) & 0x80
     magnitude = np.abs(clipped).astype(np.uint8)
@@ -393,7 +410,9 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
         (num_blocks,) int32 array of E8M0 scale codes
     """
     # amax is taken over finite datums only.
-    finite_blocks = np.where(np.isfinite(blocks), blocks, 0.0)
+    finite = np.isfinite(blocks)
+    all_finite = bool(finite.all())
+    finite_blocks = blocks if all_finite else np.where(finite, blocks, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
     # amax = mantissa * 2^exp with mantissa in [0.5, 1), so floor(log2) = exp - 1
     _, frexp_exp = np.frexp(max_abs_values)
@@ -410,6 +429,9 @@ def _mx_shared_exponents(blocks, elem_exp_max_unbiased):
     # Special block exponents:
     # - every datum NaN                                   -> 0xFF (NaN block)
     # - only {Inf, NaN, 0} and at least one Inf           -> 0xFE
+    # Both need a non-finite datum, so the usual all-finite input is done.
+    if all_finite:
+        return scales_e8m0_array
     all_nan_blocks = np.all(np.isnan(blocks), axis=1)
     inf_or_zero_or_nan = np.isinf(blocks) | np.isnan(blocks) | (blocks == 0)
     all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
@@ -723,7 +745,9 @@ def _pack_mxfp4_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes
 
     # Pre-process blocks for element conversion: NaN -> 0.0 (MXFP4 has no NaN)
     blocks_raw = blocks
-    blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
+    nan = np.isnan(blocks_raw)
+    if nan.any():
+        blocks = np.where(nan, 0.0, blocks_raw)
 
     # E8M0 block scales, per the packer's floor(log2(amax)) rule
     # (elem_exp_max_unbiased is 2 for E2M1: max normal 6.0 = 1.5 * 2^2)
@@ -743,7 +767,32 @@ def _pack_mxfp4_tiles(tensor, num_faces=4, face_r_dim=16, tile_count=1) -> bytes
 
 
 def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
-    """Quantize scaled values to FP4 nibbles."""
+    """Quantize scaled values to FP4 nibbles.
+
+    Served from :data:`_FP4_NIBBLE_TABLE`, which is filled in by
+    :func:`_quantize_fp4_bitwise` below, so that function stays the definition.
+
+    A nibble is decided by the sign, the exponent and the top three mantissa
+    bits, plus whether any lower mantissa bit is set: every rounding boundary
+    of E2M1 (0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5) has at most two mantissa
+    bits, so the lower twenty only ever break a tie. That is 13 bits of key.
+
+    One exception, kept so the table matches the bitwise model on every
+    float32: in [0.25, 0.5) that model shifts the mantissa right by two before
+    it rounds, which drops the two lowest bits, so 0.25 plus one to three ULPs
+    is read as the tie itself and rounds to zero.
+    """
+    bits = np.ascontiguousarray(scaled_blocks, dtype=np.float32).ravel().view(np.uint32)
+    sticky = ((bits & 0xFFFFF) != 0) & ((bits & 0x7FFFFFFC) != _FP4_QUARTER_BITS)
+    return _FP4_NIBBLE_TABLE.take((bits >> 19) & ~np.uint32(1) | sticky)
+
+
+#: float32 bits of 0.25, the one tie the bitwise model widens. See above.
+_FP4_QUARTER_BITS = 0x3E800000
+
+
+def _quantize_fp4_bitwise(scaled_blocks: np.ndarray) -> np.ndarray:
+    """The FP4 quantization itself, one datum at a time in bit operations."""
     flat = scaled_blocks.astype(np.float32).ravel()
     ui32 = flat.view(np.uint32)
     sign = (ui32 >> 31) & 0x1
@@ -812,6 +861,22 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
             out[normal_mask] = elem_bits[normal_mask]
 
     return out
+
+
+def _build_fp4_nibble_table() -> np.ndarray:
+    """:func:`_quantize_fp4_bitwise` on one float32 per key.
+
+    Key ``2 * top + sticky``: `top` is the upper twelve bits of the float32 and
+    `sticky` says whether any of its lower twenty is set.
+    """
+    top = np.arange(1 << 12, dtype=np.uint32) << 20
+    # Bit 19 for the sticky half: any lower bit decides the same way, except
+    # the lowest two in the one binade the caller masks out.
+    representatives = np.stack([top, top | (1 << 19)], axis=1).reshape(-1)
+    return _quantize_fp4_bitwise(representatives.view(np.float32))
+
+
+_FP4_NIBBLE_TABLE = _build_fp4_nibble_table()
 
 
 def _mxint_block_scale_and_quantize(
