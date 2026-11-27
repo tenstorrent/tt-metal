@@ -9,6 +9,7 @@
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/operations/normalization/whole_padding_tiles.hpp"
 
 namespace ttnn {
 
@@ -23,16 +24,25 @@ DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch) {
 }
 
 Tensor layer_norm(
-    const Tensor& input_tensor,
+    const Tensor& input_tensor_arg,
     float epsilon,
-    const std::optional<const Tensor>& weight,
-    const std::optional<const Tensor>& bias,
-    const std::optional<const Tensor>& residual_input_tensor,
+    const std::optional<const Tensor>& weight_arg,
+    const std::optional<const Tensor>& bias_arg,
+    const std::optional<const Tensor>& residual_input_tensor_arg,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor,
     const std::optional<const DataType>& dtype) {
+    using operations::normalization::detail::on_default_tile_grid;
+    const Tensor input_tensor = on_default_tile_grid(input_tensor_arg);
+    const auto on_grid = [](const std::optional<const Tensor>& t) -> std::optional<const Tensor> {
+        return t.has_value() ? std::optional<const Tensor>(on_default_tile_grid(*t)) : std::nullopt;
+    };
+    const auto weight = on_grid(weight_arg);
+    const auto bias = on_grid(bias_arg);
+    const auto residual_input_tensor = on_grid(residual_input_tensor_arg);
+
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().rank();
 

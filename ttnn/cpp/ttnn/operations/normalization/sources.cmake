@@ -41,6 +41,7 @@ set(TTNN_OP_NORMALIZATION_SRCS
     softmax/device/softmax_program_factory_general_c_large.cpp
     softmax/device/softmax_program_factory_attention_optimized.cpp
     softmax/device/softmax_program_factory_attention_optimized_sharded.cpp
+    whole_padding_tiles.cpp
 )
 
 set(TTNN_OP_NORMALIZATION_API_HEADERS
