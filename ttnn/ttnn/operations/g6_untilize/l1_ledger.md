@@ -14,7 +14,7 @@ holds for every shape, and at Phase 0 it never binds.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_row_block` | `block_tile_cols · buffer_depth` tile pages of `tile_bytes`. Phase 0: `4 · 1 = 4` pages = 16384 B | one block per slot: `block_rows` rows × `chunk_row_bytes`, at stride `padded_chunk_row_bytes` inside the slot's `block_tile_cols` pages. Phase 0: 1 row = 512 B, inside a 16384-B slot | `{rows: spans → block_rows ≤ TILE_HEIGHT (capacity sized at the cap: one tile page column holds 32 rows), tile_cols: spans → block_tile_cols, batch: streams (folded into rows), blocks-per-core: streams → buffer_depth window}` | UInt32. Dataflow-only payload: NoC in, NoC out, never unpacked and never in DEST, so the DEST-width audit does not apply | reader | writer | whole kernel; each slot lives from `cb_reserve_back` of a block to `cb_pop_front` after that block's write barrier | Nothing to share with: it is the only buffer. **Capacity > live set at Phase 0** (16384 B allocated, 512 B live) for a mechanism reason. The store helper's wait/pop quantum is `width_in_tiles` tile pages per ≤ 32-row block (`tilize_helpers_dataflow.inl:209,229,239`), so a slot is sized for a full 32-row block whatever `core_rows` is. Shrinking it would mean replacing the helper; the slack is 16 KB of a 1347776-B budget |
+| `cb_row_block` | `block_tile_cols · buffer_depth` tile pages of `tile_bytes`. Phase 0: `4 · 1 = 4` pages = 16384 B | one block per slot: `block_rows` rows × `chunk_row_bytes`, at stride `padded_chunk_row_bytes` inside the slot's `block_tile_cols` pages. Phase 0: 1 row = 512 B, inside a 16384-B slot | `{rows: spans → block_rows ≤ TILE_HEIGHT (capacity sized at the cap: one tile page column holds 32 rows), tile_cols: spans → block_tile_cols, batch: streams (folded into rows), blocks-per-core: streams → buffer_depth window}` | UInt32. Dataflow-only payload: NoC in, NoC out, never unpacked and never in DEST, so the DEST-width audit does not apply | reader (NCRISC, NoC0) and, with `GATHER_RISCS = 2`, writer (BRISC, NoC1): each gathers the tile-column walk steps of its parity into disjoint 128-B column bands of the slot | writer | whole kernel; a slot's block lives from its first gather write (reader: after `cb_reserve_back`; writer: after it popped the slot's previous block) to `cb_pop_front` after that block's write barrier. The writer stores only after its own read barrier and the reader's push | Nothing to share with: it is the only buffer. **Capacity > live set at Phase 0** (16384 B allocated, 512 B live) for a mechanism reason. The store helper's wait/pop quantum is `width_in_tiles` tile pages per ≤ 32-row block (`tilize_helpers_dataflow.inl:209,229,239`), so a slot is sized for a full 32-row block whatever `core_rows` is. Shrinking it would mean replacing the helper; the slack is 16 KB of a 1347776-B budget |
 
 ## Symbol table
 
@@ -23,7 +23,7 @@ holds for every shape, and at Phase 0 it never binds.
 | `tile_bytes` | one 32×32 uint32 tile | = 4096 | dtype = uint32 (SUPPORTED) |
 | `TILE_HEIGHT` | rows per tile page column, rows-per-wait cap of the store helper | = 32 | CB tile shape 32×32 (`tile_constants.h:18`) |
 | `tensor_tile_cols` | `ceil(W/32)` | any ≥ 1 (production 4) | input shape |
-| `block_tile_cols` | tile columns per block | `1 ≤ block_tile_cols ≤ tensor_tile_cols`; divides `tensor_tile_cols`; `buffer_depth · block_tile_cols · tile_bytes ≤ L1_OP_BUDGET_BYTES` | `derive_block_tile_cols` (largest divisor that fits); production 4 |
+| `block_tile_cols` | tile columns per block | `1 ≤ block_tile_cols ≤ tensor_tile_cols`; divides `tensor_tile_cols`; `ROW_BLOCK_DEPTH · block_tile_cols · tile_bytes ≤ L1_OP_BUDGET_BYTES` (checked at full depth, so it holds for any clamped `buffer_depth`) | `derive_block_tile_cols(tensor_tile_cols, tile_bytes, ROW_BLOCK_DEPTH, L1_OP_BUDGET_BYTES)` (largest divisor that fits; knobs passed at call time); production 4 |
 | `buffer_depth` | slots in flight | `1 ≤ buffer_depth ≤ ROW_BLOCK_DEPTH = 2` | `min(ROW_BLOCK_DEPTH, max_blocks_per_core)`; production 1 |
 | `block_rows` | rows in one block | `1 ≤ block_rows ≤ TILE_HEIGHT` | `min(core_rows − 32k, TILE_HEIGHT)`; production 1 |
 | `padded_chunk_row_bytes` | row stride inside a slot | `= block_tile_cols · 128` (a multiple of 64) | helper's `round_up(row_bytes, tile_row_bytes)` (`tilize_helpers_dataflow.inl:208`) |
@@ -38,6 +38,11 @@ holds for every shape, and at Phase 0 it never binds.
 - Phase 0: `1 · 4 · 4096 = 16384 B` per core on each of 32 cores, against the 1347776-B bound.
 - Worst case for any shape: `2 · block_tile_cols · 4096 ≤ L1_OP_BUDGET_BYTES` by the `block_tile_cols`
   derivation. With `block_tile_cols ≥ 1` this needs only 8192 B, so no shape needs a host refusal.
+- The capacity is fixed by the store helper's 32-row tile-page quantum, not by `core_rows`: a core with
+  1–3 rows still holds `32 · padded_chunk_row_bytes` per slot. Outside INPUTS this is the dominant term,
+  e.g. `(3, 1, 96, 4096)` on 110 cores: 2–3 rows (≤ 48 KB live) in a 512-KB slot. It stays inside the bound
+  by the derivation above; shrinking it needs a store loop with a `min(core_rows, 32)`-row slot instead of
+  the helper.
 
 ## Data-movement budget
 
@@ -45,7 +50,7 @@ Chosen split: `rows` only, regime `row_gather`, Phase 0 shape `(1, 1, 32, 128)`.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (input, TILE) | 1 read: 16384 B as 256 reads × 64 B | each face-row piece is read once, by the core that owns its output row, directly into its final L1 position. No piece is resident twice or re-read | 0 |
+| x (input, TILE) | 1 read: 16384 B as 256 reads × 64 B (per core 8: 4 on NCRISC/NoC0, 4 on BRISC/NoC1 with `GATHER_RISCS = 2`) | each face-row piece is read once, by the core that owns its output row, directly into its final L1 position. No piece is resident twice or re-read | 0 |
 | out (output, ROW_MAJOR) | 1 write: 16384 B as 32 writes × 512 B | each row page is written whole, once, by its owning core from the gathered block | 0 |
 
 Totals per call: DRAM 16384 B read + 16384 B written, in 288 transactions; cross-core NoC 0 B; core-local

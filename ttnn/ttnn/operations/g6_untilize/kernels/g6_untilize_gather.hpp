@@ -49,7 +49,13 @@ struct GatherArgs {
     static constexpr uint32_t tile_row_bytes = tile_w * elem_bytes;
     // Row stride inside a slot: the writer helper's padded row of block_tile_cols tile rows.
     static constexpr uint32_t padded_chunk_row_bytes = block_tile_cols * tile_row_bytes;
-    static_assert(face_row_bytes % 64 == 0, "face-row pieces must keep the BH 64-B DRAM read alignment");
+    static_assert(
+        face_row_bytes % NOC_DRAM_READ_ALIGNMENT_BYTES == 0,
+        "face-row pieces must keep the DRAM read alignment (L1 and DRAM offsets agree mod the alignment)");
+    // The host derives the tile counts from the input's tile; the kernels walk the CB's tile. They must agree,
+    // or rows and columns land on the wrong slots.
+    static_assert(tensor_tile_cols == (row_elems + tile_w - 1) / tile_w, "host tile width != CB tile width");
+    static_assert(tile_rows_per_image == (rows_per_image + tile_h - 1) / tile_h, "host tile height != CB tile height");
 };
 
 struct CoreRows {

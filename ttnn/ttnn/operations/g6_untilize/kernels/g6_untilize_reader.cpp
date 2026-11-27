@@ -19,8 +19,12 @@ void kernel_main() {
         for (uint32_t block_row = 0; block_row < mine.count; block_row += A::tile_h) {
             const uint32_t block_rows = (mine.count - block_row < A::tile_h) ? mine.count - block_row : A::tile_h;
             {
-                DeviceZoneScopedN("G6U-gather-issue");
+                // Blocks only when the writer still holds every slot (>= buffer_depth + 1 blocks per core).
+                DeviceZoneScopedN("G6U-gather-reserve");
                 cb_reserve_back(A::cb_row_block, A::block_tile_cols);
+            }
+            {
+                DeviceZoneScopedN("G6U-gather-issue");
                 g6_untilize::gather_row_block<0>(
                     input, get_write_ptr(A::cb_row_block), mine.start + block_row, block_rows, col_block_idx, first_c);
             }

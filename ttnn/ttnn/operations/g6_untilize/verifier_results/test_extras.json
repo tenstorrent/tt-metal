@@ -1,0 +1,6 @@
+{
+  "eval/golden_tests/g6_untilize/test_golden.py::test_op_loose[1x1x32x128-dtype=UINT32-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  }
+}

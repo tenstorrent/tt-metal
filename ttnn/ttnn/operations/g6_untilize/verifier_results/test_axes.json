@@ -1,0 +1,10 @@
+{
+  "eval/golden_tests/g6_untilize/test_golden.py::test_op[1x1x32x128-dtype=UINT32-layout=TILE]": {
+    "dtype": "UINT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_untilize/test_golden.py::test_op_loose[1x1x32x128-dtype=UINT32-layout=TILE]": {
+    "dtype": "UINT32",
+    "layout": "TILE"
+  }
+}

@@ -58,7 +58,7 @@ def choose_core_rectangle(num_units, grid, core_limit=None):
     return best[1], best[2]
 
 
-def derive_block_tile_cols(tensor_tile_cols, tile_bytes, depth=ROW_BLOCK_DEPTH, budget=L1_OP_BUDGET_BYTES):
+def derive_block_tile_cols(tensor_tile_cols, tile_bytes, depth, budget):
     """Largest divisor of tensor_tile_cols whose CB at full depth fits the L1 budget.
 
     A divisor keeps the push quantum identical for every col block, so the CB ring never wraps
@@ -87,7 +87,7 @@ def _plan(input_tensor):
     rect_w, rect_h = choose_core_rectangle(tensor_rows, grid, CORE_LIMIT)
     num_cores = rect_w * rect_h
 
-    block_tile_cols = derive_block_tile_cols(tensor_tile_cols, tile_bytes)
+    block_tile_cols = derive_block_tile_cols(tensor_tile_cols, tile_bytes, ROW_BLOCK_DEPTH, L1_OP_BUDGET_BYTES)
     num_col_blocks = tensor_tile_cols // block_tile_cols
     max_core_rows = -(-tensor_rows // num_cores)
     max_blocks_per_core = -(-max_core_rows // tile_h) * num_col_blocks
@@ -209,6 +209,11 @@ def _device_key(device):
         return id(device)
 
 
+def _knob_key():
+    """Every module knob that shapes the program. Read at call time, so a tuned knob reaches the cache key."""
+    return (CORE_LIMIT, ROW_BLOCK_DEPTH, BANK_STAGGER, GATHER_RISCS, L1_OP_BUDGET_BYTES)
+
+
 def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -222,10 +227,7 @@ def get_program_descriptor(input_tensor, output_tensor) -> ttnn.ProgramDescripto
         _device_key(device),
         grid.x,
         grid.y,
-        CORE_LIMIT,
-        ROW_BLOCK_DEPTH,
-        BANK_STAGGER,
-        GATHER_RISCS,
+        *_knob_key(),
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:

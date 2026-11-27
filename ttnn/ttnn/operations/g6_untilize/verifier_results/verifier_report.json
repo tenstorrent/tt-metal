@@ -1,0 +1,60 @@
+{
+  "summary": {
+    "total": 6,
+    "supported_pass": 2,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 4
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_golden.py::test_op[1x1x32x128-dtype=UINT32-layout=TILE]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_golden.py::test_op_loose[1x1x32x128-dtype=UINT32-layout=TILE]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "TILE"
+        },
+        "status": "passed"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_regression.py::test_face_order",
+        "test_name": "test_face_order",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_regression.py::test_extremes",
+        "test_name": "test_extremes",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_regression.py::test_new_storage",
+        "test_name": "test_new_storage",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_untilize/test_regression.py::test_repeat",
+        "test_name": "test_repeat",
+        "status": "passed"
+      }
+    ]
+  }
+}

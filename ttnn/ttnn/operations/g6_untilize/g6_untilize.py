@@ -70,6 +70,10 @@ def validate(input_tensor, *, use_multicore=True, sub_core_grids=None):
         raise ValueError(
             f"g6_untilize: input_tensor must be DRAM interleaved, got {mc.memory_layout} in {mc.buffer_type}"
         )
+    # The kernels walk the 32x32 tile geometry of their CB; another input tile would mis-place every row,
+    # and the descriptor cache key does not carry the tile shape.
+    if input_tensor.layout == ttnn.TILE_LAYOUT and tuple(input_tensor.tile.tile_shape) != (32, 32):
+        raise ValueError(f"g6_untilize: input_tensor must use 32x32 tiles, got {tuple(input_tensor.tile.tile_shape)}")
 
     scenario = {
         "input_shape": tuple(input_tensor.shape),
