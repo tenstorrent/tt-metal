@@ -3360,6 +3360,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (const auto& kernels : kernels_) {
             for (const auto& [id, kernel] : kernels) {
                 JitBuildOptions build_options(build_env.build_env);
+                kernel->set_build_options(build_options);
                 this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
                 this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
                 check_fp8_dest_acc(*kernel, build_options);
