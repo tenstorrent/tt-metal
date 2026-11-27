@@ -7,12 +7,13 @@
 Run under `scripts/run_safe_pytest.sh --profile --no-py-zones`: each case is one dispatch, read the
 device kernel duration from the ops CSV. Every case also checks the output bit for bit.
 - grid: the same work over fewer cores separates a per-core read-issue limit (time grows as cores
-  shrink) from a DRAM-side request limit (time stays flat); read_nocs 2 repeats it with the page
-  reads spread over both NoCs, which reach every DRAM bank through a second endpoint.
+  shrink) from a DRAM-side request limit (time stays flat); alt1_2 repeats it with half the page
+  reads on the second NoC, which reaches every DRAM bank through a second port. Blocks of 2 units, depth 4.
 DO NOT DELETE.
 """
 
 import importlib
+from fractions import Fraction
 
 import pytest
 import torch
@@ -49,10 +50,12 @@ def _run(shape, device):
     assert torch.equal(actual.view(torch.int16), expected.view(torch.int16))
 
 
-@pytest.mark.parametrize("read_nocs", [1, 2], ids=lambda n: f"read_nocs{n}")
+@pytest.mark.parametrize("alt_share", [Fraction(0), Fraction(1, 2)], ids=lambda f: f"alt{f.numerator}_{f.denominator}")
 @pytest.mark.parametrize("rows", [10, 5, 2, 1], ids=lambda r: f"grid_rows{r}")
-def test_grid_scaling(rows, read_nocs, device, fresh_cache, monkeypatch):
+def test_grid_scaling(rows, alt_share, device, fresh_cache, monkeypatch):
     full = device.compute_with_storage_grid_size()
     monkeypatch.setattr(regime_module, "worker_grid", lambda _device: ttnn.CoreCoord(full.x, rows))
-    monkeypatch.setattr(regime_module, "READ_NOCS", read_nocs)
+    monkeypatch.setattr(regime_module, "READ_ALT_NOC_SHARE", alt_share)
+    monkeypatch.setattr(regime_module, "BLOCK_H_LIMIT", 2)
+    monkeypatch.setattr(regime_module, "INPUT_DEPTH", 4)
     _run(FLUX_74, device)

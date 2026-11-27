@@ -1,0 +1,85 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Refinement 3 ablation of blocks_rm_gather on FLUX_74 (DRAM and L1), plus a BLOCK_PAGES sweep.
+
+The ablation arms need temporary `#ifndef G6_ABLATE_READS` / `#ifndef G6_ABLATE_WRITES` guards around
+the reader's issue + barrier and the writer's noc_async_write; the shipped kernels do not carry them, so
+the stubbed arms are skipped unless G6_ABLATION_GUARDS=1. Stubbed arms keep every CB handshake and the
+gather, and their output is not checked. Run under `scripts/run_safe_pytest.sh --profile --no-py-zones`.
+DO NOT DELETE.
+"""
+
+import importlib
+import os
+
+import pytest
+import torch
+import ttnn
+
+from ttnn.operations.g6_permute import g6_permute
+
+op_module = importlib.import_module("ttnn.operations.g6_permute.g6_permute")
+regime_module = importlib.import_module("ttnn.operations.g6_permute.g6_permute_blocks_rm_gather")
+
+BLOCKS = (0, 1, 4, 2, 5, 3)
+FLUX_74 = (1, 64, 128, 32, 2, 2)
+GUARDS = os.environ.get("G6_ABLATION_GUARDS") == "1"
+
+ARMS = {
+    "full": [],
+    "no_writes": ["G6_ABLATE_WRITES"],
+    "no_reads": ["G6_ABLATE_READS"],
+    "no_reads_no_writes": ["G6_ABLATE_READS", "G6_ABLATE_WRITES"],
+}
+
+
+@pytest.fixture
+def fresh_cache():
+    op_module._PROGRAM_CACHE.clear()
+    yield
+    op_module._PROGRAM_CACHE.clear()
+
+
+def _input(device, memory_config):
+    torch.manual_seed(5)
+    torch_input = torch.randn(FLUX_74, dtype=torch.float32).to(torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    return torch_input, ttnn_input
+
+
+@pytest.mark.parametrize("placement", ["dram", "l1"])
+@pytest.mark.parametrize("arm", list(ARMS))
+def test_ablation(arm, placement, device, fresh_cache, monkeypatch):
+    if ARMS[arm] and not GUARDS:
+        pytest.skip("needs the temporary ablation guards in the kernels (G6_ABLATION_GUARDS=1)")
+    defines = [(name, "1") for name in ARMS[arm]]
+    create = regime_module.create_program_descriptor
+
+    def create_with_defines(plan, input_tensor, output_tensor):
+        descriptor = create(plan, input_tensor, output_tensor)
+        for kernel in descriptor.kernels:
+            kernel.defines = defines
+        return descriptor
+
+    monkeypatch.setattr(regime_module, "create_program_descriptor", create_with_defines)
+    memory_config = ttnn.L1_MEMORY_CONFIG if placement == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    torch_input, ttnn_input = _input(device, memory_config)
+    actual = ttnn.to_torch(g6_permute(ttnn_input, BLOCKS))
+    if not ARMS[arm]:
+        expected = torch.permute(torch_input, BLOCKS).contiguous()
+        assert torch.equal(actual.view(torch.int16), expected.view(torch.int16))
+
+
+@pytest.mark.parametrize("placement", ["dram", "l1"])
+@pytest.mark.parametrize("block_pages", [64, 128, 256, 512])
+def test_block_pages(block_pages, placement, device, fresh_cache, monkeypatch):
+    monkeypatch.setattr(regime_module, "BLOCK_PAGES", block_pages)
+    memory_config = ttnn.L1_MEMORY_CONFIG if placement == "l1" else ttnn.DRAM_MEMORY_CONFIG
+    torch_input, ttnn_input = _input(device, memory_config)
+    actual = ttnn.to_torch(g6_permute(ttnn_input, BLOCKS))
+    expected = torch.permute(torch_input, BLOCKS).contiguous()
+    assert torch.equal(actual.view(torch.int16), expected.view(torch.int16))

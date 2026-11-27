@@ -15,6 +15,7 @@ writer gathers the [W, I * J] values of a unit into I * J output rows in L1, the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fractions import Fraction
 
 import ttnn
 
@@ -37,11 +38,25 @@ CB_OUTPUT_ROWS = 1
 
 # Buffer-depth knob of cb_input_slots; the allocated depth is min(INPUT_DEPTH, max_blocks_per_core).
 INPUT_DEPTH = 2
-# Tuning cap on block_h on top of the L1 cap; None keeps the design value min(max_core_units, block_cap).
+# Input pages a block aims for; block_h = ceil(BLOCK_PAGES / pages_per_unit) under the L1 and core caps.
+# A small block hides the gather of every block but the last under the reads: on FLUX_74 the whole
+# per-core assignment as one block leaves a 55 us gather tail. Below ~256 pages, L1 input pays for the
+# extra read barriers (FLUX_74: 152 us at 64 pages, 141 us at 256); DRAM input is flat up to 256 and
+# slows at 512. None makes the whole per-core assignment one block.
+BLOCK_PAGES = 256
+# Tuning cap on block_h on top of BLOCK_PAGES and the L1 cap.
 BLOCK_H_LIMIT = None
-# NoCs the reader issues its page reads on (1 or 2); 2 puts both kernels in dynamic NoC mode.
-READ_NOCS = 1
-# Rotate each core's per-block issue order by (core index mod banks) pages.
+# DRAM input only. Every input page is one request at the DRAM port it enters, and a port retires them at
+# a fixed rate; each NoC enters a bank through its own port. This is the share of the reader's page
+# rounds issued on the second NoC, a power-of-two fraction below 1. A nonzero share puts both kernels in
+# dynamic NoC mode. L1 input stays on one NoC: there the split only adds NoC contention.
+READ_ALT_NOC_SHARE = Fraction(1, 2)
+# DRAM input only: issue each block bank by bank (one set_state per bank and NoC) instead of in page order.
+BANK_MAJOR = True
+# Bank rounds (num_banks pages each) per bank-major chunk, which bounds a core's run of requests to one
+# port; None makes the whole block one chunk.
+BANK_RUN_ROUNDS = 8
+# Rotate each core's per-block issue order by (core index mod banks) pages, or banks when bank-major.
 BANK_STAGGER = False
 
 
@@ -64,16 +79,18 @@ class BlocksPlan:
     slot_bytes: int = 0
     out_page_bytes: int = 0
     out_row_bytes: int = 0
-    read_nocs: int = 1
+    read_alt_share: Fraction = Fraction(0)
     num_banks: int = 1
     bank_stagger: bool = False
+    bank_major: bool = False
+    chunk_pages: int = 0
     all_cores: object = None
     assignment: list = field(default_factory=list)  # [(CoreCoord, start_unit, num_units)]
 
 
 def knob_key():
     """Host knobs that reach this regime's CT args; part of the program cache key."""
-    return (INPUT_DEPTH, BLOCK_H_LIMIT, READ_NOCS, BANK_STAGGER)
+    return (INPUT_DEPTH, BLOCK_PAGES, BLOCK_H_LIMIT, READ_ALT_NOC_SHARE, BANK_MAJOR, BANK_RUN_ROUNDS, BANK_STAGGER)
 
 
 def _align_up(value, alignment):
@@ -83,7 +100,6 @@ def _align_up(value, alignment):
 def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     assert tuple(canonical_dims) == DIMS, f"regime {REGIME} serves dims {DIMS}"
     assert INPUT_DEPTH >= 1
-    assert READ_NOCS in (1, 2, 3)
     N, C, H, W, I, J = (int(d) for d in input_tensor.shape)
     tensor_units = N * C * H
     pages_per_unit = W * I
@@ -118,9 +134,20 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
     num_cores, all_cores, units_g1, units_g2, assignment = split_units(worker_grid(input_tensor.device()), tensor_units)
 
     block_h = min(units_g1, block_cap)
+    if BLOCK_PAGES is not None:
+        block_h = min(block_h, _div_up(BLOCK_PAGES, pages_per_unit))
     if BLOCK_H_LIMIT is not None:
         block_h = min(block_h, BLOCK_H_LIMIT)
     assert block_h >= 1
+
+    dram_input = buffer_type == ttnn.BufferType.DRAM
+    alt_share = Fraction(READ_ALT_NOC_SHARE) if dram_input else Fraction(0)
+    assert 0 <= alt_share < 1 and alt_share.denominator & (alt_share.denominator - 1) == 0
+    bank_major = BANK_MAJOR and dram_input
+    num_banks = ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks
+    block_pages = block_h * pages_per_unit
+    chunk_pages = block_pages if BANK_RUN_ROUNDS is None else min(block_pages, BANK_RUN_ROUNDS * num_banks)
+    chunk_pages = _align_up(chunk_pages, num_banks)
     max_blocks_per_core = _div_up(units_g1, block_h)
 
     core_roles = {f"{c.x},{c.y}": f"{REGIME} reader+writer units (n, c, h) [{s}, {s + n})" for c, s, n in assignment}
@@ -143,9 +170,11 @@ def build_plan(input_tensor, canonical_dims) -> BlocksPlan:
         slot_bytes=slot_bytes,
         out_page_bytes=out_page_bytes,
         out_row_bytes=out_row_bytes,
-        read_nocs=READ_NOCS,
-        num_banks=ttnn.get_memory_view(input_tensor.device(), buffer_type).num_banks,
+        read_alt_share=alt_share,
+        num_banks=num_banks,
         bank_stagger=BANK_STAGGER,
+        bank_major=bank_major,
+        chunk_pages=chunk_pages,
         all_cores=all_cores,
         assignment=assignment,
     )
@@ -161,7 +190,7 @@ def _first_output_page(plan: BlocksPlan, unit):
 def _dm_config(plan: BlocksPlan, processor, noc, dedicated_config):
     """The default reader/writer config, or the same RISC and NoC in dynamic NoC mode when the reader
     also issues on the second NoC (one core runs both kernels in one mode)."""
-    if plan.read_nocs == 1:
+    if plan.read_alt_share == 0:
         return dedicated_config()
     return ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC)
 
@@ -201,8 +230,11 @@ def create_program_descriptor(plan: BlocksPlan, input_tensor, output_tensor) -> 
         W * I,
         plan.in_page_bytes,
         plan.slot_bytes,
-        plan.read_nocs,
+        plan.read_alt_share.numerator,
+        plan.read_alt_share.denominator,
         plan.num_banks,
+        int(plan.bank_major),
+        plan.chunk_pages,
         *ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args(),
     ]
     writer_ct_args = [

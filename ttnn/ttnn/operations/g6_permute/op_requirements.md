@@ -79,7 +79,7 @@ This moves golden PANOPTIC_53 `[1,128,256,32]` and loose L2, L15 (`w_scaled`), L
 
 **Done when**: PANOPTIC_53 (golden) and L2, L15, L16 and L18 pass; loud categories are all 0; every prior cell still passes; one Qwen shape and one FLUX shape pass with buffer `"l1"`.
 
-### [ ] Refinement 3 — Speed up the perf-flagged FLUX profile (gather tuning)
+### [x] Refinement 3 — Speed up the perf-flagged FLUX profile (gather tuning)
 
 **Type**: perf
 
@@ -97,6 +97,8 @@ Walking each block's pages bank-major (`p, p+8, p+16, …` share a bank) also le
 - L0's `device_kernel_ns` improves by more than noise (> 3 %) over Refinement 1's recorded baseline and stays below stock;
 - the bit-exact gate holds and the golden suite is green;
 - nothing regresses across the config-spanning guard set: one representative per distinct kernel path × layout × placement, measured where the cell is > 32 tiles. Regimes whose kernels this phase does not touch only need to stay green.
+
+**Outcome**: L0 device kernel time went 1022579 → 554900 ns (−45.7 %; R1 plan in the same session 1029265), FLUX_73 248450 → 144460 ns, FLUX in L1 −25 % / −21 %. All bit-exact. The win comes from reads split evenly over both NoCs on DRAM input, each NoC entering a bank through its own port, issued bank by bank in 8-round runs, with 256-page blocks. L0 is now bound by the DRAM ports' request rate: 524288 single-page reads over 16 ports at ~17 ns each. Ablation: writes stubbed −1.7 %, all payloads stubbed 49.8 µs; 55 cores are only +8 %, so the issue rate is not binding. Next is fewer requests (Refinement 5's bank-coalesced reads). `split_reader` and `trid_double_issue` were not built: the core-count, depth and block sweeps show the ports never starve. L1 placement is issue-bound (~28 ns per read), so a split reader or cheaper per-page addressing is its lever.
 
 ### [ ] Refinement 4 — ROW_MAJOR NHWC→NCHW (Panoptic p4)
 

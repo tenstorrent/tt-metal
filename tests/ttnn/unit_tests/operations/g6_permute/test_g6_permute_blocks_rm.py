@@ -12,6 +12,7 @@ input pages longer than one 64 B DRAM slot, and every alignment tag.
 """
 
 import importlib
+from fractions import Fraction
 
 import pytest
 import torch
@@ -123,7 +124,12 @@ def test_plan_reports_regime(device):
     plan = g6_permute_plan(_to_device(_randn(shape), device), BLOCKS)
     assert plan.regime == "blocks_rm_gather"
     assert plan.tensor_units == 64 * 128
-    assert plan.block_h == min(plan.units_per_core_g1, plan.block_cap)
+    pages_per_unit = shape[3] * shape[4]
+    block_target = -(-regime_module.BLOCK_PAGES // pages_per_unit)
+    assert plan.block_h == min(plan.units_per_core_g1, plan.block_cap, block_target)
+    # DRAM input: half the page rounds on the second NoC, issued bank by bank.
+    assert plan.read_alt_share == Fraction(1, 2)
+    assert plan.bank_major
     assert plan.num_cores == len(plan.assignment)
     assert sum(n for _, _, n in plan.assignment) == plan.tensor_units
 
@@ -157,9 +163,12 @@ def test_repeat_call_reuses_program(device):
 
 @pytest.fixture
 def knobs(monkeypatch):
-    def force(block_limit, input_depth):
+    def force(block_limit, input_depth, **extra):
+        monkeypatch.setattr(regime_module, "BLOCK_PAGES", None)
         monkeypatch.setattr(regime_module, "BLOCK_H_LIMIT", block_limit)
         monkeypatch.setattr(regime_module, "INPUT_DEPTH", input_depth)
+        for name, value in extra.items():
+            monkeypatch.setattr(regime_module, name, value)
 
     op_module._PROGRAM_CACHE.clear()
     yield force
@@ -188,3 +197,30 @@ def test_forced_blocks_bit_exact(shape, block_limit, input_depth, device, knobs)
         assert plan.max_blocks_per_core > 1
         assert plan.input_depth == min(input_depth, plan.max_blocks_per_core)
     _permute_and_check(torch_input, device)
+
+
+# id, shape, block_h limit, input_depth, read-side knobs: bank-major chunks that end mid-round or mid-unit,
+# blocks whose page count is not a whole bank round, NoC shares other than 1/2, stagger, page-major.
+FORCED_READ_PATHS = [
+    ("bm_chunk1_odd_pages", (2, 8, 37, 7, 3, 3), 3, 2, {"BANK_RUN_ROUNDS": 1}),
+    ("bm_chunk3_stagger", (1, 3, 141, 33, 2, 2), 2, 3, {"BANK_RUN_ROUNDS": 3, "BANK_STAGGER": True}),
+    ("bm_alt1_4_i4_j1", (1, 3, 7, 24, 4, 1), 4, 2, {"READ_ALT_NOC_SHARE": Fraction(1, 4)}),
+    (
+        "bm_alt3_8_whole_block",
+        (1, 32, 64, 32, 2, 2),
+        5,
+        2,
+        {"READ_ALT_NOC_SHARE": Fraction(3, 8), "BANK_RUN_ROUNDS": None},
+    ),
+    ("pm_alt1_2_stagger", (2, 8, 37, 7, 3, 3), 2, 2, {"BANK_MAJOR": False, "BANK_STAGGER": True}),
+    ("one_noc_bm", (1, 2, 3, 40, 4, 8), 1, 2, {"READ_ALT_NOC_SHARE": Fraction(0)}),
+]
+
+
+@pytest.mark.parametrize(
+    "shape, block_limit, input_depth, extra", [c[1:] for c in FORCED_READ_PATHS], ids=[c[0] for c in FORCED_READ_PATHS]
+)
+def test_forced_read_paths_bit_exact(shape, block_limit, input_depth, extra, device, knobs):
+    knobs(block_limit, input_depth, **extra)
+    torch.manual_seed(11)
+    _permute_and_check(_randn(shape), device)

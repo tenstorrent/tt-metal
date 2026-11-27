@@ -58,8 +58,8 @@ Unit `(n, c, h)`: `W·I` input pages of `J` values in, `I·J` output pages of `W
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_slots` | `min(input_depth, max_blocks_per_core) · block_h` pages of `unit_slot_bytes` (FLUX_74: 75 × 4096 B) | with ≥ 2 blocks per core the reader fills block `k+1` while the writer gathers block `k`; capacity = live set | `{h: spans → block_h · depth; w: spans → W; i: spans → I; j: spans → J (one input page, in a slot of slot_bytes = the page's bank stride, so local ≡ remote mod 64); n, c: folded into the unit}` | Float16_b, dataflow-only payload | reader | writer | whole program | Cannot take the rows: the gather reads every slot of a unit while it writes the unit's rows, and the rows are 16× denser than the slots, so writing them in place overwrites unread values |
-| `cb_output_rows` | `block_h` pages of `unit_row_bytes` (FLUX_74: 75 × 256 B), never pushed or popped | one block of gathered rows: the gather of block `k+1` starts only after `noc_async_writes_flushed` releases block `k`'s rows | `{h: spans → block_h; i, j: spans → I·J rows; w: spans → W values per row, padded to out_row_bytes (L1 alignment, a NoC write source)}` | Float16_b | writer (gather) | writer (NoC write source) | whole program | The writer's private staging area. Cannot be the output tensor: an output page is in DRAM. Cannot alias `cb_input_slots`: both are live during the gather |
+| `cb_input_slots` | `min(input_depth, max_blocks_per_core) · block_h` pages of `unit_slot_bytes` (FLUX_74: 2 × 4 × 4096 B) | with ≥ 2 blocks per core the reader fills block `k+1` while the writer gathers block `k`; capacity = live set | `{h: spans → block_h · depth; w: spans → W; i: spans → I; j: spans → J (one input page, in a slot of slot_bytes = the page's bank stride, so local ≡ remote mod 64); n, c: folded into the unit}` | Float16_b, dataflow-only payload | reader | writer | whole program | Cannot take the rows: the gather reads every slot of a unit while it writes the unit's rows, and the rows are 16× denser than the slots, so writing them in place overwrites unread values |
+| `cb_output_rows` | `block_h` pages of `unit_row_bytes` (FLUX_74: 4 × 256 B), never pushed or popped | one block of gathered rows: the gather of block `k+1` starts only after `noc_async_writes_flushed` releases block `k`'s rows | `{h: spans → block_h; i, j: spans → I·J rows; w: spans → W values per row, padded to out_row_bytes (L1 alignment, a NoC write source)}` | Float16_b | writer (gather) | writer (NoC write source) | whole program | The writer's private staging area. Cannot be the output tensor: an output page is in DRAM. Cannot alias `cb_input_slots`: both are live during the gather |
 
 ### Symbol table (`blocks_rm_gather`)
 
@@ -67,14 +67,14 @@ Unit `(n, c, h)`: `W·I` input pages of `J` values in, `I·J` output pages of `W
 |--------|-------|----------------|
 | `slot_bytes` | `input_tensor.buffer_aligned_page_size()` = 64 on DRAM (J ≤ 32) | DRAM read alignment (risk R7) |
 | `out_row_bytes` | `align_up(W · 2, l1_alignment)` = 64 for W = 32 | NoC write source alignment |
-| `block_h` | `min(units_per_core_g1, block_cap)` (and `BLOCK_H_LIMIT` when set) | host plan, single source |
+| `block_h` | `min(units_per_core_g1, block_cap, ceil(BLOCK_PAGES / (W·I)))` with `BLOCK_PAGES = 256` (and `BLOCK_H_LIMIT` when set); FLUX_74 and FLUX_73: 4 | host plan, single source (Refinement 3: a small block keeps all but the last block's gather under the reads) |
 | `block_cap` | `floor((L1_OP_BUDGET_BYTES − out_l1_bytes_per_core) / (input_depth · unit_slot_bytes + unit_row_bytes))` = 159 on FLUX | mechanism cap (BB-05); `RuntimeError` when < 1 |
 | `input_depth` | `min(INPUT_DEPTH = 2, max_blocks_per_core)` | host constant |
 
 ### Total per-core footprint (`blocks_rm_gather`)
 
 `depth · block_h · unit_slot_bytes + block_h · unit_row_bytes + out_l1_bytes_per_core ≤ L1_OP_BUDGET_BYTES`.
-FLUX_74 (75 units per core, one block): 307200 + 19200 = 326400 B. FLUX_73 (19 units per core): 77824 + 4864 = 82688 B.
+FLUX_74 and FLUX_73 (blocks of 4 units, depth 2): 32768 + 1024 = 33792 B per core. Before Refinement 3 the whole per-core assignment was one block (FLUX_74: 326400 B).
 
 ## Data-movement budget (`blocks_rm_gather`)
 
@@ -88,7 +88,7 @@ FLUX_74 (75 units per core, one block): 307200 + 19200 = 326400 B. FLUX_73 (19 u
 | FLUX_73 `[1,32,64,32,2,2]` | 131072 × 4 B | 8192 × 64 B | 512 KiB | 131072 × 64 B = 8 MiB |
 | FLUX_74 `[1,64,128,32,2,2]` | 524288 × 4 B | 32768 × 64 B | 2 MiB | 524288 × 64 B = 32 MiB |
 
-Core-local: every value moves once by RISC-V loads and stores (the gather). The read side is bound by the count of DRAM requests, not their bytes (`changelog.md`, Refinement 1).
+Core-local: every value moves once by RISC-V loads and stores (the gather). The read side is bound by the count of DRAM requests, not their bytes: each DRAM port retires one 4 B read per ~17 ns (`changelog.md`, Refinements 1 and 3). On DRAM input the reader sends half of each bank's reads through the NoC1 port of that bank, so 16 ports serve the 524288 FLUX_74 requests instead of 8. The crossings per tensor are unchanged.
 
 
 ## CB ledger (`nhwc_tile_bfp8_transpose`)

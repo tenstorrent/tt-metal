@@ -75,3 +75,65 @@
   - negative dims, the plan report, the excluded cells, and program reuse;
   - forced `GROUP_DEPTH` 1/3 and forced `READ_CHUNK_TILES` 1/32;
   - Qwen 303, `[2,34,47,96]`, FLUX_73 and an odd-J FLUX shape in L1, bit-exact.
+
+## Refinement 3 — Speed up the perf-flagged FLUX profile (gather tuning)
+- Date: 2026-11-27
+- What was done:
+  - Reused: `blocks_rm_gather`'s reader/writer pair, plan, CBs, cache key and plan report. Added: four read-side knobs on the host (`g6_permute_blocks_rm_gather.py`, all in `knob_key()` and reported by `BlocksPlan`), plus the reader paths they select (`g6_permute_blocks_reader.cpp`). The writer is unchanged.
+    - `BLOCK_PAGES = 256`: `block_h = ceil(BLOCK_PAGES / (W·I))` under the L1 and core caps. This is the `double_buffer` lever: FLUX_74 goes from one 75-unit block per core to blocks of 4 units, and the gather of every block but the last runs under the reads. `None` restores the whole-assignment block.
+    - `READ_ALT_NOC_SHARE = 1/2`, DRAM input only: half of each bank's page rounds go on NoC1. On Blackhole each NoC enters a DRAM bank through its own port. Both kernels run in dynamic NoC mode when the share is nonzero.
+    - `BANK_MAJOR = True`, DRAM input only: the block is issued bank by bank, one `noc_async_read_one_packet_set_state` per (bank, NoC) run and `_with_state` reads inside it (the refinement's bank-major walk).
+    - `BANK_RUN_ROUNDS = 8`: a bank-major chunk is 8 bank rounds, which bounds a core's run of requests to one port.
+    - `BANK_STAGGER` (`bank_stagger`) stays a live knob at its trivial default `False`. It measured flat.
+  - The interrupted earlier attempt's `READ_NOCS` 1/2/3 knob became `READ_ALT_NOC_SHARE`. The adaptive `cmd_buf_ready` mode (3) was dropped: it measured no better than the fixed half split.
+- Bottleneck classification (FLUX_74, Blackhole, 110 cores, one fresh-cache run per variant):
+  - **Not RISC-issue-bound on DRAM.** On 55 cores the kernel is 594966 ns against 551599 on 110 (+8 %). Each reader has at least 2× issue slack.
+  - **Not writer-bound.** Ablation of the shipped plan: full 551296 ns, writes stubbed 542144 (−1.7 %, noise), reads stubbed 64985, everything stubbed 49847 (the gather plus CB handshakes).
+  - **Bound by the per-port DRAM request rate.** One NoC means 8 ports: ~14.8 ns per 4 B read per port. Two NoCs mean 16 ports: ~17 ns per read per port. An uneven split loses on both sides: share 15/32 gives 628709 ns, 17/32 gives 628919, 1/2 gives 603150.
+  - **L1 input is issue-bound.** The R1 reader takes ~28 ns per read: 132 µs for 4766 reads per core.
+- Lever measurements (FLUX_74 DRAM, device kernel ns):
+
+  | Lever | Setting | Kernel ns |
+  |-------|---------|-----------|
+  | R1 plan | one 75-unit block, page order, NoC0 | 1019021 – 1034835 |
+  | `double_buffer` | block 2 units, depth 4 | 939380 |
+  | `double_buffer` | block 1, depth 4 | 943812 |
+  | `bank_stagger` | block 2, depth 4 | 947080 |
+  | 2-NoC split | share 1/2, block 2, depth 4 | 602124 |
+  | 2-NoC split | share 7/16 / 15/32 / 17/32 | 655101 / 628709 / 628919 |
+  | 2-NoC + page order | block 1 / 4 | 579520 / 609748 |
+  | bank-major, NoC0 only | block 2 | 1090015 |
+  | bank-major + 2-NoC | run = whole block: block 1 / 2 / 4 / 8 / 75 | 556944 / 567919 / 627646 / 701654 / 933225 |
+  | bank-major + 2-NoC | run 2 / 4 / 8 rounds, block 1 | 579761 / 565899 / 550793 |
+  | bank-major + 2-NoC, run 8 | block 2 / 4 / 8 | 550575 / 558580 / 564223 |
+  | bank-major + 2-NoC + stagger | block 2 | 570460 |
+  | input depth | 2 / 4 / 8 at block 1 | 554308 / 551599 / 550061 |
+  | fewer cores | 88 / 77 / 66 / 55 / 44 | 566093 / 561293 / 562584 / 594966 / 596410 |
+  | `BLOCK_PAGES` (shipped plan) | 64 / 128 / 256 / 512 | 553389 / 550625 / 552775 / 560955 |
+  | `BLOCK_PAGES` (shipped plan), L1 input | 64 / 128 / 256 / 512 | 152461 / 143413 / 141308 / 139160 |
+
+  On L1 input the 2-NoC split (244256) and the bank-major walk (259813) both lose to page order on NoC0 (152215). Both are therefore gated to DRAM input.
+- Device kernel time, guard set (final run, same session):
+
+  | Cell | R1 plan | Shipped | Change |
+  |------|---------|---------|--------|
+  | L0 / FLUX_74 DRAM | 1029265 | **554900** | −46.1 % (−45.7 % against the recorded 1022579) |
+  | FLUX_73 DRAM | 248450 | **144460** | −41.9 % |
+  | FLUX_74 L1 | 187733 | **141290** | −24.7 % |
+  | FLUX_73 L1 | 48597 | **38410** | −21.0 % |
+
+  L0 is now 0.53× stock (1056.20 µs). `rows_tile_scatter` and `nhwc_tile_bfp8_transpose` kernels are untouched.
+- Finding (remaining headroom):
+  - L0 is bound by the DRAM ports' request rate: 524288 single-page reads over 16 ports at ~17 ns each. Only fewer requests move it, i.e. Refinement 5's bank-coalesced `k·64 B` reads.
+  - Not built:
+    - `split_reader` and `trid_double_issue`: the core-count, depth and block sweeps show the reader never starves the ports on DRAM.
+    - The third NoC endpoint of each DRAM bank. The soc descriptor ties the noc0 endpoint to the one CMFW uses for telemetry (SYS-1419), so workers stay on the two endpoints the descriptor assigns.
+  - For L1 placement the reader is issue-bound, so a split reader or a cheaper per-page address (bank cursor instead of a `TensorAccessor` lookup per page) is the next lever there.
+- Accuracy achieved: bit-exact (PCC=1.0, relative RMS=0, no differing bit patterns) on FLUX_73, FLUX_74, every `test_g6_permute_blocks_rm.py` shape, 6 new forced read-path plans, and every sweep variant above, in DRAM and L1.
+- Golden test progress: FLUX slice 4 / 4 pass (FLUX_73, FLUX_74, loose L0, L1). The other regimes' code is untouched; expected full suite unchanged at 29 / 32 passing, 3 `xfail_expected` (Refinement 4's ROW_MAJOR Panoptic cells).
+- Issues encountered: one Tracy capture crashed (`tracy-capture` exit 3) and its CSV was never written; re-run. One 18-op profiled run dropped its last 4 ops from the CSV; those variants were re-measured in smaller runs.
+- Tests added:
+  - `test_g6_permute_blocks_rm.py`: `test_forced_read_paths_bit_exact` covers 6 plans: bank-major chunks ending mid-round, stagger, shares 1/4 and 3/8, page order with the 2-NoC split, and bank-major on one NoC. The plan test now checks the `BLOCK_PAGES` block and the DRAM read plan. The forced-block fixture pins `BLOCK_PAGES = None` so its ragged multi-block plans stay ragged.
+  - `test_g6_permute_blocks_rm_perf.py`: the guard sweep, shipped plan against R1 on FLUX_73/74 in DRAM and L1.
+  - `test_g6_permute_blocks_rm_ablation_debug.py`: ablation arms behind temporary kernel guards, plus the `BLOCK_PAGES` sweep.
+  - `test_g6_permute_blocks_rm_debug.py`: the grid-scaling experiment now runs at share 0 and 1/2.
