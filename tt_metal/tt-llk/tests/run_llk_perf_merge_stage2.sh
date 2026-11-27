@@ -28,6 +28,13 @@ BASE_SHA="${LLK_STAGE2_BASE_REF:-$(cat "$OUT/stage2.base")}"
 # The code positions, from the one list in run_llk_perf_placement.sh: both sides measure at them and decide reads them.
 SHIFTS="$(sed -n 's/.*LLK_CODE_SHIFTS:-\([0-9 ]*\).*/\1/p' "$LLK/tests/run_llk_perf_placement.sh")"
 
+CODE=()
+if [[ -n "${CODE_POSITIONS:=}" ]]; then
+  SHIFTS="$CODE_POSITIONS"
+  CODE=(--points "$OUT/stage1.points.csv" --base-map "$BASELINE/**/*.windowhash" --stable "${STABLE_MODULES:-}"
+    --map "$LLK/perf_data/runs/**/*.windowhash")
+fi
+
 COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles "${MIN_CYCLES:?}" --module-threshold "${MODULE_THRESHOLDS?}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
@@ -37,14 +44,14 @@ if [[ ! -f "$OUT/stage1.verdict.json" ]]; then
   echo "::warning::The stage-1 comparison of this leg did not finish; no stage 2."
   exit 0
 fi
-if [[ ! -s "$OUT/stage1.regressions.csv" ]]; then
+if [[ ! -s "$OUT/stage1.regressions.csv" && -z "$CODE_POSITIONS" ]]; then
   echo "No stage-1 regression in this leg."
   # An empty result still tells the gate this leg's stage 2 ran.
   echo "[]" > "$OUT/stage2.json"
   exit 0
 fi
 python3 "$LLK/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
-  --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt"
+  --map "$LLK/perf_data/runs/**/*.windowhash" --cap 1000000 --out "$OUT/nodes.txt" "${CODE[@]}"
 
 measure() {
   local left=$(( $3 - $(date +%s) ))
@@ -52,7 +59,7 @@ measure() {
     echo "::warning::No time left to measure on the $1 side."
     return
   fi
-  LLK_CODE_SHIFTS="$SHIFTS" LLK_PERF_NODE_LIST="$4" LLK_STOP_AT="$3" RUNNER_TEMP="$OUT/tmp-$1" \
+  LLK_CODE_SHIFTS="$SHIFTS" LLK_WINDOW_HASH="${CODE_POSITIONS:+code}" LLK_PERF_NODE_LIST="$4" LLK_STOP_AT="$3" RUNNER_TEMP="$OUT/tmp-$1" \
     timeout -k 5 "$(( $3 + 15 - $(date +%s) ))" "$2/tests/run_llk_perf_placement.sh" \
     || echo "::warning::Stage 2 on the $1 side did not finish; what it missed is reported as not re-measured."
   for x in "$2"/tests/python_tests/pytest-report-placement-*.xml; do
@@ -101,4 +108,4 @@ fi
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \
   --baseline "$BASE/tt_metal/tt-llk/perf_data/runs" --current "$LLK/perf_data/runs" \
-  --over-cap "$OUT/nodes.over" --positions "$SHIFTS" --arch "$CHIP_ARCH" --report "$OUT/stage2.md" || true
+  --over-cap "$OUT/nodes.over" --positions "$SHIFTS" --arch "$CHIP_ARCH" --report "$OUT/stage2.md" "${CODE[@]}" || true

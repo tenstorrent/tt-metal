@@ -20,7 +20,9 @@
         "wormhole": {
             "threshold": "0.01",
             "min_cycles": "30",
-            "module_thresholds": ""
+            "module_thresholds": "",
+            "code_positions": "0 4 8 12 16 20 24 28",
+            "stable_modules": "perf_sfpu_ema perf_sfpu_ternary perf_transpose_dest perf_eltwise_bcast_col_custom"
         }
     },
     "nightly": {

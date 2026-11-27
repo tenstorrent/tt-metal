@@ -114,12 +114,33 @@ def read_candidates(path):
     return out
 
 
-def nodes(candidates, window_map, cap):
+def _changed(a, b):
+    a, b = a or {"all": ""}, b or {}
+    return sorted(
+        t
+        for t in set(a) | set(b)
+        if t != "nodeid"
+        and not (a.get(t) == b.get(t) and str(a.get(t)).startswith("code-"))
+    )
+
+
+def _tests(points):
+    return {_config_key(c["module"], c["run_type"], c["config"]) for c in points}
+
+
+def nodes(candidates, window_map, cap, tests=None, base_map=None):
     """(test node ids to re-measure, indices of the candidates left out by the cap).
 
     The cap is shared evenly across the test modules, largest slowdown first within each, so every module
     with a candidate is re-measured.
     """
+    if tests is not None:
+        changed = {
+            window_map[k]["nodeid"]
+            for k in tests
+            if k in window_map and _changed(base_map.get(k), window_map[k])
+        }
+        return sorted(changed), []
     queues = collections.defaultdict(list)
     for i, c in sorted(enumerate(candidates), key=lambda ic: -ic[1]["delta_pct"]):
         entry = window_map.get(_config_key(c["module"], c["run_type"], c["config"]))
@@ -172,6 +193,10 @@ def decide(
     min_cycles,
     module_thresholds,
     over_cap=(),
+    tests=None,
+    window_map=None,
+    base_map=None,
+    stable=(),
 ):
     over_cap = set(over_cap)
     base, base_windows = _side(baseline_root)
@@ -190,6 +215,31 @@ def decide(
                 frozenset((k, _value(v)) for k, v in config.items()),
             )
         ] = key
+    first = None
+    if tests is not None:
+        first = {k: _changed(base_map.get(k), window_map.get(k)) for k in tests}
+        first.update(
+            (k, _changed(base_windows[k], cur_windows[k]))
+            for k in tests
+            if k in base_windows and k in cur_windows
+        )
+        markers = collections.defaultdict(set)
+        for marker, *k in index:
+            markers[tuple(k)].add(marker)
+        rows = [
+            {
+                "module": k[0],
+                "run_type": k[1],
+                "marker": marker,
+                "config": sorted(k[2]),
+                "delta_pct": 0.0,
+            }
+            for k in sorted(first, key=str)
+            if first[k]
+            for marker in sorted(markers.get(k, [""]))
+        ]
+        have = {_row_key(c) for c in candidates}
+        candidates = candidates + [r for r in rows if _row_key(r) not in have]
     for i, c in enumerate(candidates):
         limit = module_thresholds.get(c["module"], threshold)
         lookup = index.get(
@@ -201,6 +251,13 @@ def decide(
             )
         )
         row = dict(c, deltas=[], threads=[], slower=0)
+        changed = first is None or first.get(
+            _config_key(c["module"], c["run_type"], c["config"]), ["all"]
+        )
+        if not changed:
+            row.update(outcome="same", why="")
+            results.append(row)
+            continue
         if i in over_cap:
             row.update(outcome="unmeasured", why="over the test limit")
             results.append(row)
@@ -235,7 +292,17 @@ def decide(
         if labelled:
             threads = sorted(t for t in bw if t != "nodeid" and bw.get(t) != cw.get(t))
         why = ""
-        if not any(slower):
+        if first is not None:
+            threads = changed
+            moves = [(h[lookup] - b[lookup], b[lookup]) for b, h in zip(base, cur)]
+            if (
+                sum(d / bv for d, bv in moves) / len(moves) > limit
+                and sum(d for d, _ in moves) / len(moves) > min_cycles
+            ):
+                outcome = "changed-slower"
+            else:
+                outcome = "changed-ok" if c["module"] in stable else "changed"
+        elif not any(slower):
             outcome = "not-reproduced"
         elif all(slower):
             outcome = "review" if labelled and not threads else "regression"
@@ -268,6 +335,34 @@ def _row(r, hidden=()):
 
 
 _SECTIONS = (
+    (
+        "changed-slower",
+        "Code changed and slower",
+        "The code of the test changed, and the mean of the change over the code positions is above the "
+        "threshold. The last column names the threads whose code changed.",
+        False,
+    ),
+    (
+        "changed",
+        "Code changed in a layout-sensitive test: needs the llk-perf-accept-regression label",
+        "The code of the test changed, and the mean of the change over the code positions is not above the "
+        "threshold. In this test module a move of the code alone can change the time by more than the "
+        "threshold, so the positions cannot clear the change.",
+        False,
+    ),
+    (
+        "changed-ok",
+        "Code changed, not slower",
+        "The code of the test changed, and the mean of the change over the code positions is not above the "
+        "threshold.",
+        True,
+    ),
+    (
+        "same",
+        "Same code as the baseline",
+        "A stage-1 regression of a test whose code did not change: a code-placement effect.",
+        True,
+    ),
     (
         "regression",
         "Confirmed regressions",
@@ -308,20 +403,24 @@ _SECTIONS = (
 
 
 # A blocking gate fails on these: slower at every position, or not re-measured at all.
-BLOCKING = ("regression", "review", "unmeasured")
+BLOCKING = ("changed-slower", "changed", "regression", "review", "unmeasured")
 
 
 def blocks(results):
     return any(r["outcome"] in BLOCKING for r in results)
 
 
-def render(results, arch, limit_note=""):
+def render(results, arch, limit_note="", code_first=False):
     by = collections.defaultdict(list)
     for r in results:
         by[r["outcome"]].append(r)
     fixed = _fixed(results)
     name = f"{arch.capitalize()} stage 2" if arch else "Stage 2"
-    if by["regression"] or by["review"]:
+    if by["changed-slower"] or by["changed"]:
+        verdict = (
+            f"❌ {len(by['changed-slower']) + len(by['changed'])} with changed code"
+        )
+    elif by["regression"] or by["review"]:
         verdict = f"❌ {len(by['regression']) + len(by['review'])} slower at every code position"
     elif by["unmeasured"]:
         verdict = f"❌ {len(by['unmeasured'])} not re-measured"
@@ -332,16 +431,17 @@ def render(results, arch, limit_note=""):
     else:
         verdict = "✅ no confirmed regression"
     at = " / ".join(f"+{p[1:]}" for p in POSITIONS)
-    head = f"| test | configuration | run type | change at positions {at} B | loop code changed in |"
+    head = f"| test | configuration | run type | change at positions {at} B | {'code' if code_first else 'loop code'} changed in |"
     rule = "|---|---|---|---|---|"
     lines = [
         f"## {name}: {verdict}",
         "",
-        "Stage 2 measured every stage-1 regression again with the TRISC code at 5 positions, on the base "
+        f"Stage 2 measured every {'test with changed code' if code_first else 'stage-1 regression again'} with "
+        f"the TRISC code at {len(POSITIONS)} positions, on the base "
         "and on the head. All of the code moves together, so the positions of functions relative to each other "
         "do not change.",
         "",
-        f"- {len(results)} stage-1 regression(s)",
+        f"- {len(results)} {'row(s)' if code_first else 'stage-1 regression(s)'}",
     ]
     note = "The configuration column leaves out the parameters that are the same in all of a test's rows; `stage2.json` has every parameter."
     lines += [f"- {title}: {len(by[key])}" for key, title, _, _ in _SECTIONS if by[key]]
@@ -475,6 +575,11 @@ def main(argv=None):
         "--limit-note", default="", help="shown when candidates were over the cap"
     )
     d.add_argument("--report", required=True)
+    for p in (n, d):
+        p.add_argument("--points", default="")
+        p.add_argument("--base-map", default="")
+        p.add_argument("--stable", default="")
+    d.add_argument("--map", default="")
     r = sub.add_parser("render")
     r.add_argument("--results", required=True, help="glob of decide's .json files")
     r.add_argument("--arch", default="")
@@ -493,6 +598,7 @@ def main(argv=None):
     g.add_argument("--bases", required=True, help="glob of the legs' stage2.base files")
     g.add_argument("--arch", default="")
     g.add_argument("--report", required=True)
+    g.add_argument("--positions", default="")
     g.add_argument(
         "--blocking-csv",
         default="",
@@ -516,7 +622,7 @@ def main(argv=None):
         )
         if a.blocking_csv and Path(a.stage1).exists():
             write_blocking(a.stage1, results, notes, a.blocking_csv)
-        report = render(results, a.arch)
+        report = render(results, a.arch, code_first=bool(a.positions))
         if notes:
             report += "\n\n" + "\n".join(f"> ⚠️ {n}" for n in notes)
         Path(a.report).write_text(report + "\n")
@@ -529,11 +635,18 @@ def main(argv=None):
         ]
         Path(a.report).write_text(render(results, a.arch) + "\n")
         return 1 if blocks(results) else 0
-    candidates = read_candidates(a.candidates)
+    candidates = read_candidates(a.candidates) if Path(a.candidates).exists() else []
+    window_map = read_window_map(glob.glob(a.map, recursive=True))
+    code = {}
+    if a.points:
+        code = {
+            "tests": _tests(
+                read_candidates(a.points) if Path(a.points).exists() else []
+            ),
+            "base_map": read_window_map(glob.glob(a.base_map, recursive=True)),
+        }
     if a.cmd == "nodes":
-        selected, over = nodes(
-            candidates, read_window_map(glob.glob(a.map, recursive=True)), a.cap
-        )
+        selected, over = nodes(candidates, window_map, a.cap, **code)
         Path(a.out).write_text("".join(f"{n}\n" for n in selected))
         Path(a.out).with_suffix(".over").write_text("".join(f"{i}\n" for i in over))
         print(
@@ -552,8 +665,13 @@ def main(argv=None):
         a.min_cycles,
         _module_thresholds(a.module_threshold),
         over_cap,
+        **code,
+        window_map=window_map,
+        stable=a.stable.split(),
     )
-    Path(a.report).write_text(render(results, a.arch, a.limit_note) + "\n")
+    Path(a.report).write_text(
+        render(results, a.arch, a.limit_note, bool(a.points)) + "\n"
+    )
     Path(a.report).with_suffix(".json").write_text(json.dumps(results, default=str))
     counts = collections.Counter(r["outcome"] for r in results)
     print("stage2", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
