@@ -642,8 +642,6 @@ def draw_request_latents(
     return condition_noise, video_rows, audio_rows
 
 
-# The number of first forwards a request runs at a lower resolution (default 0: none), and that resolution as a
-# fraction of the height and width (default 1/2); see `MiniMaxH3Pipeline._denoise_lowres`.
 LOWRES_STEPS_ENV = "MINIMAX_H3_LOWRES_STEPS"
 LOWRES_SCALE_ENV = "MINIMAX_H3_LOWRES_SCALE"
 
@@ -3522,9 +3520,8 @@ class MiniMaxH3Pipeline:
         transformer.set_sol_request(None if sol is None else sol[:3], tau=1.0 if sol is None else sol[3])
         self._sol_key = sol
         self._log(
-            "attention: dense ring"
-            if sol is None
-            else f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+            "attention: dense ring" if sol is None else
+            f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
         )
 
     def _denoise_lowres(
