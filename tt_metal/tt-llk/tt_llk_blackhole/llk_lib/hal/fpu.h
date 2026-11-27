@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::fpu
@@ -382,16 +383,16 @@ constexpr bool is_valid(const Pool operation)
 /**
  * @brief Encode a compile-time elementwise operation without issuing it.
  *
- * @tparam Operation: Complete elementwise description.
+ * @tparam Descriptor: Complete elementwise description.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP
  *       or replay configuration.
  */
-template <Elementwise Operation>
-constexpr std::uint32_t get_operation()
+template <Elementwise Descriptor>
+constexpr hal::Operation get_operation()
 {
-    static_assert(is_valid(Operation), "invalid elementwise descriptor");
+    static_assert(is_valid(Descriptor), "invalid elementwise descriptor");
 
-    return detail::get_operation(Operation);
+    return hal::detail::make_operation(detail::get_operation(Descriptor));
 }
 
 /**
@@ -402,22 +403,21 @@ constexpr std::uint32_t get_operation()
  *       or replay configuration.
  * @note Invalid fields fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const Elementwise operation)
+inline constexpr __attribute__((always_inline)) hal::Operation get_operation(const Elementwise operation)
 {
     detail::validate(operation);
-    return detail::get_operation(operation);
+    return hal::detail::make_operation(detail::get_operation(operation));
 }
 
 /**
  * @brief Issue a compile-time elementwise operation as one immediate instruction.
  *
- * @tparam Operation: Complete elementwise description.
+ * @tparam Descriptor: Complete elementwise description.
  */
-template <Elementwise Operation>
+template <Elementwise Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    hal::detail::run_immediate<get_operation<Descriptor>()>();
 }
 
 /**
@@ -428,21 +428,21 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Elementwise operation)
 {
-    TT_INSN(get_operation(operation));
+    hal::run(get_operation(operation));
 }
 
 /**
  * @brief Encode a compile-time DOTPV dot product without issuing it.
  *
- * @tparam Operation: Complete dot-product description.
+ * @tparam Descriptor: Complete dot-product description.
  * @note Prefer @ref MatrixMultiply; DOTPV remains for legacy compatibility.
  */
-template <DotProduct Operation>
-constexpr std::uint32_t get_operation()
+template <DotProduct Descriptor>
+constexpr hal::Operation get_operation()
 {
-    static_assert(is_valid(Operation), "invalid dot-product descriptor");
+    static_assert(is_valid(Descriptor), "invalid dot-product descriptor");
 
-    return detail::get_operation(Operation);
+    return hal::detail::make_operation(detail::get_operation(Descriptor));
 }
 
 /**
@@ -451,22 +451,21 @@ constexpr std::uint32_t get_operation()
  * @param operation: Complete dot-product description.
  * @note Invalid fields fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const DotProduct operation)
+inline constexpr __attribute__((always_inline)) hal::Operation get_operation(const DotProduct operation)
 {
     detail::validate(operation);
-    return detail::get_operation(operation);
+    return hal::detail::make_operation(detail::get_operation(operation));
 }
 
 /**
  * @brief Issue a compile-time DOTPV dot product as one immediate instruction.
  *
- * @tparam Operation: Complete dot-product description.
+ * @tparam Descriptor: Complete dot-product description.
  */
-template <DotProduct Operation>
+template <DotProduct Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    hal::detail::run_immediate<get_operation<Descriptor>()>();
 }
 
 /**
@@ -477,22 +476,22 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const DotProduct operation)
 {
-    TT_INSN(get_operation(operation));
+    hal::run(get_operation(operation));
 }
 
 /**
  * @brief Encode a compile-time MVMUL matrix multiply without issuing it.
  *
- * @tparam Operation: Complete matrix-multiply description.
+ * @tparam Descriptor: Complete matrix-multiply description.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP
  *       or replay configuration.
  */
-template <MatrixMultiply Operation>
-constexpr std::uint32_t get_operation()
+template <MatrixMultiply Descriptor>
+constexpr hal::Operation get_operation()
 {
-    static_assert(is_valid(Operation), "invalid matrix-multiply descriptor");
+    static_assert(is_valid(Descriptor), "invalid matrix-multiply descriptor");
 
-    return detail::get_operation(Operation);
+    return hal::detail::make_operation(detail::get_operation(Descriptor));
 }
 
 /**
@@ -501,22 +500,21 @@ constexpr std::uint32_t get_operation()
  * @param operation: Complete matrix-multiply description.
  * @note Invalid fields fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const MatrixMultiply operation)
+inline constexpr __attribute__((always_inline)) hal::Operation get_operation(const MatrixMultiply operation)
 {
     detail::validate(operation);
-    return detail::get_operation(operation);
+    return hal::detail::make_operation(detail::get_operation(operation));
 }
 
 /**
  * @brief Issue a compile-time MVMUL matrix multiply as one immediate instruction.
  *
- * @tparam Operation: Complete matrix-multiply description.
+ * @tparam Descriptor: Complete matrix-multiply description.
  */
-template <MatrixMultiply Operation>
+template <MatrixMultiply Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    hal::detail::run_immediate<get_operation<Descriptor>()>();
 }
 
 /**
@@ -527,22 +525,22 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const MatrixMultiply operation)
 {
-    TT_INSN(get_operation(operation));
+    hal::run(get_operation(operation));
 }
 
 /**
  * @brief Encode a compile-time pool operation without issuing it.
  *
- * @tparam Operation: Complete pool description.
+ * @tparam Descriptor: Complete pool description.
  * @note Use the result where another expander accepts an encoded operation, such as a MOP
  *       or replay configuration.
  */
-template <Pool Operation>
-constexpr std::uint32_t get_operation()
+template <Pool Descriptor>
+constexpr hal::Operation get_operation()
 {
-    static_assert(is_valid(Operation), "invalid pool descriptor");
+    static_assert(is_valid(Descriptor), "invalid pool descriptor");
 
-    return detail::get_operation(Operation);
+    return hal::detail::make_operation(detail::get_operation(Descriptor));
 }
 
 /**
@@ -551,22 +549,21 @@ constexpr std::uint32_t get_operation()
  * @param operation: Complete pool description.
  * @note Invalid fields fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
  */
-inline constexpr __attribute__((always_inline)) std::uint32_t get_operation(const Pool operation)
+inline constexpr __attribute__((always_inline)) hal::Operation get_operation(const Pool operation)
 {
     detail::validate(operation);
-    return detail::get_operation(operation);
+    return hal::detail::make_operation(detail::get_operation(operation));
 }
 
 /**
  * @brief Issue a compile-time pool operation as one immediate instruction.
  *
- * @tparam Operation: Complete pool description.
+ * @tparam Descriptor: Complete pool description.
  */
-template <Pool Operation>
+template <Pool Descriptor>
 inline __attribute__((always_inline)) void run()
 {
-    constexpr std::uint32_t operation = get_operation<Operation>();
-    TTI_INSN(operation);
+    hal::detail::run_immediate<get_operation<Descriptor>()>();
 }
 
 /**
@@ -577,7 +574,7 @@ inline __attribute__((always_inline)) void run()
  */
 inline __attribute__((always_inline)) void run(const Pool operation)
 {
-    TT_INSN(get_operation(operation));
+    hal::run(get_operation(operation));
 }
 
 } // namespace hal::fpu
