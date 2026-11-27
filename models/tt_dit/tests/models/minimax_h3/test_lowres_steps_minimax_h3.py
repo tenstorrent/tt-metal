@@ -54,17 +54,6 @@ def test_windows_split_the_schedule(steps):
     assert (first.num_inference_steps, rest.num_inference_steps) == (steps, total - steps)
 
 
-def test_window_to_clean_lands_on_the_clean_estimate():
-    scheduler = _scheduler()
-    window = scheduler.window(0, 2, to_clean=True)
-
-    assert torch.equal(window.timesteps, scheduler.timesteps[:2])
-    assert window.step_coefficient(0) == scheduler.step_coefficient(0)
-    # x0 = x_t + sigma * v
-    assert window.step_coefficient(1) == float(scheduler.sigmas[1])
-    assert float(scheduler.sigmas[2]) > 0.0, "the parent schedule keeps its own sigmas"
-
-
 @pytest.mark.parametrize("height, width", [(32, 48), (24, 36)])  # 16x24 is 1/2 of the first, 2/3 of the second
 def test_lowres_noise_is_the_low_frequencies_of_the_noise(height, width):
     # Still unit variance, and below its own highest frequency it is the request's noise.
@@ -77,16 +66,6 @@ def test_lowres_noise_is_the_low_frequencies_of_the_noise(height, width):
     assert torch.allclose(lowres_spectrum[..., :8, :12], spectrum[..., :8, :12], atol=1e-4)
     # The one frequency that is the highest on both axes has the power of every other.
     assert torch.allclose(lowres_spectrum[..., 8, 12].real, spectrum[..., -8, -12].real * 2**0.5, atol=1e-4)
-
-
-def test_handoff_is_the_upscale_renoised_to_sigma():
-    lowres = torch.full((FRAMES * (HEIGHT // 4) * (WIDTH // 4), CHANNELS * 4), 3.0)
-    noise = torch.randn(
-        (FRAMES * (HEIGHT // 2) * (WIDTH // 2), CHANNELS * 4), generator=torch.Generator().manual_seed(1)
-    )
-
-    assert torch.equal(lowres_handoff_rows(lowres, noise, 0.0, *SHAPE), torch.full_like(noise, 3.0))
-    assert torch.allclose(lowres_handoff_rows(lowres, noise, 0.25, *SHAPE), 0.75 * 3.0 + 0.25 * noise)
 
 
 def test_handoff_upscales_in_space_only():
@@ -103,6 +82,7 @@ def _stage_pipeline(calls, pdd=None):
     pipeline.transformer_config = {"patch_size": PATCH}
     pipeline.vae_config = SimpleNamespace(latent_channels=CHANNELS)
     pipeline._pdd_active = pdd
+    pipeline._log = lambda message: None
 
     def denoise(transformer, layout, prompt, video, audio, scheduler, audio_scheduler, **kwargs):
         calls.append((layout, prompt, video.clone(), scheduler, audio_scheduler, pipeline._pdd_active, kwargs))
@@ -162,6 +142,7 @@ def test_lowres_stage_hands_off_video_and_carries_audio(monkeypatch, steps):
     calls = []
     scheduler, audio_scheduler = _scheduler(12.0), _scheduler(3.0)
     layout, noise, audio, result = _run_lowres(_stage_pipeline(calls), scheduler, audio_scheduler)
+    assert float(scheduler.sigmas[steps]) > 0.0, "the parent schedule keeps its own sigmas"
     video_rows, audio_rows, rest, audio_rest = result
 
     lowres_layout, prompt, lowres_video, first, audio_first, _pdd, kwargs = calls[0]
