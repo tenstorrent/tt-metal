@@ -88,15 +88,18 @@ cap (via the shared `_fit_block_atoms`), the CB sizes and `describe_plan()["l1_b
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_src_stage_m{0,1}` | 1 page of `stage_depth · align_up(block_atoms·S_rm·(2A + max(A, G)) + A, 64)` B | the block's A-aligned covering read runs: a new run stages `< 3A` per piece, an extension `≤ G + 2A`; `+A` slack so the kernel can start the slot DRAM-aligned | `{out_atom: spans → block_atoms, elem: streams (one piece = one input-row run), movers: one per mover}` | input dtype (dataflow-only) | mover m (NoC reads) | mover m (CPU loads) | gather → end of permute, every block | cannot alias image (both live in permute) or plan (written while reads land); capacity > live set by the A-rounding of runs and the gap read-through |
-| `cb_dst_image_m{0,1}` | 1 page of `image_depth · align_up(block_atoms·A + A, 64)` B | exactly `block_atoms` A-byte slot chunks in DRAM byte order (valid bytes + the slot's alignment padding, written as-is) + `A` alignment slack | `{out_atom: spans → block_atoms, movers: one per mover}` | input dtype | mover m (CPU stores) | mover m (NoC writes, one per (block, bank)) | permute → writes_flushed at the next block's permute | cannot alias staging (concurrent in permute); capacity = live set + slack |
-| `cb_move_plan_m{0,1}` | 1 page of `align_up(8·S_rm·block_atoms, 64)` B | one copy entry per piece; no tile table (the store re-walks the bank-affine cursor) | `{out_atom: spans → block_atoms, elem: one entry per piece}` | UInt32 | mover m | mover m | gather → permute | cannot share with staging (written while reads land) |
+| `cb_dst_image_m{0,1}` | 1 page of `image_depth · align_up(block_atoms·A + A, 64)` B | exactly `block_atoms` A-byte slot chunks (valid bytes + the slot's alignment padding, written as-is) + `A` alignment slack. Linear fold (default, Refinement 2): laid out BANK-GROUPED — pages `p0+g, p0+g+NB, …` consecutively per group `g` — so each group is consecutive bytes of one bank; bank fold: DRAM byte order | `{out_atom: spans → block_atoms, movers: one per mover}` | input dtype | mover m (CPU stores) | mover m (NoC writes, one per (block, bank)) | permute → writes_flushed at the next block's permute | cannot alias staging (concurrent in permute); capacity = live set + slack |
+| `cb_move_plan_m{0,1}` | 1 page of `align_up(8·S_rm·block_atoms, 64)` B | one copy entry per piece; no tile table (the store derives its ≤ NB group writes from the block's first page/chunk under the linear fold, or re-walks the bank-affine cursor) | `{out_atom: spans → block_atoms, elem: one entry per piece}` | UInt32 | mover m | mover m | gather → permute | cannot share with staging (written while reads land) |
 
 Worked values (Blackhole, `A = 64`, 110 cores, `G = A`): `[1,4096]→[4096,1]` int32: 4096 atoms, ≤ 19 per mover,
 `S_rm = 1` → 17920 B per core. `[1,3844]→[3844,1]`: 17024 B. `[8,1]→[8]` int32 (`S_rm = 16`, one atom): 6784 B.
 `[4096,1]→[1,4096]` int32: 13312 B. All ≥ 75× under 1347776.
 
-Data-movement budget (rm_row_gather): input — each needed input byte crosses DRAM once per covering run,
-plus `< 2A` of rounding per run and up to `G` per read-through gap (for `[1,W]→[W,1]` a mover reads its
-strided elements as ONE run: `≈ 8·e·atoms` bytes, i.e. every input byte is read once across the NB movers
-sharing a bank stride); output — every output slot byte (valid + alignment padding) crosses DRAM exactly
-once, one write per (block, bank). Cross-core traffic 0.
+Data-movement budget (rm_row_gather): input — linear fold (default, Refinement 2): a block is one
+contiguous stream range, so each needed input byte crosses DRAM exactly once, plus `< 2A` of rounding per
+input row the block crosses (one covering read per row, issued before the walk). For `[1,4096]→[4096,1]`
+int32 that is ~19·4 B + ≤ 128 B per mover, ≈ 28 KB total from the single input bank. Bank fold
+(`RM_FOLD="bank"`): reads through the NB-page stride, `≈ NB·e·atoms` bytes per mover (~133 KB total on the
+flagged shape, all from one hot bank — the await bottleneck Refinement 2 removed). The gap `G` applies only
+to the bank fold. Output — every output slot byte (valid + alignment padding) crosses DRAM exactly once,
+one write per (block, bank): ≤ NB writes per block under the linear fold. Cross-core traffic 0.

@@ -61,3 +61,43 @@
   - int32/uint32 TILE;
   - the flagged-plan pin (`regime == rm_row_gather`, `num_cores > 1`, within the L1 budget) with extremes and `-1`;
   - an RM block-knob matrix: multi-block, depth 2, one mover, one core, no read gap.
+
+## Refinement 2 — Speed up the perf-flagged int32 row-to-column profile (knob co-tune)
+- Date: 2026-11-27
+- What was done:
+  - **Diagnosis** (device zones, flagged `[1,4096]→[4096,1]` int32, 110 cores × 2 movers): the read barrier (`g6.await`) dominated, at 1.2–1.3 µs median and 2.2–2.5 µs max. The input is ONE 16 KB page in ONE DRAM bank. The bank-affine fold gives each mover output pages NB apart, i.e. input elements 32 B apart, so 220 movers read ≈ 133 KB (8× amplification) from that hot bank.
+  - **Lever 1, `RM_FOLD` (new knob, default `"linear"`; read_coalescing + bank grouping)**: atoms fold in stream order, so a block is one contiguous input range and each input byte is read once (≈ 28 KB total). The permute lays the image out bank-grouped (pages `p0+g, p0+g+NB, …` per group), so the store stays ≤ NB writes per block (the design's "~NB writes per mover"). The bank-affine path is kept as `RM_FOLD="bank"` (byte-identical to Refinement 1) and covered in the knob matrix.
+  - **Lever 2, pre-issued reads (reader/writer pair with lever 1)**: under the linear fold a block's covering reads (one A-aligned run per input row) are known before the walk. They are issued first, and the walk overlaps their DRAM latency; the walk only re-derives the staging layout and ASSERTs that it matches. Await median 1.2 µs → 0.2–0.3 µs.
+  - **Knob co-tune** (fresh descriptor per setting; a warm-up call absorbs a ~200–300 ns first-call-in-module penalty):
+    - `MAX_CORES` 8/16/32/64/110: full grid best (64 cores: 3.6 µs).
+    - `MOVERS_PER_CORE` 1: 4.4 µs (worse).
+    - `MAX_BLOCK_ATOMS=10` at depth 1 or 2: ~4.3 µs (worse; per-block fixed cost).
+    - `MOVER_NOCS` (noc_placement, new knob in the cache key; `MOVERS` no longer hardcodes the NoC): swapped placement is ~6% slower on the flagged shape and ~10% slower on tile `(16,1,5120)`, so the native `(NOC_0, NOC_1)` stays the default.
+    - `bank_stagger`: no extra mechanism needed. Linear-fold movers start at different banks and write groups in bank order from their own start bank.
+  - Reused: the RM mover skeleton, permute block op, cursor/advance, CB sizing (`_rm_slot_bytes`, unchanged bounds) and the knob/cache-key plumbing. Added: the `kLinearFold` CT arg (index 16), group offset/size computation, the pre-issue loop, the group store, and the `RM_FOLD` / `MOVER_NOCS` knobs.
+- Perf (device kernel ns, profiler build, 110 cores, warm call):
+
+  | Shape | Bank fold (R1 path) | Refinement 2 | Change |
+  |---|---|---|---|
+  | `[1,4096]→[4096,1]` int32 (flagged) | ≈ 4250–4400 | **≈ 2900** (2892 / 2898 / 2907 / 2932) | −33%; −37% vs R1's recorded 4610 |
+  | `[1,3844]→[3844,1]` int32 | ≈ 4150–4350 | ≈ 2875–2920 | −32% |
+
+  Tile guards are unchanged (no tile-kernel change): `(16,1,5120)→(1,1,16,5120)` 8.5–8.7 µs, `(1,1,16,4608)→(16,1,4608)` 6.83–6.87 µs. Incumbent 362.12 µs.
+- Remaining profile (flagged, per mover; median ns):
+  - launch to kernel start ≈ 500;
+  - issue 100;
+  - walk (`g6.gather`) ≈ 500;
+  - await 200–300 (max ≈ 800, the hot bank);
+  - permute ≈ 620 (19 one-word copies, ~45 cycles each);
+  - store ≈ 320 (8 writes);
+  - drain ≈ 185.
+
+  The critical path is now the mover's per-unit RISC-V work (walk + permute ≈ 1.1 µs of ~2.3 µs kernel time). That is exactly Refinement 3's scope: plan-free permute for the linear fold, image-free stores, and roles split.
+- Accuracy achieved: bit-exact (exact gate) on every case, including `int32_extremes`, the `-1` variant, uint32 high bit, bf16/fp32 RM, and int32/uint32 TILE.
+- Golden test progress: targeted slice (`EVAL_CAPTURE_L1=0`, `-k "ROW_MAJOR or 16x1x5120"`) 26/26 pass: all 20 int32/uint32 RM cells, the 5 RM loose cases and a tile representative. The full suite is left to the harness gate.
+- Issues encountered:
+  - The first sweep's NoC "swap" patched `MOVERS`, which was not in the descriptor-cache key, so it re-ran the default program. The fake "win" was the first-call penalty. Fixed by making the NoC a cache-keyed knob (`MOVER_NOCS`) and adding a warm-up entry to the sweep.
+  - The Tracy capture tool sometimes exits with code 3 (no new CSV); re-running is enough.
+- Tests added:
+  - `test_g6_reshape_perf_sweep.py`: guard-set correctness pin by default; `G6_PERF_SWEEP=1` / `G6_PERF_SWEEP2=1` run the knob sweeps under `--profile`.
+  - `test_g6_reshape_row_major.py` knob matrix: `bank_fold`, `bank_fold_block5` and `linear_block7` settings, plus an fp32 `(2,33,40)→(66,40)` case (3 atoms per page; blocks start/end mid-page and span > NB pages). 66/66 pass under `--dev` (kernel ASSERTs on).

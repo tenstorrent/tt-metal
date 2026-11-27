@@ -62,7 +62,7 @@ Rank-1 inputs are included. Cells moved xfail → pass (25): 15 int32 and 5 uint
 - The flagged shape's device-ns is recorded in `changelog.md` as the baseline for Refinement 2.
 - **Outcome**: landed. Flagged `[1,4096]→[4096,1]` int32 = 4610 device-ns on 110 cores (`[1,3844]→[3844,1]` 4280 ns), incumbent 362.12 µs. Harness gate run (`eval_test_runner.sh`, graded default): 54/59, 0 hangs; the 5 failures are H1 (trace) + H2 (4 validation tests), as at Phase 0.
 
-### [ ] Refinement 2 — Speed up the perf-flagged int32 row-to-column profile (knob co-tune)
+### [x] Refinement 2 — Speed up the perf-flagged int32 row-to-column profile (knob co-tune)
 
 **Type**: perf
 
@@ -76,6 +76,12 @@ Several T1/T2 levers fit in one phase. No SUPPORTED change.
 - Measured device-ns on `[1,4096]→[4096,1]` int32 improves beyond the 2–3% noise band over Refinement 1's recorded baseline.
 - The exact gate holds, including the `int32_extremes` loose variant, and the golden suite is green.
 - No regression across the config-spanning guard set (measurable cells > 32 tiles): bf16 `tile_face_row` `(16,1,5120)→(1,1,16,5120)` and `(1,1,16,4608)→(16,1,4608)`, and int32 RM `(1,3844)→(3844,1)`. `tile_element_run` (every cell ≤ 32 tiles, fp32 FLUX included) is guarded by the golden suite only.
+- **Outcome**: landed.
+  - Flagged `[1,4096]→[4096,1]` int32: ≈ 4300 ns (bank fold, same build; 4610 recorded) → **≈ 2900 ns** (−33%), 110 cores, exact.
+  - `[1,3844]→[3844,1]`: ≈ 4250 → ≈ 2900 ns. Tile guards unchanged (8.5–8.7 µs, 6.85 µs).
+  - Levers: linear fold with a bank-grouped image (`RM_FOLD`; removes the 8× read amplification on the single hot input bank, still ≤ NB writes per block) and covering reads pre-issued before the walk (await 1.2 µs → 0.25 µs).
+  - Co-tune: full grid, 2 movers and one block per mover remain best. Native `MOVER_NOCS` beats swapped by ~6%; it is now a cache-keyed knob.
+  - Now bound by the mover's per-unit RISC-V work (walk ≈ 500 ns + permute ≈ 620 ns for 19 atoms) on top of ≈ 500 ns launch. That is Refinement 3's scope, so it was not attempted here.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile, phase 2 (per-unit mover cost)
 

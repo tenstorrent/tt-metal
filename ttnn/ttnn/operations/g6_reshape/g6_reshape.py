@@ -78,13 +78,17 @@ COPY_ENTRY_BYTES = 8
 TILE_ENTRY_BYTES = 16
 CB_ALIGN = 64
 
-# Mover m: CB ids (stage, image, plan) and the RISC-V / NoC it runs on. Mover 0 takes the reader
-# placement (RISCV_1, NoC0), mover 1 the writer placement (RISCV_0, NoC1).
+# Mover m's NoC (noc_placement knob): reader/writer-native (RISCV_1 on NoC0, RISCV_0 on NoC1). Refinement 2
+# measured the swapped placement ~7% slower on the flagged [1,4096]->[4096,1] int32 and on the tile
+# (16,1,5120)->(1,1,16,5120) guard, neutral elsewhere.
+MOVER_NOCS = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+
+# Mover m: CB ids (stage, image, plan) and the RISC-V it runs on (mover 0: RISCV_1, mover 1: RISCV_0).
 MOVERS = (
-    ((0, 1, 2), ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
-    ((3, 4, 5), ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
+    ((0, 1, 2), ttnn.DataMovementProcessor.RISCV_1),
+    ((3, 4, 5), ttnn.DataMovementProcessor.RISCV_0),
 )
-assert 1 <= MOVERS_PER_CORE <= len(MOVERS)
+assert 1 <= MOVERS_PER_CORE <= len(MOVERS) == len(MOVER_NOCS)
 
 
 def _knobs():
@@ -97,6 +101,7 @@ def _knobs():
         IMAGE_DEPTH,
         RM_READ_GAP_BYTES,
         RM_FOLD,
+        MOVER_NOCS,
         L1_OP_BUDGET,
     )
 
@@ -526,7 +531,8 @@ def _build_descriptor(plan, input_tensor, output_tensor):
     kernels = []
     cbs = []
     for mover in range(MOVERS_PER_CORE):
-        (cb_stage, cb_image, cb_plan), processor, noc = MOVERS[mover]
+        (cb_stage, cb_image, cb_plan), processor = MOVERS[mover]
+        noc = MOVER_NOCS[mover]
         compile_args = [*compile_args_fn(plan, cb_stage, cb_image, cb_plan), *in_accessor, *out_accessor]
         runtime_args = ttnn.RuntimeArgs()
         for (x, y), begin, count in plan.roles[mover]:
@@ -624,7 +630,8 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
     plan = _plan_for(input_tensor, out_shape)
     roles = []
     for mover in range(MOVERS_PER_CORE):
-        _, processor, noc = MOVERS[mover]
+        _, processor = MOVERS[mover]
+        noc = MOVER_NOCS[mover]
         for xy, begin, count in plan.roles[mover]:
             roles.append(
                 {

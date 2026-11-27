@@ -25,13 +25,20 @@ CASES = [
     ((1, 1, 16, 4608), (16, 1, 4608), ttnn.bfloat16, ttnn.TILE_LAYOUT),
 ]
 
-SWEEP = {"default": {}}
+# "warmup" absorbs the first-call-in-module penalty (~200-300 ns observed); read "default" as the baseline.
+SWEEP = {"warmup": {}, "default": {}}
 CASES = CASES[:1] if os.environ.get("G6_FLAG_ONLY") else CASES
 if os.environ.get("G6_PERF_SWEEP"):
     for c in (8, 16, 32, 64):
         SWEEP[f"cores{c}"] = {"MAX_CORES": c}
     SWEEP["movers1"] = {"MOVERS_PER_CORE": 1}
     SWEEP["cores32_movers1"] = {"MAX_CORES": 32, "MOVERS_PER_CORE": 1}
+if os.environ.get("G6_PERF_SWEEP2"):
+    SWEEP["noc_swapped"] = {"MOVER_NOCS": (ttnn.NOC.NOC_1, ttnn.NOC.NOC_0)}
+    SWEEP["default_again"] = {}
+    SWEEP["blk10_d2"] = {"MAX_BLOCK_ATOMS": 10, "STAGE_DEPTH": 2, "IMAGE_DEPTH": 2}
+    SWEEP["blk10_d1"] = {"MAX_BLOCK_ATOMS": 10}
+    SWEEP["bank_fold"] = {"RM_FOLD": "bank"}
 
 
 def _id(case):
