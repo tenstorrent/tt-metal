@@ -9,10 +9,10 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "program/program_impl.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 
@@ -196,6 +196,21 @@ private:
     std::optional<FinalizedMetadata> finalized_metadata_;
     // Per-device runtime args per program range (see PerDeviceRuntimeArgs); empty for almost every workload.
     std::unordered_map<MeshCoordinateRange, PerDeviceRuntimeArgs> per_device_runtime_args_;
+    using DeviceSpecificRuntimeArgs = tt::tt_metal::detail::ProgramImpl::DeviceSpecificRuntimeArgs;
+    // The runtime args of each installed program range's Program that differ per device.
+    std::unordered_map<MeshCoordinateRange, std::vector<DeviceSpecificRuntimeArgs>> device_specific_runtime_args_;
+    // Sets the runtime args of `program` that differ per device on each device of `program_range`.
+    // precondition: `program` is compiled.
+    void install_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, Program& program, MeshDevice& mesh_device);
+    // Sets the words of `run` on each device of `program_range`.
+    void set_device_specific_runtime_args(
+        const MeshCoordinateRange& program_range, const DeviceSpecificRuntimeArgs& run);
+    // Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to
+    // `per_device`, then sets the Program's runtime args that differ per device again.
+    // Every place that applies drops calls this, so a drop never removes the runtime args that differ per device.
+    void apply_run_arg_drops(
+        const MeshCoordinateRange& program_range, PerDeviceRuntimeArgs& per_device, Program& program);
     PerDeviceRuntimeArgsField& per_device_runtime_args_field(
         const MeshCoordinateRange& program_range,
         KernelHandle kernel,
@@ -232,6 +247,8 @@ private:
     friend class tt::tt_metal::Program;
 
     bool use_prefetcher_cache_ = false;
+    // Whether the kernel-config block fits the KERNEL_CONFIG window, as fast dispatch needs. Set by finalize_offsets.
+    bool fits_kernel_config_window_ = true;
 
 public:
     // Main User-Facing API building blocks
@@ -298,7 +315,15 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    void check_circular_buffers_bound();
+    // Compiles and finalizes the workload; in fast dispatch, also throws if its kernel-config block does not fit the
+    // KERNEL_CONFIG window.
     void compile(MeshDevice* mesh_device);
+    // Whether the finalized workload's kernel-config block, kernel binaries included, fits the KERNEL_CONFIG window.
+    bool fits_kernel_config_window() const { return fits_kernel_config_window_; }
+    // Throws with the size breakdown of the kernel-config block, for a finalized workload whose block does not fit the
+    // KERNEL_CONFIG window.
+    [[noreturn]] void throw_kernel_config_window_overflow(MeshDevice* mesh_device);
     // Compile/finalize the workload and commit its kernel binaries to DRAM without executing it.
     // The returned owner must remain alive while commands referencing the binary addresses may execute.
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);

@@ -6,16 +6,16 @@
 #include <cstdint>
 #include <memory>
 
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include "debug_tools_fixture.hpp"
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.

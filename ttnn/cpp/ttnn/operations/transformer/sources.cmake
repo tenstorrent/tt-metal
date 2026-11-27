@@ -40,6 +40,11 @@ set(TTNN_OP_TRANSFORMER_SRCS
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_device_operation.cpp
     fused_recurrent_gated_delta_rule/device/fused_recurrent_gated_delta_rule_program_factory.cpp
     fused_recurrent_gated_delta_rule/fused_recurrent_gated_delta_rule.cpp
+    # Keep last: inserting earlier shifts the unity-build batches and puts the gated-delta-rule sources, which share
+    # file-scope names, into one batch.
+    sdpa/sparse_ring_sdpa.cpp
+    sdpa/device/sparse_ring_sdpa_device_operation.cpp
+    sdpa/device/sparse_ring_sdpa_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

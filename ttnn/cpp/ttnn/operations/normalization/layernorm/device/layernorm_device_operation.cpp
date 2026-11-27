@@ -9,17 +9,28 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
-#include <tt-metalium/work_split.hpp>
-#include <tt-metalium/math.hpp>
+#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
+#include <tt-metalium/utils/work_split.hpp>
+#include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+// The sharded program also runs an interleaved input, split into the program config's blocks.
+bool uses_sharded_program(const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args) {
+    return tensor_args.input.is_sharded() ||
+           std::holds_alternative<LayerNormShardedMultiCoreProgramConfig>(operation_attributes.program_config);
+}
+
+}  // namespace
+
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (uses_sharded_program(operation_attributes, tensor_args)) {
         return LayerNormShardedProgramFactory{};
     }
     return LayerNormMultiCoreProgramFactory{};
@@ -27,7 +38,7 @@ LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_pro
 
 ttsl::hash::hash_t LayerNormDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    if (tensor_args.input.is_sharded()) {
+    if (uses_sharded_program(operation_attributes, tensor_args)) {
         return ttsl::hash::hash_objects_with_default_seed(
             ttsl::hash::type_hash<LayerNormDeviceOperation>, operation_attributes, tensor_args);
     }
@@ -90,6 +101,28 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             is_mx(a.dtype()),
         "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         a.dtype());
+    if (operation_attributes.dtype.has_value() && *operation_attributes.dtype != a.dtype()) {
+        const auto out_dtype = *operation_attributes.dtype;
+        TT_FATAL(
+            out_dtype == DataType::FLOAT32 or out_dtype == DataType::BFLOAT16 or out_dtype == DataType::BFLOAT8_B or
+                is_mx(out_dtype),
+            "Output dtype must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
+            out_dtype);
+        TT_FATAL(
+            a.layout() == Layout::TILE,
+            "An output dtype other than the input's ({}) needs a TILE input, got {} with dtype {}",
+            a.dtype(),
+            a.layout(),
+            out_dtype);
+        const auto* sharded = std::get_if<LayerNormShardedMultiCoreProgramConfig>(&operation_attributes.program_config);
+        // Distributed stages keep their existing (sharded) dtype handling.
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED ||
+                sharded == nullptr || !sharded->inplace,
+            "An inplace layernorm keeps the input dtype ({}); got output dtype {}",
+            a.dtype(),
+            out_dtype);
+    }
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.is_allocated(), "Operands to layernorm need to be allocated in buffers on device!");
 
@@ -279,6 +312,48 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         // per-tile column mask, so it must be at least one tile.
         TT_FATAL(sharded_pc.block_w >= 1, "Sharded layernorm requires block_w >= 1 (per-core width in tiles)");
         ttnn::operations::normalization::detail::validate_sharded_input(a, sharded_pc.compute_with_storage_grid_size);
+    } else if (
+        const auto* sharded_pc =
+            std::get_if<LayerNormShardedMultiCoreProgramConfig>(&operation_attributes.program_config)) {
+        // An interleaved input under a sharded program config: the writer streams each core's block of the
+        // (Kt / block_w) x (Mt / block_h) grid in and out by tile id. Only the plain norm takes this path.
+        TT_FATAL(a.layout() == Layout::TILE, "Sharded layernorm over an interleaved input needs TILE layout");
+        // The writer copies whole tiles (input, and TILE gamma/beta) into buffers with the default tile ordering.
+        const auto untransposed = [](const Tensor& t) {
+            return t.layout() != Layout::TILE || (!t.tensor_spec().tile().get_transpose_within_face() &&
+                                                  !t.tensor_spec().tile().get_transpose_of_faces());
+        };
+        TT_FATAL(
+            untransposed(a) && (!gamma.has_value() || untransposed(gamma.value())) &&
+                (!beta.has_value() || untransposed(beta.value())),
+            "Sharded layernorm over an interleaved input does not support transposed tiles");
+        TT_FATAL(
+            !operation_attributes.output_mem_config.is_sharded(),
+            "Sharded layernorm over an interleaved input writes an interleaved output, got {}",
+            operation_attributes.output_mem_config);
+        TT_FATAL(!b.has_value(), "Sharded layernorm over an interleaved input does not fuse a residual add");
+        TT_FATAL(
+            operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
+            "Sharded layernorm over an interleaved input does not support distributed layernorm");
+        TT_FATAL(!sharded_pc->use_welford, "Sharded layernorm over an interleaved input does not support Welford");
+        TT_FATAL(!sharded_pc->inplace, "Sharded layernorm over an interleaved input cannot run in place");
+        TT_FATAL(
+            sharded_pc->subblock_w > 0 && sharded_pc->block_w % sharded_pc->subblock_w == 0,
+            "block_w ({}) must be divisible by subblock_w ({})",
+            sharded_pc->block_w,
+            sharded_pc->subblock_w);
+        const auto grid = interleaved_block_shard_spec(a, *sharded_pc).grid.bounding_box().grid_size();
+        const auto device_grid = a.device()->compute_with_storage_grid_size();
+        TT_FATAL(
+            grid.x <= sharded_pc->compute_with_storage_grid_size.x &&
+                grid.y <= sharded_pc->compute_with_storage_grid_size.y && grid.x <= device_grid.x &&
+                grid.y <= device_grid.y,
+            "Sharded layernorm over an interleaved input splits it into a {} x {} block grid, which must fit the "
+            "program config grid {} and the device grid {}",
+            grid.x,
+            grid.y,
+            sharded_pc->compute_with_storage_grid_size,
+            device_grid);
     }
     if (operation_attributes.distributed_norm_stage == DistributedLayerNormStage::PRE_ALL_GATHER ||
         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::POST_ALL_GATHER) {
@@ -337,6 +412,9 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (!a.is_sharded()) {
+                    return;  // validated above
+                }
                 if (use_welford) {
                     TT_FATAL(
                         operation_attributes.distributed_norm_stage == DistributedLayerNormStage::NOT_DISTRIBUTED,
@@ -523,7 +601,7 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 }
 
                 auto mem_config = operation_attributes.output_mem_config;
-                if (!mem_config.shard_spec().has_value()) {
+                if (input_tensor.is_sharded() && !mem_config.shard_spec().has_value()) {
                     mem_config = tt::tt_metal::MemoryConfig(
                         mem_config.memory_layout(), mem_config.buffer_type(), input_tensor.shard_spec());
                 }
@@ -541,7 +619,9 @@ tt::tt_metal::TensorSpec LayerNormDeviceOperation::compute_output_specs(
                 return tt::tt_metal::TensorSpec(
                     output_shape,
                     TensorLayout(
-                        input_tensor.dtype(), PageConfig(output_layout), operation_attributes.output_mem_config));
+                        operation_attributes.dtype.value_or(input_tensor.dtype()),
+                        PageConfig(output_layout),
+                        operation_attributes.output_mem_config));
             }
         },
         operation_attributes.program_config);

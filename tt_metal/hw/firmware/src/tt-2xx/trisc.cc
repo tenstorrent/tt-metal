@@ -19,28 +19,32 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "api/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
-#include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#include "ckernel_buf_desc.h"  // ckernel::trisc::BD_TABLE_NUM_ENTRIES
+#if defined(UCK_CHLKC_UNPACK)
+#include "llk_dest_borrow.h"  // _llk_dest_borrow_init_
+#endif
 #if defined(UCK_CHLKC_MATH)
-#include "cmath_common.h"    // ckernel::math::DataFormatConfigSet (definition of data_format_config_set below)
+#include "cmath_common.h"    // ckernel::math::AluCfgTracker (definition of alu_cfg below)
 #endif
 
 // clang-format on
 
-// The pack TRISC's firmware is the tightest of the four: it carries the dataflow-buffer init that the
-// other threads do not, and sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
+// The pack and isolate-SFPU TRISCs carry the producer side of the dataflow-buffer init that the other
+// threads do not; the pack image sits at ~93% of MEM_TRISC_FIRMWARE_SIZE (5120 B) before any debug feature
 // is turned on. The watcher and DPRINT each cost it roughly 1.3-3 KB of .text, so either one alone
 // fits but the two together do not -- measured on main: watcher-only 4776 B, DPRINT-only 3180 B,
 // both 6140 B against the 5120 B limit. Enabling both produces a link-time region overflow at device
 // open ("segment[0] ... overflows region:0 limit of 0x1400 bytes"), which is far harder to read than
 // this message. Turn off one of the two: unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES.
-#if defined(UCK_CHLKC_PACK) && defined(WATCHER_ENABLED) && defined(DEBUG_PRINT_ENABLED)
+#if (defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_ISOLATE_SFPU)) && defined(WATCHER_ENABLED) && \
+    defined(DEBUG_PRINT_ENABLED)
 #error \
-    "Quasar pack TRISC (trisc2) firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
+    "Quasar pack (trisc2) and isolate-SFPU (trisc3) TRISC firmware does not fit with both the watcher and DPRINT enabled: the two together exceed MEM_TRISC_FIRMWARE_SIZE (5120 B). Disable one -- unset TT_METAL_WATCHER, or unset TT_METAL_DPRINT_CORES."
 #endif
 
 #if defined(PROFILE_KERNEL)
@@ -67,7 +71,7 @@ std::uint8_t my_logical_y_ __attribute__((used));
 std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
 thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
 thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
@@ -87,8 +91,7 @@ thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
 namespace llk_reinit_guard {
 // #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
 // llk_reinit_guard.h.
-thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
-    __attribute__((used)) = {};
+thread_local std::uint8_t reinit_guard_slots[ckernel::trisc::BD_TABLE_NUM_ENTRIES] __attribute__((used)) = {};
 }  // namespace llk_reinit_guard
 #endif
 
@@ -111,11 +114,10 @@ thread_local std::uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
-// BFD id allocator state (Quasar). Defined for all TRISC images alongside dest_register_offset;
-// thread_local so the host-threaded emulation gives each TRISC its own allocator (tt-llk#1678).
-// do_thread_crt1 clears this per-thread state before first use; bfd_alloc then sets next to the
-// partition base and current[] to BFD_ID_INVALID on the first allocation.
-thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
+// Tile-shape index (log2 Dest rows per tile) of the last math init; read on the per-tile Dest addressing path
+// instead of the TILE_SHAPE_IDX GPR. thread_local per TRISC (tt-llk#1678). Declared extern thread_local in
+// ckernel_trisc_common.h.
+thread_local std::uint32_t dest_tile_shape_idx __attribute__((used)) = 0;
 }  // namespace trisc
 namespace pack {
 // Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
@@ -130,14 +132,13 @@ using namespace ckernel;
 
 // Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
 #if defined(UCK_CHLKC_MATH)
-thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
-    ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+thread_local ckernel::math::AluCfgTracker alu_cfg __attribute__((used)) = {};
 // Unpack-to-dest: set once math has seen the unpacker's first UNPACK_MATH post of the program.
 thread_local bool unpack_math_seeded __attribute__((used)) = false;
 #endif
 
 // Called from trisc_irq_entry, which saves no vector registers, so built without the vector extension.
-extern "C" __attribute__((noinline, used, hot, target("arch=rv32im_zmmul_zaamo_zba_zbc_xtttensixqsr_xttzbkb"))) void
+extern "C" __attribute__((noinline, used, hot, target("cpu=tt-qsr32-tensix"))) void
 handle_interrupt() {
     uint32_t trisc_id = internal_::get_trisc_id();
     uint32_t error_code = RISC_PIC_BRISC_EX_REG_BASE(trisc_id)[HW_ERROR_INTERRUPT_INDEX] >> 8 & 0x3f;
@@ -228,18 +229,23 @@ inline void enable_cc_stack() {
 // lo==0xFF means nothing was programmed.
 FORCE_INLINE void dfb_clear_packer_remapper_window(
     uint32_t trisc_id, volatile tt_l1_ptr std::uint8_t* trisc_run, uint8_t lo, uint8_t hi) {
-#if defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_CAN_PRODUCE
     if (lo == 0xFFu) {
         return;
     }
-    // Drop packer remapper pairs only after the TRISCs that can issue counter updates through them have drained.
-    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
+    // Drop this thread's remapper pairs only after the TRISCs that can issue counter updates through them have
+    // drained. Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
     // Math never touches DFB tile counters.
     using ckernel::trisc::TriscID;
     volatile tt_l1_ptr std::uint32_t* const neo_sync =
         reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(trisc_run - trisc_id);
+#if defined(UCK_CHLKC_ISOLATE_SFPU)
+    // trisc3's pairs feed trisc0 or trisc3 itself, so it waits for trisc0 only.
+    constexpr std::uint32_t dfb_trisc_mask = std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8);
+#else
     constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
                                              (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
+#endif
     while ((*neo_sync & dfb_trisc_mask) != 0u) {
         invalidate_l1_cache();
     }
@@ -287,6 +293,36 @@ extern "C" std::uint32_t _start1() {
     }
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
+#if defined(UCK_CHLKC_UNPACK)
+    // Reset every tile counter on this Neo, in case they are in some invalid sticky state left from previous
+    // program runs. An unrouted reset of Tensix-only counter 16+c also hits overlay counter c, so link them in
+    // remapper pairs during the reset. Writes are posted, so each step reads back the last register written
+    // before moving on.
+    constexpr uint32_t num_pairs = dfb::NUM_TENSIX_ONLY_TILE_COUNTERS / 2;
+    static_assert(dfb::REMAPPER_ONE_TO_ONE_PAIR_START + dfb::NUM_TENSIX * num_pairs <= dfb::NUM_REMAPPER_PAIRINGS);
+    const uint32_t first_pair = dfb::REMAPPER_ONE_TO_ONE_PAIR_START + neo_id * num_pairs;
+    const uint32_t client_id = static_cast<uint32_t>(overlay::NEO_0) + neo_id;
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        const uint32_t tc = dfb::TC_TENSIX_POOL_START + 2 * i;
+        WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(first_pair + i), client_id | ((tc + 1) << 3));
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), client_id | (tc << 3) | (1u << 8));
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs live before the resets
+    for (uint32_t tc = 0; tc < dfb::NUM_TILE_COUNTERS_PER_TENSIX; tc++) {
+        ckernel::trisc::tile_counters[tc].f.reset = 1;
+    }
+    (void)ckernel::trisc::tile_counters[dfb::NUM_TILE_COUNTERS_PER_TENSIX - 1].f.posted;  // resets applied before clear
+#pragma GCC unroll 0
+    for (uint32_t i = 0; i < num_pairs; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + i), 0u);
+    }
+    (void)READ_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(first_pair + num_pairs - 1));  // pairs cleared before signaling
+    _llk_dest_borrow_init_();
+    _llk_sync_init_(ckernel::trisc::semaphore::MATH_PACK, 2 /*max*/, 0 /*init*/);
+    tensix_sync();
+    asm volatile("fence" ::: "memory");
+#endif
     *trisc_run = RUN_SYNC_MSG_DONE;
     setup_isr_csrs();
     enable_cc_stack();
@@ -312,13 +348,13 @@ extern "C" std::uint32_t _start1() {
 
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if DFB_TRISC_HAS_INTERFACE
             std::uint32_t tt_l1_ptr* dfb_l1_base =
                 (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
             std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
             const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #else
-            // Math/SFPU TRISCs set up no DFBs, so there is no packer remapper window to clear.
+            // Math sets up no DFBs, so there is no packer remapper window to clear.
             const DfbPackerRemapperRange packer_rmp{};
 #endif
 

@@ -4,8 +4,8 @@
 
 // The expert rows path's placement program, on the combine cores: place.cpp writes moe_compute's outputs from the rows
 // and the routing table; with a combine, rows_combine.cpp sends every routed row to the combine output.
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"

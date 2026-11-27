@@ -7,7 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <optional>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/ttnn_all_includes.hpp"

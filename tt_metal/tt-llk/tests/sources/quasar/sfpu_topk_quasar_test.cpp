@@ -40,7 +40,7 @@ constexpr std::uint8_t TOPK_L1_WB_SEM = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
@@ -106,8 +106,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t unpack_src_format = unpack_src_data_types[stage_index];
                     const std::uint32_t unpack_dst_format = unpack_dst_data_types[stage_index];
 
-                    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
-                        ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), unpack_src_format);
+                    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(ckernel::DEFAULT_TENSOR_SHAPE, L1_ADDRESS(buffer_A[0]), unpack_src_format);
+                    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
                     _llk_unpack_configure_unary_<p_unpacr::UNP_A>(static_cast<DataFormat>(unpack_dst_format));
 
                     if (first_iteration)
@@ -210,8 +210,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const int stage_index        = static_cast<int>(stage);
                     const DataFormat math_format = static_cast<DataFormat>(math_data_types[stage_index]);
 
-                    _configure_alu_formats_<is_fp32_dest_acc_en>(
-                        math_format, math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
+                    _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
 
                     const int first_tile_in_pair_idx  = stage_index * NUM_TILES_PER_STAGE;
                     const int second_tile_in_pair_idx = first_tile_in_pair_idx + 1;
@@ -223,8 +222,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // All 4 tiles are in dest: release the FPU dvalid to the SFPU client.
                 _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 
-                _configure_alu_formats_<is_fp32_dest_acc_en>(
-                    value_math_format, value_math_format, false /*en_int32_dest_format*/, DataFormat::Invalid /*no dest-format override*/);
+                _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(value_math_format, value_math_format);
 
                 // Run the topk stages. RC_custom issues one SFPU call per tile (no per-face walk).
                 if (first_iter)
@@ -303,7 +301,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -367,8 +365,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         l1_addr_16B                = buffer_A[tile_L1_offset] / 16;
                     }
 
-                    const auto bfd_pack =
-                        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
+                    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(ckernel::DEFAULT_TENSOR_SHAPE, l1_addr_16B, pack_dst_format);
+                    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
                     _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
 
                     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(pack_src_format), ckernel::ReluConfig::none());
