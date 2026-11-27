@@ -163,13 +163,23 @@ KNOB_SETTINGS = {
     "one_mover": {"MAX_CORES": 8, "MOVERS_PER_CORE": 1, "MAX_BLOCK_ATOMS": 7},
     "one_core": {"MAX_CORES": 1, "MAX_BLOCK_ATOMS": 64},
     "no_read_gap": {"MAX_CORES": 8, "RM_READ_GAP_BYTES": 0},
+    # Refinement 2: the default fold is "linear" (bank-grouped image); keep the bank-affine fold covered.
+    "bank_fold": {"RM_FOLD": "bank"},
+    "bank_fold_block5": {"RM_FOLD": "bank", "MAX_CORES": 8, "MAX_BLOCK_ATOMS": 5},
+    # Linear fold with blocks that start / end mid-page and span more than NB pages.
+    "linear_block7": {"MAX_CORES": 3, "MAX_BLOCK_ATOMS": 7},
 }
 
 
 @pytest.mark.parametrize("knobs", KNOB_SETTINGS.values(), ids=KNOB_SETTINGS.keys())
 @pytest.mark.parametrize(
     "case",
-    [((1, 4096), (4096, 1), ttnn.int32), ((3, 5, 7), (7, 15), ttnn.bfloat16), ((4096, 1), (1, 4096), ttnn.uint32)],
+    [
+        ((1, 4096), (4096, 1), ttnn.int32),
+        ((3, 5, 7), (7, 15), ttnn.bfloat16),
+        ((4096, 1), (1, 4096), ttnn.uint32),
+        ((2, 33, 40), (66, 40), ttnn.float32),
+    ],
     ids=_case_id,
 )
 def test_row_major_block_knobs(case, knobs, device, monkeypatch):

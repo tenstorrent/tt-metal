@@ -64,6 +64,10 @@ IMAGE_DEPTH = 1
 # instead of opening a new run (None: one DRAM alignment word). Bounded by the DRAM alignment so the
 # per-piece staging bound below stays 3·A.
 RM_READ_GAP_BYTES = None
+# rm_row_gather atom fold. "linear": a block is one contiguous stream range (each input byte read once, so a
+# single hot input bank serves no stride amplification) with a bank-grouped image (<= NB writes per block).
+# "bank": bank-affine fold (one write per (block, bank), but a mover's input elements are NB pages apart).
+RM_FOLD = "linear"
 
 # BB-05: L1 the model leaves to the op on every core.
 L1_OP_BUDGET = 1347776
@@ -85,7 +89,16 @@ assert 1 <= MOVERS_PER_CORE <= len(MOVERS)
 
 def _knobs():
     """Every module-level knob that changes the program; part of the descriptor cache key."""
-    return (MAX_CORES, MOVERS_PER_CORE, MAX_BLOCK_ATOMS, STAGE_DEPTH, IMAGE_DEPTH, RM_READ_GAP_BYTES, L1_OP_BUDGET)
+    return (
+        MAX_CORES,
+        MOVERS_PER_CORE,
+        MAX_BLOCK_ATOMS,
+        STAGE_DEPTH,
+        IMAGE_DEPTH,
+        RM_READ_GAP_BYTES,
+        RM_FOLD,
+        L1_OP_BUDGET,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +395,8 @@ def _make_rm_plan(in_shape, out_shape, elem, grid, dram_align):
     atoms_total = rows_out * atoms_per_page
     # Input pieces of one atom: atom_elems consecutive stream elements cross at most this many input rows.
     s_bound = min(atom_elems, -(-(atom_elems - 1) // w_in) + 1)
+    if RM_FOLD not in ("linear", "bank"):
+        raise ValueError(f"g6_reshape: RM_FOLD must be 'linear' or 'bank', got {RM_FOLD!r}")
     read_gap = dram_align if RM_READ_GAP_BYTES is None else RM_READ_GAP_BYTES
     if not 0 <= read_gap <= dram_align:
         raise ValueError(f"g6_reshape: RM_READ_GAP_BYTES must be in [0, {dram_align}], got {read_gap}")
@@ -495,6 +510,7 @@ def _rm_compile_args(plan, cb_stage, cb_image, cb_plan):
         cb_stage,
         cb_image,
         cb_plan,
+        int(RM_FOLD == "linear"),
     ]
 
 
