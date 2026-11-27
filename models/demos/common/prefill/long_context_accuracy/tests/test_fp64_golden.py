@@ -4,6 +4,7 @@
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -242,3 +243,34 @@ def test_read_slices_refuses_a_view_of_another_file(tmp_path: Path, expect_error
     a, b = MappedFile(tmp_path / "a.pt"), MappedFile(tmp_path / "b.pt")
     with expect_error(ValueError, "not inside"):
         read_slices({"x": [(a, b.contents["x"][:10])]})
+
+
+def test_read_slices_refuses_views_that_torch_cat_would_not_join_as_they_are(tmp_path: Path, expect_error) -> None:
+    """Views of one name must share dtype and trailing shape (a malformed golden fails, not reinterprets bytes)."""
+    torch.save({"x": torch.zeros(4, 3, dtype=torch.float64)}, tmp_path / "a.pt")
+    torch.save({"x": torch.zeros(4, 5, dtype=torch.float64), "y": torch.zeros(4, 3)}, tmp_path / "b.pt")
+    a, b = MappedFile(tmp_path / "a.pt"), MappedFile(tmp_path / "b.pt")
+    with expect_error(GoldenInvalid, re.escape("not torch.float64[*, [3]]")):
+        read_slices({"x": [(a, a.contents["x"]), (b, b.contents["x"])]})
+    with expect_error(GoldenInvalid, re.escape("torch.float32[4, 3], not torch.float64")):
+        read_slices({"x": [(a, a.contents["x"]), (b, b.contents["y"])]})
+
+
+def test_read_slices_fails_on_a_file_that_ends_before_its_bytes(tmp_path: Path, expect_error) -> None:
+    torch.save({"x": torch.arange(64 * 64, dtype=torch.float64).reshape(64, 64)}, tmp_path / "a.pt")
+    file = MappedFile(tmp_path / "a.pt")
+    view = file.contents["x"][32:]
+    os.truncate(tmp_path / "a.pt", file.span(view)[0] + 100)  # (the mapping keeps its size; the reads see the end)
+    with expect_error(GoldenInvalid, "ends before byte"):
+        read_slices({"x": [(file, view)]})
+
+
+def test_mapped_file_refuses_a_mapping_whose_storages_do_not_match_its_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+) -> None:
+    """An extra storage outside the file (here a fresh tensor next to the mapped one) cannot be located: refused."""
+    torch.save({"x": torch.zeros(4, 3)}, tmp_path / "a.pt")
+    load = torch.load
+    monkeypatch.setattr(torch, "load", lambda *args, **kwargs: {**load(*args, **kwargs), "extra": torch.ones(2)})
+    with expect_error(GoldenInvalid, "cannot locate its 1 tensor records"):
+        MappedFile(tmp_path / "a.pt")

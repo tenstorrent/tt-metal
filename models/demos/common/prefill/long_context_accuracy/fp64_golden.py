@@ -275,8 +275,9 @@ def _tensors(tree: object) -> Iterable[torch.Tensor]:
 
 def read_slices(parts: Mapping[str, Sequence[tuple[MappedFile, torch.Tensor]]]) -> dict[str, torch.Tensor]:
     """Per name, the concatenation along rows of non-empty views ``(file, view)`` of mapped tensors, as a new
-    contiguous tensor, equal to ``torch.cat([view, ...])``. All the bytes are read with ``READ_STREAMS`` parallel
-    ``preadv`` streams of equal size; a non-contiguous view is read whole over its span, then copied."""
+        contiguous tensor, equal to ``torch.cat([view, ...])`` (``GoldenInvalid`` when a view's dtype or trailing shape
+    differs from the first's: ``torch.cat`` would promote or refuse). All the bytes are read with ``READ_STREAMS`` parallel
+        ``preadv`` streams of equal size; a non-contiguous view is read whole over its span, then copied."""
     out: dict[str, torch.Tensor] = {}
     reads: list[tuple[Path, int, memoryview]] = []  # (file, offset, destination bytes)
     strided: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = []  # (span bytes, view, destination rows)
@@ -285,10 +286,16 @@ def read_slices(parts: Mapping[str, Sequence[tuple[MappedFile, torch.Tensor]]]) 
         result = torch.empty((sum(v.shape[0] for _, v in views), *first.shape[1:]), dtype=first.dtype)
         row = 0
         for file, view in views:
+            if view.dtype != first.dtype or view.shape[1:] != first.shape[1:]:
+                raise GoldenInvalid(
+                    f"{file.path}: {name} is {view.dtype}{list(view.shape)}, not {first.dtype}[*, {list(first.shape[1:])}]"
+                )
             rows = result[row : row + view.shape[0]]
             row += view.shape[0]
             start, end = file.span(view)
             if view.is_contiguous():
+                if end - start != rows.nbytes:
+                    raise GoldenInvalid(f"{file.path}: {name} spans {end - start} bytes, not its {rows.nbytes}")
                 reads.append((file.path, start, memoryview(rows.view(-1).view(torch.uint8).numpy())))
             else:
                 raw = torch.empty(end - start, dtype=torch.uint8)
