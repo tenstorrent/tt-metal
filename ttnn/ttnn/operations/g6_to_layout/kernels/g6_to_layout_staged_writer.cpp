@@ -9,6 +9,8 @@
 // byte, so stale stage bytes (padding columns, unread faces, untilized stale tiles) never leave L1.
 // The block's stage is one whole-block page (R1) or block_cols_tiles tile pages per tile-row as the
 // untilize helper packs them (tiled_stage); its layout is the same either way.
+// A bfloat8_b input (patch_bfp8_nans) also waits the block's cb_nan_marks page and stores the host's
+// NaN rendering over the marked datums before any row is written (g6_to_layout_bfp8_nan_marks.hpp).
 // Rows are addressed through get_noc_addr(page, offset): the RM page stride is the aligned
 // page size, not 2 * W.
 // Zones (profiler builds only): per block, the wait and the block's work each have a zone; the
@@ -17,6 +19,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "g6_to_layout_block_walk.hpp"
+#include "g6_to_layout_bfp8_nan_marks.hpp"
 
 using namespace g6_to_layout;
 
@@ -24,7 +27,9 @@ void kernel_main() {
     constexpr uint32_t cb_row_block = get_compile_time_arg_val(Geometry::next_ct_arg + 0);
     constexpr bool tiled_stage = get_compile_time_arg_val(Geometry::next_ct_arg + 1) != 0;
     constexpr bool sharded = get_compile_time_arg_val(Geometry::next_ct_arg + 2) != 0;
-    constexpr auto output_args = TensorAccessorArgs<Geometry::next_ct_arg + 3>();
+    constexpr bool patch_bfp8_nans = get_compile_time_arg_val(Geometry::next_ct_arg + 3) != 0;
+    constexpr uint32_t cb_nan_marks = get_compile_time_arg_val(Geometry::next_ct_arg + 4);
+    constexpr auto output_args = TensorAccessorArgs<Geometry::next_ct_arg + 5>();
 
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
     const auto output = TensorAccessor(output_args, output_addr);
@@ -41,6 +46,16 @@ void kernel_main() {
         {
             DeviceZoneScopedN("wait_row_block");
             cb_wait_front(cb_row_block, block_pages);
+        }
+        if constexpr (patch_bfp8_nans) {
+            DeviceZoneScopedN("patch_block_nans");
+            cb_wait_front(cb_nan_marks, 1);
+            // The marks were stored by the reader's RISC; this one may hold stale lines of the page.
+            invalidate_l1_cache();
+            patch_block_nans(get_read_ptr(cb_nan_marks), block, get_read_ptr(cb_row_block));
+            cb_pop_front(cb_nan_marks, 1);
+            // Drain the patch stores before the NoC reads the stage.
+            invalidate_l1_cache();
         }
         {
             DeviceZoneScopedN("store_block");

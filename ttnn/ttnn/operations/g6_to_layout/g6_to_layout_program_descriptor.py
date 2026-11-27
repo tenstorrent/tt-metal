@@ -14,7 +14,9 @@ Four regimes, each its own program. The bf16 regimes are a reader (NCRISC, NoC0)
 A bfloat8_b input is a value conversion, so it adds a compute kernel between the same two CBs:
 
     packer_untilize  (R3): whole bfp8 tiles -> cb_tile_window -> unpack + pack-untilize to bf16
-                           -> cb_row_block tile pages -> one write per live row segment.
+                           -> cb_row_block tile pages -> one write per live row segment. The
+                           packer renders NaN datums as +-inf, so the reader marks them on
+                           cb_nan_marks and the writer stores the host's NaN (0xFFFF) over them.
     sharded_in_place (R4): R3 with cb_tile_window backed on the resident shard (zero-copy); the
                            core assignment and the block are the caller's shard.
 
@@ -38,6 +40,8 @@ READ_BATCH_TILES = 8  # tiles per DRAM read batch in R1
 TILE_WINDOW_DEPTH = 2  # R1 batches resident in cb_tile_window
 ROW_DEPTH = 2  # blocks resident in cb_row_block / cb_left_faces
 TILE_BLOCK_DEPTH = 2  # R3 blocks resident in cb_tile_window (reader -> compute)
+# cb_nan_marks pages: the reader can run TILE_BLOCK_DEPTH + ROW_DEPTH blocks ahead of the writer.
+NAN_MARKS_DEPTH = TILE_BLOCK_DEPTH + ROW_DEPTH
 # Target blocks per core; sets block_rows_tiles below its L1 cap so pipeline fill/drain stays near
 # 1/17 of a core's run. Measured against {1 (the L1-cap block), 4, 64}: 5-6% faster than the L1-cap
 # block on cases 304 and 1978, 6% faster than 64 on 1978, and within run-to-run spread on 308 (whose
@@ -64,6 +68,13 @@ _COMPUTE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
 CB_TILE_WINDOW = 0
 CB_ROW_BLOCK = 1
 CB_LEFT_FACES = 2
+CB_NAN_MARKS = 3
+
+# Per-tile record of a cb_nan_marks page (NanMarks in kernels/g6_to_layout_bfp8_nan_marks.hpp): a
+# 64-bit bitmap of the tile's 64 bfp8 groups plus one 16-bit datum mask per group.
+NAN_MARK_RECORD_BYTES = 8 + 2 * (4 * FACE_HW)
+# cb_nan_marks pages are rounded up to this; it is never a NoC endpoint, so only RISC access alignment.
+NAN_MARKS_PAGE_ALIGN = 16
 
 # The R1 reader tags DRAM batches with trids 1..TILE_WINDOW_DEPTH and alternates two more over
 # the reorder copies; ids are 4 bits and 0 means untagged.
@@ -137,14 +148,21 @@ def _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows):
     return block_rows_tiles * stage_rows * block_cols_tiles * TILE_ROW_BYTES
 
 
+def _nan_marks_page_bytes(block_tiles):
+    return _round_up(block_tiles * NAN_MARK_RECORD_BYTES, NAN_MARKS_PAGE_ALIGN)
+
+
 def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes):
     if regime == FACE_DIRECT:
         return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * LEFT_SLOT_BYTES)
+    # The compute regimes' budget keeps the cb_nan_marks page rounding aside.
+    marks_budget = L1_BUDGET_BYTES - out_l1_share - NAN_MARKS_DEPTH * NAN_MARKS_PAGE_ALIGN
+    marks_per_tile = NAN_MARKS_DEPTH * NAN_MARK_RECORD_BYTES
     if regime == PACKER_UNTILIZE:
-        return (L1_BUDGET_BYTES - out_l1_share) // (TILE_BLOCK_DEPTH * in_tile_bytes + ROW_DEPTH * TILE_BYTES)
+        return marks_budget // (TILE_BLOCK_DEPTH * in_tile_bytes + ROW_DEPTH * TILE_BYTES + marks_per_tile)
     if regime == SHARDED_IN_PLACE:
         # The input tile window is the caller's resident shard, outside the op's budget.
-        return (L1_BUDGET_BYTES - out_l1_share) // (ROW_DEPTH * TILE_BYTES)
+        return marks_budget // (ROW_DEPTH * TILE_BYTES + marks_per_tile)
     return (L1_BUDGET_BYTES - out_l1_share - _window_bytes()) // (ROW_DEPTH * stage_rows * TILE_ROW_BYTES)
 
 
@@ -235,6 +253,10 @@ class Plan:
     shard: ShardPlacement = None
 
     @property
+    def nan_marks_page_bytes(self):
+        return _nan_marks_page_bytes(self.block_rows_tiles * self.block_cols_tiles)
+
+    @property
     def l1_bytes_per_core(self):
         return sum(self.cb_bytes.values()) + self.out_l1_share
 
@@ -267,6 +289,9 @@ class Plan:
             "read_batch_tiles": READ_BATCH_TILES if self.regime == STAGED_REORDER else None,
             "tile_window_depth": TILE_WINDOW_DEPTH if self.regime == STAGED_REORDER else None,
             "tile_block_depth": TILE_BLOCK_DEPTH if self.regime == PACKER_UNTILIZE else None,
+            "nan_marks_depth": self.cb_bytes[CB_NAN_MARKS] // self.nan_marks_page_bytes
+            if self.regime in _COMPUTE_REGIMES
+            else None,
             "row_depth": ROW_DEPTH,
             "cb_bytes": dict(self.cb_bytes),
             "out_l1_share": self.out_l1_share,
@@ -354,10 +379,15 @@ def compute_plan(
         cb_bytes = {
             CB_TILE_WINDOW: TILE_BLOCK_DEPTH * block_tiles * in_tile_bytes,
             CB_ROW_BLOCK: ROW_DEPTH * block_bytes,
+            CB_NAN_MARKS: NAN_MARKS_DEPTH * _nan_marks_page_bytes(block_tiles),
         }
     else:
-        # A second row-block page only helps when the shard takes more than one block.
-        cb_bytes = {CB_ROW_BLOCK: min(ROW_DEPTH, blocks_per_core_max) * block_bytes}
+        # A second row-block or marks page only helps when the shard takes more than one block.
+        block_tiles = block_rows_tiles * block_cols_tiles
+        cb_bytes = {
+            CB_ROW_BLOCK: min(ROW_DEPTH, blocks_per_core_max) * block_bytes,
+            CB_NAN_MARKS: min(NAN_MARKS_DEPTH, blocks_per_core_max) * _nan_marks_page_bytes(block_tiles),
+        }
 
     return Plan(
         regime=regime,
@@ -418,19 +448,20 @@ class G6ToLayoutProgram:
             ]
             reader_source, writer_source = "g6_to_layout_staged_reader.cpp", "g6_to_layout_staged_writer.cpp"
             reader_ct_args = geometry_ct_args + [CB_TILE_WINDOW, CB_ROW_BLOCK, READ_BATCH_TILES, TILE_WINDOW_DEPTH]
-            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 0, 0]
+            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 0, 0, 0, CB_NAN_MARKS]
         else:
             row_block = _cb(CB_ROW_BLOCK, plan.cb_bytes[CB_ROW_BLOCK], TILE_BYTES, all_cores)
+            nan_marks = _cb(CB_NAN_MARKS, plan.cb_bytes[CB_NAN_MARKS], plan.nan_marks_page_bytes, all_cores)
             if sharded:
-                cbs = [self._shard_window(input_tensor), row_block]
+                cbs = [self._shard_window(input_tensor), row_block, nan_marks]
             else:
                 window = _cb(
                     CB_TILE_WINDOW, plan.cb_bytes[CB_TILE_WINDOW], plan.in_tile_bytes, all_cores, input_tensor.dtype
                 )
-                cbs = [window, row_block]
+                cbs = [window, row_block, nan_marks]
             reader_source, writer_source = "g6_to_layout_tile_reader.cpp", "g6_to_layout_staged_writer.cpp"
-            reader_ct_args = geometry_ct_args + [CB_TILE_WINDOW, int(sharded)]
-            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 1, int(sharded)]
+            reader_ct_args = geometry_ct_args + [CB_TILE_WINDOW, int(sharded), CB_NAN_MARKS]
+            writer_ct_args = geometry_ct_args + [CB_ROW_BLOCK, 1, int(sharded), 1, CB_NAN_MARKS]
             compute_ct_args = geometry_ct_args + [CB_TILE_WINDOW, CB_ROW_BLOCK, int(sharded)]
         reader_ct_args += ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
         writer_ct_args += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
