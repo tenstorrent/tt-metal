@@ -1283,6 +1283,55 @@ def test_zz_push_vs_dispatch_real_scratch(mesh_device):
                     res["kvd_rest"] = _traced_us(mesh_device, lambda: d(cache, table, part=2, skip_exchange=True, **kw))
                 if name == "kvd":
                     res["kvd_plan"] = _traced_us(mesh_device, lambda: d.plan(idx, chunk_start=start))
+                # compact landing (the push's compact buffer, the plan's rank table), same grid and planners
+                _, _, rank = ttnn.experimental.sparse_push_plan(
+                    idx,
+                    stripe_chunk=STRIPE,
+                    max_rows=max_rows,
+                    page_bytes=page_bytes,
+                    chunk_start=start,
+                    owner_major=True,
+                    rank_table=True,
+                )
+                ctab = ttnn.experimental.sparse_push_plan(
+                    idx,
+                    stripe_chunk=STRIPE,
+                    max_rows=max_rows,
+                    page_bytes=page_bytes,
+                    chunk_start=start,
+                    owner_major=True,
+                    rank_table=True,
+                )[0]
+                cbuf = ttnn.experimental.sparse_kv_push_create_output_buffer(
+                    mesh_device,
+                    distinct_rows=STRIPE * TOPK,
+                    max_rows=max_rows,
+                    stripe_chunk=STRIPE,
+                    row_width=width,
+                    dtype=dtype,
+                )
+                ckw = dict(kw, rank_table=rank)
+                ckw.pop("output_tensor", None)
+                compact_call = lambda: ttnn.experimental.sparse_kv_dispatch(
+                    cache,
+                    output_tensor=cbuf,
+                    table=ctab,
+                    inbox=d.inbox,
+                    scratch=d.scratch,
+                    stripe_chunk=STRIPE,
+                    max_rows=max_rows,
+                    fence_semaphore=d.sems[0],
+                    arrived_semaphore=d.sems[1],
+                    credit_semaphore=d.sems[2],
+                    inbox_semaphore=d.sems[3],
+                    num_links=d.links,
+                    planners=d.planners,
+                    lanes_per_link=d.lanes,
+                    **ckw,
+                )
+                compact_call()
+                ttnn.synchronize_device(mesh_device)
+                res[name + "_compact"] = _traced_us(mesh_device, compact_call)
                 ttnn.deallocate(d.output)
                 ttnn.deallocate(d.scratch)
             finally:

@@ -15,6 +15,17 @@
 // The L1 loops of the plan's steps (see the overview in sparse_push_plan.cpp); BRISC and NCRISC each run half.
 namespace sparse_push_plan {
 
+#ifndef PLAN_RANK_TABLE
+#define PLAN_RANK_TABLE 0
+#endif
+// A needed row's page in the compact buffer. sparse_kv_push writes a packet of pages_per_packet rows to one bank
+// (compact_page); sparse_kv_dispatch (the rank-table plans) writes rows one at a time, so consecutive ranks go to
+// consecutive pages, i.e. round the banks: run base + rank.
+template <uint32_t pages_per_packet, uint32_t banks>
+inline uint32_t plan_page(uint32_t run_base, uint32_t rank) {
+    return PLAN_RANK_TABLE ? run_base + rank : sparse_push::compact_page<pages_per_packet, banks>(run_base, rank);
+}
+
 constexpr uint32_t kSentinel = 0xFFFFFFFFu;
 constexpr uint32_t kRowsPerWord = sparse_push::plan_table::kRowsPerWord;
 // Bitmap words are dealt to the workers by residue w % kWordResidues, a contiguous run of residues each.
@@ -398,7 +409,7 @@ inline void rewrite(
                 const uint32_t owner = block % num_devices;
                 const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
                                       ranks[k] + __builtin_popcount(bits[k] & ((1u << (row % kRowsPerWord)) - 1u));
-                idx[i + k] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+                idx[i + k] = plan_page<pages_per_packet, banks>(run_bases[owner], rank);
             }
         }
         begin = i;
@@ -419,7 +430,7 @@ inline void rewrite(
         const uint32_t word = row / kRowsPerWord;
         const uint32_t rank = range_offsets[(block / range_blocks) * owner_stride(num_devices) + owner] +
                               word_ranks[word] + __builtin_popcount(bitmap[word] & ((1u << (row % kRowsPerWord)) - 1u));
-        idx[i] = sparse_push::compact_page<pages_per_packet, banks>(run_bases[owner], rank);
+        idx[i] = plan_page<pages_per_packet, banks>(run_bases[owner], rank);
     }
 }
 

@@ -594,26 +594,33 @@ void kernel_main() {
         copies = 0;
         return;
 #endif
+#ifdef KVD_COMPACT
+        uint32_t c_pg[kCopyBatch];
+        uint32_t last_lb = ~0u, pages = 0;
+#endif
         for (uint32_t k = 0; k < copies; ++k) {
             noc_async_read(input.get_noc_addr(slot_base + copy_rows[k]), row_l1 + k * row_bytes, row_bytes);
 #ifdef KVD_COMPACT
-            // (local row lb * stripe + r is global row (me + lb * N) * stripe + r: block me + lb * N)
-            noc_async_read(
-                rank_table.get_noc_addr(1 + me_o + (copy_rows[k] / stripe) * N),
-                rank_l1 + (1 + k) * rank_page_bytes,
-                rank_page_bytes);
+            // (local row lb * stripe + r is global row (me_o + lb * N) * stripe + r: block me_o + lb * N; one rank
+            // page read a block)
+            if (copy_rows[k] / stripe != last_lb) {
+                last_lb = copy_rows[k] / stripe;
+                ++pages;
+                noc_async_read(
+                    rank_table.get_noc_addr(1 + me_o + last_lb * N),
+                    rank_l1 + pages * rank_page_bytes,
+                    rank_page_bytes);
+            }
+            c_pg[k] = pages;
 #endif
         }
         noc_async_read_barrier();
         for (uint32_t k = 0; k < copies; ++k) {
 #ifdef KVD_COMPACT
-            const auto* rp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + (1 + k) * rank_page_bytes);
+            const auto* rp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + c_pg[k] * rank_page_bytes);
             const uint32_t r = copy_rows[k] % stripe, w = r / 32;
             const uint32_t rank = rp[w] + __builtin_popcount(rp[stripe / 32 + w] & ((1u << (r % 32)) - 1u));
-            noc_async_write(
-                row_l1 + k * row_bytes,
-                output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[me_o], rank)),
-                row_bytes);
+            noc_async_write(row_l1 + k * row_bytes, output.get_noc_addr(run_bases[me_o] + rank), row_bytes);
 #else
             noc_async_write(
                 row_l1 + k * row_bytes, output.get_noc_addr(me_o * owner_slot_rows + copy_rows[k]), row_bytes);

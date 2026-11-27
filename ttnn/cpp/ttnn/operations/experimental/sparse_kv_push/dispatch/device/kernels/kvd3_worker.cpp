@@ -81,7 +81,7 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<22>();
 #ifdef KVD_COMPACT
     // compact landing: sparse_push_plan's rank table (page 0 the owners' run bases, page 1 + b block b's word ranks and
-    // bitmap words); a row lands at compact_page(run_base[owner], rank of the row within its owner's run)
+    // bitmap words); a row lands at run_base[owner] + its rank within its owner's run (sparse_push_plan plan_page)
     constexpr auto rank_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     constexpr uint32_t rank_page_bytes = KVD_RANK_PAGE_WORDS * 4;
     constexpr uint32_t words_per_block = stripe / 32;
@@ -381,16 +381,27 @@ void kernel_main() {
             const uint32_t trows = stats_clock();
             cy_cap += trows - tw;
 #ifdef KVD_COMPACT
-            // the rank pages of the rows this chip needs (one read each, one barrier)
-            for (uint32_t i = 0; i < n; ++i) {
-                if (e_m[i] & me_bit) {
-                    noc_async_read(
-                        rank_table.get_noc_addr(1 + entry_row(e_w0[i]) / stripe),
-                        rank_l1 + (1 + i) * rank_page_bytes,
-                        rank_page_bytes);
+            // the rank pages of the rows this chip needs: issued now, waited for after the onward copies (below), so
+            // the DRAM round trip overlaps them
+            // (one read a block: a slot's rows mostly come from a few blocks; e_pg[i]: row i's page in the CB)
+            uint32_t e_pg[B];
+            {
+                uint32_t last_blk = ~0u, pages = 0;
+                for (uint32_t i = 0; i < n; ++i) {
+                    if (e_m[i] & me_bit) {
+                        const uint32_t blk = entry_row(e_w0[i]) / stripe;
+                        if (blk != last_blk) {
+                            noc_async_read(
+                                rank_table.get_noc_addr(1 + blk),
+                                rank_l1 + (1 + pages) * rank_page_bytes,
+                                rank_page_bytes);
+                            last_blk = blk;
+                            ++pages;
+                        }
+                        e_pg[i] = pages;  // (1-based: page 0 holds the run bases)
+                    }
                 }
             }
-            noc_async_read_barrier();
 #endif
             // the rows
             uint32_t to_publish[4] = {0, 0, 0, 0};
@@ -399,24 +410,15 @@ void kernel_main() {
                 const uint32_t g = entry_row(w0), hops = entry_hops(w0), gen = entry_gen(w0), order = entry_order(w0);
                 const uint32_t src = slot_l1 + rows_off + i * row_bytes;
 #ifndef KVD_ABL_W_NOGATHER
+#ifndef KVD_COMPACT  // (compact: after the onward copies, once the rank pages are in)
                 if (m & me_bit) {
                     const uint32_t owner = (g / stripe) % N;
-#ifdef KVD_COMPACT
-                    const auto* rp =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + (1 + i) * rank_page_bytes);
-                    const uint32_t w = (g % stripe) / 32;
-                    const uint32_t rank = rp[w] + __builtin_popcount(rp[words_per_block + w] & ((1u << (g % 32)) - 1u));
-                    noc_async_write(
-                        src,
-                        output.get_noc_addr(sparse_push::compact_page<KVD_PPP, KVD_BANKS>(run_bases[owner], rank)),
-                        row_bytes);
-#else
                     noc_async_write(
                         src,
                         output.get_noc_addr(owner * owner_slot_rows + (g / stripe / N) * stripe + g % stripe),
                         row_bytes);
-#endif
                 }
+#endif
 #endif
                 Out outs[3];
                 uint32_t no = 0;
@@ -456,6 +458,22 @@ void kernel_main() {
                 }
                 ++n_rows;
             }
+#if defined(KVD_COMPACT) && !defined(KVD_ABL_W_NOGATHER)
+            noc_async_read_barrier();  // the rank pages
+            for (uint32_t i = 0; i < n; ++i) {
+                if (e_m[i] & me_bit) {
+                    const uint32_t g = entry_row(e_w0[i]);
+                    const auto* rp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rank_l1 + e_pg[i] * rank_page_bytes);
+                    const uint32_t w = (g % stripe) / 32;
+                    const uint32_t rank = rp[w] + __builtin_popcount(rp[words_per_block + w] & ((1u << (g % 32)) - 1u));
+                    noc_async_write(
+                        slot_l1 + rows_off + i * row_bytes,
+                        output.get_noc_addr(run_bases[(g / stripe) % N] + rank),
+                        row_bytes);
+                }
+            }
+#endif
             const uint32_t tbar = stats_clock();
             cy_rows += tbar - trows;
             noc_async_write_barrier();  // copies and gather writes landed: the slots may be published, this one freed
