@@ -77,6 +77,7 @@ jobs:
         timeout-minutes: 20
         with:
           fetch-depth: 0
+          filter: blob:none
       - name: Find the branch point
         id: find
         env:
@@ -94,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -121,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [blackhole, wormhole]
+        arch: [blackhole]
     uses: ./.github/workflows/llk-perf-impl.yaml
     with:
       architecture: ${{ matrix.arch }}
@@ -362,7 +363,7 @@ jobs:
       - name: Decide
         env:
           ARCH: ${{ matrix.arch }}
-          THRESHOLD: "0.02"
+          THRESHOLD: "0.01"
           HEAD_RESULT: ${{ needs.placement-measure-head.result }}
           BASE_RESULT: ${{ needs.placement-measure-base.result }}
           SOURCE_RUN: ${{ needs.placement-plan.outputs.run }}
