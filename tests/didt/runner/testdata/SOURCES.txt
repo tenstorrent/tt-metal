@@ -10,8 +10,31 @@ crash_triage_hang.csv
   MinimalMatmulDeviceOperation on 120 cores. Cells hold literal \n, quoted cells hold commas.
 
 nd_report.log
-  Built from the f-strings in tt_py_test_utils_common/op_test_base.py log_nd_cores/log_nd_core_summary
-  (no real failing run with core mapping on /data yet). Devices 19 and 26 fail; device 18 passes.
+  NOT real: built from the f-strings in tt_py_test_utils_common/op_test_base.py (log_nd_cores, log_nd_core_summary),
+  in loguru's real line format. Only test_steps.py uses it, for a two-device ND (devices 19 and 26 fail, 18 passes);
+  no real run has more than one ND device yet. Parser tests use the real nd_*.log below.
+
+chips_c10u08.json
+  didt_runner_runs/LOG_2026_11_26_12_00_bh-glx-110-c10u08_b45441987a7/status.json chips[]: the host the nd_*.log
+  excerpts below ran on.
+
+nd_minimal_dev16.log
+  didt_runner_runs/LOG_2026_11_26_12_00_bh-glx-110-c10u08_b45441987a7/nd/minimal/log lines 65750-65797, 66073-66075:
+  last iteration, 32 Chip map lines, ND report, ND summary of device 16 (2/20 checks, 24 cores, 8 core lines).
+
+nd_duty_dev16.log
+  didt_runner_runs/LOG_2026_11_26_12_00_bh-glx-110-c10u08_b45441987a7/nd/duty-cycle-bursty-5/log lines 66-68,
+  248-250, 1288-1335, 1597-1599: Starting iterations, iterations 0 and 9 (loop 99.350 s), a per-check
+  "ND device 16 [...] pattern:" line, Chip map, ND summary of device 16 (3/10 checks, 108 cores).
+
+nd_write_ack_chip16.log
+  didt_runner_runs/LOG_2026_11_26_12_33_bh-glx-110-c10u08_1fd640a5450/nd/mcast-ack-duty/chips/chip16/pytest.log
+  lines 79-80, 455-471, 687-688: a child run with TT_VISIBLE_DEVICES=16 that logs its chip as device 0
+  (3/10 checks, whole grid; loop 92.455 s).
+
+nd_pass_duty.log
+  didt_runner_runs/repeat_nd_20261126_1501_bh-glx-110-c10u08/r2/duty/log lines 66-68, 1046-1082, 1123: a passing run,
+  Chip map lines and "ND report: 0 of 32", no summary (loop 96.517 s).
 
 iteration_loop.log
   didt_runner_runs/LOG_2026_11_26_12_00_bh-glx-110-c10u08_b45441987a7/nd/minimal/log: the "Starting iterations" line,
