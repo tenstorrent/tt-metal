@@ -70,9 +70,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     constexpr const char* COMPUTE_INTERLEAVED_SRC =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_runtime_rows.cpp";
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(a.dtype());
+    tt::DataFormat input_data_format = cb_dataformat_for(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_data_format);
-    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_data_format = cb_dataformat_for(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
     MeshDevice* device = a.device();

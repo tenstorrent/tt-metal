@@ -33,6 +33,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     PACK_SRC_FROM_OUTPUT,
     PACK_UNTILIZE_BENCHMARK,
+    TILE_COUNT,
     TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
@@ -182,6 +183,7 @@ def test_pack_untilize(
             ),
             PACK_UNTILIZE_BENCHMARK(benchmark),
             NUM_FACES(4),
+            TILE_COUNT(tile_cnt_A),
             LOOP_FACTOR(loop_factor),
         ],
         "runtimes": [],

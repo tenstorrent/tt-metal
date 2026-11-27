@@ -281,6 +281,33 @@ def test_a_column_one_side_added_keeps_the_other_points_comparable(tmp_path):
     assert not result["new_points"] and not result["missing_points"]
 
 
+def test_a_loop_factor_one_side_added_is_not_compared_raw(tmp_path):
+    # perf_transpose_dest gained LOOP_FACTOR=32: 32 times the work, the same per-tile cost.
+    baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP)]
+    current = [
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP * 32, extra={"loop_factor": 32})
+    ]
+
+    result = compare_runs(current, baseline)
+
+    assert not result["regressions"] and not result["records"]
+    assert len(result["new_points"]) == 2 and len(result["missing_points"]) == 2
+
+
+@pytest.mark.parametrize("side", ["current", "baseline"])
+def test_a_one_sided_loop_factor_of_one_still_matches(tmp_path, side):
+    plain = _csv(tmp_path, "p.csv", _INIT, _TILE_LOOP)
+    looped = _csv(tmp_path, "l.csv", _INIT, _TILE_LOOP, extra={"loop_factor": 1})
+    current, baseline = (
+        ([looped], [plain]) if side == "current" else ([plain], [looped])
+    )
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 2
+    assert not result["new_points"] and not result["missing_points"]
+
+
 def test_a_column_another_module_has_is_still_one_sided_here(tmp_path):
     baseline = [
         _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_x"),

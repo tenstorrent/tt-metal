@@ -8,6 +8,7 @@ TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -89,6 +90,17 @@ PYTESTS = {
             "1200",
         ],
     },
+    # SDPA K-read mimic: ctrl 3, then all 8 ctrls, 300 s each (~10.3 min). Catches the 64 MB alias
+    # (bit 26) DramDeployment misses. A hit skips the remaining passes. Timeout is a marker on the test.
+    "gddr_act_c3": {
+        "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_c3_screen",
+        "args": ["-s"],
+    },
+    # Superset of gddr_act_c3: all 8 ctrls, then corner ctrls 7, 3, 4, 0 alone, 300 s each (~25.5 min).
+    "gddr_act_all": {
+        "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
+        "args": ["-s"],
+    },
 }
 
 
@@ -157,6 +169,9 @@ def run_pytest_test(
     test_env = env.copy()
     test_env.setdefault("PYTHONPATH", str(tt_metal))
     log_path = logs_dir / f"{name}.log"
+    # Only the output dir survives the container.
+    result_path = logs_dir / f"{name}.json"
+    test_env["DIAG_RESULT_JSON"] = str(result_path)
     # shlex.join keeps args with spaces (-k "galaxy and bf16_HiFi2") copy-pasteable
     cmdline = shlex.join(cmd)
     log(f"--- test '{name}' (pytest) ---")
@@ -185,6 +200,7 @@ def run_pytest_test(
 
     emit_running(name)
 
+    result_path.unlink(missing_ok=True)
     t0 = time.time()
     passed = 0
     failed = 0
@@ -221,26 +237,36 @@ def run_pytest_test(
         suffix += f"  passed={passed} failed={failed}"
     emit_result(name, status, suffix=suffix)
     details = f"target={target} rc={rc} dur={dt:.1f}s " f"passed={passed} failed={failed} log={log_path}"
-    phase.add(
-        Check(
-            name=name,
-            status=status,
-            details=details,
-            data={
-                "target": target,
-                "command": cmdline,
-                "rc": rc,
-                "duration_s": dt,
-                "log_file": str(log_path),
-                "testcases": {"passed": passed, "failed": failed, "failures": failures},
-            },
-            ip="other",
-        )
-    )
+    data = {
+        "target": target,
+        "command": cmdline,
+        "rc": rc,
+        "duration_s": dt,
+        "log_file": str(log_path),
+        "testcases": {"passed": passed, "failed": failed, "failures": failures},
+    }
+    summary = read_result_summary(result_path)
+    if summary is not None:
+        data["result_file"] = str(result_path)
+        data["summary"] = summary
+        if summary.get("details"):
+            details += f" {summary['details']}"
+    phase.add(Check(name=name, status=status, details=details, data=data, ip="other"))
 
 
-def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path) -> None:
-    """Run the named TESTS / PYTESTS entries, in order."""
+def read_result_summary(path: Path) -> dict | None:
+    """``summary`` from a test's result JSON, or None. Never affects pass/fail."""
+    try:
+        summary = json.loads(path.read_text()).get("summary")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return summary if isinstance(summary, dict) else None
+
+
+def run_tests(
+    tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, name_suffix: str = ""
+) -> None:
+    """Run the named TESTS / PYTESTS entries, in order. ``name_suffix`` keeps a rerun's checks and logs apart."""
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
@@ -266,13 +292,14 @@ def run_tests(tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool,
 
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    for name in names:
-        if name in PYTESTS:
-            run_pytest_test(name, PYTESTS[name], tt_metal, env, phase, dry_run, logs_dir)
+    for test in names:
+        name = f"{test}{name_suffix}"
+        if test in PYTESTS:
+            run_pytest_test(name, PYTESTS[test], tt_metal, env, phase, dry_run, logs_dir)
             continue
         if binary is None:
             continue
-        spec = TESTS[name]
+        spec = TESTS[test]
         filt = spec["filter"]
         test_env = {**env, **spec.get("env", {})}
         env_overrides = {k: test_env[k] for k in GTEST_ENV_KEYS if k in test_env}

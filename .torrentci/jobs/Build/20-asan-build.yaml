@@ -4,7 +4,8 @@ jobs:
   - id: asan-build
     name: ASan build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
-    timeout: 1h
+    # Leaves room for a build with a cold compiler cache.
+    timeout: 1h40m
     compiler-cache: ccache
     runs-on:
       kubernetes:
@@ -58,10 +59,15 @@ jobs:
         kind: shell
         shell:
           run:
+            # Key the CPM source cache on every file that declares a CPM dependency. The step
+            # shell is /bin/sh, which has no pipefail, so the pipeline runs under bash.
             - >-
-              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
-              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
-              third_party/*.patch tt-train/cmake/*.patch .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+              bash -o pipefail -c 'cat cmake/CPM.cmake third_party/CMakeLists.txt third_party/*.patch
+              tt_metal/third_party/CMakeLists.txt tt_metal/third_party/tracy/cmake/CPM.cmake
+              tt_metal/third_party/tracy/cmake/vendor.cmake tt_metal/third_party/umd/cmake/CPM.cmake
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/CPM.cmake
+              tt-train/cmake/dependencies.cmake tt-train/sources/examples/mnist_mlp/CMakeLists.txt
+              | sha256sum | cut -d" " -f1 > /tmp/cpm-deps.sha256'
             - >-
               if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
               elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
@@ -80,7 +86,10 @@ jobs:
             - configure
             # After a fresh download, normalise the tree the way the cache
             # stores it (no .git, symlinks or sparse files) and reconfigure, so
-            # ccache keys match later restored runs.
+            # ccache keys match later restored runs. Dropping .git changes no
+            # dependency version: google/benchmark and flatbuffers read `git describe`
+            # but fall back to their release numbers, and GIT_CEILING_DIRECTORIES
+            # keeps them from finding tt-metal's .git.
             - if [ -f /tmp/cpm-unchanged ]; then exit 0; fi
             - find .cpmcache -name .git -prune -exec rm -rf {} +
             - >-
@@ -97,7 +106,6 @@ jobs:
         shell:
           run:
             - cmake --build build --target install
-            - ccache -s
       - id: package
         kind: shell
         shell:
@@ -113,7 +121,6 @@ jobs:
               -printf '%f\n' | sort > packages.list
             - test -s packages.list
             - tar -cf packages.tar -C build -T packages.list
-            - ls -l packages.tar
       - id: stage-ttnn-import
         kind: shell
         shell:
@@ -126,7 +133,6 @@ jobs:
             - cp -a runtime ttnn-import/runtime
             - du -sh ttnn-import ttnn-import/build/lib
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
-            - ls -l ttnn-import.tar.zst
       - id: cpm-cache-save
         kind: shell
         shell:

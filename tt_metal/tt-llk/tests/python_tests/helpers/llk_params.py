@@ -320,6 +320,7 @@ class MathOperation(Enum):
     SfpuAtan2 = OpSpec("ATAN2", MathOpType.SFPU_BINARY)
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
+    SfpuMulSmShift23 = OpSpec("MUL_SM_SHIFT23", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
     SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)

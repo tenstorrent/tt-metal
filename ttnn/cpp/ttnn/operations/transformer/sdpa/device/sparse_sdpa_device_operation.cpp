@@ -59,6 +59,12 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
         q.memory_config().buffer_type() == BufferType::DRAM || q.memory_config().buffer_type() == BufferType::L1,
         "sparse_sdpa q must be in DRAM or L1");
     TT_FATAL(idx.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa indices must be in DRAM");
+    TT_FATAL(
+        attrs.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+            (attrs.output_mem_config.buffer_type() == BufferType::DRAM ||
+             attrs.output_mem_config.buffer_type() == BufferType::L1),
+        "sparse_sdpa output must be interleaved in DRAM or L1, got {}",
+        attrs.output_mem_config);
     for (const Tensor* tp : {&q, &idx}) {
         TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
         TT_FATAL(!tp->memory_config().is_sharded(), "sparse_sdpa q/indices must be interleaved");
@@ -228,12 +234,11 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     shape[3] = attrs.v_dim;            // [1, H, S, v_dim]
     // Output dtype matches q (bf16 -> bf16, fp8_e4m3 -> fp8_e4m3): the final untilize packs the bf16
     // accumulator to the output dtype (fp8 is a regular float8, not block-float, so it untilizes fine).
-    // The output is always DRAM-interleaved ROW_MAJOR — the writer drains it with per-head-row paged
-    // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
-    const tt::tt_metal::MemoryConfig out_mem{
-        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    // ROW_MAJOR and interleaved (DRAM or L1): the writer drains it with per-head-row paged noc writes through a
+    // TensorAccessor.
     return tt::tt_metal::TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape,
+        tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), attrs.output_mem_config));
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
@@ -286,6 +291,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.dtype(),
         t.attention_sink,
         attrs.worker_core_grid,
+        // The writer's output accessor differs between DRAM and L1.
+        attrs.output_mem_config,
         // The split-K plan depends on the free L1 (live L1 tensors), which the fields above do not pin.
         plan.split_k,
         plan.num_used);
@@ -303,7 +310,8 @@ Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx,
     std::optional<BlockCyclicLayout> block_cyclic,
     const std::optional<Tensor>& attention_sink,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     // Validated (non-empty, inside the first subdevice) in validate_non_hashed, on every dispatch.
     auto* device = q.device();
@@ -319,6 +327,8 @@ Tensor sparse_sdpa(
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
             .worker_core_grid = worker_core_grid,
+            .output_mem_config = memory_config.value_or(tt::tt_metal::MemoryConfig{
+                tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}),
         },
         OperationType::tensor_args_t{
             .q = q,

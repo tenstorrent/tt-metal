@@ -28,7 +28,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT           = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT                 = params.TILE_CNT;
     const std::uint32_t NUM_BLOCKS               = params.NUM_BLOCKS;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_A                      = params.buffer_A;
@@ -60,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t srcb_dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t tile = 0; tile < INPUT_TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     // Real broadcast unpack emits SrcA once, then SrcB once
                     // per broadcast face. Combining these handshakes blocks
@@ -102,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT            = params.INPUT_TILE_CNT;
+    const std::uint32_t TILE_CNT                  = params.TILE_CNT;
     const std::uint32_t NUM_BLOCKS                = params.NUM_BLOCKS;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK  = params.INPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -134,7 +134,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t tile = 0; tile < INPUT_TILE_CNT; tile++)
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
                 {
                     // ROW/COL math clears SrcB after each non-final face,
                     // then clears SrcA and the final SrcB together.

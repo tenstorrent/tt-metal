@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "typecast_program_factory.hpp"
+#include "typecast_kernel_format.hpp"
 
 #include <string>
 
@@ -191,8 +192,12 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt},
                  {"per_core_block_dim", entries_per_page},
-                 {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
-                 {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+                 {"in_data_format",
+                  typecast_kernel_data_format(
+                      datatype_to_dataformat_converter(input.dtype()), input.device()->arch() == tt::ARCH::QUASAR)},
+                 {"out_data_format",
+                  typecast_kernel_data_format(
+                      datatype_to_dataformat_converter(output.dtype()), input.device()->arch() == tt::ARCH::QUASAR)}},
             .hw_config =
                 make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format_input)),
         };
@@ -352,8 +357,12 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
         .compile_time_args =
             {{"per_core_block_cnt", static_cast<uint32_t>(ntiles_per_core)},
              {"per_core_block_dim", 1u},
-             {"in_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(input.dtype()))},
-             {"out_data_format", static_cast<uint32_t>(datatype_to_dataformat_converter(output.dtype()))}},
+             {"in_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(input.dtype()), input.device()->arch() == tt::ARCH::QUASAR)},
+             {"out_data_format",
+              typecast_kernel_data_format(
+                  datatype_to_dataformat_converter(output.dtype()), input.device()->arch() == tt::ARCH::QUASAR)}},
         .hw_config = make_compute_config(device->arch(), args, make_unpack_modes(args, IN_DFB, cb_data_format)),
     };
 

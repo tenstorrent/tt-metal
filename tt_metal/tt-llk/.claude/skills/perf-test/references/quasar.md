@@ -38,7 +38,10 @@ def test_perf_[op]_quasar(perf_report, <sweep args>, run_types, loop_factor, is_
   parametrizes on that list plus `_PERF_AXES`. That is the same contract: one
   generator, perf narrowing only inside it through the helpers below.
 - 4-TRISC kernels use `PERF_RUN_TYPES_QUASAR_4_TRISC`, which adds
-  `SFPU_ISOLATE`.
+  `SFPU_ISOLATE`. Their `L1_TO_L1` is the overlap of the FPU and SFPU
+  workloads, so the config also passes `OVERLAPPED_WORKLOAD()` and the CSV
+  carries `overlapped_workload`; do not compare those rows with a standalone
+  test's `L1_TO_L1`.
 - Perf runs `DestSync.Half` only. The comparer still reports the missing
   `DestSync.Full` as a perf subset; that one difference is expected.
 - Do not put `approx_mode` on `_PERF_AXES` when a family already constrains

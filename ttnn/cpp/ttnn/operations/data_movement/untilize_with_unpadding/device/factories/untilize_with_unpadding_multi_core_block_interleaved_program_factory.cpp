@@ -103,7 +103,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     uint32_t unpadded_row_size_bytes;
 
     uint32_t el_size;
-    if (a.dtype() == DataType::BFLOAT8_B) {
+    if (a.dtype() == DataType::BFLOAT8_B || tt::tt_metal::is_mx(a.dtype())) {
         padded_row_size_bytes = input_shape[-1] * output.element_size();
         unpadded_row_size_bytes = output_shape[-1] * output.element_size();
         el_size = output.element_size();
