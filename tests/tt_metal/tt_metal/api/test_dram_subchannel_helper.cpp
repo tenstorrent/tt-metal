@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 

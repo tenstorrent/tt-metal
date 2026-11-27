@@ -5,8 +5,10 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <numeric>
 #include <utility>
+#include <variant>
 
 #include <tt-logger/tt-logger.hpp>
 
@@ -53,6 +55,21 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
+
+    // MultiCoreTiledGeneric indexes rows and tile blocks in uint32_t.
+    if (std::holds_alternative<MultiCoreTiledGeneric>(select_program_factory(attributes, tensor_args))) {
+        const uint64_t logical_volume = tensor_args.input_tensor.logical_shape().volume();
+        TT_FATAL(
+            logical_volume <= std::numeric_limits<uint32_t>::max(),
+            "permute: logical volume of {} elements exceeds the uint32_t limit",
+            logical_volume);
+
+        const uint64_t xw_blocks = MultiCoreTiledGeneric::compute_xw_blocks(attributes, tensor_args);
+        TT_FATAL(
+            xw_blocks <= std::numeric_limits<uint32_t>::max(),
+            "permute: tile-padded volume of {} tiles exceeds the uint32_t work-split limit",
+            xw_blocks);
+    }
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
@@ -186,11 +203,13 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
 
-    // BH 8-bit int RM pack_untilize drops the top 24 bits of each 32-bit Dest lane (#61827).
+    // BH 8-bit int RM permute (#61827): the 8-bit compute path turns INT8 -128 into 0, and the RM reader's
+    // alignment bounce covers interleaved input only, so sharded UINT8 can still make misaligned reads.
     // Workaround: stage via UInt32 in DRAM, permute, cast back. Lives in prim (not user API)
     // because fold/transpose/quasar call prim::permute directly; a user-API-only workaround
-    // would need to be duplicated at every call site. Delete this block once #61827 lands.
-    if ((input_tensor.dtype() == DataType::UINT8 || input_tensor.dtype() == DataType::INT8) &&
+    // would need to be duplicated at every call site.
+    if ((input_tensor.dtype() == DataType::INT8 ||
+         (input_tensor.dtype() == DataType::UINT8 && input_tensor.is_sharded())) &&
         input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.device() != nullptr &&
         input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && !dims.empty() &&
         dims.back() != static_cast<uint32_t>(dims.size() - 1)) {
@@ -203,8 +222,8 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
             !(optional_output_tensor.has_value() && final_memory_config.is_sharded()),
             "prim::permute BH 8-bit RM workaround cannot honor a sharded optional_output_tensor; "
             "pass interleaved or omit it (see #61827).");
-        const auto interleaved_l1 = tt::tt_metal::MemoryConfig(
-            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        const auto interleaved_l1 =
+            tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
         auto staged = input_tensor.is_sharded() ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt)
                                                 : input_tensor;
         auto as_u32 = ttnn::typecast(staged, DataType::UINT32, ttnn::DRAM_MEMORY_CONFIG);
@@ -220,12 +239,27 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
                                                 : as_8bit;
     }
 
-    return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .dims = dims,
-            .output_mem_config = memory_config.value_or(input_tensor.memory_config()),
-            .pad_value = pad_value},
-        OperationType::tensor_args_t{
-            .input_tensor = input_tensor, .optional_output_tensor = std::move(optional_output_tensor)});
+    const MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+    const auto attributes = [&](const MemoryConfig& mem_config) {
+        return OperationType::operation_attributes_t{
+            .dims = dims, .output_mem_config = mem_config, .pad_value = pad_value};
+    };
+    return ttnn::operations::data_movement::launch_with_aligned_shard_rows(
+        input_tensor,
+        output_mem_config,
+        optional_output_tensor,
+        [&] {
+            return OperationType::compute_output_specs(
+                attributes(output_mem_config),
+                OperationType::tensor_args_t{
+                    .input_tensor = input_tensor, .optional_output_tensor = optional_output_tensor});
+        },
+        [&](const Tensor& input, const std::optional<MemoryConfig>& explicit_mem_config) {
+            return ttnn::device_operation::launch<OperationType>(
+                attributes(explicit_mem_config.value_or(output_mem_config)),
+                OperationType::tensor_args_t{
+                    .input_tensor = input,
+                    .optional_output_tensor = explicit_mem_config.has_value() ? std::nullopt : optional_output_tensor});
+        });
 }
 }  // namespace ttnn::prim

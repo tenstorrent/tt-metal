@@ -28,8 +28,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operation.hpp"

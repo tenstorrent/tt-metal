@@ -18,6 +18,7 @@ private:
     AutocastTensor m_value;
     ttnn::Tensor m_grad;
     bool m_requires_grad = false;
+    bool m_is_parameter = false;
     std::optional<NodeId> m_node_id;
 
 public:
@@ -35,8 +36,15 @@ public:
     void set_grad(const ttnn::Tensor &grad);
     void set_node(const std::optional<NodeId> &node);
     void clean_node();
+    // Stores the first gradient as it comes and adds every later one into it. The sum runs in fp32 when this tensor is
+    // a module parameter and the stored reduce dtype (AutoContext::get_gradient_reduce_dtype) is FLOAT32, or when the
+    // stored gradient is already fp32; otherwise it runs in the gradient's dtype.
     void add_grad(const ttnn::Tensor &grad);
     void set_requires_grad(bool requires_grad);
+    // ModuleBase::register_tensor() and override_tensor() mark the tensors they register. Activations stay unmarked, so
+    // their gradients keep the dtype the backward kernels they feed take.
+    void mark_as_parameter();
+    [[nodiscard]] bool is_parameter() const;
 
     const ttnn::Tensor &get_value(PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
     // The only way to update the value in place; see AutocastTensor.

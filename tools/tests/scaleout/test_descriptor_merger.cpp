@@ -44,13 +44,56 @@ protected:
         return desc.root_instance().child_mappings().size();
     }
 
-    // Helper to create a torus descriptor file for testing merging
+    // (tray_id, port_id) pairs of intra-node QSFP_DD cables
+    using TrayPort = std::pair<uint32_t, uint32_t>;
+    using IntraNodeConnections = std::vector<std::pair<TrayPort, TrayPort>>;
+
+    // WH Galaxy torus cabling (BH Galaxy Rev C uses the same trays)
+    inline static const IntraNodeConnections WH_GALAXY_X_TORUS_CABLES = {
+        {{1, 3}, {2, 3}},
+        {{1, 4}, {2, 4}},
+        {{1, 5}, {2, 5}},
+        {{1, 6}, {2, 6}},
+        {{3, 6}, {4, 6}},
+        {{3, 5}, {4, 5}},
+        {{3, 4}, {4, 4}},
+        {{3, 3}, {4, 3}}};
+    inline static const IntraNodeConnections WH_GALAXY_Y_TORUS_CABLES = {
+        {{1, 2}, {3, 2}}, {{1, 1}, {3, 1}}, {{2, 1}, {4, 1}}, {{2, 2}, {4, 2}}};
+
+    inline static const IntraNodeConnections BH_GALAXY_REV_AB_X_TORUS_CABLES = {
+        {{1, 3}, {3, 3}},
+        {{1, 4}, {3, 4}},
+        {{1, 5}, {3, 5}},
+        {{1, 6}, {3, 6}},
+        {{2, 6}, {4, 6}},
+        {{2, 5}, {4, 5}},
+        {{2, 4}, {4, 4}},
+        {{2, 3}, {4, 3}}};
+    inline static const IntraNodeConnections BH_GALAXY_REV_AB_Y_TORUS_CABLES = {
+        {{1, 2}, {2, 2}}, {{1, 1}, {2, 1}}, {{3, 1}, {4, 1}}, {{3, 2}, {4, 2}}};
+
+    static IntraNodeConnections concat(const IntraNodeConnections& a, const IntraNodeConnections& b) {
+        IntraNodeConnections result = a;
+        result.insert(result.end(), b.begin(), b.end());
+        return result;
+    }
+
+    // Helper to create a single-node descriptor whose torus cables are listed as internal_connections
     static void create_torus_descriptor(
         const std::string& path,
         const std::string& template_name,
         const std::string& node_name,
         const std::string& node_type,
+        const IntraNodeConnections& torus_connections,
         uint32_t host_id = 0) {
+        std::string connections;
+        for (const auto& [a, b] : torus_connections) {
+            connections += "        connections { port_a { path: [\"" + node_name +
+                           "\"] tray_id: " + std::to_string(a.first) + " port_id: " + std::to_string(a.second) +
+                           " } port_b { path: [\"" + node_name + "\"] tray_id: " + std::to_string(b.first) +
+                           " port_id: " + std::to_string(b.second) + " } }\n";
+        }
         write_textproto(
             path,
             "graph_templates {\n"
@@ -65,6 +108,12 @@ protected:
                 "      node_ref { node_descriptor: \"" +
                 node_type +
                 "\" }\n"
+                "    }\n"
+                "    internal_connections {\n"
+                "      key: \"QSFP_DD\"\n"
+                "      value {\n" +
+                connections +
+                "      }\n"
                 "    }\n"
                 "  }\n"
                 "}\n"
@@ -385,19 +434,19 @@ TEST_F(DescriptorMergerTest, RejectNonexistentFile) {
 }
 
 // ============================================================================
-// Torus Merge Tests: Torus-specific inter_board_connections merging
+// Torus Merge Tests: intra-node torus cables merged as graph internal_connections
 // ============================================================================
 
 TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
-    // Test that X_TORUS and Y_TORUS node types can merge into a combined XY_TORUS configuration
-    // Both X and Y torus have the same Wormhole architecture and compatible topology
-    // Their inter_board_connections should merge successfully to form an XY_TORUS
+    // Test that X torus and Y torus cabling on the same WH_GALAXY node merge into XY torus cabling
     const std::string test_dir = create_test_dir("xy_torus_merge_test");
 
     const std::string merge_dir = test_dir + "merge/";
     std::filesystem::create_directories(merge_dir);
-    create_torus_descriptor(merge_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(merge_dir + "y_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_Y_TORUS", 0);
+    create_torus_descriptor(
+        merge_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
+    create_torus_descriptor(
+        merge_dir + "y_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_Y_TORUS_CABLES, 0);
 
     // Merge X + Y torus
     CablingGenerator merged_gen(merge_dir, create_host_vector(1));
@@ -405,7 +454,13 @@ TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
     // Create reference XY torus descriptor
     const std::string ref_dir = test_dir + "reference/";
     std::filesystem::create_directories(ref_dir);
-    create_torus_descriptor(ref_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
+    create_torus_descriptor(
+        ref_dir + "xy_torus.textproto",
+        "wh_galaxy_torus",
+        "node1",
+        "WH_GALAXY",
+        concat(WH_GALAXY_X_TORUS_CABLES, WH_GALAXY_Y_TORUS_CABLES),
+        0);
     CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
 
     // Validate that X + Y merge produces the same result as XY torus
@@ -413,14 +468,26 @@ TEST_F(DescriptorMergerTest, MergeXTorusAndYTorusIntoXYTorus) {
 }
 
 TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
-    // Test that BH (Blackhole) X_TORUS and Y_TORUS can merge into XY_TORUS
+    // Test that BH (Blackhole) X torus and Y torus cabling merge into XY torus cabling
     // Validates torus merging works for Blackhole architecture, not just Wormhole
     const std::string test_dir = create_test_dir("bh_xy_torus_merge");
 
     const std::string merge_dir = test_dir + "merge/";
     std::filesystem::create_directories(merge_dir);
-    create_torus_descriptor(merge_dir + "x_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(merge_dir + "y_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_Y_TORUS", 0);
+    create_torus_descriptor(
+        merge_dir + "x_torus.textproto",
+        "bh_galaxy_torus",
+        "node1",
+        "BH_GALAXY_REV_AB",
+        BH_GALAXY_REV_AB_X_TORUS_CABLES,
+        0);
+    create_torus_descriptor(
+        merge_dir + "y_torus.textproto",
+        "bh_galaxy_torus",
+        "node1",
+        "BH_GALAXY_REV_AB",
+        BH_GALAXY_REV_AB_Y_TORUS_CABLES,
+        0);
 
     // Merge BH X + Y torus
     CablingGenerator merged_gen(merge_dir, create_host_vector(1));
@@ -428,7 +495,13 @@ TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
     // Create reference BH XY torus descriptor
     const std::string ref_dir = test_dir + "reference/";
     std::filesystem::create_directories(ref_dir);
-    create_torus_descriptor(ref_dir + "xy_torus.textproto", "bh_galaxy_torus", "node1", "BH_GALAXY_XY_TORUS", 0);
+    create_torus_descriptor(
+        ref_dir + "xy_torus.textproto",
+        "bh_galaxy_torus",
+        "node1",
+        "BH_GALAXY_REV_AB",
+        concat(BH_GALAXY_REV_AB_X_TORUS_CABLES, BH_GALAXY_REV_AB_Y_TORUS_CABLES),
+        0);
     CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
 
     // Validate that BH X + Y merge produces the same result as BH XY torus
@@ -436,15 +509,16 @@ TEST_F(DescriptorMergerTest, MergeBHXTorusAndBHYTorusIntoXYTorus) {
 }
 
 TEST_F(DescriptorMergerTest, MergeTwoIdenticalXTorusDescriptors) {
-    // Test merging two identical X_TORUS descriptors
-    // Both have the same torus type and architecture - should merge successfully
-    // (duplicate connections will be deduplicated during merge)
+    // Test merging two identical X torus descriptors
+    // Duplicate connections are deduplicated during merge
     const std::string test_dir = create_test_dir("two_x_torus_merge");
 
     const std::string merge_dir = test_dir + "merge/";
     std::filesystem::create_directories(merge_dir);
-    create_torus_descriptor(merge_dir + "x_torus1.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(merge_dir + "x_torus2.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(
+        merge_dir + "x_torus1.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
+    create_torus_descriptor(
+        merge_dir + "x_torus2.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
 
     // Merge two identical X torus descriptors
     CablingGenerator merged_gen(merge_dir, create_host_vector(1));
@@ -452,7 +526,8 @@ TEST_F(DescriptorMergerTest, MergeTwoIdenticalXTorusDescriptors) {
     // Create reference X torus descriptor
     const std::string ref_dir = test_dir + "reference/";
     std::filesystem::create_directories(ref_dir);
-    create_torus_descriptor(ref_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(
+        ref_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
     CablingGenerator x_gen(ref_dir + "x_torus.textproto", create_host_vector(1));
 
     // Validate that merging two identical X torus gives the same X torus (deduplication works)
@@ -460,15 +535,17 @@ TEST_F(DescriptorMergerTest, MergeTwoIdenticalXTorusDescriptors) {
 }
 
 TEST_F(DescriptorMergerTest, MergeXYTorusWithXTorusDescriptors) {
-    // Test merging XY_TORUS with X_TORUS descriptors
-    // XY_TORUS already contains X-direction connections, X_TORUS adds more
-    // Both are torus types with the same architecture (Wormhole) - should merge to XY_TORUS
+    // Test merging XY torus with X torus descriptors
+    // XY torus already contains the X-direction cables, so the result is still XY torus
     const std::string test_dir = create_test_dir("xy_plus_x_torus_merge");
 
+    const auto xy_torus_cables = concat(WH_GALAXY_X_TORUS_CABLES, WH_GALAXY_Y_TORUS_CABLES);
     const std::string merge_dir = test_dir + "merge/";
     std::filesystem::create_directories(merge_dir);
-    create_torus_descriptor(merge_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
-    create_torus_descriptor(merge_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(
+        merge_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", xy_torus_cables, 0);
+    create_torus_descriptor(
+        merge_dir + "x_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
 
     // Merge XY + X torus
     CablingGenerator merged_gen(merge_dir, create_host_vector(1));
@@ -476,7 +553,7 @@ TEST_F(DescriptorMergerTest, MergeXYTorusWithXTorusDescriptors) {
     // Create reference XY torus descriptor
     const std::string ref_dir = test_dir + "reference/";
     std::filesystem::create_directories(ref_dir);
-    create_torus_descriptor(ref_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY_XY_TORUS", 0);
+    create_torus_descriptor(ref_dir + "xy_torus.textproto", "wh_galaxy_torus", "node1", "WH_GALAXY", xy_torus_cables, 0);
     CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
 
     // Validate that XY + X torus still equals XY torus (X connections already present)
@@ -488,7 +565,7 @@ TEST_F(DescriptorMergerTest, MergeXYTorusWithXTorusDescriptors) {
 // ============================================================================
 
 TEST_F(DescriptorMergerTest, SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
-    // Test splitting the 8x16 WH_GALAXY_XY_TORUS superpod descriptor and merging it back
+    // Test splitting the 8x16 WH Galaxy XY torus superpod descriptor and merging it back
     const std::string source_path =
         "tools/tests/scaleout/cabling_descriptors/8x16_wh_galaxy_xy_torus_superpod.textproto";
 
@@ -523,7 +600,7 @@ TEST_F(DescriptorMergerTest, SplitAndMerge8x16WhGalaxyXyTorusSuperpod) {
 }
 
 TEST_F(DescriptorMergerTest, SplitAndMerge5WhGalaxyYTorusSuperpod) {
-    // Test splitting the 5 WH_GALAXY_Y_TORUS superpod descriptor and merging it back
+    // Test splitting the 5 WH Galaxy Y torus superpod descriptor and merging it back
     const std::string source_path = "tools/tests/scaleout/cabling_descriptors/5_wh_galaxy_y_torus_superpod.textproto";
 
     // Create hostnames based on descriptor
@@ -584,10 +661,10 @@ TEST_F(DescriptorMergerTest, SplitAndMerge16N300Cluster) {
 
 TEST_F(DescriptorMergerTest, RejectMismatchedNodeTypes) {
     // Test that merging files with incompatible node types fails
-    // Y_TORUS and N300_T3K_NODE have different board structures and cannot merge
+    // WH_GALAXY and N300_T3K_NODE have different board structures and cannot merge
     const std::string test_dir = create_test_dir("node_type_mismatch_test");
 
-    create_simple_descriptor(test_dir + "file1.textproto", "test_cluster", "node1", "WH_GALAXY_Y_TORUS");
+    create_simple_descriptor(test_dir + "file1.textproto", "test_cluster", "node1", "WH_GALAXY");
     create_simple_descriptor(test_dir + "file2.textproto", "test_cluster", "node1", "N300_T3K_NODE");
 
     try {
@@ -608,8 +685,10 @@ TEST_F(DescriptorMergerTest, RejectWormholeAndBlackholeTorusTogether) {
     // Even though both are torus types, they have incompatible hardware architectures
     const std::string test_dir = create_test_dir("wh_bh_torus_mismatch");
 
-    create_torus_descriptor(test_dir + "wh_torus.textproto", "mixed_torus", "node1", "WH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(test_dir + "bh_torus.textproto", "mixed_torus", "node1", "BH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(
+        test_dir + "wh_torus.textproto", "mixed_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
+    create_torus_descriptor(
+        test_dir + "bh_torus.textproto", "mixed_torus", "node1", "BH_GALAXY_REV_AB", BH_GALAXY_REV_AB_X_TORUS_CABLES, 0);
 
     try {
         CablingGenerator merged_gen(test_dir, create_host_vector(1));
@@ -880,8 +959,10 @@ TEST_F(DescriptorMergerTest, RejectEmptyPath) {
     // Even though both are torus types, they have incompatible hardware architectures
     const std::string test_dir = create_test_dir("wh_bh_torus_mismatch");
 
-    create_torus_descriptor(test_dir + "wh_torus.textproto", "mixed_torus", "node1", "WH_GALAXY_X_TORUS", 0);
-    create_torus_descriptor(test_dir + "bh_torus.textproto", "mixed_torus", "node1", "BH_GALAXY_X_TORUS", 0);
+    create_torus_descriptor(
+        test_dir + "wh_torus.textproto", "mixed_torus", "node1", "WH_GALAXY", WH_GALAXY_X_TORUS_CABLES, 0);
+    create_torus_descriptor(
+        test_dir + "bh_torus.textproto", "mixed_torus", "node1", "BH_GALAXY_REV_AB", BH_GALAXY_REV_AB_X_TORUS_CABLES, 0);
 
     try {
         CablingGenerator merged_gen(test_dir, create_host_vector(1));
@@ -1087,7 +1168,13 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
     const std::vector<std::string> descriptors = {
         "tools/tests/scaleout/cabling_descriptors/wh_galaxy_mesh.textproto",
         "tools/tests/scaleout/cabling_descriptors/bh_galaxy_mesh.textproto",
-        "tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto",
+        "tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_ab_xy_torus.textproto",
+        "tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_c_xy_torus.textproto",
+        "tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_ab_xy_torus_z_ports.textproto",
+        "tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_c_xy_torus_z_ports.textproto",
+        "tt_metal/fabric/cabling_descriptors/wh_galaxy_x_torus.textproto",
+        "tt_metal/fabric/cabling_descriptors/wh_galaxy_y_torus.textproto",
+        "tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto",
         "tools/tests/scaleout/cabling_descriptors/t3k.textproto",
     };
 
@@ -1106,15 +1193,15 @@ TEST_F(DescriptorMergerTest, LoadAllAvailableDescriptors) {
 }
 
 TEST_F(DescriptorMergerTest, MergeExistingBHTorusDescriptors) {
-    // Test merging existing bh_galaxy_x_torus.textproto and bh_galaxy_y_torus.textproto
+    // Test merging existing bh_galaxy_rev_ab_x_torus.textproto and bh_galaxy_rev_ab_y_torus.textproto
     // This demonstrates using actual existing descriptor files from the cabling_descriptors directory
     const std::string test_dir = create_test_dir("merge_existing_bh_torus");
 
     // Read the actual existing files
-    std::ifstream x_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_x_torus.textproto");
-    std::ifstream y_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_y_torus.textproto");
-    ASSERT_TRUE(x_file.is_open()) << "Failed to open existing bh_galaxy_x_torus.textproto";
-    ASSERT_TRUE(y_file.is_open()) << "Failed to open existing bh_galaxy_y_torus.textproto";
+    std::ifstream x_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_ab_x_torus.textproto");
+    std::ifstream y_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_ab_y_torus.textproto");
+    ASSERT_TRUE(x_file.is_open()) << "Failed to open existing bh_galaxy_rev_ab_x_torus.textproto";
+    ASSERT_TRUE(y_file.is_open()) << "Failed to open existing bh_galaxy_rev_ab_y_torus.textproto";
 
     std::string x_content((std::istreambuf_iterator<char>(x_file)), std::istreambuf_iterator<char>());
     std::string y_content((std::istreambuf_iterator<char>(y_file)), std::istreambuf_iterator<char>());
@@ -1142,8 +1229,8 @@ TEST_F(DescriptorMergerTest, MergeExistingBHTorusDescriptors) {
     CablingGenerator merged_gen(test_dir, create_host_vector(1));
 
     // Read and modify the existing XY torus file for comparison (unify template name)
-    std::ifstream xy_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto");
-    ASSERT_TRUE(xy_file.is_open()) << "Failed to open existing bh_galaxy_xy_torus.textproto";
+    std::ifstream xy_file("tools/tests/scaleout/cabling_descriptors/bh_galaxy_rev_ab_xy_torus.textproto");
+    ASSERT_TRUE(xy_file.is_open()) << "Failed to open existing bh_galaxy_rev_ab_xy_torus.textproto";
     std::string xy_content((std::istreambuf_iterator<char>(xy_file)), std::istreambuf_iterator<char>());
     xy_file.close();
 
@@ -1163,8 +1250,9 @@ TEST_F(DescriptorMergerTest, MergeExistingBHTorusDescriptors) {
     CablingGenerator xy_gen(ref_dir + "xy_torus.textproto", create_host_vector(1));
 
     // Validate that merging the existing X and Y torus files produces the same result as the existing XY torus file
-    EXPECT_EQ(merged_gen, xy_gen) << "Merging existing bh_galaxy_x_torus.textproto + bh_galaxy_y_torus.textproto "
-                                     "should equal bh_galaxy_xy_torus.textproto";
+    EXPECT_EQ(merged_gen, xy_gen)
+        << "Merging existing bh_galaxy_rev_ab_x_torus.textproto + bh_galaxy_rev_ab_y_torus.textproto "
+           "should equal bh_galaxy_rev_ab_xy_torus.textproto";
 }
 
 TEST_F(DescriptorMergerTest, MergeExistingMeshDescriptors) {

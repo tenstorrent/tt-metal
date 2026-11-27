@@ -7,7 +7,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/vector.h>
 
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::tensor_accessor_args {

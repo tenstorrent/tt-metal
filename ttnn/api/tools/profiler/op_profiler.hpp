@@ -20,9 +20,9 @@
 #include <tracy/Tracy.hpp>
 #include <tracy/TracyC.h>
 
-#include <tt-metalium/base_types.hpp>
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/specification/compute_modes.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 

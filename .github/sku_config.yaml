@@ -135,6 +135,16 @@ skus:
       - pipeline-perf
     weights-cache-mode: local-disk
 
+  # Host-bound runtime perf cases differ across the bh_p150_perf machines, so they run on gh04's higher core count CPU.
+  bh_p150_perf_high_core_count:
+    runs_on:
+      - in-service
+      - arch-blackhole
+      - P150
+      - pipeline-perf
+      - bh_p150_perf_high_core_count
+    weights-cache-mode: local-disk
+
   bh_loudbox:
     runs_on:
       - in-service
@@ -212,15 +222,10 @@ skus:
   # self-hosted device runners only execute tests that actually need silicon.
   # No merge_queue_sku: GitHub-hosted capacity is not a contended prio pool
   # (same as the sim_* ubuntu-latest SKUs below).
-  #
-  # Pinned to ubuntu-24.04 instead of ubuntu-latest: this SKU runs the sanitizer
-  # test binaries, and on an ubuntu-26.04 host TSan aborts at startup because
-  # personality(ADDR_NO_RANDOMIZE) is denied inside the job container
-  # ("CHECK failed: tsan_platform_linux.cpp:290", exit 139). The sim_* SKUs below
-  # stay on ubuntu-latest; they carry no sanitizer binaries and pass on 26.04.
+  # Runs sanitizer binaries: relies on its seccomp option in smoke.yaml.
   github_hosted_cpu:
     runs_on:
-      - ubuntu-24.04
+      - ubuntu-latest
 
   # ---------------------------------------------------------------------------
   # Merge-queue prio SKUs (merge_group events only).

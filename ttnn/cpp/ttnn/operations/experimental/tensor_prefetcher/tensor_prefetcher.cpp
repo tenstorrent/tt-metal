@@ -12,8 +12,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 namespace ttnn::operations::experimental {
 

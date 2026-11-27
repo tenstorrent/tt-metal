@@ -4,19 +4,22 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
-#include "tt_metal.hpp"
+#include "tt-metalium/execution/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
+#include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "distributed_context.hpp"
+#include "tt-metalium/mesh/multihost/distributed_context.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <cstring>
+#include <optional>
 #include <string>
 
 // hack for test_basic_fabric_apis.cpp
@@ -33,6 +36,7 @@ std::unique_ptr<FabricBuildSession> begin_fabric_build_session(tt::tt_metal::Met
     }
     auto& fabric_context = env_impl.get_control_plane().get_fabric_context();
     fabric_context.get_builder_context().clear_router_channel_layouts();
+    fabric_context.get_builder_context().set_inter_domain_ports({});
     return create_fabric_build_session(fabric_context);
 }
 
@@ -62,6 +66,7 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
     }
     build.builder->connect_routers();
     build.builder->compile_ancillary_kernels();
+    build.builder->choose_master_router();
     return build;
 }
 
@@ -116,7 +121,30 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
     }
     const auto& control_plane = env_impl.get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-    const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+    std::optional<std::vector<uint32_t>> vc2_route_table;
+    for (const auto& port : control_plane.get_fabric_context().get_builder_context().get_inter_domain_ports()) {
+        if (port.node == fabric_node_id && port.has_router) {
+            router_chans_and_direction.insert({port.eth_chan, eth_chan_directions::COUNT});
+            // VC2 routes over the domain as a 2D mesh: no wraps, so no dateline needed
+            if (!vc2_route_table) {
+                const auto& mesh_graph = control_plane.get_mesh_graph();
+                const auto coord = mesh_graph.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+                const auto table = line_route_table_2d(
+                    mesh_graph, fabric_node_id.mesh_id, static_cast<int>(coord[0]), static_cast<int>(coord[1]));
+                vc2_route_table.emplace(sizeof(table) / sizeof(uint32_t));
+                std::memcpy(vc2_route_table->data(), &table, sizeof(table));
+            }
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device,
+                soc_desc.get_eth_core_for_channel(port.eth_chan, CoordSystem::LOGICAL),
+                env_impl.get_hal().get_dev_addr(
+                    tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE) +
+                    offsetof(routing_l1_info_t, route_table_2d),
+                *vc2_route_table,
+                CoreType::ETH);
+        }
+    }
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();
     const auto addresses_to_clear = builder_context.get_fabric_router_addresses_to_clear();
@@ -139,6 +167,11 @@ void configure_fabric_cores(tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::
             router_config.sender_channels_bookkeeping_start,
             sender_bookkeeping_zeros,
             CoreType::ETH);
+        if (router_config.inter_domain_ctrl_address != 0) {
+            std::vector<uint32_t> ctrl_zeros(sizeof(InterDomainRouterControl) / sizeof(uint32_t), 0);
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, router_logical_core, router_config.inter_domain_ctrl_address, ctrl_zeros, CoreType::ETH);
+        }
     }
 }
 

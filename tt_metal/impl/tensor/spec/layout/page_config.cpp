@@ -4,10 +4,10 @@
 
 #include <tt_stl/fmt.hpp>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/memory/tensor/spec/layout/page_config.hpp>
 
-#include <tt-metalium/shape2d.hpp>
-#include <tt-metalium/float8.hpp>
+#include <tt-metalium/vocabulary/shape2d.hpp>
+#include <tt-metalium/data_formats/float8.hpp>
 #include <numeric>
 #include <type_traits>
 #include <variant>

@@ -143,13 +143,12 @@ jobs:
         test-group: ${{ fromJSON(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
     steps:
       - name: Checkout code
-        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@8146c9d2746a20109da97143663494805274ce8c # cachew checkout
+        uses: tenstorrent/tt-metal/.github/actions/cachew-checkout@7586e1e528b173057dbaa828c9ae1fa945fd2a9f # cachew checkout
         timeout-minutes: 20
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -187,17 +186,20 @@ jobs:
             cp "split-durations/$CHIP_ARCH.json" "$LLK_PATH/tests/python_tests/.test_durations"
           fi
       - name: Run tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
           PYTEST_ADDOPTS: --store-durations --clean-durations
+          # run_sfpu_ulp_pr_check.sh reads the PR's labels (ulp-budget-raise-approved).
+          GH_TOKEN: ${{ github.token }}
         run: |
           ${{ matrix.test-group.cmd }}
 
       # Only push runs on main are read back, and a fault must not fail a leg.
       - name: Upload test durations
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && startsWith(matrix.test-group.name, 'llk_smoke_')
         continue-on-error: true
         timeout-minutes: 2
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

@@ -14,7 +14,6 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
-#include "lltt.h"
 #include "sfpi.h"
 #include "tensor_shape.h"
 #include "tensor_shape_coverage_unpack.h"
@@ -115,13 +114,13 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr std::uint32_t srca_set_z_1           = TT_OP_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 1, 0b0001);  // set srcA ch0_z = 1
     static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001);  // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001);  // set srcB ch0_z = 0
-    lltt::record(0, 4);
+    TTI_REPLAY(0, 4, 0, 1);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID);
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     TTI_UNPACR(SrcB, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
-    static constexpr std::uint32_t unpack_srca_zerosrc_set_dvalid = lltt::replay_insn(0, 2);
-    static constexpr std::uint32_t unpack_srcb_unpack_srcb        = lltt::replay_insn(2, 2);
+    static constexpr std::uint32_t unpack_srca_zerosrc_set_dvalid = TT_OP_REPLAY(0, 2, 0, 0);
+    static constexpr std::uint32_t unpack_srcb_unpack_srcb        = TT_OP_REPLAY(2, 2, 0, 0);
 
     if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
@@ -179,7 +178,10 @@ inline void _llk_unpack_A_mop_config_(
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
-        static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
+        // One zeroed SrcA bank per tile serves ELWADD; dest reuse consumes one SrcA bank per face.
+        static_assert(
+            !acc_to_dest || binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
+            "accumulate into dest with broadcast scalar is not supported with dest reuse!");
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
@@ -192,7 +194,7 @@ inline void _llk_unpack_A_mop_config_(
         if (transpose_of_faces)
         {
             constexpr std::uint32_t replay_buf_len = 3;
-            lltt::record(4, replay_buf_len);
+            TTI_REPLAY(4, replay_buf_len, 0, 1);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC);
             TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID);
             if (num_faces > 2)
@@ -206,7 +208,7 @@ inline void _llk_unpack_A_mop_config_(
 
             const std::uint32_t outerloop = num_faces < 4 ? 1 : 2;
             const std::uint32_t innerloop = num_faces < 2 ? 1 : 2;
-            ckernel_template tmp(outerloop, innerloop, lltt::replay_insn(4, replay_buf_len)); // Unpack faces 0/2 && 1/3 to srcA
+            ckernel_template tmp(outerloop, innerloop, TT_OP_REPLAY(4, replay_buf_len, 0, 0)); // Unpack faces 0/2 && 1/3 to srcA
                                                                                               // or 0/1 for 2 face tile
             if (num_faces > 2)
             {
@@ -267,6 +269,8 @@ inline void _llk_unpack_A_mop_config_(
  * @note ROW broadcast with 32-bit unpack to dest does not support a 32x16 tile (2x1 face grid).
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_unpack_A_ is the matching execute call.
  * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
  */
@@ -351,6 +355,8 @@ inline void _llk_unpack_A_init_(
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note For BType != NONE, pass the same acc_to_dest as @ref _llk_math_eltwise_unary_datacopy_init_ and
+ *       @ref _llk_math_eltwise_unary_datacopy_ on the math thread; a mismatch drops the accumulation or hangs on SrcA.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <
@@ -401,9 +407,6 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     // Run MOP
     ckernel::ckernel_template::run();
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
     if (unpack_to_dest)
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -411,6 +414,10 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
             unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
+
+    // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
+    // configure_unpack_AB's wait_for_idle also waits for them
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);

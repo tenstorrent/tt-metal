@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <internal/fabric/inter_domain.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
@@ -54,6 +55,8 @@ struct IntermeshVCConfig {
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    bool requires_host_rdma = false;                // TT_METAL_ENABLE_FABRIC_HOST_RDMA=1 to enable
+    bool vc2_forwards = false;
     // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
     // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
     bool intermesh_vc_disabled = false;
@@ -189,6 +192,15 @@ public:
     const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
         return router_channel_layouts_.find(node, eth_chan);
     }
+    PeerLayout get_peer_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.peer(node, eth_chan);
+    }
+
+    // ============ Inter-domain ============
+    void set_inter_domain_ports(std::vector<internal::InterDomainPort> ports) {
+        inter_domain_ports_ = std::move(ports);
+    }
+    const std::vector<internal::InterDomainPort>& get_inter_domain_ports() const { return inter_domain_ports_; }
 
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
@@ -212,6 +224,7 @@ public:
     bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
     bool requires_vc2() const { return intermesh_vc_config_.requires_vc2; }
+    bool requires_host_rdma() const { return intermesh_vc_config_.requires_host_rdma; }
 
 private:
 
@@ -256,6 +269,8 @@ private:
     std::vector<uint32_t> num_initialized_routers_;
 
     RouterChannelLayouts router_channel_layouts_;
+
+    std::vector<internal::InterDomainPort> inter_domain_ports_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

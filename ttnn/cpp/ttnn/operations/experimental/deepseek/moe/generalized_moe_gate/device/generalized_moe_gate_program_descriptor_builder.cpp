@@ -8,8 +8,8 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 
