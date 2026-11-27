@@ -34,24 +34,19 @@ void bind_reshape(nb::module_& mod) {
     const auto* doc =
         R"doc(
 
-        Returns a tensor with the new shape ``[W, Z, Y, X]``.
-
-        Equivalent pytorch code:
-
-        .. code-block:: python
-
-            input_tensor = torch.arange(4.)
-            W = 1
-            Z = 1
-            Y = 2
-            X = 2
-            output_tensor = torch.reshape(input_tensor, (W, Z, Y, X))
+        Returns a tensor with the new shape ``[W, Z, Y, X]``. For a TILE input with tile padding, padding values can
+        become output values, on the view path as well as the copy path, so its logical elements are not always kept
+        in row-major order. Use :func:`ttnn.reshape` to reshape the logical elements of a padded TILE tensor.
 
         Whether data moves depends on ``X``:
 
         * If ``X`` equals the input's padded last dim (for TILE, its last dim rounded up to a multiple of 32), the
-          result is a zero-cost view that shares the input's buffer and keeps its memory configuration;
-          ``memory_config`` is ignored.
+          result is a zero-cost view, provided the padded output fits in the input's buffer; otherwise an error is
+          raised, as for TILE ``[1, 1, 32, 64]`` to ``[1, 2, 16, 64]``, whose padded output is twice as large. The
+          view shares the input's buffer and keeps its memory layout, buffer type and
+          shard grid, with shard metadata adapted to the new shape as in :func:`ttnn.view`; ``memory_config`` is
+          ignored. For an ND sharded input the view must also keep the padded shape; other
+          reshapes of an ND sharded input raise an error, so use :func:`ttnn.reshape` for those.
         * Otherwise the data is copied into a new tensor on device.
         * A ROW_MAJOR copy in which the input's or the new last dim is not a multiple of 8 is instead done on host and
           written back to device. It needs a ``BFLOAT16`` input.
@@ -82,16 +77,19 @@ void bind_reshape(nb::module_& mod) {
 
             A view, where ``X`` matches the input's padded last dim, does not move data and accepts any dtype.
 
-            A TILE copy needs the input and output to have the same tile-padded volume; reshapes that change the
-            tile padding, such as ``(1, 1, 1, 1024)`` to ``(1, 1, 32, 32)``, are not supported. Use :func:`ttnn.reshape`
-            for those.
+            A TILE copy reshapes the tile-padded data, not just the logical elements, and needs the input and output
+            to have the same tile-padded volume. When the input has tile padding, padding values can therefore end
+            up as logical output values: ``(1, 1, 32, 48)`` to ``(1, 1, 48, 32)`` runs, but the output does not
+            hold the input's logical elements in row-major order. Reshapes that change the tile-padded volume, such as ``(1, 1, 1, 1024)`` to
+            ``(1, 1, 32, 32)``, are not supported. Use :func:`ttnn.reshape` to reshape logical data with padding.
 
             A ROW_MAJOR copy on device needs the input's and the new last dim to be multiples of 8, with one of the two
             row sizes, in bytes, a multiple of the other.
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Sharded: not supported when data is copied; use :func:`ttnn.reshape` for sharded tensors
+            - Sharded: supported for a view. A copy on device needs interleaved input and output; the ``BFLOAT16`` ROW_MAJOR copy done on host can read a sharded input when ``memory_config`` is interleaved. Use :func:`ttnn.reshape` for other sharded copies
+            - ND sharded: only as a view that keeps the padded shape
 
         Example:
 

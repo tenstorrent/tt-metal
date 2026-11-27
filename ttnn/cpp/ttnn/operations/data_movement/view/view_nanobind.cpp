@@ -35,7 +35,7 @@ void bind_view(nb::module_& mod) {
             shape (ttnn.Shape or List[int]): the new shape, with the same number of elements as the input. As a list, one dimension may be ``-1``; its size is inferred from the other dimensions.
 
         Returns:
-            ttnn.Tensor: a view of the input with the new shape, and the input's dtype, layout and memory configuration. If the shape does not change, the input tensor itself is returned.
+            ttnn.Tensor: a view of the input with the new shape, and the input's dtype, layout, memory layout, buffer type and shard grid. The shard metadata can be adapted to the new shape: a rank 0 or 1 ND sharded input viewed as rank 2 gets a matching ND shard spec, and a 2D sharded input whose memory configuration was built from an ND shard spec keeps only its 2D shard spec when the padded shape changes. If the shape does not change, the input tensor itself is returned.
 
         Note:
             Supported dtypes and layouts:
@@ -56,10 +56,14 @@ void bind_view(nb::module_& mod) {
             (32 for the standard tile) both before and after the view. A rank 1 shape counts as a second-to-last
             dimension of 1.
 
+            With a tile other than 32x32, a view whose last two dims are not multiples of the tile is padded to
+            multiples of 32, not of the tile, and the padded output must still fit in the input's buffer. For example,
+            a ``[2, 3, 32]`` tensor with 16x32 tiles cannot be viewed as ``[1, 2, 3, 32]``.
+
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED, in DRAM or L1
-            - ND sharded: only a rank 0 or 1 input viewed as a rank 2 shape ``[1, N]``, or a view that leaves the padded shape unchanged
+            - ND sharded: only a rank 0 or 1 input viewed as a rank 2 shape ``[1, N]``, or a view that keeps the rank and the padded shape. A TILE rank 2 input ``[1, N]`` cannot be viewed as rank 1 ``[N]``, although both have the padded shape ``[32, N]``
 
         Example:
 

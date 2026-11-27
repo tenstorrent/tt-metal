@@ -58,10 +58,10 @@ void bind_split(nb::module_& mod) {
                 dim (int): the dimension to split along, in ``[-r, r)`` for an input of rank ``r``. Negative values count from the last dimension. Defaults to 0.
 
             Keyword Args:
-                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensors. A sharded configuration without a shard spec gets one derived from the per-chunk shape, or falls back to DRAM interleaved when none can be derived. Defaults to `None`, which uses the input tensor's memory configuration, with these exceptions: for a sharded input, the shard spec is rescaled to the chunk shape, and the outputs are DRAM interleaved when the chunks are unequal, the shard spec cannot be rescaled, or the rescaled TILE shard is not a multiple of 32 in both dims; and an L1 input whose chunks would not fit in L1 gives DRAM interleaved outputs.
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensors. A sharded configuration without a shard spec gets one derived from the per-chunk shape, or falls back to DRAM interleaved when none can be derived. Defaults to `None`, which uses the input tensor's memory configuration, with these exceptions: for a sharded input, the shard spec is rescaled to the chunk shape, and the outputs are DRAM interleaved when the chunks are unequal, the shard spec cannot be rescaled, or the rescaled TILE shard is not a multiple of 32 in both dims; and an L1 input split into more than 2 chunks gives DRAM interleaved outputs when the chunks and the slice buffers are estimated not to fit in L1. A split into 1 or 2 chunks has no such fallback, so its L1 outputs can fail to allocate.
 
             Returns:
-                List[ttnn.Tensor]: the chunks, in order along :attr:`dim`. Each chunk has the dtype and layout of :attr:`input_tensor` and the input's shape except along :attr:`dim`. The chunks are copies, except that a single chunk covering the whole input, with an unchanged memory configuration, is the input tensor itself.
+                List[ttnn.Tensor]: the chunks, in order along :attr:`dim`. Each chunk has the dtype and layout of :attr:`input_tensor` and the input's shape except along :attr:`dim`. The chunks are copies, except that on the :func:`ttnn.slice` path a single chunk covering the whole input, with an unchanged memory configuration, is the input tensor itself. A single chunk produced by the TILE kernel (see the note below) is still a copy.
 
             Note:
                 Supported dtypes and layouts:
@@ -82,12 +82,21 @@ void bind_split(nb::module_& mod) {
                 starts at an index that is not a multiple of 32.
 
                 Each chunk is produced by :func:`ttnn.slice`, except for an equal split of a TILE tensor along its last
-                dim, which uses a single kernel when the logical last dim is tile-aligned and the chunks line up with tiles.
+                dim, which uses a single kernel when all of these hold, with the input viewed as rank 4 ``[N, C, H, W]``:
+
+                * ``W`` is a multiple of 32, ``H`` and ``W`` are both at least 64, and the number of tiles in ``W``
+                  is divisible by the number of chunks.
+                * The number of chunks is at most the number of rows in the device's compute grid.
+                * For a split into 2 chunks, ``N * C`` is less than or equal to the number of columns in the
+                  compute grid. For any other number of chunks, ``N`` is 1 and ``C`` is less than or equal to the
+                  number of columns.
+
+                Otherwise the split falls back to :func:`ttnn.slice`.
 
             Memory Support:
                 - Interleaved: DRAM and L1
                 - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output, in DRAM or L1
-                - ND sharded: input, with DRAM interleaved outputs by default
+                - ND sharded: input, with DRAM interleaved outputs by default. A split into 2 chunks that uses the TILE kernel with ``N`` greater than 1 is not supported for an ND sharded input; convert the input to interleaved first
         )doc";
 
     ttnn::bind_function<"split">(

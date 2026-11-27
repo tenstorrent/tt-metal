@@ -32,18 +32,18 @@ void bind_expand(nb::module_& mod) {
         R"doc(
         Returns a new tensor where singleton dimensions are expanded to a larger size.
 
-        Unlike :func:`torch.expand`, this function is not zero-cost: ``ttnn.Tensor`` has no strided views, so the
-        expanded tensor is materialized with :func:`ttnn.repeat`.
+        This function is not zero-cost: ``ttnn.Tensor`` has no strided views, so the expanded tensor is
+        materialized with :func:`ttnn.repeat`.
 
-        As in :func:`torch.expand`, ``output_shape`` is aligned with the input shape from the last dimension:
+        ``output_shape`` is aligned with the input shape from the last dimension:
 
         * Only dimensions of size 1 can be expanded.
         * ``-1``, or the input's size, keeps a dimension unchanged.
         * ``output_shape`` can have more dimensions than the input. The new leading dimensions must be given as non-negative sizes, not ``-1``. A size of 0 gives an empty tensor.
 
         Args:
-            input_tensor (ttnn.Tensor): the tensor to expand, on device.
-            output_shape (List[int]): the desired output shape. Its rank must be at least the rank of ``input_tensor``.
+            input_tensor (ttnn.Tensor): the tensor to expand, on device. When a dimension is expanded, a TILE input must use the standard 32x32 tile; with other tiles the output values are wrong, and no error is raised.
+            output_shape (List[int]): the desired output shape. It must have at least one dimension, and its rank must be at least the rank of ``input_tensor``.
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`, which derives it from the input as :func:`ttnn.repeat` does.
@@ -69,8 +69,9 @@ void bind_expand(nb::module_& mod) {
         Memory Support:
             - Interleaved: DRAM and L1
             - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED input and output in L1
-            - DRAM sharded: HEIGHT_SHARDED and WIDTH_SHARDED input. A TILE input keeps its DRAM sharding by default or takes an interleaved ``memory_config``; a ROW_MAJOR input needs an interleaved ``memory_config``
-            - ND sharded: input in DRAM or L1; by default the output is interleaved, in the input's buffer type
+            - DRAM sharded: HEIGHT_SHARDED and WIDTH_SHARDED input. A TILE input keeps its DRAM sharding by default or takes an interleaved ``memory_config``; when a dimension is expanded, a ROW_MAJOR input needs an interleaved ``memory_config``
+            - ND sharded: input in DRAM or L1, with ``output_shape`` of the input's rank; adding leading dimensions is limited to what :func:`ttnn.view` accepts for ND sharded tensors, so a rank 2 or higher input cannot gain dimensions. When a dimension is expanded, the output is interleaved by default, in the input's buffer type
+            - When no dimension is expanded and ``memory_config`` is not given, the output keeps the input's memory configuration, including DRAM and ND sharding
         )doc";
 
     ttnn::bind_function<"expand">(

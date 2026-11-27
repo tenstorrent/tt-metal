@@ -14,7 +14,7 @@ namespace ttnn::operations::data_movement {
 void bind_narrow(nb::module_& mod) {
     const auto* doc = R"doc(
         Returns a narrowed view of the input tensor along dimension :attr:`dim`, starting at index :attr:`start`
-        with the given :attr:`length`. Equivalent to `torch.narrow`.
+        with the given :attr:`length`.
 
         This is a zero-cost operation: the returned tensor shares the same data buffer as the input tensor.
         No data is copied or moved, so writes through either tensor are visible in the other.
@@ -23,7 +23,7 @@ void bind_narrow(nb::module_& mod) {
             input_tensor (ttnn.Tensor): the input tensor, on device. A multi-device tensor must be replicated.
             dim (int): the dimension to narrow, in ``[-r, r)`` for an input of rank ``r``. Negative values count from the last dimension.
             start (int): the starting index (inclusive), in ``[-shape[dim], shape[dim])``. Negative values count from the end of ``dim``.
-            length (int): the length of the narrowed dimension. Must be greater than 0, with ``start + length <= shape[dim]``.
+            length (int): the length of the narrowed dimension. Must be greater than 0, with ``start + length <= shape[dim]`` after a negative ``start`` is converted to ``start + shape[dim]``.
 
         Returns:
             ttnn.Tensor: a view of the input tensor with ``shape[dim] == length``, and the input's dtype, layout, buffer type and memory layout. For a sharded input, the shard spec is narrowed to the shards that hold the window. If the window covers all of ``dim``, the input tensor itself is returned.
@@ -42,7 +42,7 @@ void bind_narrow(nb::module_& mod) {
                  - TILE
 
             ``start`` and ``length`` are checked against the logical shape, not the tile-padded shape, so the window
-            must lie within the logical size of ``dim``, as in `torch.narrow`.
+            must lie within the logical size of ``dim``.
 
             For a TILE input narrowed on one of its last two dims, ``start`` and ``length`` must be multiples of 32.
             For a ROW_MAJOR input narrowed on its last dim, ``start``, counted in elements, must be a multiple of the
@@ -55,8 +55,9 @@ void bind_narrow(nb::module_& mod) {
             multiple of the number of DRAM banks.
 
             An L1 sharded input can be narrowed only when the window consists of complete shards, or fits inside a
-            shard along ``dim`` and spans shards at the same page offset. Narrowing the last dim inside a shard also
-            needs shards that are one page tall: 32 rows for TILE, 1 row for ROW_MAJOR.
+            shard along ``dim`` and spans shards at the same page offset. Narrowing the last dim inside a shard is
+            supported only for TILE layout, with shards that are one tile (32 rows) tall; a ROW_MAJOR input can be
+            narrowed on its last dim only in complete shards.
 
         Memory Support:
             - Interleaved: DRAM; L1 interleaved inputs are not supported
