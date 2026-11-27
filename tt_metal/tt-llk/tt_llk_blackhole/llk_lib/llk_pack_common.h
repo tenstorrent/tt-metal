@@ -55,6 +55,13 @@ inline void llk_pack_pre_dst_write();
 static_assert((DEST_REGISTER_HALF_SIZE & 0xff) == 0 && (DEST_REGISTER_HALF_SIZE >> 8) <= 0xf, "the DEST half offset is in bits 8-11");
 constexpr std::uint32_t PACK_DEST_OFFSET_B1_MASK = 0xf;
 
+// ttsim does not model the cfg read of RMWCIB on the offset register and aborts there: it writes the offset from the GPRs.
+#if defined(TT_METAL_TTSIM)
+inline constexpr bool llk_pack_offset_rmw_modeled = false;
+#else
+inline constexpr bool llk_pack_offset_rmw_modeled = true;
+#endif
+
 // One SyncHalf release with the half known at compile time: the ZEROACC and WRCFG words are fixed, so the RISC computes none.
 template <bool is_fp32_dest_acc_en, bool clear_dest, std::uint32_t half, bool offset_first, bool offset_nops, bool pre = false, bool offset_by_gpr = true>
 inline void _llk_pack_dest_half_done_()
@@ -127,7 +134,7 @@ inline void _llk_pack_dest_section_done_()
                                   (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
                                                    ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en) ||
                                                    ckernel::packer::llk_pack_copy<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
-    constexpr bool offset_by_gpr = pack_fast_untilize_linked<Dst>;
+    constexpr bool offset_by_gpr = pack_fast_untilize_linked<Dst> || !llk_pack_offset_rmw_modeled;
     if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
         if (dest_offset_id == 0)
