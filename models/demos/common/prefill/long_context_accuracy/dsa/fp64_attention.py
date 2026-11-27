@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""FP64 gated sparse MLA (DSA attention) of a layer, over a given key selection: what a DSA device output is scored
+"""FP64 gated sparse MLA (DSA attention) of a DSA Block, over a given key selection: what a DSA device output is scored
 against.
 
 The golden holds each row's FP64 keys (``latent``, ``kpe``) and its FP64 indexer selection, but the FP64 attention
 output only on sampled rows (attention is quadratic in the chain), so the scorer recomputes it here on the rows it
-scores. Sizes (``Dims``) and FP64 weights come from the case; nothing here names a model.
+scores. Sizes (``Dims``) and FP64 weights come from the case. The attention is K3.1-shaped: NoPE keys (no rotary
+embedding) and a sigmoid-gated output (``g_proj``); a model with RoPE or no gate extends this file.
 
 ``weights`` are the layer's FP64 tensors by their layer-local checkpoint names (``WEIGHTS``, the DeepSeek-style MLA
 names). Per scored row, three FP64 attentions over the golden's keys, each against the reference (attention over the

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""``DsaScorer``: a DSA (indexer top-k + sparse MLA) layer's device results against its FP64 golden, chunk by chunk,
+"""``DsaScorer``: a DSA Block's (indexer top-k + sparse MLA) device results against its FP64 golden, chunk by chunk,
 then over the run in metric tiers (``block.BlockScorer``).
 
 What it reads. Per row, from the golden (``GoldenNames``): the layer input, its FP64 keys (latent, rope part, index
@@ -148,9 +148,9 @@ def measure(window: Window, floor: float, topk: int) -> dict:
 
 
 class DsaScorer:
-    """One device run of rows ``[0, rows)`` of a DSA layer scored against its golden, holding per row only the recall
+    """One device run of rows ``[0, rows)`` of a DSA Block scored against its golden, holding per row only the recall
     columns and the golden's FP64 keys, and the scored rows' arms. Reads the golden's sampled rows below ``rows``
-    when built. ``weights``: the layer's FP64 ``fp64_attention.WEIGHTS``."""
+    when built. ``weights``: the Block's FP64 ``fp64_attention.WEIGHTS``."""
 
     def __init__(
         self, golden: Fp64Golden, rows: int, names: GoldenNames, weights: Mapping[str, torch.Tensor], dims: Dims

@@ -111,7 +111,7 @@ def moe_routing(ffn, block, rows: int) -> torch.Tensor:
 
 
 class KimiK31MoeBlock:
-    """The production K3.1 MoE (``TtMoEBlockFfn``, the MoE block) of ``layer`` as one K3.1 stage of the mesh builds it
+    """The production K3.1 MoE (the MoE-block implementation, ``TtMoEBlockFfn``) of ``layer`` as one K3.1 stage of the mesh builds it
     (``k31_stage.STAGE_LAYOUTS``): its routed experts from the stage's TTNN weight cache (skips without one), its
     router, shared expert and latent pair from the adapter's checkpoint (``moe_block_checkpoint``).
 

@@ -121,7 +121,7 @@ def kda_tiers(
 
 
 class KdaScorer:
-    """``block.BlockScorer`` of a KDA layer: ``outputs.output`` ``[rows, hidden]`` against the golden ``output``
+    """``block.BlockScorer`` of a KDA Block: ``outputs.output`` ``[rows, hidden]`` against the golden ``output``
     rows, and ``outputs.extras["recurrent"]`` ``[heads, k, v]``, the device state after the call, against the golden
     ``state.recurrent`` at the call's end (so every call ends a golden segment).
 
