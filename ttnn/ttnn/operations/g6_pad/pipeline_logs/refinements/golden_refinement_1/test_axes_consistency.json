@@ -1,0 +1,8 @@
+{
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x196x128-pad0.60.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "memory_config": {
+      "declared": "dram",
+      "captured": "l1"
+    }
+  }
+}

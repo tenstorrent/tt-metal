@@ -33,14 +33,17 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    const uint32_t rot = get_arg_val<uint32_t>(3);  // bank_stagger rotation (0 = in-order)
 
     if (num_tiles == 0) {
         return;
     }
 
     const auto src = TensorAccessor(src_args, src_addr, src_page_bytes);
-    g6_pad::OutTileWalker<out_tiles_h, out_tiles_w, out_lead1, in_tiles_h, in_tiles_w, in_lead0, in_lead1> walk(
-        start_tile);
+    using Walker =
+        g6_pad::OutTileWalker<out_tiles_h, out_tiles_w, out_lead1, in_tiles_h, in_tiles_w, in_lead0, in_lead1>;
+    g6_pad::RotatedCursor<Walker> cur(start_tile, num_tiles, rot);
+    const Walker& walk = cur.w;
 
     const uint32_t num_blocks = (num_tiles + block_tiles - 1) / block_tiles;
     uint32_t remaining = num_tiles;
@@ -63,7 +66,7 @@ void kernel_main() {
                     noc_async_read(src.get_noc_addr(walk.source_page()), slot_base + k * slot_bytes, slot_bytes);
                 }
             }
-            walk.advance();
+            cur.advance();
         }
         noc_async_read_barrier();
         cb_push_back(cb_input_tiles, block_tiles);

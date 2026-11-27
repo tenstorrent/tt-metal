@@ -1,0 +1,90 @@
+{
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[5x12x128x128-pad3.0.0.0-v0-alignment=tile_aligned-dtype=FLOAT32-layout=TILE-memory_config=dram-padded_dims=leading-rank=4]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x2x62080-pad0.0.30.0-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.8.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4_0]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.24.0-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.8.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4_1]": {
+    "gate": "exact",
+    "poison_padding": 1000.0
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x3844x1536-pad0.28.0-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3_0]": {
+    "gate": "exact",
+    "poison_padding": 1000.0,
+    "value_positional": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x185x128-pad0.71.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "gate": "exact",
+    "poison_padding": 1000.0
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x196-pad0.60-v0-alignment=w_non_aligned-dtype=UINT32-layout=TILE-memory_config=dram-padded_dims=w-rank=2_0]": {
+    "gate": "exact",
+    "poison_padding": 2139062143.0
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x196x196-pad0.0.60.60-v-1.7014118346046923e+38-alignment=w_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=hw-rank=4]": {
+    "gate": "exact",
+    "poison_padding": 1000.0
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x3844x1536-pad0.28.0-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3_1]": {
+    "gate": "exact",
+    "poison_padding": 1000.0,
+    "untouched_rows": true,
+    "value_positional": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1000x12-pad0.24.0-v0.0-alignment=w_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "gate": "exact",
+    "poison_padding": 1000.0,
+    "untouched_rows": true,
+    "value_positional": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.8.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4_2]": {
+    "gate": "exact",
+    "follow_ups": "[{'scenario': {'shape': [1, 1, 8, 62080], 'padding': [[0, 0], [0, 0], [0, 8], [0, 0]], 'value': 7.0, 'dtype': DataType.BFLOAT16, 'layout': Layout.TILE, 'memory_config': 'dram'}, 'poison_padding': None}, {'scenario': {'shape': [1, 1, 8, 62080], 'padding': [[0, 0], [0, 0], [0, 24], [0, 0]], 'value': 0.0, 'dtype': DataType.BFLOAT16, 'layout': Layout.TILE, 'memory_config': 'dram'}, 'poison_padding': 1000.0}]"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.8.0-v0.1-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4]": {
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.8.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4_3]": {
+    "gate": "exact",
+    "special_values": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x3844x12-pad0.28.0-v0.0-alignment=w_non_aligned-dtype=FLOAT32-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "gate": "exact",
+    "special_values": true,
+    "value_positional": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[5x8192-pad3.0-v0-alignment=h_non_aligned-dtype=INT32-layout=ROW_MAJOR-memory_config=dram-padded_dims=h-rank=2]": {
+    "gate": "exact",
+    "special_values": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x196-pad0.60-v0-alignment=w_non_aligned-dtype=UINT32-layout=TILE-memory_config=dram-padded_dims=w-rank=2_1]": {
+    "gate": "exact",
+    "special_values": true
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x196x128-pad0.60.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "refusal": "sharded"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x3844x1536-pad0.28.0-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3_2]": {
+    "refusal": "args"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x3844x1536-pad0.28.-4-v0.0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=3]": {
+    "refusal": "args"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x1x8x62080-pad0.0.0.8.0-v0-alignment=h_non_aligned-dtype=BFLOAT16-layout=TILE-memory_config=dram-padded_dims=h-rank=4]": {
+    "refusal": "args"
+  },
+  "eval/golden_tests/g6_pad/test_golden.py::test_op_loose[1x196-pad0.60-v4294967296-alignment=w_non_aligned-dtype=UINT32-layout=TILE-memory_config=dram-padded_dims=w-rank=2]": {
+    "refusal": "args"
+  }
+}

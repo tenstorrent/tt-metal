@@ -46,7 +46,8 @@ void kernel_main() {
     constexpr uint32_t in_row_bytes = get_compile_time_arg_val(16);    // rows: logical input row bytes
     constexpr uint32_t out_row_bytes = get_compile_time_arg_val(17);   // rows: logical output row bytes
     constexpr uint32_t dst_page_bytes = get_compile_time_arg_val(18);  // aligned output page size
-    constexpr auto dst_args = TensorAccessorArgs<19>();
+    constexpr uint32_t fill_seed_bytes = get_compile_time_arg_val(19);  // RISC-filled prefix of the fill page
+    constexpr auto dst_args = TensorAccessorArgs<20>();
 
     constexpr uint32_t row_bytes = FACE * elem_bytes;
     constexpr uint32_t face_bytes = FACE * row_bytes;
@@ -57,6 +58,7 @@ void kernel_main() {
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
     const uint32_t fill_bits = get_arg_val<uint32_t>(3);
+    const uint32_t rot = get_arg_val<uint32_t>(4);  // bank_stagger rotation (0 = in-order), same as reader
 
     if (num_tiles == 0) {
         return;
@@ -70,9 +72,10 @@ void kernel_main() {
     const uint32_t fill_base = get_write_ptr(cb_fill_tile);
     {
         DeviceZoneScopedN("make_fill_page");
-        // RISC stores seed at most one tile's worth; a larger (row-chunk) page is grown by local NoC
-        // doubling copies (tile pages are <= 4 KB, so the tiles path is unchanged: one RISC fill).
-        constexpr uint32_t seed_bytes = slot_bytes < 4096 ? slot_bytes : 4096;
+        // RISC stores seed only fill_seed_bytes (a whole-page store loop costs ~2.3 us for a 4 KB fp32
+        // tile); the rest of the page is grown by local NoC doubling copies (DMA, not the RISC).
+        constexpr uint32_t seed_bytes = slot_bytes < fill_seed_bytes ? slot_bytes : fill_seed_bytes;
+        static_assert(seed_bytes % 64 == 0 || seed_bytes == slot_bytes, "seed keeps copies 64 B-aligned");
         dataflow_kernel_lib::fill_l1_range<elem_bytes>(fill_base, seed_bytes, fill_bits);
         if constexpr (slot_bytes > seed_bytes) {
             for (uint32_t have = seed_bytes; have < slot_bytes; have *= 2) {
@@ -103,8 +106,8 @@ void kernel_main() {
         }
     };
 
-    Walker walk(start_tile);
-    uint32_t t = start_tile;
+    using Cursor = g6_pad::RotatedCursor<Walker>;
+    Cursor cur(start_tile, num_tiles, rot);
     const uint32_t num_blocks = (num_tiles + block_tiles - 1) / block_tiles;
     uint32_t remaining = num_tiles;
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
@@ -113,12 +116,12 @@ void kernel_main() {
         // N3: fill-only tiles of this block, issued before the input wait.
         {
             DeviceZoneScopedN("write_fill_tiles");
-            Walker w = walk;
+            Cursor c = cur;
             for (uint32_t k = 0; k < extent; ++k) {
-                if (!w.source_bearing()) {
-                    noc_async_write(fill_base, dst_noc_addr(w, t + k), unit_bytes(w));
+                if (!c.w.source_bearing()) {
+                    noc_async_write(fill_base, dst_noc_addr(c.w, c.t), unit_bytes(c.w));
                 }
-                w.advance();
+                c.advance();
             }
         }
 
@@ -133,8 +136,9 @@ void kernel_main() {
                 if constexpr (in_row_bytes < out_row_bytes) {
                     const uint32_t slot_base = get_read_ptr(cb_input_tiles);
                     bool noc_patched = false;
-                    Walker w = walk;
+                    Cursor c = cur;
                     for (uint32_t k = 0; k < extent; ++k) {
+                        const Walker& w = c.w;
                         if (w.source_bearing() && w.last_input_tile_col()) {
                             const uint32_t base = slot_base + k * slot_bytes;
                             const uint32_t in_len = in_row_bytes - w.wt * chunk_bytes;
@@ -153,7 +157,7 @@ void kernel_main() {
                                 }
                             }
                         }
-                        w.advance();
+                        c.advance();
                     }
                     if (noc_patched) {
                         noc_async_write_barrier();
@@ -169,8 +173,9 @@ void kernel_main() {
                     noc_async_write(fill_base + off, get_noc_addr(base + off), bytes);
                     noc_patched = true;
                 };
-                Walker w = walk;
+                Cursor c = cur;
                 for (uint32_t k = 0; k < extent; ++k) {
+                    const Walker& w = c.w;
                     if (w.source_bearing()) {
                         const uint32_t base = slot_base + k * slot_bytes;
                         if constexpr (edge_row != 0) {
@@ -212,7 +217,7 @@ void kernel_main() {
                             }
                         }
                     }
-                    w.advance();
+                    c.advance();
                 }
                 if (noc_patched) {
                     // Local patch writes must land before the slot is sourced by store_block.
@@ -226,15 +231,14 @@ void kernel_main() {
             DeviceZoneScopedN("store_block");
             const uint32_t slot_base = get_read_ptr(cb_input_tiles);
             for (uint32_t k = 0; k < extent; ++k) {
-                if (walk.source_bearing()) {
-                    noc_async_write(slot_base + k * slot_bytes, dst_noc_addr(walk, t + k), unit_bytes(walk));
+                if (cur.w.source_bearing()) {
+                    noc_async_write(slot_base + k * slot_bytes, dst_noc_addr(cur.w, cur.t), unit_bytes(cur.w));
                 }
-                walk.advance();
+                cur.advance();
             }
             noc_async_writes_flushed();
             cb_pop_front(cb_input_tiles, block_tiles);
         }
-        t += extent;
         remaining -= extent;
     }
 

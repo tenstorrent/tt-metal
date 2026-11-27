@@ -130,9 +130,24 @@ KNOBS = {
     # extension_band: band tiles per block (0 = whole per-lane range, the design's Phase 0 value).
     "band_block_tiles": 0,
     # new_storage_tiles: output tiles per block (0 = whole per-core range, clamped by the L1 cap).
-    "block_tiles": 0,
+    # Refinement 2 (p1 fp32 [5,12,128,128], 110 cores, ~14 tiles/core): 2-tile blocks at depth 2 overlap
+    # the read of block k+1 with the store of block k (29.3 -> ~27.4 us alone; whole range = no overlap).
+    "block_tiles": 2,
+    # new_storage_*: block_tiles applies only when a core holds >= this many units; below it a core runs
+    # its whole range as one block (RM [1,1,196,196], 3 units/core: 1.50 us whole vs 1.63 us at block 2).
+    "pipeline_min_units": 8,
     # new_storage_tiles / new_storage_rows: cb_input_tiles depth in blocks (clamped to blocks per core).
     "input_depth_blocks": 2,
+    # new_storage_*: rotate each core's unit walk so concurrent cores start on different DRAM/L1 banks
+    # (0 = in-order walk, the byte-identical Phase 0 schedule; 1 = start core i on bank i mod n_banks).
+    "bank_stagger": 1,
+    # new_storage_*: bytes of the writer's fill page written by RISC stores; the rest is grown by local
+    # NoC doubling copies. 4096 = whole tile page by RISC (the Phase 0 schedule). Multiple of 64.
+    "fill_seed_bytes": 256,
+    # new_storage_*: NoC of the reader (RISCV_1) and of the writer (RISCV_0). 0 / 1 is the Reader/Writer
+    # ConfigDescriptor default (reads on NoC0, writes on NoC1).
+    "reader_noc": 0,
+    "writer_noc": 1,
     # new_storage_rows: bytes per row chunk (0 = auto: split each output row into enough 64 B-aligned
     # chunks that rows x chunks covers the grid, never below min_row_chunk_bytes, capped by L1).
     "row_chunk_bytes": 0,
@@ -293,6 +308,11 @@ def make_plan(input_tensor, out_shape, value, knobs):
         "in_lead": in_lead,
         "fill_bits": fill_bits_of(value, dtype),
         "min_units_per_core": knobs["min_units_per_core"],
+        "bank_stagger": knobs["bank_stagger"],
+        "fill_seed_bytes": knobs["fill_seed_bytes"],
+        "pipeline_min_units": knobs["pipeline_min_units"],
+        "reader_noc": knobs["reader_noc"],
+        "writer_noc": knobs["writer_noc"],
     }
     if regime == "extension_band":
         row_begin = in_shape[-2] % TILE

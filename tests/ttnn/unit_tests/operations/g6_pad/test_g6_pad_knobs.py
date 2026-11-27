@@ -24,9 +24,14 @@ KNOB_SETS = {
     "lanes1": {"band_lanes": 1},
     "band_block2": {"band_block_tiles": 2},
     "min_units32": {"min_units_per_core": 32},
-    "block1_depth2": {"block_tiles": 1, "input_depth_blocks": 2},
-    "block3_depth2": {"block_tiles": 3, "input_depth_blocks": 2},
-    "block2_depth1": {"block_tiles": 2, "input_depth_blocks": 1},
+    # pipeline_min_units=1 lifts the path gate so the multi-block ring runs on every shape here.
+    "block1_depth2": {"block_tiles": 1, "input_depth_blocks": 2, "pipeline_min_units": 1},
+    "block3_depth2": {"block_tiles": 3, "input_depth_blocks": 2, "pipeline_min_units": 1},
+    "block2_depth1": {"block_tiles": 2, "input_depth_blocks": 1, "pipeline_min_units": 1},
+    # Refinement 2 knobs: rotated (bank_stagger) walk wrapping across blocks, NoC-grown fill page, and
+    # the Phase 0 schedule (whole range, in-order, whole-page RISC fill) kept reachable.
+    "stagger_block3": {"block_tiles": 3, "bank_stagger": 1, "pipeline_min_units": 1, "fill_seed_bytes": 64},
+    "phase0_schedule": {"block_tiles": 0, "bank_stagger": 0, "fill_seed_bytes": 4096},
 }
 
 SHAPES = [

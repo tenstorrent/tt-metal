@@ -39,3 +39,37 @@
 - Perf (BH, device ns, 110 cores): `[5,8192]` fp32 RM 2,856; `[5,3,2560]` bf16 RM 1,590; `[1,1,196,196]` bf16 RM 1,485.
 - Issues encountered: none in the op. The Tracy wrapper splits a multi-word `-k` expression, so use single-token filters with `--profile`.
 - Tests added: `test_g6_pad_row_major.py` (11 regime-pinned cases plus a knob sweep). `test_g6_pad_perf_ab.py` gained 3 ROW_MAJOR guard cases (`-k rm`).
+
+## Refinement 2 — Speed up the perf-flagged profile p1 (pipeline knobs)
+- Date: 2026-11-27
+- What was done: tuned and added pipeline knobs for `new_storage_tiles` / `new_storage_rows`. Every knob has one source (`KNOBS`) and is carried through `make_plan`. There is no restructure and no new CB.
+  - Reused: the existing `block_tiles` / `input_depth_blocks` knobs and the multi-block ring, the writer's NoC-doubling fill-page path (Refinement 1), and `OutTileWalker`.
+  - `block_tiles` 0 → **2** at depth 2, so the read of block k+1 overlaps the store of block k. It is path-gated by the new knob `pipeline_min_units` = 8: a core with fewer units runs its range as one block, as before.
+  - New knob `bank_stagger` = **1**: `RotatedCursor` in `g6_pad_common.hpp` walks core i's range starting at the unit on bank `i mod n_banks` (n_banks from `ttnn.get_memory_view`) and wraps. The reader and writer get the same rotation as an RT arg, so slot k matches on both sides. 0 = the in-order walk.
+  - New knob `fill_seed_bytes` = **256**: only the first 256 B of the fill page are RISC stores, and the rest is grown by local NoC doubling. Zones showed the whole-tile RISC fill cost 2.3 µs on every writer (4 KB fp32), and it now costs 0.5 µs.
+  - New knobs `reader_noc` / `writer_noc` (defaults 0 / 1, unchanged). Measured on p1: writer on NoC0 40.4 µs, reader on NoC1 29.6 µs, both swapped 38.1 µs, against 26.7 µs for the defaults.
+- Perf (BH, 110 cores, device kernel ns):
+  - p1 `[5,12,128,128]` fp32: **29,300 → 26,780** (median of 3; −8.6%, 1.21× the 22.19 µs roofline, under the 29.91 µs limit).
+  - Guard set, before → after:
+
+    | Case | Before (ns) | After (ns) | Change |
+    |---|---|---|---|
+    | p2 (extension path, untouched) | 11,896 | 11,810 | noise |
+    | p3 (extension path, untouched) | 5,036 | 5,064 | noise |
+    | p4 (extension path, untouched) | 9,767 | 9,907 | noise |
+    | `[1,3844,1536]` (extension path, untouched) | 1,981 | 1,971 | noise |
+    | 299 L1 (extension path, untouched) | 2,019 | 2,015 | noise |
+    | `[1,196,128]` | 2,041 | 1,289 | faster |
+    | `[1,1,196,196]` hw | 3,030 | 2,270 | faster |
+    | case 63 `[1,196]` u32 | 4,413 | 2,708 | faster |
+    | RM `[5,8192]` | 2,867 | 2,070 | faster |
+    | RM `[5,3,2560]` | 1,613 | 1,368 | faster |
+    | RM `[1,1,196,196]` | 1,487 | 1,46–1,54 | noise |
+
+  - The RM `[1,1,196,196]` case read 1.63 µs at block 2 before the `pipeline_min_units` gate was added; the gate fixed it.
+  - Most of the small-shape wins come from `fill_seed_bytes`.
+- Remaining bottleneck (finding): per-core end times rise steeply with logical x inside every grid row, from about 8 µs at x=0 to about 26 µs at x=10. This holds for copy cores and fill-only cores alike. The wall is NoC/DRAM placement skew, not the copy/fill imbalance. `bank_stagger` alone measured within noise on p1 (block 3: 27.0 vs 27.1 µs). It is kept on because it is correct and does not regress. Next lever: a cost- and x-aware split that gives east-side cores fewer units (Refinement 3's load-balance scope).
+- Accuracy achieved: bit-exact on every case (exact gate, PCC = 1.0, RMS = 0). Shapes: p1, the guard set, and every knob set in `test_g6_pad_knobs.py`.
+- Golden test progress: targeted slice 18/18 pass (p1, case 63, hw 196/185/207, `[1,196,128]`, all ROW_MAJOR cells). The unit dir passes 106/106.
+- Issues encountered: the Tracy capture tool sometimes exits with code 3 before writing a trace. Re-running is enough; the test itself had passed.
+- Tests added: `test_g6_pad_knobs.py` gained `stagger_block3` (rotated walk wrapping across blocks, 64 B fill seed) and `phase0_schedule`. The existing multi-block sets now pin `pipeline_min_units=1`. `test_g6_pad_perf_ab.py` gained guard cases 63 (uint32) and 299 (L1).

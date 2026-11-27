@@ -34,6 +34,10 @@ def _cb(index, total_size, page_size, dtype, cores):
     )
 
 
+def _dm_config(processor, noc):
+    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0)
+
+
 def _core_assignment(plan, device):
     """Contiguous unit ranges in row-wise core order (split_work_to_cores, row_wise=True)."""
     grid = device.compute_with_storage_grid_size()
@@ -106,7 +110,9 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
     rows_mode = plan["regime"] == "new_storage_rows"
     tile_bytes = plan["slot_bytes"] if rows_mode else plan["tile_bytes"]  # CB page / slot stride
 
-    block_tiles = min(plan["block_tiles"] or units_g1, units_g1, plan["block_tiles_cap"])
+    # The block split only pays when a core holds enough units to overlap read and store (path gate).
+    pipelined = plan["block_tiles"] and units_g1 >= plan["pipeline_min_units"]
+    block_tiles = min(plan["block_tiles"] if pipelined else units_g1, units_g1, plan["block_tiles_cap"])
     num_blocks_max = -(-units_g1 // block_tiles)
     input_depth_blocks = min(plan["input_depth_blocks"], num_blocks_max)
     plan["block_tiles_used"] = block_tiles
@@ -133,14 +139,19 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
     writer_ct = [CB_FILL_TILE, CB_INPUT_TILES, plan["elem_bytes"], tile_bytes, block_tiles] + geom
     writer_ct += [plan["edge_row"], plan["edge_col"]]
     writer_ct += rows_ct + [plan.get("out_row_bytes", 0), output_tensor.buffer_aligned_page_size()]
+    writer_ct += [plan["fill_seed_bytes"]]
     writer_ct += ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
 
+    # bank_stagger: rotate core i's walk so it begins on bank (i mod n_banks) instead of (start mod n_banks)
+    # -- contiguous equal ranges otherwise start many cores on the same few banks. 0 = in-order walk.
+    n_banks = ttnn.get_memory_view(device, output_tensor.memory_config().buffer_type).num_banks
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     patches_in, patches_out = [], []
-    for c, start, cnt in ranges:
-        reader_rt[c.x][c.y] = [input_tensor.buffer_address(), start, cnt]
-        writer_rt[c.x][c.y] = [output_tensor.buffer_address(), start, cnt, plan["fill_bits"]]
+    for i, (c, start, cnt) in enumerate(ranges):
+        rot = ((i - start) % n_banks) % cnt if (plan["bank_stagger"] and cnt) else 0
+        reader_rt[c.x][c.y] = [input_tensor.buffer_address(), start, cnt, rot]
+        writer_rt[c.x][c.y] = [output_tensor.buffer_address(), start, cnt, plan["fill_bits"], rot]
         patches_in.append((0, c.x, c.y))
         patches_out.append((1, c.x, c.y))
 
@@ -149,14 +160,14 @@ def build_new_storage_descriptor(plan, input_tensor, output_tensor):
         core_ranges=all_cores,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, plan["reader_noc"]),
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_pad_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=ttnn.WriterConfigDescriptor(),
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, plan["writer_noc"]),
     )
     desc = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=cbs)
     return desc, (patches_in, patches_out)

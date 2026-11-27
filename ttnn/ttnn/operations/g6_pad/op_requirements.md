@@ -49,7 +49,7 @@ The perf-1 contract (p1 = `[5,12,128,128]` float32 TILE DRAM, `padded_dims=leadi
 
 **Done when**: the 7 ROW_MAJOR cells pass bit-exactly in the golden suite with `xpass_drift = xfail_wrong_mode = 0`, and each call is one device program with no host-side conversion. All Phase 0 tests stay green, and the RM path uses more than one core wherever the input holds more than one output page.
 
-### [ ] Refinement 2 — Speed up the perf-flagged profile p1 (pipeline knobs)
+### [x] Refinement 2 — Speed up the perf-flagged profile p1 (pipeline knobs)
 
 **Type**: perf
 
@@ -68,6 +68,8 @@ No SUPPORTED change.
 - case 63 `[1,196]` uint32 rank 2;
 - an L1 case (299);
 - one ROW_MAJOR case from Refinement 1.
+
+**Outcome**: p1 went from 29.30 µs to 26.78 µs (median of 3, bit-exact). That is −8.6% and 1.21× the roofline, under the 29.91 µs limit. The defaults are now `block_tiles` = 2 at depth 2 (gated by `pipeline_min_units` = 8), `bank_stagger` = 1 and `fill_seed_bytes` = 256. The last of these took the writer's RISC fill of the whole fill page from 2.3 µs to 0.5 µs. The NoC knobs stay at their defaults, which measured fastest. There is no guard-set regression beyond noise, and new_storage shapes gained 15–40%. `bank_stagger` alone measured within noise on p1. The bottleneck now is a placement skew: per-core end time rises from about 8 µs at x=0 to about 26 µs at x=10 in every grid row, for copy and fill-only cores alike. Next would be an x/cost-aware split, which is Refinement 3's scope and so was not done here.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile p1 (copy/fill load balance)
 

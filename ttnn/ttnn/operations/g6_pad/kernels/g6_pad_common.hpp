@@ -60,4 +60,26 @@ struct OutTileWalker {
     bool last_input_tile_col() const { return wt == in_tiles_w - 1; }
 };
 
+// A core's unit range [start, start + count) walked from start + rot and wrapped to start (bank_stagger:
+// the host picks rot per core so concurrent cores begin on different DRAM banks). rot = 0 is the plain
+// in-order walk. Reader and writer construct it with the same (start, count, rot), so slot k of every
+// block holds the same unit on both sides. `t` is the flat unit index of the current unit.
+template <typename Walker>
+struct RotatedCursor {
+    Walker w;
+    uint32_t t, start, end;
+
+    RotatedCursor(uint32_t start_, uint32_t count, uint32_t rot) :
+        w(start_ + rot), t(start_ + rot), start(start_), end(start_ + count) {}
+
+    void advance() {
+        if (++t == end) {
+            t = start;
+            w = Walker(start);
+        } else {
+            w.advance();
+        }
+    }
+};
+
 }  // namespace g6_pad
