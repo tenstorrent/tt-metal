@@ -389,23 +389,17 @@ class KDARecurrence:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # (K3_ACC_FIDELITY, tt/kimi_k3/accuracy.py: exact SFPU math in the scans too; production keeps the default)
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import accuracy
-
-        exact = {"math_approx_mode": False} if accuracy.fidelity() else {}
         affine_prefix = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=program_config.affine_prefix_math_fidelity or ttnn.MathFidelity.HiFi2,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
-            **exact,
         )
         scan = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=program_config.scan_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
-            **exact,
         )
         self._compute_config = _RecurrenceComputeConfig(
             preparation=preparation,
