@@ -8,11 +8,15 @@ g6_reshape moves values and never computes on them, so every check is bit-exact
 (the golden suite's TOLERANCES are ("exact", None) for every dtype).
 """
 
+import importlib
+
 import pytest
 import torch
 
 import ttnn
 from ttnn.operations.g6_reshape import describe_plan, g6_reshape
+
+_op_module = importlib.import_module("ttnn.operations.g6_reshape.g6_reshape")
 
 # BB-05: L1 the model leaves to the op on every core.
 L1_OP_BUDGET = 1347776
@@ -217,3 +221,31 @@ def test_invalid_input_rank(device, expect_error):
     ttnn_input = _to_device(_random_input((1, 1, 1, 16, 64)), device)
     with expect_error((ValueError, RuntimeError), ""):
         g6_reshape(ttnn_input, [16, 64])
+
+
+# Every golden shape is one block per mover on the full grid, so the block loop, the depth-2 slot
+# rotation, a single mover and a single core only run when the knobs force them. Each setting gives
+# every case more than one block per mover; NaN padding catches a block boundary that leaks padding.
+KNOB_SETTINGS = {
+    "block1": {"MAX_CORES": 8, "MAX_BLOCK_ATOMS": 1},
+    "block3_depth2": {"MAX_CORES": 8, "MAX_BLOCK_ATOMS": 3, "STAGE_DEPTH": 2, "IMAGE_DEPTH": 2},
+    "one_mover": {"MAX_CORES": 8, "MOVERS_PER_CORE": 1, "MAX_BLOCK_ATOMS": 4},
+    "one_core": {"MAX_CORES": 1, "MAX_BLOCK_ATOMS": 16},
+}
+
+
+@pytest.mark.parametrize("knobs", KNOB_SETTINGS.values(), ids=KNOB_SETTINGS.keys())
+@pytest.mark.parametrize(
+    "case",
+    [((16, 1, 5120), (1, 1, 16, 5120)), ((1, 16, 6, 256), (1, 1, 16, 1536)), ((1, 185), (1, 1, 185, 1))],
+    ids=_case_id,
+)
+def test_block_knobs(case, knobs, device, monkeypatch):
+    for name, value in knobs.items():
+        monkeypatch.setattr(_op_module, name, value)
+    src, dst = case
+    torch_input = _random_input(src)
+    plan = describe_plan(_to_device(torch_input, device), list(dst))
+    assert plan["max_blocks_per_mover"] > 1
+    assert plan["l1_bytes_per_core"] <= L1_OP_BUDGET
+    _run_and_check(torch_input, list(dst), device, poison=float("nan"))
