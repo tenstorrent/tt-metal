@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "device/dit_fused_distributed_groupnorm_device_operation.hpp"
 #include "device/dit_fused_distributed_groupnorm_device_operation_types.hpp"

@@ -13,11 +13,11 @@
 #include <ostream>
 #include <tuple>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/buffer_distribution_spec.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/buffer_page_mapping.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_page_mapping.hpp>
 // UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <tt-umd/types/core_coordinates.hpp>
 

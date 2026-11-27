@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 #include "ttnn/operations/data_movement/reshape_view/codegen/reshape_codegen_plan.hpp"
 #include "ttnn/tensor/tensor.hpp"

@@ -23,10 +23,11 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 // mesh_graph.hpp only forward-declares ClusterType; the MeshGraph constructor takes it by value.
-#include "cluster.hpp"
+#include "tt-metalium/discovery/cluster.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"
+#include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/mcast_reverse_tree.hpp"
 #include "tt_metal/fabric/routing_2d_table_builder.hpp"
 #include "utils.hpp"
@@ -770,6 +771,39 @@ void check_full_extent_roots(const std::string& fixture) {
 
 TEST(McastReverseTreeTest, FullExtentRoots32x4) {
     check_full_extent_roots("express_links_32x4_mesh_graph_descriptor.textproto");
+}
+
+TEST(McastReverseTreeTest, LineRouteTableNeverWraps) {
+    const tt::llrt::RunTimeOptions rtoptions;
+    const auto path = std::filesystem::path(rtoptions.get_root_dir()) /
+                      "tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto";
+    const MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, path.string());
+    const auto shape = mesh_graph.get_mesh_shape(MeshId{0});
+    const auto table = line_route_table_2d(mesh_graph, MeshId{0}, 0, 0);
+    const auto encode = [&](int axis, int from, int to) {
+        const auto direction = axis_edge_direction(mesh_graph, MeshId{0}, axis, 0, from, to);
+        EXPECT_TRUE(direction.has_value());
+        return Routing2DCodec::encode(
+            axis == 0 ? Fabric2DAxis::Y : Fabric2DAxis::X,
+            builder::routing_direction_to_eth_direction(direction.value_or(RoutingDirection::N)));
+    };
+    for (int axis = 0; axis < 2; axis++) {
+        const int len = static_cast<int>(shape[axis]);
+        ASSERT_TRUE(derive_ordinary_ring_topology(mesh_graph, MeshId{0}, axis).has_value());
+        for (int dst = 0; dst < len; dst++) {
+            const auto* row = axis == 0 ? Routing2DCodec::y_row(table.action_vectors, shape[0], dst)
+                                        : Routing2DCodec::x_row(table.action_vectors, shape[0], shape[1], dst);
+            for (int cur = 0; cur < len; cur++) {
+                const auto got = Routing2DCodec::get_action_2bit(row, cur);
+                const auto want =
+                    cur == dst ? Routing2DCodec::CODE_STOP : encode(axis, cur, cur + (dst > cur ? 1 : -1));
+                EXPECT_EQ(got, want) << "axis " << axis << " cur " << cur << " dst " << dst;
+            }
+        }
+        const auto* to_last = axis == 0 ? Routing2DCodec::y_row(table.action_vectors, shape[0], len - 1)
+                                        : Routing2DCodec::x_row(table.action_vectors, shape[0], shape[1], len - 1);
+        EXPECT_NE(Routing2DCodec::get_action_2bit(to_last, 0), encode(axis, 0, len - 1)) << "axis " << axis;
+    }
 }
 
 TEST(McastReverseTreeTest, Encode8x4) {

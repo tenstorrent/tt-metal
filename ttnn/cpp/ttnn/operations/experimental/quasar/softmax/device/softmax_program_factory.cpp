@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <string>
 
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -96,7 +96,9 @@ ttnn::device_operation::ProgramArtifacts SoftmaxProgramFactory::create_program_a
     // ---- Formats ----
     const tt::DataFormat in_df = datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat out_df = datatype_to_dataformat_converter(output.dtype());
-    const tt::DataFormat stats_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : in_df;
+    // Intermediates never use an MX format (the unpacker expands MX to Float16_b, the packer converts back
+    // only for the MX output ring), so non-fp32 statistics rings are Float16_b. UNVERIFIED on device.
+    const tt::DataFormat stats_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat scaler_df = tt::DataFormat::Float16_b;  // the reader fills a bf16 tile
     const auto& tile = input.tensor_spec().tile();
     auto tile_bytes = [&](tt::DataFormat df) { return tile.get_tile_size(df); };

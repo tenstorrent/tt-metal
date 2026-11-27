@@ -120,6 +120,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class ADDRMOD_CALLER_SCOPED(TemplateParameter):
+    """Scalar-block multiply: the kernel brackets its executes with the addrmod set/restore helpers."""
+
+    caller_scoped: bool = False
+
+    def convert_to_cpp(self) -> str:
+        scope = "CallerScoped" if self.caller_scoped else "PerCall"
+        return f"constexpr auto ADDRMOD_SCOPE = ckernel::AddrModScope::{scope};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
@@ -149,6 +160,16 @@ class BROADCAST_TYPE(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto BROADCAST_TYPE = ckernel::BroadcastType::{self.broadcast_type.value};"
+
+
+@dataclass
+class SEED_BROADCAST_TYPE(TemplateParameter):
+    """Broadcast type of the plain pass that seeds Dest before an ``ACC_TO_DEST`` broadcast pass."""
+
+    seed_broadcast_type: BroadcastType
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr auto SEED_BROADCAST_TYPE = ckernel::BroadcastType::{self.seed_broadcast_type.value};"
 
 
 @dataclass
@@ -186,6 +207,14 @@ class REUSE_DEST_TYPE(TemplateParameter):
 class EN_DEST_REUSE(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define EN_DEST_REUSE"
+
+
+@dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
 
 
 @dataclass
@@ -357,10 +386,19 @@ class SFPU_BINOP_MODE(TemplateParameter):
     Emits ``constexpr int SFPU_BINOP_MODE = <n>;`` consumed by
     ``sfpu_binop_scalar_{test,perf}.cpp``, matching the BINOP_MODE enum in
     ``ckernel_sfpu_binop_with_unary.h`` (ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4).
+    ``quasar/sfpu_binop_scalar_quasar_test.cpp`` also takes 5 and 6 for the int32 kernels.
     """
 
     # Maps MathOperation.cpp_enum_value -> the kernel's BINOP_MODE integer.
-    _MODE = {"ADD": 0, "SUB": 1, "MUL": 2, "DIV": 3, "RSUB": 4}
+    _MODE = {
+        "ADD": 0,
+        "SUB": 1,
+        "MUL": 2,
+        "DIV": 3,
+        "RSUB": 4,
+        "add_int32": 5,
+        "sub_int32": 6,
+    }
 
     binop_mathop: MathOperation = None
 
@@ -498,6 +536,43 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
         if not self.max_min_sign_magnitude:
             return ""
         return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
+class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
+    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
+    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+
+    A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+    """
+
+    compute_api_kernels: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.compute_api_kernels:
+            return ""
+        return "#define SFPU_COMPUTE_API_KERNELS 1"
+
+
+@dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -1270,6 +1345,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
     do_extra_scale: bool = False
     extra_scale: int = 0x3F800000
     output_tiles: int = 3
+    sanitize_output: bool = True
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1305,6 +1381,7 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr bool GMG_DO_EXTRA_SCALE = {str(self.do_extra_scale).lower()};",
             f"constexpr std::uint32_t GMG_EXTRA_SCALE = {self.extra_scale};",
             f"constexpr std::uint32_t GMG_OUTPUT_TILES = {self.output_tiles};",
+            f"constexpr bool GMG_SANITIZE_OUTPUT = {str(self.sanitize_output).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1570,6 +1647,16 @@ class MOE_GATE_TOPK(TemplateParameter):
             f"constexpr bool MOE_GATE_SCORES_INCLUDE_BIAS = {str(self.scores_include_bias).lower()};",
         ]
         return "\n".join(lines)
+
+
+@dataclass
+class MOE_GATE_TOPK_STIMULUS(TemplateParameter):
+    """Record stimulus-only MoE-gate settings in perf reports."""
+
+    spread_biased_scores: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -2601,13 +2688,13 @@ class MUL_REDUCE_SCALAR_CHUNK_SIZE(RuntimeParameter):
 class ZERO_PAD_ROWS(TemplateParameter):
     """SFPU row bounds for _zero_pad_tile_."""
 
-    valid_rows: int = 0
-    total_rows: int = 32
+    zero_pad_valid_rows: int = 0
+    zero_pad_total_rows: int = 32
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
+            f"constexpr int ZERO_PAD_VALID_ROWS = {self.zero_pad_valid_rows};\n"
+            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.zero_pad_total_rows};"
         )
 
 

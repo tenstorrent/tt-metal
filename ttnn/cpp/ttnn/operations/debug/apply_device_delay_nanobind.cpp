@@ -13,7 +13,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "apply_device_delay.hpp"
-#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/mesh/sub_device_types.hpp>
 
 namespace ttnn::operations::debug {
 

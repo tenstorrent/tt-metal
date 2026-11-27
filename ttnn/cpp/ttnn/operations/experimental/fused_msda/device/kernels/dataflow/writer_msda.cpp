@@ -64,7 +64,7 @@ constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(7);  // allo
 constexpr uint32_t POINTS_PER_BLOCK = get_compile_time_arg_val(8);
 constexpr uint32_t NUM_HEADS = get_compile_time_arg_val(9);
 constexpr uint32_t NUM_KEYS = get_compile_time_arg_val(10);
-constexpr bool VALUE_PACKED = get_compile_time_arg_val(11) != 0;
+constexpr auto VALUE_LAYOUT = static_cast<fused_msda_value_layout::ValueLayout>(get_compile_time_arg_val(11));
 constexpr uint32_t value_stick_nbytes = get_compile_time_arg_val(12);
 constexpr uint32_t value_page_nbytes = get_compile_time_arg_val(13);
 
@@ -78,7 +78,7 @@ struct WriterGatherCfg {
     static constexpr uint32_t D = ::D;
     static constexpr uint32_t NUM_KEYS = ::NUM_KEYS;
     static constexpr uint32_t NUM_HEADS = ::NUM_HEADS;
-    static constexpr bool VALUE_PACKED = ::VALUE_PACKED;
+    static constexpr fused_msda_value_layout::ValueLayout VALUE_LAYOUT = ::VALUE_LAYOUT;
     static constexpr uint32_t STICK_NBYTES = value_stick_nbytes;
 };
 
