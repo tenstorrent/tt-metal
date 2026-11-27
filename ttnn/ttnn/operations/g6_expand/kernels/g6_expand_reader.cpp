@@ -85,7 +85,10 @@ void kernel_main() {
 
     for (uint32_t c0 = 0; c0 < cols_this_core; c0 += col_block) {
         const uint32_t block_cols = (cols_this_core - c0) < col_block ? (cols_this_core - c0) : col_block;
-        cb_reserve_back(cb_bcast_tiles, block_cols);
+        {
+            DeviceZoneScopedN("G6E_RESERVE");  // blocking wait: own zone (BB-21)
+            cb_reserve_back(cb_bcast_tiles, block_cols);
+        }
         const uint32_t block_base = get_write_ptr(cb_bcast_tiles);
         {
             DeviceZoneScopedN("G6E_FETCH");
