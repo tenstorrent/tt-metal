@@ -665,7 +665,7 @@ def _tqdm_spacer() -> None:
 
 
 # 8, not half the CPUs as the LTX and Wan pipelines use: on a loaded 64-CPU host a call's small torch
-# ops still stall at 32 threads (see utils/torch_threads.py).
+# ops still stall at 32 threads.
 _CALL_TORCH_THREADS = 8
 
 
