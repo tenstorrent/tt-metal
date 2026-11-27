@@ -16,7 +16,11 @@ from safetensors.torch import save_file
 from models.tt_dit.experimental.lora.h3_adapter_loader import h3_host_deltas
 from models.tt_dit.pipelines.minimax_h3.hyperflow_minimax_h3 import MARKER_KEY, MiniMaxH3HyperFlow, validate_sigmas
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
-from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import HYPERFLOW_HOST_PREFIXES, MiniMaxH3TurboPipeline
+from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import (
+    HYPERFLOW_HOST_PREFIXES,
+    MiniMaxH3TurboPipeline,
+    bundle_base_timesteps,
+)
 from models.tt_dit.pipelines.minimax_h3.scheduler import shift_sigmas
 
 # The header of minimax_h3_hyperflow_8step_v1.0.safetensors as published.
@@ -107,10 +111,13 @@ def test_the_grid_is_shifted_with_the_schedulers_own_formula(shift):
 # ----------------------------------------------------- the pipeline's schedule hooks
 
 
-def _pipeline(*, warming: bool, contract: MiniMaxH3HyperFlow | None) -> MiniMaxH3TurboPipeline:
-    """The schedule hooks read four attributes; skip the mesh-bound constructor."""
+def _pipeline(
+    *, warming: bool, contract: MiniMaxH3HyperFlow | None, base_timesteps: tuple[int, ...] | None = None
+) -> MiniMaxH3TurboPipeline:
+    """The schedule hooks read five attributes; skip the mesh-bound constructor."""
     pipeline = object.__new__(MiniMaxH3TurboPipeline)
     pipeline.hyperflow = contract
+    pipeline.base_timesteps = base_timesteps
     pipeline._warming = warming
     pipeline.video_shift = VIDEO_SHIFT
     pipeline.audio_shift = AUDIO_SHIFT
@@ -176,6 +183,46 @@ def test_a_turbo_adapter_stays_single_time():
     video, audio = pipeline._build_schedulers(5)
     assert video.num_inference_steps == 4
     assert pipeline._step_endpoints(video, audio) is None
+
+
+# -------------------------------------------------- FastVideo FastH3 bundle schedule
+
+FASTH3_RUNGS = (999, 749, 500, 250)
+
+
+def test_a_fasth3_bundle_adapter_reads_its_rungs_from_the_manifest(tmp_path):
+    adapter = tmp_path / "dense-datafree" / "adapter_model.safetensors"
+    assert bundle_base_timesteps(adapter) is None
+    manifest = {
+        "schema_version": "fasth3-lora-bundle-v1",
+        "sampling": {"base_timesteps": list(FASTH3_RUNGS)},
+        "variants": [{"adapter_path": "dense-datafree/adapter_model.safetensors"}],
+    }
+    (tmp_path / "adapter_manifest.json").write_text(json.dumps(manifest))
+    assert bundle_base_timesteps(adapter) == FASTH3_RUNGS
+    assert bundle_base_timesteps(tmp_path / "other" / "adapter_model.safetensors") is None
+
+
+def test_a_fasth3_bundle_runs_its_trained_rungs_on_both_modalities(expect_error):
+    """FastVideo's `_set_shifted_schedule`: sigma = shift * t / (1 + (shift - 1) * t) at t = rung / 1000,
+    then 0. The default grid starts from 1, 0.75 instead: off by 0.001 at the first two rungs."""
+    pipeline = _pipeline(warming=False, contract=None, base_timesteps=FASTH3_RUNGS)
+    video, audio = pipeline._build_schedulers(5)
+    for scheduler, shift in ((video, VIDEO_SHIFT), (audio, AUDIO_SHIFT)):
+        expected = [shift * t / (1 + (shift - 1) * t) for t in (0.999, 0.749, 0.5, 0.25)] + [0.0]
+        torch.testing.assert_close(scheduler.sigmas, torch.tensor(expected), rtol=0, atol=1e-6)
+    assert pipeline._step_endpoints(video, audio) is None
+    with expect_error(ValueError, "4 forwards"):
+        pipeline._build_schedulers(9)
+    warm, _ = _pipeline(warming=True, contract=None, base_timesteps=FASTH3_RUNGS)._build_schedulers(3)
+    assert warm.num_inference_steps == 2
+
+
+def test_an_omitted_step_count_takes_the_bundles_grid(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
+    _pipeline(warming=False, contract=None, base_timesteps=FASTH3_RUNGS)("a prompt")
+    assert seen["num_inference_steps"] == 5
 
 
 # -------------------------------------------------- float32 time-embedder fusion
