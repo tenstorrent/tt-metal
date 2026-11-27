@@ -69,11 +69,11 @@ def test_split_docstring_supported_inputs(dtype, layout, buffer_type, device):
             continue
         # A TILE input of rank 1, or one split in its last two dims into chunks that do not start at multiples of 32,
         # is re-tiled through ROW_MAJOR by compute kernels that hold BFLOAT16 zeros by value. There a BFLOAT16 input
-        # leaves out NaN, as the docstring requires, and its zeros are compared by value.
+        # leaves out NaN, as the docstring requires, and -0.0 as well.
         bfloat16_retiled = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT and (rank == 1 or not aligned)
         # preserve_nan_values keeps full_range_input's NaN in the input: a BFLOAT16 input built on device can lose it.
         input_tensor = ttnn.from_torch(
-            full_range_input(shape, dtype, nan=not bfloat16_retiled),
+            full_range_input(shape, dtype, nan=not bfloat16_retiled, negative_zero=not bfloat16_retiled),
             dtype=dtype,
             layout=layout,
             device=device,
@@ -91,7 +91,7 @@ def test_split_docstring_supported_inputs(dtype, layout, buffer_type, device):
             assert output_chunk.dtype == dtype, case
             assert output_chunk.layout == layout, case
             assert output_chunk.memory_config().buffer_type == buffer_type, case
-            assert_exact(expected_chunk, ttnn.to_torch(output_chunk), signed_zeros=not bfloat16_retiled)
+            assert_exact(expected_chunk, ttnn.to_torch(output_chunk))
 
 
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.split))
