@@ -96,8 +96,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-#include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include "sfpu/macro/binop_scalar.h"
+
+// SFPU_BINOP_MODE follows the legacy BINOP_MODE numbering: ADD=0, SUB=1, MUL=2, DIV=3, RSUB=4.
+constexpr llk::sfpu::BinopScalarMode BINOP_SCALAR_MODE = static_cast<llk::sfpu::BinopScalarMode>(SFPU_BINOP_MODE);
+static_assert(static_cast<int>(llk::sfpu::BinopScalarMode::Rsub) == 4, "BinopScalarMode must keep the legacy numbering");
 
 void run_kernel(RUNTIME_PARAMETERS)
 {
@@ -106,16 +109,9 @@ void run_kernel(RUNTIME_PARAMETERS)
 
     auto run_scalar_binop = [](std::uint32_t dst_index)
     {
-        // VectorMode::RC drives four faces (eight rows each), matching the
-        // production add_unary_tile / sub_unary_tile / ... APIs.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            is_fp32_dest_acc_en,
-            calculate_binop_with_scalar,
-            (APPROX_MODE, SFPU_BINOP_MODE, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
-            dst_index,
-            VectorMode::RC,
-            SFPU_UNARY_SCALAR);
+        // The whole tile in place, as the production add_unary_tile / sub_unary_tile / ... APIs do.
+        constexpr DataFormat DEST_FORMAT = is_fp32_dest_acc_en ? DataFormat::Float32 : DataFormat::Float16_b;
+        llk::sfpu::BinopScalar::execute<BINOP_SCALAR_MODE, DEST_FORMAT, DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(dst_index, dst_index, SFPU_UNARY_SCALAR);
     };
 
     {
@@ -124,7 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS)
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(MATH_FMT, MATH_FMT);
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
             ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces), MATH_FMT);
-        llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
+        llk::sfpu::BinopScalar::init();
         PROFILER_SYNC();
     }
     {

@@ -129,6 +129,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_where.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
+#include "sfpu/macro/binop_scalar.h"
 
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
 // calculate_mask_binary) used by the dispatch below.
@@ -1256,11 +1257,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::add_int32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_add_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 5u /* scalar */);
+        // The int32 sweep runs the legacy kernel once for 32 rows from the tile start: the whole tile.
+        static_assert(ITERATIONS == 32, "add_int32 runs over the whole tile");
+        llk::sfpu::BinopScalar::execute<llk::sfpu::BinopScalarMode::Add, DataFormat::Int32, DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(
+            dst_index, dst_index, 5u /* scalar */);
     }
     else if constexpr (OPERATION == SfpuType::sub_int32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sub_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, 5u /* scalar */);
+        // The int32 sweep runs the legacy kernel once for 32 rows from the tile start: the whole tile.
+        static_assert(ITERATIONS == 32, "sub_int32 runs over the whole tile");
+        llk::sfpu::BinopScalar::execute<llk::sfpu::BinopScalarMode::Sub, DataFormat::Int32, DST_SYNC_MODE, ckernel::DEFAULT_TENSOR_SHAPE>(
+            dst_index, dst_index, 5u /* scalar */);
     }
     else if constexpr (OPERATION == SfpuType::bitwise_not)
     {
