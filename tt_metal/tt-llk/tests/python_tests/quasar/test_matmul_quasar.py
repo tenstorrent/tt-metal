@@ -148,45 +148,47 @@ def matmul_stimuli_spec(data_format):
     return StimuliSpec.uniform(low=0.0, high=1.0)
 
 
-def matmul_dest_acc_modes(format):
+def matmul_dest_acc_modes(formats):
     return (
         [DestAccumulation.Yes]
-        if format.input_format == DataFormat.Int8
+        if formats.input_format == DataFormat.Int8
         else [DestAccumulation.Yes, DestAccumulation.No]
     )
 
 
-def matmul_tile_dimensions(
-    dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False
-):
+def matmul_rt_dims(dest_acc, dest_sync):
+    return list(range(1, max_dest_tiles(dest_acc, dest_sync) + 1))
+
+
+def matmul_ct_dims(dest_acc, dest_sync, rt_dim):
+    return list(range(1, max_dest_tiles(dest_acc, dest_sync) // rt_dim + 1))
+
+
+def matmul_exact_fill_rt_dims(dest_acc, dest_sync):
     max_tiles = max_dest_tiles(dest_acc, dest_sync)
-    # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
-    # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
-    rt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)
-    selected_kt_dims = PERF_KT_DIMS if is_perf else kt_dims
-    return [
-        (ct_dim, rt_dim, kt_dim)
-        for rt_dim in rt_dims
-        if not exact_dest_fill or max_tiles % rt_dim == 0
-        for ct_dim in (
-            [max_tiles // rt_dim]
-            if exact_dest_fill
-            else range(1, max_tiles // rt_dim + 1)
-        )
-        for kt_dim in selected_kt_dims
-    ]
+    return [rt_dim for rt_dim in range(1, max_tiles + 1) if max_tiles % rt_dim == 0]
 
 
-def matmul_register_format_hints(format):
+def matmul_exact_fill_ct_dims(dest_acc, dest_sync, rt_dim):
+    return [max_dest_tiles(dest_acc, dest_sync) // rt_dim]
+
+
+def matmul_perf_rt_dims(dest_acc, dest_sync):
+    # Dest-full tall (max_tiles, 1) and wide (1, max_tiles) cover both the ct>=rt
+    # and the ct<rt MOP addr_mod branches.
+    return [1, max_dest_tiles(dest_acc, dest_sync)]
+
+
+def matmul_register_format_hints(formats):
     # MxFp4_2x is Quasar only. Quasar Architecture derivations don't support it.
-    if format.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
+    if formats.input_format != DataFormat.MxFp4 or _ARCH != ChipArchitecture.QUASAR:
         return [None]
     # One hint per exponent family. infer_downstream_unpack_out maps 2x_A to
     # Float16 and 2x_B to Float16_b; the crossed output is a pack conversion
     # owned by test_pack_quasar.
-    if format.output_format == DataFormat.Float16:
+    if formats.output_format == DataFormat.Float16:
         return [DataFormat.MxFp4_2x_A]
-    if format.output_format == DataFormat.Float16_b:
+    if formats.output_format == DataFormat.Float16_b:
         return [DataFormat.MxFp4_2x_B]
     return [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
 
@@ -256,10 +258,10 @@ TINY_MATMUL_SHAPE_CASES = [((16, 16), (16, 16))] + [
     if (height, width) != (32, 32)
 ]
 NON_MX_MATMUL_FORMATS = [
-    format
-    for format in MATMUL_FORMAT
-    if not format.input_format.is_mx_format()
-    and not format.output_format.is_mx_format()
+    formats
+    for formats in MATMUL_FORMAT
+    if not formats.input_format.is_mx_format()
+    and not formats.output_format.is_mx_format()
 ]
 
 
@@ -270,30 +272,32 @@ _ARCH = get_chip_architecture()
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=MATMUL_FORMAT,
-    math_fidelity=lambda format: get_valid_math_fidelities(format),
+    formats=MATMUL_FORMAT,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
-    matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
-    ),
+    rt_dim=runtime(matmul_rt_dims),
+    ct_dim=runtime(matmul_ct_dims),
+    kt_dim=runtime(kt_dims),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=matmul_transpose_modes,
+    unpack_transpose_faces=matmul_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
 def test_matmul(
     input_tile_dimensions,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     math_fidelity,
     dest_sync,
     dest_acc,
-    format,
+    formats,
     register_format_hint,
     enable_direct_indexing,
-    transpose,
+    unpack_transpose_faces,
     run_types,
     loop_factor,
     boot_mode=BootMode.TRISC,
@@ -302,16 +306,15 @@ def test_matmul(
     perf_report=None,
 ):
 
-    # Reassign format with register_format_hint so that test config generation and stimulus generation are aware of the register format hint.
-    format = InputOutputFormat(
-        format.input_format,
-        format.output_format,
-        input_format_B=format.input_format_B,
+    # Reassign formats with register_format_hint so that test config generation and stimulus generation are aware of the register formats hint.
+    formats = InputOutputFormat(
+        formats.input_format,
+        formats.output_format,
+        input_format_B=formats.input_format_B,
         register_format_hint=register_format_hint,
     )
 
     input_A_tile_dimensions, input_B_tile_dimensions = input_tile_dimensions
-    ct_dim, rt_dim, kt_dim = matmul_tile_dims
     input_A_dimensions = [
         rt_dim * input_A_tile_dimensions[0],
         kt_dim * input_A_tile_dimensions[1],
@@ -326,89 +329,89 @@ def test_matmul(
     )
     output_tile_cnt = rt_dim * ct_dim
 
-    stimuli_spec_A = matmul_stimuli_spec(format.input_format)
-    stimuli_spec_B = matmul_stimuli_spec(format.input_format_B)
+    stimuli_spec_A = matmul_stimuli_spec(formats.input_format)
+    stimuli_spec_B = matmul_stimuli_spec(formats.input_format_B)
     src_A, tile_cnt_A, _, _ = generate_stimuli(
-        stimuli_format_A=format.input_format,
+        stimuli_format_A=formats.input_format,
         input_dimensions_A=input_A_dimensions,
-        stimuli_format_B=format.input_format,
+        stimuli_format_B=formats.input_format,
         input_dimensions_B=input_A_dimensions,
         spec_A=stimuli_spec_A,
         spec_B=stimuli_spec_A,
         tile_dimensions=input_A_tile_dimensions,
-        output_format=format.output_format,
+        output_format=formats.output_format,
     )
     src_B, tile_cnt_B, _, _ = generate_stimuli(
-        stimuli_format_A=format.input_format_B,
+        stimuli_format_A=formats.input_format_B,
         input_dimensions_A=input_B_dimensions,
-        stimuli_format_B=format.input_format_B,
+        stimuli_format_B=formats.input_format_B,
         input_dimensions_B=input_B_dimensions,
         spec_A=stimuli_spec_B,
         spec_B=stimuli_spec_B,
         tile_dimensions=input_B_tile_dimensions,
-        output_format=format.output_format,
+        output_format=formats.output_format,
     )
     tilized_A = tilize_block(
         src_A,
         dimensions=input_A_dimensions,
-        stimuli_format=format.input_format,
+        stimuli_format=formats.input_format,
         tile_dimensions=input_A_tile_dimensions,
     )
     tilized_B = tilize_block(
         src_B,
         dimensions=input_B_dimensions,
-        stimuli_format=format.input_format_B,
+        stimuli_format=formats.input_format_B,
         tile_dimensions=input_B_tile_dimensions,
     )
 
     if not is_perf:
-        torch_format = format_dict[format.output_format]
+        torch_format = format_dict[formats.output_format]
         src_A_golden = src_A
         src_B_golden = src_B
-        if format.input_format.is_mx_format():
+        if formats.input_format.is_mx_format():
             tilized_A_golden = quantize_mx_tensor_chunked(
-                tilized_A.flatten().to(torch.bfloat16), format.input_format
+                tilized_A.flatten().to(torch.bfloat16), formats.input_format
             ).reshape(tilized_A.shape)
             tilized_B_golden = quantize_mx_tensor_chunked(
-                tilized_B.flatten().to(torch.bfloat16), format.input_format_B
+                tilized_B.flatten().to(torch.bfloat16), formats.input_format_B
             ).reshape(tilized_B.shape)
             src_A_golden = untilize_block(
                 tilized_A_golden,
-                stimuli_format=format.input_format,
+                stimuli_format=formats.input_format,
                 dimensions=input_A_dimensions,
             )
             src_B_golden = untilize_block(
                 tilized_B_golden,
-                stimuli_format=format.input_format_B,
+                stimuli_format=formats.input_format_B,
                 dimensions=input_B_dimensions,
             )
 
-        if transpose == Transpose.Yes:
+        if unpack_transpose_faces == Transpose.Yes:
             t_matrix = get_golden_generator(TransposeGolden)
 
             src_B_golden = t_matrix.transpose_faces_multi_tile(
                 src_B_golden,
-                format.input_format_B,
+                formats.input_format_B,
                 num_tiles=tile_cnt_B,
                 tilize=True,
                 input_dimensions=input_B_dimensions,
             )
             src_B_golden = t_matrix.transpose_within_faces_multi_tile(
                 src_B_golden,
-                format.input_format_B,
+                formats.input_format_B,
                 num_tiles=tile_cnt_B,
                 untilize=True,
                 input_dimensions=input_B_dimensions,
             )
 
         formats_config = data_formats(
-            input_format=format.input_format,
-            input_format_B=format.input_format_B,
-            output_format=format.output_format,
+            input_format=formats.input_format,
+            input_format_B=formats.input_format_B,
+            output_format=formats.output_format,
             is_fp32_dest_acc_en=dest_acc,
             num_iterations=1,
             unpacking_to_dest=False,
-            register_format_hint=format.register_format_hint,
+            register_format_hint=formats.register_format_hint,
         )[0]
         pack_src_format = formats_config.pack_src
 
@@ -416,21 +419,21 @@ def test_matmul(
         golden_tensor = generate_golden(
             src_A_golden,
             src_B_golden,
-            format.output_format,
+            formats.output_format,
             math_fidelity,
             input_A_dimensions=input_A_dimensions,
             input_B_dimensions=input_B_dimensions,
             tilize=False,
-            input_A_format=format.input_format,
-            input_B_format=format.input_format_B,
+            input_A_format=formats.input_format,
+            input_B_format=formats.input_format_B,
             math_format=pack_src_format,  # For accumulation of results in matmul we require to calculate in pack_src_format.
             dest_acc=dest_acc,
         )
         golden_dimensions = (input_A_dimensions[0], input_B_dimensions[1])
         golden_format = (
             pack_src_format
-            if format.output_format.is_mx_format()
-            else format.output_format
+            if formats.output_format.is_mx_format()
+            else formats.output_format
         )
         if output_tile_dimensions[0] < 16 and output_tile_dimensions[1] == 16:
             tile_rows, tile_cols = output_tile_dimensions
@@ -461,14 +464,14 @@ def test_matmul(
         num_faces_r_dim=input_A_shape.num_faces_r_dim,
         num_faces_c_dim=input_B_shape.num_faces_c_dim,
     )
-    enable_2x_format = format.register_format_hint is not None
+    enable_2x_format = formats.register_format_hint is not None
 
     templates = [
         MATH_FIDELITY(math_fidelity),
         ENABLE_2X_FORMAT(enable_2x_format),
         ENABLE_DIRECT_INDEXING(enable_direct_indexing),
         DEST_SYNC(dest_sync),
-        UNPACK_TRANS_FACES(transpose),
+        UNPACK_TRANS_FACES(unpack_transpose_faces),
         QUASAR_VARIANT(),
     ]
     runtimes = [
@@ -497,10 +500,10 @@ def test_matmul(
     ]
     variant_stimuli = IndependentMatmulStimuliConfig(
         tilized_A.flatten(),
-        format.input_format,
+        formats.input_format,
         tilized_B.flatten(),
-        format.input_format_B,
-        format.output_format,
+        formats.input_format_B,
+        formats.output_format,
         input_A_tile_dimensions=input_A_shape.tile_dims,
         input_B_tile_dimensions=input_B_shape.tile_dims,
         tile_count_A=tile_cnt_A,
@@ -517,7 +520,7 @@ def test_matmul(
 
     test_config_kwargs = {
         "test_name": "sources/quasar/matmul_quasar_test.cpp",
-        "formats": format,
+        "formats": formats,
         "templates": templates,
         "runtimes": runtimes,
         "variant_stimuli": variant_stimuli,
@@ -537,21 +540,21 @@ def test_matmul(
 
     res_from_L1 = configuration.run().result
 
-    res_tensor = result_tensor(res_from_L1, format.output_format, golden_tensor)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
     # math/pack_src format the result was produced in) so the comparison validates the
     # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-
     # aware compare in passed_test then supplies the small HW-vs-reference rounding slack.
-    if format.output_format.is_mx_format():
+    if formats.output_format.is_mx_format():
         golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor.to(format_dict[pack_src_format]), format.output_format
+            golden_tensor.to(format_dict[pack_src_format]), formats.output_format
         ).to(torch_format)
 
     assert passed_test(
         golden_tensor,
         res_tensor,
-        format.output_format,
+        formats.output_format,
     ), "Assert against golden failed"
 
 
@@ -559,42 +562,46 @@ def test_matmul(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
-    format=NON_MX_MATMUL_FORMATS,
+    formats=NON_MX_MATMUL_FORMATS,
     math_fidelity=[MathFidelity.LoFi],
     dest_sync=[DestSync.Half],
     dest_acc=matmul_dest_acc_modes,
-    matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
-    ),
+    rt_dim=runtime(matmul_rt_dims),
+    ct_dim=runtime(matmul_ct_dims),
+    kt_dim=runtime(kt_dims),
     register_format_hint=matmul_register_format_hints,
     enable_direct_indexing=matmul_enable_direct_indexing,
-    transpose=matmul_tiny_transpose_modes,
+    unpack_transpose_faces=matmul_tiny_transpose_modes,
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_matmul_tiny(
     input_tile_dimensions,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     math_fidelity,
     dest_sync,
     dest_acc,
-    format,
+    formats,
     register_format_hint,
     enable_direct_indexing,
-    transpose,
+    unpack_transpose_faces,
     run_types,
     loop_factor,
 ):
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         math_fidelity,
         dest_sync,
         dest_acc,
-        format,
+        formats,
         register_format_hint,
         enable_direct_indexing,
-        transpose,
+        unpack_transpose_faces,
         run_types,
         loop_factor,
     )
@@ -607,95 +614,108 @@ def test_matmul_tiny(
 )
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
+    formats=[InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
     math_fidelity=[MathFidelity.LoFi],
     dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
-    matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
-    ),
+    rt_dim=runtime(matmul_rt_dims),
+    ct_dim=runtime(matmul_ct_dims),
+    kt_dim=runtime(kt_dims),
     register_format_hint=[DataFormat.Int8_2x],
     enable_direct_indexing=[True, False],
-    transpose=[Transpose.No],
+    unpack_transpose_faces=[Transpose.No],
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_matmul_int8_2x(
     input_tile_dimensions,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     math_fidelity,
     dest_sync,
     dest_acc,
-    format,
+    formats,
     register_format_hint,
     enable_direct_indexing,
-    transpose,
+    unpack_transpose_faces,
     run_types,
     loop_factor,
 ):
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         math_fidelity,
         dest_sync,
         dest_acc,
-        format,
+        formats,
         register_format_hint,
         enable_direct_indexing,
-        transpose,
+        unpack_transpose_faces,
         run_types,
         loop_factor,
     )
 
 
-def matmul_dest_depth_tile_dimensions(dest_acc, dest_sync):
-    """(ct, rt, kt) whose output spans 4 and 8 full Dest sections, on both MOP reuse branches.
+def _non_reuse_ct_dim(max_tiles):
+    # The non-reuse branch needs rt_block > ct; a 4-tile section only fits that at ct=1.
+    return 2 if max_tiles > 4 else 1
+
+
+def matmul_dest_depth_ct_dims(dest_acc, dest_sync):
+    """ct of the two MOP reuse branches: a full-width section row and the non-reuse split."""
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
+    return [max_tiles, _non_reuse_ct_dim(max_tiles)]
+
+
+def matmul_dest_depth_rt_dims(dest_acc, dest_sync, ct_dim):
+    """rt spanning 4 and 8 full Dest sections.
 
     The kernel splits rt into blocks that each fill one section (matmul_rows_per_dest_section).
     """
     max_tiles = max_dest_tiles(dest_acc, dest_sync)
-    # The non-reuse branch needs rt_block > ct; a 4-tile section only fits that at ct=1.
-    non_reuse_ct = 2 if max_tiles > 4 else 1
-    return [
-        (ct, blocks * rows, kt)
-        for ct, rows, kt in (
-            (max_tiles, 1, 2),
-            (non_reuse_ct, max_tiles // non_reuse_ct, 1),
-        )
-        for blocks in DEST_DEPTH_BLOCK_COUNTS
-    ]
+    rows = 1 if ct_dim == max_tiles else max_tiles // _non_reuse_ct_dim(max_tiles)
+    return [blocks * rows for blocks in DEST_DEPTH_BLOCK_COUNTS]
+
+
+def matmul_dest_depth_kt_dims(dest_acc, dest_sync, ct_dim):
+    return [2] if ct_dim == max_dest_tiles(dest_acc, dest_sync) else [1]
 
 
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=[
+    formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
     ],
     dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=matmul_dest_acc_modes,
-    matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync: matmul_dest_depth_tile_dimensions(
-            dest_acc, dest_sync
-        )
-    ),
+    ct_dim=runtime(matmul_dest_depth_ct_dims),
+    rt_dim=runtime(matmul_dest_depth_rt_dims),
+    kt_dim=runtime(matmul_dest_depth_kt_dims),
 )
 def test_matmul_dest_depth(
     input_tile_dimensions,
-    format,
+    formats,
     dest_sync,
     dest_acc,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
 ):
     """Output larger than Dest: full Dest sections stacked along M."""
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         MathFidelity.LoFi,
         dest_sync,
         dest_acc,
-        format,
+        formats,
         None,
         False,
         Transpose.No,
@@ -709,47 +729,49 @@ DEEP_KT_DIMS = [3, 8, 16]
 MATMUL_LOFI_HIFI4 = [MathFidelity.LoFi, MathFidelity.HiFi4]
 
 
-def matmul_deep_k_tile_dimensions(format, dest_acc):
-    """(ct, rt, kt); a 16-bit Dest rounds every K-tile, so kt=16 Float16_b fails the 0.99 PCC gate."""
-    kt_dims = (
-        [kt for kt in DEEP_KT_DIMS if kt <= 8]
-        if format.input_format == DataFormat.Float16_b
-        and dest_acc == DestAccumulation.No
-        else DEEP_KT_DIMS
-    )
-    return [(ct, rt, kt) for ct, rt in ((2, 2), (1, 2)) for kt in kt_dims]
+def matmul_deep_k_kt_dims(formats, dest_acc):
+    """A 16-bit Dest rounds every K-tile, so kt=16 Float16_b fails the 0.99 PCC gate."""
+    if formats.input_format == DataFormat.Float16_b and dest_acc == DestAccumulation.No:
+        return [kt for kt in DEEP_KT_DIMS if kt <= 8]
+    return DEEP_KT_DIMS
 
 
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=[
+    formats=[
         InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
         InputOutputFormat(DataFormat.Float16, DataFormat.Float16),
         InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
     ],
-    math_fidelity=lambda format: [
+    math_fidelity=lambda formats: [
         fidelity
-        for fidelity in get_valid_math_fidelities(format)
+        for fidelity in get_valid_math_fidelities(formats)
         if fidelity in MATMUL_LOFI_HIFI4
     ],
     dest_acc=matmul_dest_acc_modes,
-    matmul_tile_dims=runtime(matmul_deep_k_tile_dimensions),
+    ct_dim=runtime([2, 1]),
+    rt_dim=runtime([2]),
+    kt_dim=runtime(matmul_deep_k_kt_dims),
 )
 def test_matmul_deep_k(
     input_tile_dimensions,
-    format,
+    formats,
     math_fidelity,
     dest_acc,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
 ):
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         math_fidelity,
         DestSync.Half,
         dest_acc,
-        format,
+        formats,
         None,
         False,
         Transpose.No,
@@ -761,38 +783,44 @@ def test_matmul_deep_k(
 @pytest.mark.quasar
 @parametrize(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
-    format=[
+    formats=[
         InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
         InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
     ],
-    math_fidelity=lambda format: [
+    math_fidelity=lambda formats: [
         fidelity
-        for fidelity in get_valid_math_fidelities(format)
+        for fidelity in get_valid_math_fidelities(formats)
         if fidelity in MATMUL_LOFI_HIFI4
     ],
     # A Float32 output needs a 32-bit Dest; the packer cannot upcast.
-    dest_acc=lambda format: (
+    dest_acc=lambda formats: (
         [DestAccumulation.Yes]
-        if format.output_format.is_32_bit()
+        if formats.output_format.is_32_bit()
         else [DestAccumulation.Yes, DestAccumulation.No]
     ),
-    matmul_tile_dims=runtime([(1, 1, 1), (2, 2, 2), (4, 1, 2)]),
+    ct_dim=runtime([1, 2, 4]),
+    rt_dim=runtime(lambda ct_dim: [2] if ct_dim == 2 else [1]),
+    kt_dim=runtime(lambda ct_dim: [1] if ct_dim == 1 else [2]),
 )
 def test_matmul_float32(
     input_tile_dimensions,
-    format,
+    formats,
     math_fidelity,
     dest_acc,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
 ):
     """Float32 L1 operands, read into SrcA/SrcB as Tf32 (32-bit Dest) or Float16_b."""
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         math_fidelity,
         DestSync.Half,
         dest_acc,
-        format,
+        formats,
         None,
         False,
         Transpose.No,
@@ -818,15 +846,17 @@ MATMUL_INT4_FORMAT = InputOutputFormat(
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     dest_sync=lambda: quasar_dest_sync_modes(),
     dest_acc=[DestAccumulation.Yes],
-    matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync: matmul_tile_dimensions(dest_acc, dest_sync)
-    ),
+    rt_dim=runtime(matmul_rt_dims),
+    ct_dim=runtime(matmul_ct_dims),
+    kt_dim=runtime(kt_dims),
     register_format_hint=matmul_int4_register_format_hints(),
     enable_direct_indexing=matmul_enable_direct_indexing,
 )
 def test_matmul_int4(
     input_tile_dimensions,
-    matmul_tile_dims,
+    ct_dim,
+    rt_dim,
+    kt_dim,
     dest_sync,
     dest_acc,
     register_format_hint,
@@ -834,7 +864,9 @@ def test_matmul_int4(
 ):
     test_matmul(
         input_tile_dimensions,
-        matmul_tile_dims,
+        ct_dim,
+        rt_dim,
+        kt_dim,
         MathFidelity.LoFi,
         dest_sync,
         dest_acc,

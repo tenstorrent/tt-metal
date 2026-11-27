@@ -1048,14 +1048,15 @@ def test_permute_specless_sharded_output_grid_shrinks_block_col_major(device):
         # Hit the tiled permute factories directly (bypass the transpose_wh/hc decomps).
         ((2, 3, 64, 64), (1, 0, 2, 3)),  # MultiCoreTileInvariant
         ((2, 3, 64, 64), (0, 3, 1, 2)),  # MultiCoreTileRowInvariant
-        pytest.param(
-            (2, 3, 64, 64),
-            (0, 2, 3, 1),
-            marks=pytest.mark.xfail(
-                strict=False,
-                reason="MultiCoreTiledGeneric uses pack_untilize_dest; BH 8-bit truncation tracked in #61827",
-            ),
-        ),
+        # MultiCoreTiledGeneric: 16B UINT8 face lines vs 64B BH DRAM read alignment (#67025).
+        ((2, 3, 64, 64), (0, 2, 3, 1)),
+        ((2, 8, 3), (2, 1, 0)),
+        ((2, 2, 3), (1, 2, 0)),
+        ((2, 32, 32), (2, 1, 0)),
+        ((1, 2, 4, 2), (3, 2, 0, 1)),
+        ((2, 1, 17), (1, 2, 0)),
+        ((5, 64, 7), (2, 1, 0)),
+        ((2, 3, 4, 5), (3, 1, 2, 0)),
     ],
 )
 def test_permute_dtype_uint8(device, shape, dims, input_layout):
@@ -1063,6 +1064,66 @@ def test_permute_dtype_uint8(device, shape, dims, input_layout):
     x = torch.randint(0, 256, shape, dtype=torch.uint8)
     ttnn_in = ttnn.from_torch(x, dtype=ttnn.uint8, layout=input_layout, device=device)
     got = ttnn.to_torch(ttnn.permute(ttnn_in, dims).cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    assert torch.equal(got, x.permute(dims))
+
+
+# MultiCoreBlockedGeneric: 32 B UINT8 rows vs 64 B BH DRAM read alignment (#61827). Covers partial W blocks,
+# odd W block counts and partial X blocks; L1 input takes the non-bounce path.
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
+@pytest.mark.parametrize(
+    "shape, dims",
+    [
+        ((2, 8, 3), (2, 1, 0)),
+        ((2, 1, 17), (1, 2, 0)),
+        ((5, 64, 7), (2, 1, 0)),
+        ((3, 33, 65), (2, 0, 1)),
+        ((2, 3, 4, 5), (3, 1, 2, 0)),
+        ((2, 3, 40, 70), (0, 3, 1, 2)),
+        ((1, 8, 100, 48), (0, 1, 3, 2)),
+    ],
+)
+def test_permute_uint8_rm_read_alignment(device, shape, dims, memory_config):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    ttnn_in = ttnn.from_torch(
+        x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims))
+    assert torch.equal(got, x.permute(dims))
+
+
+# The bounce compile args depend on the input buffer type, so a cached L1 program must not be reused for DRAM input
+# (or vice versa). Alternating buffer types and shapes with the same dims exercises the program cache.
+def test_permute_uint8_rm_read_alignment_program_cache(device):
+    torch.manual_seed(0)
+    dims = (0, 1, 3, 2)
+    for shape in [(1, 2, 40, 70), (1, 3, 64, 96)]:
+        for memory_config in [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG] * 2:
+            x = torch.randint(0, 256, shape, dtype=torch.uint8)
+            ttnn_in = ttnn.from_torch(
+                x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+            )
+            got = ttnn.to_torch(ttnn.permute(ttnn_in, dims))
+            assert torch.equal(got, x.permute(dims))
+
+
+# Sharded UINT8 RM input is not covered by the reader's bounce; on BH it stays on the UInt32 workaround.
+@pytest.mark.parametrize(
+    "shape, dims, buffer_type",
+    [
+        ((1, 1, 64, 96), (0, 1, 3, 2), ttnn.BufferType.L1),
+        ((1, 1, 64, 96), (0, 1, 3, 2), ttnn.BufferType.DRAM),
+        ((2, 64, 32), (2, 1, 0), ttnn.BufferType.L1),
+    ],
+)
+def test_permute_uint8_rm_sharded_input(device, shape, dims, buffer_type):
+    torch.manual_seed(0)
+    x = torch.randint(0, 256, shape, dtype=torch.uint8)
+    in_mem_cfg = _height_shard_config(shape, device, layout=ttnn.ROW_MAJOR_LAYOUT, buffer_type=buffer_type)
+    ttnn_in = ttnn.from_torch(
+        x, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem_cfg
+    )
+    got = ttnn.to_torch(ttnn.permute(ttnn_in, dims, memory_config=ttnn.DRAM_MEMORY_CONFIG))
     assert torch.equal(got, x.permute(dims))
 
 

@@ -6,6 +6,7 @@
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_device_operation_types.hpp"
 
 namespace ttnn::prim {
@@ -13,6 +14,8 @@ namespace ttnn::prim {
 struct MoeProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const MoeParams& operation_attributes, const MoeInputs& tensor_args, Tensor& output_tensor);
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const MoeParams&, const MoeInputs&, const tt::tt_metal::ProgramSpec&, const tt::tt_metal::ProgramRunArgs&);
 };
 
 }  // namespace ttnn::prim

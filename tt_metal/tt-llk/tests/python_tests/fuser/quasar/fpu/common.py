@@ -63,10 +63,7 @@ def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str
         return ""
     code = f"_llk_math_pack_sync_init_<{dest_sync}>();\n"
     if config.uses_unpack_to_dest_sync:
-        code += (
-            "set_up_zero_dest_dvalid_handshake_for_math();\n"
-            "_llk_sync_spin_until_posted_(semaphore::UNPACK_MATH);\n"
-        )
+        code += "set_up_zero_dest_dvalid_handshake_for_math();\n"
     return code
 
 
@@ -75,7 +72,10 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
         code = ""
         if config.uses_unpack_to_dest_pack_sync:
             code += "_llk_math_wait_for_dest_available_();\n"
-        code += "_llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
+        code += (
+            "_llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();\n"
+            "_llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();\n"
+        )
         return code
     if config.skip_sync or config.quasar_use_dvalid:
         return ""
@@ -84,13 +84,9 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
 
 def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
     if config.uses_unpack_to_dest_sync:
+        code = ""
         if config.uses_unpack_to_dest_pack_sync:
-            code = (
-                "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
-                "_llk_sync_get_(semaphore::UNPACK_MATH);\n"
-            )
-        else:
-            code = "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
+            code += "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
         if operation.dest_sync == DestSync.Half:
             code += (
                 "_llk_sync_advance_dest_section_<ckernel::TRISC_ID, "

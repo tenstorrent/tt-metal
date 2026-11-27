@@ -10,7 +10,7 @@
 #include <optional>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/soc_descriptor.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>

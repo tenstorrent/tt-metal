@@ -5,8 +5,8 @@
 #include "select_target_logit_program_factory.hpp"
 
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
 #include "select_target_logit_device_operation.hpp"

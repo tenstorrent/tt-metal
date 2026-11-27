@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/span.hpp>
-#include <device.hpp>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
 #include <mutex>
@@ -15,7 +15,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "allocator/allocator.hpp"
-#include "buffer_types.hpp"
+#include "tt-metalium/memory/buffer/buffer_types.hpp"
 #include "dispatch.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -23,17 +23,17 @@
 #include "impl/context/metal_env_impl.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
 #include "dispatch/dispatch_settings.hpp"
-#include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "math.hpp"
+#include "tt-metalium/utils/math.hpp"
 #include <tt_stl/strong_type.hpp>
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
-#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/observability/capture_hooks.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"

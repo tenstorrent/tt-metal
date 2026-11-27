@@ -200,7 +200,8 @@ class TtK3KdaAttention(LightweightModule):
     host in the loop. That somewhere is the migration slab itself, the way MLA's KV cache is its own
     migration format: per chunk the convolution, the SP relay and the final carry read the slot's
     carry from the slabs and write the replacement back in place, each op reading the slot on
-    device. `ttKDA.forward` on `KdaStates.entry` is that whole per-chunk layer (TP all-gather, KDA,
+    device. The slabs store each head once on the mesh; the ops move the other SP ranks' heads to the
+    chunk's first rank and each rank writes back its own. `ttKDA.forward` on `KdaStates.entry` is that whole per-chunk layer (TP all-gather, KDA,
     reduce-scatter), so it is what the layer's perf test measures.
     """
 

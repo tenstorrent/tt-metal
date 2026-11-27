@@ -4,13 +4,14 @@
 
 #include "untilize_with_unpadding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 #include <algorithm>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 
 using namespace tt::tt_metal;
@@ -182,7 +183,7 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.nd_shard_spec().has_value(),
                     "Output memory config is sharded but no shard spec or nd shard spec is provided");
                 uint32_t output_dtype_size = input_tensor_a.element_size();
-                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B || is_mx(input_tensor_a.dtype())) {
                     output_dtype_size = 2;
                 }
                 uint32_t output_shard_width;
@@ -224,7 +225,7 @@ tt::tt_metal::TensorSpec UntilizeWithUnpaddingDeviceOperation::compute_output_sp
         out_shape.push_back(operation_attributes.output_tensor_end[i] + 1);
     }
     Shape output_shape(std::move(out_shape));
-    DataType output_dtype = ttnn::operations::data_movement::untilize_output_dtype(input_tensor_a.dtype());
+    DataType output_dtype = ttnn::operations::experimental::quasar::untilize_output_dtype(input_tensor_a.dtype());
     if (input_tensor_a.memory_config().is_sharded() && operation_attributes.output_mem_config.is_sharded() &&
         input_tensor_a.shard_spec().has_value()) {
         uint32_t fused_height = output_shape.volume() / output_shape[-1];

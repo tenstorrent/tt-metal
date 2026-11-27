@@ -461,6 +461,37 @@ void ValidateDFBBlockedBindings(const DataflowBufferSpec& dfb, const CollectedSp
     }
 }
 
+void ValidateDFBSfpuPipeline(
+    const DataflowBufferSpec& dfb, const CollectedSpecData::DFBEndpointInfo& endpoints, tt::ARCH arch) {
+    if (!is_gen2_arch(arch)) {
+        return;
+    }
+    auto check_side = [&](const auto& records, DFBEndpointType side, std::string_view role, std::string_view field) {
+        if (records.empty()) {
+            return;
+        }
+        const bool first_uses = ComputeKernelUsesSfpuPipeline(*records[0].kernel, dfb.unique_id, side);
+        for (const auto& rec : records) {
+            TT_FATAL(
+                ComputeKernelUsesSfpuPipeline(*rec.kernel, dfb.unique_id, side) == first_uses,
+                "DFB '{}' has multiple {} bindings with mismatched {} (kernel '{}' vs kernel '{}')",
+                dfb.unique_id,
+                role,
+                field,
+                records[0].kernel->unique_id,
+                rec.kernel->unique_id);
+        }
+        TT_FATAL(
+            !first_uses || dfb.advanced_options.prefetcher_pipe_relays.empty(),
+            "DFB '{}' is a PrefetcherPipe relay DFB, so kernel '{}' cannot list it in {}",
+            dfb.unique_id,
+            records[0].kernel->unique_id,
+            field);
+    };
+    check_side(endpoints.producers, DFBEndpointType::PRODUCER, "PRODUCER", "sfpu_pipeline_produced_dfbs");
+    check_side(endpoints.consumers, DFBEndpointType::CONSUMER, "CONSUMER", "sfpu_pipeline_consumed_dfbs");
+}
+
 using DFBEndpointsByNode = std::unordered_map<NodeCoord, std::vector<const KernelSpec*>>;
 
 DFBEndpointsByNode CollectDFBEndpointsByNode(
@@ -733,6 +764,7 @@ void ValidateDFBEndpointPlacement(const DataflowBufferSpec& dfb, const Collected
     }
     // block_size validity and cross-role BLOCKED legality.
     ValidateDFBBlockedBindings(dfb, endpoints);
+    ValidateDFBSfpuPipeline(dfb, endpoints, arch);
     ValidateDFBEndpointCoverage(dfb, collected);
     ValidateDFBSelfLoop(dfb, endpoints, arch);
     if (!allow_multi && is_gen1_arch(arch)) {

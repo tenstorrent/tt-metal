@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <type_traits>
-#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
 #if defined(__x86_64__)
 #include <immintrin.h>
 #endif

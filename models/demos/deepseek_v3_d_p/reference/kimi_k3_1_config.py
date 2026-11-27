@@ -25,7 +25,8 @@ class KimiK31Config(KimiK3Config):
     INDEX_TOPK_FREQ = 1
     INDEX_SKIP_TOPK_OFFSET = 1
 
-    # K3's (which includes the MoE block's persistent words' slab), + 1552 B for the DSA layers: 6656 B a bank.
+    # K3's (which includes the MoE block's persistent words' slab), + 1552 B for the DSA layers: 6720 B a bank
+    # (6656 B before the KDA convolution's old-tail semaphore added 64 B to K3's).
     # A DSA layer's early-Q all-to-all needs more than K3's layers (OOM at K3's then-1536 B with KDA layers 1-2
     # and DSA layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window). Measured on the block:
     # K3's + 512 B ran out of L1_SMALL in that all-to-all during the traced warmup, 6656 B passes (sc1 runner,
