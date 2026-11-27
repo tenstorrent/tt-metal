@@ -67,12 +67,13 @@ The `status.json` fields are listed in [runner/CLAUDE.md](runner/CLAUDE.md).
 ### Env knobs
 
 All opt-in: unset, the test runs as before. The runner passes your shell environment to every step (except
-`TT_VISIBLE_DEVICES`, `TT_METAL_VISIBLE_DEVICES`, `TT_MM_THROTTLE_PERF` and the dispatch timeout variables), so an
+`TT_VISIBLE_DEVICES`, `TT_METAL_VISIBLE_DEVICES`, `TT_MM_THROTTLE_PERF`, the dispatch timeout variables and the
+`pin_core` knobs `DIDT_DEVICE_ID`, `DIDT_MIN_LOOP_SECONDS`), so an
 exported knob changes every step that reads it.
 
 | variable | read by | effect |
 |---|---|---|
-| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests) | pick the chip by device id, not by submesh index; `pin_core` sets it |
+| `DIDT_DEVICE_ID=<dev>` | `didt_chip.py` (per-chip tests), `test_mm_mcast_write_ack_failure.py` scan | pick the chip by device id, not by submesh index; the mcast scan runs that chip alone; `pin_core` sets it |
 | `DIDT_MIN_LOOP_SECONDS=<s>` | `OpTestBase.run_op_test` | keep iterating until the loop has run `<s>` seconds; `pin_core` sets it |
 | `DIDT_MINIMAL_M=<M>` | `test_minimal_matmul.py` | override M (default 16384); M > N transposes the core grid |
 | `DIDT_GRID_X=<x>`, `DIDT_GRID_Y=<y>` | `test_ff1_matmul.py` | shrink the compute grid, anchored at core (0,0) |

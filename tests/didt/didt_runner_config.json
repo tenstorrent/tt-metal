@@ -83,6 +83,7 @@
     },
     {
       "key": "nd:mcast-ack",
+      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]",
       "runner": "script",
       "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
       "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_scan[blackhole-1x1]"],
@@ -95,6 +96,7 @@
     },
     {
       "key": "nd:mcast-ack-duty",
+      "pin_id": "tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]",
       "runner": "script",
       "cmd": "python tests/didt/test_mm_mcast_write_ack_failure.py",
       "ids": ["tests/didt/test_mm_mcast_write_ack_failure.py::test_mm_mcast_write_ack_failure_duty[blackhole-1x1]"],

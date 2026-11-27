@@ -43,6 +43,23 @@ def _loop(start: str, end: str, iterations: int) -> str:
 ORIGINAL_LOOP = _loop("12:01:00.000", "12:03:44.400", 1000)  # 164.4 s
 RERUN_LOOP = _loop("12:10:00.000", "12:12:50.000", 2486)  # 170.0 s
 
+# mcast-ack script outcomes: chip -> pass | hung | nd | build. A pinned rerun (DIDT_DEVICE_ID set) scans that chip
+# alone and takes its outcome as the chip's state.
+SCRIPT_CHIPS = {
+    "pass": {3: "pass", 1: "pass"},
+    "fail": {3: "hung", 1: "pass"},
+    "build": {12: "build", 1: "pass"},
+    "hung2": {3: "hung", 7: "hung", 1: "pass"},
+    "mixed": {3: "hung", 19: "nd", 1: "pass"},
+}
+# a per-chip child sees itself as device 0
+ND_CHILD = (
+    "2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:160 - "
+    "ND summary device 0 [UBB4 ASIC4]: 3/20 checks; pattern single core (6,8); failing checks per core: (6,8)x3\n"
+    "2026-11-26 12:05:01.100 | info     | tt_py_test_utils_common.op_test_base:log_nd_core_summary:167 - "
+    "ND summary device 0 core (6,8) translated=(7,10): failed 3/20 checks; face column lane 3 in 3/3 checks\n"
+)
+
 
 class FakeShell:
     """Stands in for every command the runner launches. outcomes: attempt dir (relative to the run dir) ->
@@ -86,19 +103,24 @@ class FakeShell:
             return 137
         if script:
             work = Path(env["MCAST_ACK_WORK_DIR"])
-            (work / "chip3").mkdir(parents=True)
             (Path(env["MCAST_ACK_CACHE_DIR"]) / "kmd2").mkdir(parents=True)
-            (work / "chip3" / "pytest.log").write_text("1 passed\n")
-            if outcome == "build":
-                log.write_text(
-                    "chip 12 FAIL: TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages:\nchip 1 PASS\n"
-                )
-                return 1
-            if outcome == "fail":
-                log.write_text("chip 3 FAIL: HUNG chip 3 (runtime id 0): BusDeviceFunction=0000:04:00.0\nchip 1 PASS\n")
-                return 1
-            log.write_text("chip 3 PASS\nchip 1 PASS\nall 2 chips passed\n")
-            return 0
+            pinned = env.get("DIDT_DEVICE_ID")
+            chips = {int(pinned): outcome} if pinned else SCRIPT_CHIPS[outcome]
+            lines = []
+            for c, state in chips.items():
+                who = f"chip {c} (runtime id 0): BusDeviceFunction={CHIPS[c].bdf}"
+                child, line = {
+                    "pass": (RERUN_LOOP + "1 passed\n", "PASS"),
+                    "hung": (f"HUNG {who}\n", f"FAIL: HUNG {who}"),
+                    "nd": (ORIGINAL_LOOP + ND_CHILD + f"ND {who}\n1 failed\n", f"FAIL: ND {who}"),
+                    "build": ("", "FAIL: TT_THROW: trisc0 build failed. Log: /tmp/x.s: Assembler messages:"),
+                }[state]
+                (work / f"chip{c}").mkdir(parents=True)
+                (work / f"chip{c}" / "pytest.log").write_text(child)
+                lines.append(f"chip {c} {line}")
+            failed = any(s != "pass" for s in chips.values())
+            log.write_text("\n".join(lines + ([] if failed else [f"all {len(chips)} chips passed"])) + "\n")
+            return 1 if failed else 0
         if outcome == "fail":
             log.write_text(ORIGINAL_LOOP + (TESTDATA / "nd_report.log").read_text())
             return 1
@@ -349,11 +371,18 @@ def test_cli_help_has_sbatch_note(capsys):
 
 def test_runner_env_drops_device_selection_and_throttle(tmp_path, monkeypatch):
     # dev = rank among ALL the host's chips, and the first attempt must run unthrottled.
-    for k, v in {"TT_VISIBLE_DEVICES": "3", "TT_METAL_VISIBLE_DEVICES": "3", "TT_MM_THROTTLE_PERF": "5"}.items():
+    inherited = {
+        "TT_VISIBLE_DEVICES": "3",
+        "TT_METAL_VISIBLE_DEVICES": "3",
+        "TT_MM_THROTTLE_PERF": "5",
+        "DIDT_DEVICE_ID": "3",
+        "DIDT_MIN_LOOP_SECONDS": "9",
+    }
+    for k, v in inherited.items():
         monkeypatch.setenv(k, v)
     _, _, _, shell, _ = _run(tmp_path, only=["nd:minimal"], outcomes={"nd/minimal": "fail"})
     first = shell.workload_calls("nd/minimal")[0]["env"]
-    assert not {"TT_VISIBLE_DEVICES", "TT_METAL_VISIBLE_DEVICES", "TT_MM_THROTTLE_PERF"} & set(first)
+    assert not set(inherited) & set(first)
     assert shell.workload_calls("nd/minimal_throttle")[0]["env"]["TT_MM_THROTTLE_PERF"] == "5"
     assert all("TT_VISIBLE_DEVICES" not in c["env"] for c in shell.calls)
 
@@ -514,6 +543,54 @@ def test_pin_core_without_named_device_records_why(tmp_path):
     _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes={"nd/mcast-ack": "timeout"})
     (p,) = _pins(steps, "nd:mcast-ack")
     assert p["status"] == "SKIP" and p["reason"] == "no failing device named by the first attempt"
+
+
+MCAST = "python tests/didt/test_mm_mcast_write_ack_failure.py"
+
+
+def test_pin_core_reruns_hung_write_ack_chips_after_tt_smi_r(tmp_path):
+    _, steps, _, shell, run_dir = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes={"nd/mcast-ack-duty": "hung2"})
+    assert steps["nd:mcast-ack-duty"]["status"] == "FAIL"
+    pins = _pins(steps, "nd:mcast-ack-duty")
+    assert [(p["target"], p["trigger"]) for p in pins] == [(CHIPS[3].as_dict(), "hang"), (CHIPS[7].as_dict(), "hang")]
+    for p in pins:
+        dev = p["target"]["dev"]
+        rel = f"nd/mcast-ack-duty_pin_core_dev{dev}"
+        assert p["status"] == "WARN" and p["reason"] == "not reproduced on chip alone"
+        assert shell.reset_cmds(rel) == ["tt-smi -r"]
+        (call,) = shell.workload_calls(rel)
+        assert call["cmd"] == MCAST
+        assert call["env"]["DIDT_DEVICE_ID"] == str(dev) and call["env"]["MATMUL_ITERS"] == "20"
+        assert call["env"]["MATMUL_WORKLOAD"] == "duty"
+        assert p["iterations"] == {"MATMUL_ITERS": 20}
+        # a chip that hung before its loop started logged no loop time: doubled iterations only, and say so
+        assert "DIDT_MIN_LOOP_SECONDS" not in p["env"] and p["loop"] == {}
+        chip_log = run_dir / f"nd/mcast-ack-duty/chips/chip{dev}/pytest.log"
+        assert f"WARNING original loop time unknown (no iteration lines in {chip_log})" in p["details"][-1]
+
+
+def test_pin_core_hang_reproduced_on_write_ack_chip(tmp_path):
+    outcomes = {"nd/mcast-ack-duty": "fail", "nd/mcast-ack-duty_pin_core_dev3": "hung"}
+    _, steps, _, _, run_dir = _run(tmp_path, only=["nd:mcast-ack-duty"], outcomes=outcomes)
+    (p,) = _pins(steps, "nd:mcast-ack-duty")
+    assert p["status"] == "FAIL" and p["reason"] == "hang reproduced on chip alone"
+    assert p["devices"] == [{**CHIPS[3].as_dict(), "hung": True}]
+    assert (run_dir / "nd/mcast-ack-duty_pin_core_dev3/chips/chip3/pytest.log").is_file()
+
+
+def test_pin_core_mixed_hung_and_nd_write_ack_targets(tmp_path):
+    outcomes = {"nd/mcast-ack": "mixed", "nd/mcast-ack_pin_core_dev19": "nd"}
+    _, steps, _, shell, _ = _run(tmp_path, only=["nd:mcast-ack"], outcomes=outcomes)
+    hung, nd = _pins(steps, "nd:mcast-ack")
+    assert (hung["target"]["dev"], hung["trigger"], nd["target"]["dev"], nd["trigger"]) == (3, "hang", 19, "nd")
+    assert shell.reset_cmds("nd/mcast-ack_pin_core_dev3") == ["tt-smi -r"]
+    assert shell.reset_cmds("nd/mcast-ack_pin_core_dev19") == ["tt-smi -glx_reset_auto"]
+    assert hung["status"] == "WARN" and hung["reason"] == "not reproduced on chip alone"
+    assert nd["status"] == "FAIL" and nd["reason"] == "ND reproduced on chip alone: 3/20 checks"
+    assert nd["cores"]["first"][0]["x"] == 6 and nd["cores"]["rerun"][0]["failed_checks"] == 3
+    # the loop time comes from the target chip's own child log, in the original and in the rerun
+    assert nd["env"] == {"MATMUL_ITERS": "20", "DIDT_DEVICE_ID": "19", "DIDT_MIN_LOOP_SECONDS": "164.4"}
+    assert nd["loop"] == {"original_s": 164.4, "rerun_s": 164.4, "rerun_iterations": 1000}
 
 
 def test_pin_id_that_does_not_collect_skips_only_the_pin(tmp_path):

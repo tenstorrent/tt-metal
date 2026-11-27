@@ -92,9 +92,12 @@ Read by the tests the runner launches, never imported by `runner/`:
 ## Fallbacks and step two
 
 - Today: `throttle` (`TT_MM_THROTTLE_PERF=5`), then `pin_core` on every step.
-- `pin_core`: each failing device of the first attempt (ND or hang) reruns alone via the step's `pin_id` with
-  `DIDT_DEVICE_ID=<dev>`, at twice the iterations and at least the original attempt's loop time
-  (`DIDT_MIN_LOOP_SECONDS`, honoured by `op_test_base.run_op_test`; read from the original log's iteration debug lines). A per-chip test must pick its chip with
+- `pin_core`: each failing device of the first attempt (hung, or with ND data) reruns alone via the step's `pin_id`
+  with `DIDT_DEVICE_ID=<dev>`, at twice the iterations and at least the original attempt's loop time
+  (`DIDT_MIN_LOOP_SECONDS`, honoured by `op_test_base.run_op_test`; read from the original log's iteration debug lines,
+  for a script step from the target's `chips/chip<dev>/pytest.log`). Hang or ND is per device, never from the step
+  status: a `write_ack` step is FAIL with hung chips in it. The mcast script scans only chip `DIDT_DEVICE_ID` when
+  set; its wkv_b1 workload logs no iteration lines and ignores `DIDT_MIN_LOOP_SECONDS`. A per-chip test must pick its chip with
   `tests/didt/didt_chip.py` `pick_submesh`, never `submeshes[logical_chip_id]` alone: the submesh index is not the
   device id. A new per-chip test = a `pin_id` in the config, collected on a galaxy first.
 - Not reproduced on the chip alone is WARN, not PASS. A reset failure inside `pin_core` aborts the run.
