@@ -1,0 +1,1 @@
+{"event":"test_run","result":"pass","detail":"acceptance 43/43 dev+non-dev, golden 16 pass 3 xfail (int32 RM, Phase 0), knob sweep bit-exact; [512] kernel 827 ns = 350 ns go-signal skew + 477 ns per core","ts":"2026-11-27T10:08:03-05:00"}
