@@ -73,6 +73,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_FACES,
     SFPU_DROPOUT_PARAMS,
+    SFPU_POWER_ITERATIVE_EXPONENT,
     SFPU_UNARY_MAX_MIN_SCALAR,
     SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE,
     TEST_FACE_DIMS,
@@ -1817,6 +1818,56 @@ def _dest_acc_for_typecast_formats(formats):
     return quasar_sfpu_dest_acc_modes(_typecast_variants(), formats)
 
 
+# 0 and 1 (no walk), then every shape of the bit walk: one set bit, two, a single high bit, all set.
+POWER_ITERATIVE_EXPONENTS = [0, 1, 2, 3, 5, 8, 17, 31]
+# Base magnitudes: the largest exponent neither overflows fp32 nor reaches its denormals.
+POWER_ITERATIVE_BASE_MAGNITUDES = (0.5, 1.75)
+
+
+def prepare_power_iterative_inputs(
+    src_A: torch.Tensor, input_format: DataFormat
+) -> torch.Tensor:
+    """Bases distinct per row, signs alternating, with both zeros and +/-1.0 at the front, so a row
+    pair written to the wrong Dest rows cannot match the model."""
+    low, high = POWER_ITERATIVE_BASE_MAGNITUDES
+    magnitudes = torch.linspace(low, high, src_A.numel(), dtype=torch.float64)
+    signs = torch.where(torch.arange(src_A.numel()) % 2 == 0, 1.0, -1.0)
+    flat = (magnitudes * signs).to(format_dict[input_format])
+    flat[:4] = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=flat.dtype)
+    return flat.reshape(src_A.shape)
+
+
+def power_iterative_expected(
+    src: torch.Tensor, exponent: int, output_format: DataFormat
+) -> torch.Tensor:
+    """calculate_unary_power_iterative in fp32, in the kernel's multiply order (torch.pow differs in
+    the last bits). SFPMUL gives +0.0 for every zero product, so (-0.0)^n is +0.0 above n = 1.
+    """
+
+    def sfpmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        product = a * b
+        return torch.where(product == 0, torch.zeros_like(product), product)
+
+    base = src.flatten().to(torch.float32)
+    if exponent == 0:
+        result = torch.ones_like(base)
+    else:
+        result = base.clone()
+        square = base.clone()
+        remaining = exponent - 1
+        while remaining:
+            if remaining & 1:
+                result = sfpmul(result, square)
+            remaining >>= 1
+            if remaining:
+                square = sfpmul(square, square)
+    if output_format == DataFormat.Float16_b:
+        # The store into a 16-bit Dest keeps the top 16 bits of the fp32 result.
+        truncated = result.contiguous().view(torch.int32) & ~0xFFFF
+        result = truncated.view(torch.float32)
+    return result.to(format_dict[output_format])
+
+
 def run_eltwise_unary_sfpu_quasar(
     formats,
     dest_acc,
@@ -1833,12 +1884,16 @@ def run_eltwise_unary_sfpu_quasar(
     max_min_sign_magnitude=False,
     format_variant=None,
     inverse_trig_edges=False,
+    power_iterative_exponent=None,
+    power_iterative_runtime=False,
     zero_comp_edges=False,
 ):
     """Shared unary SFPU runner for the functional and perf tests.
 
     *format_variant* overrides the resolved route, for routes the resolver never picks.
     *inverse_trig_edges* swaps the stimulus for prepare_inverse_trig_edge_inputs.
+    *power_iterative_exponent* sets the exponent and swaps in the power_iterative stimulus and model;
+    *power_iterative_runtime* has the kernel see it as a runtime value.
     *zero_comp_edges* swaps it for prepare_zero_comp_edge_inputs and the golden for zero_comp_expected.
     """
     if format_variant is None:
@@ -1880,6 +1935,8 @@ def run_eltwise_unary_sfpu_quasar(
         src_A = _prepare_typecast_input(
             src_A, src_B, formats.input_format, formats.output_format
         )
+    elif power_iterative_exponent is not None:
+        src_A = prepare_power_iterative_inputs(src_A, formats.input_format)
     elif not is_max_min:
         src_A = prepare_unary_inputs(
             mathop, src_A, src_B, formats.input_format, formats.output_format
@@ -1911,6 +1968,10 @@ def run_eltwise_unary_sfpu_quasar(
             golden_tensor = float_class_expected(mathop, src_A, formats.output_format)
         elif inverse_trig_edges:
             golden_tensor = inverse_trig_expected(mathop, src_A, formats.output_format)
+        elif power_iterative_exponent is not None:
+            golden_tensor = power_iterative_expected(
+                src_A, power_iterative_exponent, formats.output_format
+            )
         elif zero_comp_edges:
             golden_tensor = zero_comp_expected(mathop, src_A, format_variant)
         elif format_dict[formats.input_format].is_floating_point:
@@ -1997,6 +2058,15 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
+            *(
+                [
+                    SFPU_POWER_ITERATIVE_EXPONENT(
+                        power_iterative_exponent, power_iterative_runtime
+                    )
+                ]
+                if power_iterative_exponent is not None
+                else []
+            ),
             *([INP_FLOAT32()] if _erf_fp32_table(mathop, formats) else []),
         ],
         "runtimes": [
@@ -2077,6 +2147,14 @@ def run_eltwise_unary_sfpu_quasar(
             mismatch.any()
         ), f"heaviside differs from its bit-level model in {int(mismatch.sum())} lanes"
 
+    if power_iterative_exponent is not None:
+        # The model multiplies in the kernel's order, so the bit patterns must agree, zero sign included.
+        res_bits = res_tensor.to(torch.float32).contiguous().view(torch.int32)
+        golden_bits = golden_tensor.to(torch.float32).contiguous().view(torch.int32)
+        mismatch = res_bits != golden_bits
+        assert not bool(
+            mismatch.any()
+        ), f"power_iterative differs from its model in {int(mismatch.sum())} lanes"
     if zero_comp_edges:
         # Two exact outputs, so nothing short of equality is a pass.
         mismatch = res_tensor.to(torch.float32) != golden_tensor.to(torch.float32)
@@ -2426,6 +2504,49 @@ def test_eltwise_unary_sfpu_float_class_quasar(
         input_dimensions,
         DestSync.Half,
         format_variant=format_variant,
+    )
+
+
+def _power_iterative_variants() -> List[QuasarSfpuVariant]:
+    """Same-format Unpack-to-Dest routes: Float16_b through a 16-bit Dest, Float32 through a 32-bit one."""
+    return [
+        resolve_quasar_sfpu_variant(
+            MathOperation.UnaryPowerIterative,
+            InputOutputFormat(fmt, fmt),
+            dest_acc,
+        )
+        for fmt, dest_acc in (
+            (DataFormat.Float16_b, DestAccumulation.No),
+            (DataFormat.Float32, DestAccumulation.Yes),
+        )
+    ]
+
+
+@pytest.mark.quasar
+@parametrize(
+    format_variant=_power_iterative_variants(),
+    exponent=POWER_ITERATIVE_EXPONENTS,
+    runtime_exponent=[False, True],
+    input_dimensions=runtime(list(TENSOR_DIMS[:1])),
+)
+def test_eltwise_unary_sfpu_power_iterative_quasar(
+    format_variant,
+    exponent,
+    runtime_exponent,
+    input_dimensions,
+):
+    """power_iterative, bit-exact against power_iterative_expected, for constant and runtime
+    exponents on both Dest widths."""
+    run_eltwise_unary_sfpu_quasar(
+        format_variant.formats,
+        format_variant.dest_acc,
+        MathOperation.UnaryPowerIterative,
+        ApproximationMode.No,
+        input_dimensions,
+        DestSync.Half,
+        format_variant=format_variant,
+        power_iterative_exponent=exponent,
+        power_iterative_runtime=runtime_exponent,
     )
 
 
