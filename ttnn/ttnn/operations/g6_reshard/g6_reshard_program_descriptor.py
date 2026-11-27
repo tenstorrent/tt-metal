@@ -58,11 +58,20 @@ NOC_POLICY = "split"
 
 # What the "split" policy may choose per issuer.
 #   "issuer": one NoC.
-#   "cut":    one NoC, or one tile-row or piece-column cut with a NoC per side.
-SPLIT_SHAPE = "cut"
+#   "cut":    one NoC, or one tile-row or piece-column cut with a NoC per side. The route
+#             model ranks it best, yet on Blackhole it measures slower than "issuer": an
+#             issuer's reads on its second NoC take ~300 cycles longer to issue, a cost the
+#             model (response bytes per link) does not see. Splitting rows into segments on
+#             one NoC costs nothing, so the cross-NoC switch is the cost.
+SPLIT_SHAPE = "issuer"
 # Candidate cut positions per axis; bounds the host search per issuer.
 SPLIT_MAX_ROW_CUTS = 6
 SPLIT_MAX_COL_CUTS = 4
+# Link-load weight the "split" search gives a read whose route crosses the torus seam;
+# 1.0 is the plain link-sum model. Above 1 the search avoids wrapped routes (stops the
+# "cut" regression on I5), but it also drops the wrapped single-issuer moves that make
+# "issuer" faster on P.
+SPLIT_WRAP_WEIGHT = 1.0
 
 # Common RT arg slots, rewritten on every call (both buffers are lockstep-allocated:
 # one address serves every core).
@@ -177,6 +186,9 @@ def choose_nocs(roles, in_p, policy):
 
 # NoC torus extent (columns, rows) in NoC coordinates, per architecture.
 NOC_GRID = {"BLACKHOLE": (17, 12), "WORMHOLE_B0": (10, 12)}
+
+
+_NIU = ("egress", "ingress")
 
 
 def _route_links(noc, src, dst, grid):
@@ -359,22 +371,28 @@ def split_nocs(roles, in_p, nocs, device, shape, powers=(4, 8, 16, 32, 64), max_
                 pc0.append(max(role["block_cols"][0], ci * in_p.block_width_tiles))
                 pws.append(piece_width)
                 src = noc_xy(in_p.core_of(ri, ci))
-                routes.append(
-                    [
-                        [resource_ids.setdefault(link, len(resource_ids)) for link in _route_links(noc, src, dst, grid)]
-                        for noc in (0, 1)
-                    ]
-                )
+                per_noc = []
+                for noc in (0, 1):
+                    weight = 1.0 if _wrap_free(noc, src, dst) else SPLIT_WRAP_WEIGHT
+                    per_noc.append(
+                        [
+                            (resource_ids.setdefault(link, len(resource_ids)), 1.0 if link[0] in _NIU else weight)
+                            for link in _route_links(noc, src, dst, grid)
+                        ]
+                    )
+                routes.append(per_noc)
             options, noc0, tiles = _issuer_options(
                 nocs[ri_][k], (begin, end), role["block_cols"], pr0, prs, pc0, pws, shape
             )
-            touched = sorted({r for route in routes for per_noc in route for r in per_noc})
+            touched = sorted({r for route in routes for per_noc in route for r, _ in per_noc})
             column = {r: i for i, r in enumerate(touched)}
             on0 = np.zeros((len(routes), len(touched)))
             on1 = np.zeros((len(routes), len(touched)))
             for j, (route0, route1) in enumerate(routes):
-                on0[j, [column[r] for r in route0]] = 1.0
-                on1[j, [column[r] for r in route1]] = 1.0
+                for r, w in route0:
+                    on0[j, column[r]] = w
+                for r, w in route1:
+                    on1[j, column[r]] = w
             load = noc0 @ on0 + (tiles[None, :] - noc0) @ on1
             issuers.append((ri_, k, options, np.asarray(touched), load))
     if not issuers:
@@ -387,7 +405,7 @@ def split_nocs(roles, in_p, nocs, device, shape, powers=(4, 8, 16, 32, 64), max_
 
     niu = np.zeros(len(resource_ids), dtype=bool)
     for link, r in resource_ids.items():
-        niu[r] = link[0] in ("egress", "ingress")
+        niu[r] = link[0] in _NIU
     # Measured: a NoC's NIU port carrying twice the tiles costs time even with no link traffic,
     # so a plan that only trades link load for NIU-port load is not taken.
     niu_cap = float(total[niu].max())
@@ -495,6 +513,7 @@ def _cache_key(input_tensor, memory_config):
         SPLIT_SHAPE,
         SPLIT_MAX_ROW_CUTS,
         SPLIT_MAX_COL_CUTS,
+        SPLIT_WRAP_WEIGHT,
     )
 
 

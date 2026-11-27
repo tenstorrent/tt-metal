@@ -30,7 +30,7 @@
 - **Golden baseline**: 9 / 9 registry cells passing (12 / 12 tests incl. 3 regression); verifier CLI: 0 supported_fail, 0 xpass_drift, 0 xfail_wrong_mode
 - **Perf baseline (P)**: 1637 ns Tracy `DEVICE KERNEL DURATION` (warm median); 1980–2041 ns golden `device_kernel_ns`; stock 1990 ns
 
-### [ ] Refinement 1 — Cut P's busiest NoC link
+### [x] Refinement 1 — Cut P's busiest NoC link
 
 **Type**: perf
 
@@ -49,6 +49,16 @@ Lower P's busiest-link load and measure it. The `noc_placement` entry of `ttnn/t
 - Do not touch the launch skew: it is dispatch-side and outside the op.
 
 **Done when**: Tracy `DEVICE KERNEL DURATION` on P improves beyond noise (> 3%) on a fresh kernel cache, and golden `device_kernel_ns` for P moves the same way. The golden suite stays green (exact gate) and `test_g6_reshard.py` passes in plain and `--dev` mode. No regression on the guard set: one representative per distinct kernel path × placement, which here is I0 (all-local, one run per issuer), I3 (COL_MAJOR input, transpose links), I5 (every tile crosses, grid off origin) and O1 (COL_MAJOR output off origin, 5-over-3 shards, 56 cores).
+
+**Outcome**:
+- Measured (Tracy `DEVICE KERNEL DURATION`, fresh kernel cache, 5-call medians): P 1641 → 1532 ns (−6.6%; two earlier sessions −9% to −10%). Golden `device_kernel_ns` for P in a same-session control: 1996 → 1782 (test_op) and 1942 → 1821 (loose). O1 2845 → 2688. I0, I3 and I5 plans are unchanged.
+- Lever: the per-issuer p-norm NoC search (`SPLIT_SHAPE="issuer"`) lowers P's modeled busiest link from 64 to 48. Per-issuer choice was not floored at 64; the greedy had stopped in a local optimum.
+- The model ranks per-issuer plans like the device does, but not intra-issuer cuts:
+  - `cut` (modeled 40) measured 1698 on P and +20% on I5.
+  - An issuer's reads on its second NoC take ~300 cycles longer to issue. Same-NoC segmenting costs nothing.
+  - `cut` and `SPLIT_WRAP_WEIGHT` stay as live, non-default knobs.
+- Bottleneck now: NoC1 link transfer at 48 tiles, plus the ~300-cycle per-issuer fixed cost, plus ~450 ns of dispatch-side launch skew.
+- Next to try: give the model a term for request injection behind passing response packets, so cross-NoC splits are priced right; or interleave per-run NoCs inside an issuer. Both need calibration runs outside this refinement's scope, and Refinement 2's ordering levers change which links are busy when, so they are best tuned together.
 
 ### [ ] Refinement 2 — Trim P's per-issuer fixed cost and co-tune issue order
 
