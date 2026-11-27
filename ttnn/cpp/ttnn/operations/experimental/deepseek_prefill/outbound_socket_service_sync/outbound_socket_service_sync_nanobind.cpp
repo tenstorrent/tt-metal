@@ -43,6 +43,8 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
                 per-shard spec. Default: None.
             metadata (ttnn.Tensor): ``[1, 1, 1, N]`` uint32 blob; size must match the
                 service's ``metadata_size_bytes``. Default: None.
+            metadata_size_bytes (int): D2H only: send just this many leading bytes of
+                ``metadata``. Default: all of it.
 
         Returns:
             ttnn.Tensor | list[ttnn.Tensor]: the (now-filled) service backing tensor(s).
@@ -72,11 +74,13 @@ void bind_outbound_socket_service_sync(nb::module_& mod) {
             static_cast<ttnn::Tensor (*)(
                 const tt::tt_metal::D2HStreamService&,
                 const std::optional<ttnn::Tensor>&,
-                const std::optional<ttnn::Tensor>&)>(&ttnn::experimental::outbound_socket_service_sync),
+                const std::optional<ttnn::Tensor>&,
+                std::optional<uint32_t>)>(&ttnn::experimental::outbound_socket_service_sync),
             nb::arg("service"),
             nb::kw_only(),
             nb::arg("input") = std::nullopt,
-            nb::arg("metadata") = std::nullopt));
+            nb::arg("metadata") = std::nullopt,
+            nb::arg("metadata_size_bytes") = std::nullopt));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::outbound_socket_service_sync::detail

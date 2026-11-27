@@ -46,6 +46,7 @@ std::vector<Tensor> outbound_socket_service_sync(
 Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,
     const std::optional<Tensor>& input = std::nullopt,
-    const std::optional<Tensor>& metadata = std::nullopt);
+    const std::optional<Tensor>& metadata = std::nullopt,
+    std::optional<uint32_t> metadata_size_bytes = std::nullopt);
 
 }  // namespace ttnn::experimental

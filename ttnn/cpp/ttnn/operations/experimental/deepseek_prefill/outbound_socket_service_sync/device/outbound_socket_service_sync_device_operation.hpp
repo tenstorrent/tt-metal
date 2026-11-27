@@ -65,10 +65,12 @@ std::vector<ttnn::Tensor> outbound_socket_service_sync(
 
 // D2H service: {backing+metadata, backing-only, metadata-only}. `input` is the payload to
 // stream (omit for metadata-only); `metadata` is the record (omit for payload-only). At
-// least one must be set.
+// least one must be set. `metadata_size_bytes` sends only that many leading bytes of
+// `metadata` (default: all of it).
 ttnn::Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,
     const std::optional<ttnn::Tensor>& input = std::nullopt,
-    const std::optional<ttnn::Tensor>& metadata = std::nullopt);
+    const std::optional<ttnn::Tensor>& metadata = std::nullopt,
+    std::optional<uint32_t> metadata_size_bytes = std::nullopt);
 
 }  // namespace ttnn::prim

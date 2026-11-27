@@ -485,7 +485,9 @@ class TtPrefillRuntime:
         if d2h_service is not None:
 
             def on_layer_complete(layer_idx: int) -> None:
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(
+                    d2h_service, metadata=metadata_msg, metadata_size_bytes=d2h_service.metadata_size_bytes()
+                )
 
         elif self._layer_completion_sink is not None:
             # Pipelined mode: bind the forward's chunks per call so the synchronous callback reads no mutable state.

@@ -600,22 +600,6 @@ def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
     return _device_record(_metadata_record_words(meta), outbound.get_backing_tensor().device())
 
 
-def _ack_metadata(runtime, sockets, meta: dict, d2h_service) -> ttnn.Tensor:
-    """Metadata sent back in the D2H ack. Normally this is the metadata the rank received. On the first rank with
-    media refs, the received metadata also carries the refs and is too long for the ack, so send only the chunk
-    records, rebuilt every forward."""
-    if not (MEDIA_MAX_REFS and d2h_service is not None and runtime.config.is_first_rank):
-        return sockets.metadata
-    words = torch.tensor(forward_metadata_words(meta["chunks"], FORWARD_CHUNKS), dtype=torch.int32).reshape(1, 1, 1, -1)
-    # Refilling in place is safe: _socket_next's blocking metadata read already waited for the previous forward,
-    # whose D2H ack read this record.
-    if sockets.ack_record is not None and sockets.ack_record.is_allocated():
-        _fill_record(sockets.ack_record, words)
-    else:
-        sockets.ack_record = _device_record(words, runtime.mesh_device)
-    return sockets.ack_record
-
-
 def _fill_record(record: ttnn.Tensor, words: torch.Tensor) -> None:
     src = ttnn.from_torch(
         words,
@@ -740,7 +724,6 @@ class SocketBuffers:
         # Persistent destinations of the inbound D2D extra segments, in segment order, or None.
         self.extras = extras
         self.send_record = send_record
-        self.ack_record = None
         self.per_chunk = PerChunkBuffers()
         self.drain_trace = None
         self.send_trace = None
@@ -979,7 +962,7 @@ def _compute_and_send(
                 meta["chunks"],
                 request_id=c,
                 d2h_service=d2h_service,
-                metadata_msg=_ack_metadata(runtime, sockets, meta, d2h_service),
+                metadata_msg=sockets.metadata,
                 **mtp_kwargs,
                 **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),
@@ -1002,7 +985,7 @@ def _compute_and_send(
                 actual_end=meta["actual_end"],
                 request_id=c,
                 d2h_service=d2h_service,
-                metadata_msg=_ack_metadata(runtime, sockets, meta, d2h_service),
+                metadata_msg=sockets.metadata,
                 **mtp_kwargs,
                 **media_kwargs,
                 **({"indexer_indices": indices} if indices is not None else {}),

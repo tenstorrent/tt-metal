@@ -285,6 +285,25 @@ def test_metadata_ack_waits_for_the_service_once_the_ring_is_full(mesh_device):
     del keep
 
 
+def test_metadata_ack_sends_the_leading_bytes_of_a_wider_tensor(mesh_device, expect_error):
+    """The first prefill rank acks with its H2D metadata, whose chunk records are followed by its media refs."""
+    service = _metadata_only_service(mesh_device, fifo_pages=4)
+    wide = ttnn.from_torch(
+        torch.tensor([7, 1007, 2007, 5, 6], dtype=torch.int64).reshape(1, 1, 1, 5),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ack = ttnn.experimental.deepseek_prefill.outbound_socket_service_sync
+    for size, error in ((None, "exceeds the service"), (24, "within the metadata tensor"), (10, "multiple of 4")):
+        with expect_error(RuntimeError, error):
+            ack(service, metadata=wide, metadata_size_bytes=size)
+    ack(service, metadata=wide, metadata_size_bytes=_ACK_RECORD_BYTES)
+    assert _read_records(service, 1, timeout_s=60) == [(7, 1007, 2007)]
+
+
 # ---- teardown with records the host never read ---------------------------------------------------
 # The destructor gives up waiting for the host, abandons the unread records and still stops the service before
 # releasing it, so the service core is reusable straight away.

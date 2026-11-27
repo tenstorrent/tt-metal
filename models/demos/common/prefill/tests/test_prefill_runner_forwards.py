@@ -204,14 +204,6 @@ def test_first_rank_decodes_media_refs_from_the_metadata_bytes(monkeypatch, expe
         runner._decode_metadata(bytes(raw), with_media=True)
 
 
-def test_only_the_first_rank_acks_with_a_chunks_only_record(monkeypatch):
-    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
-    sockets = runner.SocketBuffers(metadata=None)
-    sockets.metadata = "received record"
-    later_rank = SimpleNamespace(config=SimpleNamespace(is_first_rank=False))
-    assert runner._ack_metadata(later_rank, sockets, {}, d2h_service=object()) == "received record"
-
-
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):
     split = [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(0, C, 2 * C)]
     with expect_error(ValueError, "two separate runs"):

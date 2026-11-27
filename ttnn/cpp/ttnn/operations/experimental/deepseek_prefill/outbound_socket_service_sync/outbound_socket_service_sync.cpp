@@ -21,8 +21,9 @@ std::vector<Tensor> outbound_socket_service_sync(
 Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,
     const std::optional<Tensor>& input,
-    const std::optional<Tensor>& metadata) {
-    return ttnn::prim::outbound_socket_service_sync(service, input, metadata);
+    const std::optional<Tensor>& metadata,
+    std::optional<uint32_t> metadata_size_bytes) {
+    return ttnn::prim::outbound_socket_service_sync(service, input, metadata, metadata_size_bytes);
 }
 
 }  // namespace ttnn::experimental
