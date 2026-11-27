@@ -42,8 +42,10 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         TT_FATAL(
             !tensors.attn_mask.has_value() && !tensors.attn_mask_block_map.has_value() &&
                 !tensors.page_table.has_value() && !attrs.chunk_start_idx.has_value() &&
-                !tensors.chunk_start_idx_tensor.has_value() && !tensors.attention_sink.has_value(),
-            "runtime_seq_len supports SDPA without a mask, a mask block map, paging, chunks or an attention sink only");
+                !tensors.chunk_start_idx_tensor.has_value() && !tensors.attention_sink.has_value() &&
+                !tensors.cu_window_seqlens.has_value() && !tensors.windowed_q_token_offset_tensor.has_value(),
+            "runtime_seq_len supports SDPA without a mask, a mask block map, paging, chunks, an attention sink or "
+            "window tensors only");
         TT_FATAL(
             ttnn::get_fp32_dest_acc_en(attrs.compute_kernel_config),
             "runtime_seq_len supports the standard compute path only, which fp32_dest_acc_en=True selects");

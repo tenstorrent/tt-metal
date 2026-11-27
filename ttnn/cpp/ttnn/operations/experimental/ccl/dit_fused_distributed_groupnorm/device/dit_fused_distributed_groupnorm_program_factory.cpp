@@ -921,6 +921,14 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         for (size_t j = 0; j < group.size(); ++j) {
             const CoreCoord core = group[j];
             const CoreCoord virtual_core = virtual_group[j];
+            // The sender weights the group's statistics by tile-row slot in core order, so the j-th core must
+            // hold slot j.
+            TT_FATAL(
+                virtual_core.y == j,
+                "internal: core {} of mcast group {} holds tile-row slot {}",
+                j,
+                i,
+                virtual_core.y);
             // The start pages are size-dependent: write_size_runtime_args fills them in.
             constexpr uint32_t in0_start_id = 0;
             constexpr uint32_t out_tile_start_id = 0;
