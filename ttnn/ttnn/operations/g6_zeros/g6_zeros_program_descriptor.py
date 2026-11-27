@@ -26,8 +26,10 @@ TILE_DIM = 32
 
 # Upper bound on the zero source and on one NoC write: NOC_MAX_BURST_SIZE on Blackhole.
 ZERO_SOURCE_MAX_BYTES = 16384
-# Writer cores used, at most the whole grid. None = the whole compute grid.
-MAX_WRITER_CORES = None
+# Writer cores per DRAM bank (max_writer_cores = num_dram_banks * this, capped by the grid). None = the
+# whole compute grid. 1 measured fastest on all four production shapes: more writers per bank only add
+# NoC and DRAM-endpoint contention.
+WRITER_CORES_PER_BANK = 1
 # Banks one core visits. 1 = bank-affine; num_dram_banks = every core walks every bank, staggered.
 BANKS_PER_CORE = 1
 # Slots of one bank written as one block. None = the core's whole slot range.
@@ -92,11 +94,14 @@ def make_plan(shape, dtype, grid, num_dram_banks) -> ZerosPlan:
     if num_dram_banks % banks_per_core != 0:
         raise RuntimeError(f"g6_zeros: BANKS_PER_CORE={banks_per_core} must divide {num_dram_banks} DRAM banks")
     num_bank_sets = num_dram_banks // banks_per_core
-    max_writer_cores = grid_cores if MAX_WRITER_CORES is None else min(MAX_WRITER_CORES, grid_cores)
+    if WRITER_CORES_PER_BANK is None:
+        max_writer_cores = grid_cores
+    else:
+        max_writer_cores = min(grid_cores, num_dram_banks * WRITER_CORES_PER_BANK)
     if max_writer_cores < num_bank_sets:
         raise RuntimeError(
             f"g6_zeros: {max_writer_cores} writer cores cannot cover {num_bank_sets} bank sets; "
-            "raise MAX_WRITER_CORES or BANKS_PER_CORE"
+            "raise WRITER_CORES_PER_BANK or BANKS_PER_CORE"
         )
 
     # A set's first bank holds the most pages; later banks of the set end one slot earlier at most.

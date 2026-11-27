@@ -41,12 +41,17 @@ Chosen split: bank-affine bank runs (regime R1), per device.
 
 Bytes per tier, per device and per call:
 
-| Case | DRAM write | DRAM read | Cross-core NoC | Core-local fill (all writer cores, 130-core illustration) |
+| Case | DRAM write | DRAM read | Cross-core NoC | Core-local fill (all writer cores: 8 = one per bank, `WRITER_CORES_PER_BANK = 1`) |
 |------|-----------:|----------:|---------------:|-----------------------------------------------------------|
-| p1 (32831,1,32,256) bfloat8_b | 285761024 | 0 | 0 | 130 x 16384 = 2129920 |
-| p2 (16,12,128,128) float32 | 12582912 | 0 | 0 | 130 x 16384 = 2129920 |
-| p3 (8,12,128,128) float32 | 6291456 | 0 | 0 | 130 x 16384 = 2129920 |
-| p4 (1,4,256,128) bfloat16 | 262144 | 0 | 0 | 128 x 2048 = 262144 |
+| p1 (32831,1,32,256) bfloat8_b | 285761024 | 0 | 0 | 8 x 16384 = 131072 |
+| p2 (16,12,128,128) float32 | 12582912 | 0 | 0 | 8 x 16384 = 131072 |
+| p3 (8,12,128,128) float32 | 6291456 | 0 | 0 | 8 x 16384 = 131072 |
+| p4 (1,4,256,128) bfloat16 | 262144 | 0 | 0 | 8 x 16384 = 131072 |
+
+Writer count: lamp L1 turned from the whole grid to one writer core per DRAM bank
+(`max_writer_cores = num_dram_banks * WRITER_CORES_PER_BANK`). Unprofiled trace-replay time on a
+110-core Blackhole, 8 banks: p1 1118 -> 913 us, p2 51.3 -> 43.0 us, p3 27.1 -> 23.1 us,
+p4 5.70 -> 2.81 us. Bytes per tier are unchanged; only the fill count and the core count drop.
 
 > Cheapest-traffic split considered: every candidate split (bank-affine, slot-range across all
 > banks, page-range) ties at the minimum: `out` written once, 0 B read, 0 B cross-core. Delta: 0 B

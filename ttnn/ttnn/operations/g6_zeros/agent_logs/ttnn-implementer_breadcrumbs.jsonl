@@ -5,3 +5,4 @@
 {"event":"test_run","phase":"phase0","result":"pass","detail":"acceptance 21/21 (--dev and plain), golden 13 passed 6 xfailed (bf16/bf8b refused by Phase 0 SUPPORTED)","ts":"2026-11-27T04:23:16-05:00"}
 {"event":"perf_measure","shape":"p2 (16,12,128,128) f32","device_kernel_ns":49499,"gbps":254,"note":"110 cores; per-core end times spread 45us; gradient by grid position -> NoC path/endpoint contention, not bytes","ts":"2026-11-27T04:23:16-05:00"}
 {"event":"perf_measure","shape":"p3 (8,12,128,128) f32","device_kernel_ns":23872,"gbps":263,"ts":"2026-11-27T04:23:16-05:00"}
+{"event":"perf_measure","lamp":"L1","method":"unprofiled trace replay (RB-053)","p1_us":{"grid":1118,"8":913,"32":970},"p2_us":{"grid":51.3,"8":43,"16":45.7,"32":44.9,"64":47},"p3_us":{"grid":27.1,"8":23.1},"p4_us":{"grid":5.7,"8":2.81},"L4_bpc8_p2_us":48.4,"decision":"WRITER_CORES_PER_BANK=1 default","ts":"2026-11-27T04:29:30-05:00"}
