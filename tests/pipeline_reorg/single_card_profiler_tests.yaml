@@ -89,6 +89,7 @@
 - name: Streaming profiler sanity
   cmd: run_streaming_profiler_test
   skus:
+    # Blackhole only: the streaming profiler runs on tt-insight, so there is nothing to run on wh_n150/wh_n300.
     bh_p100a_civ2_viommu:
       timeout: 5
     bh_p150b_civ2_viommu:

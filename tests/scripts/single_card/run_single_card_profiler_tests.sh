@@ -93,6 +93,8 @@ run_realtime_profiler_test() {
 
 run_streaming_profiler_test() {
     remove_default_log_locations
+    # Blackhole only: the streaming profiler runs on tt-insight; the pytests self-skip elsewhere.
+    # The on-device workload and the Tracy capture.
     pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
 }
 
