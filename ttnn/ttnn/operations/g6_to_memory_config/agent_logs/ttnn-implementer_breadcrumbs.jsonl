@@ -4,3 +4,4 @@
 {"event":"test_run","result":"pass","detail":"acceptance 31/31 --dev and plain; golden 91 passed 26 xfailed; shard->core rule cross-checked vs compute_shard_page_mapping on 2058/2065/2071/2062/block","ts":"2026-11-26T23:21:39+00:00"}
 {"event":"environment","detail":"/opt/openmpi-v5.0.7-ulfm (RUNPATH of libtt_metal.so) missing on host; import ttnn fails on MPIX_Comm_shrink. Runs use LD_PRELOAD=generated/mpix_shim/libmpix_shim.so stubbing MPIX_Comm_revoke/MPIX_Comm_shrink.","ts":"2026-11-26T19:16:23-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 31/31 dev+non-dev; golden 179 passed 26 xfailed (bf8b/bf4b + loose outside Phase 0) dev+non-dev","ts":"2026-11-26T19:16:23-05:00"}
+{"event":"test_run","result":"pass","detail":"owner-mover rebuild: acceptance 31/31 --dev and plain; golden 179 passed / 26 xfailed (bf8b/bf4b only)","ts":"2026-11-27T04:13:59-05:00"}
