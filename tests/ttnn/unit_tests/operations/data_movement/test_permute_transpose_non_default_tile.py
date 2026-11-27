@@ -41,6 +41,15 @@ def test_permute_and_transpose_nop_keep_non_default_tile(device, tile):
     assert torch.equal(ttnn.to_torch(ttnn.transpose(x, 1, 1)), x_host)
 
 
+@pytest.mark.parametrize("tile", TILES, ids=lambda t: f"{t[0]}x{t[1]}")
+def test_singleton_axis_swap_keeps_non_default_tile(device, tile):
+    # Swapping two size-1 dims moves no data, so neither op runs a kernel.
+    x_host = (torch.randint(-64, 65, (1, 1, 64, 128)) / 8).to(torch.bfloat16)
+    x = ttnn.from_torch(x_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile), device=device)
+    assert torch.equal(ttnn.to_torch(ttnn.transpose(x, 0, 1)), x_host)
+    assert torch.equal(ttnn.to_torch(ttnn.permute(x, (1, 0, 2, 3))), x_host)
+
+
 @pytest.mark.parametrize("dims", [(1, 0, 2, 3), (0, 1, 3, 2), (3, 1, 2, 0)])
 def test_permute_default_tile(device, dims):
     x_host, x = _input(device, [32, 32])
