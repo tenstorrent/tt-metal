@@ -742,6 +742,11 @@ class ttKDA:
             **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3 import capture
+
+        if capture.CAPTURE is not None and capture.CAPTURE.debug:  # (K3_CAPTURE_DEBUG: KDA stage taps)
+            for name, t in (("dbg_kda_q", q), ("dbg_kda_k", k), ("dbg_kda_v", v), ("dbg_kda_decay", gate)):
+                capture.CAPTURE.tap(self.capture_layer, name, t)
         # With sequence parallelism the relay forms the output gate from the gathered input (with the fused gather, its
         # buffer, and this rank's slice from the shard) and applies the gated norm; otherwise its own program does.
         relay_norm = self.recurrence.applies_output_norm

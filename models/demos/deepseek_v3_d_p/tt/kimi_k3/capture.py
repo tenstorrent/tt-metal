@@ -215,6 +215,7 @@ class TeacherCapture:
         self.dir = root / self.run_id
         self.dir.mkdir(parents=True, exist_ok=True)
         self.raw = os.environ.get("K3_CAPTURE_RAW", "") not in ("", "0")
+        self.debug = bool(os.environ.get("K3_CAPTURE_DEBUG"))  # (also the dbg_* stage taps and the MoE dumps)
         held = [x.strip() for x in os.environ.get("K3_CAPTURE_HELDOUT_LAYERS", "").split(",") if x.strip()]
         self.heldout_layers = self.layers if held == ["all"] else {x if x == LM_HEAD else int(x) for x in held}
         self.heldout_seqs = {int(x) for x in os.environ.get("K3_CAPTURE_HELDOUT_SEQS", "").split(",") if x.strip()}
