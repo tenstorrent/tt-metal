@@ -12,3 +12,4 @@
 {"event":"test_run","result":"pass","detail":"acceptance 27/27 (--dev and plain), golden 20/20; column_group_broadcast with Mcast row groups, in-place row-0 expansion on senders","ts":"2026-11-27T08:08:51-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T08:09:49-05:00"}
 {"event":"test_run","status":"pass","tests":["tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand.py (27, --dev and plain)","eval/golden_tests/g6_expand/ (20)"],"notes":"fresh implementation of column_group_broadcast: sender reader (load/expand/publish via Mcast), receiver reader, writer on full rectangle; descriptor cached per key, addresses as common RT args","ts":"2026-11-27T08:36:24-05:00"}
+{"event":"test_run","status":"pass","test":"test_g6_expand.py (18) + golden (20)","notes":"R1 baseline; W=512 3.27us, W<=256 ~1.75us; replicate zone ~770 cyc/col on critical path","ts":"2026-11-27T21:21:41+01:00"}

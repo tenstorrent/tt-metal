@@ -1,16 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_expand program: plan (select_plan) and ProgramDescriptor.
+"""g6_expand program descriptor — regime R1 (op_design.md, Blocking Model).
 
-Regime column_group_broadcast (op_design.md, Blocking Model). The core rectangle is
-x in [0, num_row_groups), y in [0, num_col_groups). Grid row y is a column group that owns x
-pages [y * core_src_col_tiles, ...); grid column x owns out tile rows [x * core_out_row_tiles, ...)
-of every image. The group's sender (0, y) reads and expands the pages and multicasts them along
-its grid row; every core writes its own out rows of those columns.
+Knobs (each defined once here; every dependent quantity derives from them):
+  grid          — core grid fed to split_work_to_cores
+  COL_BLOCK_CAP — L1 clamp on col_block (broadcast tiles resident per fetch block)
+  col_block     — min(max_cols_per_core, COL_BLOCK_CAP), one CT arg to the reader
+  bcast_depth   — blocks of col_block pages in cb_bcast_tiles (1 when one block per core)
+  row_fetch_bytes — max(32, DRAM alignment): bytes fetched at offsets 0 and FACE_BYTES of a page
+
+The descriptor is cached per geometry (BB-07): a repeat call only refreshes the two
+buffer addresses, which are common runtime args.
 """
-
-from __future__ import annotations
 
 from pathlib import Path
 
@@ -18,203 +20,145 @@ import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-REGIME = "column_group_broadcast"
+TILE_H = 32
+TILE_W = 32
+FACE_ROWS = 16
+COL_BLOCK_CAP = 64  # tiles (128 KiB of bf16) — L1 clamp on col_block
+REGIME = "R1-colmajor-row0fetch"
 
-# BB-05: L1 the model leaves to the op on every core.
-L1_OP_BUDGET = 1347776
+CB_BCAST_TILES = 0  # broadcast tiles: row 0 fetched + replicated in place; also the write source
 
-# Rows of each upper face the sender's RISC-V seeds before the NoC fans them out (lamp L3).
-SEED_ROWS = 2
-SEED_ROWS_ALLOWED = (1, 2, 4, 8)
-
-CB_EXPANDED_TILES = 0
-MCAST_PREFIX = "expand_mcast"
+_cache = {}
 
 
 def _div_up(a, b):
-    return -(-a // b)
+    return (a + b - 1) // b
 
 
-def select_plan(input_tensor, out_shape, *, max_row_groups=None, max_col_groups=None, seed_rows=SEED_ROWS):
-    """The single source of every block knob, core assignment and buffer depth."""
-    tile_h, tile_w = (int(v) for v in input_tensor.tile.tile_shape)
-    face_h, face_w = (int(v) for v in input_tensor.tile.face_shape)
-    page_bytes = int(input_tensor.buffer_page_size())
-    element_bytes = int(input_tensor.element_size())
-
-    d0, d1, _, width = (int(v) for v in input_tensor.shape)
-    h_out = int(out_shape[2])
-    tensor_w_tiles = _div_up(width, tile_w)
-    tensor_src_col_tiles = d0 * d1 * tensor_w_tiles
-    tensor_out_row_tiles = _div_up(h_out, tile_h)
-
-    grid = input_tensor.device().compute_with_storage_grid_size()
-    grid_x, grid_y = int(grid.x), int(grid.y)
-    max_col_groups = grid_y if max_col_groups is None else min(int(max_col_groups), grid_y)
-    max_row_groups = grid_x if max_row_groups is None else min(int(max_row_groups), grid_x)
-
-    S, Hc = tensor_src_col_tiles, tensor_out_row_tiles
-    core_src_col_tiles = _div_up(S, min(S, max_col_groups))
-    num_col_groups = _div_up(S, core_src_col_tiles)
-    core_out_row_tiles = _div_up(Hc, min(Hc, max_row_groups))
-    num_row_groups = _div_up(Hc, core_out_row_tiles)
-
-    src_block_depth = 1 if core_src_col_tiles * page_bytes <= L1_OP_BUDGET else 2
-    block_src_col_tiles = min(core_src_col_tiles, L1_OP_BUDGET // (src_block_depth * page_bytes))
-    block_out_row_tiles = core_out_row_tiles
-
-    assert seed_rows in SEED_ROWS_ALLOWED and face_h % seed_rows == 0, f"seed_rows={seed_rows}"
-    assert block_src_col_tiles >= 1, "a page does not fit the op's L1 budget"
-
-    cores = {}
-    for y in range(num_col_groups):
-        src_start = y * core_src_col_tiles
-        src_count = min(S, src_start + core_src_col_tiles) - src_start
-        for x in range(num_row_groups):
-            row_start = x * core_out_row_tiles
-            row_count = min(Hc, row_start + core_out_row_tiles) - row_start
-            cores[(x, y)] = {
-                "role": "sender" if x == 0 else "receiver",
-                "src_start": src_start,
-                "src_count": src_count,
-                "row_start": row_start,
-                "row_count": row_count,
-            }
-
-    return {
-        "page_bytes": page_bytes,
-        "face_row_bytes": face_w * element_bytes,
-        "face_rows": face_h,
-        "faces_per_band": tile_w // face_w,
-        "bands_per_tile": tile_h // face_h,
-        "tensor_w_tiles": tensor_w_tiles,
-        "tensor_src_col_tiles": S,
-        "tensor_out_row_tiles": Hc,
-        "num_col_groups": num_col_groups,
-        "num_row_groups": num_row_groups,
-        "core_src_col_tiles": core_src_col_tiles,
-        "core_out_row_tiles": core_out_row_tiles,
-        "block_src_col_tiles": block_src_col_tiles,
-        "block_out_row_tiles": block_out_row_tiles,
-        "src_block_depth": src_block_depth,
-        "seed_rows": seed_rows,
-        "num_cores": num_col_groups * num_row_groups,
-        "l1_bytes_per_core": src_block_depth * block_src_col_tiles * page_bytes,
-        "cores": cores,
-        "core_roles": {xy: c["role"] for xy, c in cores.items()},
-    }
+def _ordered_cores(core_group):
+    return list(ttnn.corerange_to_cores(core_group, row_wise=True))
 
 
-def _core_range_set(x0, y0, x1, y1):
-    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
+def _build(input_tensor, output_tensor, grid):
+    in_shape = list(input_tensor.shape)
+    out_shape = list(output_tensor.shape)
+    n_img = out_shape[0] * out_shape[1]
+    Wt = _div_up(out_shape[3], TILE_W)
+    Ht = _div_up(out_shape[2], TILE_H)
+    num_cols = n_img * Wt
+    total_tiles = num_cols * Ht
+    assert input_tensor.buffer_num_pages() == num_cols, (input_tensor.buffer_num_pages(), num_cols, in_shape)
+    assert output_tensor.buffer_num_pages() == total_tiles
 
+    page_size = input_tensor.buffer_page_size()
+    assert output_tensor.buffer_page_size() == page_size
+    elem_size = input_tensor.element_size()
+    face_bytes = FACE_ROWS * FACE_ROWS * elem_size  # 512 B for bf16
+    face_row_bytes = FACE_ROWS * elem_size  # 32 B for bf16
+    row_fetch_bytes = max(face_row_bytes, ttnn.get_dram_alignment())
+    assert row_fetch_bytes <= face_bytes
 
-def _reader_kernel(core_ranges, is_sender, plan, x_ct_args, cores):
-    runtime_args = ttnn.RuntimeArgs()
-    for x, y in cores:
-        c = plan["cores"][(x, y)]
-        runtime_args[x][y] = [c["src_start"], c["src_count"]]
-    return ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "g6_expand_reader.cpp"),
-        core_ranges=core_ranges,
-        compile_time_args=[
-            1 if is_sender else 0,
-            CB_EXPANDED_TILES,
-            plan["page_bytes"],
-            plan["block_src_col_tiles"],
-            plan["seed_rows"],
-            plan["face_row_bytes"],
-            plan["face_rows"],
-            plan["faces_per_band"],
-            plan["bands_per_tile"],
-            *x_ct_args,
-        ],
-        runtime_args=runtime_args,
-        # Only the sender reads x; its address is the one common arg, patched per call.
-        common_runtime_args=[0] if is_sender else [],
-        config=ttnn.ReaderConfigDescriptor(),
+    # ---- Work split: column-major linear order over output tiles ----
+    (num_cores, all_cores, core_group_1, core_group_2, n_g1, n_g2) = ttnn.split_work_to_cores(
+        grid, total_tiles, row_wise=True
     )
+    assignments = []  # (core, start_t, n_t)
+    start_t = 0
+    for group, n_t in ((core_group_1, n_g1), (core_group_2, n_g2)):
+        if n_t == 0:
+            continue
+        for core in _ordered_cores(group):
+            assignments.append((core, start_t, n_t))
+            start_t += n_t
+    assert start_t == total_tiles, (start_t, total_tiles)
 
+    max_cols_per_core = max((s + n - 1) // Ht - s // Ht + 1 for _, s, n in assignments)
+    col_block = min(max_cols_per_core, COL_BLOCK_CAP)
+    num_col_blocks_max = _div_up(max_cols_per_core, col_block)
+    bcast_depth = 1 if num_col_blocks_max == 1 else 2
 
-def create_program_descriptor(input_tensor, output_tensor, plan):
-    """Build the descriptor once per cache key; bind_buffer_addresses() patches each call."""
-    device = input_tensor.device()
-    num_row_groups = plan["num_row_groups"]
-    num_col_groups = plan["num_col_groups"]
-    rectangle = _core_range_set(0, 0, num_row_groups - 1, num_col_groups - 1)
-    senders = _core_range_set(0, 0, 0, num_col_groups - 1)
-    sender_cores = [(0, y) for y in range(num_col_groups)]
-    receiver_cores = [(x, y) for y in range(num_col_groups) for x in range(1, num_row_groups)]
-
-    # One CB over the whole rectangle: the same slot address on every core is the multicast
-    # landing contract.
-    cb_expanded_tiles = ttnn.CBDescriptor(
-        total_size=plan["src_block_depth"] * plan["block_src_col_tiles"] * plan["page_bytes"],
-        core_ranges=rectangle,
+    # ---- CB ----
+    cb_bcast_tiles = ttnn.CBDescriptor(
+        total_size=bcast_depth * col_block * page_size,
+        core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_EXPANDED_TILES,
+                buffer_index=CB_BCAST_TILES,
                 data_format=input_tensor.dtype,
-                page_size=plan["page_bytes"],
+                page_size=page_size,
             )
         ],
     )
 
-    x_ct_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
-    readers = [_reader_kernel(senders, True, plan, x_ct_args, sender_cores)]
-    if num_row_groups > 1:
-        receivers = _core_range_set(1, 0, num_row_groups - 1, num_col_groups - 1)
-        readers.append(_reader_kernel(receivers, False, plan, x_ct_args, receiver_cores))
+    # ---- Kernels ----
+    reader_ct_args = [CB_BCAST_TILES, Ht, col_block, page_size, row_fetch_bytes, face_bytes, face_row_bytes]
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    writer_ct_args = [CB_BCAST_TILES, Ht, Wt, page_size]
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    writer_args = ttnn.RuntimeArgs()
-    for (x, y), c in plan["cores"].items():
-        writer_args[x][y] = [c["src_start"], c["src_count"], c["row_start"], c["row_count"]]
-    writer = ttnn.KernelDescriptor(
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    for core, s, n in assignments:
+        reader_rt[core.x][core.y] = [s, n]
+        writer_rt[core.x][core.y] = [s, n]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "g6_expand_reader.cpp"),
+        core_ranges=all_cores,
+        compile_time_args=reader_ct_args,
+        runtime_args=reader_rt,
+        common_runtime_args=[input_tensor.buffer_address()],
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_expand_writer.cpp"),
-        core_ranges=rectangle,
-        compile_time_args=[
-            CB_EXPANDED_TILES,
-            plan["page_bytes"],
-            plan["block_src_col_tiles"],
-            plan["block_out_row_tiles"],
-            plan["tensor_w_tiles"],
-            plan["tensor_out_row_tiles"],
-            *ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args(),
-        ],
-        runtime_args=writer_args,
-        common_runtime_args=[0],
+        core_ranges=all_cores,
+        compile_time_args=writer_ct_args,
+        runtime_args=writer_rt,
+        common_runtime_args=[output_tensor.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    descriptor = ttnn.ProgramDescriptor(cbs=[cb_expanded_tiles])
-    if num_row_groups > 1:
-        # Receiver groups are the grid rows of the rectangle (row-major, num_row_groups cores
-        # each); the first core of each row, (0, y), is its fixed sender.
-        mcast = ttnn.Mcast(
-            device,
-            ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True, data_ready=ttnn.McastDataReady.Flag),
-            rectangle,
-            num_row_groups,
-            ttnn.McastFixedSenderConfig(sender_index=0),
-            ttnn.McastCoreOrder.RowMajor,
-        )
-        mcast.attach(descriptor, MCAST_PREFIX, readers, 0)
-    else:
-        ttnn.attach_absent_mcast(readers[0], MCAST_PREFIX)
-
-    descriptor.kernels = [*readers, writer]
-    descriptor.custom_program_hash = ttnn.compute_program_descriptor_hash(descriptor)
-    return {
-        "descriptor": descriptor,
-        "x_address_kernel": 0,
-        "out_address_kernel": len(readers),
+    descriptor = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel],
+        semaphores=[],
+        cbs=[cb_bcast_tiles],
+    )
+    plan = {
+        "regime": REGIME,
+        "num_cores": num_cores,
+        "total_tiles": total_tiles,
+        "Ht": Ht,
+        "Wt": Wt,
+        "col_block": col_block,
+        "bcast_depth": bcast_depth,
+        "row_fetch_bytes": row_fetch_bytes,
+        "max_cols_per_core": max_cols_per_core,
     }
+    return descriptor, plan
 
 
-def bind_buffer_addresses(program, input_tensor, output_tensor):
-    """Patch the two per-call buffer addresses into the cached descriptor."""
-    descriptor = program["descriptor"]
+def get_program(input_tensor, output_tensor):
+    """Return (ProgramDescriptor, plan); built once per geometry, addresses refreshed per call."""
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    key = (
+        device.id(),
+        tuple(input_tensor.shape),
+        tuple(output_tensor.shape),
+        input_tensor.dtype,
+        input_tensor.layout,
+        str(input_tensor.memory_config()),
+        str(output_tensor.memory_config()),
+        (grid.x, grid.y),
+    )
+    entry = _cache.get(key)
+    if entry is None:
+        entry = _build(input_tensor, output_tensor, grid)
+        _cache[key] = entry
+    descriptor, plan = entry
     kernels = descriptor.kernels
-    kernels[program["x_address_kernel"]].common_runtime_args = [input_tensor.buffer_address()]
-    kernels[program["out_address_kernel"]].common_runtime_args = [output_tensor.buffer_address()]
+    kernels[0].common_runtime_args = [input_tensor.buffer_address()]
+    kernels[1].common_runtime_args = [output_tensor.buffer_address()]
     descriptor.kernels = kernels
+    return descriptor, plan

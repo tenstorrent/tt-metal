@@ -1,86 +1,59 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_expand writer (every core of the rectangle): store_block.
+// g6_expand writer (BRISC, NoC1) — regime R1 of op_design.md.
 //
-// Each expanded tile E in cb_expanded_tiles is the out tile of its column for every out row, so
-// a block of E pages is written once per out row this core owns, straight from L1. Out pages are
-// whole 2 KB tiles, so no kernel_lib write helper applies (they write row-major sticks).
+// This core owns output tiles [start_t, start_t + n_t) in column-major order
+// (col = t / Ht, ht = t % Ht). Each column segment of that range is served by one
+// broadcast tile from cb_bcast_tiles: await it, write it whole (2048 B) to every output
+// page (img*Ht + ht)*Wt + wt of the segment with no barrier between writes, flush, pop.
+// One write barrier before return (BB-03).
 
 #include <cstdint>
-
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
-#include "api/debug/kernel_profiler.hpp"
-
-namespace {
-
-constexpr uint32_t cb_expanded_tiles = get_compile_time_arg_val(0);
-constexpr uint32_t page_bytes = get_compile_time_arg_val(1);
-constexpr uint32_t block_src_col_tiles = get_compile_time_arg_val(2);
-constexpr uint32_t block_out_row_tiles = get_compile_time_arg_val(3);
-constexpr uint32_t tensor_w_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t tensor_out_row_tiles = get_compile_time_arg_val(5);
-constexpr auto out_args = TensorAccessorArgs<6>();
-
-constexpr uint32_t out_image_pages = tensor_out_row_tiles * tensor_w_tiles;
-
-}  // namespace
 
 void kernel_main() {
-    const uint32_t src_start = get_arg_val<uint32_t>(0);
-    const uint32_t src_count = get_arg_val<uint32_t>(1);
-    const uint32_t row_start = get_arg_val<uint32_t>(2);
-    const uint32_t row_count = get_arg_val<uint32_t>(3);
+    constexpr uint32_t cb_bcast_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);
+    constexpr uint32_t Wt = get_compile_time_arg_val(2);
+    constexpr uint32_t page_size = get_compile_time_arg_val(3);
+    constexpr auto output_args = TensorAccessorArgs<4>();
 
-    Noc noc;
-    CircularBuffer cb(cb_expanded_tiles);
-    const auto out = TensorAccessor(out_args, get_common_arg_val<uint32_t>(0), page_bytes);
-
-    uint32_t block_first_src = src_start;
-    for (uint32_t done = 0; done < src_count; done += block_src_col_tiles) {
-        const uint32_t extent = src_count - done < block_src_col_tiles ? src_count - done : block_src_col_tiles;
-        // A src block may cross an image boundary: track (image, column) per page.
-        const uint32_t first_image = block_first_src / tensor_w_tiles;
-        const uint32_t first_col = block_first_src - first_image * tensor_w_tiles;
-        {
-            DeviceZoneScopedN("wait_block");
-            cb.wait_front(block_src_col_tiles);
-        }
-        {
-            DeviceZoneScopedN("store_block");
-            for (uint32_t rows_done = 0; rows_done < row_count; rows_done += block_out_row_tiles) {
-                const uint32_t rows =
-                    row_count - rows_done < block_out_row_tiles ? row_count - rows_done : block_out_row_tiles;
-                // out_row outer, src_col inner: consecutive out pages, so banks round-robin.
-                for (uint32_t r = 0; r < rows; ++r) {
-                    const uint32_t row_page = (row_start + rows_done + r) * tensor_w_tiles;
-                    uint32_t image = first_image;
-                    uint32_t col = first_col;
-                    for (uint32_t s = 0; s < extent; ++s) {
-                        noc.async_write(
-                            cb,
-                            out,
-                            page_bytes,
-                            {.offset_bytes = s * page_bytes},
-                            {.page_id = image * out_image_pages + row_page + col});
-                        if (++col == tensor_w_tiles) {
-                            col = 0;
-                            ++image;
-                        }
-                    }
-                }
-            }
-            // E must stay put until the NoC has read it for every write of this block.
-            noc.async_writes_flushed();
-        }
-        cb.pop_front(block_src_col_tiles);
-        block_first_src += block_src_col_tiles;
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t start_t = get_arg_val<uint32_t>(0);
+    const uint32_t n_t = get_arg_val<uint32_t>(1);
+    if (n_t == 0) {
+        return;
     }
 
+    const auto output_accessor = TensorAccessor(output_args, output_addr, page_size);
+
+    const uint32_t end_t = start_t + n_t;
+    uint32_t t = start_t;
+    while (t < end_t) {
+        const uint32_t col = t / Ht;
+        const uint32_t col_end = (col + 1) * Ht;
+        const uint32_t seg_end = end_t < col_end ? end_t : col_end;
+        const uint32_t img = col / Wt;
+        const uint32_t wt = col - img * Wt;
+        uint32_t page = (img * Ht + (t - col * Ht)) * Wt + wt;
+
+        {
+            DeviceZoneScopedN("G6E_WAIT_BCAST");
+            cb_wait_front(cb_bcast_tiles, 1);
+        }
+        {
+            DeviceZoneScopedN("G6E_WRITE");
+            const uint32_t src = get_read_ptr(cb_bcast_tiles);
+            for (; t < seg_end; ++t, page += Wt) {
+                noc_async_write(src, output_accessor.get_noc_addr(page), page_size);
+            }
+            noc_async_writes_flushed();
+        }
+        cb_pop_front(cb_bcast_tiles, 1);
+    }
     {
-        DeviceZoneScopedN("write_drain");
-        noc.async_write_barrier();
+        DeviceZoneScopedN("G6E_DRAIN");
+        noc_async_write_barrier();
     }
 }
