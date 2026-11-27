@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 import argparse
-import statistics
 import sys
 
 import matplotlib
@@ -13,7 +12,6 @@ from scaling_summary import _REF, _load
 
 _LINE = "#3987e5"
 _BG, _INK, _MUTED, _GRID = "#1a1a19", "#f0efec", "#c3c2b7", "#3a3a37"
-_HALF_WINDOW = 2
 
 
 def _probes(n):
@@ -22,12 +20,6 @@ def _probes(n):
         picked.append(d)
         d = 2 * d + 1
     return picked + [n - 1]
-
-
-def _value(curve, d):
-    if d == 0:
-        return curve[0]
-    return statistics.median(curve[max(1, d - _HALF_WINDOW) : d + _HALF_WINDOW + 1])
 
 
 def _label(tokens):
@@ -59,8 +51,14 @@ def main():
     ax.minorticks_off()
 
     picked = _probes(len(curve))
-    xs = [(d + 1) * rec["chunk_size"] for d in picked]
-    ys = [_value(curve, d) for d in picked]
+    # The curve is already the summary's windowed median, null where it is n/a: the plot shows the gated values.
+    points = [((d + 1) * rec["chunk_size"], curve[d]) for d in picked]
+    points = [(x, y) for x, y in points if y is not None]
+    if not points:
+        print(f"no measured {_REF} chunk_time for {args.model}; plot skipped")
+        plt.close(fig)
+        return 0
+    xs, ys = [x for x, _ in points], [y for _, y in points]
     ax.plot(xs, ys, color=_LINE, lw=2.2, marker="o", ms=8, mfc=_BG, mec=_LINE, mew=2)
     for x, y in zip(xs, ys):
         ax.annotate(f"{y:.0f}", (x, y), textcoords="offset points", xytext=(0, 10), ha="center", color=_INK)
@@ -73,8 +71,8 @@ def main():
     fig.text(
         0.01,
         0.01,
-        "chunk_time = a chunk's first layer ack -> its last layer ack. First point is chunk 0; "
-        f"the rest are the median of the {2 * _HALF_WINDOW + 1} chunks around that ISL.",
+        "chunk_time = sum over stages of each stage's first to last layer ack, scaled to all its layers (queues and "
+        "hand-offs excluded); each point is the median of the forward holding that chunk and 4 either side.",
         color=_MUTED,
         fontsize=9,
     )

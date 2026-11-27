@@ -214,3 +214,170 @@ def test_one_chunk_per_forward_window_is_unchanged():
         lo, hi = max(0, d - 4), min(409, d + 4)
         expected.append((hi - lo) * 2560 / (ends[hi] - ends[lo]))
     assert list(rec["throughput_tok_s"].values()) == expected
+
+
+def _pipeline_logs(
+    path,
+    layer_ms,
+    num_chunks=40,
+    chunks_per_forward=1,
+    batched_acks=False,
+    split=(),
+    handoff_ms=0.0,
+    bounded=False,
+    ack_every=1,
+    drain_ms=0.0,
+):
+    """Runner start-up and producer CHUNK_RETIRE lines of a pipeline whose stage k runs its layers in layer_ms[k] ms
+    each. A forward reaches stage k handoff_ms after stage k-1 finishes it; stage k starts it once it has it and is done
+    with the forward before, and, when bounded, once stage k+1 has taken the forward before (stage k holds a finished
+    forward until stage k+1 takes it). Every forward is there from the start, so a queue builds in front of the slowest stage. A stage
+    acks every ack_every layers as they finish, or all its layers at once with batched_acks (a traced packed forward),
+    which the producer stamps drain_ms apart as it drains them.
+    A forward in `split` acks its first two stages' boundary layers in one message, which no stage owns."""
+    sizes = [len(costs) for costs in layer_ms]
+    bounds = [sum(sizes[:k]) for k in range(len(sizes) + 1)]
+    lines = [
+        f"[1,{k}]<stdout>: [pp rank {k}/{len(sizes)}] mesh=(4, 4) layers=[{bounds[k]}, {bounds[k + 1]}) "
+        f"chunk_size=2560 forward_chunks={chunks_per_forward} max_seq_len=1064960 num_users=88\n"
+        for k in range(len(sizes))
+    ]
+    done = [0.0] * len(sizes)
+    started = [0.0] * len(sizes)
+    for f in range(0, num_chunks, chunks_per_forward):
+        arrived, acks = 1.0, []
+        prev_started = list(started)
+        for k, costs in enumerate(layer_ms):
+            start = max(arrived, done[k], prev_started[k + 1] if bounded and k + 1 < len(sizes) else 0.0)
+            started[k] = start
+            t = start
+            for i, ms in enumerate(costs):
+                t += ms / 1000.0
+                if not batched_acks and ((i + 1) % ack_every == 0 or i + 1 == len(costs)):
+                    acks.append((bounds[k] + i + 1 - ((i % ack_every) + 1), bounds[k] + i + 1, t))
+            if batched_acks:
+                acks += [(bounds[k] + i, bounds[k] + i + 1, t + i * drain_ms / 1000.0) for i in range(len(costs))]
+            done[k] = t
+            arrived = t + handoff_ms / 1000.0
+        if f in split:
+            b = bounds[1]
+            acks = [a for a in acks if a[0] not in (b - 1, b)] + [(b - 1, b + 1, next(t for a, _, t in acks if a == b))]
+            acks.sort(key=lambda a: a[2])
+        first = acks[0][2]
+        layer_field = ",".join(f"{a}-{z}@{(t - first) * 1000.0:.1f}" for a, z, t in acks)
+        for c in range(f, min(f + chunks_per_forward, num_chunks)):
+            lines.append(
+                f"[1,0]<stderr>: [producer] CHUNK_RETIRE slot=0 start={c * 2560} end={(c + 1) * 2560} "
+                f"first={first:.6f} retire={done[-1]:.6f} warmup=0 acks={len(acks)} layers={layer_field}\n"
+            )
+    path.mkdir()
+    (path / "log").write_text("".join(lines))
+    return path
+
+
+def _uniform(work_ms, layers):
+    return [[ms / n] * n for ms, n in zip(work_ms, layers)]
+
+
+def _measure(logs, num_chunks=40, chunks_per_forward=1):
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import _perf_metrics, _spans_from_logs, _stage_ranges
+
+    _, rec = _perf_metrics(
+        _spans_from_logs(logs, num_chunks),
+        2560,
+        len(_stage_ranges(logs)),
+        {num_chunks - 1},
+        chunks_per_forward,
+        stages=_stage_ranges(logs),
+    )
+    return rec
+
+
+# The queue forms in front of the slowest stage. A chunk's first-to-last ack latency counts it only when that stage
+# is past the first, so latency swings with which stage is slowest; chunk_time is the working time wherever it is.
+@pytest.mark.parametrize("slowest", [0, 1, 2])
+def test_chunk_time_excludes_the_queue_wherever_it_forms(tmp_path, slowest):
+    work = [100.0, 100.0, 100.0]
+    work[slowest] = 110.0
+    rec = _measure(_pipeline_logs(tmp_path / "logs", _uniform(work, [12, 12, 9])))
+    assert rec["chunk_time_ms"]["@100k"] == pytest.approx(310.0, abs=0.5)
+    assert rec["stage_ms"]["@100k"] == pytest.approx(work, abs=0.5)
+    # Latency carries the queue only when it forms past the first stage.
+    if slowest:
+        assert rec["latency_ms"]["@100k"] > 400.0 and rec["queued_ms"]["@100k"] > 100.0
+    else:
+        assert rec["latency_ms"]["@100k"] < 310.0
+
+
+def test_stages_that_ack_together_have_no_chunk_time(tmp_path, monkeypatch):
+    import json
+
+    from models.demos.common.prefill.runners.ci.summarize_ci_run import (
+        _perf_metrics,
+        _publish_json,
+        _spans_from_logs,
+        _stage_ranges,
+    )
+
+    # A traced packed forward acks each stage's layers at once: the producer sees when a stage finished, not when it
+    # started, so its work cannot be told from its wait for room downstream.
+    logs = _pipeline_logs(
+        tmp_path / "logs", _uniform([120.0, 100.0], [12, 12]), chunks_per_forward=4, batched_acks=True, drain_ms=0.2
+    )
+    lines, rec = _perf_metrics(_spans_from_logs(logs, 40), 2560, 2, {0, 19, 39}, 4, stages=_stage_ranges(logs))
+    assert len(rec["chunk_time_curve_ms"]) == 40 and rec["latency_ms"]["@100k"] > 0
+    assert [line for line in lines if "chunk_time" in line] == [
+        "chunk_time: n/a (every forward has a stage whose layer acks do not show when it started: acked as a batch, "
+        "as traced packed forwards do, or in one ack)"
+    ]
+    # n/a is null in the metrics JSON, which JSON readers parse and the gate reports as missing.
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    _publish_json(rec, "kimi_k3_1_packed_sc1")
+    sidecar = json.loads((tmp_path / "perf_json" / "kimi_k3_1_packed_sc1.json").read_text(), parse_constant=pytest.fail)
+    assert sidecar["chunk_time_ms"]["@100k"] is None
+    assert set(sidecar["chunk_time_curve_ms"]) == {None}
+
+
+def test_a_forward_that_cannot_be_split_by_stage_does_not_lose_the_probe(tmp_path):
+    rec = _measure(_pipeline_logs(tmp_path / "logs", _uniform([100.0, 110.0], [12, 12]), split={38}))
+    assert rec["chunk_time_ms"]["@100k"] == pytest.approx(210.0, abs=0.5)
+    # Most of a window that does not split leaves its probe n/a.
+    rec = _measure(_pipeline_logs(tmp_path / "most", _uniform([100.0, 110.0], [12, 12]), split=set(range(33, 40))))
+    assert rec["chunk_time_ms"]["@100k"] != rec["chunk_time_ms"]["@100k"]
+
+
+# A one-forward buffer between stages makes a stage upstream of the slowest wait for room; a hand-off between stages
+# takes time. Neither falls between a stage's own first and last layer ack.
+def test_chunk_time_excludes_back_pressure_and_hand_offs(tmp_path):
+    work = [100.0, 60.0, 150.0]
+    rec = _measure(_pipeline_logs(tmp_path / "logs", _uniform(work, [12, 12, 9]), bounded=True, handoff_ms=5.0))
+    assert rec["chunk_time_ms"]["@100k"] == pytest.approx(310.0, abs=0.5)
+    assert rec["stage_ms"]["@100k"] == pytest.approx(work, abs=0.5)
+    assert rec["latency_ms"]["@100k"] > 400.0
+    # Back-pressure is there: every stage runs at the slowest one's pace, while each still shows its own work.
+    assert rec["throughput_tok_s"]["@100k"] == pytest.approx(2560 / 0.150, rel=1e-3)
+
+
+def test_a_stage_acking_every_two_layers_is_timed(tmp_path):
+    rec = _measure(_pipeline_logs(tmp_path / "logs", _uniform([120.0, 100.0], [12, 12]), ack_every=2))
+    assert rec["stage_ms"]["@100k"] == pytest.approx([120.0, 100.0], abs=0.5)
+
+
+# The span from a stage's first ack to its last leaves out the layers of the first ack; scaling to all the stage's
+# layers counts them at the stage's average. A stage that starts on a cheap layer reads high by the difference.
+def test_scaling_counts_the_first_layer_at_the_stage_average(tmp_path):
+    rec = _measure(_pipeline_logs(tmp_path / "logs", [[10.0, 30.0, 30.0, 30.0], [25.0] * 4]))
+    assert rec["stage_ms"]["@100k"] == pytest.approx([120.0, 100.0], abs=0.5)  # stage 0 does 100 ms of work
+
+
+def test_scaling_report_shows_an_unmeasured_probe_as_missing_and_drops_an_unmeasured_metric():
+    from models.demos.common.prefill.runners.ci.scaling_summary import _ref_rows, _rows
+
+    rows = _ref_rows({"chunk_time_ms": {"@100k": None, "@1M": 796.4}, "throughput_tok_s": {"@1M": 22788.0}})
+    assert ["chunk_time @100k", "-"] in rows
+    assert ["chunk_time @1M", "796 ms"] in rows
+    # A metric unmeasured at every probe has no rows.
+    rows = _ref_rows({"chunk_time_ms": {"@100k": None, "@1M": None}, "throughput_tok_s": {"@1M": 22788.0}})
+    assert [row[0] for row in rows] == ["throughput @1M"]
+    unmeasured = {"chunk_time_ms": {"@1M": None}, "throughput_tok_s": {"@1M": 22788.0}}
+    assert [row[0] for row in _rows(unmeasured, unmeasured)] == ["throughput @1M"]
