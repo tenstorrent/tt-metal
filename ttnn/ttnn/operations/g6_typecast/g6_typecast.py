@@ -5,7 +5,8 @@
 
 Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate(), entry point.
 Design: op_design.md (regime R1 `tile_stream`: interleaved TILE in -> compute typecast -> interleaved
-TILE out, contiguous tile ranges over the full compute grid).
+TILE out, contiguous tile ranges over the full compute grid; regime R2 `rm_pseudo_tile_stream`: interleaved
+ROW_MAJOR rows gathered by bank runs, converted as dense 1024-value pseudo-tiles, scattered back).
 """
 
 from __future__ import annotations
@@ -65,16 +66,28 @@ INPUT_TAGGERS = {
 
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED (Phase 0)
+# 2. SUPPORTED (Phase 0 + Refinement 1: ROW_MAJOR regime R2 and its conversion arms)
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
-    "output_dtype": [ttnn.float32, ttnn.bfloat8_b, ttnn.int32],
-    "layout": [ttnn.TILE_LAYOUT],
+    "dtype": [ttnn.bfloat16, ttnn.uint32, ttnn.int32],
+    "output_dtype": [ttnn.float32, ttnn.bfloat8_b, ttnn.int32, ttnn.uint8, ttnn.uint32],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "buffer": ["dram", "l1"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
-    "rank": [3, 4],
+    "rank": [1, 2, 3, 4],
+}
+
+# Conversion arms implemented (source -> destination). The per-axis SUPPORTED product admits pairs with no
+# arm (e.g. uint32 -> uint8); validate() refuses those with ValueError rather than run a wrong arm.
+# Both regimes (TILE / ROW_MAJOR) run every arm: the compute chain is layout-agnostic.
+CONVERSION_ARMS = {
+    (ttnn.bfloat16, ttnn.float32),  # packer only
+    (ttnn.bfloat16, ttnn.bfloat8_b),  # packer only (bfp8_pack_precise)
+    (ttnn.bfloat16, ttnn.int32),  # SFPU truncation toward zero
+    (ttnn.bfloat16, ttnn.uint8),  # SFPU truncation, low byte
+    (ttnn.uint32, ttnn.int32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
+    (ttnn.int32, ttnn.uint32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
 }
 
 
@@ -119,12 +132,17 @@ def validate(input_tensor, dtype, *, sub_core_grids=None):
     for axis, tagger in INPUT_TAGGERS.items():
         axes[axis] = tagger((scenario,), axes)
 
+    if axes["output_dtype"] == ttnn.bfloat8_b and axes["layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        raise ValueError("g6_typecast: bfloat8_b has no ROW_MAJOR representation")
+
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
             raise UnsupportedAxisValue(f"g6_typecast: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"g6_typecast: unsupported combination (refinement candidate): {exc}")
+    if (axes["dtype"], axes["output_dtype"]) not in CONVERSION_ARMS:
+        raise ValueError(f"g6_typecast: no conversion arm for {axes['dtype']} -> {axes['output_dtype']}")
     return axes
 
 

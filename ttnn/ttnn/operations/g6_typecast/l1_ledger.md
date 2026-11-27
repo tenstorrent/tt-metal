@@ -55,3 +55,19 @@ Totals per tier: buffer tier = `tensor_tiles · (in_page_bytes + out_page_bytes)
   nominal `block_tiles`. Capacity is unchanged; the tail block starts at offset 0 or `block_tiles`
   of the ring, so it is always contiguous.
 - Data-movement budget unchanged: input ×1, output ×1, no cross-core traffic.
+
+## Refinement 1 — regime R2 `rm_pseudo_tile_stream` (ROW_MAJOR)
+
+| CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
+|----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
+| `cb_input_tiles` (0) | `effective_depth · block_tiles` pseudo-tiles (1024 values each, `elem · 1024` B) | same | `{row: spans → rows_per_block · effective_depth (dense, rows·W ≤ block_tiles·1024)}` | input dtype (Float16_b / UInt32 / Int32); 32-bit sources tagged `UnpackToDestFp32` (consumed only by `copy_tile`) | reader (compaction) | compute | whole kernel, streaming | not with `cb_input_staging`: staging holds aligned-stride pages while the dense block is written from it |
+| `cb_output_tiles` (1) | `effective_depth · block_tiles` pseudo-tiles | same | same | output dtype (UInt8 / Int32 / UInt32) — output ABI | compute | writer (expansion) | whole kernel, streaming | not with `cb_output_staging` (copy source vs destination) |
+| `cb_input_staging` (2) | `rows_per_block + ceil(64 / in_aligned)` aligned pages | one block of bank-run reads | `{row: spans → rows_per_block}` | raw aligned pages (64 B DRAM slots for F317/F322) | reader (NoC) | reader (compaction) — reader-private scratch, no push/pop | whole kernel | cannot alias the dense CBs (both live during compaction); reused per block after compaction |
+| `cb_output_staging` (3) | `rows_per_block + ceil(64 / out_aligned)` aligned pages | one block of bank-run writes | `{row: spans → rows_per_block}` | raw aligned pages | writer (expansion) | writer (NoC) — writer-private scratch | whole kernel | reused per block after `noc_async_writes_flushed` |
+
+`plan_rm_blocks`: `rows_per_block · (in_aligned + out_aligned) + effective_depth · block_tiles · (in_tile + out_tile) ≤ L1_OP_BUDGET_BYTES − L1_SLACK_BYTES − out_l1_bytes_per_bank − 128`.
+F322: core_rows_max = 38131 (110 cores), rows_per_block ≈ 8.8 K, 5 blocks/core, depth 2.
+
+Data-movement budget (R2): input ×1, output ×1 (logical bytes); physical DRAM traffic = aligned 64 B slot per
+row (F322: 4 194 304 × 64 B in and out — the slot is the DRAM transfer granule, the payload is 6 B / 3 B).
+One NoC transaction per bank run per block (≤ num_banks per block), not per row. No cross-core traffic.

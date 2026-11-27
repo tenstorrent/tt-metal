@@ -30,7 +30,7 @@
 - **Compute config**: `fp32_dest_acc_en` for 32-bit destinations; `bfp8_pack_precise` for bfloat8_b; no user-facing compute config (the spec has none)
 - **Golden baseline**: 42 supported_pass / 27 xfail_expected / 0 loud (44/71 incl. the 2 untagged regression tests)
 
-### [ ] Refinement 1 — ROW_MAJOR regime (R2 `rm_pseudo_tile_stream`) with its conversion arms
+### [x] Refinement 1 — ROW_MAJOR regime (R2 `rm_pseudo_tile_stream`) with its conversion arms
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]`, `1, 2` to `SUPPORTED["rank"]`,
 `ttnn.uint32, ttnn.int32` to `SUPPORTED["dtype"]`, and `ttnn.uint8, ttnn.uint32` to `SUPPORTED["output_dtype"]`
