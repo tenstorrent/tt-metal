@@ -6,12 +6,12 @@
 
 #include <optional>
 #include <variant>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/memory/cross_program/global_circular_buffer.hpp>
 #include "ttnn/operations/experimental/quasar/grid_sample/device/grid_sample_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {

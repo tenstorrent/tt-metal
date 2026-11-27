@@ -8,7 +8,7 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 

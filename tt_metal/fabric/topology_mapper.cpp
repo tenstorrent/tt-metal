@@ -25,7 +25,7 @@
 #include <fmt/format.h>
 #include <set>
 #include "tt_metal/impl/context/metal_context.hpp"
-#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"

@@ -142,7 +142,7 @@ def run(args, context: Context):
         ] = result
         return None
 
-    run_checks.run_per_block_check(check_block)
+    run_checks.run_per_block_check(check_block, block_filter=["tensix", "idle_eth", "active_eth"])
 
     if all_debug_bus_data:
         all_debug_bus_data["git_commit"] = _get_git_commit_hash()

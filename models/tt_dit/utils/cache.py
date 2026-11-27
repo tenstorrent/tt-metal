@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -35,6 +37,21 @@ def config_id(parallel_config):
         if v is not None:
             config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
     return config_id
+
+
+def checkpoint_id(*paths: Path) -> str:
+    """Names the content of a checkpoint's weights files for the conversion cache: per file, the Hugging Face blob hash
+    it resolves to, else the resolved file's path, size and modification time."""
+
+    def file_id(path: Path) -> str:
+        real = Path(os.path.realpath(path))
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", real.name):
+            return real.name[:16]
+        stat = real.stat()
+        return hashlib.sha256(f"{real}:{stat.st_size}:{stat.st_mtime_ns}".encode()).hexdigest()[:16]
+
+    ids = [file_id(path) for path in paths]
+    return ids[0] if len(ids) == 1 else hashlib.sha256(":".join(ids).encode()).hexdigest()[:16]
 
 
 def cache_dir_is_set() -> bool:

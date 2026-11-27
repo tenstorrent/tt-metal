@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -88,8 +89,9 @@ class TtPrefillBlock(LightweightModule):
         *,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        kv_only: bool = False,
     ) -> bool:
-        """Check if block cache is complete (norms + MLA + FFN/MoE).
+        """Check if block cache is complete (norms + MLA + FFN/MoE; attn_norm + MLA KV branch when ``kv_only``).
 
         ``model_cfg`` is optional but MUST be passed for a LatentMoE model (Kimi-K3): without it this
         cannot know to look for the latent-projection cache files, and would report a cache that is
@@ -111,8 +113,11 @@ class TtPrefillBlock(LightweightModule):
             # loaded a `torch.empty` placeholder as the weights. Reading the flag off `model_cfg` keeps
             # every non-gated model's existing cache valid, since only Kimi-K3 sets USE_OUTPUT_GATE.
             has_output_gate=bool(getattr(model_cfg, "USE_OUTPUT_GATE", False)),
+            kv_only=kv_only,
         ):
             return False
+        if kv_only:  # a kv_only block loads no FFN norm and no FFN/MoE
+            return True
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
 
@@ -288,6 +293,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         next_kv_only: bool = False,
+        indexer_key_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
@@ -296,6 +302,7 @@ class TtPrefillBlock(LightweightModule):
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
         forward_chunks: int = 1,
+        moe_impl: Optional[str] = None,
     ):
         super().__init__()
         # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
@@ -397,6 +404,7 @@ class TtPrefillBlock(LightweightModule):
             layer_num=layer_num,
             kv_only=kv_only,
             next_kv_only=next_kv_only,
+            indexer_key_only=indexer_key_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
@@ -425,7 +433,23 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- FFN (MoE or dense) ---
-        if self.is_moe:
+        # (the MoE block's C++ ops - router, shared expert and routed experts in one call,
+        # tt/moe_block/moe_block_ffn.py; the gate / shared expert from the checkpoint, the routed experts from this
+        # cache's TtMoe tensorbins): the model's default MoE, tt/moe_impl.py)
+        self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
+        if self.moe_block:
+            from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
+
+            self.ffn = TtMoEBlockFfn(
+                mesh_device,
+                model_cfg,
+                layer_idx,
+                hf_config=config,
+                cache_path=weight_cache_path,
+                state_dict=state_dict,  # (host MoE weights, when the caller gives them: the synthetic-weight tests)
+                options=MoEBlockFfnOptions(sp_axis=sp_axis),
+            )
+        elif self.is_moe:
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
@@ -471,8 +495,12 @@ class TtPrefillBlock(LightweightModule):
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+                fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
                 **_dense_ffn_kwargs,
             )
+            if self.ffn.fuses_tp_collectives:
+                # Over all forward_chunks chunks' rows at once.
+                self.ffn.prepare_fused(seq_len * forward_chunks // mesh_device.shape[sp_axis])
 
     @staticmethod
     def _build_moe(
@@ -783,6 +811,7 @@ class TtPrefillBlock(LightweightModule):
         ack_layer_idx: Optional[int] = None,
         ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
+        active_chunks: Optional[int] = None,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
@@ -797,13 +826,17 @@ class TtPrefillBlock(LightweightModule):
         indexer_indices: GLM-5.3 reuse, one entry per chunk (None for an empty chunk) from the last "full"
             layer; None when this layer computes its own.
         metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
-            unused (None). Every position runs its attention half, so the caller points an empty chunk at
-            a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
+            unused (None). Positions below ``active_chunks`` run their attention half; the caller points any
+            empty one among them at a scratch slot. Requires ``padding_config``, the persistent MoE padding
+            config, and no ack.
         padding_config: the MoE padding (PackedPadding) for the whole forward, built once by the caller for every
             layer (TtPrefillTransformer.forward_packed, packed_padding); None when every row is real.
         zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
         ack_layer_idx / ack_alias_layer_ids / force_kv_only: as in forward(), for the MTP block TtMTPPredictor
             replays once per level.
+        active_chunks: traced form only. The forward's first ``active_chunks`` positions hold its real chunks and
+            the rest are empty (validate_chunks puts empties at the tail): the empty positions' rows pass through
+            without the attention half, as in the eager form. None: every position runs its attention half.
 
         Returns:
             (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
@@ -812,6 +845,8 @@ class TtPrefillBlock(LightweightModule):
         traced = metadata is not None
         n = len(metadata) if traced else len(chunks)
         assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
+        assert active_chunks is None or (traced and 1 <= active_chunks <= n), f"active_chunks={active_chunks}"
+        active = n if active_chunks is None else active_chunks
         assert not traced or (padding_config is not None and on_layer_complete is None)
         assert indexer_indices is None or len(indexer_indices) == n
         rows = x.shape[2] // n
@@ -825,11 +860,18 @@ class TtPrefillBlock(LightweightModule):
             _t_start = time.perf_counter()
 
         # The sparse-KV push (shared layers) fills each attention step's buffer beside the step before it.
-        push_targets = packed_push_targets([traced or not c.is_empty for c in (chunks or [None] * n)])
+        runs = [k < active for k in range(n)] if traced else [not c.is_empty for c in chunks]
+        push_targets = packed_push_targets(runs)
         first_step = min(push_targets, default=None)
         outs, chunk_indices = [], []
         for k in range(n):
             chunk = None if traced else chunks[k]
+            if traced and k >= active:
+                # The empty tail passes through as one slice: no attention, no KV write.
+                if k == active and not kv_only:
+                    outs.append(ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, n * rows, x.shape[-1])))
+                chunk_indices.append(None)
+                continue
             x_k = ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, x.shape[-1]))
             if not traced and chunk.is_empty:
                 outs.append(x_k)
@@ -1038,7 +1080,8 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
-        fold_residual = self.is_moe and not return_intermediates
+        # (TtMoe adds the residual itself; the MoE block returns the MoE alone, so its residual is added here)
+        fold_residual = self.is_moe and not self.moe_block and not return_intermediates
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -1081,6 +1124,19 @@ class TtPrefillBlock(LightweightModule):
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
+        if self.moe_block and packed:  # (a packed forward: the forward's chunks or metadata words, MoEBlockPacking)
+            assert packed_padding_config is not None and hasattr(
+                packed_padding_config, "ffn_kwargs"
+            ), f"MoE block: a packed forward takes its MoEBlockPacking, got {type(packed_padding_config).__name__}"
+            return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
+        if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
+            return self.ffn(
+                ffn_norm_out,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=actual_start,
+                metadata=metadata,
+            )
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
         moe_out, _ = self.ffn(
@@ -1101,8 +1157,9 @@ class TtPrefillBlock(LightweightModule):
         return moe_out
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
-        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
-        if self.mesh_device.shape[self.tp_axis] > 1:
+        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally). With
+        fuse_tp_collectives TtFfn takes the TP-sharded input and runs both collectives inside its matmuls."""
+        if self.mesh_device.shape[self.tp_axis] > 1 and not self.ffn.fuses_tp_collectives:
             gathered = ttnn.all_gather(
                 ffn_norm_out,
                 dim=-1,

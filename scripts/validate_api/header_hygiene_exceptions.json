@@ -1,27 +1,34 @@
 [
   {
-    "source": "tt-metalium/mesh_device_view.hpp",
+    "source": "tt-metalium/mesh/mesh_device_view.hpp",
     "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Existing stable mesh view dependency on experimental fabric types (FabricNodeId, MeshId).",
     "remove_when": "The stable mesh view interface no longer requires the experimental fabric types header."
   },
   {
-    "source": "tt-metalium/program_descriptors.hpp",
+    "source": "tt-metalium/workload/legacy/program_descriptors.hpp",
     "include": "tt-metalium/experimental/blaze/named_kernel_args.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Existing ProgramDescriptor exposes experimental Blaze named kernel arguments.",
     "remove_when": "Blaze-specific arguments are segregated from the stable descriptor or graduate through design review."
   },
   {
-    "source": "tt-metalium/program_descriptors.hpp",
+    "source": "tt-metalium/workload/legacy/program_descriptors.hpp",
+    "include": "tt-metalium/experimental/cb_descriptor_options.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "CBDescriptor carries its experimental options as a single member, following the Blaze named kernel arguments on KernelDescriptor.",
+    "remove_when": "The experimental CB descriptor options graduate into CBDescriptor or are removed."
+  },
+  {
+    "source": "tt-metalium/workload/legacy/program_descriptors.hpp",
     "include": "internal/reload_table.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "ProgramDescriptor carries internal runtime-reload metadata used by Blaze.",
     "remove_when": "Runtime-reload metadata is removed from the stable descriptor."
   },
   {
-    "source": "tt-metalium/system_mesh.hpp",
+    "source": "tt-metalium/discovery/system_mesh.hpp",
     "include": "tt-metalium/experimental/fabric/fabric_types.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Existing stable system mesh dependency on experimental fabric types (FabricNodeId).",
@@ -75,5 +82,173 @@
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Including advanced options from the experimental folder allows FAFO and WIP work on Metal 2.0 without introducing it into the main stable API surface. Unlike other parts of the API, which use PImpl to hide these features, advanced options structs are needed because most Metal 2.0 specifications cannot use PImpl.",
     "remove_when": "Metal 2.0 has productized all advanced options and no longer has any experimental extensions."
+  },
+  {
+    "source": "tt-metalium/device.hpp",
+    "include": "tt-metalium/mesh/legacy/device.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/device.hpp> moved to <tt-metalium/mesh/legacy/device.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/kernel_types.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/kernel_types.hpp> moved to <tt-metalium/workload/legacy/kernel_types.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/host_api.hpp",
+    "include": "tt-metalium/workload/legacy/host_api.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/host_api.hpp> moved to <tt-metalium/workload/legacy/host_api.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/runtime_args_data.hpp",
+    "include": "tt-metalium/workload/legacy/runtime_args_data.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/runtime_args_data.hpp> moved to <tt-metalium/workload/legacy/runtime_args_data.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/tensor_accessor_args.hpp",
+    "include": "tt-metalium/workload/legacy/tensor_accessor_args.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/tensor_accessor_args.hpp> moved to <tt-metalium/workload/legacy/tensor_accessor_args.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/circular_buffer.hpp",
+    "include": "tt-metalium/workload/legacy/circular_buffer.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/circular_buffer.hpp> moved to <tt-metalium/workload/legacy/circular_buffer.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/circular_buffer_config.hpp",
+    "include": "tt-metalium/workload/legacy/circular_buffer_config.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/circular_buffer_config.hpp> moved to <tt-metalium/workload/legacy/circular_buffer_config.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/circular_buffer_constants.h",
+    "include": "tt-metalium/workload/legacy/circular_buffer_constants.h",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/circular_buffer_constants.h> moved to <tt-metalium/workload/legacy/circular_buffer_constants.h>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/program_descriptors.hpp",
+    "include": "tt-metalium/workload/legacy/program_descriptors.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/program_descriptors.hpp> moved to <tt-metalium/workload/legacy/program_descriptors.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/workload_descriptor.hpp",
+    "include": "tt-metalium/workload/legacy/workload_descriptor.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Deprecated forwarding header: <tt-metalium/workload_descriptor.hpp> moved to <tt-metalium/workload/legacy/workload_descriptor.hpp>.",
+    "remove_when": "The forwarding header is deleted (its removal date is set when it is deprecated)."
+  },
+  {
+    "source": "tt-metalium/experimental/fabric/fabric.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/mesh_program_descriptor.hpp",
+    "include": "tt-metalium/workload/legacy/program_descriptors.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/program_descriptors.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/mesh_workload_runtime_args.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/offline_kernel_compile.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/op_profiler_support.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/program_descriptor_patching.hpp",
+    "include": "tt-metalium/workload/legacy/program_descriptors.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/program_descriptors.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/udm/mesh_circular_buffer.hpp",
+    "include": "tt-metalium/workload/legacy/circular_buffer_config.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/circular_buffer_config.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/udm/mesh_kernel.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/udm/types.hpp",
+    "include": "tt-metalium/workload/legacy/circular_buffer_config.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/circular_buffer_config.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/experimental/udm/types.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/memory/cross_program/global_circular_buffer.hpp",
+    "include": "tt-metalium/workload/legacy/circular_buffer_config.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/circular_buffer_config.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/mesh/mesh_device.hpp",
+    "include": "tt-metalium/mesh/legacy/device.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/mesh/legacy/device.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/mesh/mesh_device_view.hpp",
+    "include": "tt-metalium/mesh/legacy/device.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/mesh/legacy/device.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
+  },
+  {
+    "source": "tt-metalium/workload/mesh_workload.hpp",
+    "include": "tt-metalium/workload/legacy/kernel_types.hpp",
+    "owner": "@tenstorrent/metalium-api-owners",
+    "reason": "Includes <tt-metalium/workload/legacy/kernel_types.hpp>, which moved to legacy/ (its replacement is the mesh / Metal 2.0 API); the dependency cannot be cut yet.",
+    "remove_when": "This header stops depending on the legacy header, or moves to legacy/ itself."
   }
 ]

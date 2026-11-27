@@ -6,9 +6,9 @@
 
 #include <variant>
 
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 
 namespace ttnn::prim {
 

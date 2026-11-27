@@ -12,10 +12,10 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/ndarray.h>
 
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_buffer.hpp>
-#include <tt-metalium/memory_pin.hpp>
-#include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt-metalium/data_formats/bfloat16.hpp>
+#include <tt-metalium/memory/buffer/host_buffer.hpp>
+#include <tt-metalium/memory/utils/memory_pin.hpp>
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 

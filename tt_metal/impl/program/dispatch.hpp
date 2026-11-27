@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include <device.hpp>
-#include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/workload/program.hpp>
 #include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
@@ -15,11 +15,11 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include "dispatch/dispatch_settings.hpp"
-#include "kernel_types.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
 #include "program_impl.hpp"
-#include "sub_device_types.hpp"
+#include "tt-metalium/mesh/sub_device_types.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "trace/trace_node.hpp"
 

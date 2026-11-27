@@ -19,12 +19,12 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 #include <internal/mesh_device.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"

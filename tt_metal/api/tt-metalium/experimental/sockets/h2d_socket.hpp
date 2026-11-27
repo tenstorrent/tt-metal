@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
 namespace tt::tt_metal::experimental::detail {

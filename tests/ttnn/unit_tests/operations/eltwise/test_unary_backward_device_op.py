@@ -238,7 +238,7 @@ def test_sigmoid_bw_program_cache_distinguishes_dtypes(device):
 @pytest.mark.parametrize("shard_inputs", [True, False], ids=["sharded_inputs", "sharded_output_request"])
 def test_sigmoid_bw_sharded(shard_inputs, device):
     """Sharded calls run on the fused device operation. Operands all L1-sharded on the same
-    grid, shard shape and orientation alias their circular buffers to the tensor's own shard;
+    grid, shard shape and orientation borrow the tensor's own shard as their dataflow buffers;
     anything else (DRAM-sharded, mixed sharded/interleaved) is addressed by logical page through
     TensorAccessor. Both must return the requested layout."""
     torch.manual_seed(0)

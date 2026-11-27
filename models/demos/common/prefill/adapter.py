@@ -31,6 +31,7 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,8 @@ class PrefillModelAdapter(ABC):
     # Stored drafter K layout used when comparing against half-split HF goldens.
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
+    # The runtime's prefill_forward / prefill_chunk take media_refs on the first rank (PREFILL_MEDIA_MAX_REFS > 0).
+    supports_media: bool = False
     supports_tp_shard_kv: bool = False
     # Builds any missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_HF_MODEL) at start-up.
     builds_missing_weight_cache: bool = False
@@ -178,6 +181,25 @@ class PrefillModelAdapter(ABC):
     # Send the D2D traffic between galaxies over the direct cables through relay cores, with the inter-mesh
     # fabric traffic on VC0 (fabric intermesh VC disabled). TT_METAL_FABRIC_DISABLE_INTERMESH_VC overrides.
     d2d_relay_default: bool = False
+    # The MoE the model's prefill blocks build (deepseek_v3_d_p/tt/moe_impl.py): "ttmoe" (TtMoe) or "block" (the MoE
+    # block, ttnn.experimental.moe_block: its dims from model_config's fields, its weights from the two methods below).
+    # $MOE_IMPL and a caller's moe_impl override it.
+    moe_impl: str = "ttmoe"
+    # The MoE block's persistent words' slab a core (bytes, in L1_SMALL: the model's L1_SMALL_SIZE holds it); None:
+    # MoEBlockConfig.words_slab_bytes.
+    moe_block_words_slab: Optional[int] = None
+
+    def moe_block_nonrouted_weights(self, layer_idx: int, hf_config=None) -> dict:
+        """A MoE layer's non-routed weights for the MoE block, from the model's checkpoint, in the checkpoint's expert
+        order: float32 torch tensors router_weight [E, H], router_bias [E], the shared expert's gate / up [I, H] and
+        down [H, I]; a latent MoE also latent_down / latent_up / latent_norm. A model that runs the block on its
+        checkpoint implements it."""
+        raise NotImplementedError(f"{type(self).__name__}: the MoE block's non-routed weights")
+
+    def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
+        """The TtMoe tensorbin cache the MoE block reads a layer's routed experts from when its caller gives no
+        cache_path; None: the caller must give it."""
+        return None
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
@@ -223,6 +245,12 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint this model serves from: PREFILL_HF_MODEL, else ``hf_model_default``. An adapter that
+        resolves its checkpoint another way overrides this with that precedence."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
 
     @property
     def default_sparse_kv_cache_format(self) -> Optional[object]:
@@ -386,6 +414,7 @@ ADAPTER_PATHS = {
 }
 
 _ADAPTER_INSTANCES: dict = {}
+_ADAPTERS_OF_CONFIG: dict = {}
 
 
 def get_adapter(name: str) -> PrefillModelAdapter:
@@ -400,3 +429,27 @@ def get_adapter(name: str) -> PrefillModelAdapter:
         adapter_cls = getattr(importlib.import_module(module_path), cls_name)
         _ADAPTER_INSTANCES[name] = adapter_cls()
     return _ADAPTER_INSTANCES[name]
+
+
+def adapter_of_model_config(model_config) -> Optional[PrefillModelAdapter]:
+    """The registered adapter whose class declares this model_config (not one inheriting it, as GLM52Adapter does
+    GLM53Adapter's), memoized; None when no registered adapter declares it. Adapters in the config's own demo package
+    are looked at first; one that does not import here is skipped."""
+    if not isinstance(model_config, type):  # (a test's stand-in config: no adapter)
+        return None
+    if model_config in _ADAPTERS_OF_CONFIG:
+        return _ADAPTERS_OF_CONFIG[model_config]
+    package = ".".join(getattr(model_config, "__module__", "").split(".")[:3])
+    names = sorted(ADAPTER_PATHS, key=lambda n: not ADAPTER_PATHS[n].startswith(package))
+    found = None
+    for name in names:
+        module_path, cls_name = ADAPTER_PATHS[name].split(":")
+        try:
+            cls = getattr(importlib.import_module(module_path), cls_name)
+        except Exception:  # (an adapter whose module cannot import here declares no config we can use)
+            continue
+        if cls.__dict__.get("model_config") is model_config:
+            found = get_adapter(name)
+            break
+    _ADAPTERS_OF_CONFIG[model_config] = found
+    return found
