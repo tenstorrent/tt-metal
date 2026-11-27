@@ -57,8 +57,8 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
 
     if (std::holds_alternative<ReshapeViewTiledRowsProgramFactory>(program_factory) &&
         reshape_view_tiled_rows_is_shape_free(operation_attributes, tensor_args.input)) {
-        // The row counts and tile ranges are runtime args; the key keeps the row (dtype and last dim), the buffers and
-        // the core set (reshape_view_tiled_rows_cores_key).
+        // The row counts and tile ranges are runtime args, on the whole grid; the key keeps the row (dtype and last
+        // dim) and the buffers.
         const auto& input = tensor_args.input;
         return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
             program_factory.index(),
@@ -67,8 +67,7 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
             input.memory_config(),
             input.logical_shape()[-1],
             input.padded_shape()[-1],
-            input.tensor_spec().tile(),
-            reshape_view_tiled_rows_cores_key(operation_attributes, input));
+            input.tensor_spec().tile());
     }
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor

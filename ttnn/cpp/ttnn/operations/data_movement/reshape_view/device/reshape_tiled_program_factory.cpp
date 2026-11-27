@@ -525,6 +525,19 @@ uint32_t reshape_view_tiled_rows_num_output_pages(const ReshapeViewParams& opera
            tt::div_up(input.logical_shape()[-1], tt::constants::TILE_WIDTH);
 }
 
+// The cores the program runs on: shape-free, the whole grid, the cores past the work getting an empty tile range, so
+// the core set does not follow the shape; otherwise the cores split_work_to_cores gives work.
+tt::tt_metal::CoreRangeSet reshape_view_tiled_rows_program_cores(
+    const ReshapeViewParams& operation_attributes,
+    const Tensor& input,
+    const tt::tt_metal::CoreCoord& grid,
+    const tt::tt_metal::CoreRangeSet& working_cores) {
+    if (reshape_view_tiled_rows_is_shape_free(operation_attributes, input)) {
+        return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
+    }
+    return working_cores;
+}
+
 // Each core's range of output tiles and the shapes, and the tensors.
 tt::tt_metal::ProgramRunArgs reshape_view_tiled_rows_run_args(
     const ReshapeViewParams& operation_attributes, const Tensor& input_tensor, const Tensor& output_tensor) {
@@ -550,14 +563,14 @@ tt::tt_metal::ProgramRunArgs reshape_view_tiled_rows_run_args(
     KernelRunArgs reader_kra{.kernel = READER};
     KernelRunArgs writer_kra{.kernel = WRITER};
     uint32_t page_start = 0;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
+    const auto program_cores =
+        reshape_view_tiled_rows_program_cores(operation_attributes, input_tensor, grid, all_cores);
+    for (auto c : corerange_to_cores(program_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
             increment = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(c)) {
             increment = num_tiles_per_core_group_2;
-        } else {
-            continue;
         }
         const std::vector<std::pair<std::string, uint32_t>> values = {
             {"start_output_page", page_start},
@@ -685,7 +698,10 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledRowsProgramFactory::cre
         TensorParameter{.unique_id = INPUT_T, .spec = input_mt.tensor_spec(), .relaxations = relaxations},
         TensorParameter{.unique_id = OUTPUT_T, .spec = output_mt.tensor_spec(), .relaxations = relaxations},
     };
-    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}};
+    spec.work_units = {WorkUnitSpec{
+        .name = "main",
+        .kernels = {READER, WRITER},
+        .target_nodes = reshape_view_tiled_rows_program_cores(operation_attributes, input_tensor, grid, all_cores)}};
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
@@ -697,12 +713,6 @@ bool reshape_view_tiled_rows_is_shape_free(const ReshapeViewParams& operation_at
     return operation_attributes.runtime_shapes && !operation_attributes.sub_core_grid.has_value() &&
            !input.memory_config().is_sharded() && !operation_attributes.output_mem_config.is_sharded() &&
            reshape_view_tiled_keeps_last_dim(operation_attributes, input);
-}
-
-uint32_t reshape_view_tiled_rows_cores_key(const ReshapeViewParams& operation_attributes, const Tensor& input) {
-    const auto grid = input.device()->compute_with_storage_grid_size();
-    const uint32_t num_output_pages = reshape_view_tiled_rows_num_output_pages(operation_attributes, input);
-    return num_output_pages >= grid.x * grid.y ? 0 : num_output_pages;
 }
 
 tt::tt_metal::ProgramRunArgs ReshapeViewTiledRowsProgramFactory::override_runtime_arguments(

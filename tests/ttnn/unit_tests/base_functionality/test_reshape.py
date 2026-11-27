@@ -621,6 +621,21 @@ def test_reshape_tile_program_cache(device, reshape_tile_mode):
             assert_equal(torch_result, output)
 
 
+@pytest.mark.parametrize("channels", (32, 64))
+def test_reshape_tile_runtime_shapes_one_program(device, channels):
+    # Flattening [1, H, W, C] to [1, 1, H * W, C] with W not whole tiles, at row counts that give the grid's cores
+    # all, some or one output tile each: one program serves them all.
+    entries = None
+    for h, w in ((128, 40), (3, 20), (61, 33), (1, 5), (37, 50)):
+        torch_input = torch.randn(1, h, w, channels, dtype=torch.bfloat16)
+        x = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+        y = ttnn.reshape(x, (1, 1, h * w, channels), reshape_tile_mode=ttnn.TileReshapeMapMode.RUNTIME_SHAPES)
+        assert_equal(torch_input.reshape(1, 1, h * w, channels), ttnn.to_torch(y))
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries, (h, w)
+
+
 # issue 15048
 def test_previously_failing_test(device):
     src_shape = (1, 56, 56, 64)

@@ -43,11 +43,7 @@ struct ReshapeViewTiledRowsProgramFactory {
 };
 
 // Whether a row-factory program serves every shape with the same last dim: with runtime_shapes, interleaved input and
-// output and no sub core grid. Only the core set then still follows the shape, through
-// reshape_view_tiled_rows_cores_key.
+// output and no sub core grid. The program then runs on the whole grid, cores past the work getting no tiles.
 bool reshape_view_tiled_rows_is_shape_free(const ReshapeViewParams& operation_attributes, const Tensor& input);
-
-// 0 when every core of the grid gets output tiles, otherwise the output tile count, which sets the core set.
-uint32_t reshape_view_tiled_rows_cores_key(const ReshapeViewParams& operation_attributes, const Tensor& input);
 
 }  // namespace ttnn::prim
