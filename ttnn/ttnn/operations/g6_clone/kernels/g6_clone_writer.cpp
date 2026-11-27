@@ -9,13 +9,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "g6_clone_page_pieces.hpp"
 
 namespace {
 
 // One block: wait for the nominal block, issue every page write back to back, flush so the
 // slot's bytes have left L1 before the reader may refill it, pop the nominal block.
-template <uint32_t cb_page_staging, uint32_t block_pages, typename Accessor>
-FORCE_INLINE void store_block(const Accessor& out_accessor, uint32_t first_page, uint32_t block_extent) {
+// With logical_rows, each page writes back only the logical pieces the reader landed; the
+// output's padding is left as allocated.
+template <uint32_t cb_page_staging, uint32_t block_pages, bool logical_rows, typename Accessor, typename Walk>
+FORCE_INLINE void store_block(const Accessor& out_accessor, Walk& walk, uint32_t first_page, uint32_t block_extent) {
     {
         DeviceZoneScopedN("g6c_wr_wait");
         cb_wait_front(cb_page_staging, block_pages);
@@ -25,7 +28,19 @@ FORCE_INLINE void store_block(const Accessor& out_accessor, uint32_t first_page,
         const uint32_t page_bytes = out_accessor.get_aligned_page_size();
         uint32_t l1_read_addr = get_read_ptr(cb_page_staging);
         for (uint32_t i = 0; i < block_extent; ++i) {
-            noc_async_write_page(first_page + i, out_accessor, l1_read_addr);
+            if constexpr (logical_rows) {
+                const g6_clone::PagePieces& pieces = walk.pieces();
+                const uint64_t page_noc_addr = out_accessor.get_noc_addr(first_page + i);
+                noc_async_write<NOC_MAX_BURST_SIZE>(
+                    l1_read_addr + pieces.offset0, page_noc_addr + pieces.offset0, pieces.length0);
+                if (pieces.length1 != 0) {
+                    noc_async_write<NOC_MAX_BURST_SIZE>(
+                        l1_read_addr + pieces.offset1, page_noc_addr + pieces.offset1, pieces.length1);
+                }
+                walk.advance();
+            } else {
+                noc_async_write_page(first_page + i, out_accessor, l1_read_addr);
+            }
             l1_read_addr += page_bytes;
         }
     }
@@ -41,20 +56,23 @@ FORCE_INLINE void store_block(const Accessor& out_accessor, uint32_t first_page,
 void kernel_main() {
     constexpr uint32_t cb_page_staging = get_compile_time_arg_val(0);
     constexpr uint32_t block_pages = get_compile_time_arg_val(1);
-    constexpr auto out_args = TensorAccessorArgs<2>();
+    constexpr bool logical_rows = get_compile_time_arg_val(2) != 0;
+    constexpr uint32_t walk_ct_base = 3;
+    constexpr auto out_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t num_pages_this_core = get_arg_val<uint32_t>(1);
 
     const auto out_accessor = TensorAccessor(out_args, out_addr);
+    g6_clone::PartialTileWalk<walk_ct_base> walk(start_page);
 
     const uint32_t num_blocks_this_core = (num_pages_this_core + block_pages - 1) / block_pages;
     uint32_t first_page = start_page;
     uint32_t pages_left = num_pages_this_core;
     for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
         const uint32_t block_extent = pages_left < block_pages ? pages_left : block_pages;
-        store_block<cb_page_staging, block_pages>(out_accessor, first_page, block_extent);
+        store_block<cb_page_staging, block_pages, logical_rows>(out_accessor, walk, first_page, block_extent);
         first_page += block_extent;
         pages_left -= block_extent;
     }

@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_clone program descriptor: regime `flat_page_range`.
+"""g6_clone program descriptor: regimes `flat_page_range` and `logical_rows_partial_tile`.
 
 Reader (NCRISC, NoC0) -> cb_page_staging -> writer (BRISC, NoC1); no compute kernel, so the
 bytes never pass through an unpacker, DEST or a packer. The flat page axis is split into
 contiguous page ranges over the compute grid; each core walks its range in blocks of
-`block_pages` pages.
+`block_pages` pages. Both regimes share that split, the CB and the block loop; they differ only
+in the per-page transfer. `flat_page_range` moves every whole aligned page.
+`logical_rows_partial_tile` (TILE with a partial last tile row or column) moves only the face
+rows of a partial page that hold logical elements, selected by a CT flag.
 
 Every block knob is defined once here and every dependent quantity is derived from it:
 `block_pages` and `cb_depth_blocks` set the CB capacity, the push/pop quantum (CT arg) and the
@@ -15,13 +18,22 @@ per-core block count the kernels derive from `num_pages_this_core`.
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
-REGIME = "flat_page_range"
+REGIME_FLAT = "flat_page_range"
+REGIME_LOGICAL_ROWS = "logical_rows_partial_tile"
+
+TILE_HW = 32
+FACE_HW = 16
+
+# Page kinds of the logical-rows walk, in the order of the kernels' CT array:
+# kind = (tile row is the image's last) | (tile column is the image's last) << 1.
+NUM_PAGE_KINDS = 4
 
 # Buffer-depth knob of cb_page_staging: slots of `block_pages` pages when a core has more than
 # one block, so the reader fills block k+1 while the writer drains block k.
@@ -42,9 +54,121 @@ READER_KERNEL_IDX = 0
 WRITER_KERNEL_IDX = 1
 
 
-def compute_plan(device, tensor_pages: int, aligned_page_bytes: int) -> dict:
-    """Work split and block knobs for one (grid, page count, page size) triple."""
+def tile_geometry(input_tensor: ttnn.Tensor):
+    """(h_tiles, w_tiles, rows_last, cols_last, elem_bytes) of a TILE tensor whose padding is plain
+    tile padding of the last two dims, else None.
+
+    rows_last / cols_last are the logical rows / columns of the last tile row / column of each
+    image (1..32). Anything else (ROW_MAJOR, a non-32x32 or transposed tile, extra padding beyond
+    the next tile edge, padded leading dims) returns None and runs `flat_page_range`, which copies
+    whole pages and is correct for every layout.
+    """
+    if input_tensor.layout != ttnn.TILE_LAYOUT:
+        return None
+    tile = input_tensor.tile
+    if (
+        list(tile.tile_shape) != [TILE_HW, TILE_HW]
+        or list(tile.face_shape) != [FACE_HW, FACE_HW]
+        or tile.transpose_within_face
+        or tile.transpose_of_faces
+    ):
+        return None
+    logical = [int(d) for d in input_tensor.shape]
+    padded = [int(d) for d in input_tensor.padded_shape]
+    height = logical[-2] if len(logical) >= 2 else 1
+    width = logical[-1]
+    if len(padded) < 2 or height == 0 or width == 0:
+        return None
+    padded_h, padded_w = padded[-2], padded[-1]
+    if padded_h != -(-height // TILE_HW) * TILE_HW or padded_w != -(-width // TILE_HW) * TILE_HW:
+        return None
+    if math.prod(padded[:-2]) != math.prod(logical[:-2]):
+        return None
+    h_tiles, w_tiles = padded_h // TILE_HW, padded_w // TILE_HW
+    if math.prod(padded[:-2]) * h_tiles * w_tiles != input_tensor.buffer_num_pages():
+        return None
+    aligned_page_bytes = input_tensor.buffer_aligned_page_size()
+    elem_bytes, remainder = divmod(aligned_page_bytes, TILE_HW * TILE_HW)
+    if remainder or elem_bytes == 0:
+        return None
+    return (
+        h_tiles,
+        w_tiles,
+        height - (h_tiles - 1) * TILE_HW,
+        width - (w_tiles - 1) * TILE_HW,
+        elem_bytes,
+    )
+
+
+def logical_pieces(rows: int, cols: int, elem_bytes: int, granule: int) -> list:
+    """Byte ranges (offset, length) of a 32x32 tile page that hold its first `rows` rows and
+    first `cols` columns: whole face rows, merged where adjacent, each length rounded up to
+    `granule` (the DRAM alignment) so every NoC transfer is aligned at both ends. Rounding adds at
+    most one face row of padding and never crosses into the next face."""
+    face_row_bytes = FACE_HW * elem_bytes
+    face_bytes = FACE_HW * face_row_bytes
+    top = min(rows, FACE_HW)
+    bottom = rows - top
+    right = cols > FACE_HW
+    faces = [(0, top)]
+    if right:
+        faces.append((1, top))
+    if bottom:
+        faces.append((2, bottom))
+        if right:
+            faces.append((3, bottom))
+    pieces = []
+    for face, face_rows in faces:
+        offset = face * face_bytes
+        length = -(-face_rows * face_row_bytes // granule) * granule
+        if pieces and pieces[-1][0] + pieces[-1][1] == offset:
+            pieces[-1] = (pieces[-1][0], pieces[-1][1] + length)
+        else:
+            pieces.append((offset, length))
+    return pieces
+
+
+def partial_tile_walk(geometry, aligned_page_bytes: int):
+    """The logical-rows walk of `geometry`, or None when no page kind moves fewer bytes than the
+    whole page (then the regime would only add transactions)."""
+    if geometry is None:
+        return None
+    h_tiles, w_tiles, rows_last, cols_last, elem_bytes = geometry
+    granule = ttnn.get_dram_alignment()
+    kind_extents = [(TILE_HW, TILE_HW), (rows_last, TILE_HW), (TILE_HW, cols_last), (rows_last, cols_last)]
+    kinds = [logical_pieces(rows, cols, elem_bytes, granule) for rows, cols in kind_extents]
+    for pieces in kinds:
+        # Each piece must stay inside the page; the kernels issue at most two per page.
+        if len(pieces) > 2 or any(offset + length > aligned_page_bytes for offset, length in pieces):
+            raise RuntimeError(f"g6_clone: logical pieces {pieces} do not fit a {aligned_page_bytes} B page")
+    if all(sum(length for _, length in pieces) >= aligned_page_bytes for pieces in kinds):
+        return None
+    return {
+        "h_tiles": h_tiles,
+        "w_tiles": w_tiles,
+        "rows_last": rows_last,
+        "cols_last": cols_last,
+        "kinds": kinds,
+    }
+
+
+def _walk_ct_args(walk) -> list:
+    """CT args of g6_clone_page_pieces.hpp's PartialTileWalk: w_tiles, h_tiles, then 4 values per
+    kind. The flat regime passes a fixed placeholder so every flat descriptor compiles one binary."""
+    if walk is None:
+        return [1, 1] + [0] * (4 * NUM_PAGE_KINDS)
+    args = [walk["w_tiles"], walk["h_tiles"]]
+    for pieces in walk["kinds"]:
+        padded = list(pieces) + [(0, 0)] * (2 - len(pieces))
+        for offset, length in padded:
+            args.extend([offset, length])
+    return args
+
+
+def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=None) -> dict:
+    """Work split, block knobs and regime for one (grid, page count, page size, tile geometry)."""
     grid = device.compute_with_storage_grid_size()
+    walk = partial_tile_walk(geometry, aligned_page_bytes)
 
     block_pages_l1_cap = L1_BUDGET_BYTES // (CB_DEPTH_KNOB * aligned_page_bytes)
     if block_pages_l1_cap < 1:
@@ -75,7 +199,8 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int) -> dict:
         raise RuntimeError(f"g6_clone: work split covers {start_page} of {tensor_pages} pages")
 
     return {
-        "regime": REGIME,
+        "regime": REGIME_LOGICAL_ROWS if walk is not None else REGIME_FLAT,
+        "partial_tile_walk": walk,
         "grid": (grid.x, grid.y),
         "num_cores": num_cores,
         "core_ranges": all_cores,
@@ -117,10 +242,10 @@ def create_program_descriptor(
     if len(input_accessor_args.get_common_runtime_args()) or len(output_accessor_args.get_common_runtime_args()):
         raise RuntimeError("g6_clone: interleaved TensorAccessorArgs unexpectedly carry common runtime args")
 
-    reader_ct_args = [CB_PAGE_STAGING, block_pages]
-    reader_ct_args.extend(input_accessor_args.get_compile_time_args())
-    writer_ct_args = [CB_PAGE_STAGING, block_pages]
-    writer_ct_args.extend(output_accessor_args.get_compile_time_args())
+    walk = plan["partial_tile_walk"]
+    shared_ct_args = [CB_PAGE_STAGING, block_pages, int(walk is not None)] + _walk_ct_args(walk)
+    reader_ct_args = shared_ct_args + list(input_accessor_args.get_compile_time_args())
+    writer_ct_args = shared_ct_args + list(output_accessor_args.get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()

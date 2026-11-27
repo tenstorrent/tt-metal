@@ -3,9 +3,10 @@
 
 """g6_clone: out = x.clone() as one device program of NoC byte moves.
 
-The output is a newly allocated DRAM-interleaved tensor with x's TensorSpec; every stored byte
-of x is read once and written once into the same page id of out. No compute kernel runs, so
-every bit pattern of every dtype survives.
+The output is a newly allocated DRAM-interleaved tensor with x's TensorSpec; every page of x is
+copied into the same page id of out. A full page moves whole; a partial TILE page (partial last
+tile row or column) moves only its logical face rows, so out's tile padding is left as allocated.
+No compute kernel runs, so every bit pattern of every dtype survives.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_clone_program_descriptor import compute_plan, create_program_descriptor, patch_addresses
+from .g6_clone_program_descriptor import compute_plan, create_program_descriptor, patch_addresses, tile_geometry
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +42,8 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "layout": [ttnn.TILE_LAYOUT],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
 
 
@@ -98,7 +99,8 @@ def validate(input_tensor):
 # ---------------------------------------------------------------------------
 
 # Everything in a cached descriptor is a function of this key; only the two buffer addresses
-# vary per call and are patched in place.
+# vary per call and are patched in place. The tile geometry selects the regime and the
+# logical-rows pieces: [1,1,1,62080] and [1,1,32,62080] share page count and page size.
 _DESCRIPTOR_CACHE = {}
 
 
@@ -116,13 +118,19 @@ def _cache_key(input_tensor):
         memory_config.memory_layout,
         input_tensor.buffer_num_pages(),
         input_tensor.buffer_aligned_page_size(),
+        tile_geometry(input_tensor),
     )
 
 
 def _plan(input_tensor):
     # The one place the plan's inputs are read off the tensor: the entry point and the plan report
     # must agree on them (BB-08), and every input that changes the plan must also be in _cache_key.
-    return compute_plan(input_tensor.device(), input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size())
+    return compute_plan(
+        input_tensor.device(),
+        input_tensor.buffer_num_pages(),
+        input_tensor.buffer_aligned_page_size(),
+        tile_geometry(input_tensor),
+    )
 
 
 def g6_clone_plan(input_tensor: ttnn.Tensor) -> dict:
