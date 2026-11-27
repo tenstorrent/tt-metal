@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reader of the long FP64 KDA goldens (``KimiK3KdaGolden``), written by ``golden_producer.py`` next to it.
 
-The golden ``K3_LAYER0_GOLDEN`` (``k3-l0-kda-fp64-1m``) is Kimi-K3 ``layers.0`` over 1,044,480 code tokens of a vLLM
-trace. Every segment file (``golden_producer.segment_path``) holds the segment's FP64 ``output`` rows and the
-layer's full state after it; the manifest names them as products ``output`` (``row``) and ``state.<name>``
-(``segment_end``: ``state.recurrent`` ``[1, heads, k, v]`` and ``state.{q,k,v}_convolution``).
+The golden ``K3_LAYER0_GOLDEN`` (``k3-l0-kda-fp64-stored-fp32-1m``) is Kimi-K3 ``layers.0`` over 1,044,480 code
+tokens of a vLLM trace, computed in FP64 and stored FP32. Every segment file (``golden_producer.segment_path``) holds
+the segment's ``output`` rows and the layer's full state after it; the manifest names them as products ``output``
+(``row``) and ``state.<name>`` (``segment_end``: ``state.recurrent`` ``[1, heads, k, v]`` and
+``state.{q,k,v}_convolution``). Products are returned in their stored dtype; the scorers widen them to FP64.
 
 Registered goldens are read through ``Fp64Golden.read_rows``. ``load_window`` and ``state_after`` read a golden
 directory by path, also one still being written (the dev analysis reads goldens in progress).

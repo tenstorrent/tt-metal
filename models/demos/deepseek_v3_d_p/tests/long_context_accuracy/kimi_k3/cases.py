@@ -5,10 +5,10 @@ against their goldens by ``test_cases_match_goldens.py``.
 
 ``KDA_LAYER0``: the KDA layer of ``model.layers.0`` (device Block ``blocks.KimiK3KdaBlock``, scorer
 ``common/prefill/long_context_accuracy/kda/scorer.KdaScorer``) on a full Galaxy (SP8 x TP4, the 2D fabric KDA tests
-open on 8x4), teacher-fed the real code tokens of golden ``k3-l0-kda-fp64-1m`` (reader ``golden.KimiK3KdaGolden``)
-in production-size 5,120-row prefill calls. The input is built from the token ids with the checkpoint's embedding and
-input norm (``FirstLayerInput``), and the weights and input are checked against the golden's digests before any
-device time. Needs ``KIMI_K3_CKPT`` (layers.0 and the embedding shards); skips without it.
+open on 8x4), teacher-fed the real code tokens of golden ``k3-l0-kda-fp64-stored-fp32-1m`` (reader
+``golden.KimiK3KdaGolden``) in production-size 5,120-row prefill calls. The input is built from the token ids with the
+checkpoint's embedding and input norm (``FirstLayerInput``), and the weights and input are checked against the
+golden's digests before any device time. Needs ``KIMI_K3_CKPT`` (layers.0 and the embedding shards); skips without it.
 
 Bars per context length, NRMSE against the golden: per call (with PCC 0.999), over the run, per 1,024-row window
 (drift with context), per row (the golden's floor), and for the final recurrent state per head (one drifting head is

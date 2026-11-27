@@ -36,7 +36,7 @@ def test_every_case_fits_its_golden() -> None:
         (open_k3_layer0_golden, ["output"]),
         (open_k31_chain, ["moe_input_1", "routing_ids_2", "dsa_input_3", "latent", "topk_indices_3"]),
     ],
-    ids=["k3-l0-kda-fp64-1m", "k31-l0-3-fp64-1m"],
+    ids=["k3-l0-kda-fp64-stored-fp32-1m", "k31-l0-3-fp64-1m"],
 )
 def test_registered_goldens_read_through_their_readers(open_registered, row_products) -> None:
     golden = open_registered()

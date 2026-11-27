@@ -3,11 +3,13 @@
 """The Kimi-K3 KDA golden producer (``golden_producer.py``) on a tiny configuration, and the registered Kimi-K3 golden
 the device test reads. CPU only."""
 
+import hashlib
 import json
 import os
 import stat
 from pathlib import Path
 
+import pytest
 import torch
 
 from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
@@ -19,8 +21,17 @@ from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
 from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import load_window, open_k3_layer0_golden
-from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import run_golden
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3 import golden_producer
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden import (
+    KimiK3KdaGolden,
+    load_window,
+    open_k3_layer0_golden,
+)
+from models.demos.deepseek_v3_d_p.tests.long_context_accuracy.kimi_k3.golden_producer import (
+    convert_to_fp32_storage,
+    resume_state_path,
+    run_golden,
+)
 
 TOKENS = list(range(10))
 SEGMENT = 4  # segments [0, 4), [4, 8), [8, 10): the last one is partial
@@ -73,16 +84,36 @@ def test_resumed_run_is_bit_identical_to_an_uninterrupted_one(tmp_path: Path, ex
     for index in range(3):
         full = torch.load(tmp_path / "full" / f"segment_{index:06d}.pt", weights_only=True)
         resumed = torch.load(tmp_path / "resumed" / f"segment_{index:06d}.pt", weights_only=True)
-        assert torch.equal(full["output"], resumed["output"]), index
+        assert full["output"].dtype == torch.float32 and torch.equal(full["output"], resumed["output"]), index
         for name, tensor in full["state"].items():
-            assert tensor.dtype == torch.float64 and torch.equal(tensor, resumed["state"][name]), (index, name)
+            assert tensor.dtype == torch.float32 and torch.equal(tensor, resumed["state"][name]), (index, name)
+    # The FP64 state the resume continued from is kept for the last segment only.
+    for run in ("full", "resumed"):
+        assert sorted(p.name for p in (tmp_path / run).glob("resume_state_*.pt")) == ["resume_state_000002.pt"]
+    full_state = torch.load(resume_state_path(tmp_path / "full", 2), weights_only=True)
+    resumed_state = torch.load(resume_state_path(tmp_path / "resumed", 2), weights_only=True)
+    assert all(t.dtype == torch.float64 and torch.equal(t, resumed_state[n]) for n, t in full_state.items())
 
     # Segmenting changes nothing but rounding: the whole sequence in one call agrees to FP64 precision.
     whole_output, whole_state = kda_forward_reference(table.unsqueeze(0), weights, config, dtype=torch.float64)
-    output, _ = load_window(tmp_path / "full", 0, 10)
-    torch.testing.assert_close(output, whole_output[0], rtol=0, atol=1e-12)
-    last = torch.load(tmp_path / "full" / "segment_000002.pt", weights_only=True)["state"]
-    torch.testing.assert_close(last["recurrent"], whole_state.recurrent, rtol=0, atol=1e-12)
+    torch.testing.assert_close(full_state["recurrent"], whole_state.recurrent, rtol=0, atol=1e-12)
+
+
+def test_products_are_computed_in_fp64_and_stored_in_fp32(tmp_path: Path) -> None:
+    """Each stored tensor is the FP64 computation rounded once to FP32, bit for bit: the first segment against the
+    reference run in FP64 on its rows, the second against the FP64 run continued from the FP64 state."""
+    run, table, weights, config = make_run(tmp_path)
+    manifest = run()
+    assert (manifest["dtype"], manifest["storage_dtype"]) == ("torch.float64", "float32")
+    assert {schema["dtype"] for schema in manifest["products"].values()} == {"float32"}
+    state = None
+    for index in range(2):
+        rows = table[index * SEGMENT : (index + 1) * SEGMENT].unsqueeze(0)
+        output, state = kda_forward_reference(rows, weights, config, state, dtype=torch.float64)
+        stored = torch.load(tmp_path / f"segment_{index:06d}.pt", weights_only=True)
+        assert torch.equal(stored["output"].view(torch.int32), output[0].float().view(torch.int32)), index
+        for name, tensor in vars(state).items():
+            assert torch.equal(stored["state"][name].view(torch.int32), tensor.float().view(torch.int32)), name
 
 
 def test_a_bounded_run_stops_after_its_segments_and_resumes_to_the_same_golden(tmp_path: Path) -> None:
@@ -137,7 +168,7 @@ def test_manifest_records_provenance_and_the_whole_golden_token_floor(tmp_path: 
     run, *_ = make_run(tmp_path)
     manifest = run()
 
-    assert manifest["token_floor"] == golden_floor(load_window(tmp_path, 0, 10)[0].norm(dim=-1))
+    assert manifest["token_floor"] == golden_floor(load_window(tmp_path, 0, 10)[0].double().norm(dim=-1))
     assert manifest == json.loads((tmp_path / MANIFEST).read_text())
     assert {"code_revision", "torch", "cpu_capability", "machine"} <= set(manifest["sessions"][0])
 
@@ -158,8 +189,68 @@ def test_golden_files_are_readable_by_other_users_whatever_the_umask(tmp_path: P
     golden = tmp_path / "golden"
     assert stat.S_IMODE(golden.stat().st_mode) == GOLDEN_DIR_MODE
     modes = {path.name: stat.S_IMODE(path.stat().st_mode) for path in golden.iterdir()}
-    assert sorted(modes) == [MANIFEST, *(f"segment_{i:06d}.pt" for i in range(3)), "token_ids.pt"]
+    assert sorted(modes) == [
+        MANIFEST,
+        "resume_state_000002.pt",
+        *(f"segment_{i:06d}.pt" for i in range(3)),
+        "token_ids.pt",
+    ]
     assert set(modes.values()) == {GOLDEN_FILE_MODE}
+
+
+def _version_1_golden(run_dir: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """A golden of producer version 1 (products stored FP64): this producer with FP64 storage."""
+    with monkeypatch.context() as patch:
+        patch.setattr(golden_producer, "STORAGE_DTYPE", torch.float64)
+        patch.setattr(golden_producer, "PRODUCER_VERSION", 1)
+        run, *_ = make_run(run_dir)
+        manifest = run()
+    del manifest["storage_dtype"]  # (version 1 had no storage dtype)
+    (run_dir / MANIFEST).write_text(json.dumps(manifest))
+    return manifest
+
+
+def test_conversion_writes_the_golden_the_producer_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, expect_error
+) -> None:
+    """A version-1 golden converted to FP32 storage equals a version-2 run of the same inputs bit for bit: segment
+    files, FP64 resume state, products and token floor; the manifest records the source and its digest."""
+    source = _version_1_golden(tmp_path / "fp64", monkeypatch)
+    run, *_ = make_run(tmp_path / "direct")
+    direct = run()
+    converted = convert_to_fp32_storage(tmp_path / "fp64", tmp_path / "fp32")
+
+    assert converted == json.loads((tmp_path / "fp32" / MANIFEST).read_text())
+    for key in ("producer", "producer_version", "storage_dtype", "dtype", "products", "token_floor", "rows"):
+        assert converted[key] == direct[key], key
+    assert converted["golden_id"] == "fp32" and converted["identity"] == source["identity"]
+    conversion = converted["conversion"]
+    assert conversion["source_golden_id"] == "fp64" and conversion["source_token_floor"] == source["token_floor"]
+    assert (
+        conversion["source_manifest_sha256"] == hashlib.sha256((tmp_path / "fp64" / MANIFEST).read_bytes()).hexdigest()
+    )
+    for index, entry in enumerate(converted["segments"]):
+        path = tmp_path / "fp32" / f"segment_{index:06d}.pt"
+        assert entry["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        want = torch.load(tmp_path / "direct" / path.name, weights_only=True)
+        got = torch.load(path, weights_only=True)
+        assert torch.equal(want["output"], got["output"]) and want["output"].dtype == got["output"].dtype
+        assert all(
+            torch.equal(t, got["state"][n]) and t.dtype == got["state"][n].dtype for n, t in want["state"].items()
+        )
+    want = torch.load(resume_state_path(tmp_path / "direct", 2), weights_only=True)
+    got = torch.load(resume_state_path(tmp_path / "fp32", 2), weights_only=True)
+    assert all(t.dtype == torch.float64 and torch.equal(t, got[n]) for n, t in want.items())
+    golden = open_golden("fp32", root=tmp_path, reader=KimiK3KdaGolden)
+    assert golden.token_ids().tolist() == TOKENS
+    rows = golden.read_rows(["output", "state.recurrent"], 0, 8)
+    assert rows["output"].dtype == torch.float32 and rows["output"].shape[0] == 8
+    # The source is unchanged and still a version-1 golden; a destination holding a golden is refused.
+    assert json.loads((tmp_path / "fp64" / MANIFEST).read_text()) == source
+    with expect_error(ValueError, "already holds a golden"):
+        convert_to_fp32_storage(tmp_path / "fp64", tmp_path / "fp32")
+    with expect_error(ValueError, "version-1 golden"):
+        convert_to_fp32_storage(tmp_path / "direct", tmp_path / "again")
 
 
 def _readable_by_anyone(path: Path) -> bool:
