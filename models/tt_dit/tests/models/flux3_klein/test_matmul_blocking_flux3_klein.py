@@ -68,34 +68,63 @@ def agmm(m, n, tp):  # as the model calls it: QKV (N 9216 / TP) and MLP-in (N 18
 
 
 @pytest.fixture
-def shape_tables(monkeypatch):  # empty, as an import leaves them; an SP8 x TP4 transformer registers its entries
+def shape_tables(monkeypatch):  # empty, as an import leaves them; a transformer registers its layout's entries
+    grid = dict(matmul.grid_12_9_configs)
     monkeypatch.setattr(matmul, "agmm_shape_configs", {})
+    monkeypatch.setattr(matmul, "matmul_shape_configs", {})
     matmul._clear_config_caches()
-    yield matmul.agmm_shape_configs
+    yield matmul.agmm_shape_configs, matmul.matmul_shape_configs
+    matmul.grid_12_9_configs.clear()
+    matmul.grid_12_9_configs.update(grid)
     monkeypatch.undo()
     matmul._clear_config_caches()
 
 
 register = transformer_flux3_klein.register_layout_shape_configs
+LAYOUT_TABLES = {
+    (8, 4): (transformer_flux3_klein.SP8_AGMM_SHAPE_CONFIGS, {}),
+    (4, 2): (transformer_flux3_klein.DP4_AGMM_SHAPE_CONFIGS, transformer_flux3_klein.DP4_MATMUL_SHAPE_CONFIGS),
+}
 
 
-@pytest.mark.parametrize("sp, tp", [(8, 4), (4, 4), (4, 2)])  # SP8, DP2, DP4
-def test_only_sp8_registers_the_entries(shape_tables, sp, tp):
+def mm(m, k, n, grid):
+    c = get_matmul_config(m, k, n, ttnn.CoreCoord(*grid))
+    return c.M_block_size, c.K_block_size, c.N_block_size, (c.subblock_h, c.subblock_w)
+
+
+@pytest.mark.parametrize("sp, tp", [(8, 4), (4, 4), (4, 2), (2, 2)])  # SP8, DP2, DP4, DP8
+def test_each_layout_registers_only_its_entries(shape_tables, sp, tp):
     register(sp, tp)
-    assert shape_tables == (transformer_flux3_klein.SP8_AGMM_SHAPE_CONFIGS if (sp, tp) == (8, 4) else {})
+    assert shape_tables == LAYOUT_TABLES.get((sp, tp), ({}, {}))
 
 
-def test_swept_shapes_resolve_to_their_entry(shape_tables):
-    register(8, 4)
-    for (m, k, n, tp), (grid, blk, buffers) in shape_tables.items():
+@pytest.mark.parametrize("layout", list(LAYOUT_TABLES))
+def test_swept_shapes_resolve_to_their_entry(shape_tables, layout):
+    register(*layout)
+    agmm_table, mm_table = shape_tables
+    for (m, k, n, tp), (grid, blk, buffers) in agmm_table.items():
         assert agmm(m, n, tp) == (grid, blk, -(-grid[0] // 2))
         assert matmul.agmm_shape_buffers(m, k, n, tp) == buffers
+    for (m, k, n, *grid), blocking in mm_table.items():
+        assert mm(m, k, n, grid) == blocking
 
 
-def test_every_other_shape_resolves_as_without_the_entries(shape_tables):
+@pytest.mark.parametrize("layout", list(LAYOUT_TABLES))
+def test_every_other_shape_resolves_as_without_the_entries(shape_tables, layout):
     rows = range(128, 32768 + 1, 128)
-    shapes = [(m, n, tp) for m in rows for tp in (2, 4) for n in (9216 // tp, 18432 // tp)]
-    before = {s: agmm(*s) for s in shapes}
-    register(8, 4)
-    swept = {(m, n, tp) for m, _, n, tp in shape_tables}
-    assert {s: agmm(*s) for s in shapes if s not in swept} == {s: v for s, v in before.items() if s not in swept}
+    agmm_shapes = [(m, n, tp) for m in rows for tp in (2, 4) for n in (9216 // tp, 18432 // tp)]
+    mm_shapes = [(m, k, 3072, grid) for m in rows for k in (3072, 6144) for grid in ((12, 10), (11, 10))]
+    before = {s: agmm(*s) for s in agmm_shapes}
+    before_mm = {s: mm(*s) for s in mm_shapes}
+    register(*layout)
+    agmm_table, mm_table = shape_tables
+    swept = {(m, n, tp) for m, _, n, tp in agmm_table}
+    # DP4's 12x9 MLP blockings are keyed (M, K, N), so they reach both TP sizes and every M of the same M per core
+    if layout == (4, 2):
+        dp4 = transformer_flux3_klein.DP4_MLP_BLOCKINGS
+        near = matmul._same_m_per_core_match
+        swept |= {(m, n, tp) for m, n, tp in agmm_shapes if (m, 3072, n) in dp4 or near(dp4, m, 3072, n, 12)}
+    swept_mm = {(m, k, n, tuple(grid)) for m, k, n, *grid in mm_table}
+    assert {s: agmm(*s) for s in agmm_shapes if s not in swept} == {s: v for s, v in before.items() if s not in swept}
+    after_mm = {s: mm(*s) for s in mm_shapes if s not in swept_mm}
+    assert after_mm == {s: v for s, v in before_mm.items() if s not in swept_mm}

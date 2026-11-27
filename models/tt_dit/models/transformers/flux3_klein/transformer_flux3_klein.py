@@ -209,11 +209,50 @@ SP8_AGMM_SHAPE_CONFIGS = {
 }
 
 
+# SP4 x TP2 only (the keys hold the TP size or the grid, not the layout, so the transformer registers them for DP4
+# groups): swept at the exact shape, same output as today's config (same K block). QKV (N 4608) and MLP-in (N 9216) at
+# the text, reference and single-stage rows of 1024 / 2048 with 0-10 references and 4096 with 1-4, mostly N block 8 on
+# the narrow rows (10 or 11 of the 12 M cores) and M block 6 or 7 where the L1 cut gave 4; proj_out's matmul (K 6144)
+# a larger M block.
+DP4_AGMM_SHAPE_CONFIGS = {
+    (256, 3072, 4608, 2): ((10, 9), (1, 8, 8, (1, 4)), 24),
+    (256, 3072, 9216, 2): ((10, 9), (1, 8, 8, (1, 4)), 8),
+    (512, 3072, 4608, 2): ((10, 9), (2, 8, 8, (1, 4)), 24),
+    (512, 3072, 9216, 2): ((10, 9), (2, 8, 8, (1, 4)), 24),
+    (1024, 3072, 4608, 2): ((12, 9), (3, 8, 8, (1, 4)), 24),
+    (1024, 3072, 9216, 2): ((11, 9), (3, 8, 8, (1, 2)), 16),
+    (1280, 3072, 4608, 2): ((10, 9), (4, 8, 8, (1, 2)), 8),
+    (1280, 3072, 9216, 2): ((10, 9), (4, 8, 8, (4, 1)), 24),
+    (2048, 3072, 9216, 2): ((11, 9), (6, 8, 16, (1, 4)), 24),
+    (3328, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 2)), 24),
+    (3328, 3072, 9216, 2): ((11, 9), (5, 8, 16, (1, 4)), 24),
+    (4352, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+    (5376, 3072, 9216, 2): ((12, 9), (7, 8, 16, (1, 4)), 8),
+    (6400, 3072, 4608, 2): ((10, 9), (5, 8, 16, (1, 4)), 16),
+    (6400, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 2)), 8),
+    (10240, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 16),
+    (11520, 3072, 4608, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+    (11520, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 8),
+    (14592, 3072, 4608, 2): ((11, 9), (6, 8, 16, (2, 2)), 24),
+    (14592, 3072, 9216, 2): ((12, 9), (6, 8, 16, (1, 4)), 24),
+}
+DP4_MATMUL_SHAPE_CONFIGS = {
+    (2048, 6144, 3072, 12, 10): (4, 8, 8, (4, 1)),
+    (3328, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (4096, 6144, 3072, 12, 10): (6, 8, 8, (1, 4)),
+    (4352, 6144, 3072, 12, 10): (6, 8, 8, (2, 2)),
+    (6400, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (10240, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+    (18688, 6144, 3072, 12, 10): (10, 8, 8, (1, 4)),
+}
+
+
 def register_layout_shape_configs(sp_factor: int, tp_factor: int) -> None:
     if (sp_factor, tp_factor) == (8, 4):
         register_shape_configs(agmm=SP8_AGMM_SHAPE_CONFIGS)
     elif (sp_factor, tp_factor) == (4, 2):
         register_matmul_configs({"12x9": DP4_MLP_BLOCKINGS})
+        register_shape_configs(agmm=DP4_AGMM_SHAPE_CONFIGS, matmul=DP4_MATMUL_SHAPE_CONFIGS)
 
 
 @dataclass(frozen=True)
