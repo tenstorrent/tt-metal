@@ -645,7 +645,9 @@ class PrewarmFailureTests(unittest.TestCase):
         parser = dependencies[
             dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
         ]
-        harness = INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
+        harness = (
+            INTEGRATION_PREFIX + "namespace tt::jit_build {" + parser + "}\n" + context_and_loop + INTEGRATION_MAIN
+        )
         with tempfile.TemporaryDirectory(prefix="prewarm-integration-") as work:
             path = Path(work)
             (path / "test.cpp").write_text(harness)
@@ -761,13 +763,19 @@ class PrewarmFailureTests(unittest.TestCase):
         """Offline live-stamp filter, the per-entry commit filter and the real device-open path, host-only."""
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
         stamp_helpers = source[
-            source.index("std::string default_manifest_path(") : source.index("// Build one target from a portable recipe")
+            source.index("std::string default_manifest_path(") : source.index(
+                "// Build one target from a portable recipe"
+            )
         ]
         production = source[
             source.index("void hash_field(") : source.index("void initialize_prewarm_shutdown_dependencies()")
         ]
-        open_path = source[source.index("void maybe_launch_prewarm(") : source.index("std::size_t prewarm_manifest_offline(")]
-        offline = source[source.index("std::size_t prewarm_manifest_offline(") : source.index("void wait_for_prewarm()")]
+        open_path = source[
+            source.index("void maybe_launch_prewarm(") : source.index("std::size_t prewarm_manifest_offline(")
+        ]
+        offline = source[
+            source.index("std::size_t prewarm_manifest_offline(") : source.index("void wait_for_prewarm()")
+        ]
         dependencies = (ROOT / "tt_metal/jit_build/depend.cpp").read_text()
         parser = dependencies[
             dependencies.index("ParsedDependencies parse_dependency_file(") : dependencies.index("\nnamespace {")
@@ -817,11 +825,20 @@ class PrewarmFailureTests(unittest.TestCase):
         """The real append_manifest_entry and read_manifest carry treeCommit (needs a capnp build tree)."""
         build = Path(os.environ.get("TT_METAL_CAPNP_BUILD_DIR", "/home/smarton/tt-metal-ltx-rt/build_Release"))
         capnp_dir = build / "_deps/capnproto-build/c++/src"
-        needed = [build / "bin/capnp", build / "bin/capnpc-c++", capnp_dir / "capnp/libcapnp.a", capnp_dir / "capnp/libcapnp-rpc.a", capnp_dir / "kj/libkj.a", capnp_dir / "kj/libkj-async.a"]
+        needed = [
+            build / "bin/capnp",
+            build / "bin/capnpc-c++",
+            capnp_dir / "capnp/libcapnp.a",
+            capnp_dir / "capnp/libcapnp-rpc.a",
+            capnp_dir / "kj/libkj.a",
+            capnp_dir / "kj/libkj-async.a",
+        ]
         if not all(f.exists() for f in needed):
             self.skipTest("no built capnp (set TT_METAL_CAPNP_BUILD_DIR to a tt-metal build tree)")
         source = (ROOT / "tt_metal/impl/program/kernel_prewarm.cpp").read_text()
-        manifest_state = source[source.index("std::mutex g_manifest_mutex;") : source.index("// Prewarm orchestration.")]
+        manifest_state = source[
+            source.index("std::mutex g_manifest_mutex;") : source.index("// Prewarm orchestration.")
+        ]
         append = source[source.index("void append_manifest_entry(") : source.index("void maybe_launch_prewarm(")]
         harness = r"""
 #include <fcntl.h>
@@ -844,7 +861,7 @@ namespace {
 """
         harness += manifest_state + "}\n"
         harness += (
-            'const char* manifest_write_path() { return g_capture_path.empty() ? nullptr : g_capture_path.c_str(); }\n'
+            "const char* manifest_write_path() { return g_capture_path.empty() ? nullptr : g_capture_path.c_str(); }\n"
             + append
             + r"""
 void run(const char* path) {
@@ -871,18 +888,45 @@ int main(int, char** argv) { tt::tt_metal::kernel_prewarm::run(argv[1]); return 
             schema.mkdir(parents=True)
             (schema / "rpc.capnp").write_text((ROOT / "tt_metal/impl/jit_server/rpc.capnp").read_text())
             subprocess.run(
-                [str(build / "bin/capnp"), "compile", f"-I{build}/include", f"-o{build}/bin/capnpc-c++:{path}/gen",
-                 "--src-prefix", str(path / "gen"), str(schema / "rpc.capnp")],
-                check=True, timeout=60, cwd=path / "gen",
+                [
+                    str(build / "bin/capnp"),
+                    "compile",
+                    f"-I{build}/include",
+                    f"-o{build}/bin/capnpc-c++:{path}/gen",
+                    "--src-prefix",
+                    str(path / "gen"),
+                    str(schema / "rpc.capnp"),
+                ],
+                check=True,
+                timeout=60,
+                cwd=path / "gen",
             )
             (path / "test.cpp").write_text(harness)
             subprocess.run(
-                ["c++", "-std=c++20", "-Wall", "-Wextra", "-Werror", "-pthread", "-I", str(path / "gen"),
-                 "-I", str(ROOT / "tt_metal"), "-I", str(build / "include"), str(path / "test.cpp"),
-                 str(schema / "rpc.capnp.c++"), str(capnp_dir / "capnp/libcapnp-rpc.a"), str(capnp_dir / "capnp/libcapnp.a"),
-                 str(capnp_dir / "kj/libkj-async.a"), str(capnp_dir / "kj/libkj.a"),
-                 "-o", str(path / "test")],
-                check=True, timeout=300,
+                [
+                    "c++",
+                    "-std=c++20",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-pthread",
+                    "-I",
+                    str(path / "gen"),
+                    "-I",
+                    str(ROOT / "tt_metal"),
+                    "-I",
+                    str(build / "include"),
+                    str(path / "test.cpp"),
+                    str(schema / "rpc.capnp.c++"),
+                    str(capnp_dir / "capnp/libcapnp-rpc.a"),
+                    str(capnp_dir / "capnp/libcapnp.a"),
+                    str(capnp_dir / "kj/libkj-async.a"),
+                    str(capnp_dir / "kj/libkj.a"),
+                    "-o",
+                    str(path / "test"),
+                ],
+                check=True,
+                timeout=300,
             )
             subprocess.run([str(path / "test"), str(path / "kernel_prewarm.manifest")], check=True, timeout=30)
 
