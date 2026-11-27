@@ -74,6 +74,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     _llk_unpack_dest_init_();
     {
         START_PERF_MEASURE("INIT")
@@ -84,8 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
-        // Configure the unpacker and set it up to unpack into Dest; the tile loop pulls the whole bank in.
-        _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
+        // Set the unpacker up to unpack into Dest; the tile loop pulls the whole bank in.
         _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
 
         // UNPACK is the producer in the chain.

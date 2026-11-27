@@ -40,11 +40,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-    {
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-    }
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     if constexpr (unpack_to_dest)
     {
         _llk_unpack_dest_init_();
@@ -92,11 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else
         {
             ckernel::trisc::program_bfd<unp_res, ckernel::trisc::L1AccessMode::Continuous>(tensor_shape, l1_addr_16B, formats.unpack_A_src);
-        }
-
-        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
         if constexpr (unpack_to_dest)
