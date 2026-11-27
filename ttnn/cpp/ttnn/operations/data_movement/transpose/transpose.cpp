@@ -346,23 +346,29 @@ ttnn::Tensor transpose_impl(
     // bfloat4_b go through bfloat16 there.
     const DataType input_dtype = input_unsqueezed.dtype();
     // An MX tile (Quasar) is not a flat element array either. Only the CN kernel moves whole tiles with no compute, so
-    // every other MX transpose (and the padding it can need) runs in bfloat16 and is packed back to MX afterwards.
-    const bool typecast =
-        ((input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported) ||
-        (tt::tt_metal::is_mx(input_dtype) and !cn);
+    // every other MX transpose that moves data (and the padding it can need) runs in bfloat16 and is packed back to MX
+    // afterwards. No-op transposes (same dim, or both dims of extent 1) never take the detour.
+    const bool mx_noop = normalized_dim1 == normalized_dim2 || (input_unsqueezed.padded_shape()[normalized_dim1] == 1 &&
+                                                                input_unsqueezed.padded_shape()[normalized_dim2] == 1);
+    const bool mx_via_bf16 = tt::tt_metal::is_mx(input_dtype) and !cn and !mx_noop;
     // The bfloat16 copy of an MX tensor is 2x its size (more with a padded dim), so for MX it and the transposed result
     // are staged in DRAM instead of the L1 the caller asked for; only the final pack back to MX lands in that config.
-    const bool mx_via_bf16 = typecast && tt::tt_metal::is_mx(input_dtype);
+    // The detour is interleaved, so a sharded input or output would silently change placement: reject it.
+    if (mx_via_bf16) {
+        TT_FATAL(
+            !input_tensor.is_sharded() && !(memory_config_arg.has_value() && memory_config_arg->is_sharded()),
+            "transpose of an MX tensor ({}) over these dims supports interleaved input and output only; convert with "
+            "ttnn.to_memory_config first.",
+            input_dtype);
+    }
+    const bool typecast =
+        ((input_dtype == DataType::BFLOAT8_B || input_dtype == DataType::BFLOAT4_B) and !bfloat8_supported) ||
+        mx_via_bf16;
     const std::optional<MemoryConfig> work_memory_config =
         mx_via_bf16 ? std::optional<MemoryConfig>(ttnn::DRAM_MEMORY_CONFIG) : memory_config_arg;
-    // typecast requires its input and output memory layouts to match, so a sharded MX input is moved to the
-    // interleaved staging layout first (the original tensor's metadata still decides the output placement below).
-    const Tensor input_for_typecast = mx_via_bf16 && input_unsqueezed.is_sharded()
-                                          ? ttnn::to_memory_config(input_unsqueezed, ttnn::DRAM_MEMORY_CONFIG)
-                                          : input_unsqueezed;
     Tensor input_typecasted = typecast
                                   ? ttnn::typecast(
-                                        input_for_typecast,
+                                        input_unsqueezed,
                                         DataType::BFLOAT16,
                                         mx_via_bf16 ? work_memory_config : std::optional<MemoryConfig>(std::nullopt))
                                   : input_unsqueezed;
@@ -398,14 +404,8 @@ ttnn::Tensor transpose_impl(
     }
     output = initial_rank < 4u ? ttnn::squeeze_from_4D(output, initial_rank) : output;
     if (mx_via_bf16) {
-        // output is interleaved (DRAM staging) and typecast requires matching memory layouts: pack straight into an
-        // interleaved target, otherwise pack in DRAM and move the MX result to the (sharded) target.
-        const MemoryConfig target_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
-        if (target_memory_config.memory_layout() == output.memory_config().memory_layout()) {
-            return ttnn::typecast(output, input_dtype, target_memory_config);
-        }
-        return ttnn::to_memory_config(
-            ttnn::typecast(output, input_dtype, ttnn::DRAM_MEMORY_CONFIG), target_memory_config);
+        // Both the input and the requested output are interleaved (checked above), so pack straight into the target.
+        return ttnn::typecast(output, input_dtype, memory_config_arg.value_or(input_tensor.memory_config()));
     }
     return typecast ? ttnn::typecast(output, input_dtype) : output;
 }
