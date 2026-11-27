@@ -182,8 +182,10 @@ void split_operand_block(uint32_t in_cb, uint32_t hi_cb, uint32_t lo_cb) {
     sub_binary_tile_init();
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(in_cb, i, DST_LO);
         copy_tile(in_cb, i, DST_HI);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         typecast_tile<(uint32_t)DataFormat::Float32, (uint32_t)DataFormat::Float16_b>(DST_HI);
         sub_binary_tile(DST_LO, DST_HI, DST_LO);
         tile_regs_commit();
@@ -280,9 +282,13 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
         for (uint32_t i = 0; i < num_tiles; ++i) {
             tile_regs_acquire();
             copy_init(src_cb);
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(src_cb, 0, DST_ACC);
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             copy_init(remote_cb);
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(remote_cb, 0, DST_OPERAND);
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             add_binary_tile_init();
             add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
             tile_regs_commit();
@@ -315,7 +321,9 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
             copy_init(inout_cb);
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             copy_tile(inout_cb, 0, DST_ACC);
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             unary_bcast_init<BroadcastType::ROW>(bias_cb);
             unary_bcast<BroadcastType::ROW>(bias_cb, j, DST_OPERAND);
             add_binary_tile_init();

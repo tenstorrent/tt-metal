@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/mesh/dispatch_core_config.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>  // tt::ChipId
 #include <tt-umd/types/core_coordinates.hpp>          // CoreType

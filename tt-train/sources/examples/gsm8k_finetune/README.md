@@ -22,7 +22,7 @@ export TT_METAL_HOME=/home/ubuntu/tt-metal
 
 ### Base training config and overrides
 The training script loads a base YAML config:
-- Base: `tt-train/configs/training_shakespeare_tinyllama.yaml`
+- Base: `tt-train/configs/training_configs/training_gsm8k_tinyllama.yaml`
 
 At runtime, if present, it applies overrides from:
 - `tt-train/configs/training_overrides.yaml`
@@ -85,7 +85,7 @@ What the script does:
 - Saves `training_curves.png` at the end
 
 ### Configuration
-- Base config: `tt-train/configs/training_shakespeare_tinyllama.yaml`
+- Base config: `tt-train/configs/training_configs/training_gsm8k_tinyllama.yaml`
 - Dashboard overrides produce YAML with sections:
   - `training_config` (e.g., `batch_size`, `max_steps`, `gradient_accumulation_steps`, `eval_every`, `transformer_config.max_sequence_length`)
   - `scheduler_config` (`min_lr`, `max_lr`, `warmup_steps`, `hold_steps`)

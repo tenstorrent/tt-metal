@@ -4,19 +4,19 @@
 
 #include "tilize_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
 #include "tilize_multi_core_sharded_retile_program_factory.hpp"
 #include "tilize_multi_core_retile_program_factory.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using namespace tt::tt_metal;
 
@@ -95,6 +95,14 @@ bool can_use_sharded_optimized_factories(
             if (shard.orientation != ShardOrientation::ROW_MAJOR) {
                 return false;
             }
+            // Every core tilizes and writes a full shard, so the shards must cover the input height
+            // exactly. A partial last shard (or idle grid cores) would write tiles past the end of the
+            // interleaved output. The retile factory clamps its writes itself.
+            const auto physical_height = input_tensor.physical_volume() / input_tensor.padded_shape()[-1];
+            if (!is_retile(operation_attributes, tensor_args) &&
+                physical_height != static_cast<uint64_t>(shard.shape[0]) * shard.grid.num_cores()) {
+                return false;
+            }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
         }
@@ -145,6 +153,8 @@ bool can_use_sharded_optimized_factories(
 }  // namespace
 
 constexpr uint32_t WIDE_ROW_TILE_THRESHOLD = 32;
+constexpr uint32_t BH_MIN_BLOCK_ROW_BYTES = 1024;
+constexpr uint32_t BH_IDLE_GRID_DIVISOR = 4;
 
 void TilizeDeviceOperation::validate_on_program_cache_miss(
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
@@ -375,7 +385,11 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
         uint32_t num_blocks_block =
             (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
-        if (ncores < ncores_wh.ncores) {
+        // On Blackhole the block factory is slower than the default one when its per-core row
+        // segments are shorter than 1 KB, unless the default factory would use under a quarter of the grid.
+        const uint32_t block_row_bytes = ncores_wh.single_block_size * tile_width * input_tensor_a.element_size();
+        const bool short_segments = device->arch() == tt::ARCH::BLACKHOLE && block_row_bytes < BH_MIN_BLOCK_ROW_BYTES;
+        if (ncores < ncores_wh.ncores && (ncores < grid_area / BH_IDLE_GRID_DIVISOR || !short_segments)) {
             return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
         }
     }

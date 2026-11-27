@@ -116,7 +116,6 @@ jobs:
         test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
     name: ${{ matrix.test-group.name }}
     runs-on: ${{ matrix.test-group.runs_on }}
-    timeout-minutes: ${{ matrix.test-group.timeout }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       options: "--label runner-mode=sim"
@@ -188,6 +187,7 @@ jobs:
       # continue-on-error: ttsim is WIP and many tests are expected to fail; the HTML report is
       # the deliverable, not a green check.
       - name: ${{ matrix.test-group.name }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         id: regression
         shell: bash
         continue-on-error: true

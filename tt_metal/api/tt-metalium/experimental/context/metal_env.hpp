@@ -10,7 +10,7 @@
 #include <string>
 #include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/discovery/system_mesh.hpp>
 
 namespace tt::tt_metal {
 

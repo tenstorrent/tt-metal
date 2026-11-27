@@ -89,12 +89,13 @@ class AbstractModuleBase(CppModuleBase):
                 yield (name, attr)
 
     def named_buffers(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
-        """Yield (name, buffer) pairs."""
+        """Yield (name, buffer) pairs, through ``named_children()`` so the modules a ``ModuleList`` or ``ModuleDict``
+        holds are walked too."""
         for name, buf in self._buffers.items():
             yield (f"{prefix}.{name}" if prefix else name, buf)
-        for name, attr in self.__dict__.items():
-            if isinstance(attr, AbstractModuleBase):
-                yield from attr.named_buffers(f"{prefix}.{name}" if prefix else name)
+        for name, child in self.named_children():
+            if isinstance(child, AbstractModuleBase):
+                yield from child.named_buffers(f"{prefix}.{name}" if prefix else name)
 
     def modules(self) -> Iterator[Any]:
         """Yield all modules."""

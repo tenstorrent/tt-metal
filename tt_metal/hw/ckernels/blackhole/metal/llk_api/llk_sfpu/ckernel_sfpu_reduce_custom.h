@@ -8,7 +8,6 @@
 
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
-#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel {
@@ -105,7 +104,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            lltt::replay(0, 8);
+            TTI_REPLAY(0, 8, 0, 0);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);
@@ -130,7 +129,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     for (std::uint32_t i = 0; i < block_height; i++) {
 #pragma GCC unroll 8
         for (int j = 0; j < 8; j++) {
-            lltt::replay(0, 8);
+            TTI_REPLAY(0, 8, 0, 0);
 
             if (j % 4 == 3) {
                 TTI_INCRWC(0, 10, 0, 0);
