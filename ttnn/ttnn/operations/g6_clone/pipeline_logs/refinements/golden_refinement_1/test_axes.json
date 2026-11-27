@@ -1,0 +1,142 @@
+{
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x512x5120-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x32x62080-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x1x62080-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x5120-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x256x5120-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x256x3072-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x2048x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x8192x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x2048x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x2304x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x8192x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x8448x128-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[16x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[8x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x3x2560-dtype=BFLOAT16-layout=ROW_MAJOR]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[16-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[8-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[32-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1x1x1x32-dtype=UINT32-layout=ROW_MAJOR]": {
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[16-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[8-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op[1-dtype=INT32-layout=ROW_MAJOR]": {
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p1-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p2-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p3-1x512x5120-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[p4-1x1x32x62080-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_f32-1x1-dtype=FLOAT32-layout=TILE]": {
+    "dtype": "FLOAT32",
+    "layout": "TILE"
+  },
+  "eval/golden_tests/g6_clone/test_golden.py::test_op_loose[poisoned_padding_nan_bf16-1x1x1x62080-dtype=BFLOAT16-layout=TILE]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE"
+  }
+}

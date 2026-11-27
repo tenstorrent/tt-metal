@@ -1,0 +1,307 @@
+# golden: g6_clone
+Clone: a copy of one device tensor into a new device tensor of the same
+shape, dtype, layout and memory placement, every logical element
+bit-identical. It matches torch.clone(x) with its default memory format
+(the only option of the reference, see below).
+
+    out[i] = x[i]    bit-identical, for every logical index i
+    shape(out) = shape(x), dtype(out) = dtype(x), layout(out) = layout(x),
+    placement(out) = placement(x); out is new storage, x is unchanged
+
+where x is `input_tensor`, of rank 1 to 4, i = (i_0, ..., i_{R-1}) runs over
+the logical shape, and "bit-identical" means the stored bit pattern of each
+logical element of out equals that of x: -0.0, +-inf, NaN with its payload,
+subnormal values and integers of every magnitude (int32 -2^31, uint32
+2^32 - 1, any value above 2^24) included. Positions of a TILE tensor beyond
+its logical shape (tile padding) are not part of the result.
+
+The operation MUST produce every logical element of the output with the
+bit pattern of the input element, for every bit pattern of the dtype, and
+MUST NOT send the values through any conversion or arithmetic on the way
+(a float32 detour loses integers above 2^24, a matrix-engine operand keeps
+10 of the 23 float32 mantissa bits, a 16-bit register rounds float32);
+moving bytes in any grouping, order and split is allowed, because a copy
+that changes a bit is not a copy and a tolerance-based test can miss it.
+
+Import path and function signature must be exactly:
+
+    from ttnn.operations.g6_clone import g6_clone
+
+    g6_clone(
+        input_tensor: ttnn.Tensor,            # (d_0, ..., d_{R-1}), R in 1..4
+    ) -> ttnn.Tensor                          # (d_0, ..., d_{R-1})
+
+The reference's only option, `memory_format`, is deliberately not a
+parameter: a device tensor has no strides to preserve, and the result keeps
+the input's layout and placement. No `dtype` or `memory_config` keyword
+exists: no production call passes one, the output always takes the input's
+dtype and placement, and a conversion is not a copy. No compute
+configuration exists: the op does no arithmetic.
+
+This supports these call patterns:
+- g6_clone(x)                                # the only call form
+
+The op MUST follow the registry model (see eval/op_template.py):
+
+- Declare INPUT_TAGGERS, SUPPORTED, EXCLUSIONS inline in the op file.
+- Implement validate() that raises a support-refusal from
+  ttnn.operations._op_contract (UnsupportedAxisValue / ExcludedCell) for cells
+  outside the declared support contract: SUPPORTED per-axis, then EXCLUSIONS
+  (cell-level). Do NOT declare or check INVALID -- INVALID is a test-harness
+  concept that lives in feature_spec.py; the test runner skips INVALID cells
+  before they reach the op.
+- The public entry point calls validate() as its first line.
+
+Expected INPUT_TAGGERS (axis names and return values must match TARGET in
+eval/golden_tests/g6_clone/feature_spec.py):
+
+- tag_dtype(inputs, axes) -> ttnn.bfloat16 | ttnn.float32 | ttnn.int32 | ttnn.uint32
+  reads inputs[0]["dtype"]; the element width decides the page and tile bytes.
+- tag_layout(inputs, axes) -> ttnn.TILE_LAYOUT | ttnn.ROW_MAJOR_LAYOUT
+  reads inputs[0]["layout"]; a TILE page is one 32x32 tile, a ROW_MAJOR page
+  is one row of the last dimension.
+
+`inputs` is (scenario,), with scenario = {"input_shape": tuple, "dtype":
+ttnn dtype, "layout": ttnn layout}: one production case each, so that only
+the dtype and layout pairs that production uses are built. validate() builds
+the same tuple from input_tensor.
+
+Phase 0 SUPPORTED (the baseline -- the implementer's claim about what works
+right now; refinements extend this toward TARGET in feature_spec.py):
+
+- dtype:            ttnn.float32
+- layout:           ttnn.TILE_LAYOUT
+
+Phase 0 holds the float32 TILE cases of every rank and alignment, among them
+the two shapes the model calls most of all TILE cases, (16, 12, 128, 128)
+and (8, 12, 128, 128), and the single-tile (1, 1). Deferring the other
+values refuses, until a refinement adds them, the bfloat16 TILE cases (14,
+among them (1, 512, 5120) and (1, 1, 32, 62080)), the bfloat16 ROW_MAJOR
+cases (3, called as often as the float32 ones) and the int32 and uint32
+ROW_MAJOR cases (8). None of them needs an algorithm of its own: do not add
+a tagger, an EXCLUSIONS entry or an alignment or size axis to gate any of
+them out.
+
+INVALID: none. Every pair of TARGET's dtype and layout values can be stored
+on the device; INPUTS builds only the production pairs.
+
+EXCLUSIONS (Phase 0): none.
+
+Input requirements (Phase 0):
+- rank: 1 to 4
+- memory: DRAM interleaved
+
+Output: shape of input_tensor, dtype of input_tensor, layout of
+input_tensor, in the memory configuration of input_tensor (DRAM
+interleaved), in a newly allocated buffer that shares no storage with
+input_tensor.
+
+## Precision
+
+Supported dtypes: float32 (Phase 0), bfloat16 (refinement), int32
+(refinement), uint32 (refinement).
+Numerical tolerances (PCC and relative RMS, gated together) are in
+eval/metrics.py (DEFAULT_TOLERANCES) and
+eval/golden_tests/g6_clone/helpers.py:TOLERANCES.
+
+The op moves data and computes nothing: every output element is
+bit-identical to its input element in every dtype, and the suite compares
+exactly: the suite's TOLERANCES entries for this op are exact for every
+dtype, compared on bit patterns, and no PCC or RMS limit applies. No cast is
+legal: the output dtype is the input dtype. Float32
+comes first because the model's largest TILE calls are float32 and because
+it is the dtype in which a path through an arithmetic engine shows first.
+
+## Layout handling
+
+input_tensor arrives in TILE_LAYOUT (bfloat16, float32) or in
+ROW_MAJOR_LAYOUT (bfloat16, int32, uint32); the output has the layout of the
+input. The Python entry point MUST NOT call ttnn.to_layout, ttnn.tilize,
+ttnn.untilize, ttnn.pad, ttnn.slice, or any other host-side tensor
+transformation to work around layout or alignment differences.
+
+## Shape handling
+
+Ranks 1 to 4. The last two dimensions need not be multiples of 32: the
+bfloat16 TILE inputs (1, 1, 1, 62080) and (1, 5120) and the float32 and
+bfloat16 TILE input (1, 1) have partial tiles.
+Only logical elements are part of the result: the content of the input's
+tile padding (garbage, not zeros, when another op produced the tensor) MUST
+NOT reach a logical element of the output, and the output's tile padding may
+hold anything. ROW_MAJOR rows of 4, 32, 64, 128 and 5120 bytes occur. The
+operation MUST handle non-tile-aligned dims and every row size natively --
+no host-side padding or slicing. No dimension grows without bound in the
+model (the largest input is (16, 12, 128, 128) float32, 12582912 bytes), and
+the tensor size has no upper limit in this
+contract: an out-of-memory on a shape in the golden INPUTS is a correctness
+failure, not a missing feature.
+
+## Work geometry
+
+On every geometry in INPUTS, the number of cores used must be the blocking
+decision's choice, not a limit imposed by the tensor's shape: one input is a
+single tile row of 1940 tiles, another 48 rows of one page each, and no
+result depends on another element, so every tile and every page can be moved
+independently.
+
+## Validation
+
+The operation must validate inputs on the Python side and raise ValueError or
+RuntimeError for:
+- input_tensor that is not a device tensor
+- input_tensor of rank 0 or above 4
+- input_tensor that is not DRAM interleaved (sharded or in L1)
+
+## Background material
+
+Non-normative: this spec is the contract and wins on any conflict. The files
+below exist only where the exploration bundle was installed; when a path is
+absent, work from this spec alone.
+
+- docs/explorations/g6_clone/DOSSIER.md -- index of the exploration: exact
+  semantics of the upstream reference implementation, the mathematical design,
+  the op restated in tile terms, forecast risks.
+- docs/explorations/g6_clone/oracle/pytorch_g6_clone.py -- pure-PyTorch
+  reference of the math above (how it was checked: DOSSIER.md).
+- docs/explorations/g6_clone/sources/ -- pinned copies of the upstream
+  reference implementation and paper; no network access is needed.
+- docs/explorations/g6_clone/lessons.md -- what earlier ops of the campaign
+  found, filtered for this op; advice, not a requirement.
+
+## Model environment
+
+The op runs inside a model. For every op of this campaign the following holds; the model-wide rules
+under `## Rules` state it as obligations:
+- one call of the op is one program in the model's sequence of programs;
+- every tensor of the signature is the model's own tensor, in the shape, dtype, layout, memory
+  placement and packing named there: no program runs between the op that produces a tensor and this
+  one;
+- another device program starts right after every call;
+- the model keeps tensors of its own in L1 while the op runs, and leaves 1347776 bytes per core to
+  the op;
+- the op's neighbours in the model are generated separately against the same interface contract, so
+  the boundary of this op does not move;
+- the model replays its calls from captured traces;
+
+## Rules
+
+Conditional implementation rules. Apply each only when its condition matches
+the current SUPPORTED scope; a rule whose condition is not yet met applies as
+soon as a later refinement adds the relevant axis value.
+
+- When the op runs (every call, Phase 0 included): every logical element of
+  the output MUST be bit-identical to its input element, for every bit
+  pattern of the dtype -- MUST NOT pass the values through a conversion or an
+  arithmetic engine (a float32 detour, a matrix-engine operand, a 16-bit
+  register), which changes integers above 2^24, low float32 mantissa bits,
+  subnormals or NaN payloads while randn inputs still look right.
+- When the op returns (every call): the output MUST be a newly allocated
+  device tensor that shares no buffer with input_tensor, and input_tensor
+  MUST be unchanged by the call -- MUST NOT return input_tensor, a view of it
+  or any tensor on its buffer, nor use the input's buffer as scratch; the
+  values would be right and a later write through either tensor would change
+  the other.
+- When the entry point runs (every call): it MUST dispatch the op's own
+  program, built from its own program descriptor and kernels -- MUST NOT
+  delegate the copy to any existing device op, a memory-configuration or
+  layout conversion included; one wrapped op is one program with right
+  values, which no golden cell can tell apart.
+- When the op runs (every call): input_tensor MUST cross DRAM at most once as
+  a read and the output at most once as a write -- MUST NOT stage the data
+  through an intermediate device tensor or a second pass over DRAM; what
+  stays inside the cores' own L1 is allowed, and no golden cell counts DRAM
+  passes.
+- When ROW_MAJOR_LAYOUT is in SUPPORTED or an input is not tile-aligned
+  (Phase 0 included): kernels MUST handle that data natively -- the entry
+  point MUST NOT call ttnn.to_layout, ttnn.tilize, ttnn.untilize, ttnn.pad,
+  ttnn.slice or any other host-side tensor transformation; the values would
+  be right and the kernel unchanged.
+- When a TILE input is not tile-aligned: the logical elements of the output
+  MUST NOT depend on the content of the input's tile padding -- a producer
+  in the model owes no zeros there, while a host-made test tensor holds
+  zeros and hides the defect.
+- When a shape in the golden INPUTS runs out of memory: the op MUST NOT
+  refuse the shape, list it in EXCLUSIONS or tag it by size -- the cell stays
+  a failing cell until the design runs it; an out-of-memory there, or a
+  refusal under the per-core L1 bound of the model environment, is a defect
+  of the block, never a support statement.
+- When declaring SUPPORTED, INPUT_TAGGERS or EXCLUSIONS (every phase): the op
+  MUST NOT add an alignment, rank or size axis, a tagger beyond tag_dtype and
+  tag_layout, or an EXCLUSIONS entry that refuses a production case -- every
+  case of TARGET is a plain copy, and a refused cell is an expected failure
+  that hides missing work.
+- When an input holds more than one tile or row: the number of cores used
+  MUST be the blocking decision's choice, not a limit imposed by the tensor's
+  shape -- no golden cell sees how many cores ran.
+
+Model-wide rules (the same text in every op spec of this campaign; ids are those of the black
+bible):
+
+- When the entry point is called (every call): the call MUST run as one device program -- MUST NOT
+  dispatch a second program, chain other device ops or read tensor values on the host; the fixed
+  cost of a program and every extra crossing of DRAM is a cost that no kernel tuning removes, the
+  values stay right and no golden cell counts programs (BB-01).
+- When the entry point runs (every call): the op MUST take and return every tensor in the shape,
+  dtype, layout, memory placement and packing this spec names for it -- the entry point MUST NOT
+  call a slice, reshape, typecast, layout or memory conversion on an input or an output, and the
+  caller MUST NOT need one before or after the call; such programs scale with users and tokens and
+  cancel the op's gain, and the values of a wrapped call are right (BB-02).
+- When another program runs right after the call (always in the model): every kernel MUST have
+  completed every NoC transaction it issued, remote semaphore increments and other atomic operations
+  included, when it returns -- a transaction left in flight hangs the next program, and a single
+  call or a profiled run hides it (BB-03).
+- When the kernels of the op are built (every build flavour the campaign runs: plain, with profiler
+  zones, with NoC tracing): the kernels of one core with their runtime arguments and buffer
+  configuration MUST fit the kernel-config region of that core -- MUST NOT fit only in the leanest
+  build; an image that is too large is a refused launch that no golden cell of another build shows,
+  and an op that cannot be traced cannot be diagnosed (BB-04).
+- When the model holds tensors of its own in L1 during the call (every call of the model): the L1
+  the op uses on any core MUST stay within 1347776 bytes for every shape of the golden INPUTS, and a
+  shape that cannot meet the bound MUST be refused on the host -- MUST NOT pass only when the op has
+  a whole L1 to itself; a test that calls the op alone hides the overlap, which then fails at launch
+  only for the shapes that reach it (BB-05).
+- When the same call is repeated on the same inputs and state (every shape): the op MUST return
+  bit-identical outputs and state on every run -- a hand-over that is taken before its data has
+  landed gives a result that changes between runs and still passes a tolerance most of the time
+  (BB-06).
+- When the op is called again with the same shapes, dtypes, layouts, memory configurations and
+  options (every repeat call): the host MUST NOT rebuild the program description, and everything
+  that changes the program MUST be part of the cache key -- an untraced call otherwise pays the
+  build on every call, and an incomplete key replays a wrong program (BB-07).
+- When the op chooses among internal plans by shape or by free L1 (every call of such an op): the op
+  MUST be able to report the plan a call selected, and a production shape MUST get the same plan
+  with its inputs placed as the model places them -- a silent fall to a slower plan passes every
+  correctness test (BB-08).
+- When the op is refined or tuned (every later change): what the op takes, computes and returns MUST
+  stay what this spec says -- MUST NOT move work across the boundary to or from a neighbouring op to
+  gain time, because the neighbours are generated separately against the same contract; inside the
+  boundary every restructuring is allowed (BB-09).
+- When the op carries fp32 state across calls or steps (every call of such an op): the carried state
+  and every full-precision factor applied to it MUST NOT pass through a matrix-engine operand of
+  reduced precision, and the state MUST stay fp32 at every call boundary -- a state that is cut at
+  every step drifts without bound and still passes a loose limit (BB-12).
+- When fp32 values that feed a carried state are computed with matrix-engine products (every such
+  product): the one-sided truncation of the operands MUST be compensated so that the state error
+  against the fp32 reference, whole tensor and worst unit, does not grow on the state-carry cases of
+  the suite -- truncation accumulates in the state and a correlation check does not see it (BB-13).
+- When the op runs under trace replay (every call of a traced model): a call after capture MUST NOT
+  allocate a device tensor or build a kernel, and a replayed call MUST equal the eager call bit for
+  bit -- a late allocation or a build at request time stalls or breaks the replay (BB-16).
+- When a kernel group of the op spans more than one core (every multi-core shape): for every
+  production shape the cores of each kernel group MUST form few rectangular core ranges, reached by
+  choosing which core gets which role and not by changing the data path -- binaries and launch
+  messages are written once per core range, so scattered groups start late on every call of a traced
+  model (BB-17).
+- When the op runs under trace replay (every call of a traced model): the kernel text of every role
+  MUST be small enough to sit in the kernel-config region beside the binaries of the programs that
+  precede the op -- MUST NOT be reached with a size-optimising build that slows the kernels;
+  otherwise the dispatcher waits for the previous program to end before it writes the op's binaries
+  and launch messages (BB-18).
+- When the op is built for profiling (the zone build): every piece of work and every blocking wait
+  of every core MUST fall inside its own named zone, the op MUST be able to dump which role each
+  core has, and none of this MUST change the plain build -- time outside a zone reads as waiting,
+  and the wrong role gets optimised (BB-21).
+- When tests of the op are written or run (every phase): the tests MUST be limited to the production
+  cases this spec names and to the cases its rules require, and a run MUST cover only the cases the
+  change at hand can affect -- sweeps over shapes, dtypes or layouts that production never calls and
+  full-suite runs after every edit take most of the device time and decide nothing (BB-22).

@@ -1,0 +1,244 @@
+{
+ "op": "g6_clone",
+ "evidence": "E1",
+ "evidence_scope": "",
+ "evidence_levels": [
+  "E1"
+ ],
+ "max_rel_diff": 0.0,
+ "compared_in": "float64",
+ "passed": true,
+ "notes": [],
+ "torch": "2.11.0+cpu",
+ "python": "3.10.18",
+ "date": "2026-11-25",
+ "files": {
+  "check_oracle.py": "be439095ff26760f79480cd1f4c1ba3d4f195eb2d6be12f875c3a10ba6835408",
+  "oracle_kit.py": "bed4d14a497eb4cd32ed27b97a3577356b87a064c824b7271ac8170d87fa25b9",
+  "pytorch_g6_clone.py": "8610dd0d454de491d9d08d4c51dcd95038fe0318932816d4903202f69e5811d0"
+ },
+ "upstream_edits": [],
+ "checks": [
+  {
+   "name": "upstream (1, 1, 32, 32)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "upstream (2, 3, 64, 96)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "upstream (1, 2, 17, 50)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "upstream (16,)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "upstream (1, 1)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "upstream (3, 5, 7)",
+   "kind": "equivalence",
+   "status": "pass",
+   "detail": "max rel diff 0.000e+00 (gate 1e-06)",
+   "note": "",
+   "value": 0.0,
+   "dtypes": [
+    "float64",
+    "float64"
+   ],
+   "evidence": "E1"
+  },
+  {
+   "name": "bit patterns BFLOAT16: reference equals upstream",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns BFLOAT16: oracle equals reference",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns FLOAT32: reference equals upstream",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns FLOAT32: oracle equals reference",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns INT32: reference equals upstream",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns INT32: oracle equals reference",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns UINT32: reference equals upstream",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "bit patterns UINT32: oracle equals reference",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "special values float32 kept bit for bit",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "special values bfloat16 kept bit for bit",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "special values int32 kept bit for bit",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "special values uint32 kept bit for bit",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "float32 round trip loses int32 2^24 + 1 (why the oracle keeps the dtype)",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "new storage: writing the result leaves the input unchanged",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "call matrix: 29 cases, one tensor each, no other argument, output metadata equals input",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "call matrix: all 29 production shapes bit-identical (reference, oracle, upstream)",
+   "kind": "probe",
+   "status": "pass",
+   "detail": "holds",
+   "note": ""
+  },
+  {
+   "name": "float32 cell, randn",
+   "kind": "precision",
+   "status": "info",
+   "detail": "TF32 cut of the inputs, if they enter a matrix-engine phase: pcc 1.000000 rms 0.0004 vs (0.999, 0.01): inside; emulated (storage and operands only), not confirmed on a device",
+   "note": "",
+   "value": {
+    "pcc": 0.999999975325888,
+    "rms": 0.0004170382313658262,
+    "max_abs_diff": 0.003486156463623047,
+    "has_inf": false,
+    "has_nan": false
+   },
+   "inside": true
+  },
+  {
+   "name": "bfloat16 cell, randn",
+   "kind": "precision",
+   "status": "info",
+   "detail": "storage floor 0; one-ULP sensitivity c = 0.0000: a fraction p of elements on the other neighbour costs sqrt(p) x 0.0000 against the rms limit 0.04; emulated (storage and operands only), not confirmed on a device",
+   "note": "",
+   "value": {
+    "pcc": 1.0,
+    "rms": 0.0,
+    "max_abs_diff": 0.0,
+    "has_inf": false,
+    "has_nan": false
+   },
+   "sensitivity": 0.0,
+   "inside": true
+  }
+ ]
+}

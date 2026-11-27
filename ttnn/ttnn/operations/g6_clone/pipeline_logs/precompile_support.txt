@@ -1,0 +1,2 @@
+supported=False
+reason=ttnn.graph up_front_* API absent (ttnn import/probe failed)

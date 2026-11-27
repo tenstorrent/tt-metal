@@ -1,0 +1,931 @@
+{
+  "schema": "explorator.facts/1",
+  "op_name": "g6_clone",
+  "title": "A bit-identical copy of one DRAM-interleaved device tensor into a new tensor of the same shape, dtype, layout and placement (torch.clone semantics).",
+  "status": "ready for golden-tests",
+  "date": "2026-11-25",
+  "request": "Explorator ticket for the library op g6_clone (group 6, data movement): bundle and op spec under the lead's contract; support every case of scenarios.json and beat the incumbent stock op on device time",
+  "feasibility": "feasible as one device program",
+  "model": {
+    "name": "FLUX.2-dev (2,2) mesh and Qwen3.8-27B text-only (1,4) mesh, shapes per device",
+    "hub_id": "",
+    "revision": "",
+    "config": {
+      "source": "sources/local/contract.md:24",
+      "cases": 29,
+      "calls_qwen": 3559,
+      "calls_flux": 249
+    }
+  },
+  "reference": [
+    {
+      "role": "canonical",
+      "repo": "pytorch/pytorch",
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "files": [
+        "sources/github/pytorch/pytorch@70d99e998b49/aten/src/ATen/native/TensorFactories.cpp",
+        "sources/github/pytorch/pytorch@70d99e998b49/aten/src/ATen/native/native_functions.yaml",
+        "sources/github/pytorch/pytorch@70d99e998b49/torch/_torch_docs.py"
+      ],
+      "license": "BSD-3-Clause (given)"
+    },
+    {
+      "role": "tests",
+      "repo": "lead of the library: traced production runs",
+      "commit": "",
+      "files": [
+        "sources/local/scenarios.json"
+      ],
+      "license": "unknown"
+    }
+  ],
+  "paper": {
+    "arxiv": "",
+    "title": ""
+  },
+  "signature": {
+    "import": "from ttnn.operations.g6_clone import g6_clone",
+    "function": "g6_clone",
+    "params": [
+      {
+        "name": "input_tensor",
+        "type": "ttnn.Tensor",
+        "default": null,
+        "kw_only": false
+      }
+    ],
+    "returns": "ttnn.Tensor"
+  },
+  "tensors": [
+    {
+      "name": "input_tensor",
+      "role": "input",
+      "shape": "(d_0, ..., d_{R-1}), R in 1..4",
+      "dtype": "bfloat16, float32 (TILE); bfloat16, int32, uint32 (ROW_MAJOR)",
+      "layout": "TILE or ROW_MAJOR, DRAM interleaved"
+    },
+    {
+      "name": "out",
+      "role": "output",
+      "shape": "shape of input_tensor",
+      "dtype": "dtype of input_tensor",
+      "layout": "layout and placement of input_tensor"
+    }
+  ],
+  "axes": [
+    {
+      "name": "d_0 (leading)",
+      "spans": false,
+      "why": "out[i] reads x[i] only",
+      "state": "none",
+      "combine": "none"
+    },
+    {
+      "name": "d_1",
+      "spans": false,
+      "why": "out[i] reads x[i] only",
+      "state": "none",
+      "combine": "none"
+    },
+    {
+      "name": "H",
+      "spans": false,
+      "why": "out[i] reads x[i] only",
+      "state": "none",
+      "combine": "none"
+    },
+    {
+      "name": "W",
+      "spans": false,
+      "why": "out[i] reads x[i] only",
+      "state": "none",
+      "combine": "none"
+    }
+  ],
+  "phases": [
+    {
+      "id": 1,
+      "name": "move",
+      "math": "out[i] = x[i], bit-identical",
+      "candidates": [
+        {
+          "name": "noc_async_read_page",
+          "header": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+          "line": 1243,
+          "status": "covered"
+        },
+        {
+          "name": "noc_async_write_page",
+          "header": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+          "line": 1418,
+          "status": "covered"
+        },
+        {
+          "name": "noc_async_read",
+          "header": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+          "line": 547,
+          "status": "covered"
+        },
+        {
+          "name": "noc_async_write",
+          "header": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+          "line": 876,
+          "status": "covered"
+        },
+        {
+          "name": "noc_async_write_barrier",
+          "header": "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+          "line": 1951,
+          "status": "covered"
+        }
+      ]
+    }
+  ],
+  "gaps": [],
+  "registry": {
+    "axes": {
+      "dtype": {
+        "target": [
+          "ttnn.float32",
+          "ttnn.bfloat16",
+          "ttnn.int32",
+          "ttnn.uint32"
+        ],
+        "phase0": [
+          "ttnn.float32"
+        ],
+        "derived": "tagger"
+      },
+      "layout": {
+        "target": [
+          "ttnn.TILE_LAYOUT",
+          "ttnn.ROW_MAJOR_LAYOUT"
+        ],
+        "phase0": [
+          "ttnn.TILE_LAYOUT"
+        ],
+        "derived": "tagger"
+      }
+    },
+    "exclusions": [],
+    "invalid_candidates": []
+  },
+  "production_shapes": [
+    {
+      "name": "Qwen 0",
+      "tensors": {
+        "input_tensor": [
+          16
+        ],
+        "out": [
+          16
+        ]
+      },
+      "dtype": "uint32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:7-32"
+    },
+    {
+      "name": "Qwen 1",
+      "tensors": {
+        "input_tensor": [
+          16
+        ],
+        "out": [
+          16
+        ]
+      },
+      "dtype": "int32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:34-59"
+    },
+    {
+      "name": "Qwen 2",
+      "tensors": {
+        "input_tensor": [
+          16,
+          12,
+          128,
+          128
+        ],
+        "out": [
+          16,
+          12,
+          128,
+          128
+        ]
+      },
+      "dtype": "float32 TILE",
+      "source": "sources/local/scenarios.json:61-92"
+    },
+    {
+      "name": "Qwen 3",
+      "tensors": {
+        "input_tensor": [
+          16,
+          3,
+          2560
+        ],
+        "out": [
+          16,
+          3,
+          2560
+        ]
+      },
+      "dtype": "bfloat16 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:94-123"
+    },
+    {
+      "name": "Qwen 4",
+      "tensors": {
+        "input_tensor": [
+          8
+        ],
+        "out": [
+          8
+        ]
+      },
+      "dtype": "uint32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:125-150"
+    },
+    {
+      "name": "Qwen 5",
+      "tensors": {
+        "input_tensor": [
+          8
+        ],
+        "out": [
+          8
+        ]
+      },
+      "dtype": "int32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:152-177"
+    },
+    {
+      "name": "Qwen 6",
+      "tensors": {
+        "input_tensor": [
+          8,
+          12,
+          128,
+          128
+        ],
+        "out": [
+          8,
+          12,
+          128,
+          128
+        ]
+      },
+      "dtype": "float32 TILE",
+      "source": "sources/local/scenarios.json:179-210"
+    },
+    {
+      "name": "Qwen 7",
+      "tensors": {
+        "input_tensor": [
+          8,
+          3,
+          2560
+        ],
+        "out": [
+          8,
+          3,
+          2560
+        ]
+      },
+      "dtype": "bfloat16 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:212-241"
+    },
+    {
+      "name": "Qwen 8",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          1,
+          62080
+        ],
+        "out": [
+          1,
+          1,
+          1,
+          62080
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:243-274"
+    },
+    {
+      "name": "Qwen 9",
+      "tensors": {
+        "input_tensor": [
+          32
+        ],
+        "out": [
+          32
+        ]
+      },
+      "dtype": "uint32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:276-301"
+    },
+    {
+      "name": "Qwen 10",
+      "tensors": {
+        "input_tensor": [
+          1
+        ],
+        "out": [
+          1
+        ]
+      },
+      "dtype": "uint32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:303-328"
+    },
+    {
+      "name": "Qwen 11",
+      "tensors": {
+        "input_tensor": [
+          1
+        ],
+        "out": [
+          1
+        ]
+      },
+      "dtype": "int32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:330-355"
+    },
+    {
+      "name": "Qwen 12",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          1,
+          32
+        ],
+        "out": [
+          1,
+          1,
+          1,
+          32
+        ]
+      },
+      "dtype": "uint32 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:357-388"
+    },
+    {
+      "name": "Qwen 13",
+      "tensors": {
+        "input_tensor": [
+          1,
+          12,
+          128,
+          128
+        ],
+        "out": [
+          1,
+          12,
+          128,
+          128
+        ]
+      },
+      "dtype": "float32 TILE",
+      "source": "sources/local/scenarios.json:390-421"
+    },
+    {
+      "name": "Qwen 14",
+      "tensors": {
+        "input_tensor": [
+          1,
+          3,
+          2560
+        ],
+        "out": [
+          1,
+          3,
+          2560
+        ]
+      },
+      "dtype": "bfloat16 ROW_MAJOR",
+      "source": "sources/local/scenarios.json:423-452"
+    },
+    {
+      "name": "Qwen 15",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          32,
+          62080
+        ],
+        "out": [
+          1,
+          1,
+          32,
+          62080
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:454-485"
+    },
+    {
+      "name": "FLUX 4",
+      "tensors": {
+        "input_tensor": [
+          1,
+          512,
+          5120
+        ],
+        "out": [
+          1,
+          512,
+          5120
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:487-516"
+    },
+    {
+      "name": "FLUX 5",
+      "tensors": {
+        "input_tensor": [
+          1,
+          2048,
+          128
+        ],
+        "out": [
+          1,
+          2048,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:518-547"
+    },
+    {
+      "name": "FLUX 6",
+      "tensors": {
+        "input_tensor": [
+          1,
+          256,
+          3072
+        ],
+        "out": [
+          1,
+          256,
+          3072
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:549-578"
+    },
+    {
+      "name": "FLUX 7",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1
+        ],
+        "out": [
+          1,
+          1
+        ]
+      },
+      "dtype": "float32 TILE",
+      "source": "sources/local/scenarios.json:580-607"
+    },
+    {
+      "name": "FLUX 8",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1
+        ],
+        "out": [
+          1,
+          1
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:609-636"
+    },
+    {
+      "name": "FLUX 9",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          2048,
+          128
+        ],
+        "out": [
+          1,
+          1,
+          2048,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:638-669"
+    },
+    {
+      "name": "FLUX 10",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          256,
+          128
+        ],
+        "out": [
+          1,
+          1,
+          256,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:671-702"
+    },
+    {
+      "name": "FLUX 11",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          2304,
+          128
+        ],
+        "out": [
+          1,
+          1,
+          2304,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:704-735"
+    },
+    {
+      "name": "FLUX 12",
+      "tensors": {
+        "input_tensor": [
+          1,
+          256,
+          5120
+        ],
+        "out": [
+          1,
+          256,
+          5120
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:737-766"
+    },
+    {
+      "name": "FLUX 13",
+      "tensors": {
+        "input_tensor": [
+          1,
+          5120
+        ],
+        "out": [
+          1,
+          5120
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:768-795"
+    },
+    {
+      "name": "FLUX 14",
+      "tensors": {
+        "input_tensor": [
+          1,
+          8192,
+          128
+        ],
+        "out": [
+          1,
+          8192,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:797-826"
+    },
+    {
+      "name": "FLUX 15",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          8192,
+          128
+        ],
+        "out": [
+          1,
+          1,
+          8192,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:828-859"
+    },
+    {
+      "name": "FLUX 16",
+      "tensors": {
+        "input_tensor": [
+          1,
+          1,
+          8448,
+          128
+        ],
+        "out": [
+          1,
+          1,
+          8448,
+          128
+        ]
+      },
+      "dtype": "bfloat16 TILE",
+      "source": "sources/local/scenarios.json:861-891"
+    }
+  ],
+  "counts": [
+    {
+      "counts": {},
+      "engine_core_cycles": 0.0,
+      "bytes_read": 12582912,
+      "bytes_written": 12582912,
+      "cores_assumed": 110,
+      "fidelity": "HiFi4",
+      "fp32_dest": false,
+      "balance_core_cycles_per_byte": 0.2900390625,
+      "vector_engine_unpriced": [],
+      "shape": "p1 (16, 12, 128, 128) float32",
+      "verdict": "data-movement-bound (r = 0: no engine work)"
+    },
+    {
+      "counts": {},
+      "engine_core_cycles": 0.0,
+      "bytes_read": 6291456,
+      "bytes_written": 6291456,
+      "cores_assumed": 110,
+      "fidelity": "HiFi4",
+      "fp32_dest": false,
+      "balance_core_cycles_per_byte": 0.2900390625,
+      "vector_engine_unpriced": [],
+      "shape": "p2 (8, 12, 128, 128) float32",
+      "verdict": "data-movement-bound (r = 0: no engine work)"
+    },
+    {
+      "counts": {},
+      "engine_core_cycles": 0.0,
+      "bytes_read": 5242880,
+      "bytes_written": 5242880,
+      "cores_assumed": 110,
+      "fidelity": "HiFi4",
+      "fp32_dest": false,
+      "balance_core_cycles_per_byte": 0.2900390625,
+      "vector_engine_unpriced": [],
+      "shape": "p3 (1, 512, 5120) bfloat16",
+      "verdict": "data-movement-bound (r = 0: no engine work)"
+    },
+    {
+      "counts": {},
+      "engine_core_cycles": 0.0,
+      "bytes_read": 3973120,
+      "bytes_written": 3973120,
+      "cores_assumed": 110,
+      "fidelity": "HiFi4",
+      "fp32_dest": false,
+      "balance_core_cycles_per_byte": 0.2900390625,
+      "vector_engine_unpriced": [],
+      "shape": "p4 (1, 1, 32, 62080) bfloat16",
+      "verdict": "data-movement-bound (r = 0: no engine work)"
+    }
+  ],
+  "oracle": {
+    "evidence": "E1",
+    "max_rel_diff": 0.0,
+    "compared_in": "float64",
+    "executed": true,
+    "report": "oracle/oracle_report.json"
+  },
+  "cold_reads": "independent",
+  "risks": [
+    {
+      "id": "R1",
+      "severity": "high",
+      "title": "values pass through a conversion or an engine and change bits"
+    },
+    {
+      "id": "R2",
+      "severity": "high",
+      "title": "the output aliases the input"
+    },
+    {
+      "id": "R3",
+      "severity": "medium",
+      "title": "tile padding reaches a logical element, or partial tiles are misaddressed"
+    },
+    {
+      "id": "R4",
+      "severity": "low",
+      "title": "the work collapses on few cores"
+    },
+    {
+      "id": "R5",
+      "severity": "medium",
+      "title": "small ROW_MAJOR pages against the DRAM alignment"
+    },
+    {
+      "id": "R6",
+      "severity": "medium",
+      "title": "an incomplete program cache key"
+    },
+    {
+      "id": "R7",
+      "severity": "low",
+      "title": "an extra DRAM pass"
+    },
+    {
+      "id": "R8",
+      "severity": "low",
+      "title": "per-call overhead on the tiny cases"
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "Q1",
+      "question": "The contract says the copy takes 'the dtype and memory placement the call asks for' (contract.md:10), but no production call passes a dtype or a memory configuration (contract.md:39). The spec has no dtype or memory_config keyword and the output always takes the input's dtype and placement. Confirm, or name the keywords the call needs.",
+      "owner": "lead",
+      "blocks": "nothing"
+    },
+    {
+      "id": "Q2",
+      "question": "The brief projects dtype and layout from scenario dicts so that only the five production (dtype, layout) pairs are built; projecting dtype has no precedent in a shipped suite. Accept, or iterate dtype and accept non-production cells?",
+      "owner": "golden-tests",
+      "blocks": "golden suite"
+    },
+    {
+      "id": "Q3",
+      "question": "Can the suite's host-to-device path carry NaN payloads and subnormals unchanged into a tensor, so that the random-bit-pattern generator can include them?",
+      "owner": "golden-tests",
+      "blocks": "nothing"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "D1",
+      "decision": "Name g6_clone, kind op, one call computes out = x.clone(). Source: lead",
+      "why": "sources/local/contract.md:8-10"
+    },
+    {
+      "id": "D2",
+      "decision": "Boundary: one call is one device program, never merged or split. Source: lead",
+      "why": "sources/local/contract.md:17-20"
+    },
+    {
+      "id": "D3",
+      "decision": "Tensors at the boundary: 29 cases, one input each, output with the input's shape, dtype, layout and DRAM-interleaved placement. Source: lead",
+      "why": "sources/local/contract.md:26-39; sources/local/scenarios.json"
+    },
+    {
+      "id": "D4",
+      "decision": "memory_format of the reference is not a parameter",
+      "why": "a device tensor has no strides; no call passes it"
+    },
+    {
+      "id": "D5",
+      "decision": "No dtype or memory_config keyword; the output takes the input's dtype and placement",
+      "why": "no production call passes one (contract.md:39); a conversion is not a copy; Q1"
+    },
+    {
+      "id": "D6",
+      "decision": "The oracle returns the input dtype without a float32 round trip",
+      "why": "int32 and uint32 above 2^24 are not exact in float32 (oracle probe)"
+    },
+    {
+      "id": "D7",
+      "decision": "Phase 0: float32, TILE, DRAM interleaved, every rank and alignment",
+      "why": "largest TILE calls of the model and the flagged cases p1, p2; float32 shows an engine path first"
+    },
+    {
+      "id": "D8",
+      "decision": "Registry axes dtype and layout projected from scenario dicts; no alignment, rank or memory_layout axis",
+      "why": "BB-22: only production pairs; no kernel path differs by alignment or rank"
+    },
+    {
+      "id": "D9",
+      "decision": "Gate: bitwise exact for every dtype. Source: lead, bitwise comparison of bit patterns is mine",
+      "why": "sources/local/contract.md:73"
+    },
+    {
+      "id": "D10",
+      "decision": "Oracle evidence E1: torch.clone of the installed torch 2.11.0, the pinned commit",
+      "why": "the contract names the PyTorch function as the reference (contract.md:72)"
+    },
+    {
+      "id": "D11",
+      "decision": "Perf focus on p1 to p4. Source: lead",
+      "why": "sources/local/contract.md:50-57"
+    },
+    {
+      "id": "D12",
+      "decision": "The cores rule stands in the spec",
+      "why": "no golden case fails on a single core; p4 is one tile row"
+    },
+    {
+      "id": "D13",
+      "decision": "Advice: no bullet kept in the spec; lessons RB-036 and RB-053 kept",
+      "why": "model-bringup filter; see DOSSIER.md"
+    }
+  ],
+  "not_read": {
+    "count": 126,
+    "kinds": [
+      "C++ op",
+      "Python op",
+      "tt-train",
+      "tests",
+      "model code",
+      "fused kernel header"
+    ],
+    "names_probed": [
+      "g6_clone",
+      "clone",
+      "copy",
+      "tensor_clone"
+    ]
+  },
+  "environment": {
+    "tt_metal_commit": "33bde179040e7189ba5f948bfe7c89e321ceac6d",
+    "codegen_commit": "240db745712345db0e311484fb900191f584ede5",
+    "hardware_facts_verified_live": true
+  },
+  "handin": {
+    "from": "lead of the model bring-up",
+    "contract": {
+      "file": "contract.md",
+      "sha256": "c6aa81f90c93dd37a63bed4b91a0a249f41dab0142f3a8d9b1273ea26853ecf6",
+      "pinned": "sources/local/contract.md"
+    },
+    "rules": {
+      "file": "rules.md",
+      "sha256": "825a2f040f024d1e5f1867e9bf0e3163e0b4e5e96d1a611d949801880798e000",
+      "pinned": "sources/local/rules.md",
+      "ids": [
+        "BB-01",
+        "BB-02",
+        "BB-03",
+        "BB-04",
+        "BB-05",
+        "BB-06",
+        "BB-07",
+        "BB-08",
+        "BB-09",
+        "BB-12",
+        "BB-13",
+        "BB-16",
+        "BB-17",
+        "BB-18",
+        "BB-21",
+        "BB-22"
+      ]
+    },
+    "advice": {
+      "file": "advice.md",
+      "sha256": "1691cab30fd48c52e5ba6bf498e91a59ef083065e40cd45b95bda66a1345cd32",
+      "ids": [
+        "RB-036",
+        "RB-038",
+        "RB-053",
+        "RB-001",
+        "RB-010",
+        "RB-014"
+      ]
+    },
+    "lessons": {
+      "file": "lessons.md",
+      "sha256": "9f44880df961142544d8e99f0b368510caee66de03f61881e99d2c96b432ae20",
+      "ids": [
+        "RB-036",
+        "RB-038",
+        "RB-053",
+        "RB-059",
+        "RB-061",
+        "RB-001",
+        "RB-010",
+        "RB-014",
+        "RB-002",
+        "RB-027",
+        "RB-005",
+        "RB-012"
+      ],
+      "copy": "lessons.md"
+    }
+  }
+}

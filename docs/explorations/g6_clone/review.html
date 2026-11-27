@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0}</style>
+<title>g6_clone spec review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: one reading column in the manner of a component datasheet: title block, then ruled sections. */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --ink: #17212c; --muted: #5a6777; --rule: #d5dbe3;
+  --accent: #1d5ca8; --good: #1b7548; --warn: #8f5d00; --bad: #b0271f; --code: #edf0f4;
+  --sans: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f141a; --surface: #161d26; --ink: #e5eaf0; --muted: #98a5b4; --rule: #2a3643;
+    --accent: #82b4f2; --good: #62cf98; --warn: #e2b04e; --bad: #ff8d83; --code: #1c2632; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f141a; --surface: #161d26; --ink: #e5eaf0; --muted: #98a5b4; --rule: #2a3643;
+  --accent: #82b4f2; --good: #62cf98; --warn: #e2b04e; --bad: #ff8d83; --code: #1c2632; color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.5; }
+.page { max-width: 54rem; margin: 0 auto; padding-block: 1.5rem 3rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 1.5rem; }
+header { background: var(--surface); border: 1px solid var(--rule); border-top: 3px solid var(--accent); padding: 1rem 1.1rem;
+  display: flex; flex-direction: column; gap: 0.6rem; }
+h1 { font-family: var(--mono); font-weight: 500; font-size: 1.45rem; margin: 0; overflow-wrap: anywhere; }
+h2 { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted);
+  margin: 0; padding-bottom: 0.35rem; border-bottom: 1px solid var(--rule); }
+p { margin: 0; max-width: 46rem; }
+section { display: flex; flex-direction: column; gap: 0.7rem; min-width: 0; }
+.lede { font-size: 1.02rem; }
+.meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.5rem 1.2rem; }
+.meta div { min-width: 0; }
+.meta dt, .k { font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.meta dd { margin: 0; font-family: var(--mono); font-size: 0.85rem; overflow-wrap: anywhere; }
+dl { margin: 0; }
+pre { margin: 0; background: var(--code); border-left: 3px solid var(--rule); padding: 0.7rem 0.9rem; overflow-x: auto;
+  font-family: var(--mono); font-size: 0.82rem; line-height: 1.45; }
+code { font-family: var(--mono); font-size: 0.86em; background: var(--code); padding: 0.05em 0.3em; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 600; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--muted); padding: 0.3rem 0.8rem 0.3rem 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+td { padding: 0.4rem 0.8rem 0.4rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td.m { font-family: var(--mono); font-size: 0.8rem; }
+.pill { display: inline-block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; padding: 0.1rem 0.5rem;
+  border: 1px solid currentColor; white-space: nowrap; }
+.good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); } .plain { color: var(--muted); }
+.lamp { display: inline-block; width: 0.62rem; height: 0.62rem; margin-right: 0.4rem; background: currentColor; vertical-align: baseline; }
+ul { margin: 0; padding-left: 1.1rem; display: flex; flex-direction: column; gap: 0.35rem; max-width: 46rem; }
+.note { color: var(--muted); font-size: 0.85rem; }
+footer { color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--rule); padding-top: 0.8rem; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div class="page">
+<header>
+<div><span class="pill good">ready for golden-tests</span></div><h1>g6_clone</h1>
+<p class="lede">A bit-identical copy of one DRAM-interleaved device tensor into a new tensor of the same shape, dtype, layout and placement (torch.clone semantics).</p>
+<dl class="meta"><div><dt>Model</dt><dd>FLUX.2-dev (2,2) mesh and Qwen3.8-27B text-only (1,4) mesh, shapes per device</dd></div><div><dt>Reference</dt><dd>pytorch/pytorch@70d99e998b</dd></div><div><dt>Date</dt><dd>2026-11-25</dd></div><div><dt>Feasibility</dt><dd>feasible as one device program</dd></div></dl>
+</header>
+<section><h2>What it computes</h2>
+<pre>M1  out = new tensor, shape(out) = shape(x), dtype(out) = dtype(x), layout(out) = layout(x), placement(out) = placement(x)
+M2  bits(out[i]) = bits(x[i])   for every logical index i</pre>
+<p class="note">Requested as: Explorator ticket for the library op g6_clone (group 6, data movement): bundle and op spec under the lead&#x27;s contract; support every case of scenarios.json and beat the incumbent stock op on device time</p>
+</section>
+<section><h2>Contract</h2><pre>from ttnn.operations.g6_clone import g6_clone
+
+g6_clone(
+    input_tensor: ttnn.Tensor,            # (d_0, ..., d_{R-1}), R in 1..4
+) -&gt; ttnn.Tensor                          # (d_0, ..., d_{R-1})</pre></section>
+<section><h2>Phase 0 against the target</h2><div class="scroll"><table><thead><tr><th>Axis</th><th>Phase 0</th><th>Target</th><th>Derived from</th></tr></thead><tbody><tr><td class="m">dtype</td><td class="m">ttnn.float32</td><td class="m">ttnn.float32, ttnn.bfloat16, ttnn.int32, ttnn.uint32</td><td>tagger</td></tr><tr><td class="m">layout</td><td class="m">ttnn.TILE_LAYOUT</td><td class="m">ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT</td><td>tagger</td></tr></tbody></table></div>
+</section>
+<section><h2>How strong the evidence is</h2><ul>
+<li><span class="pill good">E1</span> Oracle: the code the model&#x27;s forward path executes was run, largest relative difference 0.0e+00 in float64.</li>
+<li><span class="pill good">checkout</span> Hardware facts checked against tt-metal 33bde17904.</li>
+<li><span class="pill good">cold reads</span> The planner, cheater and skeptic reads of the spec and the brief were done by independent readers.</li>
+</ul></section>
+<section><h2>Compute phases and candidate primitives</h2><div class="scroll"><table><thead><tr><th>Phase</th><th>Math</th><th>Candidate</th><th>Status</th></tr></thead><tbody><tr><td>move</td><td class="m">out[i] = x[i], bit-identical</td><td class="m">noc_async_read_page</td><td><span class="good"><span class="lamp"></span>covered</span></td></tr></tbody></table></div>
+</section>
+<section><h2>Largest risks</h2><div class="scroll"><table><thead><tr><th>Id</th><th>Severity</th><th>Risk</th></tr></thead><tbody><tr><td class="m">R1</td><td><span class="pill bad">high</span></td><td>values pass through a conversion or an engine and change bits</td></tr><tr><td class="m">R2</td><td><span class="pill bad">high</span></td><td>the output aliases the input</td></tr><tr><td class="m">R3</td><td><span class="pill warn">medium</span></td><td>tile padding reaches a logical element, or partial tiles are misaddressed</td></tr><tr><td class="m">R5</td><td><span class="pill warn">medium</span></td><td>small ROW_MAJOR pages against the DRAM alignment</td></tr><tr><td class="m">R6</td><td><span class="pill warn">medium</span></td><td>an incomplete program cache key</td></tr><tr><td class="m">R4</td><td><span class="pill plain">low</span></td><td>the work collapses on few cores</td></tr><tr><td class="m">R7</td><td><span class="pill plain">low</span></td><td>an extra DRAM pass</td></tr><tr><td class="m">R8</td><td><span class="pill plain">low</span></td><td>per-call overhead on the tiny cases</td></tr></tbody></table></div></section>
+<section><h2>Decided on your behalf</h2><ul><li><code>D1</code> Name g6_clone, kind op, one call computes out = x.clone(). Source: lead <span class="note">sources/local/contract.md:8-10</span></li><li><code>D2</code> Boundary: one call is one device program, never merged or split. Source: lead <span class="note">sources/local/contract.md:17-20</span></li><li><code>D3</code> Tensors at the boundary: 29 cases, one input each, output with the input&#x27;s shape, dtype, layout and DRAM-interleaved placement. Source: lead <span class="note">sources/local/contract.md:26-39; sources/local/scenarios.json</span></li><li><code>D4</code> memory_format of the reference is not a parameter <span class="note">a device tensor has no strides; no call passes it</span></li><li><code>D5</code> No dtype or memory_config keyword; the output takes the input&#x27;s dtype and placement <span class="note">no production call passes one (contract.md:39); a conversion is not a copy; Q1</span></li><li><code>D6</code> The oracle returns the input dtype without a float32 round trip <span class="note">int32 and uint32 above 2^24 are not exact in float32 (oracle probe)</span></li><li><code>D7</code> Phase 0: float32, TILE, DRAM interleaved, every rank and alignment <span class="note">largest TILE calls of the model and the flagged cases p1, p2; float32 shows an engine path first</span></li><li><code>D8</code> Registry axes dtype and layout projected from scenario dicts; no alignment, rank or memory_layout axis <span class="note">BB-22: only production pairs; no kernel path differs by alignment or rank</span></li><li><code>D9</code> Gate: bitwise exact for every dtype. Source: lead, bitwise comparison of bit patterns is mine <span class="note">sources/local/contract.md:73</span></li><li><code>D10</code> Oracle evidence E1: torch.clone of the installed torch 2.11.0, the pinned commit <span class="note">the contract names the PyTorch function as the reference (contract.md:72)</span></li><li><code>D11</code> Perf focus on p1 to p4. Source: lead <span class="note">sources/local/contract.md:50-57</span></li><li><code>D12</code> The cores rule stands in the spec <span class="note">no golden case fails on a single core; p4 is one tile row</span></li><li><code>D13</code> Advice: no bullet kept in the spec; lessons RB-036 and RB-053 kept <span class="note">model-bringup filter; see DOSSIER.md</span></li></ul></section>
+<section><h2>Waiting for an answer</h2><ul><li><code>Q1</code> The contract says the copy takes &#x27;the dtype and memory placement the call asks for&#x27; (contract.md:10), but no production call passes a dtype or a memory configuration (contract.md:39). The spec has no dtype or memory_config keyword and the output always takes the input&#x27;s dtype and placement. Confirm, or name the keywords the call needs. <span class="note">owner: lead, blocks nothing</span></li><li><code>Q2</code> The brief projects dtype and layout from scenario dicts so that only the five production (dtype, layout) pairs are built; projecting dtype has no precedent in a shipped suite. Accept, or iterate dtype and accept non-production cells? <span class="note">owner: golden-tests, blocks golden suite</span></li><li><code>Q3</code> Can the suite&#x27;s host-to-device path carry NaN payloads and subnormals unchanged into a tensor, so that the random-bit-pattern generator can include them? <span class="note">owner: golden-tests, blocks nothing</span></li></ul></section>
+<section><h2>Next</h2><ul><li>Read <code>spec/g6_clone.txt</code>; it is the contract the pipeline's planner receives.</li><li>Build the golden suite with the golden-tests skill from <code>golden_brief.md</code>, keeping this spec.</li><li>Check the spec against the suite, from the tt-metal root with EXPLORATOR set to the directory of the explorator skill: <code>python3 -B &quot;$EXPLORATOR&quot;/scripts/lint_spec.py eval/prompts/g6_clone.txt --rules docs/explorations/g6_clone/sources/local/rules.md --tt-metal .</code></li><li>Generate, from the tt-metal root: <code>python3 .claude/run_op.py eval/prompts/g6_clone.txt</code></li></ul></section>
+<footer>Built from the bundle <code>g6_clone</code>. Detail: DOSSIER.md, reference.md, math.md, tensix.md, risks.md, golden_brief.md.</footer>
+</div>
+</body>
+</html>

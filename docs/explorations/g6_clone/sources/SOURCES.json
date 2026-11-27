@@ -1,0 +1,87 @@
+{
+  "entries": [
+    {
+      "bytes": 76058,
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "fetched": "2026-11-25",
+      "kind": "github",
+      "license": "BSD-3-Clause",
+      "license_source": "given",
+      "local": "github/pytorch/pytorch@70d99e998b49/aten/src/ATen/native/TensorFactories.cpp",
+      "path": "aten/src/ATen/native/TensorFactories.cpp",
+      "ref": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "repo": "pytorch/pytorch",
+      "sha256": "9e0f0ba334a290b1d2a055dd2b8082cfec808e2c6631e1a65be22826348aeda2",
+      "url": "https://github.com/pytorch/pytorch/blob/70d99e998b4955e0049d13a98d77ae1b14db1f45/aten/src/ATen/native/TensorFactories.cpp"
+    },
+    {
+      "bytes": 621964,
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "fetched": "2026-11-25",
+      "kind": "github",
+      "license": "BSD-3-Clause",
+      "license_source": "given",
+      "local": "github/pytorch/pytorch@70d99e998b49/aten/src/ATen/native/native_functions.yaml",
+      "path": "aten/src/ATen/native/native_functions.yaml",
+      "ref": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "repo": "pytorch/pytorch",
+      "sha256": "d1f2017fb46c4b34ef42c761844de6304b21b6f094d6daad6f2f5d1ca5f946aa",
+      "url": "https://github.com/pytorch/pytorch/blob/70d99e998b4955e0049d13a98d77ae1b14db1f45/aten/src/ATen/native/native_functions.yaml"
+    },
+    {
+      "bytes": 228602,
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "fetched": "2026-11-25",
+      "kind": "github",
+      "license": "BSD-3-Clause",
+      "license_source": "given",
+      "local": "github/pytorch/pytorch@70d99e998b49/torch/_refs/__init__.py",
+      "path": "torch/_refs/__init__.py",
+      "ref": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "repo": "pytorch/pytorch",
+      "sha256": "72e2fd0f897459ebf79e91c0ec1f7ebc0705524e886c04ed7ea01259f898e07c",
+      "url": "https://github.com/pytorch/pytorch/blob/70d99e998b4955e0049d13a98d77ae1b14db1f45/torch/_refs/__init__.py"
+    },
+    {
+      "bytes": 435639,
+      "commit": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "fetched": "2026-11-25",
+      "kind": "github",
+      "license": "BSD-3-Clause",
+      "license_source": "given",
+      "local": "github/pytorch/pytorch@70d99e998b49/torch/_torch_docs.py",
+      "path": "torch/_torch_docs.py",
+      "ref": "70d99e998b4955e0049d13a98d77ae1b14db1f45",
+      "repo": "pytorch/pytorch",
+      "sha256": "e529fe701917b3c1a45ecc70cbd5b6113fba6df1139e99600470240d89f6c6d0",
+      "url": "https://github.com/pytorch/pytorch/blob/70d99e998b4955e0049d13a98d77ae1b14db1f45/torch/_torch_docs.py"
+    },
+    {
+      "bytes": 5646,
+      "fetched": "2026-11-25",
+      "kind": "local",
+      "license": "unknown",
+      "local": "local/contract.md",
+      "origin": "lead of the model bring-up",
+      "sha256": "c6aa81f90c93dd37a63bed4b91a0a249f41dab0142f3a8d9b1273ea26853ecf6"
+    },
+    {
+      "bytes": 7020,
+      "fetched": "2026-11-25",
+      "kind": "local",
+      "license": "unknown",
+      "local": "local/rules.md",
+      "origin": "lead of the model bring-up",
+      "sha256": "825a2f040f024d1e5f1867e9bf0e3163e0b4e5e96d1a611d949801880798e000"
+    },
+    {
+      "bytes": 13679,
+      "fetched": "2026-11-25",
+      "kind": "local",
+      "license": "unknown",
+      "local": "local/scenarios.json",
+      "origin": "lead of the library: traced production runs",
+      "sha256": "9ad8469aa27330adfb9ef6b7e09c5c7d54b0f8f723e7413368e3f6828859551b"
+    }
+  ]
+}

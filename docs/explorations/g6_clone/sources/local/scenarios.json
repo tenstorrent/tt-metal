@@ -1,0 +1,894 @@
+{
+ "op": "g6_clone",
+ "replaces": "group-6 op clone of the incumbent library",
+ "note": "target cases only: calls where the incumbent launches at least one device program; shapes are per device",
+ "cases": [
+  {
+   "model": "Qwen",
+   "id": 0,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      16
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     16
+    ],
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 10,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 1,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      16
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     16
+    ],
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 10,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 2,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      16,
+      12,
+      128,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     16,
+     12,
+     128,
+     128
+    ],
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 336,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 3,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      16,
+      3,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     16,
+     3,
+     2560
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 336,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 4,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      8
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     8
+    ],
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 9,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 5,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      8
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     8
+    ],
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 9,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 6,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      8,
+      12,
+      128,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     8,
+     12,
+     128,
+     128
+    ],
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 480,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 7,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      8,
+      3,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     8,
+     3,
+     2560
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 480,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 8,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      1,
+      62080
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     1,
+     62080
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 148,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 9,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      32
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     32
+    ],
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 32,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 10,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1
+    ],
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 17,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 11,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1
+     ],
+     "dtype": "INT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1
+    ],
+    "dtype": "INT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 13,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 12,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      1,
+      32
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     1,
+     32
+    ],
+    "dtype": "UINT32",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 32,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 13,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      12,
+      128,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     12,
+     128,
+     128
+    ],
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 816,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 14,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      3,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     3,
+     2560
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 816,
+   "stock_programs": 1
+  },
+  {
+   "model": "Qwen",
+   "id": 15,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      32,
+      62080
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     32,
+     62080
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 15,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 4,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      512,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     512,
+     5120
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 42,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 5,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      2048,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     2048,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 15,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 6,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      256,
+      3072
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     256,
+     3072
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 18,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 7,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1
+    ],
+    "dtype": "FLOAT32",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 36,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 8,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 18,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 9,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      2048,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     2048,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 30,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 10,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      256,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     256,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 36,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 11,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      2304,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     2304,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 30,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 12,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      256,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     256,
+     5120
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 3,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 13,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     5120
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 6,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 14,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      8192,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     8192,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 3,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 15,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      8192,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     8192,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 6,
+   "stock_programs": 1
+  },
+  {
+   "model": "FLUX",
+   "id": 16,
+   "tensor_args": [
+    {
+     "pos": 0,
+     "shape": [
+      1,
+      1,
+      8448,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "memory": "INTERLEAVED/DRAM"
+    }
+   ],
+   "literal_args": [],
+   "kwargs": {},
+   "output": {
+    "shape": [
+     1,
+     1,
+     8448,
+     128
+    ],
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory": "INTERLEAVED/DRAM"
+   },
+   "traced_calls": 6,
+   "stock_programs": 1
+  }
+ ]
+}
