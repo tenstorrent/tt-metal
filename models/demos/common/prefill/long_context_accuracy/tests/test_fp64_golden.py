@@ -5,6 +5,7 @@
 import json
 import os
 import re
+import resource
 import stat
 from pathlib import Path
 
@@ -274,3 +275,21 @@ def test_mapped_file_refuses_a_mapping_whose_storages_do_not_match_its_records(
     monkeypatch.setattr(torch, "load", lambda *args, **kwargs: {**load(*args, **kwargs), "extra": torch.ones(2)})
     with expect_error(GoldenInvalid, "cannot locate its 1 tensor records"):
         MappedFile(tmp_path / "a.pt")
+
+
+def test_read_slices_closes_every_file_it_opens(tmp_path: Path) -> None:
+    """Many reads of several views of one file (as a KDA chunk's state, four tensors of one segment file) leave no
+    file open: under an open-file limit a little above what is open now they all pass (a reader that opened a file
+    once per view and kept one descriptor per file leaked the rest and hit Errno 24 within a few reads)."""
+    torch.save({f"s{i}": torch.full((2, 3), float(i)) for i in range(4)}, tmp_path / "segment.pt")
+    open_now = len(os.listdir("/proc/self/fd"))
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (open_now + 32, hard))
+    try:
+        for _ in range(200):
+            file = MappedFile(tmp_path / "segment.pt")
+            got = read_slices({name: [(file, t)] for name, t in file.contents.items()})
+        assert [got[f"s{i}"][0, 0].item() for i in range(4)] == [0.0, 1.0, 2.0, 3.0]
+    finally:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+    assert len(os.listdir("/proc/self/fd")) <= open_now

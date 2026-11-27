@@ -323,7 +323,7 @@ def _pread(reads: Sequence[tuple[Path, int, memoryview]]) -> None:
             if room == 0:
                 streams.append([])
                 room = share
-    descriptors = {path: os.open(path, os.O_RDONLY) for path, _, _ in reads}
+    descriptors: dict[Path, int] = {}  # one per file, however many views it serves; all closed on return
 
     def stream(pieces: list[tuple[Path, int, memoryview]]) -> None:
         for path, offset, memory in pieces:
@@ -335,6 +335,9 @@ def _pread(reads: Sequence[tuple[Path, int, memoryview]]) -> None:
                 done += count
 
     try:
+        for path, _, _ in reads:
+            if path not in descriptors:
+                descriptors[path] = os.open(path, os.O_RDONLY)
         with ThreadPoolExecutor(READ_STREAMS, thread_name_prefix="golden-read") as pool:
             list(pool.map(stream, [s for s in streams if s]))
     finally:
