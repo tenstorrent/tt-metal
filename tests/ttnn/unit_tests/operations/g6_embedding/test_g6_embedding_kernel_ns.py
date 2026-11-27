@@ -18,6 +18,7 @@ from ttnn.operations.g6_embedding import g6_embedding, select_plan
 
 QWEN_SMALL = (262144, 64)
 QWEN_LARGE = (248320, 1280)
+FLUX_LARGE = (131072, 2560)
 
 CASES = [
     pytest.param((16, 4096), QWEN_LARGE, id="p1_16x4096_qwen1280"),
@@ -27,9 +28,13 @@ CASES = [
     pytest.param((1, 4096), QWEN_LARGE, id="1x4096_qwen1280"),
     pytest.param((1, 128), QWEN_LARGE, id="1x128_qwen1280"),
     pytest.param((1, 8), QWEN_LARGE, id="1x8_qwen1280"),
+    pytest.param((1, 256), QWEN_LARGE, id="1x256_qwen1280"),
+    pytest.param((1, 1024), QWEN_LARGE, id="1x1024_qwen1280"),
+    pytest.param((1, 77), QWEN_LARGE, id="1x77_qwen1280"),
     pytest.param((16, 4096), QWEN_SMALL, id="16x4096_qwen64"),
     pytest.param((1, 4096), QWEN_SMALL, id="1x4096_qwen64"),
     pytest.param((1, 1), QWEN_SMALL, id="1x1_qwen64"),
+    pytest.param((1, 512), FLUX_LARGE, id="1x512_flux2560"),
 ]
 
 

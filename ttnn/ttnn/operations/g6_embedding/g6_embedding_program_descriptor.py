@@ -38,6 +38,11 @@ L1_BUDGET_BYTES = 1_347_776
 # bank_stagger lamp: the writer starts each tile-row's walk at tile (g mod block_col_tiles) so cores
 # do not all open on the same DRAM bank. Measured flat on p1 (752.8 vs 753.4 us), so off.
 WRITER_BANK_ROTATION = False
+# split_reader lamp: alternate rows of a block between NoC0 and NoC1 (both DM kernels in dynamic NoC
+# mode). Narrow row segments are bound by the DRAM request rate, which a second NoC raises (128-B
+# segments: 145.6 -> 102.6 us); wide ones lose, their reads then contend with the writer's NoC1
+# traffic (2560-B segments: p1 755.8 -> 812.2 us). Measured on at <= 4 tiles, off at >= 16.
+READ_NOC_SPLIT_MAX_COL_TILES = 4
 
 INDEX_SLOT_BYTES = BLOCK_TILE_ROWS * TILE_DIM * INDEX_BYTES
 
@@ -70,6 +75,7 @@ class Plan:
     total_blocks: int
     num_cores: int
     l1_bytes_per_core: int
+    read_noc_split: bool
 
 
 def _divisors(n: int):
@@ -117,6 +123,8 @@ def plan_for_shapes(index_shape, weight_shape, num_grid_cores: int) -> Plan:
         total_blocks=total_blocks,
         num_cores=min(total_blocks, num_grid_cores),
         l1_bytes_per_core=l1_bytes_per_core(block_col_tiles),
+        # A one-token call has a single row per block: nothing to split.
+        read_noc_split=block_col_tiles <= READ_NOC_SPLIT_MAX_COL_TILES and token_extent > 1,
     )
 
 
@@ -150,6 +158,14 @@ def core_roles(plan: Plan, grid) -> dict:
         (core.x, core.y): {"roles": [K_READER, K_COMPUTE, K_WRITER], "first_block": first, "num_blocks": count}
         for core, first, count in assignment
     }
+
+
+def _dm_config(config, dynamic_noc: bool):
+    if dynamic_noc:
+        config_1xx = config.config_1xx
+        config_1xx.noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        config.config_1xx = config_1xx
+    return config
 
 
 def create_program_artifacts(input_tensor, weight, output_tensor, plan: Plan, *, zones: bool = False):
@@ -197,7 +213,7 @@ def create_program_artifacts(input_tensor, weight, output_tensor, plan: Plan, *,
     reader = ttnn.experimental.KernelSpec(
         unique_id=K_READER,
         source=str(KERNEL_DIR / "g6_embedding_reader.cpp"),
-        hw_config=ttnn.experimental.create_reader_datamovement_config(),
+        hw_config=_dm_config(ttnn.experimental.create_reader_datamovement_config(), plan.read_noc_split),
         compiler_options=compiler_options,
         dfb_bindings=[
             ttnn.experimental.producer_of(DFB_INDEX_VALUES, DFB_INDEX_VALUES),
@@ -214,6 +230,7 @@ def create_program_artifacts(input_tensor, weight, output_tensor, plan: Plan, *,
             "token_extent": plan.tensor_token_extent,
             "row_segment_bytes": row_segment_bytes,
             "index_slot_bytes": INDEX_SLOT_BYTES,
+            "read_noc_split": int(plan.read_noc_split),
         },
         runtime_arg_schema=run_arg_schema,
     )
@@ -234,7 +251,7 @@ def create_program_artifacts(input_tensor, weight, output_tensor, plan: Plan, *,
     writer = ttnn.experimental.KernelSpec(
         unique_id=K_WRITER,
         source=str(KERNEL_DIR / "g6_embedding_writer.cpp"),
-        hw_config=ttnn.experimental.create_writer_datamovement_config(),
+        hw_config=_dm_config(ttnn.experimental.create_writer_datamovement_config(), plan.read_noc_split),
         compiler_options=compiler_options,
         dfb_bindings=[ttnn.experimental.consumer_of(DFB_OUTPUT_TILES, DFB_OUTPUT_TILES)],
         tensor_bindings=[ttnn.experimental.TensorBinding(tensor_parameter_name=TP_OUT, accessor_name=TP_OUT)],

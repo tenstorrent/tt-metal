@@ -32,6 +32,9 @@ void kernel_main() {
     constexpr uint32_t token_extent = get_arg(args::token_extent);
     constexpr uint32_t row_segment_bytes = get_arg(args::row_segment_bytes);
     constexpr uint32_t index_slot_bytes = get_arg(args::index_slot_bytes);
+    // Odd rows go out on the other NoC (dynamic NoC mode): narrow segments are bound by the DRAM
+    // request rate, which a second NoC raises.
+    constexpr bool read_noc_split = get_arg(args::read_noc_split) != 0;
 
     constexpr uint32_t tile_height = 32;
     constexpr uint32_t index_bytes = sizeof(uint32_t);
@@ -48,6 +51,13 @@ void kernel_main() {
     DataflowBuffer dfb_rows(dfb::gathered_rows);
     const auto index_acc = TensorAccessor(tensor::index);
     const auto weight_acc = TensorAccessor(tensor::weight);
+
+    auto read_barrier = [] {
+        noc_async_read_barrier(noc_index);
+        if constexpr (read_noc_split) {
+            noc_async_read_barrier(1 - noc_index);
+        }
+    };
 
     // Only logical positions are read: a partial last tile-row reads valid_rows indices, never the
     // next image's page or page padding.
@@ -90,10 +100,12 @@ void kernel_main() {
             const uint32_t rows = valid_rows(g % tile_rows_per_image);
             const uint32_t tile_row_base = staging + t * staging_tile_row_bytes;
             for (uint32_t r = 0; r < rows; ++r) {
+                const uint8_t noc = read_noc_split ? static_cast<uint8_t>(noc_index ^ (r & 1)) : noc_index;
                 noc_async_read(
-                    weight_acc.get_noc_addr(indices[t * tile_height + r], col_offset),
+                    weight_acc.get_noc_addr(indices[t * tile_height + r], col_offset, noc),
                     tile_row_base + r * row_segment_bytes,
-                    row_segment_bytes);
+                    row_segment_bytes,
+                    noc);
             }
         }
     };
@@ -105,7 +117,7 @@ void kernel_main() {
     fetch_index_block(row_block);
     {
         G6_ZONE("index_barrier");
-        noc_async_read_barrier();
+        read_barrier();
     }
     dfb_index.wait_front(1);
 
@@ -125,7 +137,7 @@ void kernel_main() {
         }
         {
             G6_ZONE("rows_barrier");
-            noc_async_read_barrier();
+            read_barrier();
         }
         dfb_rows.push_back(block_pages);
 
