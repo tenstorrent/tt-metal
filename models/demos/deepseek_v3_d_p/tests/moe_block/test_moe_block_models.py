@@ -398,7 +398,7 @@ BLOCK_US = {
     "kimi_k3-4x4-y-5120": (1177.8, 287.5, 2772.4, 251.5),
     "kimi_k3-4x4-y-7680": (585.4, 363.5, 2867.4, 143.9),
     "kimi_k3-8x4-10240": (870.3, 324.8, 1686.2, 248.0),
-    "kimi_k3-8x4-5120": (408.3, 184.4, 1495.9, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
+    "kimi_k3-8x4-5120": (408.3, 184.4, 1338.1, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
     "kimi_k3-8x4-5120-weka-L1": (427.1, 203.2, 1542.2, 163.3),
     # (K3 / K3.1 carve rows: the CI-gated ones (K3.1 2.5k, K3 packed 5k / 10k) from a CI run; the rest local b07u08 runs
     # of main, mean of 2)
