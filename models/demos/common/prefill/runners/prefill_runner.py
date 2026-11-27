@@ -262,8 +262,7 @@ def _meta_from_words(words) -> dict:
 
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
     """The forward's metadata from one D2H read: the word after the chunk metadata is MTP provided_levels on D2D,
-    the media refs on H2D. A malformed ref is a protocol error and stops the runner. A missing or wrong-size
-    embedding also stops it: failing only that request needs a per-request error path to the engine."""
+    the media refs on H2D. A malformed ref is a protocol error and stops the runner."""
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     n = CHUNK_METADATA_SIZE_BYTES // 4
     meta = _meta_from_words(m[:n].tolist())
@@ -1477,6 +1476,14 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             runtime.set_d2h_ack_service(d2h_service)
         else:
             layer_ack_service.start()
+        if (
+            MEDIA_MAX_REFS
+            and runtime.config.is_first_rank
+            and getattr(runtime, "set_chunk_failure_sink", None) is not None
+        ):
+            # A chunk whose media cannot be served is reported from the host, beside the device's layer acks.
+            producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+            runtime.set_chunk_failure_sink(LayerCompletionRingWriter(producer, is_shutdown=lambda: _shutdown))
         source_desc = "D2H device records"
     else:
         # Host-callback transport: the only one MiniMax-M3 and GPT-OSS have.
