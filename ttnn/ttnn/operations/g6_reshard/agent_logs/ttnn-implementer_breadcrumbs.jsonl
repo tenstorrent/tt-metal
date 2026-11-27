@@ -4,3 +4,5 @@
 {"event":"env_workaround","detail":"/opt/openmpi-v5.0.7-ulfm (libtt_metal RUNPATH) missing after host reboot; ran with LD_LIBRARY_PATH=/localdev/snadkarni/opt/openmpi-v5.0.7-ulfm/lib","ts":"2026-11-26T19:12:58-05:00"}
 {"event":"test_run","what":"host plan probe","result":"P 1024 runs (8/issuer), I0/I3/I5 128 (1/issuer), O1 960 over 56 cores; matches op_design","ts":"2026-11-26T19:12:58-05:00"}
 {"event":"test_run","what":"acceptance (dev+prod) + golden","result":"21/21 dev, 21/21 prod, golden 9/9","ts":"2026-11-26T19:12:58-05:00"}
+{"event":"env_fix","what":"libtt_metal RUNPATH /opt/openmpi-v5.0.7-ulfm missing on host; LD_PRELOAD generated/mpix_stub/libmpix_stub.so (MPIX_Comm_revoke/shrink abort stubs) to import ttnn","ts":"2026-11-27T04:03:46-05:00"}
+{"event":"test_run","what":"acceptance --dev and plain, golden suite","result":"16/16, 16/16, golden 12/12","classification":"pass","ts":"2026-11-27T04:03:46-05:00"}
