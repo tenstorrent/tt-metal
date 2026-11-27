@@ -46,12 +46,13 @@ PP4_MAX_USERS = 76
 # 4x4 count was (#61481): 96 serves one full 1,049,600-token request; 97 fails in compile, the DSA indexer's score
 # buffer (42.6 MB per DRAM bank) finding no contiguous block (largest 38.4 MB of 63.3 MB free): fragmentation, not
 # total DRAM. 98 fails there too, 100 at the MoE dispatch buffer, 104 at the KDA slabs, 112 and up at the kvpe cache.
-STAGE0_4X4_MAX_USERS = 96
-# The users kimi_k3_1.json allocates for the 4x4 layout, below stage 0's maximum: at 96 the SC4 leg (8x[4,4], CI run
-# 45061518673) ran stages 4-6, which carry more AttnRes history than stage 0, out of DRAM on the first chunk, ~16 MB
-# per chip short (largest free block 0.98 MB per bank). 88 leaves a margin, as K3 allocates two under its limit (127
-# of 129). The 8x4 layout keeps its measured maximum (PP4_MAX_USERS).
-MANIFEST_4X4_USERS = 88
+# With the KDA state SP-sharded (#66430), stage 0 fits 103.
+STAGE0_4X4_MAX_USERS = 103
+# The users kimi_k3_1.json allocates for the 4x4 layout, below stage 0's maximum: SC4's stages 4-6 carry more AttnRes
+# history than stage 0 and bound the count (before sharding, 96 ran them out of DRAM on the first chunk, CI run
+# 45061518673). #67553 sets 100 from a per-bank DRAM model of stages 4-6 (100.96-101.04) after sharding. The 8x4 layout
+# keeps its measured maximum (PP4_MAX_USERS).
+MANIFEST_4X4_USERS = 100
 
 # The 4x4 stage of kimi_k3_1.json: by default SP on the tray half's axis-1 ring, TP on axis 0; the SP-axis knob
 # ($PREFILL_SP_AXIS, runner_utils.stage_sp_axis) moves SP to axis 0 for the whole process, as it does the runner's.
