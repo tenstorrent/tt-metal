@@ -206,7 +206,7 @@ import json
 import os
 from collections import namedtuple
 from types import SimpleNamespace as NS
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 PC = namedtuple("ParallelFactor", "factor mesh_axis")
 
@@ -483,6 +483,41 @@ class WrapperContracts(unittest.TestCase):
         v = vocoder()
         self.assertIsNone(install(v, mode="auto:D", config=c12.CONFIG, checkpoint=None))
         self.assertEqual(v.c12_selection["fallback_reason"], "missing checkpoint evidence")
+
+
+class AdapterContracts(unittest.TestCase):
+    def test_mode_selection_uses_shared_parser_before_configuration(self):
+        tree = ast.parse((ROOT / "models/tt_dit/models/audio_vae/audio_decoder_ltx.py").read_text())
+        adapter = next(node for node in tree.body if isinstance(node, ast.ClassDef))
+        build = next(node for node in adapter.body if isinstance(node, ast.FunctionDef) and node.name == "_build")
+        start = next(
+            i
+            for i, node in enumerate(build.body)
+            if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "c12_mode" for t in node.targets)
+        )
+        selection = compile(ast.Module(body=build.body[start : start + 2], type_ignores=[]), "adapter", "exec")
+        for mode in (None, "", "off", "0", "A", "B", "C", "D", "auto:B", "OFF", "auto:off", " D", "auto:Z"):
+            with self.subTest(mode=mode), patch.dict(os.environ, {}, clear=True):
+                if mode is not None:
+                    os.environ["LTX_C12_MODE"] = mode
+                parser = Mock(wraps=c12.parse_mode)
+                configure = Mock()
+                vocoder, config = object(), object()
+                ns = dict(os=os, parse_mode=parser, self=NS(_configure_c12=configure), main_voc=vocoder, voc_cfg=config)
+                value = "off" if mode is None else mode
+                try:
+                    cell, _ = c12.parse_mode(value)
+                except ValueError:
+                    with self.assertRaises(ValueError):
+                        exec(selection, ns)
+                    configure.assert_not_called()
+                else:
+                    exec(selection, ns)
+                    if cell is None:
+                        configure.assert_not_called()
+                    else:
+                        configure.assert_called_once_with(vocoder, config, value)
+                parser.assert_called_once_with(value)
 
 
 if __name__ == "__main__":
