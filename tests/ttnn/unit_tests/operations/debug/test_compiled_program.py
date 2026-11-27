@@ -49,6 +49,16 @@ def plain_cb():
     )
 
 
+def l1_backed_cb(device):
+    """CB 0 backed by an L1 tensor sharded over CORES (two tiles per core), and that tensor."""
+    shard_spec = ttnn.ShardSpec(CORES, [64, 32], ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 64 * CORES.num_cores(), 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, memory_config
+    )
+    return ttnn.cb_descriptor_from_sharded_tensor(0, tensor), tensor
+
+
 def copy_descriptor(input_tensor, output_tensor, cb, compile_time_arg=0):
     """A DRAM-to-DRAM copy of NUM_TILES tiles over CORES: a reader and a writer sharing CB 0 (`cb`).
 
@@ -131,7 +141,12 @@ def test_run_rejects_a_different_program(device, expect_error):
 def test_run_from_kernel_config_buffer(device, bottom_up):
     data, input_tensor, output_tensor = make_io(device)
     io_tensors = [input_tensor, output_tensor]
-    descriptor = copy_descriptor(input_tensor, output_tensor, plain_cb())
+    cb = plain_cb()
+    if bottom_up:
+        # A bottom-up buffer takes the bottom of L1, where static CBs go, so the CB must live in an L1 tensor.
+        cb, cb_tensor = l1_backed_cb(device)
+        io_tensors = [input_tensor, cb_tensor, output_tensor]
+    descriptor = copy_descriptor(input_tensor, output_tensor, cb)
     compiled = ttnn.experimental.compile_generic_op(io_tensors, descriptor)
     buffer = ttnn.experimental.create_kernel_config_buffer(device, compiled, bottom_up=bottom_up)
     assert buffer.max_size > 0

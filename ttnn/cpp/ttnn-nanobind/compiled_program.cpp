@@ -58,7 +58,8 @@ void py_module(nb::module_& mod) {
         Args:
             device (ttnn.MeshDevice): The device ``compiled_program`` was compiled for.
             compiled_program (ttnn.experimental.CompiledProgram): The program to size the buffer for.
-            bottom_up (bool): Allocate it from the bottom of L1 instead of the top. Defaults to False.
+            bottom_up (bool): Allocate it from the bottom of L1 instead of the top, where the program's static CBs
+                would go: its CBs must then be backed by L1 tensors. Defaults to False.
 
         Returns:
             KernelConfigBuffer: The buffer.
