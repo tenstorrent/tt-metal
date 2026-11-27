@@ -1,0 +1,119 @@
+{
+  "summary": {
+    "total": 11,
+    "supported_pass": 7,
+    "supported_fail": 2,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 2
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR0]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR1]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR3]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR4]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[2-5x2x1x64-2x2x1x64-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR5]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "supported_fail": [
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR2]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "failed",
+        "failure_category": "other"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_golden.py::test_op_loose[1-7x1x1x32-1x1x1x32-alignment=h_non_aligned-dtype=UINT32-layout=ROW_MAJOR6]",
+        "axes": {
+          "dtype": "UINT32",
+          "layout": "ROW_MAJOR",
+          "alignment": "h_non_aligned"
+        },
+        "status": "failed",
+        "failure_category": "other"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_regression.py::test_full_range_values",
+        "test_name": "test_full_range_values",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/g6_indexed_fill/test_regression.py::test_last_batch",
+        "test_name": "test_last_batch",
+        "status": "passed"
+      }
+    ]
+  }
+}

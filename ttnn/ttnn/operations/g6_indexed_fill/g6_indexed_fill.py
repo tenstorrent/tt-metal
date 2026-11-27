@@ -47,7 +47,9 @@ INPUT_TAGGERS = {
 SUPPORTED = {
     "dtype": [ttnn.uint32],
     "layout": [ttnn.ROW_MAJOR_LAYOUT],
-    "alignment": ["h_non_aligned"],
+    # ROW_MAJOR pages carry no tile padding, so the kernel never branches on alignment; refusing a
+    # value here would refuse valid shapes on the host (spec rule: every B, K, d1, d2, W).
+    "alignment": ["h_non_aligned", "w_non_aligned", "tile_aligned"],
 }
 
 
