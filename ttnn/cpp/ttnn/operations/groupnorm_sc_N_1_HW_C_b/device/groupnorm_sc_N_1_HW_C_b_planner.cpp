@@ -857,12 +857,15 @@ struct PlanInputsHash {
 }  // namespace
 
 uint32_t l1_cb_budget(tt::tt_metal::IDevice* device) {
-    const auto base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // Python: the memory view's per-bank size (the allocator's L1 bank, measured from its base; the L1_SMALL region
+    // above it is not counted), capped by the lowest live L1 buffer.
+    const auto& allocator = device->allocator();
+    uint64_t budget = allocator->get_statistics(BufferType::L1).total_allocatable_size_bytes;
     const auto lowest = device->lowest_occupied_compute_l1_address();
     if (lowest.has_value()) {
-        return static_cast<uint32_t>(*lowest - base);
+        budget = std::min<uint64_t>(budget, *lowest - allocator->get_base_allocator_addr(HalMemType::L1));
     }
-    return static_cast<uint32_t>(device->l1_size_per_core() - base);
+    return static_cast<uint32_t>(budget);
 }
 
 PlanInputs plan_inputs(const GroupnormScN1HwCbParams& attrs, const GroupnormScN1HwCbInputs& tensors) {

@@ -85,8 +85,8 @@ struct Plan {
     Formats fmt;
 };
 
-// Bytes for the program's static CBs on every worker core: from the L1 allocator base to the lowest live L1 buffer
-// (Python l1_cb_budget).
+// Bytes for the program's static CBs on every worker core: from the L1 allocator base to the lowest live L1 buffer,
+// at most the allocator's L1 bank (L1_SMALL excluded) (Python l1_cb_budget).
 uint32_t l1_cb_budget(tt::tt_metal::IDevice* device);
 
 // The plan's inputs for a call (reads the device's free L1). Throws std::invalid_argument / refusals never: the
