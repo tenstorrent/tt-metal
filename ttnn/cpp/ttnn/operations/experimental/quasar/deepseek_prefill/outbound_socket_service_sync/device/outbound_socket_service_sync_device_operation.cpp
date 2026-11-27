@@ -5,8 +5,8 @@
 #include <type_traits>
 #include "outbound_socket_service_sync_device_operation.hpp"
 
-#include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/vocabulary/mesh_coord.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"

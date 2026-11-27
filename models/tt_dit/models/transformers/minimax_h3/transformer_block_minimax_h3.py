@@ -23,6 +23,7 @@ from ....utils.tensor import bf16_tensor
 from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
+from .vsa_prepass import MiniMaxH3VSAConfig
 
 # Number of modalities the AdaLN table is indexed by: video (0), text (1), audio (2).
 # Mirrors `MINIMAX_H3_MODALITY_NUM` in the reference; padding rows (-1) are clamped to 0.
@@ -85,10 +86,13 @@ class MiniMaxH3TransformerBlock(Module):
         dynamic_length: bool = False,
         norm_row_capacity: int | None = None,
         agmm_mode: AgmmMode | str | None = None,
+        ff1_output_dtype: ttnn.DataType | None = None,
+        vsa_config: MiniMaxH3VSAConfig | None = None,
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
         no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
-        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`). `ff1_output_dtype` is the dtype of the
+        feed-forward's ff1 -> ff2 intermediate (None: bfloat16)."""
         super().__init__()
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
@@ -140,6 +144,7 @@ class MiniMaxH3TransformerBlock(Module):
             dynamic_length=dynamic_length,
             norm_row_capacity=norm_row_capacity,
             agmm_mode=agmm_mode,
+            vsa_config=vsa_config,
         )
         self.norm2 = DistributedRMSNorm(
             embedding_dim=hidden_size,
@@ -191,6 +196,7 @@ class MiniMaxH3TransformerBlock(Module):
             ccl_manager=ccl_manager,
             ff1_compute_kernel_config=ff1_compute_kernel_config,
             ff2_compute_kernel_config=self.mm_compute_kernel_config,
+            ff1_output_dtype=ff1_output_dtype,
         )
         self.adaln_proj = ColParallelLinear(
             time_embed_dim,

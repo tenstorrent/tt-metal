@@ -9,31 +9,21 @@
 #include "per_token_cast_to_fp8_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+
 namespace ttnn::experimental::prim::qsr::per_token_cast_to_fp8 {
 
-struct PerTokenCastToFp8SharedVariables {
-    tt::tt_metal::KernelHandle reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    tt::tt_metal::KernelHandle compute_kernel_id = 0;
-    std::vector<CoreCoord> all_cores_vec;
-};
-
-// Single factory for both input layouts. create() reads the input layout and selects the ROW_MAJOR vs
+// Single factory for both input layouts. create_descriptor() reads the input layout and selects the ROW_MAJOR vs
 // TILE work-split / kernel define internally (compute skips input tilization only for TILE); everything
-// else is shared. ROW_MAJOR and TILE stay distinct program-cache entries via compute_program_hash, which
-// hashes input.layout().
+// else is shared. ROW_MAJOR and TILE stay distinct program-cache entries because the default program hash
+// covers the input's TensorSpec (which includes its layout).
+//
+// No override_runtime_arguments: only the I/O buffer addresses vary between two calls sharing a cache key, and
+// they are declared as Buffer* bindings, which the framework re-points on a cache hit.
 struct PerTokenCastToFp8ProgramFactory {
-    using shared_variables_t = PerTokenCastToFp8SharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
     using tensor_return_value_t = std::tuple<Tensor, Tensor>;
 
-    static cached_program_t create(
-        const PerTokenCastToFp8Params& operation_attributes,
-        const PerTokenCastToFp8Inputs& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
         const PerTokenCastToFp8Params& operation_attributes,
         const PerTokenCastToFp8Inputs& tensor_args,
         tensor_return_value_t& tensor_return_value);

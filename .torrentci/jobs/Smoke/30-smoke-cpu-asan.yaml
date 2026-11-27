@@ -1,0 +1,63 @@
+---
+# PR Gate runtime smoke, cpu-only entry: the CPU_* cases on a mock cluster.
+jobs:
+  - id: smoke-cpu-asan
+    name: Runtime smoke, CPU only (ASan)
+    checkout: false
+    description: "Run the PR Gate runtime validation smoke cpu-only test (CPU_* cases, mock cluster) on the ASan packages"
+    # GitHub's caps: smoke.yaml's 30 min job, runtime_validation_pr_gate_tests.yaml's 10 min test.
+    timeout: 30m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        # GitHub runs the cpu-only leg on ci-test (cpu-docker-image: ci-test-tag).
+        image:
+          from-job: ci-test-image
+          image: ci-test
+        resources:
+          requests:
+            cpu: '4'
+            memory: 16Gi
+            ephemeral-storage: 30Gi
+          limits:
+            cpu: '4'
+            memory: 16Gi
+            ephemeral-storage: 40Gi
+    packages:
+      artifacts:
+        - from-job: asan-build
+          name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
+          install: [tt-metalium, tt-metalium-validation]
+    # GitHub uploads the gtest XML (test_reports_*); gtest names it after the binary.
+    artifacts:
+      publish:
+        - name: smoke-cpu-test-report
+          path: test-reports/tt-metalium-validation-smoke.xml
+          content-type: application/junit+xml
+          when: always
+    env:
+      - name: ASAN_OPTIONS
+        value: color=always
+      - name: TSAN_OPTIONS
+        value: color=always
+      - name: UBSAN_OPTIONS
+        value: color=always:print_stacktrace=1:halt_on_error=1
+      - name: GTEST_COLOR
+        value: 'yes'
+      - name: TT_METAL_WATCHER_TEST_MODE
+        value: '1'
+      - name: TT_LOGGER_LEVEL
+        value: warn
+      - name: LSAN_OPTIONS
+        value: suppressions=/usr/share/tt-metalium/lsan.supp
+    steps:
+      - id: smoke-cpu
+        kind: shell
+        shell:
+          run:
+            - mkdir -p test-reports
+            # GitHub's step cap (runtime_validation_pr_gate_tests.yaml: 10 min); steps have no timeout key yet.
+            - >-
+              TT_METAL_MOCK_CLUSTER_DESC_PATH=/usr/libexec/tt-metalium/tt_metal/third_party/umd/descriptors/cluster_descriptor_examples/wormhole_N150.yaml
+              timeout 10m /usr/bin/tt-metalium-validation-smoke --gtest_filter='*CPU_*' --gtest_output=xml:test-reports/

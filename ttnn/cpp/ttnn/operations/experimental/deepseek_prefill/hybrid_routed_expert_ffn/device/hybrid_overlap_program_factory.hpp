@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 
 #include "hybrid_routed_expert_ffn_types.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"

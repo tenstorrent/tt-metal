@@ -99,5 +99,21 @@ sfpi_inline sfpi::vFloat round_to_dest(sfpi::vFloat result) {
     }
 }
 
+/** @brief Dest store policy: rounds to bf16 (RNE) before SFPSTORE when ROUND_TO_BF16; LAYOUT is the store format. */
+template <bool ROUND_TO_BF16, sfpi::DataLayout LAYOUT>
+struct DestBf16RneFormat : SfpiFormat<LAYOUT, sfpi::vFloat> {
+    // The software rounding sits between the op and the SFPSTORE, so only the unrounded store is a plain one.
+    static constexpr bool plain_store = !ROUND_TO_BF16;
+
+    template <SfpuReg REG>
+    sfpi_inline static void store(int index, sfpi::vFloat value) {
+        static_assert(REG == SfpuReg::Dest, "bf16 RNE store policy is Dest-only");
+        if constexpr (ROUND_TO_BF16) {
+            value = float32_to_bf16_rne(value);
+        }
+        SfpiFormat<LAYOUT, sfpi::vFloat>::template store<REG>(index, value);
+    }
+};
+
 }  // namespace sfpu
 }  // namespace ckernel

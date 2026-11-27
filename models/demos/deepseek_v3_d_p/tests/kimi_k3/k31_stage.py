@@ -17,9 +17,13 @@ import pytest
 from loguru import logger
 
 from models.demos.common.prefill.adapter import PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split
+from models.demos.common.prefill.runners.runner_utils import compute_layer_split, stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    SKIP_8X4_SP_AXIS_1,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_fabric_payload_size
 
 ADAPTER = get_adapter("kimi_k3_1")
@@ -42,12 +46,18 @@ PP4_MAX_USERS = 76
 # 4x4 count was (#61481): 96 serves one full 1,049,600-token request; 97 fails in compile, the DSA indexer's score
 # buffer (42.6 MB per DRAM bank) finding no contiguous block (largest 38.4 MB of 63.3 MB free): fragmentation, not
 # total DRAM. 98 fails there too, 100 at the MoE dispatch buffer, 104 at the KDA slabs, 112 and up at the kvpe cache.
-# K3 allocates two slots under its limit (127 of 129); K3.1 allocates its measured maximum, at 4x4 and 8x4.
 STAGE0_4X4_MAX_USERS = 96
+# The users kimi_k3_1.json allocates for the 4x4 layout, below stage 0's maximum: at 96 the SC4 leg (8x[4,4], CI run
+# 45061518673) ran stages 4-6, which carry more AttnRes history than stage 0, out of DRAM on the first chunk, ~16 MB
+# per chip short (largest free block 0.98 MB per bank). 88 leaves a margin, as K3 allocates two under its limit (127
+# of 129). The 8x4 layout keeps its measured maximum (PP4_MAX_USERS).
+MANIFEST_4X4_USERS = 88
 
-# The 4x4 stage of kimi_k3_1.json: SP on the tray half's axis-1 ring, TP on axis 0.
+# The 4x4 stage of kimi_k3_1.json: by default SP on the tray half's axis-1 ring, TP on axis 0; the SP-axis knob
+# ($PREFILL_SP_AXIS, runner_utils.stage_sp_axis) moves SP to axis 0 for the whole process, as it does the runner's.
 MESH_4X4 = (4, 4)
-SP_AXIS_4X4, TP_AXIS_4X4 = 1, 0
+SP_AXIS_4X4 = stage_sp_axis(MESH_4X4)
+TP_AXIS_4X4 = 1 - SP_AXIS_4X4
 CHUNK_4X4 = 2560
 NUM_STAGES_4X4 = 8
 # (first layer, layer count) of each 4x4 stage: twelve layers (one AttnRes block) each, nine on the last.
@@ -81,8 +91,8 @@ assert STAGE_LAYOUTS[MESH_4X4].tp_axis == TP_AXIS_4X4
 
 # The runner's mesh for each layout, at the adapter's fabric payload (raised to one combine row of the MoE block, K3.1's
 # MoE, as the runner raises it) and L1_SMALL and the default trace region:
-# 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), which the runner opens for an SP-on-axis-1 rank. The 4x4
-# row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
+# 8x4 Ring/Ring; 4x4 Linear/Ring (FABRIC_2D_TORUS_X), the wraps of the runner's 4x4 descriptor, on either SP axis.
+# The 4x4 row needs the Galaxy narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
 # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
 PLACEMENT = [
     pytest.param(
@@ -92,7 +102,7 @@ PLACEMENT = [
             l1_small_size=ADAPTER.l1_small_size,
             trace_region_size=TRACE_REGION_SIZE,
         ),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH, topology="mesh-8x4"),
+        marks=[pytest.mark.requires_mesh_topology(mesh_shape=MESH, topology="mesh-8x4"), SKIP_8X4_SP_AXIS_1],
         id="torus-xy-8x4",
     ),
     pytest.param(
@@ -103,7 +113,7 @@ PLACEMENT = [
             trace_region_size=TRACE_REGION_SIZE,
         ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH_4X4, topology="mesh-4x4"),
-        id="4x4-sp1",
+        id=f"4x4-sp{SP_AXIS_4X4}",
     ),
 ]
 

@@ -31,7 +31,6 @@ from run_checks import run as get_run_checks
 from rich.markup import escape
 from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
-from ttexalens.tt_exalens_lib import read_word_from_device
 from ttexalens.elf import CallstackEntry, CallstackEntryVariable
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
@@ -207,9 +206,13 @@ def dump_lightweight_asserts(
                 previous_instruction = int.from_bytes(data[offset - 4 : offset], "little")
         else:
             # Otherwise, read instructions directly from device
-            current_instruction = read_word_from_device(location, pc)
+            l1_mem_access = dispatcher_data.l1_memory_access(location)
+            instruction = bytearray(4)
+            l1_mem_access.read(pc, instruction)
+            current_instruction = int.from_bytes(instruction, "little")
             if pc >= 4:
-                previous_instruction = read_word_from_device(location, pc - 4)
+                l1_mem_access.read(pc - 4, instruction)
+                previous_instruction = int.from_bytes(instruction, "little")
 
         # Check if core hit ebreak or is spinning in a while(true) loop after an assert failure
         while_true_instruction = 0x0000006F

@@ -18,10 +18,10 @@
 #include <tuple>
 
 #include <fmt/format.h>
-#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
 #include <tt-metalium/experimental/device.hpp>
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/workload/legacy/kernel_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 

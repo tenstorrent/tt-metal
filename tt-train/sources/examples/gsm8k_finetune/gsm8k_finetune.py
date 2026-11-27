@@ -447,6 +447,7 @@ def train():
         # SpeedrunScheduler uses a 0-based step index; the optimizer's lr is max_lr, so lr_at / max_lr is the factor.
         lr_lambda=lambda step: sched.lr_at(step) / scheduler_config.max_lr,
         attention_mask=causal_mask,
+        precision=training_config.precision,
     )
 
     print(f"Starting training for max {training_config.steps} steps...")

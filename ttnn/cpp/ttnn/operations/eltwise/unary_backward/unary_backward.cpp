@@ -9,11 +9,11 @@
 #include <utility>
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -31,7 +31,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <cstdint>
 
 namespace ttnn {
@@ -671,8 +671,8 @@ std::vector<Tensor> sigmoid_bw(
     std::vector<Tensor> grad_tensor;
     grad_tensor.reserve(1);
 
-    // Sharded configurations run on the fused device operation too: it either aliases the
-    // circular buffers to the shards (when every operand and the output are L1-sharded on the
+    // Sharded configurations run on the fused device operation too: it either borrows the shards
+    // as its dataflow buffers (when every operand and the output are L1-sharded on the
     // same grid and shape) or addresses every operand by logical page through TensorAccessor,
     // which is transparent to sharding. See the factory for the rule.
     const auto& output_memory_config = output_mem_config.value_or(input.memory_config());
@@ -1706,6 +1706,17 @@ std::vector<Tensor> cosh_bw(
 // #         )
 std::vector<Tensor> logiteps_bw(
     const Tensor& grad, const Tensor& input, float eps, const std::optional<MemoryConfig>& output_mem_config) {
+    // One program whose gradient is the generated SFPU kernel, for the calls it serves at the
+    // fitted scalar values; every other call keeps the composite below.
+    if (generated_bf16_kernel_applies(grad, input, output_mem_config) && std::bit_cast<uint32_t>(eps) == 0x00000000u) {
+        return {ttnn::operations::unary_backward::launch_unary_backward(
+            ttnn::operations::unary_backward::UnaryBackwardOpType::LOGITEPS_BW,
+            grad,
+            input,
+            input.dtype(),
+            output_mem_config.value_or(input.memory_config()))};
+    }
+
     std::vector<Tensor> grad_tensor;
     const float low = eps < 0.0f ? 0.0f : eps;
     const float high = 1.0f - low;
@@ -2151,11 +2162,8 @@ std::vector<Tensor> repeat_bw(
 
     auto shape_wh = input.padded_shape();
     TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
-    auto* ttnn_device = input.device();
-    // moreh_sum writes its result into the zeros tensor created below. If no memory config is passed,
-    // zeros allocate the tensor in DRAM, in which case use the input memory config. The result has input
-    // shape and config. Grad config was built for larger grad shape and may not always fit (a width-sharded grad
-    // fails).
+    // With no memory config the sum follows the input's: the grad's config was built for the larger grad shape and may
+    // not fit the result (a width-sharded grad fails).
     const auto sum_output_mem_config = output_mem_config.value_or(input.memory_config());
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
@@ -2164,34 +2172,20 @@ std::vector<Tensor> repeat_bw(
         grad_tensor.emplace_back(zero_tensor);
         return grad_tensor;
     }
+    // The gradient has the input's dtype.
+    const auto sum_to_input = [&](int dim) {
+        Tensor result = ttnn::sum(grad, dim, /*keepdim=*/true, sum_output_mem_config);
+        return result.dtype() == input.dtype() ? result
+                                               : ttnn::typecast(result, input.dtype(), sum_output_mem_config);
+    };
     if (shape[0] > 1) {
-        ttsl::SmallVector<std::int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
-        std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
-            grad,
-            dim,
-            true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, sum_output_mem_config),
-            sum_output_mem_config,
-            std::nullopt);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(sum_to_input(0));
         return grad_tensor;
     }
     if (shape[1] > 1) {
-        ttsl::SmallVector<std::int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
-        std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
-            grad,
-            dim,
-            true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, sum_output_mem_config),
-            sum_output_mem_config,
-            std::nullopt);
-        grad_tensor.emplace_back(result);
+        grad_tensor.emplace_back(sum_to_input(1));
         return grad_tensor;
     }
     return grad_tensor;

@@ -5,7 +5,7 @@
 #include "halo_scatter_device_operation_types.hpp"
 #include "halo_scatter_program_factory.hpp"
 
-#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/execution/slow_dispatch.hpp>
 
 using namespace tt::tt_metal;
 

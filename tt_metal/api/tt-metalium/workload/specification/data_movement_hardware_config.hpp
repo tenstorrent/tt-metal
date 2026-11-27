@@ -9,7 +9,7 @@
 
 #include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
 #include <tt-metalium/workload/utils/group.hpp>
-#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
+#include <tt-metalium/workload/specification/kernel_hardware_types.hpp>
 
 namespace tt::tt_metal {
 

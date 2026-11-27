@@ -20,12 +20,12 @@ from models.demos.common.prefill.runners.runner_utils import compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import (
     CHUNK_4X4,
+    MANIFEST_4X4_USERS,
     MAX_SEQ_LEN,
     MESH_4X4,
     NUM_STAGES,
     NUM_STAGES_4X4,
     PP4_MAX_USERS,
-    SP_AXIS_4X4,
     STAGE0_4X4_MAX_USERS,
 )
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -103,20 +103,23 @@ def _manifest_env(name: str) -> dict[str, str]:
 
 
 def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
-    """`kimi_k3_1.json` is `kimi_k3.json` with K3.1's model, user count and kvpe format; nothing else differs.
+    """`kimi_k3_1.json` is `kimi_k3.json` with K3.1's model, user count, kvpe format and SP axis; nothing else differs.
 
-    K3.1 declares K3's layout: 4x4 stages (two per galaxy, SP=4 on axis 1, TP=4 on axis 0, 2560-token chunks), so
+    K3.1 declares K3's layout with SP on axis 0: 4x4 stages (two per galaxy, SP=4, TP=4, 2560-token chunks), so
     the 93 layers run as eight stages on the adapter's AttnRes split boundaries, twelve layers each and nine on the
     last. The 8x4 layout stays reachable through run_multirank_pcc.sh's *_8x4 configs, which export it.
     """
     k3, k31 = _manifest_env("kimi_k3"), _manifest_env("kimi_k3_1")
-    layout = {"PREFILL_SP", "PREFILL_TP", "PREFILL_SP_AXIS", "PREFILL_CHUNK_SIZE"}
+    layout = {"PREFILL_SP", "PREFILL_TP", "PREFILL_CHUNK_SIZE"}
     assert {k: k31.get(k) for k in layout} == {k: k3[k] for k in layout}, "K3.1 declares K3's 4x4 layout"
     sp, tp = int(k31["PREFILL_SP"]), int(k31["PREFILL_TP"])
     sp_axis = int(k31["PREFILL_SP_AXIS"])
-    assert (sp_axis, int(k31["PREFILL_CHUNK_SIZE"])) == (SP_AXIS_4X4, CHUNK_4X4)
+    # The manifest holds the stage's default axis; the SP-axis knob, not the manifest, moves it.
+    assert (sp_axis, int(k31["PREFILL_CHUNK_SIZE"])) == (0, CHUNK_4X4)
     assert tuple(sp if axis == sp_axis else tp for axis in (0, 1)) == MESH_4X4
-    own = {"PREFILL_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"}
+    # PREFILL_HF_MODEL: K3 names its checkpoint (it keys K3's weight cache); K3.1's is the adapter default.
+    own = {"PREFILL_MODEL", "PREFILL_HF_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE", "PREFILL_SP_AXIS"}
+    assert "PREFILL_HF_MODEL" not in k31, "K3.1 must not inherit K3's checkpoint"
     assert {k: v for k, v in k31.items() if k not in own} == {k: v for k, v in k3.items() if k not in own}
     assert get_adapter(k31["PREFILL_MODEL"]) is K31
 
@@ -133,5 +136,6 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
 
     # The context must be whole 2560-token chunks.
     assert int(k31["PREFILL_MAX_SEQ_LEN"]) == MAX_SEQ_LEN and MAX_SEQ_LEN % CHUNK_4X4 == 0
-    # The slots allocated are the measured maximum, as for the 8x4 stage (PP4_MAX_USERS, which the *_8x4 configs keep).
-    assert int(k31["PREFILL_NUM_USERS"]) == STAGE0_4X4_MAX_USERS > PP4_MAX_USERS
+    # The 4x4 slots sit below stage 0's measured maximum, which stages 4-6 of SC4 do not reach (MANIFEST_4X4_USERS).
+    assert int(k31["PREFILL_NUM_USERS"]) == MANIFEST_4X4_USERS < STAGE0_4X4_MAX_USERS
+    assert MANIFEST_4X4_USERS > PP4_MAX_USERS

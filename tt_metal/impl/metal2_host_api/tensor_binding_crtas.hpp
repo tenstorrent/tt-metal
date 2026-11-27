@@ -8,8 +8,8 @@
 #include <limits>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/tensor/mesh_tensor.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
