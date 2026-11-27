@@ -4,20 +4,21 @@
 
 | Field | Value |
 |-------|-------|
-| Classification | data_movement (no compute kernel, no CB, no semaphore) |
-| Goal | Return a new BLOCK_SHARDED L1 tensor in the placement `memory_config` names whose every tile is the tile of `input_tensor` at the same tile index, moved as stored, in exactly one device program. |
-| Math | `out[t] = in0[t]` for every tile index `t = (tile_row, tile_col)` of the 2-D view; bytes copied verbatim (bfloat8_b shared exponents included). |
-| Regime | `PULL`: every core that holds an out block reads that block's tiles straight from the L1 of the cores that hold them, landing each run in its final slot of the out shard. |
-| References | `eval/prompts/g6_reshard.txt` (contract, via the task), `eval/golden_tests/g6_reshard/feature_spec.py` (TARGET, SCENARIOS, LOOSE_CASES), `eval/golden_tests/g6_reshard/helpers.py` (exact gate), `docs/explorations/g6_reshard/{DOSSIER,math,tensix,risks}.md`, `tt_metal/impl/buffers/buffer_distribution_spec.cpp:162-200` (GRID_2D block→core map), `tt_metal/impl/buffers/buffer.cpp:459-473` (in-shard page order), `tech_reports/tensor_accessor/tensor_accessor.md` |
+| Classification | data_movement (L1 → L1, cross-core; no compute kernel, no DRAM) |
+| Goal | Move every tile of a BLOCK_SHARDED L1 tensor, as stored, into a new tensor BLOCK_SHARDED in L1 on the placement `memory_config` names, in one device program, for every legal placement pair. |
+| Math | `out[i] = in0[i]` for every logical index `i`; out held in the placement `memory_config` names, in0 unchanged (`docs/explorations/g6_reshard/math.md` M1, M2) |
+| Tile form | For every tile index `(tile_row, tile_col)` of the padded 2-D view: the 1088 B tile (bfloat8_b, shared exponents included) at that index in in0's shard is copied byte-for-byte into the slot of out's shard that holds the same index (`math.md` F2) |
+| Production call | x `(1, 1, 2048, 1024)` bfloat8_b TILE on (0,0)-(10,9), shard (224, 96), ROW_MAJOR → out on (0,0)-(7,7), shard (256, 128), ROW_MAJOR |
+| References | `docs/explorations/g6_reshard/{DOSSIER,math,tensix,risks,golden_brief}.md`; `eval/golden_tests/g6_reshard/{feature_spec,helpers}.py`; `tech_reports/tensor_accessor/tensor_accessor.md`; catalog `ttnn/ttnn/operations/examples/master.md` (entries below) |
 
 ## Parameters
 
 | Name | Type | Required | Valid Range | Default | CT/RT |
 |------|------|----------|-------------|---------|-------|
-| `input_tensor` | `ttnn.Tensor` (positional) | yes | on device, rank 4, BLOCK_SHARDED L1, TILE, bfloat8_b (Phase 0), 2-D view H and W multiples of 32 | — | placement → CT (walk geometry + in0 accessor args); address → common RT |
-| `memory_config` | `ttnn.MemoryConfig` (positional) | yes | BLOCK_SHARDED, L1, shard spec present, one rectangle inside the worker grid, shard dims multiples of 32, grid ≥ block rows/cols in its orientation | — | placement → CT (walk geometry) + kernel core range; per-core block coords → per-core RT |
+| `input_tensor` | `ttnn.Tensor` | yes (positional) | rank 4, bfloat8_b, TILE, BLOCK_SHARDED in L1, on device; padded 2-D view H, W multiples of 32 | — | its placement → accessor CT args; its address → common RT arg |
+| `memory_config` | `ttnn.MemoryConfig` | yes (positional) | BLOCK_SHARDED, L1, with a shard spec: one core rectangle inside the device worker grid, shard dims multiples of 32, enough grid rows/cols for the block rows/cols in its orientation | — | its placement → kernel core range, CT args, per-core RT args |
 
-No dtype, no output tensor, no compute config. `out` takes `input_tensor`'s dtype and layout.
+No output dtype, no output tensor argument, no `compute_kernel_config`.
 
 ## Tensors
 
@@ -25,10 +26,10 @@ No dtype, no output tensor, no compute config. `out` takes `input_tensor`'s dtyp
 
 | Property | Requirement |
 |----------|-------------|
-| Shape | `(d_0, d_1, d_2, d_3)`, rank 4; production `(1, 1, 2048, 1024)` |
-| Dtype | `bfloat8_b` (Phase 0 SUPPORTED = TARGET) |
+| Shape | rank 4 `(d0, d1, d2, d3)`; logical 2-D view `H = d0·d1·d2`, `W = d3`, both multiples of 32 |
+| Dtype | bfloat8_b (Phase 0 SUPPORTED) |
 | Layout | TILE |
-| Memory | BLOCK_SHARDED, L1, any legal block placement (production: grid (0,0)-(10,9), shard (224, 96) = 7×3 tiles, ROW_MAJOR; last block row 1 tile high, last block column 2 tiles wide) |
+| Memory | BLOCK_SHARDED in L1, any legal placement (any core rectangle, either orientation, shard dims multiples of 32, cut-short last block row/column); read from the tensor, never assumed |
 
 ### Output
 
@@ -37,301 +38,232 @@ No dtype, no output tensor, no compute config. `out` takes `input_tensor`'s dtyp
 | Shape | `input_tensor.shape` |
 | Dtype | `input_tensor.dtype` |
 | Layout | `input_tensor.layout` |
-| Memory | exactly `memory_config` (BLOCK_SHARDED L1, its grid / shard shape / orientation); a newly allocated tensor, never `input_tensor` or a view of it |
-
-**Tile geometry (single source, host):** the 2-D view is taken from the **padded** shape, alignment-aware:
-`tensor_row_tiles = prod(padded_shape[:-1]) / 32` (= `d_0·d_1·ceil(d_2/32)`), `tensor_col_tiles = padded_shape[-1] / 32` (= `ceil(d_3/32)`). Production: 64 × 32.
-
----
+| Memory | exactly `memory_config` (BLOCK_SHARDED, L1, its grid, shard shape, orientation); a new allocation, never a view of in0 |
 
 ## Blocking Model
 
-The op is a parameterized gather. The **block** is one out shard; its extents are pinned by the caller's
-`memory_config` (a shard hands you the block size — honor it). What stays this design's choice is (a)
-which core issues each move (`PULL`: the out-block holder), (b) how a block is cut among the issuing RISCs
-(`num_issuers` row bands), and (c) the transfer unit inside a band (the maximal run, never a tile).
+The op computes nothing and no element depends on another, so the blocking decides only **which core issues which transfer and how coarse each transfer is**. Where each tile starts and ends is fixed by the two placements.
+
+**Committed scheme (Phase 0): PULL.** Each core that holds a block of out reads, into its own out shard, the pieces of in0's blocks that overlap it. The block is the out shard (one per core, honored as handed by `memory_config`). Inside a core the block's tile rows are split between both data-movement RISC-Vs (`issuers_per_core = 2`, one per NoC). Each issuer enumerates its pieces **on device** from the two placements' geometry and moves every piece as maximal runs that are contiguous on both sides, one NoC read per run, then waits once. Every knob below is a parameter with one source; none is an inlined constant.
 
 ### Axes
 
-Both axes live in the 2-D view; `d_0..d_2` fold into `tile_row` because the placement itself is defined on
-the 2-D view (blocks, shards and tile indices all are), so there is no separate batch axis to block.
-
 | Axis | Character (+ one-clause reason) | Extent knob | Phase 0 value | Knob source | Core-assignment | Later unlock |
 |------|--------------------------------|-------------|---------------|-------------|-----------------|--------------|
-| `tile_row` | **independent** — `out[t]` is `in0[t]` alone, no result spans the axis | block: `block_height_tiles = out_shard_row_tiles` (clipped to `tensor_row_tiles` on the last block row); per issuer: `band_height_tiles = ceil(actual_block_height_tiles / num_issuers)` | block = whole out shard height (8 tiles, production); band = 4 tiles (`num_issuers = 2`) | `out_shard_row_tiles = memory_config.shard_spec.shape[0] / 32` (host, CT arg); `num_issuers` = one host constant `NUM_ISSUERS` | out block row `block_row` → the core `memory_config` places it on (`(x0+block_col, y0+block_row)` ROW_MAJOR, `(x0+block_row, y0+block_col)` COL_MAJOR); band `issuer_idx` → data-movement RISC `issuer_idx` of that core | knob-turn (`num_issuers` 1↔2; band axis) |
-| `tile_col` | **independent** — same reason | block: `block_width_tiles = out_shard_col_tiles` (clipped to `tensor_col_tiles` on the last block column); per issuer: whole block width (not split) | whole out shard width (4 tiles, production) | `out_shard_col_tiles = memory_config.shard_spec.shape[1] / 32` (host, CT arg) | out block column `block_col` → as above | knob-turn (band split along columns instead of rows, perf lamp) |
+| tile rows of the padded 2-D view (`tensor_height_tiles` = d0·d1·⌈d2/32⌉; P: 64) | independent: `out[h, w]` is `in0[h, w]` alone, no result spans it | `block_height_tiles` (out shard height / 32); runtime extent of the last block row = `tensor_height_tiles − (num_block_rows − 1)·block_height_tiles` | whole out shard (P: 8; O1: 8) | `memory_config.shard_spec.shape[0] // 32`, read once on host | out block row `r` → its holder core (ROW_MAJOR: `(x0 + c, y0 + r)`, COL_MAJOR: `(x0 + r, y0 + c)`); inside the core the block's rows split over `issuers_per_core` issuers as contiguous ranges of `⌈rows/2⌉` and `⌊rows/2⌋` | knob-turn (`issuers_per_core`) |
+| tile columns (`tensor_width_tiles` = d3/32; P: 32) | independent: same reason | `block_width_tiles` (out shard width / 32); last block column = `tensor_width_tiles − (num_block_cols − 1)·block_width_tiles` | whole out shard (P: 4; O1: 5) | `memory_config.shard_spec.shape[1] // 32`, read once on host | out block column `c` → its holder core (same map); not split inside a core: each issuer covers the block's full width, so full-width rows can merge into one run | knob-turn |
+| piece boundaries along both axes (not a knob: in0's placement) | — set by in0's block grid; a piece is (in block) ∩ (issuer sub-block) | `in_block_height_tiles`, `in_block_width_tiles` | P: 7 × 3; I0/I3/I5: 8 × 4 | `input_tensor.memory_config().shard_spec.shape // 32`, read once on host | in block `(r, c)` lives on the core in0's placement names; resolved on device by in0's `TensorAccessor` (never a hand-built table) | — |
+| transfer (run) extent | — | maximal: the piece's width in tiles, or `piece_rows × piece_width` when `piece_width == in_block_width_tiles == block_width_tiles` (rows contiguous on both sides) | P: 1–3 tiles; I0/I3/I5: 16 tiles (one run per issuer) | derived on device from the above; never a literal | the issuer that owns the piece | — |
 
-**Reuse check (every operand × the chosen split).** The split is by out block. `in0` varies along it: the
-blocks of `in0` that overlap one out block partition the tile grid together with the out blocks
-(math.md F2), so **no input tile has two destinations** and no operand is reuse-shared. Nothing to broadcast.
+Operand-reuse check (the split is by out block): in0 varies along both split axes; each tile of in0 feeds exactly one out tile, so no operand is reuse-shared and no broadcast row exists.
 
-**Stall-shadow check.** The only wait in the scheme is each issuer's final read barrier. Every run of the
-band is issued before it, so no independent work remains to place in the stall; nothing else in the op waits
-on anything.
+Stall-shadow check: the only wait is the final read barrier of each issuer. Nothing remains to schedule into it: the op has one phase and all of its reads are already in flight when the barrier starts. Enumerating piece `n+1` already overlaps the in-flight reads of piece `n`.
 
-**Intermediate data.** The scheme introduces no stage that produces data other than `out` itself (no CB, no
-staging, no partial). There is no second table to re-run. No core collects or coordinates: every
-out-block core pulls its own block, and no core computes on behalf of another.
-
-**Phase 0 is multi-core:** all `out_block_rows × out_block_cols` cores pull concurrently (64 cores for
-production, 56 for O1), each with `num_issuers = 2` RISCs on separate NoCs → 128 concurrent issuers for
-production. The core count follows the out blocking (the block is the out shard, the holder issues), not
-the tensor shape.
-
-**Every knob is a parameter.** `out_shard_row_tiles`, `out_shard_col_tiles`, `in_shard_row_tiles`,
-`in_shard_col_tiles`, `tensor_row_tiles`, `tensor_col_tiles`, `tile_stride_bytes` and `num_issuers` are
-host-derived once per cache entry and passed as CT args; `block_row`, `block_col` per core as RT args;
-`band_height_tiles`, band bounds, run counts and every address are derived from them in the kernel. No
-literal tile count, shard size, grid origin or orientation appears in a kernel.
+`num_blocks_this_core = 1` (the out shard is the coarsest block and it needs no scratch L1, so there is no L1-pressure reason to cut it).
 
 ### Buffer-depth knobs
 
+The op allocates **no circular buffer**: reads land directly in out's shard by address (pack-into-destination, `l1-footprint-discipline.md` Rule 3.1). The only depth-like knob is NoC reads in flight.
+
 | CB | Depth knob | Phase 0 value | What the depth buys |
 |----|------------|---------------|---------------------|
-| — (no CB exists) | `transactions_in_flight` = runs issued per barrier | all runs of the band (one barrier per band; ≤ 8 runs per issuer in production) | maximal NoC overlap: the read latency is paid once per band, not per run. There is no ring buffer to size — every run lands at its final, distinct address in the out shard, so depth costs no L1. |
+| — (NoC reads in flight per issuer; no CB) | reads issued before the barrier | all runs of the issuer's sub-block (P: ≤ 8; O1: ≤ 12; I0/I3/I5: 1) | one barrier per block: the NoC never idles between batches and the round-trip latency is paid once (catalog `double_buffer`, `trid_double_issue`: batch the barrier; trids add nothing when there is one batch) |
 
 ### Mechanism caps
 
 | Mechanism | Cap on which extent | Clamp | What happens unclamped |
 |-----------|--------------------|-------|------------------------|
-| L1 NoC alignment (16 B, `ttnn.get_l1_alignment()`) | run start offsets = tile index × `tile_stride_bytes` | host asserts `tile_stride_bytes % l1_alignment == 0` (1088 = 68 × 16 for bfloat8_b); `tile_stride_bytes = input_tensor.buffer_aligned_page_size()` and must equal out's | misaligned NoC read: corrupted bytes or a hang |
-| NoC packet size `NOC_MAX_BURST_SIZE` = 16384 B (`tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:287-290`) | run length | none needed: runs are issued with `noc_async_read_with_state` (any length; splits bursts internally, `dataflow_api.h:678-705`). **If** a realization switches to the `*_one_packet_*` calls, clamp every run to `floor(16384 / tile_stride_bytes)` tiles (15 for bfloat8_b) | a >16 KB one-packet read truncates the run (wrong tiles, silently) |
-| Source-shard addressing (in0 `TensorAccessor`, CT args) | `in_block_rows × in_block_cols` shard ids ≤ worker cores | bounded by the device grid (≤ 1 shard per core) | — |
-| Kernel-config region (BB-04) | RT/CT arg count | constant in the placement: 2 common RT (addresses) + 2 per-core RT (`block_row`, `block_col`) + fixed CT list + accessor CT args (bounded by the core count). The run list is **derived on device**, never shipped as args (a host-built run list grows with runs per block, up to every tile of the block) | launch refused in some build flavour |
-| In-shard page order (`buffer.cpp:464-469`) | src/dst tile offsets | in-shard offset of tile `(h, w)` = `(h − shard_row0) · shard_col_tiles + (w − shard_col0)`, stride = the **allocated** shard width even on a tail shard | reading a tail shard's padding slots or landing tiles in the wrong slots |
-| Shard geometry / tails | band and intersection extents | every extent clipped to `tensor_row_tiles` / `tensor_col_tiles`; tail slots of in0 shards are never read, tail slots of out shards never written (contents unspecified per spec) | stale or out-of-range tiles |
-| Empty band | `band_height_tiles` when `actual_block_height_tiles < num_issuers` | an issuer whose band is empty issues nothing, runs its (zero-outstanding) barrier and returns | a hang or an out-of-range walk |
+| NoC packet size `NOC_MAX_BURST_SIZE` (16384 B on BH, `tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_parameters.h:290`) | run bytes | none with `noc_async_read` (it splits a run into packets itself, `dataflow_api.h:547`). If a realization uses `noc_async_read_one_packet` (`:515`) or stateful single-packet reads: clamp each transfer to `⌊NOC_MAX_BURST_SIZE / aligned_page_bytes⌋` tiles (15 for bfloat8_b on BH) | I0/I3/I5 runs are 16 tiles = 17408 B > 16384 B: a one-packet read truncates or corrupts the run |
+| Shard slot stride: a cut-short shard keeps the full shard row stride (slot of in-shard tile `(i, j)` = `i·in_block_width_tiles + j`; out: `i·block_width_tiles + j`) | run merging across rows | merge rows into one run only when `piece_width == in_block_width_tiles == block_width_tiles` (compare against the **shard** widths, never the valid widths of a tail block) | P's last input block column is 2 tiles valid in a 3-wide shard: merging by valid width reads the wrong slots of every tail shard (wrong results, R1) |
+| L1 / NoC address alignment (16 B, `tt_metal/hw/inc/internal/tt-1xx/blackhole/core_config.h:43`) | run start offsets | slot stride = `aligned_page_bytes` (`buffer_aligned_page_size()`; 1088 = 68 × 16 for bfloat8_b); host asserts in0 and out report the same aligned page size | misaligned NoC transfers |
+| Kernel-config region (BB-04) | per-core args | per-core RT args are O(1) (the issuer's rectangle); in0's accessor args scale with in0's core count ≤ worker grid (≤ 140 on BH) | a host-built run list would grow with the run count (one per tile in the worst placement) and overflow the region — see the rejected HOST-RUN-LIST row |
+| L1 budget 1347776 B per core (BB-05, `sources/local/contract_r3.md:68`) | out shard bytes = `block_height_tiles·block_width_tiles·aligned_page_bytes` | host refuses (RuntimeError) a `memory_config` whose out shard exceeds 1347776 B; golden INPUTS max is 43520 B (O1) | allocation succeeds alone and fails inside the model |
+| Empty issuer range | issuer sub-block height | a block with 1 tile row gives issuer 1 an empty range: it issues no read and still runs its barrier (a no-op) and returns | a kernel that assumes ≥ 1 row reads garbage geometry |
 
 ### Regimes
 
-Named memory boundary: **core L1 ↔ NoC**. Minimum: every tile of `in0` is read once from its resident
-shard and every tile of `out` written once into its shard; tiles whose source and target core coincide
-move by NoC loopback (no inter-core crossing); **0 DRAM bytes**.
+Named boundary for "minimum": **each tile whose source core differs from its target core crosses the NoC once; each tile already on its target core is copied once inside that core; DRAM is never crossed.**
 
 | Regime | Status | Predicate | Block | Data movement vs. minimum | What a bigger block buys |
 |--------|--------|-----------|-------|---------------------------|--------------------------|
-| `PULL` — out-block holder reads its block's runs from the source shards, each run landing in its final slot | **built** | always: every legal pair of block placements (one regime for the whole domain; `in0` shards are resident before the program starts, so no handshake is needed) | out shard `[block_height_tiles × block_width_tiles]`, cut into `num_issuers` row bands of `band_height_tiles`; inside a band, one maximal run per (band × source shard) intersection when it spans full rows of both shards, else one run per tile row | **minimum.** Production: 1880 tiles = 2,045,440 B cross between cores in 1024 runs over 256 core pairs, 168 tiles = 182,784 B by loopback, 0 DRAM. I0: 2048 tiles loopback (128 runs); I3: 256 loopback; I5: 0 loopback (2,228,224 B cross); O1: 960 runs, 43 loopback | the fixed costs per band — kernel launch and arg fetch, accessor construction, one NoC source-state programming per source shard, one barrier — paid once per out shard instead of per piece; a full-width intersection becomes one transfer (I0/I3/I5: one 16-tile run per band instead of 8 per-row runs). The block is the caller's out shard, so it is already at its bound. |
-| `PUSH` — in-block holder writes its block's runs into the out shards that need them | **deferred** — `PULL` already serves every placement pair `PUSH` would, with identical bytes. The only delta is which end issues: production critical core 16 runs (pull, 8/RISC) vs 14 (push, 7/RISC), 64 vs 110 issuing cores | always (same domain) | in shard `[in_shard_row_tiles × in_shard_col_tiles]` in row bands | minimum (same bytes, same runs: 1024 in production) | same terms, plus a write-ack drain per band. **Reachable:** the same host CT geometry and the same intersection walk with the roles of the two placements swapped; `noc_async_read*` → `noc_async_write`, kernel core range = in-block cores, one `noc_async_write_barrier` per band (BB-03). No semaphores: nothing reads `out` inside the program. Settled by one measurement on production: pull vs push kernel duration. |
-| `HYBRID` — each (source, target) pair's runs assigned to whichever end has the lighter issue load | **deferred** — `PULL` covers every shape; this only rebalances issue work across the union of both grids (production: 110 cores instead of 64) | always | as `PULL` and `PUSH` | minimum (same bytes) | same as `PULL`, plus a host-side assignment rule. **Reachable:** both kernels walk the same intersections and filter by a CT assignment predicate; same structure as `PUSH` + `PULL` side by side. |
-| `TILE_AT_A_TIME` — one NoC transaction per tile | **rejected** — superseded by `PULL`'s maximal runs (2048 transactions instead of 64–1024; per-transfer cost dominates the short-run production regime, `risks.md` R3) | — | 1 tile | minimum bytes, but 2048 transactions | — |
-| `SINGLE_ISSUER` — one core moves every tile | **rejected** — dead end (X3/X7): no better regime is built on top of it; `PULL` spreads the same work over every out-block core | — | whole tensor | minimum bytes, one issuer | — |
-| `STAGED` — through DRAM, an interleaved intermediate, a third core's buffer, or another library device op (e.g. a sharded↔interleaved round trip) | **rejected** — forbidden (rule 1, BB-01/02); dead end: +2 DRAM crossings of 2,228,224 B and a second program | — | — | in0 crosses DRAM twice (write + read) | — |
-| `CONVERT` — unpack/repack through compute (tilize/untilize, typecast, copy_tile) | **rejected** — forbidden (rule 1: no unpack/convert/repack); a compute pass the golden values cannot see; may regroup bfloat8_b exponents | — | — | minimum bytes plus a full unpack/pack pass | — |
-| `HOST_ROUNDTRIP` — read values on host, upload in the new placement | **rejected** — forbidden (BB-01) | — | — | PCIe both ways | — |
-| `SPLIT_DEPENDENT + COMBINE` | **rejected** — not applicable: no dependent axis exists (no result spans any axis) | — | — | — | — |
-| `BROADCAST` (multicast a reuse-shared operand) | **rejected** — not applicable: no tile has two destinations; a multicast would deliver bytes every receiver but one discards | — | — | — | — |
-
-Single built regime ⇒ no selection function and no regime-pinned tests are needed. BB-08 still applies: the
-host reports the plan (`PULL`, `num_issuers`, core roles) for any call (Host Contract below).
+| PULL — out holders read their pieces | **built** | every legal placement pair (any rectangles, orientations, shard shapes, tails; identity placement included). The only built row; no selection function. | the out shard `block_height_tiles × block_width_tiles`, clipped at the tensor edge; rows split over `issuers_per_core`; pieces = (in block) ∩ (issuer sub-block) | **minimum**. P: 1880 tiles (2045440 B) cross once, 168 tiles copied in place by a self-aimed read; I0: 0 cross / 2048 local; I3: 1792 / 256; I5: 2048 / 0; O1: 2005 / 43. DRAM 0 | The block is fixed by `memory_config` (one per core), so the fixed costs are paid once per block = once per issuer kernel: RT-arg load, accessor construction, one read barrier (the round-trip latency of the last read). Inside it, the run is the extent that amortizes: one NoC command per run, so maximal runs give P 16 commands per block (2 per tile row) and I0/I3/I5 2 commands per block (16 tiles each). Per piece: one accessor address resolution, amortized over the piece's rows. |
+| PUSH — in holders write their pieces | deferred: identical bytes on every tier and the same per-destination ingress (P: 34816 B into each out core), and PULL already covers every placement pair it would serve; it differs only in which end issues (P: 110 issuers with ≤ 14 runs each, 9.3 on average, instead of 64 with 16) and needs a write-ack barrier on every source. Reachable: the piece enumeration is (my block) ∩ (other placement's block grid) and is symmetric, so PUSH is the same kernel with the roles swapped (kernel on in0's block-holder rectangle, out-side addressing through an out accessor, `noc_async_write` + `noc_async_write_barrier`); no semaphore is needed because nothing in the program consumes out | same as PULL | in0's shard | minimum (same bytes) | same terms, with the in shard as the block |
+| BALANCED — each piece issued by the less-loaded of its two holders | deferred: same bytes and same per-destination ingress as PULL, and PULL covers every placement pair; it adds a per-piece owner decision and a kernel role on in-only holders, which is a second core-range group (P: 46 in-only cores form two rectangles, BB-17). Reachable: the issuer of a piece is a host-side assignment over the same piece enumeration | same as PULL | out shard or in shard per piece | minimum | same terms |
+| PER-TILE — one transfer per tile (accessor page walk) | rejected: superseded by PULL's maximal runs (every run is ≥ 1 tile; P 2048 commands instead of 1024, I0 2048 instead of 128) | — | one tile | minimum bytes, maximum command count | — |
+| HOST-RUN-LIST — host enumerates every run and ships it as per-core RT args | rejected: RT args grow with the run count, unbounded by the placement (one entry per tile of the out block in the worst legal pair), so BB-04 fails on legal placements; superseded by on-device enumeration with O(1) per-core args | — | out shard | minimum | — |
+| DRAM / INTERLEAVED STAGING | rejected: forbidden by rule 1; +1 DRAM write and +1 DRAM read of 2228224 B and a second NoC crossing | — | — | 2× NoC, 2 DRAM crossings | — |
+| DELEGATED — any existing placement-changing TTNN op | rejected: forbidden by rule 1 and BB-01 (a second program, or the move handed to the library) | — | — | — | — |
+| COMPUTE COPY — unpack → pack through a compute kernel | rejected: forbidden by rule 1 (no unpack/repack); the packer can regroup bfloat8_b exponents; an extra engine pass | — | — | minimum bytes + 2 L1 passes per tile | — |
+| THIRD-CORE ISSUER — a core holding neither end stages tiles | rejected: forbidden by rule 1; every tile crosses the NoC twice | — | — | 2× NoC | — |
 
 ### Traffic ranking
 
-Production pair (in (0,0)-(10,9) 7×3-tile shards → out (0,0)-(7,7) 8×4-tile shards), bfloat8_b, 1088 B/tile.
+| Candidate split (who issues) | DRAM crossings | NoC crossings per non-local tile | Extra traffic | Rank |
+|------------------------------|----------------|----------------------------------|---------------|------|
+| PULL (split by out block; out holder issues reads) | 0 | 1 | none (reads of an immutable, resident input need no handshake) | 1 (chosen) |
+| PUSH (split by in block; in holder issues writes) | 0 | 1 | write acks back to every source | 1 (tie) |
+| BALANCED (split by piece) | 0 | 1 | write acks for the pushed pieces | 1 (tie) |
+| third-core issuer | 0 | 2 | a staging copy | 4 (forbidden) |
+| DRAM / interleaved staging | 2 per tile | 2 | 4456448 B through DRAM | 5 (forbidden) |
+| split a dependent axis + cross-core combine | — | — | no axis is dependent (no result spans an axis), so no combine exists | n/a |
 
-| Candidate split / regime | DRAM crossings (in0 / out) | Core-to-core NoC bytes | Loopback bytes | Issuers / max runs per issuer | Verdict |
-|--------------------------|----------------------------|------------------------|----------------|-------------------------------|---------|
-| by out block (`PULL`), 2 issuers/core | 0 / 0 | 2,045,440 | 182,784 | 128 / 8 | **chosen** |
-| by in block (`PUSH`), 2 issuers/core | 0 / 0 | 2,045,440 | 182,784 | 220 / 7 | tie on bytes; deferred |
-| union of both ends (`HYBRID`) | 0 / 0 | 2,045,440 | 182,784 | ≤ 220 / ≥ 5 (1024 runs over 220 RISCs; the actual max depends on the assignment rule) | tie on bytes; deferred |
-| through a third core / DRAM / interleaved (`STAGED`) | 1+1 extra (2 × 2,228,224 B) | ≥ 2× | — | — | rejected (forbidden) |
-| dependent-axis split + combine | n/a | n/a | n/a | n/a | no dependent axis |
-
-The three legal splits move identical bytes on every tier, so the ranking ties and the tiebreaker decides:
-`PULL` makes every out tile the responsibility of the core that owns it, so completion is one local read
-barrier per issuer (no cross-core completion, no write acks), and the per-core work is bounded by the out
-shard the caller sized. Occupancy is not used to break the tie.
+PULL, PUSH and BALANCED tie on bytes per tier; occupancy is not part of this ranking. Tiebreak to PULL: its completion is local (a read barrier on the core that owns the block, no remote acks), the out block is written only by the core that holds it (each tile written once falls out of the row partition of each block), and its issuer group is one rectangle (out's block holders).
 
 ### Block schedule
 
-Logical schedule of one issuer (`issuer_idx ∈ [0, num_issuers)`) on the core holding out block
-`(block_row, block_col)`. `num_blocks_this_core == 1`: the block is the whole out shard (caller-pinned).
+Logical schedule of each issuer kernel (one source, two instances per out-holding core: issuer 0 on RISCV_1/NoC0, issuer 1 on RISCV_0/NoC1):
 
 ```cpp
-for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {   // == 1
-    pull_band(block_idx, issuer_idx);   // issue every run of this issuer's row band of the out block
-    drain_band();                        // one read barrier: every run of the band has landed (BB-03)
+for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {  // == 1: the out shard
+    locate_pieces(block_idx);   // in0 blocks overlapping [issuer_row_begin, issuer_row_end) x [block_col_begin, block_col_end)
+    move_pieces(block_idx);     // per piece: resolve the source once, issue its maximal runs into the out shard
+    complete_block(block_idx);  // one read barrier on this issuer's NoC
 }
 ```
 
-| Block operation | Block shape it acts on | Resident across it | Intended frequency of fixed costs |
-|-----------------|------------------------|--------------------|-----------------------------------|
-| `pull_band` | rows `[band_row_begin, band_row_end)` × cols `[block_col_begin, block_col_end)` of the out block, where `band_row_begin = block_row_begin + issuer_idx · band_height_tiles`, `band_row_end = min(band_row_begin + band_height_tiles, block_row_end)`, `block_row_end = min((block_row+1) · out_shard_row_tiles, tensor_row_tiles)`, `block_col_end = min((block_col+1) · out_shard_col_tiles, tensor_col_tiles)` | in0 shards (model's, read-only, on their own cores); the out shard (written in place) | args + accessor: once per kernel. NoC source state (`noc_async_read_set_state`): once per (band × source shard) intersection — ≤ 4 per issuer in production. Read issue (`noc_async_read_with_state`): once per maximal run — ≤ 8 per issuer in production. No CB handshake, no semaphore, no multicast, no barrier inside. |
-| `drain_band` | the band | same | `noc_async_read_barrier`: exactly once per issuer. |
+| Operation | Block shape | Resident across it | Intended frequency of fixed costs |
+|-----------|-------------|--------------------|-----------------------------------|
+| `locate_pieces` | the issuer's sub-block: `issuer_rows × block_width_tiles` (P: 4 × 4) | in0's shards on their holders (model's tensor, read-only); out's shard on this core | once per block: load the issuer rectangle, construct in0's accessor, find the first overlapping in block row and column (one division per axis); the walk over in block rows and columns is additions only |
+| `move_pieces` | each piece: `piece_rows × piece_width` with `piece_rows ≤ in_block_height_tiles`, `piece_width ≤ in_block_width_tiles` (P: ≤ 4 × 3) | same | per piece: one source-address resolution (`get_noc_addr` of the piece's first tile); per maximal run: one NoC read; no barrier, no semaphore, no multicast inside the block |
+| `complete_block` | — | out's sub-block complete in L1 | one `noc_async_read_barrier` per block per issuer (BB-03: nothing left in flight at return) |
 
-`pull_band` contract (the run walk), all in tiles of the padded 2-D view:
+Piece walk, stated once so both issuers and every placement use the same rule:
 
-1. Source shards overlapping the band: `src_block_row ∈ [band_row_begin / in_shard_row_tiles, (band_row_end−1) / in_shard_row_tiles]`, `src_block_col ∈ [block_col_begin / in_shard_col_tiles, (block_col_end−1) / in_shard_col_tiles]`, walked row-major. All divisors are CT args (constant-divisor arithmetic).
-2. Per source shard: intersection rows `[h0, h1) = band ∩ [src_block_row · in_shard_row_tiles, …)`, cols `[w0, w1) = [block_col_begin, block_col_end) ∩ [src_block_col · in_shard_col_tiles, …) ∩ [0, tensor_col_tiles)`. `shard_id = src_block_row · in_block_cols + src_block_col`; its NoC address comes from the in0 `TensorAccessor` (`get_shard_noc_addr(shard_id, 0, noc)` with **this issuer's NoC id**) → `noc_async_read_set_state` once.
-3. Offsets: `src_off(h, w) = (h − src_block_row·in_shard_row_tiles) · in_shard_col_tiles + (w − src_block_col·in_shard_col_tiles)`; `dst_off(h, w) = (h − block_row·out_shard_row_tiles) · out_shard_col_tiles + (w − block_col·out_shard_col_tiles)`; byte address = base + off · `tile_stride_bytes`, where the source base is the low 32 bits of the shard NoC address and the destination base is out's buffer address.
-4. Runs: if `w1 − w0 == in_shard_col_tiles` **and** `w1 − w0 == out_shard_col_tiles` (full rows of both shards ⇒ contiguous in both), one run of `(h1 − h0) · (w1 − w0)` tiles from `src_off(h0, w0)` to `dst_off(h0, w0)`; otherwise one run of `w1 − w0` tiles per row `h ∈ [h0, h1)`.
-5. Run bytes = run tiles × `tile_stride_bytes`. Same-core intersections use the same call (NoC loopback); no special path.
+| Quantity | Value (tiles of the padded 2-D view) |
+|----------|---------------------------------------|
+| in block rows overlapping the sub-block | `issuer_row_begin / in_block_height_tiles` … `(issuer_row_end − 1) / in_block_height_tiles` |
+| in block columns overlapping the sub-block | `block_col_begin / in_block_width_tiles` … `(block_col_end − 1) / in_block_width_tiles` |
+| piece rows of in block row `ri` | `[max(issuer_row_begin, ri·ih), min(issuer_row_end, (ri+1)·ih))` |
+| piece columns of in block column `ci` | `[max(block_col_begin, ci·iw), min(block_col_end, (ci+1)·iw))` |
+| source of the piece's first tile | in0 accessor `get_noc_addr(page_id = piece_row0·tensor_width_tiles + piece_col0)` on this issuer's NoC; each next row adds `in_block_width_tiles·aligned_page_bytes` |
+| destination of the piece's first tile | `out_shard_base + ((piece_row0 − block_row_begin)·block_width_tiles + (piece_col0 − block_col_begin))·aligned_page_bytes`; each next row adds `block_width_tiles·aligned_page_bytes` |
+| runs of the piece | one run of `piece_rows·piece_width` tiles if `piece_width == in_block_width_tiles == block_width_tiles`, else `piece_rows` runs of `piece_width` tiles |
 
-Production per issuer: 4 tile rows, 2–4 source shards, 8 runs of 1–3 tiles; I0/I3/I5: 1 source shard, 1 run of 16 tiles; O1: ≤ 6 source shards, ≤ 12 runs.
+`ih`, `iw` above are `in_block_height_tiles`, `in_block_width_tiles`. `block_row_begin` / `block_col_begin` are the out block's origin; `block_col_end` and the issuer row range are already clipped to the tensor, so no piece reaches beyond the tensor or into the unused slots of a tail shard.
 
 ### Perf lamps
 
 | Lamp | Why the default may be wrong here | Nearby alternative to measure |
 |------|-----------------------------------|-------------------------------|
-| Split reader (`num_issuers = 2`, catalog `split_reader`) | Production is 16 short reads per out core, likely RISC-issue-bound — the situation the catalog's split pays in; but if the NoC, not issue, binds, the second kernel only adds launch/arg cost | `num_issuers = 1` (one kernel per core on NOC_0) vs 2, production case |
-| Band axis | Row bands split production evenly (4 + 4 rows, 8 + 8 runs), but a tail block of odd height or a shard with few rows and many columns balances poorly; row bands also cut I0/I3/I5's single 32-tile run in two | column bands, or round-robin assignment of runs to issuers in walk order |
-| NoC per issuer (catalog `noc_placement`) | Default issuer 0 → RISCV_1/NOC_0, issuer 1 → RISCV_0/NOC_1 spreads link load over both NoCs; NoC choice measured 2.5–4.8× on DRAM lines, untested for L1→L1 gathers | both issuers on NOC_0; swapped assignment |
-| Source-core stagger (catalog `bank_stagger` analog) | Every puller walks its source shards row-major from its block's top-left; each production in0 shard feeds up to 4 pullers that may hit it at the same moment | rotate each core's walk start (e.g. start at source shard `(block_row + block_col) mod n_intersections`) |
-| Stateful vs plain issue | `set_state` per source shard saves the coordinate write on later runs, but with 2 runs per source shard (production) the saving is small and the state call has its own cost | plain `noc_async_read` per run |
-
-Overlap lamp: not attached — there is no compute to overlap and every run of a band is in flight before its
-single barrier. Grid-synchronization lamp: not attached — no collective, barrier or semaphore spans cores.
-
----
+| Issuers per core (default 2: both DM RISC-Vs, one per NoC) | Each core moves only 32 tiles (P); the second instance's launch and RT-arg load may cost as much as halving the per-RISC issue (8 instead of 16 runs) and adding NoC1 ingress saves (catalog `split_reader`: pays only when one RISC is issue-bound) | `issuers_per_core = 1` (issuer 0 only, NoC0) on P and O1 |
+| Issuer row split shape (default: contiguous halves) | Halves put each issuer's reads on one source block row at a time; interleaving rows may balance the two NoCs' link load better | even/odd tile rows per issuer (runs stay per row; full-width merging is lost) on P |
+| Per-run command cost (default: plain `noc_async_read` per run) | P issues ≤ 4 rows per piece per issuer with the same size; programming the source and size once per piece may cut command-register writes | `noc_async_read_one_packet_set_state` + `_with_state` per piece (run ≤ 15 tiles: mechanism cap above) |
+| Start-piece order (default: every core starts at its top-left piece) | In P each in block feeds up to 4 out blocks; cores that start on the same source core at the same moment contend on its egress (catalog `bank_stagger`) | rotate each core's piece walk by its block index |
+| NoC assignment (default: issuer 0 NoC0, issuer 1 NoC1) | NoC0 and NoC1 route in opposite directions; for P sources lie up to 3 columns east/1–2 rows south of their targets (catalog `noc_placement`) | swap the NoCs of the two issuers |
+| Overlap lamp | does not apply: no compute phase and no CB; all reads of a block are in flight together | — |
+| Grid-synchronization lamp | does not apply: no collective, barrier or semaphore across cores; every core completes on its own reads | — |
 
 ## Dataflow Strategy
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| in0 shard on its core | stored tiles (Bfp8_b, 1088 B, row-major tile order inside the shard) | resident L1 (the model's tensor) | read in place by remote NoC reads; never copied to a CB; never written |
-| source L1 → target L1 | raw bytes of whole-tile runs | NoC read issued by the target core: `noc_async_read_set_state` per source shard + `noc_async_read_with_state` per run | issuer 0 on RISCV_1 / NOC_0, issuer 1 on RISCV_0 / NOC_1; same-core runs are loopback reads |
-| out shard on target core | stored tiles, byte-identical | written at the final slot by the read itself | no CB, no staging; tail slots untouched |
-| completion | — | `noc_async_read_barrier` once per issuer before return | nothing else in flight (no writes, no atomics) — BB-03 |
+| in0's shards on their holder cores (L1) | bfloat8_b tiles as stored, `aligned_page_bytes` slots, row-major inside the shard with the full shard row stride | resident before the program (the model's tensor) | never written; read only over the NoC (self-aimed for tiles already on their target core) |
+| source → destination | raw bytes, whole tiles | `noc_async_read` issued by the out holder, source address from in0's `TensorAccessor`, destination = out's shard by address | no CB, no compute kernel, no conversion; one NoC crossing per non-local tile |
+| out's shard on its holder core (L1) | bfloat8_b tiles as stored, slot `(i, j)` at `i·block_width_tiles + j` | written once per tile by the issuer whose row range holds it | complete when both issuers' read barriers return; consumed by the next program |
+| deferred PUSH contract | same bytes | in holder `noc_async_write` into the out holder's shard address + `noc_async_write_barrier`; no semaphore (no in-program consumer) | out side addressed by an out `TensorAccessor`; kept reachable by the symmetric piece walk |
 
-**Kernels.** One dataflow kernel source, instantiated twice per core (two `KernelDescriptor`s on the same
-core range): issuer 0 with `ReaderConfigDescriptor` (RISCV_1, NOC_0), issuer 1 with
-`WriterConfigDescriptor`-style placement (RISCV_0, NOC_1), differing only in the CT arg `issuer_idx`. No
-compute kernel. Kernel core range = the out-block cores: the rectangle from out's grid start, `out_block_cols`
-wide × `out_block_rows` tall for ROW_MAJOR (`out_block_rows` wide × `out_block_cols` tall for COL_MAJOR) —
-one rectangle (BB-17); grid cores beyond the block count run nothing.
+TARGET connection: TARGET is `{dtype: [bfloat8_b], layout: [TILE_LAYOUT]}` (`eval/golden_tests/g6_reshard/feature_spec.py`). Placements are case arguments, not a TARGET axis; PULL is the single scheme for every legal placement pair, so no placement value is a knob-turn or scheme-change unlock. Structural impossibilities beyond `INVALID = []`: none.
 
-**Placement axis vs TARGET.** TARGET has no `memory_layout` axis: both placements are arguments, and every
-legal block placement on either side is in Phase 0 (rule 2). There is no placement unlock to classify.
-
-**Deferred regimes' contracts.** `PUSH`: source core writes `noc_async_write(src_l1, get_noc_addr(target_x,
-target_y, out_addr + dst_off·stride), bytes)` — out's address is lockstep (same on every core), target core
-coordinates from a second accessor over `out`; one write barrier per issuer; no semaphore. `HYBRID`: both
-kernel sets as above, each run assigned by a host CT predicate.
+Catalog entries that set knobs: `double_buffer`, `trid_double_issue` (all runs in flight, one barrier); `read_coalescing`, `tile_reorder` (whole tiles, maximal contiguous runs, merged full-width rows); `tensix_all_reduce` (pull from an immutable resident shard needs no handshake; "prefer pull"); `split_reader`, `noc_placement`, `bank_stagger` (the lamps above).
 
 ## Work Distribution
 
 | Field | Value |
 |-------|-------|
-| Work unit | one out block = the whole out shard (`block_height_tiles × block_width_tiles`), cut into `num_issuers` row bands |
-| Grid | the out-block cores (one rectangle, see Dataflow Strategy); production 8×8 = 64 cores, O1 8×7 = 56 cores |
-| Per-core work | core of out block `(block_row, block_col)`: rows `[block_row·out_shard_row_tiles, min(…+out_shard_row_tiles, tensor_row_tiles))`, cols likewise; issuer `i` takes band `i` |
-| Remainder | `out_block_rows = ceil(tensor_row_tiles / out_shard_row_tiles)`, `out_block_cols = ceil(tensor_col_tiles / out_shard_col_tiles)`, `in_block_rows/cols` likewise; last block row/col clipped (`min`), tile counts from the padded shape (`ceil` per image) |
-| Assignment API | none: `memory_config` pins block → core (`split_work_to_cores` does not apply). Per-core RT args `(block_row, block_col)` are the inverse of the placement formula over the trimmed rectangle. |
-
-Single regime: no selection predicate.
+| Work unit | one out block: out's shard on its holder core, clipped at the tensor edge |
+| Grid | the block-holding cores of out's placement — one rectangle: ROW_MAJOR `(x0 … x0+num_block_cols−1, y0 … y0+num_block_rows−1)`, COL_MAJOR `(x0 … x0+num_block_rows−1, y0 … y0+num_block_cols−1)`. P: (0,0)-(7,7), 64 cores; O1: (1,0)-(8,6), 56 cores. Cores of `memory_config`'s grid that hold no block run no kernel |
+| Per-core work | 1 block; issuer 0 takes rows `[block_row_begin, block_row_begin + ⌈rows/2⌉)`, issuer 1 the rest; both take columns `[block_col_begin, block_col_end)`. P: 16 tiles, ≤ 8 runs per issuer; O1: ≤ 20 tiles, ≤ 12 runs |
+| Remainder | `tensor_height_tiles = d0·d1·⌈d2/32⌉` (each image tile-padded on its own), `tensor_width_tiles = ⌈d3/32⌉`; `num_block_rows = ⌈tensor_height_tiles / block_height_tiles⌉`, `num_block_cols = ⌈tensor_width_tiles / block_width_tiles⌉`; last block extents are the remainders. The same `ceil` rule gives in0's block grid. `split_work_to_cores` is not used: the placement fixes which core owns which block |
+| Regime selection | one built regime (PULL); no predicate, no regime-pinned tests needed |
 
 ## Circular Buffers
 
-| Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
-|---------------|-------|-----------|-----------|------------------|--------|----------|----------|----------|
-| — none — | — | — | 0 | Every run lands at its final address in out's shard (pattern 1, pack into the destination), and in0 is read in place on its own core. A CB backed on out's shard (`cb_descriptor_from_sharded_tensor`) is not needed: out's base address is a common RT arg (it is the same on every core), so nothing would use the CB's FIFO. | — | — | — | — |
+None. Reads land directly in out's shard (by its buffer address); the source is read where it lives. No reserve/push/wait/pop exists, so no CB sync or ownership question arises. The two issuers write disjoint row ranges of the same out shard.
 
-The op's only L1 is out's own shard; see `l1_ledger.md`.
+| Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
+|---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
+| — | — | — | — | no CB: pack-into-destination (`l1-footprint-discipline.md` Rule 3.1); see `l1_ledger.md` | — | — | — | — |
 
 ## Block Operation Realization
 
-| # | Block operation | Block shape | Helper? | Input (semantic name, pages, state) | Output (semantic name, pages) | State after |
-|---|-----------------|-------------|---------|-------------------------------------|-------------------------------|-------------|
-| 1 | `pull_band` | `band_height_tiles × block_width_tiles` (clipped) | TensorAccessor (source shard address) + raw NoC read API | `in0` shards on their cores (tensor buffer, not a CB; all pages resident, read-only) | `out` shard of this core (tensor buffer, not a CB; the band's tiles) | all runs of the band in flight |
-| 2 | `drain_band` | the band | raw NoC barrier | — | — | band landed; kernel returns with nothing outstanding |
+| # | Block operation | Block shape | Helper? | Input CB (semantic name, pages, state) | Output CB (semantic name, pages) | CB state after |
+|---|-----------------|-------------|---------|----------------------------------------|----------------------------------|----------------|
+| 1 | `locate_pieces` | issuer sub-block `issuer_rows × block_width_tiles` | no (integer walk over in0's block grid) | none | none | — |
+| 2 | `move_pieces` | each piece `piece_rows × piece_width`, as maximal runs | `TensorAccessor` for the source address; raw `noc_async_read` per run | none (source: in0's shard on its holder, by NoC address) | none (destination: out's shard, by local address) | — |
+| 3 | `complete_block` | — | raw `noc_async_read_barrier` | none | none | out's sub-block complete |
 
 ## API Mapping
 
-| Block operation | Type | Function | File:Line | Template Params / Args | Input | Output | Which params are block knobs |
-|-----------------|------|----------|-----------|------------------------|-------|--------|------------------------------|
-| `pull_band` (source address) | helper | `TensorAccessor::get_shard_noc_addr(shard_id, offset, noc)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:229-233` | `TensorAccessorArgs<…>` from `ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()` appended last in the CT list; base address = common RT arg; `noc` = this issuer's NoC id | in0 | — | none (placement read from in0's own distribution spec) |
-| `pull_band` (state) | raw_api | `noc_async_read_set_state(src_noc_addr, noc)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:644` | shard NoC address from the accessor | in0 shard | — | — |
-| `pull_band` (run) | raw_api | `noc_async_read_with_state(src_local_l1_addr, dst_local_l1_addr, size, noc)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:677-707` | `size = run_tiles · tile_stride_bytes` (any length) | in0 shard | out shard | run length follows `band_height_tiles` (full-width merge) and the shard geometry |
-| `pull_band` (alt., plain issue lamp) | raw_api | `noc_async_read(src_noc_addr, dst, size, noc)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:547-555` | — | in0 shard | out shard | — |
-| `drain_band` | raw_api | `noc_async_read_barrier(noc)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1921` | this issuer's NoC | — | — | — |
-| args | raw_api | `get_arg_val`, `get_common_arg_val` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:148`, `:168` | per-core `(block_row, block_col)`; common `(in0_addr, out_addr)` | — | — | — |
-| zones (BB-21) | raw_api | `DeviceZoneScopedN(name)` | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1012-1047` | `"G6R-PULL-ISSUE"` around `pull_band`, `"G6R-PULL-DRAIN"` around `drain_band` | — | — | — |
+| Block operation | Type | Function | File:Line | Template Params / Args | Input CB | Output CB | Which params are block knobs |
+|-----------------|------|----------|-----------|------------------------|----------|-----------|------------------------------|
+| `locate_pieces` | raw_api | `get_arg_val<uint32_t>` / `get_common_arg_val<uint32_t>` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:148`, `:168` | the issuer rectangle (per core); in0 / out buffer addresses (common) | — | — | the issuer rectangle carries `issuers_per_core`'s split |
+| `locate_pieces` | helper | `TensorAccessor` constructed from `TensorAccessorArgs` (sharded, all compile-time) | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:165` (`get_noc_addr`), host `ttnn.TensorAccessorArgs(input_tensor)` `ttnn/cpp/ttnn-nanobind/tensor_accessor_args.cpp:26-28`, `.get_compile_time_args()` `:35` | in0's address, `aligned_page_bytes` | — | — | none (in0's placement) |
+| `move_pieces` | helper | `TensorAccessor::get_noc_addr(page_id, offset, noc)` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:165` | `page_id` of the piece's first tile; `noc` = this issuer's NoC (default `noc_index`) | — | — | — |
+| `move_pieces` | raw_api | `noc_async_read(src_noc_addr, dst_l1_addr, bytes)` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:547` | `bytes = run_tiles·aligned_page_bytes` | — | — | run extent (derived) |
+| `complete_block` | raw_api | `noc_async_read_barrier()` | `tt_metal/hw/inc/api/dataflow/dataflow_api.h:1921` | this issuer's NoC | — | — | — |
+| profiling (BB-21) | raw_api | `DeviceZoneScopedN(name)` | `tt_metal/hw/inc/api/debug/kernel_profiler.hpp:1012` (compiles out in the plain build, `:1047`) | one zone around `locate_pieces` + `move_pieces` (issue), one around `complete_block` (wait) | — | — | — |
+| host: issuer placement | host | `ttnn.DataMovementConfigDescriptor(processor, noc)` or `ReaderConfigDescriptor` (RISCV_1/NoC0) and `WriterConfigDescriptor` (RISCV_0/NoC1) | `tt_metal/api/tt-metalium/program_descriptors.hpp:96-102`; defaults `tt_metal/impl/kernels/kernel_types.cpp:18-19`, `:36-37` | issuer 0: RISCV_1 + NOC_0; issuer 1: RISCV_0 + NOC_1 | — | — | `issuers_per_core` |
+| host: dispatch | host | `ttnn.generic_op([input_tensor, out], program_descriptor)`; `ProgramDescriptor.custom_program_hash` | `ttnn/cpp/ttnn/operations/generic/generic_op_nanobind.cpp:83`; `ttnn/cpp/ttnn-nanobind/program_descriptors.cpp:1141` | output last in the tensor list | — | — | — |
 
-**Helpers considered and rejected (for every `raw_api` row above).**
+Helpers considered and rejected (for every `raw_api` row above):
 
-| Candidate | File:Line of the mismatch | Why it cannot express the shape |
-|-----------|---------------------------|---------------------------------|
-| `dataflow_kernel_lib::set_read_state<transfer_size>` / `read_with_state` | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:57`, `:66-75` | self-aimed only (source = `my_x/my_y` via `local_addr`), and single-packet with the size a template parameter; runs here are remote and runtime-length (1 tile … a whole shard). |
-| `dataflow_kernel_lib::set_read_trid` / `async_read_barrier_with_trid` | `local_copy_helpers_dataflow.hpp:147`, `:158` | for retiring batches while later ones stay in flight; this op has one batch per issuer and no buffer to recycle. |
-| `McastArgs` / `ttnn.Mcast` | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp` | no tile has two destinations. |
-| `ccl_helpers_dataflow` | `ttnn/cpp/ttnn/kernel_lib/ccl/ccl_helpers_dataflow.hpp:8-20` | multi-device fabric egress; this op is one chip, L1→L1. |
-| `tilize` / `untilize` / `eltwise` copy | `tilize_helpers.hpp`, `untilize_helpers.hpp`, `eltwise_convenience.hpp` | they unpack and repack — forbidden by rule 1. |
-| `noc_async_read_shard(shard_id, accessor, dst)` | `tech_reports/tensor_accessor/tensor_accessor.md:139-142` | copies a whole source shard; an out block takes only the pieces of a source shard that overlap it. |
-
-No compute phase exists, so no compute helper applies and `compute_kernel_hw_startup()` is not called.
-
----
+| Candidate | File:Line | Why it cannot express the planned operation |
+|-----------|-----------|---------------------------------------------|
+| `dataflow_kernel_lib::local_addr` / `set_read_state` / `read_with_state` | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:57`, `:75`, `:95` | self-aimed only (source at `my_x/my_y` of the issuing core) and single-packet only (`:66-68`); PULL reads from a remote core for every non-local tile (P: 1880 of 2048) and I0/I3/I5 runs exceed one packet |
+| `dataflow_kernel_lib::set_read_trid` / `async_read_barrier_with_trid` | `ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp:147`, `:158` | scoped waits for a pipelined multi-batch loop; the block issues one batch and waits once |
+| `McastArgs` / `ttnn.Mcast` | `ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp:18` | one source to many receivers; every tile of a reshard has exactly one destination |
+| `noc_async_read_shard` (whole-shard read through the accessor) | `tech_reports/tensor_accessor/tensor_accessor.md:141` | reads a whole in0 shard into a contiguous buffer; a piece is a sub-rectangle of a shard landing at the out shard's stride |
+| `TensorAccessor::num_contiguous_pages` | `tt_metal/hw/inc/api/tensor/tensor_accessor.h:192` | stops at one shard row and knows nothing of the destination stride; run length is already known from the piece geometry without its divisions |
+| compute helpers (`eltwise` `copy`, tilize/untilize) | `ttnn/cpp/ttnn/kernel_lib/eltwise/`, `tilize_helpers.hpp`, `untilize_helpers.hpp` | unpack → pack is forbidden by rule 1 and would regroup bfloat8_b |
 
 ## Host Contract
 
-### Registry (op file)
+### Registry model (op file)
 
-| Item | Value |
-|------|-------|
-| `INPUT_TAGGERS` | `{}` — the spec names no shape-derived axis; placements are arguments, never axes (axes.py imports this dict) |
-| `SUPPORTED` | `{"dtype": [ttnn.bfloat8_b], "layout": [ttnn.TILE_LAYOUT]}` (implementer writes it; TARGET = Phase 0) |
+| Declaration | Value |
+|-------------|-------|
+| `INPUT_TAGGERS` | `{}` — no shape-derived axis; placements are arguments |
+| `SUPPORTED` | `{"dtype": [ttnn.bfloat8_b], "layout": [ttnn.TILE_LAYOUT]}` |
 | `EXCLUSIONS` | `[]` |
-| `validate(input_tensor, memory_config)` | builds axes `{dtype, layout}` from `input_tensor`; raises `UnsupportedAxisValue` / `ExcludedCell` only; first line of `g6_reshard` |
+| `validate(input_tensor, memory_config)` | builds `{dtype, layout}` from `input_tensor`; raises `UnsupportedAxisValue` / `ExcludedCell` (`ttnn.operations._op_contract`); the first line of `g6_reshard` |
 
-### Validation (after `validate()`; raises `ValueError` / `RuntimeError`, never `NotImplementedError`)
+### Input validation (after `validate()`, before any device work)
 
-| Check | Error |
-|-------|-------|
-| `input_tensor` not on device, not BLOCK_SHARDED, not L1, or without a shard spec | ValueError |
-| `memory_config` not BLOCK_SHARDED, not L1, or `shard_spec is None` | ValueError |
-| `memory_config` shard dims not multiples of 32 | ValueError |
-| `memory_config` grid not exactly one rectangle; fewer cores along a direction than its block count needs (`out_block_cols` along x for ROW_MAJOR, `out_block_rows` along x for COL_MAJOR, and the other on y) | ValueError |
-| `memory_config` grid outside `device.compute_with_storage_grid_size()` | ValueError |
-| rank ≠ 4, or the 2-D view's H or W not a multiple of 32 | ValueError |
-| out shard bytes `out_shard_row_tiles · out_shard_col_tiles · tile_stride_bytes > 1347776` (BB-05: the L1 the model leaves free; out's shard is the op's only L1) | RuntimeError |
+| Condition | Error |
+|-----------|-------|
+| `input_tensor` not on device, not BLOCK_SHARDED, not L1, or without a shard spec | `ValueError` |
+| `memory_config` not BLOCK_SHARDED, not L1, or without a shard spec | `ValueError` |
+| `memory_config` shard dims not multiples of 32 | `ValueError` |
+| `memory_config` grid not one rectangle, or fewer grid columns/rows than `num_block_cols`/`num_block_rows` (ROW_MAJOR) — rows/cols swapped for COL_MAJOR | `ValueError` |
+| `memory_config` grid outside `device.compute_with_storage_grid_size()` | `ValueError` |
+| rank ≠ 4, or logical H or W not a multiple of 32 | `ValueError` |
+| out shard bytes > 1347776 (BB-05) | `RuntimeError` |
 
-A legal placement is never refused (rule 2): no orientation, origin, tail or shard-shape check beyond the list.
-Every message starts with `g6_reshard:` — the acceptance test matches that text through the repo's
-`expect_error` fixture. All checks run in the op's host code before any allocation or dispatch.
+No other refusal: every other legal placement on either side is served (rule 2).
 
-### Dispatch, cache, plan (BB-01, BB-07, BB-08, BB-21)
+### Program build and cache (BB-01, BB-07, BB-08, BB-17, BB-21)
 
 | Item | Decision |
 |------|----------|
-| Program count | exactly one `ttnn.generic_op([input_tensor, out], descriptor)` per call; `out = ttnn.allocate_tensor_on_device(shape, dtype, layout, device, memory_config)` (positional) — always a new tensor, even when the placements are equal (I0) |
-| Cache key | `(device id, padded shape, dtype, layout, tile_stride_bytes, in grid start/end, in shard shape, in orientation, out grid start/end, out shard shape, out orientation, num_issuers)` |
-| Repeat call (BB-07) | module-level dict `key → ProgramDescriptor`; on a hit the host only rewrites the two common-RT address words (`in0_addr`, `out_addr`) of each kernel and dispatches — no descriptor rebuild. generic_op hashes CT args and core ranges (`generic_op_device_operation.cpp:78-147`), so every placement value lives in CT args and two different placements never share a compiled program; on a hit generic_op re-applies RT values from the passed descriptor (`mesh_device_operation_adapter.hpp:345-348`). |
-| Plan report (BB-08) | `g6_reshard_plan(input_tensor, memory_config) -> dict`: `{"regime": "PULL", "num_issuers": …, "cores": {(x, y): role}}`; production always gets `PULL` |
-| Roles (BB-21) | role per core: `"pull:issuer0/NOC_0+issuer1/NOC_1"` for out-block cores, `"idle"` otherwise; dumped by the same function. Zones as in API Mapping; they compile out of the plain build. |
-| Integrity | no `ttnn.reshard`, `to_memory_config`, `interleaved_to_sharded`, `sharded_to_interleaved`, typecast or `to_torch` on the path; no reads of tensor values on host. |
+| Programs per call | one `ttnn.generic_op` dispatch; out allocated by `ttnn.allocate_tensor_on_device(shape, dtype, layout, device, memory_config)` (positional) before it; nothing else touches the device |
+| Kernels | one dataflow source, two `KernelDescriptor`s on the same core range (out's block-holder rectangle): issuer 0 and issuer 1; no compute kernel, no CBs, no semaphores |
+| Per-call values | in0 and out buffer addresses (identical on every core: both are lockstep-allocated sharded L1 buffers), passed as common RT args |
+| Placement values | in0's placement → accessor CT args; `in_block_*_tiles`, `block_width_tiles`, `tensor_width_tiles`, `aligned_page_bytes` → CT args; each issuer's rectangle → per-core RT args |
+| Host plan cache | key = `(padded shape, dtype, layout, in0 placement (grid start/end, shard shape, orientation), out placement (same), device id)`; value = the built `ProgramDescriptor`. A hit rewrites only the two address common RT args and dispatches; the descriptor is never rebuilt (BB-07). The same key, hashed, is set as `custom_program_hash`, so generic_op's program cache key holds both placements (I0 and I3 differ only in orientation, P and O1 only in out's placement) |
+| Plan report (BB-08) | one plan; the op exposes the plan of the last call (regime `PULL`, issuer rectangles) |
+| Role dump (BB-21) | host function returning, per core of the kernel range, its out block `(r, c)`, each issuer's row range and piece count |
+| Core ranges (BB-17) | one rectangle per kernel (both kernels share it) |
 
 ## Key Risks and Gotchas
 
 | Risk | Why it bites here | Mitigation in this design |
 |------|-------------------|---------------------------|
-| NoC coordinate space | issuer 1 runs on NOC_1; a shard address computed for NOC_0 reads a different core | `get_shard_noc_addr(shard_id, 0, noc)` and every read/barrier take the issuer's own NoC id (a CT arg), never the default |
-| Stale NoC state | `noc_async_read_with_state` reuses the coordinates of the last `set_state` | call `set_state` at the start of every source-shard intersection; keep `skip_cmdbuf_chk` at its default `false` |
-| Tail shards (production in0 has both a 1-tile-high last block row and a 2-tile-wide last block column; O1's out has a 2-tile-wide last block column) | the allocated shard width, not the actual one, is the row stride; full-width merging must not fire on a tail | offsets use `in_shard_col_tiles` / `out_shard_col_tiles` strides; merge condition compares the intersection width with both **allocated** widths, which a tail intersection never equals |
-| Orientation / origin (I3, I5, O1) | block→core is the placement formula; a ROW_MAJOR assumption sends blocks off the diagonal to the wrong cores | in0's core comes from its own `TensorAccessor` (its distribution spec); out's per-core `(block_row, block_col)` come from the inverse of `memory_config`'s formula with its orientation |
-| Cache replay (I0 vs I3 differ only in input orientation; P vs O1 only in out placement) | a key missing any placement field replays a wrong program | key covers both placements; geometry in CT args so generic_op's hash differs too |
-| Address patching | `out` is new every call and `in0` may be another tensor at the same placement | both address words rewritten on every call, hit or miss |
-| Aliasing (I0) | same placement on both sides tempts returning `input_tensor` | always allocate `out`; the walk then copies every tile by loopback |
-| Padded geometry | a shape like `(1, 2, 16, 64)` passes the 2-D check yet is tile-padded per image | tile counts from `padded_shape`, never from the logical shape |
-| Empty band | an out block shorter than `num_issuers` tile rows | empty band issues nothing and still returns cleanly |
-| Accessor shard indexing | the walk's `shard_id = src_block_row · in_block_cols + src_block_col` assumes in0's distribution spec is the 2-D view's block grid; for `d_0 = d_1 = 1` (production) any rank-4 form coincides with it, but a rank-4 spec over `d_0·d_1 > 1` images could index shards per image | host asserts, at cache-miss time, that in0's shard count equals `in_block_rows · in_block_cols`; kernel `ASSERT(shard_id < num_shards)` under `--dev` |
-
-## Catalog entries consulted
-
-| Entry | Informed |
-|-------|----------|
-| `read_coalescing` | transfer unit = maximal contiguous run (one call per full-width intersection) |
-| `split_reader` | `num_issuers = 2` default + its lamp (pays only when issue-bound) |
-| `noc_placement` | issuer→NoC assignment default + lamp |
-| `bank_stagger` | source-core stagger lamp |
-| `trid_double_issue`, `double_buffer` | not used: no buffer to recycle; one barrier per issuer already keeps the band in flight |
-
-## Structural impossibilities
-
-None beyond `feature_spec.INVALID = []`.
-
-## Acceptance test
-
-`tests/ttnn/unit_tests/operations/g6_reshard/test_g6_reshard.py`: the production shape alone (BB-22) on the
-five placement pairs the rules require (P, I0, I3, I5, O1), graded by bit equality (`helpers.TOLERANCES`
-is `("exact", None)`), plus out's placement, no aliasing, input unchanged, all placements in one process,
-repeat determinism, and the spec's validation errors. The ≥4-shape sweep of the generic template is replaced
-by the placement sweep: the spec restricts the suite to the production shape.
+| Tail shards read at the wrong stride (R1) | P's input has a 1-tile-high last block row and a 2-wide last block column inside 7 × 3 shards; O1's output a 2-wide last column in 8 × 5 shards | slot stride is always the **shard** width (`in_block_width_tiles`, `block_width_tiles`); runs merge only when the piece width equals both shard widths; the source address of each piece comes from in0's accessor. P and O1 are the cases that catch it |
+| Orientation or grid origin wrong (R1) | I3 (COL_MAJOR input), O1 (COL_MAJOR output at (1,0)), I5 (input at (2,1)) | input side: the accessor carries in0's own core order (no hand-built table); output side: the host maps out block `(r, c)` to its core by `memory_config`'s orientation and origin, and the kernel range is exactly the block-holder rectangle |
+| `TensorAccessorArgs` page model differs from the 2-D view | page ids must be `tile_row·tensor_width_tiles + tile_col` of the padded 2-D view | first device probe: run P and compare exactly (the golden P cell); if the accessor's page model disagrees, the source base per piece is computed from a host-built in-block → NoC-coordinate table in common RT args (≤ in0's block count words) instead of the accessor |
+| NoC coordinate space of issuer 1 | NoC0 and NoC1 address cores differently (`local_copy_helpers_dataflow.hpp` warning on `my_x/my_y`) | every accessor call passes the issuer's own NoC (`noc_index` default); no coordinate is hard-coded to NoC0 |
+| Cache replays a stale program or address (R6) | out is a fresh allocation every call (the repeat loose case keeps three alive); I0 vs I3 and P vs O1 share shape and dtype | the plan-cache key and `custom_program_hash` hold both placements; addresses are rewritten on every call. Verify on the first build that generic_op's cache hit re-applies common RT args (the `placements_one_process` and `repeat_determinism` loose cases fail otherwise); if the Python binding returns copies of `common_runtime_args`, assign the patched list back through the descriptor |
+| Transactions in flight at return (BB-03) | another program starts right after | each issuer ends with `noc_async_read_barrier` on its own NoC; PULL issues no writes, atomics or semaphore increments |
+| One-packet API on long runs | I0/I3/I5 runs are 16 tiles = 17408 B | plain `noc_async_read`; the one-packet lamp carries the 15-tile clamp |
+| Aliasing (R8) | I0 has identical placements on both sides | out is always a new allocation; in-place tiles are copied by a self-aimed read into out's own buffer; in0 is never written |
+| A conversion sneaks in (R2) | an implementer reaching for a compute copy | no compute kernel exists in the program; the move is bytes over the NoC |

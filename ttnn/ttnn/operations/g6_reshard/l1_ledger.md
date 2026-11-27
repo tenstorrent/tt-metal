@@ -1,59 +1,44 @@
 # L1 Ledger: g6_reshard
 
-Schema: `.claude/references/l1-footprint-discipline.md`. Blocking: `op_design.md` → Blocking Model
-(axes `tile_row`, `tile_col`; regime `PULL`).
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model.
 
-## Inventory
+The op allocates **no circular buffer and no scratch**. Every NoC read lands directly in out's shard (Rule 3.1, pack into the destination), and every source tile is read where it lives. The one L1 allocation charged to the op is out's own shard: the lead counts it against the free L1 (`docs/explorations/g6_reshard/sources/local/contract_r3.md:68`, D11). in0's shard belongs to the model and is outside the budget.
 
-The op allocates **no circular buffer and no scratch**. Each run is a NoC read that lands at its final
-address in out's shard (Rule 3, pattern 1: pack into the destination), and in0 is read in place on the core
-that holds it. The rows below are the two tensor buffers the kernels touch, so the footprint has a written
-justification. Only `out_shard` is the op's.
+Block axes (from the Blocking Model): `tile_rows` (extent `block_height_tiles`, split over `issuers_per_core` by rows) and `tile_cols` (extent `block_width_tiles`).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `out_shard` (tensor buffer, not a CB; allocated by the op) | `out_shard_row_tiles · out_shard_col_tiles` (the allocated shard, tail slots included) | `block_height_tiles · block_width_tiles` (= capacity except on a tail block row/col, where the placement leaves unused slots) | `{tile_row: spans → block_height_tiles (issuer bands are disjoint row slices of it), tile_col: spans → block_width_tiles}` | Bfp8_b (in0's dtype, 1088 B/tile; dataflow-only payload that never passes DEST, so no DEST-width rule applies) | the `num_issuers` pull kernels of this core, each writing its own disjoint row band (no FIFO, no handshake) | the next program (no consumer inside this op) | whole program; outlives it as the returned tensor | Nothing. It *is* the output, so it cannot alias `in0` (rule 1: a new tensor, in0 unchanged — I0 has equal placements and still needs it), and no other buffer exists to share with. The gap between capacity and live set is the shard padding the caller's placement fixes, not this op's choice. |
-| `in0_shard` (the model's tensor; read-only; **not counted**) | `in_shard_row_tiles · in_shard_col_tiles` | — (not the op's allocation; read in place by remote pullers) | `{tile_row: streams → the pullers read row runs of it, tile_col: streams → runs ≤ in_shard_col_tiles}` | Bfp8_b | the program before this one | the pull kernels of every out-block core whose block overlaps it (remote NoC reads; ≤ 4 cores in production) | before and after the program | Not the op's buffer, so there is nothing to share; per the contract it lies outside the 1347776 B. |
-
-No dataflow, compute or scratch CB rows: every candidate was eliminated before any budget was considered.
-
-| Candidate buffer | Eliminated by |
-|------------------|---------------|
-| staging CB on the target (read into a CB, then copy to out) | pattern 1: the read lands in out's slot directly |
-| staging CB on the source (copy shard into a CB, then send) | the source shard is already resident and addressable over the NoC |
-| CB backed on out's shard (`cb_descriptor_from_sharded_tensor`) | the base address is a common RT arg; nothing would use its FIFO |
-| per-run descriptor buffer (host-built run list in L1) | the run walk is derived on device from CT geometry |
+| out shard: out's tensor buffer, not a CB, reached by address | `block_height_tiles · block_width_tiles` slots of `aligned_page_bytes` each, set by `memory_config`'s shard spec (P: 8·4 = 32; O1: 8·5 = 40) | all slots: each holds one result tile from its write until the next program consumes it | `{tile_rows: spans → block_height_tiles, tile_cols: spans → block_width_tiles}` | Bfp8_b as stored, 1088 B. No DEST anywhere on the path, so the DEST-width audit does not apply | issuer 0 (rows `[block_row_begin, block_row_begin + ⌈rows/2⌉)`) and issuer 1 (the remaining rows): disjoint rows, NoC reads, no CB handshake | none inside the program (the next program reads out) | from allocation (host, before dispatch) through the end of the program and beyond: it is the result | none. It is the output itself. It cannot share with in0's shard because out must be a new tensor (rule 1, R8), and nothing else exists to share with |
+| (no other buffer) | 0 | 0 | `{tile_rows: streams → 0, tile_cols: streams → 0}`: no staging, because sources are read in place | — | — | — | — | Every phase boundary is pack-into-destination. No intermediate exists to alias or fold |
 
 ## Symbol table
 
-| Symbol | Meaning | Bound | Predicate establishing the bound |
-|--------|---------|-------|----------------------------------|
-| `out_shard_row_tiles`, `out_shard_col_tiles` | out shard shape in tiles (block extents, caller-pinned) | `out_shard_row_tiles · out_shard_col_tiles · tile_stride_bytes ≤ 1347776` | host check before allocation, RuntimeError otherwise (BB-05). Production 8·4·1088 = 34816 B; O1 8·5·1088 = 43520 B |
-| `block_height_tiles`, `block_width_tiles` | actual tiles of this core's out block | `≤ out_shard_row_tiles`, `≤ out_shard_col_tiles` | `min` clip against `tensor_row_tiles` / `tensor_col_tiles` |
-| `band_height_tiles` | rows per issuer | `ceil(block_height_tiles / num_issuers)` | derived |
-| `num_issuers` | pull kernels per core | `1 ≤ num_issuers ≤ 2` (data-movement RISCs) | host constant; contributes no L1 |
-| `tile_stride_bytes` | aligned page size | 1088 (bfloat8_b) | `input_tensor.buffer_aligned_page_size()`, equal to out's, multiple of the L1 alignment (host assert) |
-| `in_shard_row_tiles`, `in_shard_col_tiles` | in0 shard shape in tiles | any multiple-of-32 shard | the model's allocation; not in the op's footprint |
+| Symbol | Meaning | Bound | Predicate establishing it |
+|--------|---------|-------|---------------------------|
+| `block_height_tiles` | out shard height / 32 | `≥ 1`, `≤ tensor_height_tiles` rounded up to the shard | `memory_config` validation: shard dims multiples of 32; BB-05 refusal below |
+| `block_width_tiles` | out shard width / 32 | `≥ 1`, `≤ tensor_width_tiles` rounded up to the shard | same |
+| `aligned_page_bytes` | tile slot stride, `buffer_aligned_page_size()` | 1088 for bfloat8_b (Phase 0 SUPPORTED dtype) | `validate()`: dtype ∈ SUPPORTED; host asserts in0 and out report the same value |
+| `L1_FREE_BYTES` | L1 per core the model leaves to the op | 1347776 | lead's environment parameter (`contract_r3.md`, section 5) |
+| out shard bytes | `block_height_tiles · block_width_tiles · aligned_page_bytes` | `≤ L1_FREE_BYTES` | host refuses with `RuntimeError` above it (BB-05). Golden INPUTS max: 43520 B (O1) |
 
 ## Total per-core footprint
 
-`L1_op(core) = out_shard_row_tiles · out_shard_col_tiles · tile_stride_bytes` on each out-block core, 0 on
-every other core. It scales with the caller's out shard only. No term scales with `num_issuers`, the
-transaction depth or the input placement. Production: 34816 B against the 1347776 B budget (2.6 %).
+`out_shard_bytes = block_height_tiles · block_width_tiles · aligned_page_bytes` (+ 0 scratch, + 0 CB)
+
+- P / I0 / I3 / I5: 8 · 4 · 1088 = **34816 B** on each of 64 cores
+- O1: 8 · 5 · 1088 = **43520 B** on each of 56 cores
+- Scales with: the out shard shape only, which `memory_config` sets and the op does not tune. `issuers_per_core` and every lamp in the Blocking Model add **0 B** of L1.
+- Outside the L1 data budget: each issuer's RT args (O(1) per core) and in0's accessor CT args (≤ in0's core count) live in the kernel-config region (BB-04).
 
 ## Data-movement budget
 
+Split: PULL (the out block holder issues reads).
+
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `in0` | 0 | resident in L1 before the program; read in place by the pullers, every tile exactly once | production: 1880 tiles = 2,045,440 B core-to-core in 1024 runs over 256 core pairs; 168 tiles = 182,784 B by NoC loopback (source core = target core) |
-| `out` | 0 | allocated in L1 in its final placement; every tile written once, by the read that moves it | none beyond the reads above (the read *is* the write) |
+| in0 | 0 | resident in L1 before the program; each tile is read once, where it lives | each tile whose source core differs from its target core crosses the NoC once: P 1880 tiles = 2045440 B (168 tiles = 182784 B copied on their own core by a self-aimed read); I0 0 B (2048 local); I3 1949696 B (256 local); I5 2228224 B (0 local); O1 2181440 B (43 local) |
+| out | 0 | written in place, once per tile, by the core that holds it | none beyond in0's line (the same bytes, counted once) |
 
-Per tier, production: DRAM 0 B; core-to-core NoC 2,045,440 B; core-local loopback 182,784 B; total L1
-written 2,228,224 B (= one copy of the tensor). Other suite pairs: I0 0 B cross / 2,228,224 B loopback; I3
-1,949,696 B cross; I5 2,228,224 B cross; O1 2,181,440 B cross.
+Totals per tier for the production pair P: **DRAM 0 B; cross-core NoC 2045440 B (1024 runs, 256 core pairs); core-local 182784 B.** No handshake traffic: no semaphore, no write ack, no multicast.
 
-> Cheapest-traffic split considered: by out block (`PULL`), by in block (`PUSH`) and the union of both
-> ends (`HYBRID`) — all three move the minimum, delta 0 B on every tier. Implemented: `PULL`, which is
-> therefore the cheapest-traffic split. `PUSH` and `HYBRID` are `deferred` rows in the regime table
-> because `PULL` already serves every placement pair they would serve with identical bytes; they differ
-> only in which end issues (production critical core 16 runs pull vs 14 push).
+> Cheapest-traffic split considered: PULL, PUSH and BALANCED tie (each non-local tile crosses the NoC once, DRAM 0 B; PUSH and BALANCED add write acks). Implemented: PULL, which is a cheapest-traffic split. PUSH and BALANCED are `deferred` rows of the regime table because PULL already covers every placement pair they would serve. Their delta is 0 B on every tier, and they change only which end issues each transfer.
