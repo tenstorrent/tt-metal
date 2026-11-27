@@ -349,7 +349,7 @@ def _build(input_tensor, output_tensor, memory_config):
     noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if off_default else ttnn.NOC_MODE.DM_DEDICATED_NOC
 
     kernels = []
-    for issuer in range(ISSUERS_PER_CORE):
+    for issuer in range(plan["issuers_per_core"]):
         processor, default_noc = ISSUER_SLOTS[issuer]
         runtime_args = ttnn.RuntimeArgs()
         for role in plan["roles"]:

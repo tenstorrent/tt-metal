@@ -1,0 +1,19 @@
+{
+  "eval/golden_tests/g6_reshard/test_golden.py::test_op_loose[P-1x1x2048x1024-dtype=BFLOAT8_B-layout=TILE]": {
+    "gate": "exact",
+    "math_fidelity": null
+  },
+  "eval/golden_tests/g6_reshard/test_golden.py::test_op_loose[I0-placements_one_process-1x1x2048x1024-dtype=BFLOAT8_B-layout=TILE]": {
+    "gate": "exact",
+    "then": "['I3', 'P', 'O1', 'P', 'I5']"
+  },
+  "eval/golden_tests/g6_reshard/test_golden.py::test_op_loose[P-repeat_determinism-1x1x2048x1024-dtype=BFLOAT8_B-layout=TILE]": {
+    "gate": "exact",
+    "repeat": 3
+  },
+  "eval/golden_tests/g6_reshard/test_golden.py::test_op_loose[I0-input_unchanged-1x1x2048x1024-dtype=BFLOAT8_B-layout=TILE]": {
+    "gate": "exact",
+    "then": "['P']",
+    "check_input_unchanged": true
+  }
+}

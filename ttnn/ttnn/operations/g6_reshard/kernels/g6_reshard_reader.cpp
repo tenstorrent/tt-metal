@@ -28,22 +28,25 @@ void kernel_main() {
     // Rows are contiguous on both sides only when a piece spans both shard widths.
     constexpr bool shard_widths_match = in_block_width_tiles == block_width_tiles;
 
-    const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
-
-    // This issuer's rectangle of the padded 2-D view, already clipped to the tensor.
-    const uint32_t row_begin = get_arg_val<uint32_t>(0);
-    const uint32_t row_end = get_arg_val<uint32_t>(1);
-    const uint32_t block_row_begin = get_arg_val<uint32_t>(2);
-    const uint32_t col_begin = get_arg_val<uint32_t>(3);
-    const uint32_t col_end = get_arg_val<uint32_t>(4);
     // Chosen on the host from where the placement pair's sources lie (NoC0 carries
     // data east/south, NoC1 west/north); may differ from the configured NoC, in
     // which case the host builds the kernel in dynamic NoC mode.
-    const uint8_t noc = static_cast<uint8_t>(get_arg_val<uint32_t>(5));
+    uint8_t noc;
 
     {
+        // Argument loads and accessor setup are per-block fixed cost: kept inside the zone (BB-21).
         DeviceZoneScopedN("RESHARD-ISSUE");
+        const uint32_t in_addr = get_common_arg_val<uint32_t>(0);
+        const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
+
+        // This issuer's rectangle of the padded 2-D view, already clipped to the tensor.
+        const uint32_t row_begin = get_arg_val<uint32_t>(0);
+        const uint32_t row_end = get_arg_val<uint32_t>(1);
+        const uint32_t block_row_begin = get_arg_val<uint32_t>(2);
+        const uint32_t col_begin = get_arg_val<uint32_t>(3);
+        const uint32_t col_end = get_arg_val<uint32_t>(4);
+        noc = static_cast<uint8_t>(get_arg_val<uint32_t>(5));
+
         if (row_begin < row_end) {
             const auto in_accessor = TensorAccessor(in_args, in_addr, aligned_page_bytes);
 
