@@ -81,6 +81,10 @@ class TtPrefillTransformer(LightweightModule):
         layers:         list[dict] — per-layer state dicts for TtPrefillBlock
     """
 
+    # forward_packed's traced form takes active_chunks (the empty tail skips its attention half), so a traced packed
+    # runtime captures one forward per real-chunk count (TtPrefillRuntime._capture_trace_packed).
+    packed_trace_skips_empty_positions = True
+
     @staticmethod
     def check_cache_complete(
         cache_path: Path | None,
@@ -395,6 +399,7 @@ class TtPrefillTransformer(LightweightModule):
         mtp_layer = getattr(getattr(mtp_predictor, "module", None), "layer", None)
         self.moe_is_block = any(getattr(layer, "moe_block", False) for layer in [*self.layers, mtp_layer])
         self._trace_controller = None
+        self._zero_indices = {}  # _pack_chunk_indices: persistent zero top-k blocks for traced empty positions
         if mtp_predictor is not None:
             assert is_last_rank and not kv_only_last_layer, (
                 "MTP is seeded by h^0 = model.norm(trunk output) and needs the LM head for the last "
@@ -505,17 +510,26 @@ class TtPrefillTransformer(LightweightModule):
         _, _, rows, k = self.layers[0].mla.indexer_indices_shape()
         return (1, 1, rows * self.forward_chunks, k)
 
-    def _pack_chunk_indices(self, per_chunk: list) -> ttnn.Tensor:
-        """Stack per-chunk top-k indices chunk-major along rows (indexer_indices_shape()). An empty chunk of an
-        eager packed forward has none; its rows are zeros, which the next rank never reads (it skips that
-        chunk's attention, or runs it in the scratch slot when traced)."""
+    def _pack_chunk_indices(self, per_chunk: list, traced: bool = False) -> ttnn.Tensor:
+        """Stack per-chunk top-k indices chunk-major along rows (indexer_indices_shape()). An empty chunk has
+        none; its rows are zeros, which the next rank never reads (it skips that chunk's attention, or runs it
+        in the scratch slot in a traced forward with every position running)."""
         real = next(t for t in per_chunk if t is not None)
-        parts = [t if t is not None else ttnn.zeros_like(real) for t in per_chunk]
-        packed = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
-        for t, part in zip(per_chunk, parts):
-            if t is None:
-                ttnn.deallocate(part)
-        return packed
+        if not traced or all(t is not None for t in per_chunk):
+            parts = [t if t is not None else ttnn.zeros_like(real) for t in per_chunk]
+            packed = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+            for t, part in zip(per_chunk, parts):
+                if t is None:
+                    ttnn.deallocate(part)
+            return packed
+        # Traced form with empty positions: zeros_like writes from the host, which a capture refuses, so empties take
+        # one persistent read-only zero block, built by the warm pass of the same forward.
+        key = (tuple(real.shape), real.dtype, real.layout)
+        zero = self._zero_indices.get(key)
+        if zero is None:
+            zero = self._zero_indices[key] = ttnn.zeros_like(real)
+        parts = [t if t is not None else zero for t in per_chunk]
+        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
 
     @staticmethod
     def _split_chunk_indices(packed: ttnn.Tensor, n: int) -> list:
@@ -829,6 +843,7 @@ class TtPrefillTransformer(LightweightModule):
         mtp_unions: Optional[list] = None,
         provided_levels: Optional[list] = None,
         mtp_geometries: Optional[list] = None,
+        active_chunks: Optional[int] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
         attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
@@ -850,6 +865,10 @@ class TtPrefillTransformer(LightweightModule):
         MTP (last rank): ``mtp_unions`` holds one MTPUnionEmbedding per chunk position. Eager, ``provided_levels`` is
         one count per chunk (run_mtp_packed); traced, ``mtp_geometries`` one MTPTraceGeometry per chunk position
         (run_mtp_packed_traced).
+
+        ``active_chunks`` (traced form): only the first ``active_chunks`` positions run their trunk attention half;
+        the empty tail passes through (TtPrefillBlock.forward_packed). The MTP layer still runs every position
+        (empty ones in the scratch slot).
         """
         assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
         n = len(metadata) if metadata is not None else len(chunks)
@@ -916,6 +935,7 @@ class TtPrefillTransformer(LightweightModule):
                 metadata=metadata,
                 padding_config=padding_config,
                 zero_pad=zero_pad,
+                active_chunks=active_chunks,
             )
             if reuse:
                 h, _, new_indices = ret
@@ -934,7 +954,7 @@ class TtPrefillTransformer(LightweightModule):
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
         if self.forwards_indexer_indices:
-            self.last_indexer_indices = self._pack_chunk_indices(indexer_indices)
+            self.last_indexer_indices = self._pack_chunk_indices(indexer_indices, traced=metadata is not None)
         indexer_indices = None
 
         if mtp_unions is not None:

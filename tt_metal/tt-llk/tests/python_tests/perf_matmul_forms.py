@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from perf_matmul import matmul_combos
+from perf_matmul import matmul_block_combos
 
 pytestmark = pytest.mark.llk_sweep
 
@@ -47,7 +47,7 @@ FORMS = [(kind, hoist) for kind in (0, 1, 2) for hoist in (False, True)]
 
 
 def _cases():
-    combos = matmul_combos(
+    combos = matmul_block_combos(
         formats=input_output_formats(
             [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b]
         ),

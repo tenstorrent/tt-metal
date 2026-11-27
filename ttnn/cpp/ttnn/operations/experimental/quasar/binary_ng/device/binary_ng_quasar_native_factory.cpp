@@ -505,12 +505,16 @@ ProgramArtifacts create_native_artifacts(
     const bool is_scalar = !tensor_args.input_tensor_b.has_value();
     TT_FATAL(
         !is_scalar || op.scalar.has_value(), "binary_ng Quasar-native: a tensor-scalar op requires a scalar value");
+    // A one-element MX operand is not VALUE: the reader's first-element fill writes a full bf16 tile (2048 B) into the
+    // ring entry, which an MX entry (1056 B for 8-bit MX) cannot hold. It takes the SCALAR mode instead, which the
+    // compute expands into a Float16_b held ring.
     // Fires before any JIT work on a type that matches_quasar_native_slice, the only admitting caller, refuses.
     const std::array<OperandMode, 2> modes = operand_modes(
         op.subtile_broadcast_type,
         is_scalar,
-        a.logical_shape().volume() == 1,
-        !is_scalar && tensor_args.input_tensor_b->logical_shape().volume() == 1);
+        a.logical_shape().volume() == 1 && !is_mx(a.dtype()),
+        !is_scalar && tensor_args.input_tensor_b->logical_shape().volume() == 1 &&
+            !is_mx(tensor_args.input_tensor_b->dtype()));
     // A held operand (COL, SCALAR) is expanded once per page change. It runs its activation chain while it expands,
     // so it has no post ring. A held or VALUE operand is read at one ring entry for a run of tiles.
     const auto held = [](OperandMode mode) { return mode == OperandMode::COL || mode == OperandMode::SCALAR; };
@@ -914,20 +918,25 @@ ProgramArtifacts create_native_artifacts(
     }
     // A staging ring, like a post ring, holds one batch per compute thread: each thread expands a batch into its own
     // tile counter, and the binary op reads it.
+    // The expansion rings of an MX operand hold Float16_b: an MX ring would quantize the expanded tile again.
+    const tt::DataFormat a_ring_df = is_mx(a_dtype) ? tt::DataFormat::Float16_b : a_df;
+    const tt::DataFormat b_ring_df = is_mx(b_dtype) ? tt::DataFormat::Float16_b : b_df;
+    const uint32_t a_ring_bytes = static_cast<uint32_t>(a_tile.get_tile_size(a_ring_df));
+    const uint32_t b_ring_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_ring_df));
     if (stage_a) {
         dfbs.push_back(
-            make_dfb(STAGE_LHS, a_tile_bytes, compute_threads * num_tiles_per_cycle, a_df, a_tile, std::nullopt));
+            make_dfb(STAGE_LHS, a_ring_bytes, compute_threads * num_tiles_per_cycle, a_ring_df, a_tile, std::nullopt));
     }
     if (stage_b) {
         dfbs.push_back(
-            make_dfb(STAGE_RHS, b_tile_bytes, compute_threads * num_tiles_per_cycle, b_df, b_tile, std::nullopt));
+            make_dfb(STAGE_RHS, b_ring_bytes, compute_threads * num_tiles_per_cycle, b_ring_df, b_tile, std::nullopt));
     }
     // A held ring holds two entries per compute thread: each thread expands its new page before it pops the old one.
     if (held_a) {
-        dfbs.push_back(make_dfb(HELD_LHS, a_tile_bytes, 2 * compute_threads, a_df, a_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_LHS, a_ring_bytes, 2 * compute_threads, a_ring_df, a_tile, std::nullopt));
     }
     if (held_b) {
-        dfbs.push_back(make_dfb(HELD_RHS, b_tile_bytes, 2 * compute_threads, b_df, b_tile, std::nullopt));
+        dfbs.push_back(make_dfb(HELD_RHS, b_ring_bytes, 2 * compute_threads, b_ring_df, b_tile, std::nullopt));
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident

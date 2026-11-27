@@ -30,7 +30,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
 )
-from perf_matmul import matmul_combos
+from perf_matmul import matmul_block_combos
 
 pytestmark = pytest.mark.llk_sweep
 LLK_SWEEP_KEEP = frozenset(  # ids kept besides the thin subset: one per value of each swept dimension the subset misses
@@ -556,7 +556,7 @@ MIXED_FORMATS = [
 @pytest.mark.perf
 @skip_for_wormhole
 @parametrize(
-    combos=matmul_combos(
+    combos=matmul_block_combos(
         formats=MIXED_FORMATS,
         dest_acc=lambda formats: (
             [DestAccumulation.Yes]
