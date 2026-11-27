@@ -19,3 +19,9 @@
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T09:34:33-05:00"}
 {"event":"test_run","status":"pass","test":"probes/probe_008.py","detail":"topology: grid 11x10; 8 DRAM banks; banks 0-3 virtual x=17 (phys col 0), 4-7 x=18 (phys col 9); worker logical x 0..6 -> virt 1..7, 7..10 -> 10..13; y 0..9 -> 2..11; optimal NOC0 cores [(0,9),(0,0),(0,7),(0,3),(6,9),(6,1),(6,6),(6,4)]","ts":"2026-11-27T09:36:25-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T09:56:21-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-27T10:14:45-05:00"}
+{"event":"test_run","status":"pass","mode":"--profile","test":"probes/bank_affinity_ab_probe.py","detail":"p1 flat 63616, dram_side 72632, interleave 69221, dram_rows(own endpoints) 58349, dram_rows shared row endpoint 51357; rdonly 25725 wronly 25138","ts":"2026-11-27T10:30:50-05:00"}
+{"event":"hypothesis","detail":"dram_side regresses: most band cores sit north of their NoC0 endpoint row, so NoC0 read data wraps the torus; writes on NoC1 go to an endpoint on a different row than the NoC0 one, north legs overlap across banks","ts":"2026-11-27T10:30:50-05:00"}
+{"event":"fix_applied","detail":"placement dram_rows (anchor row only, 44 cores) + BANK_AFFINE_ENDPOINT_NOC=0 CT arg bank_endpoint_noc: both kernels address the cores-row endpoint","ts":"2026-11-27T10:30:50-05:00"}
+{"event":"test_run","status":"pass","test":"unit dir + golden slice","detail":"unit 125/125; golden -k not uint32/int32/poisoned 28/28","ts":"2026-11-27T10:30:50-05:00"}
+{"event":"test_run","status":"pass","mode":"--profile","test":"probes/bank_affinity_ab_probe.py stag","detail":"FLAT_BANK_STAGGER off->on: Q8 7258->7248, F13 1620->1646 (noise), flat-forced p1 63528->62719, p3 25843->25076; parked off; unit 133/133","ts":"2026-11-27T10:34:02-05:00"}

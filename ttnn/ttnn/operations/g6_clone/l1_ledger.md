@@ -27,8 +27,8 @@ Named block axes: `page` (extent knob `block_pages`) and `in_page` (extent `alig
 | `aligned_page_bytes` | `x.buffer_aligned_page_size()` | TILE: 4096 (f32), 2048 (bf16). ROW_MAJOR: `align_up(W·elem, 64)`, at most 5120 on INPUTS. | Host guard `block_pages_l1_cap ≥ 1`, i.e. `aligned_page_bytes ≤ 673888`. Otherwise RuntimeError (BB-05); no TARGET shape reaches it. |
 | `tensor_pages` | `x.buffer_num_pages()` | 1–3072 on INPUTS; unbounded by the contract | Enters capacity only through `core_pages_max`, which `block_pages` clamps |
 | `G` | `grid.x · grid.y` from `device.compute_with_storage_grid_size()` | 110 on this Blackhole box family | device query |
-| `num_cores` | `min(tensor_pages, G)` | ≤ G | — |
-| `core_pages_max` | `ceil(tensor_pages / num_cores)` | ≤ 28 on INPUTS at G = 110; unbounded otherwise | clamped by `block_pages_l1_cap` in `block_pages` |
+| `num_cores` | `flat_page_range` / `logical_rows_partial_tile`: `min(tensor_pages, G)`. `bank_affine_runs` (`dram_rows`): the cores on the banks' anchor rows between each DRAM column and the next | ≤ G; 44 under `bank_affine_runs` on the 11×10 grid (banks of 6 and 5 cores) | — |
+| `core_pages_max` | flat: `ceil(tensor_pages / num_cores)`. `bank_affine_runs`: `ceil(ceil(tensor_pages / num_banks) / smallest group)` | ≤ 18 on flat INPUTS (Q8), ≤ 77 under `bank_affine_runs` (p1); unbounded otherwise | clamped by `block_pages_l1_cap` in `block_pages` |
 | `block_pages_l1_cap` | `floor(L1_BUDGET_BYTES / (CB_DEPTH_KNOB · aligned_page_bytes))` | 164 (f32 tile), 329 (bf16 tile), 131 (5120 B row), 10529 (64 B row) | — |
 | `CB_DEPTH_KNOB` | host constant | 2 | — |
 | `BLOCKS_PER_CORE_KNOB` | host constant: blocks a core's assignment is cut into before the L1 cap | 1 (p1, 2–7 blocks at depth 2: within noise of 1; 28 blocks: +10%) | — |
@@ -40,21 +40,22 @@ Named block axes: `page` (extent knob `block_pages`) and `in_page` (extent `alig
 L1(core) = cb_depth_blocks · block_pages · aligned_page_bytes  ≤  L1_BUDGET_BYTES
 ```
 
-- `block_pages` scales with the core's assignment (`tensor_pages / G`), divided by `BLOCKS_PER_CORE_KNOB`, up to the L1 cap.
+- `block_pages` scales with the core's assignment (`tensor_pages / num_cores`), divided by `BLOCKS_PER_CORE_KNOB`, up to the L1 cap.
 - `cb_depth_blocks` is 1 until the cap splits a core's assignment, then 2.
 - `aligned_page_bytes` is fixed by dtype and layout.
 - No term scales with the tensor size once the cap binds.
 
 | Case | `cb_depth_blocks · block_pages · aligned_page_bytes` | Bytes per core | Fraction of 1347776 |
 |------|------------------------------------------------------|----------------|---------------------|
-| p1 `(16,12,128,128)` f32 | 1 · 28 · 4096 | 114688 | 0.085 |
-| p2 `(8,12,128,128)` f32 | 1 · 14 · 4096 | 57344 | 0.043 |
-| `(1,12,128,128)` f32 | 1 · 2 · 4096 | 8192 | 0.006 |
-| `(1,1)` f32 | 1 · 1 · 4096 | 4096 | 0.003 |
-| p3 `(1,512,5120)` bf16 | 1 · 24 · 2048 | 49152 | 0.036 |
-| p4 `(1,1,32,62080)` bf16 | 1 · 18 · 2048 | 36864 | 0.027 |
-| `(16,3,2560)` bf16 RM | 1 · 1 · 5120 | 5120 | 0.004 |
-| `(1,)` int32 RM | 1 · 1 · 64 | 64 | < 0.001 |
+| p1 `(16,12,128,128)` f32, `bank_affine_runs` | 1 · 77 · 4096 | 315392 | 0.234 |
+| p2 `(8,12,128,128)` f32, `bank_affine_runs` | 1 · 39 · 4096 | 159744 | 0.119 |
+| `(1,12,128,128)` f32, `bank_affine_runs` | 1 · 5 · 4096 | 20480 | 0.015 |
+| `(1,1)` f32, `logical_rows_partial_tile` | 1 · 1 · 4096 | 4096 | 0.003 |
+| p3 `(1,512,5120)` bf16, `bank_affine_runs` | 1 · 64 · 2048 | 131072 | 0.097 |
+| p4 `(1,1,32,62080)` bf16, `bank_affine_runs` | 1 · 49 · 2048 | 100352 | 0.074 |
+| Q8 `(1,1,1,62080)` bf16, `logical_rows_partial_tile` | 1 · 18 · 2048 | 36864 | 0.027 |
+| `(16,3,2560)` bf16 RM, `bank_affine_runs` | 1 · 2 · 5120 | 10240 | 0.008 |
+| `(1,)` int32 RM, `flat_page_range` | 1 · 1 · 64 | 64 | < 0.001 |
 
 ### Audits
 
@@ -107,3 +108,24 @@ read-request-bound: two 64 B ranges per page (248320 B each way) measured 9.35 �
 > Refinement 1 added bfloat16 together with the regime: tile-aligned and ROW_MAJOR shapes stay on
 > `flat_page_range`, which is the cheapest-traffic split for them, and partial-tile TILE shapes run
 > `logical_rows_partial_tile`.
+
+## Data-movement budget (regime `bank_affine_runs`, Refinement 2)
+
+Same CB, same capacity formula and same live set as `flat_page_range`; the regime changes which pages a
+core takes (one bank's run `b, b + num_banks, …` instead of a consecutive range), which cores run (44 on the
+banks' anchor rows), and which DRAM endpoint both kernels address (`BANK_AFFINE_ENDPOINT_NOC`'s, on the
+cores' row). Bytes per tensor are unchanged.
+
+| Tensor | DRAM crossings | Why that many | Cross-core traffic added |
+|--------|----------------|---------------|--------------------------|
+| `x` | 1 (read) | Each page is read once, by the one core whose bank run holds it, as part of one contiguous transfer per block | 0 |
+| `out` | 1 (write) | Each page is written once from the slot it was read into; `out` has `x`'s spec, so the run is contiguous in the same bank | 0 |
+
+| Case | DRAM bytes (x read + out write) | vs `flat_page_range` | Cross-core NoC bytes |
+|------|---------------------------------|----------------------|----------------------|
+| p1 `(16,12,128,128)` f32 | 12582912 + 12582912 = 25165824 | equal | 0 |
+| p2 `(8,12,128,128)` f32 | 6291456 + 6291456 = 12582912 | equal | 0 |
+| `(16,3,2560)` bf16 RM | 245760 + 245760 = 491520 | equal | 0 |
+
+The CB grows with the per-core assignment (p1: 28 → 77 pages, 0.085 → 0.234 of the budget) because 44
+cores carry what 110 did; it stays one block per core on every INPUTS shape.

@@ -152,19 +152,31 @@ def test_g6_clone_repeat_other_address(device):
     assert torch.equal(_bits(ttnn.to_torch(first_output)), _bits(first_input)), "second call wrote into first output"
 
 
-def test_g6_clone_multi_block_ring(device, monkeypatch):
+@pytest.mark.parametrize(
+    "regime,core_pages,block_pages",
+    [
+        # 192 pages per bank over dram_rows groups of 6 / 5 cores: 32 / 38-39 pages per core in bank
+        # runs of 13, 13, 6 / 13, 13, 12-13.
+        ("bank_affine_runs", (32, 39), 13),
+        # 14 / 13 pages per core in blocks of 5, 5, 4 / 5, 5, 3.
+        ("flat_page_range", (13, 14), 5),
+    ],
+)
+def test_g6_clone_multi_block_ring(device, monkeypatch, regime, core_pages, block_pages):
     """Depth-2 staging ring with a ragged last block, the plan the L1 cap selects for large tensors.
 
-    No INPUTS shape reaches it (one block per core), so the knob forces it on p2: 14 / 13 pages per
-    core in blocks of 5, 5, 4 / 5, 5, 3, so the ring wraps once and every push and pop stays at the
-    nominal block_pages while the transfers narrow."""
+    No INPUTS shape reaches it (one block per core), so the knob forces it on p2, in both full-page
+    regimes: the ring wraps once and every push and pop stays at the nominal block_pages while the
+    transfers narrow."""
     # The package re-exports the g6_clone function under its module's name, so the module comes
     # from sys.modules, not from attribute access.
     op_module = importlib.import_module("ttnn.operations.g6_clone.g6_clone")
     descriptor_module = importlib.import_module("ttnn.operations.g6_clone.g6_clone_program_descriptor")
 
     monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", 3)
-    # The knob is a process constant outside the cache key; isolate the cache so the forced plan is
+    if regime == descriptor_module.REGIME_FLAT:
+        monkeypatch.setattr(descriptor_module, "BANK_AFFINE_MIN_CORE_PAGES", 1 << 30)
+    # The knobs are process constants outside the cache key; isolate the cache so the forced plan is
     # built here and never served to another test.
     monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
 
@@ -173,8 +185,9 @@ def test_g6_clone_multi_block_ring(device, monkeypatch):
     torch_input = _with_special_bits(_random_bit_patterns(shape))
     ttnn_input = _upload(torch_input, device)
     plan = op_module.g6_clone_plan(ttnn_input)
-    assert (plan["block_pages"], plan["cb_depth_blocks"], plan["num_blocks_max"]) == (5, 2, 3), plan
-    assert (plan["core_pages_g1"], plan["core_pages_g2"]) == (14, 13), plan
+    assert plan["regime"] == regime, plan
+    assert (plan["block_pages"], plan["cb_depth_blocks"], plan["num_blocks_max"]) == (block_pages, 2, 3), plan
+    assert (plan["core_pages_min"], plan["core_pages_max"]) == core_pages, plan
     ttnn_output = g6_clone(ttnn_input)
     _assert_clone(ttnn_output, ttnn_input, torch_input)
 

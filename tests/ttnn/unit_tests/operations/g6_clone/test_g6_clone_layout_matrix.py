@@ -156,9 +156,13 @@ def test_g6_clone_poisoned_padding_kinds(device, shape, dtype, poison_bits):
         ((1, 1, 1, 62080), ttnn.float32, ttnn.TILE_LAYOUT, "logical_rows_partial_tile", (1, [(0, 64), (1024, 64)])),
         # The one page of [1, 1] is the last tile row and column (kind 3).
         ((1, 1), ttnn.float32, ttnn.TILE_LAYOUT, "logical_rows_partial_tile", (3, [(0, 64)])),
-        ((1, 1, 32, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT, "flat_page_range", None),
-        ((16, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT, "flat_page_range", None),
-        ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "flat_page_range", None),
+        # Full pages with at least one page per core of every bank's group run bank_affine_runs
+        # (11x10 Blackhole grid, 8 banks, dram_rows groups of 5 or 6 cores: 48 pages and up).
+        ((1, 1, 32, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
+        ((16, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
+        ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
+        # Below the gate: 40 pages leave a 6-core group 5 pages, so flat_page_range is the fallback.
+        ((40, 32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "flat_page_range", None),
         ((1,), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "flat_page_range", None),
     ],
 )
@@ -180,6 +184,60 @@ def test_g6_clone_plan_regime(device, shape, dtype, layout, regime, kind_pieces)
     else:
         kind, pieces = kind_pieces
         assert walk["kinds"][kind] == pieces, walk["kinds"]
+
+
+def test_g6_clone_plan_bank_affine_rows(device):
+    """bank_affine_runs under dram_rows: every core takes a run of one bank's pages, sits on that
+    bank's anchor row on the anchor's side, and both kernels address that NoC's endpoints; the
+    cores form one rectangle per bank (BB-17)."""
+    x = ttnn.from_torch(
+        torch.zeros((16, 12, 128, 128), dtype=torch.float32),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    plan = op_module.g6_clone_plan(x)
+    assert plan["regime"] == descriptor_module.REGIME_BANK_AFFINE
+    num_banks = plan["num_banks"]
+    assert plan["page_stride"] == num_banks
+    assert plan["bank_endpoint_noc"] == descriptor_module.BANK_AFFINE_ENDPOINT_NOC
+    endpoint_noc = ttnn.NOC.NOC_0 if descriptor_module.BANK_AFFINE_ENDPOINT_NOC == 0 else ttnn.NOC.NOC_1
+    anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, endpoint_noc)
+    for core, _, start_page, _ in plan["roles"]:
+        anchor = anchors[start_page % num_banks]
+        assert core.y == anchor.y and core.x >= anchor.x, (core, anchor)
+    # Banks on the two DRAM columns may share an anchor row, which merges their runs.
+    assert len(plan["core_ranges"].ranges()) <= num_banks
+    assert plan["core_ranges"].num_cores() == plan["num_cores"]
+
+
+@pytest.mark.parametrize("blocks_per_core", [1, 3])
+@pytest.mark.parametrize(
+    "shape,dtype,layout",
+    [
+        # logical_rows: the rotated walk resets PartialTileWalk where it wraps.
+        ((1, 1, 1, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        ((4, 100, 1000), ttnn.float32, ttnn.TILE_LAYOUT),
+        # flat_page_range (bank_affine_runs gated off).
+        ((8, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT),
+        ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+)
+def test_g6_clone_bank_stagger(device, monkeypatch, shape, dtype, layout, blocks_per_core):
+    """FLAT_BANK_STAGGER (off by default) stays bit-exact: each core's consecutive-page walk starts
+    `rotate` pages in and wraps once, also inside a block of the depth-2 ring."""
+    monkeypatch.setattr(descriptor_module, "FLAT_BANK_STAGGER", True)
+    monkeypatch.setattr(descriptor_module, "BANK_AFFINE_MIN_CORE_PAGES", 1 << 30)
+    monkeypatch.setattr(descriptor_module, "BLOCKS_PER_CORE_KNOB", blocks_per_core)
+    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
+    torch.manual_seed(7)
+    torch_input = _random_bits(shape, _TORCH_DTYPE[dtype])
+    ttnn_input = _upload(torch_input, device, dtype, layout)
+    plan = op_module.g6_clone_plan(ttnn_input)
+    assert plan["bank_stagger"] and plan["page_stride"] == 1, plan
+    ttnn_output = g6_clone(ttnn_input)
+    _assert_clone(ttnn_output, ttnn_input, torch_input, dtype, layout)
 
 
 def test_g6_clone_cache_key_partial_vs_full(device, monkeypatch):

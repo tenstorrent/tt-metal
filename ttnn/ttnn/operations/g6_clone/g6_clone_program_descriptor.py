@@ -10,7 +10,8 @@ bytes never pass through an unpacker, DEST or a packer. Each core walks a run of
 block loop and differ in the split and the per-block transfer.
 - `bank_affine_runs` (page_stride = number of DRAM banks): each core takes a run of one bank's
   pages, which sit back to back in that bank, and moves a block as one transfer each way. A bank's
-  cores are the grid rows next to that bank's DRAM column, so the grid's routes do not all cross.
+  cores sit on its endpoint's row east of its DRAM column, and both kernels address that one
+  endpoint, so no two banks' routes share a link.
 - `flat_page_range` (page_stride = 1): contiguous page ranges over the grid, one transfer per page.
 - `logical_rows_partial_tile` (TILE with a partial last tile row or column): the flat split, but a
   partial page moves only the face rows that hold logical elements, selected by a CT flag.
@@ -62,11 +63,29 @@ PIECE_MERGE_GAP_BYTES = 448
 BANK_AFFINE_MIN_CORE_PAGES = 1
 
 # Which cores serve which bank in bank_affine_runs:
-#   "dram_side":  a bank's cores are the grid columns east of its DRAM column (NoC0 read data
-#                 flows east from the bank, NoC1 write data west into it), in the row band nearest
-#                 the bank's NoC0 endpoint;
-#   "interleave": core k (row-major) serves bank k mod num_banks, ignoring the DRAM topology.
-BANK_AFFINE_PLACEMENT = "dram_side"
+#   "dram_rows":  only the cores in the bank's anchor row, between its DRAM column and the next one
+#                 (44 cores on an 11x10 Blackhole grid). Read data flows east along that row from the
+#                 bank and write data west back along it, so no two banks share a link;
+#   "dram_side":  every grid core, a bank's cores being the columns east of its DRAM column in the row
+#                 band nearest its anchor (cores north of the anchor row reach it around the torus);
+#   "interleave": every grid core, core k (row-major) serving bank k mod num_banks.
+# Blackhole p150b, p1 (16,12,128,128) f32, each kernel addressing its own NoC's endpoints:
+# flat_page_range 64.3 us, dram_rows 58.2, interleave 69.2, dram_side 72.6. dram_rows with both
+# kernels on BANK_AFFINE_ENDPOINT_NOC's endpoints: 51.4 us.
+BANK_AFFINE_PLACEMENT = "dram_rows"
+
+# Which NoC's DRAM endpoint table bank_affine_runs addresses, for both kernels; the anchors the
+# placement is built from are that NoC's preferred worker cores. A Blackhole DRAM bank has several
+# NoC endpoints on its column, and the NoC0 and NoC1 defaults sit on different rows. Addressing one
+# endpoint from both kernels keeps a bank's reads (NoC0) and writes (NoC1) on the row of its cores.
+BANK_AFFINE_ENDPOINT_NOC = 0
+
+# Consecutive-page walks (flat_page_range, logical_rows_partial_tile): rotate core k's walk so its first
+# page sits in bank k mod num_banks and wrap once at the end of its range, so the grid's first requests
+# spread over the banks instead of starting on the few banks the range starts share. Off is the
+# unrotated walk. bank_affine_runs walks one bank and is never rotated. Blackhole p150b, off -> on:
+# Q8 7258 -> 7248 ns, F13 1620 -> 1646 ns (noise); flat-forced p1 63528 -> 62719, p3 25843 -> 25076.
+FLAT_BANK_STAGGER = False
 
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
@@ -190,16 +209,18 @@ def _walk_ct_args(walk) -> list:
 
 
 def bank_core_groups(device, grid, num_banks: int, placement: str) -> list:
-    """Logical (x, y) cores serving each bank, indexed by bank id; every grid core serves one bank."""
+    """Logical (x, y) cores serving each bank, indexed by bank id. "dram_rows" leaves the cores off the
+    banks' anchor rows idle; the other placements give every grid core one bank."""
     cores = [(x, y) for y in range(grid.y) for x in range(grid.x)]
     if placement == "interleave":
         return [cores[bank::num_banks] for bank in range(num_banks)]
-    if placement != "dram_side":
+    if placement not in ("dram_side", "dram_rows"):
         raise ValueError(f"g6_clone: unknown bank placement {placement!r}")
-    # The NoC0 anchor of a bank is the worker just east of its DRAM endpoint. A grid column belongs
-    # to the nearest anchor column at or west of it (wrapping, as NoC0 does), so read data enters
-    # it from that DRAM column eastward and write data on NoC1 leaves it westward to the same column.
-    anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
+    # The anchor of a bank is the worker just east of its DRAM endpoint. A grid column belongs to the
+    # nearest anchor column at or west of it (wrapping, as NoC0 does), so read data enters it from
+    # that DRAM column eastward and write data on NoC1 leaves it westward to the same column.
+    endpoint_noc = ttnn.NOC.NOC_0 if BANK_AFFINE_ENDPOINT_NOC == 0 else ttnn.NOC.NOC_1
+    anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, endpoint_noc)
     if len(anchors) != num_banks:
         raise RuntimeError(f"g6_clone: {len(anchors)} DRAM anchors for {num_banks} banks")
     side_xs = sorted({anchor.x for anchor in anchors})
@@ -209,10 +230,18 @@ def bank_core_groups(device, grid, num_banks: int, placement: str) -> list:
         return west[-1] if west else side_xs[-1]
 
     groups = [[] for _ in range(num_banks)]
+    if placement == "dram_rows":
+        # Only the cores in each bank's anchor row, from the anchor to the next DRAM column: read data
+        # flows east along that row and write data west back along it, so no two banks share a link.
+        for bank, anchor in enumerate(anchors):
+            groups[bank] = [core for core in cores if core[1] == anchor.y and side_of(core[0]) == anchor.x]
+        return groups
     for side_x in side_xs:
         # Row-major side cores cut into contiguous row bands, top to bottom in the order of the
         # banks' endpoint rows, so each bank's cores sit nearest its own endpoint.
-        banks = sorted((bank for bank in range(num_banks) if anchors[bank].x == side_x), key=lambda b: (anchors[b].y, b))
+        banks = sorted(
+            (bank for bank in range(num_banks) if anchors[bank].x == side_x), key=lambda b: (anchors[b].y, b)
+        )
         side_cores = [core for core in cores if side_of(core[0]) == side_x]
         start = 0
         for idx, bank in enumerate(banks):
@@ -220,6 +249,29 @@ def bank_core_groups(device, grid, num_banks: int, placement: str) -> list:
             groups[bank] = side_cores[start : start + count]
             start += count
     return groups
+
+
+def _row_run_ranges(cores) -> ttnn.CoreRangeSet:
+    """The fewest rectangles covering `cores` built from row runs: a run of consecutive x in one row,
+    stacked with the same run of the rows directly below it."""
+    runs = []
+    for y in sorted({y for _, y in cores}):
+        xs = sorted(x for x, cy in cores if cy == y)
+        start = xs[0]
+        for prev, x in zip(xs, xs[1:] + [None]):
+            if x != prev + 1:
+                runs.append((start, prev, y))
+                start = x
+    rects = []
+    for x0, x1, y in runs:
+        above = next((r for r in rects if r[0] == x0 and r[1] == x1 and r[3] == y - 1), None)
+        if above is not None:
+            above[3] = y
+        else:
+            rects.append([x0, x1, y, y])
+    return ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for x0, x1, y0, y1 in rects]
+    )
 
 
 def _bank_affine_roles(device, grid, tensor_pages: int, num_banks: int):
@@ -257,11 +309,15 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
     if roles is not None:
         regime = REGIME_BANK_AFFINE
         page_stride = num_banks
-        all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        bank_endpoint_noc = BANK_AFFINE_ENDPOINT_NOC
+        all_cores = _row_run_ranges([(core.x, core.y) for core, _, _, _ in roles])
         core_pages_g1 = core_pages_g2 = None
     else:
         regime = REGIME_LOGICAL_ROWS if walk is not None else REGIME_FLAT
         page_stride = 1
+        # Unused by consecutive-page walks (each kernel addresses its own NoC's endpoints); fixed so
+        # every flat descriptor compiles one binary.
+        bank_endpoint_noc = 0
         _, all_cores, core_group_1, _, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
             grid, tensor_pages, row_wise=True
         )
@@ -288,6 +344,8 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
         "regime": regime,
         "partial_tile_walk": walk,
         "page_stride": page_stride,
+        "bank_endpoint_noc": bank_endpoint_noc,
+        "bank_stagger": FLAT_BANK_STAGGER and page_stride == 1,
         "num_banks": num_banks,
         "grid": (grid.x, grid.y),
         "num_cores": len(roles),
@@ -303,6 +361,12 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
         "tensor_pages": tensor_pages,
         "aligned_page_bytes": aligned_page_bytes,
     }
+
+
+def stagger_rotate(core_idx: int, start_page: int, num_pages: int, num_banks: int) -> int:
+    """Pages core `core_idx` skips before its rotated walk starts: its first page then lies in bank
+    core_idx mod num_banks (page p is in bank p mod num_banks), or as near as a short range allows."""
+    return (core_idx - start_page) % num_banks % num_pages
 
 
 def create_program_descriptor(
@@ -333,15 +397,23 @@ def create_program_descriptor(
         raise RuntimeError("g6_clone: interleaved TensorAccessorArgs unexpectedly carry common runtime args")
 
     walk = plan["partial_tile_walk"]
-    shared_ct_args = [CB_PAGE_STAGING, block_pages, int(walk is not None), plan["page_stride"]] + _walk_ct_args(walk)
+    shared_ct_args = [
+        CB_PAGE_STAGING,
+        block_pages,
+        int(walk is not None),
+        plan["page_stride"],
+        plan["bank_endpoint_noc"],
+        int(plan["bank_stagger"]),
+    ] + _walk_ct_args(walk)
     reader_ct_args = shared_ct_args + list(input_accessor_args.get_compile_time_args())
     writer_ct_args = shared_ct_args + list(output_accessor_args.get_compile_time_args())
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
-    for core, _, start_page, num_pages in plan["roles"]:
-        reader_rt_args[core.x][core.y] = [start_page, num_pages]
-        writer_rt_args[core.x][core.y] = [start_page, num_pages]
+    for idx, (core, _, start_page, num_pages) in enumerate(plan["roles"]):
+        rotate = stagger_rotate(idx, start_page, num_pages, plan["num_banks"]) if plan["bank_stagger"] else 0
+        reader_rt_args[core.x][core.y] = [start_page, num_pages, rotate]
+        writer_rt_args[core.x][core.y] = [start_page, num_pages, rotate]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_reader.cpp"),

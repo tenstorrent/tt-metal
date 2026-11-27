@@ -15,7 +15,8 @@ namespace {
 
 // One block: wait for the nominal block, issue the block's writes back to back, flush so the
 // slot's bytes have left L1 before the reader may refill it, pop the nominal block.
-// out has x's spec, so a bank run of x is a bank run of out and lands as one write.
+// out has x's spec, so a bank run of x is a bank run of out and lands as one write, addressed to the
+// bank's endpoint on bank_endpoint_noc's table: the reader's endpoint, on this core's row.
 // With logical_rows, each page writes back only the logical pieces the reader landed; the
 // output's padding is left as allocated.
 template <
@@ -23,9 +24,17 @@ template <
     uint32_t block_pages,
     bool logical_rows,
     uint32_t page_stride,
+    uint8_t bank_endpoint_noc,
+    bool bank_stagger,
     typename Accessor,
     typename Walk>
-FORCE_INLINE void store_block(const Accessor& out_accessor, Walk& walk, uint32_t first_page, uint32_t block_extent) {
+FORCE_INLINE void store_block(
+    const Accessor& out_accessor,
+    Walk& walk,
+    uint32_t first_page,
+    uint32_t block_extent,
+    uint32_t range_start,
+    uint32_t range_pages) {
     {
         DeviceZoneScopedN("g6c_wr_wait");
         cb_wait_front(cb_page_staging, block_pages);
@@ -38,12 +47,23 @@ FORCE_INLINE void store_block(const Accessor& out_accessor, Walk& walk, uint32_t
             ASSERT(
                 out_accessor.num_contiguous_pages(first_page, first_page + (block_extent - 1) * page_stride + 1) ==
                 block_extent);
-            noc_async_write(l1_read_addr, out_accessor.get_noc_addr(first_page), block_extent * page_bytes);
+            noc_async_write(
+                l1_read_addr, out_accessor.get_noc_addr(first_page, 0, bank_endpoint_noc), block_extent * page_bytes);
         } else {
             for (uint32_t i = 0; i < block_extent; ++i) {
+                uint32_t page = first_page + i;
+                if constexpr (bank_stagger) {
+                    // The rotated walk wraps once, from the range's end back to its start.
+                    if (page >= range_start + range_pages) {
+                        if (page == range_start + range_pages) {
+                            walk = Walk(range_start);
+                        }
+                        page -= range_pages;
+                    }
+                }
                 if constexpr (logical_rows) {
                     const g6_clone::PagePieces& pieces = walk.pieces();
-                    const uint64_t page_noc_addr = out_accessor.get_noc_addr(first_page + i);
+                    const uint64_t page_noc_addr = out_accessor.get_noc_addr(page);
                     noc_async_write<NOC_MAX_BURST_SIZE>(
                         l1_read_addr + pieces.offset0, page_noc_addr + pieces.offset0, pieces.length0);
                     if (pieces.length1 != 0) {
@@ -52,7 +72,7 @@ FORCE_INLINE void store_block(const Accessor& out_accessor, Walk& walk, uint32_t
                     }
                     walk.advance();
                 } else {
-                    noc_async_write_page(first_page + i, out_accessor, l1_read_addr);
+                    noc_async_write_page(page, out_accessor, l1_read_addr);
                 }
                 l1_read_addr += page_bytes;
             }
@@ -72,25 +92,32 @@ void kernel_main() {
     constexpr uint32_t block_pages = get_compile_time_arg_val(1);
     constexpr bool logical_rows = get_compile_time_arg_val(2) != 0;
     constexpr uint32_t page_stride = get_compile_time_arg_val(3);
-    constexpr uint32_t walk_ct_base = 4;
+    constexpr uint8_t bank_endpoint_noc = get_compile_time_arg_val(4);
+    constexpr bool bank_stagger = get_compile_time_arg_val(5) != 0;
+    constexpr uint32_t walk_ct_base = 6;
     constexpr auto out_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
+    static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
+    static_assert(page_stride == 1 || !bank_stagger, "g6_clone: a bank run is already one bank");
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t start_page = get_arg_val<uint32_t>(0);
     const uint32_t num_pages_this_core = get_arg_val<uint32_t>(1);
+    // bank_stagger: the walk starts `rotate` pages into the range, so the grid's first requests
+    // spread over the banks, and wraps once (0 without bank_stagger).
+    const uint32_t rotate = get_arg_val<uint32_t>(2);
 
     const auto out_accessor = TensorAccessor(out_args, out_addr);
-    g6_clone::PartialTileWalk<walk_ct_base> walk(start_page);
+    g6_clone::PartialTileWalk<walk_ct_base> walk(start_page + rotate);
 
     const uint32_t num_blocks_this_core = (num_pages_this_core + block_pages - 1) / block_pages;
-    uint32_t first_page = start_page;
+    uint32_t first_page = start_page + rotate;
     uint32_t pages_left = num_pages_this_core;
     for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
         const uint32_t block_extent = pages_left < block_pages ? pages_left : block_pages;
-        store_block<cb_page_staging, block_pages, logical_rows, page_stride>(
-            out_accessor, walk, first_page, block_extent);
+        store_block<cb_page_staging, block_pages, logical_rows, page_stride, bank_endpoint_noc, bank_stagger>(
+            out_accessor, walk, first_page, block_extent, start_page, num_pages_this_core);
         first_page += block_extent * page_stride;
         pages_left -= block_extent;
     }

@@ -61,7 +61,7 @@
 
 **Outcome**: Golden 38/38 bit-exact, and SUPPORTED equals TARGET. `logical_rows_partial_tile` runs Q8 `[1,1,1,62080]` bf16 at 7.06 µs (flat 19.44 µs) and F13 `[1,5120]` bf16 at 1.59 µs (flat 2.39 µs), with one-row bf16 ranges merged across the 448 B face gap. p1 63.7, p2 32.2 and p4 19.2 µs are unchanged within noise. Q8 is now bound by read requests: read issue + barrier take up to 2.3 + 4.6 µs on the slowest core, against 0.8–1.2 µs for write issue. 32 B ranges do not help, and merging wider gaps loses. What is left on Q8 is the DRAM bank and NoC route levers of Refinements 2–3, not a transfer-shape change.
 
-### [ ] Refinement 2 — Speed up p1: DRAM bank locality
+### [x] Refinement 2 — Speed up p1: DRAM bank locality
 
 **Type**: perf
 
@@ -84,6 +84,13 @@
   - Q8 `[1,1,1,62080]` bf16 TILE (the logical-rows path from Refinement 1);
   - Q3 `(16,3,2560)` bf16 ROW_MAJOR;
   - one single-page int32 ROW_MAJOR case.
+
+**Outcome**:
+- **Result.** p1 goes from 63.6 to **51.4 µs** (−19%; bit-exact). Each core takes one bank's run as one transfer per block (`bank_affine_runs`). Placement `dram_rows` puts each bank's 5–6 cores on its anchor row east of its DRAM column, and both kernels address that row's endpoint (`BANK_AFFINE_ENDPOINT_NOC`). With the writer on its own NoC1 endpoint, the same placement ran 58.3 µs; the inherited `dram_side` ran 72.6.
+- **Guard set.** p2 −21%, p3 −16%, p4 −14%, Q3 ROW_MAJOR −18%. Q8 and the single-page int32 case are unchanged.
+- **Bottleneck now.** DRAM itself. Read-only 25.7 µs plus write-only 25.1 µs ≈ full, i.e. 490 GB/s, 96% of the 512 GB/s spec and at the floor of the adjacent-core read benchmark.
+- **Levers parked.** Per-core multi-block overlap measured +4–24% and is parked at `BLOCKS_PER_CORE_KNOB = 1`. `bank_stagger` is built for the consecutive-page walks (`FLAT_BANK_STAGGER`, bit-exact) and parked off: Q8 7258 → 7248 ns and F13 1620 → 1646 ns are noise. p1 no longer walks consecutive pages.
+- **Next.** Refinement 3's headroom gate (≤ 1.05 × 54.61 µs) is met. The only residue is the ~4% to spec peak.
 
 **Verifier notes**:
 - **Design update.** The design defers `bank_affine_runs` as "transaction count only; pays only when a DM RISC is issue-bound". The grid-cap sweep falsifies that premise: p1 is not issue-bound and still sits at 77% of DRAM peak. Update that Regimes row with the measured reason once the lever lands.

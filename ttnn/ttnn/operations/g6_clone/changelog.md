@@ -51,3 +51,38 @@
   - `test_g6_clone_plan_regime`: pins the regime and merged ranges.
   - `test_g6_clone_cache_key_partial_vs_full`.
   - Probes: `probes/logical_rows_ab_probe.py` (A/B variants, the source of the perf table above) and `probes/probe_007.py`.
+
+## Refinement 2 — Speed up p1: DRAM bank locality
+- **Date**: 2026-11-27
+- **What was done**:
+  - Built regime `bank_affine_runs` as the default for full-page inputs. The design had deferred it. Each core takes a run of one DRAM bank's pages (`b, b+8, b+16, …`, contiguous in bank `b`) and moves each block as one read and one write. The flat walk becomes `start_page + i * page_stride`, with `page_stride = num_banks`. Same CB, same block loop.
+  - Placement `dram_rows` (`BANK_AFFINE_PLACEMENT`): a bank's cores are the cores of its anchor row, from just east of its DRAM column to the next one. That is 44 cores on the 11×10 grid, in at most one rectangle per bank (7 here, because banks 0 and 4 share row 9).
+  - Endpoint knob `BANK_AFFINE_ENDPOINT_NOC = 0`, passed to both kernels as CT arg `bank_endpoint_noc`. Both kernels address the bank's NoC0-table endpoint, which sits on the cores' row, through `TensorAccessor::get_noc_addr(page, 0, noc)`. Blackhole's NoC1 default endpoints sit on other rows, so writes to them took a north leg in every column, and those legs overlapped across banks. Now read data flows east along the row on NoC0 and write data flows west back along it on NoC1. The same knob picks the anchors the placement is built from.
+  - Gate: `bank_affine_runs` runs only when every group core gets at least one page (48 or more pages on this grid). Below that, `flat_page_range` is the fallback; logical-rows shapes keep the flat split. Both outcomes are pinned by plan tests.
+  - `bank_stagger` lever: CT flag `bank_stagger` (`FLAT_BANK_STAGGER`) and RT arg `rotate` on the consecutive-page walks (`flat_page_range`, `logical_rows_partial_tile`). Core k's walk starts on bank `k mod 8` and wraps once at the end of its range, resetting `PartialTileWalk` at the wrap. Measured off → on: Q8 7258 → 7248 ns, F13 1620 → 1646 ns (noise). Flat-forced p1 went 63528 → 62719 and p3 25843 → 25076, but both now run `bank_affine_runs`. Parked off (unchanged behavior) as a live knob, with a bit-exact test.
+  - `g6_clone_plan` reports `bank_endpoint_noc` and `bank_stagger`. The regime remains a function of the existing cache key.
+  - The design's Regimes and Traffic rows and the L1 ledger now record the measured reason. The deferral premise ("transaction count only; pays only when a DM RISC is issue-bound") was wrong. The bound was route overlap toward the DRAM endpoints.
+- **Perf** (Blackhole p150b, device kernel ns, one fresh-cache profiled run per variant, median of its 3 calls; `probes/bank_affinity_ab_probe.py`):
+
+  | p1 `(16,12,128,128)` f32 variant | full | read-only | write-only |
+  |-----------------------------|------|-----------|------------|
+  | `flat_page_range` (prior) | 63616 | 31773 | 44330 |
+  | bank-affine, `dram_side` (all 110 cores in row bands; the interrupted attempt's default) | 72632 | 36300 | 45512 |
+  | bank-affine, `interleave` | 69221 | — | — |
+  | bank-affine, `dram_rows`, each kernel on its own NoC's endpoints | 58349 | 25762 | 34542 |
+  | **bank-affine, `dram_rows`, shared row endpoint (shipped)** | **51357** | 25725 | 25138 |
+
+  - `dram_rows` with 2, 4 or 8 blocks per core at depth 2 measured 60.8, 60.7 and 63.7 µs, all slower than one block (58.2 µs). Once the reads and writes of a bank interleave in DRAM, it loses throughput, so `BLOCKS_PER_CORE_KNOB` stays at 1.
+  - Guard set, flat → shipped: p2 32464 → 25516; p3 25727 → 21516; p4 19405 → 16600; Q13 4605 → 3925; `(1,2048,128)` bf16 3066 → 2867; Q3 `(16,3,2560)` bf16 ROW_MAJOR 2046 → 1676. Q8 (logical rows, flat split) went 7196 → 7246 and the single-page int32 ROW_MAJOR case 936 → 932, both within noise on unchanged paths.
+  - p1 now moves 25.17 MB at 490 GB/s, 96% of the 512 GB/s DRAM spec. That is the lower bound of Blackhole's adjacent-core DRAM read benchmark (490–512 GB/s, `tests/scripts/test_moreh_microbenchmark.py`) and below the 54.61 µs roofline. Full time ≈ read-only + write-only (25.7 + 25.1 µs): DRAM is saturated and time-shares the two directions.
+- **Accuracy achieved**: bit-exact (PCC=1.0, relative RMS=0) on p1, p2, p3, p4, Q13, F5, Q3 ROW_MAJOR and the 88-cell layout matrix, which covers both regimes across dtype × layout × aligned/partial shapes, plus the poisoned-padding kinds.
+- **Golden test progress**: 28/28 in the slice I ran (`-k "not uint32 and not int32 and not poisoned"`, every cell on the changed path). The 10 deselected cells run the unchanged `flat_page_range` / `logical_rows_partial_tile` paths. Unit tests 133/133.
+- **Issues encountered**:
+  - An interrupted earlier attempt had committed `bank_affine_runs` with placement `dram_side` as the default, a 13% p1 regression. Its band split put most cores north of their bank's NoC0 endpoint row, and NoC0 (east, then south) reaches those cores only around the torus.
+  - One Tracy capture crashed (`tracy-capture` exit 3). The test had passed; the re-run measured cleanly.
+- **Tests added**:
+  - `test_g6_clone_plan_bank_affine_rows`: pins placement, endpoint and rectangle count.
+  - `test_g6_clone_plan_regime`: now pins `bank_affine_runs` on p1, p4 and Q3, and the flat fallback at 40 pages.
+  - `test_g6_clone_multi_block_ring`: parametrized over both full-page regimes.
+  - `test_g6_clone_bank_stagger`: the stagger knob forced on over logical-rows, flat TILE and ROW_MAJOR shapes, with 1 and 3 blocks per core, bit-exact.
+  - Probes: `probes/bank_affinity_ab_probe.py`, `probes/ablate_kernels/` (no-op reader/writer for read-only and write-only ablations), `probes/probe_008.py` and `probe_009.py` (DRAM / worker topology).
