@@ -18,6 +18,7 @@
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
+#include <tt-metalium/memory/tensor/tensor_types.hpp>
 
 namespace ttnn::operations::core::CMAKE_UNIQUE_NAMESPACE {
 namespace {
@@ -45,12 +46,14 @@ bool is_allowed_row_major_dtype(ttnn::DataType tensor_dtype, std::optional<ttnn:
         return true;
     }
     // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling.
-    return tensor_dtype == ttnn::DataType::BFLOAT8_B && requested_dtype.value() == ttnn::DataType::BFLOAT16;
+    // MX (Quasar) tiles are expanded to Float16_b by the unpacker, so MX -> BFLOAT16 goes the same way.
+    return (tensor_dtype == ttnn::DataType::BFLOAT8_B || tt::tt_metal::is_mx(tensor_dtype)) &&
+           requested_dtype.value() == ttnn::DataType::BFLOAT16;
 }
 
 constexpr std::string_view kRowMajorDtypeErrorMessage =
     "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device "
-    "(allowed exception: BFLOAT8_B -> BFLOAT16, which untilize handles natively)!";
+    "(allowed exception: BFLOAT8_B / MX -> BFLOAT16, which untilize handles natively)!";
 
 Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,

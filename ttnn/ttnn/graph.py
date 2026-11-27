@@ -367,6 +367,30 @@ def end_graph_capture_to_file(report_path):
     return json.loads(result_str)
 
 
+# Mesh coordinates listed one by one in a tensor summary before the rest are counted instead. Every tensor argument of
+# every operation carries the summary, in the Python I/O sidecar and the report DB, so a tensor spread over a
+# 16x8 multi-host mesh would otherwise add 128 coordinates to each.
+_MAX_MESH_COORDS_LISTED = 8
+# The two shortened forms, kept fixed so a tool can parse the count back out: the whole mesh, and the last entry after
+# the first few coordinates. The marker counts every coordinate, where _safe_arg_str's "... +N more" counts the sequence
+# elements it dropped: a different thing, and a different spelling, so a tool that treats "+N more" as a cut operand
+# list (the Quasar graph-ops generator does) doesn't skip every argument of a tensor spread over a large mesh.
+_MESH_COORDS_WHOLE_MESH_FORMAT = "all {count}"
+_MESH_COORDS_COUNT_MARKER_FORMAT = "... {count} in all"
+
+
+def _mesh_coords_summary(mesh_coords, device) -> list[str] | str:
+    """The tensor's mesh coordinates: a list of each one for a few; for more, the string ``all <n>`` when a device
+    tensor spans its whole mesh, else a list of the first few and a ``... <n> in all`` count. A host tensor has no mesh
+    to compare with, so it always gets the list form."""
+    listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
+    if len(mesh_coords) <= _MAX_MESH_COORDS_LISTED:
+        return listed
+    if device is not None and len(mesh_coords) == device.get_num_devices():
+        return _MESH_COORDS_WHOLE_MESH_FORMAT.format(count=len(mesh_coords))
+    return listed + [_MESH_COORDS_COUNT_MARKER_FORMAT.format(count=len(mesh_coords))]
+
+
 def _ttnn_tensor_summary(t) -> str:
     """Build a rich one-line summary of a ttnn.Tensor.
 
@@ -396,7 +420,7 @@ def _ttnn_tensor_summary(t) -> str:
     topology = t.tensor_topology()
     mesh_coords = topology.mesh_coords()
     if mesh_coords:
-        info["mesh_coords"] = [str(c) for c in mesh_coords]
+        info["mesh_coords"] = _mesh_coords_summary(mesh_coords, device)
     dist_shape = topology.distribution_shape()
     if dist_shape is not None:
         info["distribution_shape"] = str(dist_shape)

@@ -104,13 +104,13 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
 )
 def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
     perf_report,
-    binary_op_mathop,
+    mathop,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_bf16_rne_quasar(
-        binary_op_mathop,
+        mathop,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -147,28 +147,27 @@ def test_perf_eltwise_binary_sfpu_bcast_quasar(
     )
 
 
-_MAX_MIN_FLOAT_PERF_SWEEP = dict(
-    formats_dest_acc_is_max_input_dims=_func._generate_max_min_combinations(
-        _func.SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-    ),
-)
-
-
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    **_MAX_MIN_FLOAT_PERF_SWEEP,
+    **_func.MAX_MIN_FLOAT_SWEEP,
     **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report,
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    mathop,
+    input_dimensions,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_max_min_float_quasar(
-        formats_dest_acc_is_max_input_dims,
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -182,13 +181,19 @@ def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
 )
 def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report,
-    formats_dest_acc_is_max_input_dims,
+    formats,
+    dest_acc,
+    mathop,
+    input_dimensions,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_max_min_int32_quasar(
-        formats_dest_acc_is_max_input_dims,
+        formats,
+        dest_acc,
+        mathop,
+        input_dimensions,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -202,14 +207,14 @@ def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
 )
 def test_perf_eltwise_binary_sfpu_quant_quasar(
     perf_report,
-    binary_op,
+    mathop,
     sign_magnitude,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_quant_quasar(
-        binary_op,
+        mathop,
         sign_magnitude,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),

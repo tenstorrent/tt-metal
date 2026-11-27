@@ -63,6 +63,7 @@
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/fused_msda/fused_msda_nanobind.hpp"
 #include "ttnn/operations/experimental/modulated_deform_conv2d/modulated_deform_conv2d_nanobind.hpp"
+#include "ttnn/operations/experimental/untilize_and_split_heads/untilize_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
@@ -107,6 +108,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/pack_scaled_fp8_kv_cache/pack_scaled_fp8_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_back/per_token_cast_back_nanobind.hpp"
 #include "ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.hpp"
+#include "ttnn-nanobind/compiled_program.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
@@ -124,6 +126,8 @@ namespace ttnn::operations::experimental {
 void py_module(nb::module_& mod) {
     ttnn::operations::generic::bind_generic_operation_program_spec(mod);
     ttnn::operations::generic::bind_generic_operation_preparation(mod);
+    ttnn::compiled_program::py_module(mod);
+    ttnn::operations::generic::bind_generic_operation_compilation(mod);
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
 
@@ -228,6 +232,7 @@ void py_module(nb::module_& mod) {
     multi_scale_deformable_attn::detail::bind_multi_scale_deformable_attn(mod);
     fused_msda::detail::bind_fused_msda(mod);
     modulated_deform_conv2d::detail::bind_modulated_deform_conv2d(mod);
+    untilize_and_split_heads::detail::bind_untilize_and_split_heads(mod);
 
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);

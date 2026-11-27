@@ -107,20 +107,6 @@ bool is_block_float(DataType dtype) {
     }
 }
 
-bool is_mx(DataType dtype) {
-    switch (dtype) {
-        case DataType::MXFP8_E4M3:
-        case DataType::MXFP8_E5M2:
-        case DataType::MXFP6_E2M3:
-        case DataType::MXFP6_E3M2:
-        case DataType::MXFP4:
-        case DataType::MXINT8:
-        case DataType::MXINT4:
-        case DataType::MXINT2: return true;
-        default: return false;
-    }
-}
-
 tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype) {
     switch (datatype) {
         case tt::tt_metal::DataType::BFLOAT16: return tt::DataFormat::Float16_b;

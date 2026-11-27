@@ -126,8 +126,6 @@ inline __attribute__((always_inline, flatten)) void record(Callable &&callable, 
  * @note Ensure the recorded body never contains a REPLAY; a REPLAY cannot be one of the
  *       instructions it loads. In RecordOnly also ensure it contains no MOP or MOP_CFG;
  *       a load-only REPLAY may record only individual single-store pushes.
- * @note Ensure range.start folds to a compile-time constant; the SFPI REPLAY builtin rejects a
- *       runtime start index. Only range.count may be dynamic.
  */
 template <RecordBehavior Behavior = RecordBehavior::RecordOnly, typename Callable, typename... Args>
 inline __attribute__((always_inline, flatten)) void record(const BufferRange range, Callable &&callable, Args &&...args)
@@ -157,8 +155,6 @@ inline __attribute__((always_inline)) void run()
  *
  * @param range: Buffer range to expand into the instruction stream.
  * @note Call @ref record for range before this function unless the range was populated earlier.
- * @note Ensure range.start folds to a compile-time constant; the SFPI REPLAY builtin rejects a
- *       runtime start index. Only range.count may be dynamic.
  */
 inline __attribute__((always_inline)) void run(const BufferRange range)
 {

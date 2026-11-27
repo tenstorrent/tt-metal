@@ -13,9 +13,13 @@
 namespace ttnn {
 
 DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch) {
-    bool approx_mode = false;
-    bool fp32_acc = true;
-    return init_device_compute_kernel_config(arch, std::nullopt, tt::tt_metal::MathFidelity::HiFi4, approx_mode, fp32_acc);
+    const bool approx_mode = false;
+    const bool fp32_acc = true;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // fp32_dest_acc_en is always on here, so use HiFi3 on Wormhole (less likely to give bad results).
+    const auto math_fidelity =
+        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
+    return init_device_compute_kernel_config(arch, std::nullopt, math_fidelity, approx_mode, fp32_acc);
 }
 
 Tensor layer_norm(
@@ -42,6 +46,7 @@ Tensor layer_norm(
 
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto kernel_config_val = compute_kernel_config.value_or(layernorm_default_compute_config(arch));
 
     return ttnn::prim::layer_norm(

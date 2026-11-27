@@ -65,11 +65,26 @@ ALWI void mul_tiles_bcast_scalar_block_init(uint32_t icb0, uint32_t icb1, uint32
     UNPACK((llk_unpack_AB_scalar_block_init(icb0, icb1)));
 }
 
+// addrmod_scope = PerCall (default): each call programs and restores the math address mode it walks with.
+// addrmod_scope = CallerScoped: the caller brackets a run of calls with
+// mul_tiles_bcast_scalar_block_addrmod_set() and mul_tiles_bcast_scalar_block_addrmod_restore(),
+// and runs no other compute op in between.
+template <AddrModScope addrmod_scope = AddrModScope::PerCall>
 ALWI void mul_tiles_bcast_scalar_block(
     uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t block_size) {
     MATH(SAN_HOOK(unsupported()));
-    MATH((_llk_math_eltwise_mul_scalar_block_(idst, block_size)));
+    MATH((_llk_math_eltwise_mul_scalar_block_<addrmod_scope>(idst, block_size)));
     UNPACK((llk_unpack_AB_scalar_block(icb0, icb1, itile0, itile1, block_size)));
+}
+
+ALWI void mul_tiles_bcast_scalar_block_addrmod_set() {
+    MATH(SAN_HOOK(unsupported()));
+    MATH((_llk_math_eltwise_mul_scalar_block_addrmod_set_()));
+}
+
+ALWI void mul_tiles_bcast_scalar_block_addrmod_restore() {
+    MATH(SAN_HOOK(unsupported()));
+    MATH((_llk_math_eltwise_mul_scalar_block_addrmod_restore_()));
 }
 
 // Source-compatible spelling for callers already using the short initializer.

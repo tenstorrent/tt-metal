@@ -9,7 +9,7 @@ from abc import ABC, abstractmethod
 from ctypes import c_uint32
 from dataclasses import dataclass, field
 
-from .chip_architecture import quasar_variant
+from .chip_architecture import ChipArchitecture, get_chip_architecture, quasar_variant
 from .format_config import DataFormat
 from .golden_generators import TILE_DIMENSIONS
 from .llk_params import (
@@ -120,6 +120,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
 
 
 @dataclass
+class ADDRMOD_CALLER_SCOPED(TemplateParameter):
+    """Scalar-block multiply: the kernel brackets its executes with the addrmod set/restore helpers."""
+
+    caller_scoped: bool = False
+
+    def convert_to_cpp(self) -> str:
+        scope = "CallerScoped" if self.caller_scoped else "PerCall"
+        return f"constexpr auto ADDRMOD_SCOPE = ckernel::AddrModScope::{scope};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 
@@ -199,6 +210,14 @@ class EN_DEST_REUSE(TemplateParameter):
 
 
 @dataclass
+class INP_FLOAT32(TemplateParameter):
+    """ttnn's float32-input tag: kernels that branch on it (erf, gelu, ...) build their float32 arm."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define INP_FLOAT32 1"
+
+
+@dataclass
 class SFPU_INT_OP(TemplateParameter):
     """Emit a #define to select the integer SFPU operation in a shared C++ test source.
 
@@ -214,22 +233,13 @@ class SFPU_INT_OP(TemplateParameter):
         return ""
 
 
-@dataclass
-class SFPU_BINARY_OP(TemplateParameter):
-    """Select the consolidated Quasar binary-SFPU op at compile time.
-
-    Emits ``constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::<op>;``,
-    consumed by ``sfpu_operations_quasar.h``. ``op`` is one of:
-    ADD, MUL, DIV, GT, LT, LE, GE, MAX, MIN, ATAN2, COPY_DEST, GCD (reusing the
-    LLK BinaryOp enum, like Blackhole — int vs float MUL is disambiguated
-    by the math format in the cpp; COPY_DEST forwards the Dest encoding so
-    the sfpmem mode matches).
-    """
-
-    op: str = "ADD"
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr ckernel::BinaryOp SFPU_BINARY_OP = ckernel::BinaryOp::{self.op};"
+# Quasar's BinaryOp has no *_INT32 enumerators: the Int32 members use their float counterpart's
+# enumerator and the kernel picks the integer path from the math format.
+_QUASAR_INT32_BINARY_ENUMERATORS = {
+    MathOperation.SfpuMulInt32: "MUL",
+    MathOperation.SfpuMaxInt32: "MAX",
+    MathOperation.SfpuMinInt32: "MIN",
+}
 
 
 def _generate_operation_constants(mathop: MathOperation) -> list[str]:
@@ -241,8 +251,11 @@ def _generate_operation_constants(mathop: MathOperation) -> list[str]:
             f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{mathop.cpp_enum_value};"
         )
     elif mathop in SFPU_BINARY_OPERATIONS:
+        enumerator = mathop.cpp_enum_value
+        if get_chip_architecture() == ChipArchitecture.QUASAR:
+            enumerator = _QUASAR_INT32_BINARY_ENUMERATORS.get(mathop, enumerator)
         constants.append(
-            f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{mathop.cpp_enum_value};"
+            f"constexpr auto SFPU_BINARY_OPERATION = ckernel::BinaryOp::{enumerator};"
         )
     elif mathop in SFPU_TERNARY_OPERATIONS:
         constants.append(
@@ -323,6 +336,20 @@ class SFPU_CLOBBER_LREGS(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return "#define SFPU_CLOBBER_LREGS" if self.clobber_lregs else ""
+
+
+@dataclass
+class OVERLAPPED_WORKLOAD(TemplateParameter):
+    """Marks a 4-TRISC kernel whose FPU and SFPU workloads run in parallel, as a perf CSV column.
+
+    In these kernels ``L1_TO_L1`` is the overlap of both workloads, not the cost of either, so
+    its numbers do not compare with a standalone test's ``L1_TO_L1``. It emits no code.
+    """
+
+    overlapped_workload: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return ""
 
 
 @dataclass
@@ -517,6 +544,43 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
         if not self.max_min_sign_magnitude:
             return ""
         return "#define SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE 1"
+
+
+@dataclass
+class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
+    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
+    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+
+    A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
+    """
+
+    compute_api_kernels: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if not self.compute_api_kernels:
+            return ""
+        return "#define SFPU_COMPUTE_API_KERNELS 1"
+
+
+@dataclass
+class SFPU_POWER_ITERATIVE_EXPONENT(TemplateParameter):
+    """Exponent for power_iterative on Quasar; ``power_iterative_runtime`` has the harness pass it
+    through a volatile, so the kernel takes its runtime-exponent path."""
+
+    power_iterative_exponent: int = 3
+    power_iterative_runtime: bool = False
+
+    def convert_to_cpp(self) -> str:
+        if self.power_iterative_exponent < 0:
+            raise ValueError(
+                f"power_iterative takes a non-negative exponent, got {self.power_iterative_exponent}"
+            )
+        lines = [
+            f"#define SFPU_POWER_ITERATIVE_EXPONENT {self.power_iterative_exponent}u"
+        ]
+        if self.power_iterative_runtime:
+            lines.append("#define SFPU_POWER_ITERATIVE_RUNTIME_EXPONENT 1")
+        return "\n".join(lines)
 
 
 @dataclass
@@ -1976,17 +2040,6 @@ class NUM_GUARD_TILES(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return f"std::uint32_t NUM_GUARD_TILES;", "I"
-
-
-@dataclass
-class INPUT_TILE_CNT(RuntimeParameter):
-    input_tile_cnt: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr int INPUT_TILE_CNT = {self.input_tile_cnt};"
-
-    def convert_to_struct_fields(self) -> tuple[str, str]:
-        return "int INPUT_TILE_CNT;", "i"
 
 
 @dataclass
