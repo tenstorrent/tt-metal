@@ -1,53 +1,60 @@
 # L1 Ledger: g6_interleaved_to_sharded
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes are from `op_design.md` → Blocking Model: `image` (folded), `tile_rows`, `tile_cols`, `tile_face_rows`.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → Blocking Model.
 
-The op allocates **no CB and no scratch buffer**. The only per-core L1 involved is the output tensor's own shard. BB-05 counts that shard inside the 1347776 B budget, so it is the single row below. It is the destination the reads land in, not a buffer the op adds.
+Block axes accounted in every row: `tile_row`, `tile_col`, `image`, `row_in_tile`, `col_in_tile`.
+
+## Buffers
+
+The op adds **no circular buffer and no scratch L1**. The only L1 it writes is the output tensor's own shard. It is listed here because BB-05 (D15 of the bundle) counts it inside the per-core bound, and because it is the destination every read lands in.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `output_shard` (the output tensor's L1 shard; **not a CB**: its base address is a common RT arg) | `shard_rows_tiles · shard_cols_tiles` (caller's placement; p1 1·5 = 5, p2 1·4 = 4) | `block_rows · block_cols` pages, all resident at once because the shard is the result (p1 5, p2 4). Pages beyond the tensor on a ragged last shard are allocated but unwritten, and the capacity covers them by the shard contract | `{image: folded into tile_rows, tile_rows: spans → shard_rows_tiles, tile_cols: spans → shard_cols_tiles, tile_face_rows: spans → whole page (32 rows); a trimmed read writes only face rows < trim_span_bytes / 32 of faces 0/1 and leaves the rest unspecified}` | `Float16_b` (bfloat16 32×32 tile, 2048 B). A dataflow-only payload that never passes through DEST, so audit 2 does not apply (no `fp32_dest_acc_en`) | reader (NoC read responses from DRAM) | none in this program: the result tensor, read by the next program | allocated by the entry point before dispatch; outlives the program | It is the result. No other buffer exists to share with, and every read lands in it directly (Rule 3, pattern 1: pack into the destination) |
+| `y_shard` (output tensor's L1 shard; a tensor buffer, not a CB; allocated by the entry point from `memory_config`) | `shard_tile_rows * shard_tile_cols` pages of `tile_bytes`. This is the caller's placement, not an op choice. p1: 1*5 = 5 pages (10,240 B); p2: 1*4 = 4 pages (8,192 B). | `block_tile_rows * block_tile_cols` tiles written per core (≤ capacity; = capacity in both production cases). A partial last shard leaves the slots past the tile grid unwritten. | `{tile_row: spans → block_tile_rows; tile_col: spans → block_tile_cols; image: spans → folded into tile_row; row_in_tile: spans → span_bytes(r) of each tile written (rows past the span stay unwritten padding); col_in_tile: spans → 32 (whole face rows)}` | bfloat16 tile (Float16_b), the input's own bytes. No DEST is involved (no compute kernel), so audit 2 has nothing to compare. | reader kernel(s) (NCRISC; + BRISC when `issuers_per_core = 2`), by NoC read responses | none inside this program; the model's next program reads it in place | from the op's call to the consumer's end (it is the result) | none: it is the result itself, and no op buffer exists to share with. Inventory is 0 because each NoC read lands at its final address (Rule 3, pattern 1: pack into the destination); a staging CB would hold the same bytes a second time. |
 
-### Buffers considered and not allocated
+Audit notes:
 
-| Candidate | Would have held | Why it does not exist |
-|-----------|-----------------|-----------------------|
-| `cb_output_shard` (globally allocated on the output buffer, `ttnn.cb_descriptor_from_sharded_tensor`) | the same bytes as `output_shard` (0 B added) | Its only role would be to carry the shard address, and no kernel would pop it. A common RT arg carries the same address with one patch per call on the cached descriptor (BB-07), and it adds no CB config to the kernel-config region (BB-04/BB-18) |
-| `cb_input_tiles` (staging between a reader and a writer) | `depth · page_size` | Not needed: a NoC read's destination is the core's own L1, and the owner core is the destination, so the page lands in its final place in one step |
-| `cb_forward_staging` | `forward_depth · page_size` on helper cores | belongs to the `deferred` `reader_and_forward` regime only |
-| compute-path CB pair (`copy` through unpack/pack) | 2 × depth pages | the engine path is forbidden by spec rule 4, and the op computes nothing |
+| Audit | Finding |
+|-------|---------|
+| 1. Capacity vs live set | Over: capacity exceeds the live set only for a partial last shard; the gap is the caller's shard geometry (placement), not an op choice. Under: the live set spans `tile_row`, `tile_col`, and capacity scales with both. |
+| 2. Page format vs DEST width | n/a: no DEST on the path; page format = input format (bit-exact copy). |
+| 3. Disjoint lifetimes without sharing | n/a: one buffer. |
+| 4. Bounds and closed form | every symbol below is bounded; the total is closed-form. |
 
-### Symbol table
+## Symbol table
 
-| Symbol | Bound | Predicate / source establishing it |
-|--------|-------|------------------------------------|
-| `shard_rows_tiles`, `shard_cols_tiles` | `shard_rows_tiles · shard_cols_tiles · page_size ≤ 1347776 B` | caller's placement. The op cannot change it, and the allocator enforces it at `allocate_tensor_on_device`. Production: 5 and 4 pages (10240 B, 8192 B) |
-| `block_rows ≤ shard_rows_tiles`, `block_cols ≤ shard_cols_tiles` | the clipped shard rectangle | `derive_plan`: `min(nominal, tensor extent − start)` |
-| `page_size` | 2048 B | bfloat16 32×32 tile (`input_tensor.buffer_aligned_page_size()`) |
-| `trim_span_bytes` | `≤ face1_offset_bytes = 512 B` | trim predicate `v ≤ 16` ⇒ `round_up(32·v, 64) ≤ 512` |
+| Symbol | Meaning | Bound | Predicate establishing the bound |
+|--------|---------|-------|----------------------------------|
+| `tile_bytes` | bytes of one bf16 32x32 tile page | 2048 | `validate()`: dtype bfloat16, TILE, 32x32 tile |
+| `shard_tile_rows`, `shard_tile_cols` | `shard_shape / 32` | `shard_tile_rows * shard_tile_cols * tile_bytes ≤ L1_BUDGET_BYTES = 1347776` | `validate()` BB-05 check (ValueError otherwise); production: 5 and 4 pages |
+| `block_tile_rows`, `block_tile_cols` | one issuer's rectangle | `≤ shard_tile_rows`, `≤ shard_tile_cols` | `min()` clamps in the host work split |
+| `span_bytes(r)` | bytes read per tile of tile row `r` | `≤ tile_bytes` | regime selection function (op_design.md, Regimes) |
+| `issuers_per_core` | reader kernels per core | {1, 2} | `KNOBS` value set |
 
-### Total per-core footprint
+## Footprint
 
 ```
-L1(core) = shard_rows_tiles · shard_cols_tiles · page_size      # output shard: caller-fixed, scales with no op knob
-         + 0                                                    # everything the op adds
-p1: 5 · 2048 = 10240 B     p2: 4 · 2048 = 8192 B     (budget 1347776 B, BB-05)
+L1_op(core) = shard_tile_rows * shard_tile_cols * tile_bytes     (output shard; caller's placement)
+            + 0                                                  (op-added CBs / scratch)
+p1: 10,240 B per core on 32 cores;  p2: 8,192 B on 1 core   (bound 1,347,776 B)
 ```
 
-No term scales with an op knob: `block_rows`/`block_cols` select pages inside the caller's shard, and `trim_span_bytes` changes bytes moved, not bytes resident. Cores of the grid without a shard still hold the shard allocation, because L1 buffers are lockstep across the grid, and the op adds nothing there.
+No term scales with a knob. Block extents, `issuers_per_core` and `partial_tile_read` change what is written and how, never what is allocated. Kernel-config region per core: fixed-count CT args + 2 common RT args (input, output address) + one fixed-count rectangle of per-core RT args, independent of the tile count (BB-04).
 
 ## Data-movement budget
 
+Chosen split: owner-fetch along the target's shard axis (width: tile columns; height: tile rows), with the valid-row span on partial tile rows.
+
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| x (input, DRAM interleaved) | 1 (partial pages for the last tile row of each image) | Owner-fetch: each page is read once, by the core that owns its shard. A trimmed page moves one span `[0, face1_offset_bytes + trim_span_bytes)` by default (`LAST_ROW_FORM = "one_span"`), or 2 spans of `trim_span_bytes` (`"two_spans"`: rows 0..1 of faces 0 and 1 at the 64 B DRAM read granularity); an interior-row page moves whole | 0 |
-| y (output, L1 sharded) | 0 | Lives in L1. The DRAM read response lands at its shard address on its owner | 0 |
+| `x` (input, DRAM interleaved) | 1 per page. p1: 160 reads x 544 B = 87,040 B (327,680 B tiled; 10,240 B logical). p2: 4 x 544 B = 2,176 B. A fully valid tile row costs 2048 B per page. | Each page is read once, directly into its final L1 address. Nothing is staged, so nothing is re-read. | 0 |
+| `y` (output, L1 sharded) | 0 | It lands in the owner's L1 as the read response and never touches DRAM | 0: the read response terminates on its owner; no core writes another core's L1 |
 
 Totals per tier:
 
-| Shape | DRAM bytes read | Logical bytes | Cross-core NoC bytes | Core-local L1 bytes written |
-|-------|-----------------|---------------|----------------------|-----------------------------|
-| p1 (1, 5120) → 32 width shards | default one_span: 160 × 576 = 92160; two_spans: 160 × 128 = 20480 | 10240 | 0 | as DRAM bytes read |
-| p2 (1, 1, 1, 128) → 1 height shard | default one_span: 4 × 576 = 2304; two_spans: 4 × 128 = 512 | 256 | 0 | as DRAM bytes read |
+| Case | DRAM bytes | NoC bytes (read responses) | Core-to-core bytes |
+|------|------------|----------------------------|--------------------|
+| p1 | 87,040 | 87,040 into 32 cores (2,720 B per core, 5 requests per core) | 0 |
+| p2 | 2,176 | 2,176 into 1 core (4 requests) | 0 |
 
-> Cheapest-traffic split considered: owner-fetch with trimmed last-row pages — 20480 B of DRAM and 0 cross-core bytes on p1 (whole pages: 327680 B; single 576 B span: 92160 B; reader-and-forward: + one NoC write per forwarded page). Implemented: owner-fetch with trimmed last-row pages; the split (which core reads which page) is the cheapest. **The default transfer form is not the fewest bytes:** `one_span` moves 4.5× the bytes of `two_spans` with half the DRAM transactions, and measured faster on p1 (Blackhole, 5-call medians of device kernel duration, both with the two-reader split: 1047 ns vs 1114 ns; one reader: 1099 ns vs 1284 ns). With all 32 owners reading the 8 banks at once, the drain grows with the transaction count, not the bytes, at these sizes. `two_spans` stays a live value of the `LAST_ROW_FORM` knob. Nothing is deferred on traffic grounds; `reader_and_forward` is deferred on occupancy grounds only (see the regime table in `op_design.md`).
+> Cheapest-traffic split considered: owner-fetch along the target's shard axis — 1 DRAM crossing per page, 0 core-to-core bytes. Implemented: the same split. The implemented split is the cheapest. Inside it, the two-span transfer shape (perf lamp L2) moves fewer bytes, reaching the logical floor (p1: 10,240 B, i.e. −76,800 DRAM bytes) at 2 requests per partial tile. That is a transfer shape within the chosen split, measured as a lamp, not a different split.
