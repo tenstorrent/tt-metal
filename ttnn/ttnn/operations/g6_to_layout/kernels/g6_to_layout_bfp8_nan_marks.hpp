@@ -43,6 +43,21 @@ FORCE_INLINE uint32_t has_ff_byte(uint32_t word) {
 }
 
 FORCE_INLINE void mark_tile_nans(uint32_t tile_addr, NanMarksPtr marks) {
+    // Almost every tile has no 0xFF group: test all exponent words in one unrolled pass whose
+    // loads are independent (non-volatile, so they issue back to back), and skip the per-group
+    // walk. The scan precedes the writer's first row, so its cost is on the critical path.
+    const auto fast_exponents = reinterpret_cast<const tt_l1_ptr uint32_t*>(tile_addr);
+    uint32_t any_ff = 0;
+#pragma GCC unroll 16
+    for (uint32_t w = 0; w < BFP8_EXPONENT_BYTES / 4; ++w) {
+        any_ff |= has_ff_byte(fast_exponents[w]);
+    }
+    if (any_ff == 0) {
+        marks->groups[0] = 0;
+        marks->groups[1] = 0;
+        return;
+    }
+
     auto exponents = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_addr);
     uint32_t groups[2] = {0, 0};
     for (uint32_t w = 0; w < BFP8_EXPONENT_BYTES / 4; ++w) {
