@@ -5,16 +5,17 @@ from .g6_sharded_to_interleaved import (
     EXCLUSIONS,
     INPUT_TAGGERS,
     SUPPORTED,
-    describe_plan,
     g6_sharded_to_interleaved,
     validate,
 )
+from .g6_sharded_to_interleaved_program_descriptor import NUM_WRITER_LANES, role_dump
 
 __all__ = [
-    "g6_sharded_to_interleaved",
-    "describe_plan",
-    "validate",
-    "INPUT_TAGGERS",
-    "SUPPORTED",
     "EXCLUSIONS",
+    "INPUT_TAGGERS",
+    "NUM_WRITER_LANES",
+    "SUPPORTED",
+    "g6_sharded_to_interleaved",
+    "role_dump",
+    "validate",
 ]

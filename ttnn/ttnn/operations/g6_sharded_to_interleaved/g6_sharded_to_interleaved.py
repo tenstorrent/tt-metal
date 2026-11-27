@@ -1,21 +1,45 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""g6_sharded_to_interleaved: copy a height- or width-sharded L1 TILE tensor into a newly allocated
-interleaved TILE tensor (DRAM or L1, as memory_config names), bit for bit, as one device program.
+"""g6_sharded_to_interleaved: a height- or width-sharded L1 TILE tensor -> a new interleaved tensor.
+
+out[i] = input_tensor[i] bit for bit; shape, dtype and TILE kept; placement from `memory_config`
+(interleaved, DRAM or L1). One generic_op dispatch per call.
 """
 
 from __future__ import annotations
+
+import math
 
 import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_sharded_to_interleaved_program_descriptor import check_l1_bound, create_program_descriptor, get_plan
+from .g6_sharded_to_interleaved_program_descriptor import (
+    TILE_HW,
+    create_program_descriptor,
+    program_cache_key,
+    refresh_program_descriptor,
+)
+
+_OP = "g6_sharded_to_interleaved"
+
+_IN_SCHEME = {
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
+}
+_BUFFER = {
+    ttnn.BufferType.DRAM: "dram",
+    ttnn.BufferType.L1: "l1",
+}
+_ORIENTATION = {
+    ttnn.ShardOrientation.ROW_MAJOR: "row_major",
+    ttnn.ShardOrientation.COL_MAJOR: "column_major",
+}
 
 
 # ---------------------------------------------------------------------------
-# 1. INPUT_TAGGERS — each reads its axis off the scenario dict inputs[0]
+# 1. INPUT_TAGGERS — `inputs` is (scenario,), the scenario dict of feature_spec.py
 # ---------------------------------------------------------------------------
 
 
@@ -62,104 +86,108 @@ SUPPORTED = {
 EXCLUSIONS = []
 
 
+PROPERTIES = {
+    "multi_core": {"value": True, "source": "declared"},
+}
+
+
 # ---------------------------------------------------------------------------
 # 4. validate()
 # ---------------------------------------------------------------------------
 
-_TILE = 32
-
-_IN_SCHEME = {
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED: "width_sharded",
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED: "height_sharded",
-}
-_ORIENTATION = {
-    ttnn.ShardOrientation.ROW_MAJOR: "row_major",
-    ttnn.ShardOrientation.COL_MAJOR: "column_major",
-}
-_BUFFER = {
-    ttnn.BufferType.DRAM: "dram",
-    ttnn.BufferType.L1: "l1",
-}
-
 
 def _check_structure(input_tensor, memory_config):
-    """Inputs the op can never take: ValueError, never a support refusal."""
+    """Structural refusals: ValueError, never a support refusal."""
     if not isinstance(input_tensor, ttnn.Tensor):
-        raise ValueError(f"g6_sharded_to_interleaved: input_tensor must be a ttnn.Tensor, got {type(input_tensor)}")
+        raise ValueError(f"{_OP}: input_tensor must be a ttnn.Tensor, got {type(input_tensor)}")
     if input_tensor.storage_type() != ttnn.StorageType.DEVICE:
-        raise ValueError("g6_sharded_to_interleaved: input_tensor must be on a device")
-    if len(input_tensor.shape) not in (2, 4):
-        raise ValueError(f"g6_sharded_to_interleaved: input rank must be 2 or 4, got {len(input_tensor.shape)}")
+        raise ValueError(f"{_OP}: input_tensor must be on a device")
+    rank = len(input_tensor.shape)
+    if rank not in (2, 4):
+        raise ValueError(f"{_OP}: input rank must be 2 or 4, got {rank}")
     if input_tensor.layout != ttnn.TILE_LAYOUT:
-        raise ValueError(f"g6_sharded_to_interleaved: input layout must be TILE, got {input_tensor.layout}")
-    if tuple(input_tensor.tile.tile_shape) != (_TILE, _TILE):
-        raise ValueError(f"g6_sharded_to_interleaved: tile shape must be 32x32, got {input_tensor.tile.tile_shape}")
-    if not input_tensor.is_sharded():
-        raise ValueError("g6_sharded_to_interleaved: input_tensor must be sharded")
+        raise ValueError(f"{_OP}: input_tensor must be in TILE_LAYOUT, got {input_tensor.layout}")
+    if tuple(input_tensor.tile.tile_shape) != (TILE_HW, TILE_HW):
+        raise ValueError(f"{_OP}: input tile must be {TILE_HW}x{TILE_HW}, got {input_tensor.tile.tile_shape}")
+
     in_mc = input_tensor.memory_config()
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        raise ValueError(f"{_OP}: block-sharded input is not a valid input (height or width sharding only)")
+    if in_mc.memory_layout not in _IN_SCHEME or not input_tensor.is_sharded():
+        raise ValueError(f"{_OP}: input_tensor must be height- or width-sharded, got {in_mc.memory_layout}")
     if in_mc.buffer_type != ttnn.BufferType.L1:
-        raise ValueError(f"g6_sharded_to_interleaved: input must be in L1, got {in_mc.buffer_type}")
-    if in_mc.memory_layout not in _IN_SCHEME:
-        raise ValueError(
-            f"g6_sharded_to_interleaved: input must be HEIGHT_SHARDED or WIDTH_SHARDED, got {in_mc.memory_layout}"
-        )
-    shard_shape = tuple(in_mc.shard_spec.shape)
-    if shard_shape[0] % _TILE or shard_shape[1] % _TILE:
-        raise ValueError(f"g6_sharded_to_interleaved: shard shape {shard_shape} is not a whole number of tiles")
+        raise ValueError(f"{_OP}: input_tensor must be sharded in L1, got {in_mc.buffer_type}")
+    spec = in_mc.shard_spec
+    if spec is None:
+        raise ValueError(f"{_OP}: sharded input_tensor has no shard spec")
+    shard_h, shard_w = (int(d) for d in spec.shape)
+    if shard_h <= 0 or shard_w <= 0 or shard_h % TILE_HW or shard_w % TILE_HW:
+        raise ValueError(f"{_OP}: shard shape {(shard_h, shard_w)} is not a whole number of tiles")
+
+    padded = tuple(int(d) for d in input_tensor.padded_shape)
+    padded_rows, padded_w = math.prod(padded[:-1]), padded[-1]
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        if shard_w != padded_w:
+            raise ValueError(f"{_OP}: height shard width {shard_w} != padded width {padded_w}")
+        num_shards = -(-padded_rows // shard_h)
+    else:
+        if shard_h != padded_rows:
+            raise ValueError(f"{_OP}: width shard height {shard_h} != padded height {padded_rows}")
+        num_shards = -(-padded_w // shard_w)
+    if num_shards > spec.grid.num_cores():
+        raise ValueError(f"{_OP}: {num_shards} shards exceed the {spec.grid.num_cores()} cores of the shard grid")
+
     if not isinstance(memory_config, ttnn.MemoryConfig):
-        raise ValueError(f"g6_sharded_to_interleaved: memory_config must be a ttnn.MemoryConfig, got {memory_config}")
+        raise ValueError(f"{_OP}: memory_config must be a ttnn.MemoryConfig, got {type(memory_config)}")
     if memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
-        raise ValueError(
-            f"g6_sharded_to_interleaved: memory_config must be INTERLEAVED, got {memory_config.memory_layout}"
-        )
-    if memory_config.buffer_type not in _BUFFER:
-        raise ValueError(
-            f"g6_sharded_to_interleaved: memory_config buffer type must be DRAM or L1, got {memory_config.buffer_type}"
-        )
+        raise ValueError(f"{_OP}: memory_config must be interleaved, got {memory_config.memory_layout}")
 
 
 def _scenario(input_tensor, memory_config):
     in_mc = input_tensor.memory_config()
     spec = in_mc.shard_spec
     return {
-        "shape": tuple(input_tensor.shape),
+        "shape": tuple(int(d) for d in input_tensor.shape),
         "dtype": input_tensor.dtype,
         "layout": input_tensor.layout,
         "in_scheme": _IN_SCHEME[in_mc.memory_layout],
-        "shard_shape": tuple(spec.shape),
+        "shard_shape": tuple(int(d) for d in spec.shape),
         "grid": tuple(((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in spec.grid.ranges()),
-        "orientation": _ORIENTATION[spec.orientation],
-        "buffer": _BUFFER[memory_config.buffer_type],
+        "orientation": _ORIENTATION.get(spec.orientation, str(spec.orientation)),
+        "buffer": _BUFFER.get(memory_config.buffer_type, str(memory_config.buffer_type)),
     }
 
 
 def validate(input_tensor, memory_config):
     _check_structure(input_tensor, memory_config)
 
-    inputs = (_scenario(input_tensor, memory_config),)
-    axes = {}
-    for axis, tagger in INPUT_TAGGERS.items():
-        axes[axis] = tagger(inputs, axes)
+    scenario = _scenario(input_tensor, memory_config)
+    axes = {key: scenario[key] for key in ("dtype", "layout", "in_scheme", "buffer")}
+    for axis_name, tagger in INPUT_TAGGERS.items():
+        axes[axis_name] = tagger((scenario,), axes)
 
     for axis, allowed in SUPPORTED.items():
         if axes[axis] not in allowed:
-            raise UnsupportedAxisValue(f"g6_sharded_to_interleaved: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
+            raise UnsupportedAxisValue(f"{_OP}: {axis}={axes[axis]!r} not in SUPPORTED {allowed}")
 
     for exc in EXCLUSIONS:
         if all(axes.get(k) == v for k, v in exc.items()):
-            raise ExcludedCell(f"g6_sharded_to_interleaved: unsupported combination (refinement candidate): {exc}")
+            raise ExcludedCell(f"{_OP}: unsupported combination (refinement candidate): {exc}")
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Program descriptors by program_cache_key (BB-07): a repeat call rebuilds nothing, it only re-points the
+# cached descriptor at this call's input buffer and output address.
+_PROGRAM_CACHE = {}
+
 
 def g6_sharded_to_interleaved(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
     validate(input_tensor, memory_config)
-    check_l1_bound(get_plan(input_tensor, memory_config))
 
-    # New storage on every call (and on every device of a mesh); the input is never aliased.
+    # The call's first and only device allocation, so a freed output-sized range is reused.
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,
         input_tensor.dtype,
@@ -167,35 +195,13 @@ def g6_sharded_to_interleaved(input_tensor: ttnn.Tensor, memory_config: ttnn.Mem
         input_tensor.device(),
         memory_config,
     )
-    program_descriptor = create_program_descriptor(input_tensor, output_tensor, memory_config)
-    return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
 
+    key = program_cache_key(input_tensor, memory_config)
+    descriptor = _PROGRAM_CACHE.get(key)
+    if descriptor is None:
+        descriptor = create_program_descriptor(input_tensor, output_tensor, key)
+        _PROGRAM_CACHE[key] = descriptor
+    else:
+        refresh_program_descriptor(descriptor, input_tensor, output_tensor)
 
-def describe_plan(input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> dict:
-    """The plan a call with these arguments selects: regime and, per core, its role and blocks."""
-    validate(input_tensor, memory_config)
-    plan = get_plan(input_tensor, memory_config)
-    cores = []
-    for core_plan in plan.cores:
-        blocks = [
-            {"riscv": riscv, "block": (b.origin_row, b.origin_col, b.rows, b.cols), "start": (b.start_row, b.start_col)}
-            for riscv, riscv_blocks in enumerate(core_plan.blocks_per_riscv)
-            for b in riscv_blocks
-        ]
-        cores.append(
-            {
-                "core": core_plan.core,
-                "role": "writer" if blocks else "idle",
-                "shard": core_plan.shard_index,
-                "blocks": blocks,
-            }
-        )
-    return {
-        "regime": plan.regime,
-        "num_writer_riscs": plan.num_writer_riscs,
-        "rotate_write_order": plan.rotate_write_order,
-        "tensor_tiles": (plan.tensor_tile_rows, plan.tensor_tile_cols),
-        "shard_tiles": (plan.shard_tile_rows, plan.shard_tile_cols),
-        "num_shards": plan.num_shards,
-        "cores": cores,
-    }
+    return ttnn.generic_op([input_tensor, output_tensor], descriptor)
