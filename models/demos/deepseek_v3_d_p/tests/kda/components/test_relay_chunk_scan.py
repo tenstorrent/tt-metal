@@ -6,6 +6,8 @@ call after call and bit-identically: on torus and unwrapped 2D fabrics, with Kim
 heads) and fabric payload, and within its device-time reference.
 """
 
+import dataclasses
+
 import pytest
 import torch
 
@@ -545,10 +547,13 @@ def test_relay_chunk_scan_round_fp32_operands(mesh_device):
     truncate them, and leaves the relay itself alone. With every E = 0 (each hop S + B, exact in FP32), F(0) = 0 and
     a tiny F(I) on the 9-bit grid, a chunk's output is F(I) @ entry through an eps-dominated gated norm (FP32 output),
     so a truncated entry state or chunk output shows as a scale bias: rounded, it goes, and the carries, which only the
-    relay cores form, stay bit-identical."""
+    relay cores form, stay bit-identical. The output gate runs at HiFi4, as under K3_ACC: at the default HiFi2 srcB keeps
+    6 of bf16 x's 7 mantissa bits, and that truncation of the gate (-3.5e-4 of output scale here) is not one of the
+    rounded sites."""
     sp_size, _ = _sp_tp(mesh_device)
     relay = _relay(mesh_device)
     transforms = _Transforms(mesh_device, relay, seed=29, output_dtype=ttnn.float32)
+    transforms.norm = dataclasses.replace(transforms.norm, gate_math_fidelity=ttnn.MathFidelity.HiFi4)
     generator = torch.Generator().manual_seed(29)
     b = (0.1 * torch.randn(sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
     transforms.a, transforms.b = torch.eye(_KEY).expand_as(b).clone(), b
