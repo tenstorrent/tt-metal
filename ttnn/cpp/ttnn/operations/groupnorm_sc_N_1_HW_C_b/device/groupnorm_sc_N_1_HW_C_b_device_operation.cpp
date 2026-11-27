@@ -259,15 +259,8 @@ ttsl::hash::hash_t GroupnormScN1HwCbDeviceOperation::compute_program_hash(
     // the input spec and in_place; a preallocated output must match it. The plan is the memoized scalar solve: the
     // per-core work split is built only on a miss (create_descriptor).
     const planner::Plan& plan = planner::solve_plan(planner::plan_inputs(attrs, tensor_args));
-    std::optional<TensorSpec> gamma_spec;
-    std::optional<TensorSpec> beta_spec;
-    if (tensor_args.gamma.has_value()) {
-        gamma_spec = tensor_args.gamma->tensor_spec();
-    }
-    if (tensor_args.beta.has_value()) {
-        beta_spec = tensor_args.beta->tensor_spec();
-    }
-    return tt::tt_metal::operation::hash_operation<GroupnormScN1HwCbDeviceOperation>(
+    // Affine presence is hashed as flags and each present spec by reference: no TensorSpec is copied per call.
+    ttsl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<GroupnormScN1HwCbDeviceOperation>(
         attrs.num_groups,
         attrs.in_place,
         attrs.max_resident_chunks,
@@ -275,9 +268,16 @@ ttsl::hash::hash_t GroupnormScN1HwCbDeviceOperation::compute_program_hash(
         attrs.max_cores,
         attrs.chunk_zones,
         tensor_args.input.tensor_spec(),
-        gamma_spec,
-        beta_spec,
+        tensor_args.gamma.has_value(),
+        tensor_args.beta.has_value(),
         planner::plan_hash(plan));
+    if (tensor_args.gamma.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, tensor_args.gamma->tensor_spec());
+    }
+    if (tensor_args.beta.has_value()) {
+        hash = ttsl::hash::hash_objects(hash, tensor_args.beta->tensor_spec());
+    }
+    return hash;
 }
 
 GroupnormScN1HwCbDeviceOperation::spec_return_value_t GroupnormScN1HwCbDeviceOperation::compute_output_specs(

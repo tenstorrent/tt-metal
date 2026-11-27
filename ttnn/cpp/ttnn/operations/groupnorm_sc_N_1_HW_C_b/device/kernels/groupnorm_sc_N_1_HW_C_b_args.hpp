@@ -6,7 +6,9 @@
 #include <cstdint>
 
 // Circular buffers, argument slots and constants shared by the groupnorm_sc_N_1_HW_C_b kernels and the program
-// factory. Values are the generic op's, unchanged. Every runtime arg stays per-core, in the Python's order.
+// factory. Values are the generic op's, unchanged. A runtime arg the same on every core (tensor addresses, the
+// statistic scalars, the gather arrival count) is a common arg of its kernel; the per-core args keep the Python's
+// order otherwise.
 namespace gn_sc_args {
 
 namespace cb {
@@ -138,9 +140,6 @@ enum : uint32_t {
 // row.
 namespace reader_rt {
 enum : uint32_t {
-    IN_ADDR,
-    GAMMA_ADDR,
-    BETA_ADDR,
     UNIT_START,
     NUM_BLOCKS,
     ROW_START,
@@ -149,7 +148,6 @@ enum : uint32_t {
     IS_ROOT,
     ROOT_X,
     ROOT_Y,
-    OUT_ADDR,
     XS,
     VC,
     L0,
@@ -161,14 +159,17 @@ enum : uint32_t {
 };
 }  // namespace reader_rt
 
+// Reader common args: the tensor addresses (0 for an absent gamma / beta).
+namespace reader_crt {
+enum : uint32_t { IN_ADDR, GAMMA_ADDR, BETA_ADDR, OUT_ADDR, COUNT };
+}  // namespace reader_crt
+
 // Compute per-core args: fixed slots, then N_OPS op words.
 namespace compute_rt {
 enum : uint32_t {
     NUM_BLOCKS,
     ROWS_CORE,
     RESIDENT_CHUNKS,
-    INV_N_BITS,
-    EPS_BITS,
     N_IMG,
     SEG_IMG0,
     W_VALID,
@@ -179,10 +180,14 @@ enum : uint32_t {
 };
 }  // namespace compute_rt
 
+// Compute common args: 1 / (HW * Cg) and eps, as float bits.
+namespace compute_crt {
+enum : uint32_t { INV_N_BITS, EPS_BITS, COUNT };
+}  // namespace compute_crt
+
 // Writer per-core args: fixed slots, then 3 words per staged row, then the mcast args Mcast::attach appends.
 namespace writer_rt {
 enum : uint32_t {
-    OUT_ADDR,
     UNIT_START,
     NUM_BLOCKS,
     ROW_START,
@@ -191,7 +196,6 @@ enum : uint32_t {
     SLOT,
     ROOT_X,
     ROOT_Y,
-    CPI,
     N_IMG,
     N_SEG,
     SEG_IMG0,
@@ -200,5 +204,10 @@ enum : uint32_t {
     STAGED_TAIL
 };
 }  // namespace writer_rt
+
+// Writer common args: the output address and the gather arrivals (cores per statistic unit, plan cpi).
+namespace writer_crt {
+enum : uint32_t { OUT_ADDR, CPI, COUNT };
+}  // namespace writer_crt
 
 }  // namespace gn_sc_args

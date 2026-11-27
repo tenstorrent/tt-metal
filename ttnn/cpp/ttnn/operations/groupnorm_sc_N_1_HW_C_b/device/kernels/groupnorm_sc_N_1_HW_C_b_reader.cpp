@@ -239,9 +239,11 @@ void kernel_main() {
         AFF_TILE ? W * AFF_TILE_STAGE : ((P * AFF_ELEM + ALIGN - 1) / ALIGN) * ALIGN + ALIGN;
 
     namespace rrt = gn_sc_args::reader_rt;
-    const uint32_t in_addr = get_arg_val<uint32_t>(rrt::IN_ADDR);
-    const uint32_t gamma_addr = get_arg_val<uint32_t>(rrt::GAMMA_ADDR);
-    const uint32_t beta_addr = get_arg_val<uint32_t>(rrt::BETA_ADDR);
+    namespace rcrt = gn_sc_args::reader_crt;
+    const uint32_t in_addr = get_common_arg_val<uint32_t>(rcrt::IN_ADDR);
+    const uint32_t gamma_addr = get_common_arg_val<uint32_t>(rcrt::GAMMA_ADDR);
+    const uint32_t beta_addr = get_common_arg_val<uint32_t>(rcrt::BETA_ADDR);
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(rcrt::OUT_ADDR);
     const uint32_t unit_start = get_arg_val<uint32_t>(rrt::UNIT_START);
     const uint32_t num_blocks = get_arg_val<uint32_t>(rrt::NUM_BLOCKS);
     const uint32_t row_start = get_arg_val<uint32_t>(rrt::ROW_START);
@@ -250,7 +252,6 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(rrt::IS_ROOT);
     const uint32_t root_x = get_arg_val<uint32_t>(rrt::ROOT_X);  // SHARDED: unit root (virtual), first band row
     const uint32_t root_y = get_arg_val<uint32_t>(rrt::ROOT_Y);
-    const uint32_t out_addr = get_arg_val<uint32_t>(rrt::OUT_ADDR);
     // Sharded slice geometry (interleaved: derived per block below). Lanes count the statistic unit's groups.
     const uint32_t sh_xs = get_arg_val<uint32_t>(rrt::XS);       // first channel of the slice
     const uint32_t sh_vc = get_arg_val<uint32_t>(rrt::VC);       // its valid channels (padded last column: < P)

@@ -34,7 +34,6 @@ namespace {
 constexpr int64_t kTileDim = tt::constants::TILE_WIDTH;  // channels / rows per tile edge
 constexpr int64_t kChunkTilesTarget = 32;                // streaming quantum target (tiles per chunk)
 constexpr int64_t kInputStreamDepth = 2;                 // D_IN: TILE input stream depth (chunks)
-constexpr int64_t kRmStickDepth = 2;                     // D_RM: RM stick CB depth (chunks)
 constexpr int64_t kOutputChunks = 2;                     // D_OUT: output chunks at minimum
 constexpr int64_t kMaxGroupLanes = gn_sc_args::MAX_GROUP_LANES;
 constexpr int64_t kFaceRow0ReadBytes = gn_sc_args::FACE_ROW0_READ_BYTES;
@@ -42,7 +41,6 @@ constexpr int64_t kPilotSlotBytes = gn_sc_args::PILOT_SLOT_BYTES;
 constexpr int64_t kStageAlign = gn_sc_args::STAGE_ALIGN;
 constexpr int64_t kRmPilotAlign = gn_sc_args::RM_PILOT_ALIGN;
 
-int64_t ceil_div(int64_t a, int64_t b) { return (a + b - 1) / b; }  // a >= 0, b > 0 at every call
 int64_t floor_div(int64_t a, int64_t b) {
     const int64_t q = a / b;
     return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
@@ -125,7 +123,8 @@ int64_t footprint_bytes(const Footprint& p) {
     } else {
         ring = ring_pages_of(p.T, p.K_alloc, p.stream, p.is_rm);
     }
-    const int64_t in_pages = (p.is_rm && !p.sharded ? kRmStickDepth * p.T : 0) + ring + p.stage_pages;
+    const int64_t in_pages =
+        (p.is_rm && !p.sharded ? static_cast<int64_t>(kRmStickChunks) * p.T : 0) + ring + p.stage_pages;
     const int64_t bf16_pages = 1 + (2 * p.W);
     const int64_t amap_pages = p.W * (hg + hb);
     const int64_t out_ring = p.sharded ? 0 : output_ring_bytes(p.T, p.fmt);
@@ -179,12 +178,12 @@ std::optional<GxCandidate> evaluate_gx(int64_t gx, const InterleavedGeometry& g)
     }
     c.U = g.N * gx;
     c.cpi = c.U < g.P ? std::min(g.P / c.U, g.Ht) : 1;
-    c.rows_core_max = ceil_div(g.Ht, c.cpi);
+    c.rows_core_max = tt::div_up(g.Ht, c.cpi);
     int64_t h = std::max<int64_t>(1, std::min(g.chunk_target / c.W, c.rows_core_max));
-    const int64_t n_chunks = std::max(ceil_div(c.rows_core_max, h), std::min<int64_t>(c.rows_core_max, 2));
-    c.h = ceil_div(c.rows_core_max, n_chunks);
+    const int64_t n_chunks = std::max(tt::div_up(c.rows_core_max, h), std::min<int64_t>(c.rows_core_max, 2));
+    c.h = tt::div_up(c.rows_core_max, n_chunks);
     c.T = c.h * c.W;
-    c.R = ceil_div(c.cpi, kTileDim);
+    c.R = tt::div_up(c.cpi, kTileDim);
     Footprint fp;
     fp.W = c.W;
     fp.T = c.T;
@@ -203,7 +202,7 @@ std::optional<GxCandidate> evaluate_gx(int64_t gx, const InterleavedGeometry& g)
         c.max_core_tiles = c.rows_core_max * c.W;
         c.cores_used = c.U * c.cpi;
     } else {
-        c.max_core_tiles = ceil_div(c.U, g.P) * g.Ht * c.W;
+        c.max_core_tiles = tt::div_up(c.U, g.P) * g.Ht * c.W;
         c.cores_used = g.P;
     }
     return c;
@@ -256,13 +255,13 @@ std::vector<CoreWork> distribute(int64_t U, int64_t P, int64_t cpi, int64_t Ht, 
 Plan plan_interleaved(const PlanInputs& in) {
     const int64_t N = in.N, HW = in.HW, C = in.C, G = in.G;
     TT_FATAL(G >= 1 && C % G == 0, "groupnorm_sc_N_1_HW_C_b: num_groups={} must divide C={}", G, C);
-    const int64_t Ht = ceil_div(HW, kTileDim);
-    const int64_t Wt = ceil_div(C, kTileDim);
+    const int64_t Ht = tt::div_up(HW, kTileDim);
+    const int64_t Wt = tt::div_up(C, kTileDim);
     const int64_t Cg = C / G;
     const int64_t L = std::lcm(Cg, kTileDim);
     const int64_t span_tiles = L / kTileDim;
     const int64_t gps = L / Cg;
-    const int64_t S = ceil_div(C, L);
+    const int64_t S = tt::div_up(C, L);
 
     int64_t P = static_cast<int64_t>(in.grid_x) * in.grid_y;
     if (in.max_cores.has_value()) {
@@ -296,7 +295,7 @@ Plan plan_interleaved(const PlanInputs& in) {
     }
 
     const int64_t W = best->W, T = best->T, R = best->R, h = best->h;
-    const int64_t B_max = ceil_div(best->rows_core_max, h);
+    const int64_t B_max = tt::div_up(best->rows_core_max, h);
     const int64_t chunk_bytes = in_tile(in.fmt) * T;
     int64_t K_max = floor_div(l1_budget - best->f_fixed, chunk_bytes);
     Footprint fp;
@@ -469,8 +468,8 @@ ShardGeometry shard_geometry(const PlanInputs& in) {
         }
     }
     g.unit_cores = g.bh * g.cl_cols;
-    g.R = ceil_div(g.unit_cores, kTileDim);
-    g.rows_nominal = ceil_div(sh, g.tr);
+    g.R = tt::div_up(g.unit_cores, kTileDim);
+    g.rows_nominal = tt::div_up(sh, g.tr);
     g.cap = !in.chunk_tiles_target.has_value() ? g.rows_nominal : std::max<int64_t>(1, *in.chunk_tiles_target) / g.W;
     return g;
 }
@@ -668,7 +667,7 @@ Plan plan_sharded(const PlanInputs& in) {
         h = h_ops;
         TT_FATAL(h > 0, "groupnorm_sc_N_1_HW_C_b: chunk height 0 (chunk_tiles_target below the slice width)");
         T = h * W;
-        B = ceil_div(rows_core, h);
+        B = tt::div_up(rows_core, h);
         K_alloc = B;
         footprint = fp_ops;
         ops_path = true;
@@ -805,7 +804,7 @@ std::vector<CoreWork> sharded_work(const PlanInputs& in) {
             w.vc = static_cast<uint32_t>(g.vcols(x));
             w.l0 = static_cast<uint32_t>((xs / Cg) - g_lo);
             w.off0 = static_cast<uint32_t>(xs % Cg);
-            w.g_unit = static_cast<uint32_t>(ceil_div(last_ch, Cg) - g_lo);
+            w.g_unit = static_cast<uint32_t>(tt::div_up(last_ch, Cg) - g_lo);
             w.n_img = static_cast<uint32_t>(n_img);
             w.n_seg = static_cast<uint32_t>(n_seg);
             w.seg_img0 = static_cast<uint32_t>(img0 - n_first);

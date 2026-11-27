@@ -18,6 +18,10 @@
 // Integers in, integers out; every refusal is PlanNotImplemented with the Python's message.
 namespace ttnn::operations::groupnorm_sc_N_1_HW_C_b::planner {
 
+// RM stick CB depth in chunks (Python D_RM): a scheduling choice, two chunks so the reader fills one while compute
+// tilizes the other. One value for the planner's L1 footprint and the factory's CB_INPUT_RM size.
+inline constexpr uint32_t kRmStickChunks = 2;
+
 // Page formats (Python Formats): input = output dtype, the affine dtype (bf16 when there is no affine) and layout.
 struct Formats {
     tt::tt_metal::DataType in_dtype = tt::tt_metal::DataType::BFLOAT16;

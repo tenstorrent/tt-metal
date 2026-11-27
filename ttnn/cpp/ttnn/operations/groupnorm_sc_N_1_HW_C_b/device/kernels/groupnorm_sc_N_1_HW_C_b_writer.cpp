@@ -90,7 +90,9 @@ void kernel_main() {
     constexpr uint32_t N_STATS = 2 * NU + 1;
 
     namespace wrt = gn_sc_args::writer_rt;
-    const uint32_t out_addr = get_arg_val<uint32_t>(wrt::OUT_ADDR);
+    namespace wcrt = gn_sc_args::writer_crt;
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(wcrt::OUT_ADDR);
+    const uint32_t cpi = get_common_arg_val<uint32_t>(wcrt::CPI);
     const uint32_t unit_start = get_arg_val<uint32_t>(wrt::UNIT_START);
     const uint32_t num_blocks = get_arg_val<uint32_t>(wrt::NUM_BLOCKS);
     const uint32_t row_start = get_arg_val<uint32_t>(wrt::ROW_START);
@@ -99,7 +101,6 @@ void kernel_main() {
     const uint32_t slot = get_arg_val<uint32_t>(wrt::SLOT);
     const uint32_t root_x = get_arg_val<uint32_t>(wrt::ROOT_X);
     const uint32_t root_y = get_arg_val<uint32_t>(wrt::ROOT_Y);
-    const uint32_t cpi = get_arg_val<uint32_t>(wrt::CPI);
     // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
     const uint32_t n_img_rt = get_arg_val<uint32_t>(wrt::N_IMG);        // images of this core's unit (<= NU)
     const uint32_t n_seg_rt = get_arg_val<uint32_t>(wrt::N_SEG);        // this core's image segments

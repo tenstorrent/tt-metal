@@ -872,8 +872,8 @@ void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(crt::NUM_BLOCKS);
     const uint32_t rows_core = get_arg_val<uint32_t>(crt::ROWS_CORE);
     const uint32_t resident_chunks = get_arg_val<uint32_t>(crt::RESIDENT_CHUNKS);
-    const uint32_t inv_n_bits = get_arg_val<uint32_t>(crt::INV_N_BITS);
-    const uint32_t eps_bits = get_arg_val<uint32_t>(crt::EPS_BITS);
+    const uint32_t inv_n_bits = get_common_arg_val<uint32_t>(gn_sc_args::compute_crt::INV_N_BITS);
+    const uint32_t eps_bits = get_common_arg_val<uint32_t>(gn_sc_args::compute_crt::EPS_BITS);
     // NU == 1 (every unit holds one image: all even shards, DRAM) folds the per-image loops to their constant trip.
     const uint32_t n_img_rt = get_arg_val<uint32_t>(crt::N_IMG);        // images of the unit (root: sets to finalize)
     const uint32_t seg_img0_rt = get_arg_val<uint32_t>(crt::SEG_IMG0);  // unit image of this core's first segment

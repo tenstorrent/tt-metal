@@ -70,8 +70,8 @@ struct GroupnormScN1HwCbMeshWorkloadFactory {
         const GroupnormScN1HwCbInputs& tensors,
         Tensor& output);
 
-    // Cache hit: rewrites the address slots and EPS_BITS on every core, and re-points a shard-backed CB whose tensor
-    // moved, only in a program whose record differs from the call's values.
+    // Cache hit: rewrites the common address slots and EPS_BITS of every kernel, and re-points a shard-backed CB whose
+    // tensor moved, only in a program whose record differs from the call's values.
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const GroupnormScN1HwCbParams& attrs,

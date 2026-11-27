@@ -13,7 +13,6 @@
 #include <vector>
 
 #include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -21,6 +20,7 @@
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/work_split.hpp>
 
 #include "groupnorm_sc_N_1_HW_C_b_planner.hpp"
 #include "kernels/groupnorm_sc_N_1_HW_C_b_args.hpp"
@@ -36,8 +36,7 @@ namespace {
 
 constexpr const char* kGnKernelDir = "ttnn/cpp/ttnn/operations/groupnorm_sc_N_1_HW_C_b/device/kernels/";
 
-// RM stick CB depth in chunks (Python D_RM); the reader's output share holds one chunk (OUT_READER_CHUNKS).
-constexpr uint32_t kGnRmStickChunks = 2;
+// The reader's output share holds one chunk (OUT_READER_CHUNKS).
 constexpr uint32_t kGnOutReaderChunks = 1;
 // Per-chunk device zones are compiled in only when a core's chunk steps fit the marker budget (Python
 // CHUNK_ZONE_MAX_STEPS).
@@ -61,9 +60,10 @@ CBDescriptor gn_make_cb(uint32_t total, const CoreRangeSet& cores, std::initiali
 }
 
 // Zero-copy: the CB is the core's own shard; its pages are input-dtype tiles over it (whole tile rows only).
-CBDescriptor gn_shard_cb(
-    const Tensor& tensor, uint32_t in_tile, uint32_t in_elem, std::initializer_list<GnCbFormat> formats) {
+CBDescriptor gn_shard_cb(const Tensor& tensor, uint32_t in_tile, std::initializer_list<GnCbFormat> formats) {
     const auto& spec = *tensor.memory_config().shard_spec();
+    // Element bytes of the shard's dtype (Python Formats.in_elem; sharded inputs are never block-float).
+    const uint32_t in_elem = tt::datum_size(datatype_to_dataformat_converter(tensor.dtype()));
     const uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * in_elem;
     const uint32_t total = (shard_bytes / in_tile) * in_tile;
     CBDescriptor d =
@@ -83,20 +83,6 @@ CoreRangeSet gn_core_set(const std::vector<CoreCoord>& cores) {
         ranges.emplace_back(c, c);
     }
     return CoreRangeSet(ranges).merge_ranges();
-}
-
-// The first num_cores cores of the grid in row-major order (Python _used_core_range_set).
-CoreRangeSet gn_used_cores(uint32_t num_cores, uint32_t grid_x) {
-    std::vector<CoreRange> ranges;
-    const uint32_t full_rows = num_cores / grid_x;
-    const uint32_t rem = num_cores % grid_x;
-    if (full_rows > 0) {
-        ranges.emplace_back(CoreCoord(0, 0), CoreCoord(grid_x - 1, full_rows - 1));
-    }
-    if (rem > 0) {
-        ranges.emplace_back(CoreCoord(0, full_rows), CoreCoord(rem - 1, full_rows));
-    }
-    return CoreRangeSet(ranges);
 }
 
 // DRAM interleaved: odd grid columns of member cores take the swapped NoC pairing.
@@ -144,7 +130,6 @@ ProgramDescriptor gn_descriptor(
     const DataType in_dtype = fmt.in_dtype;
     const tt::DataFormat in_df = cb_dataformat_for(in_dtype);
     const uint32_t in_tile = tile_size(in_dtype);
-    const uint32_t in_elem = in_tile / tt::constants::TILE_HW;  // sharded only (bf16): 2
     const bool in_bfp8 = in_dtype == DataType::BFLOAT8_B;
     const bool aff_bfp8 = fmt.aff_dtype == DataType::BFLOAT8_B;
     const DataType amap_dtype = aff_bfp8 ? DataType::BFLOAT16 : fmt.aff_dtype;
@@ -157,8 +142,12 @@ ProgramDescriptor gn_descriptor(
     const uint32_t map_period = plan.map_period;
     const uint32_t vc_last = plan.vc_last != 0 ? plan.vc_last : map_period;
 
+    // Interleaved: the first work.size() cores of the grid in row-major order (Python _used_core_range_set).
     const CoreRangeSet cores = sharded ? input.memory_config().shard_spec()->grid
-                                       : gn_used_cores(static_cast<uint32_t>(work.size()), plan.grid_x);
+                                       : num_cores_to_corerangeset(
+                                             static_cast<uint32_t>(work.size()),
+                                             CoreCoord(plan.grid_x, plan.grid_y),
+                                             /*row_wise=*/true);
 
     ProgramDescriptor desc;
 
@@ -166,16 +155,17 @@ ProgramDescriptor gn_descriptor(
     namespace cb = gargs::cb;
     if (is_rm) {
         if (sharded) {
-            desc.cbs.push_back(gn_shard_cb(input, in_tile, in_elem, {{cb::INPUT_RM, in_df, in_tile}}));
-            desc.cbs.push_back(gn_shard_cb(output, in_tile, in_elem, {{cb::OUTPUT_RM, in_df, in_tile}}));
+            desc.cbs.push_back(gn_shard_cb(input, in_tile, {{cb::INPUT_RM, in_df, in_tile}}));
+            desc.cbs.push_back(gn_shard_cb(output, in_tile, {{cb::OUTPUT_RM, in_df, in_tile}}));
         } else {
-            desc.cbs.push_back(gn_make_cb(kGnRmStickChunks * T * in_tile, cores, {{cb::INPUT_RM, in_df, in_tile}}));
+            desc.cbs.push_back(
+                gn_make_cb(planner::kRmStickChunks * T * in_tile, cores, {{cb::INPUT_RM, in_df, in_tile}}));
         }
     }
     if (sharded && !is_rm) {
-        desc.cbs.push_back(gn_shard_cb(
-            input, in_tile, in_elem, {{cb::INPUT_TILES, in_df, in_tile}, {cb::INPUT_KEEP, in_df, in_tile}}));
-        desc.cbs.push_back(gn_shard_cb(output, in_tile, in_elem, {{cb::OUTPUT_TILES, in_df, in_tile}}));
+        desc.cbs.push_back(
+            gn_shard_cb(input, in_tile, {{cb::INPUT_TILES, in_df, in_tile}, {cb::INPUT_KEEP, in_df, in_tile}}));
+        desc.cbs.push_back(gn_shard_cb(output, in_tile, {{cb::OUTPUT_TILES, in_df, in_tile}}));
     } else {
         const uint32_t ring_pages =
             plan.ring_pages != 0 ? plan.ring_pages : planner::input_ring_pages(T, plan.K_alloc, plan.stream, is_rm);
@@ -334,9 +324,6 @@ ProgramDescriptor gn_descriptor(
         {
             namespace rr = gargs::reader_rt;
             RtList args(rr::COLS_TAIL, 0u);
-            args[rr::IN_ADDR] = input.buffer();
-            args[rr::GAMMA_ADDR] = gn_opt_buffer(gamma);
-            args[rr::BETA_ADDR] = gn_opt_buffer(beta);
             args[rr::UNIT_START] = wk.unit_start;
             args[rr::NUM_BLOCKS] = wk.num_blocks;
             args[rr::ROW_START] = wk.row_start;
@@ -345,7 +332,6 @@ ProgramDescriptor gn_descriptor(
             args[rr::IS_ROOT] = wk.is_root;
             args[rr::ROOT_X] = static_cast<uint32_t>(root_virt.x);
             args[rr::ROOT_Y] = static_cast<uint32_t>(root_virt.y);
-            args[rr::OUT_ADDR] = output.buffer();
             args[rr::XS] = wk.xs;
             args[rr::VC] = wk.vc;
             args[rr::L0] = wk.l0;
@@ -371,8 +357,6 @@ ProgramDescriptor gn_descriptor(
             args[cr::NUM_BLOCKS] = wk.num_blocks;
             args[cr::ROWS_CORE] = wk.rows_core;
             args[cr::RESIDENT_CHUNKS] = k_core;
-            args[cr::INV_N_BITS] = inv_n_bits;
-            args[cr::EPS_BITS] = eps_bits;
             args[cr::N_IMG] = wk.n_img;
             args[cr::SEG_IMG0] = wk.seg_img0;
             args[cr::W_VALID] = wk.w_valid;
@@ -386,7 +370,6 @@ ProgramDescriptor gn_descriptor(
         {
             namespace wr = gargs::writer_rt;
             RtList args(wr::STAGED_TAIL, 0u);
-            args[wr::OUT_ADDR] = output.buffer();
             args[wr::UNIT_START] = wk.unit_start;
             args[wr::NUM_BLOCKS] = wk.num_blocks;
             args[wr::ROW_START] = wk.row_start;
@@ -395,7 +378,6 @@ ProgramDescriptor gn_descriptor(
             args[wr::SLOT] = wk.slot;
             args[wr::ROOT_X] = static_cast<uint32_t>(root_virt.x);
             args[wr::ROOT_Y] = static_cast<uint32_t>(root_virt.y);
-            args[wr::CPI] = plan.cpi;  // gather arrivals: the cores of the unit
             args[wr::N_IMG] = wk.n_img;
             args[wr::N_SEG] = wk.n_seg;
             args[wr::SEG_IMG0] = wk.seg_img0;
@@ -422,6 +404,15 @@ ProgramDescriptor gn_descriptor(
         k.compile_time_args = reader_ct;
         k.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1, .noc = sw != 0 ? NOC::NOC_1 : NOC::NOC_0};
+        KernelDescriptor::RTArgList common;
+        common.push_back(input.buffer());
+        common.push_back(gn_opt_buffer(gamma));
+        common.push_back(gn_opt_buffer(beta));
+        common.push_back(output.buffer());
+        k.emplace_common_runtime_args(common);
+        TT_FATAL(
+            k.common_runtime_args.size() == gargs::reader_crt::COUNT,
+            "groupnorm_sc_N_1_HW_C_b: reader common args out of sync with the args header");
         reader_kernels.push_back(std::move(k));
     }
     std::vector<KernelDescriptor> writer_kernels;
@@ -436,6 +427,13 @@ ProgramDescriptor gn_descriptor(
             k.compile_time_args = writer_ct(role);
             k.config = DataMovementConfigDescriptor{
                 .processor = DataMovementProcessor::RISCV_0, .noc = sw != 0 ? NOC::NOC_0 : NOC::NOC_1};
+            KernelDescriptor::RTArgList common;
+            common.push_back(output.buffer());
+            common.push_back(plan.cpi);  // gather arrivals: the cores of the unit
+            k.emplace_common_runtime_args(common);
+            TT_FATAL(
+                k.common_runtime_args.size() == gargs::writer_crt::COUNT,
+                "groupnorm_sc_N_1_HW_C_b: writer common args out of sync with the args header");
             writer_kernels.push_back(std::move(k));
         }
     }
@@ -458,6 +456,9 @@ ProgramDescriptor gn_descriptor(
             .unpack_to_dest_mode = unpack_modes,
             .math_approx_mode = false,
         };
+        k.common_runtime_args.resize(gargs::compute_crt::COUNT);
+        k.common_runtime_args[gargs::compute_crt::INV_N_BITS] = inv_n_bits;
+        k.common_runtime_args[gargs::compute_crt::EPS_BITS] = eps_bits;
         compute_kernels.push_back(std::move(k));
     }
 
@@ -545,10 +546,10 @@ void GroupnormScN1HwCbMeshWorkloadFactory::override_runtime_arguments(
     const GroupnormScN1HwCbParams& attrs,
     const GroupnormScN1HwCbInputs& tensors,
     Tensor& output) {
-    // The key (compute_program_hash) pins every per-core arg except the tensor addresses (reader IN / GAMMA / BETA /
-    // OUT, writer OUT) and compute EPS_BITS (eps is left out of the key); these, and the shard-backed CBs, are
-    // rewritten here, in a program whose record differs from the call. The kernel indices come from the layout the
-    // miss recorded.
+    // The key (compute_program_hash) pins every arg except the tensor addresses (reader common IN / GAMMA / BETA /
+    // OUT, writer common OUT) and compute common EPS_BITS (eps is left out of the key); these, and the shard-backed
+    // CBs, are rewritten here, in a program whose record differs from the call. The kernel indices come from the
+    // layout the miss recorded.
     Buffer* const in_buffer = tensors.input.buffer();
     Buffer* const out_buffer = output.buffer();
     const GroupnormScN1HwCbHitValues call{
@@ -567,39 +568,19 @@ void GroupnormScN1HwCbMeshWorkloadFactory::override_runtime_arguments(
         const std::optional<GroupnormScN1HwCbHitValues> previous = std::exchange(sv.applied, std::nullopt);
         const KernelLayout& layout = sv.layout;
 
+        // The written values are common args: one write per kernel, whatever the core count.
         for (uint32_t k = 0; k < layout.num_readers; ++k) {
-            auto& grid = GetRuntimeArgs(program, k);
-            for (auto& column : grid) {
-                for (auto& args : column) {
-                    if (args.size() == 0) {
-                        continue;
-                    }
-                    args[gargs::reader_rt::IN_ADDR] = call.in_addr;
-                    args[gargs::reader_rt::GAMMA_ADDR] = call.gamma_addr;
-                    args[gargs::reader_rt::BETA_ADDR] = call.beta_addr;
-                    args[gargs::reader_rt::OUT_ADDR] = call.out_addr;
-                }
-            }
+            auto& common = GetCommonRuntimeArgs(program, k);
+            common[gargs::reader_crt::IN_ADDR] = call.in_addr;
+            common[gargs::reader_crt::GAMMA_ADDR] = call.gamma_addr;
+            common[gargs::reader_crt::BETA_ADDR] = call.beta_addr;
+            common[gargs::reader_crt::OUT_ADDR] = call.out_addr;
         }
         for (uint32_t k = layout.first_writer(); k < layout.first_compute(); ++k) {
-            auto& grid = GetRuntimeArgs(program, k);
-            for (auto& column : grid) {
-                for (auto& args : column) {
-                    if (args.size() != 0) {
-                        args[gargs::writer_rt::OUT_ADDR] = call.out_addr;
-                    }
-                }
-            }
+            GetCommonRuntimeArgs(program, k)[gargs::writer_crt::OUT_ADDR] = call.out_addr;
         }
         for (uint32_t k = layout.first_compute(); k < layout.first_compute() + layout.num_computes; ++k) {
-            auto& grid = GetRuntimeArgs(program, k);
-            for (auto& column : grid) {
-                for (auto& args : column) {
-                    if (args.size() != 0) {
-                        args[gargs::compute_rt::EPS_BITS] = call.eps_bits;
-                    }
-                }
-            }
+            GetCommonRuntimeArgs(program, k)[gargs::compute_crt::EPS_BITS] = call.eps_bits;
         }
 
         // A shard-backed CB is re-pointed only when its tensor moved since the last completed hit (always after the
