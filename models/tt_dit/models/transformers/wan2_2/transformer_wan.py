@@ -695,7 +695,7 @@ class WanTransformer3DModel(Module):
             rope_sin_1HND,
             trans_mat,
             N,
-            timestep,
+            ttnn.clone(timestep),
             gather_output=gather_output,
         )
 
