@@ -425,8 +425,8 @@
 - name: "(Kimi-K3-2.8T, Kimi-K3.1) long-context accuracy 1M vs FP64 golden, KDA layer 0, MoE layers 1-2, DSA layer 3"
   # Every 1M case of test_long_context_accuracy.py (its short lengths are not in CI): each
   # Block teacher-fed from its FP64 golden (Weka) over the 1,044,480 rows of the golden prompt, gated by the bars of
-  # that length. Nightly, and on dispatch with k3_accuracy_suite (no dispatch input is free). Its minutes are not yet
-  # in .github/time_budget.yaml: sign-off by the budget owners is pending (PR #67237).
+  # that length. Nightly, and on dispatch with k3_accuracy_suite (no dispatch input is free). Its 20 min are charged to
+  # models / demo / bh_sc1 in .github/time_budget.yaml.
   #
   # One pytest process per Block, each under its own bound, so a stuck run fails at its bound, not at the job limit;
   # MoE layers 1 and 2 share one process, so layer 2 reuses the per-process MoE face maps (about 40 s) and the warm

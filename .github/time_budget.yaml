@@ -448,7 +448,9 @@ models:
     bh_galaxy: 470
     # 2385 -> 2463 (+78, PR #64830): K3.1 synthetic suite 47 (traced DSA replay 12 of it), K3.1 L24 / L24-128k
     # depth 45, K3 / K3.1 KV table rows 2 (94 min, 16 of it from existing headroom).
-    bh_sc1: 2463
+    # 2463 -> 2483 (+20, PR #67237): the Kimi-K3 / K3.1 long-context accuracy 1M job (nightly and on dispatch with
+    # k3_accuracy_suite).
+    bh_sc1: 2483
     bh_sc1_high_power: 500
     bh_sc4: 60
     wh_n150: 500
