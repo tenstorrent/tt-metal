@@ -21,6 +21,7 @@ from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .agmm_config import AgmmMode
 from .sol_prepass import SolGeometry, SolRouteConstants
+from .step_cache import FirstBlockCache
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import (
     MODALITY_NUM,
@@ -493,6 +494,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_step_selector: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        step_cache: FirstBlockCache | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -519,6 +521,7 @@ class MiniMaxH3Transformer3DModel(Module):
             step's modulation tables from the resident schedule tables instead of projecting `temb`. Keys the trace.
         modulation_row_indices: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
             per slot: the blocks take their adaLN tables from there instead of projecting `temb` (the untraced path).
+        step_cache: this denoise's First Block Cache, which decides per step whether blocks 1.. run (untraced only).
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -526,6 +529,8 @@ class MiniMaxH3Transformer3DModel(Module):
         alignment = self.sp_factor * tile
         if pad_to % alignment:
             raise ValueError(f"pad_to={pad_to} must be a multiple of sp_factor * TILE = {alignment}")
+        if step_cache is not None and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
+            raise RuntimeError("the step cache decides from a host readback, so it runs untraced only")
         if self.dynamic_length and (traced or ttnn.is_trace_capture_active(self.mesh_device)):
             raise RuntimeError(
                 "dynamic_length is eager-only: the row count is a runtime argument, so a trace captured now would "
@@ -627,6 +632,7 @@ class MiniMaxH3Transformer3DModel(Module):
             **(
                 {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
             ),
+            **({} if step_cache is None else {"step_cache": step_cache}),
         )
 
         hidden = self.norm_out(
@@ -712,16 +718,19 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_selector: ttnn.Tensor | None = None,
         modulation_row_indices: ttnn.Tensor | None = None,
+        step_cache: FirstBlockCache | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
-        for index, block in enumerate(self.transformer_blocks):
+
+        def run_block(index: int, hidden: ttnn.Tensor) -> ttnn.Tensor:
+            block = self.transformer_blocks[index]
             modulation_tables = (
                 None
                 if adaln_selector is None
                 else block.select_modulation_tables(adaln_selector, self._adaln_tables[index])
             )
-            hidden = block(
+            return block(
                 hidden,
                 logical_n,
                 temb=temb if modulation_row_indices is None else None,
@@ -733,6 +742,12 @@ class MiniMaxH3Transformer3DModel(Module):
                 modulation_tables=modulation_tables,
                 modulation_row_indices=modulation_row_indices,
             )
+
+        if step_cache is None:
+            for index in range(len(self.transformer_blocks)):
+                hidden = run_block(index, hidden)
+        else:
+            hidden = step_cache.run_stack(hidden, run_block, len(self.transformer_blocks))
         ttnn.deallocate(onehot)
         if tilerow is not None:
             ttnn.deallocate(tilerow[1])

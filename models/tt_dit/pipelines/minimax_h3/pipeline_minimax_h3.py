@@ -96,6 +96,7 @@ from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TI
 from ...models.transformers.minimax_h3.agmm_config import AgmmMode
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
+from ...models.transformers.minimax_h3.step_cache import FirstBlockCache, step_cache_config_from_env
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -3683,6 +3684,20 @@ class MiniMaxH3Pipeline:
         video_rows = lowres_handoff_rows(lowres_rows, video_rows, float(scheduler.sigmas[steps]), *video_shape)
         return video_rows, audio_rows, scheduler.window(steps, total), audio_scheduler.window(steps, total)
 
+    def _step_cache(self, rung: int, sequence_length: int) -> FirstBlockCache | None:
+        """This denoise's First Block Cache when MINIMAX_H3_STEP_CACHE turns it on, else None. Bucketed untraced
+        denoise only: the cache decides each step from a host readback, and its row mask is one rung's shape."""
+        config = step_cache_config_from_env()
+        if config is None:
+            return None
+        if self.trace_denoise or self.dynamic_length:
+            self._log("step cache: off, it serves the bucketed untraced denoise only")
+            return None
+        valid = torch.zeros(1, 1, rung, 1)
+        valid[:, :, :sequence_length] = 1.0
+        valid_rows = from_torch(valid, device=self.mesh_device, mesh_axes=[None, None, self.sp_axis, None])
+        return FirstBlockCache(config, mesh_device=self.mesh_device, valid_rows=valid_rows)
+
     def _denoise(
         self,
         transformer: MiniMaxH3Transformer3DModel,
@@ -3980,6 +3995,7 @@ class MiniMaxH3Pipeline:
             if not (self.use_persistent_ccl_buffers or self.trace_denoise)
             else nullcontext()
         )
+        step_cache = self._step_cache(rung, layout.sequence_length)
         with transient:
             try:
                 if precompute_adaln_modulation:
@@ -4027,6 +4043,7 @@ class MiniMaxH3Pipeline:
                             **adaln_selector_kwargs(),
                             **({} if endpoints is None else {"endpoint_timestep": self._tt_endpoint_timestep.value}),
                             **(modulation_row_indices(i) if precompute_adaln_modulation else {}),
+                            **({} if step_cache is None else {"step_cache": step_cache}),
                         )
                     except RuntimeError as err:
                         if "Out of Memory" in str(err):
@@ -4054,7 +4071,12 @@ class MiniMaxH3Pipeline:
             finally:
                 if precompute_adaln_modulation:
                     transformer.release_modulation()
+                if step_cache is not None:
+                    step_cache.release()
+                    ttnn.deallocate(step_cache.valid_rows)
             state.warm = True
+            if step_cache is not None:
+                self._log(step_cache.summary())
             steady_steps = max(len(timesteps) - 1, 1)
             self._log(
                 f"denoise breakdown: preamble {t_preamble:.1f}s (rope {t_rope:.1f}s) | "
