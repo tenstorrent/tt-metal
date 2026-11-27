@@ -12,6 +12,30 @@ Metric tiers: every ``BlockScorer.score_run`` returns its metrics grouped by ``m
 windows), 2 diagnostics (gain, histograms, cache errors). Each tier is a list of measurements, each a dict with
 ``start``, ``end`` and ``rows`` (``WindowedErrors.whole`` / ``windows``) plus metrics; a metric name lives in one
 tier only. Bars (``acceptance_bars``) name metrics, wherever their tier.
+
+Adding a Block. Another instance of a kind a model already has (a MoE case at another layer whose products the
+golden holds) is one more case from the model's case factory. A new kind touches, in order:
+
+1. Golden products: what the scorer and the block input read, written by the model's ``golden_producer.py``. A new
+   or changed product means a new ``PRODUCER_VERSION`` (the model's ``Fp64Golden`` reader pins it, so goldens of the
+   old version no longer open) and a new golden id naming model, layers, FP64 and rows (``k31-l0-3-fp64-1m``), from
+   a producer run.
+2. A scorer, ``<kind>/scorer.py`` beside this file (``BlockScorer``; the smallest is ``FakeScorer`` in
+   ``tests/test_run_case.py``). The case passes it the golden's product names and its window as constructor
+   arguments. Windows are aligned to row 0 (``WindowedErrors.windows``); the per-row NRMSE floor is
+   ``windowed_errors.golden_floor`` of the scored rows' reference norms (KDA's predates this: its producer's
+   ``token_floor``); a whole-run metric whose name a window also uses is ``run_<name>`` (one tier per name).
+   ``score_chunk`` returns the chunk's broken Block contracts and, only if a chunk is a fair sample for a bar, a
+   measurement. Helpers stay in the scorer module unless large (``dsa/fp64_attention.py``).
+3. A ``DeviceBlock`` in the model's ``blocks.py`` (K3.1: ``stage_input`` in, ``sp_tp_rows`` out).
+4. A ``LongContextCase`` in the model's ``cases.py``, id ``<model>-l<layer>-<kind>``, with the model's placement,
+   chunk and checkpoint (K3.1: ``K31_PLACEMENT``, ``K31_CHUNK``, ``k31_checkpoint``), added to its ``CASES``; a new
+   model adds its ``CASES`` to ``ALL_CASES`` in the aggregator ``cases.py`` beside the model folders.
+5. Bars per context length, measured on the device, with their policy and measurements in a comment beside them
+   (for example 1.25x the worst window).
+6. Tests and CI: hand-value tests for the scorer's metrics (only what a run would not show: a wrong metric that still
+   passes); a new CPU test file in the ``k3_contracts`` list, and one section of the 1M job (its ``-k`` id, test
+   count and time bound) in ``tests/pipeline_reorg/blaze_models_prefill_tests.yaml``.
 """
 
 from __future__ import annotations
