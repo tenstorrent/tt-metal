@@ -7,9 +7,9 @@
 
 #include <algorithm>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/host_floats.hpp"
 #include "ttnn/operations/experimental/moe_block/common/kernels/tile_bytes.hpp"

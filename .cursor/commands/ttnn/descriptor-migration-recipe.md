@@ -87,7 +87,7 @@ struct MyDeviceOperation {
   `emplace_runtime_args` (§1.3) — declare a binding for every address; never bake one.
 - Tensor-backed circular buffer addresses are patched the same way
   (set `.buffer` on `CBDescriptor` for sharded ops).
-- Include `<tt-metalium/program_descriptors.hpp>`.
+- Include `<tt-metalium/workload/legacy/program_descriptors.hpp>`.
 
 **Know which cache-hit branch your op lands in.** On a cache hit the framework picks one of
 three branches, in priority order:
@@ -129,7 +129,7 @@ Most ops only need `create_descriptor`. But mesh-workload ops that allocate
 or emit different programs per coordinate (CCL rings) need to do that **once per
 workload** (cache miss), not once per dispatch. For those ops, return the
 framework's `tt::tt_metal::WorkloadDescriptor`
-(`<tt-metalium/workload_descriptor.hpp>`):
+(`<tt-metalium/workload/legacy/workload_descriptor.hpp>`):
 
 ```cpp
 struct WorkloadDescriptor {
@@ -472,7 +472,7 @@ If performance exceeds the threshold, check:
 
 In `<op_name>_device_operation.hpp`:
 
-1. Add `#include <tt-metalium/program_descriptors.hpp>`
+1. Add `#include <tt-metalium/workload/legacy/program_descriptors.hpp>`
 2. For single-descriptor operations **without** an override: remove the `ProgramFactory`
    wrapper struct, `program_factory_t` alias, and `select_program_factory`; place
    `create_descriptor` directly on the operation struct. **With** a surgical override, keep a

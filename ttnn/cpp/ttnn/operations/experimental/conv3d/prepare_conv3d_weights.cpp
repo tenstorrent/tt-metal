@@ -11,8 +11,8 @@
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <vector>

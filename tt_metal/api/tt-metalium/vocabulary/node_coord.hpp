@@ -24,7 +24,7 @@
 #include <optional>
 #include <variant>
 
-#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
 #include <vector>
 
 namespace tt::tt_metal {

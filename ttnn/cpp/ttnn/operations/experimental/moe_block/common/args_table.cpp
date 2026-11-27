@@ -11,15 +11,15 @@
 
 #include <fmt/format.h>
 #include <tracy/Tracy.hpp>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
-#include <tt-metalium/mesh_command_queue.hpp>
-#include <tt-metalium/mesh_device.hpp>
-#include <tt-metalium/shard_data_transfer.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/workload/legacy/circular_buffer.hpp>
+#include <tt-metalium/execution/distributed.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/memory/buffer/mesh_buffer.hpp>
+#include <tt-metalium/execution/mesh_command_queue.hpp>
+#include <tt-metalium/mesh/mesh_device.hpp>
+#include <tt-metalium/memory/buffer/shard_data_transfer.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "ttnn/operations/experimental/moe_block/common/kernels/args_table_names.hpp"

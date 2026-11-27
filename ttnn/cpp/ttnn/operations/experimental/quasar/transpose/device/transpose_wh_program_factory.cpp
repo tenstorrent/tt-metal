@@ -5,14 +5,14 @@
 #include "transpose_utils.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
-#include <tt-metalium/math.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <vector>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"

@@ -153,6 +153,14 @@ CASES = [
     BlockCase("glm53", "4x4-sp1", 10240),
     BlockCase("kimi_k3", "4x4-sp1", 10240),
     BlockCase("glm53", "4x4-sp1", 2560, pad=(2560, 2560 + 1600)),
+    # Kimi-K3.1's production stage (its runner's 4x4 manifests: SP=4 on mesh axis 1, one 2,560-token chunk a forward) on
+    # K3.1's own config: K3's MoE, the mesh opened with K3.1's L1_SMALL_SIZE
+    BlockCase("kimi_k3_1", "4x4-sp1", 2560),
+    # GLM-5.3's 4x4 stage on the [RING, RING] carve (run_subtorus_4x4_tests.sh): forwards of one, two and four full
+    # 2,560-token chunks, the packed ones with their metadata words (test_moe_block_host_perf's carve cases)
+    BlockCase("glm53", "xy4-sp1", 2560),
+    BlockCase("glm53", "xy4-sp1", 5120, chunks=((0, 0, 2560), (1, 2560, 5120))),
+    BlockCase("glm53", "xy4-sp1", 10240, chunks=((0, 0, 2560), (1, 2560, 5120), (2, 5120, 7680), (3, 7680, 10240))),
 ]
 
 
@@ -288,7 +296,7 @@ def _setup(
         ffn = TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=L, options=opts)
         pcc = case.pcc if case.pcc is not None else K3_GOLDEN_PCC
     else:
-        sd = sd if sd is not None else m.weights(R * C)
+        sd = sd if sd is not None else m.state_dict(R * C)
         x = (torch.randn(case.chunk, H, generator=torch.Generator().manual_seed(7)) * m.x_scale).to(torch.bfloat16)
         want = None  # (computed only by the accuracy test: the host reference costs minutes)
         ffn = TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, state_dict=sd, options=opts)
@@ -378,7 +386,10 @@ BLOCK_US = {
     "glm53-4x4-y-10240": (1232.1, 607.3, 2015.9, 190.0),
     "glm53-4x4-y-5120": (534.4, 320.2, 1178.1, 100.8),
     "glm53-8x4-10240": (395.9, 385.8, 1273.6, 78.2),
-    "glm53-8x4-5120": (198.8, 212.4, 675.0, 50.7),  # (combine: 702 - 705 us on a capped Galaxy, 2026-11-19)
+    "glm53-8x4-5120": (197.7, 213.7, 689.3, 52.7),  # (GLM-5.3 8x4 and carve: 14 kW CI Galaxy, mean of 3 runs)
+    "glm53-xy4-sp1-10240-packed-2560@0-2560@2560-2560@5120-2560@7680": (854.0, 425.7, 1632.3, 140.0),
+    "glm53-xy4-sp1-2560": (197.0, 131.3, 1024.7, 77.3),
+    "glm53-xy4-sp1-5120-packed-2560@0-2560@2560": (384.7, 229.7, 1181.0, 102.0),
     "kimi_k3-4x4-sp1-10240": (2624.1, 478.4, 3106.9, 553.8),
     "kimi_k3-4x4-sp1-2560": (520.9, 157.2, 2748.1, 153.4),
     "kimi_k3-4x4-sp1-5120": (1103.6, 300.3, 2800.4, 260.8),
@@ -389,6 +400,7 @@ BLOCK_US = {
     "kimi_k3-8x4-10240": (870.3, 324.8, 1686.2, 248.0),
     "kimi_k3-8x4-5120": (408.3, 184.4, 1495.9, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
     "kimi_k3-8x4-5120-weka-L1": (427.1, 203.2, 1542.2, 163.3),
+    "kimi_k3_1-4x4-sp1-2560": (529.8, 158.5, 2653.9, 152.2),  # (14 kW CI Galaxy)
     "minimax_m3-2x4-2048-c2048": (564.8, 195.7, 1345.9, 85.6),
     "minimax_m3-2x4-4096-4xc1024": (1107.0, 345.0, 1440.9, 153.0),
     "minimax_m3-2x4-5120-c5120": (1292.0, 431.8, 1483.2, 185.9),
@@ -663,7 +675,7 @@ def test_combine_landing_sweep(model, mesh, mesh_device, device_params):
     m = MODELS[model]
     sp_axis = MESH_SP_AXIS.get(mesh, 0)
     R, C = tuple(mesh_device.shape)
-    sd = m.weights(R * C)
+    sd = m.state_dict(R * C)
     wrong = []
     landings = (None, *LANDING_MODES)
     for chunk in LANDING_CHUNKS[model]:
@@ -736,7 +748,7 @@ def test_moe_block_chunk_switch(model, mesh, mesh_device, device_params):
     sp_axis = MESH_SP_AXIS.get(mesh, 0)
     R, C = tuple(mesh_device.shape)
     H = m.cfg.EMB_SIZE
-    sd = m.weights(R * C)
+    sd = m.state_dict(R * C)
     chunks = [c for c in LANDING_CHUNKS[model] if c % (tuple(mesh_device.shape)[sp_axis] * 32) == 0]
     keys = {}
     try:
