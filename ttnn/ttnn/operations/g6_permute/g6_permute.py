@@ -100,7 +100,8 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "buffer": ["dram"],
     "rank": [4],
-    "alignment": ["h_non_aligned"],
+    # rows_tile_scatter keeps W, so padding columns land in output padding columns at every alignment.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "dims": [(0, 2, 1, 3)],
 }
 

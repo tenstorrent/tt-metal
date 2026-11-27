@@ -16,12 +16,12 @@ using namespace g6_permute;
 constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t tensor_a = get_compile_time_arg_val(1);
 constexpr uint32_t tensor_b = get_compile_time_arg_val(2);
-constexpr uint32_t tensor_at = get_compile_time_arg_val(3);
 constexpr uint32_t tensor_bt = get_compile_time_arg_val(4);
 constexpr uint32_t tensor_wt = get_compile_time_arg_val(5);
 constexpr uint32_t block_in_tiles = get_compile_time_arg_val(6);
 constexpr uint32_t face_row_bytes = get_compile_time_arg_val(7);
 constexpr uint32_t in_page_bytes = get_compile_time_arg_val(8);
+// Args 3 (tensor_at) and 9 (stagger_rows) belong to the writer; the layout is shared.
 constexpr auto input_args = TensorAccessorArgs<10>();
 
 using Geometry = TileGeometry<face_row_bytes>;

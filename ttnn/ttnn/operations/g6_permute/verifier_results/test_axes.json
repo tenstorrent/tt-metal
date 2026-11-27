@@ -1,0 +1,258 @@
+{
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x1x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x16x1x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x6x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x16x6x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x1x8x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x8x1x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x6x8x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x8x6x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x32x64x32x2x2-alignment=w_non_aligned-buffer=dram-dims=(0, 1, 4, 2, 5, 3)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=6]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "dram",
+    "rank": 6,
+    "alignment": "w_non_aligned",
+    "dims": "(0, 1, 4, 2, 5, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x64x128x32x2x2-alignment=w_non_aligned-buffer=dram-dims=(0, 1, 4, 2, 5, 3)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=6]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "dram",
+    "rank": 6,
+    "alignment": "w_non_aligned",
+    "dims": "(0, 1, 4, 2, 5, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op[1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT8_B-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L0-1x64x128x32x2x2-alignment=w_non_aligned-buffer=dram-dims=(0, 1, 4, 2, 5, 3)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=6]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "dram",
+    "rank": 6,
+    "alignment": "w_non_aligned",
+    "dims": "(0, 1, 4, 2, 5, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L1-1x32x64x32x2x2-alignment=w_non_aligned-buffer=dram-dims=(0, 1, 4, 2, 5, 3)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=6]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "dram",
+    "rank": 6,
+    "alignment": "w_non_aligned",
+    "dims": "(0, 1, 4, 2, 5, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L2-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT8_B-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L3-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L4-1x1x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L5-1x16x1x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L6-1x6x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L7-1x16x6x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L8-1x1x8x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L9-1x8x1x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L10-1x6x8x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L11-1x8x6x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L12-1x6x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L13-1x6x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L14-1x16x1x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L15-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT8_B-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L16-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT8_B-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L17-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT16-layout=ROW_MAJOR-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "ROW_MAJOR",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L18-1x128x256x32-alignment=tile_aligned-buffer=l1-dims=(0, 3, 1, 2)-dtype=BFLOAT8_B-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT8_B",
+    "layout": "TILE",
+    "buffer": "l1",
+    "rank": 4,
+    "alignment": "tile_aligned",
+    "dims": "(0, 3, 1, 2)"
+  },
+  "eval/golden_tests/g6_permute/test_golden.py::test_op_loose[L19-1x6x16x64-alignment=h_non_aligned-buffer=dram-dims=(0, 2, 1, 3)-dtype=BFLOAT16-layout=TILE-rank=4]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "buffer": "dram",
+    "rank": 4,
+    "alignment": "h_non_aligned",
+    "dims": "(0, 2, 1, 3)"
+  }
+}

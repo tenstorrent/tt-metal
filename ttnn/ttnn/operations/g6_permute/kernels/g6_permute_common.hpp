@@ -38,7 +38,6 @@ template <uint32_t tensor_b, uint32_t tensor_bt>
 struct RowsLive {
     static constexpr uint32_t last = tensor_b - TILE_ROWS * (tensor_bt - 1);
     static_assert(last >= 1 && last <= TILE_ROWS, "tensor_bt = ceil(tensor_b / 32)");
-    static constexpr uint32_t of(uint32_t bt) { return bt == tensor_bt - 1 ? last : TILE_ROWS; }
 };
 
 template <uint32_t tensor_a, uint32_t tensor_bt, uint32_t tensor_wt>
@@ -60,8 +59,13 @@ struct InTileCursor {
 };
 
 // Per-block step zones are kept for the first blocks of a core only: zone executions are capped
-// per RISC and a zone past the cap vanishes silently.
+// per RISC and a zone past the cap vanishes silently. The plain build has no zones, so it compiles
+// the block loop once instead of a zoned copy beside the tail copy.
+#if defined(PROFILE_KERNEL)
 constexpr uint32_t ZONED_BLOCKS = 16;
+#else
+constexpr uint32_t ZONED_BLOCKS = 0;
+#endif
 
 }  // namespace g6_permute
 

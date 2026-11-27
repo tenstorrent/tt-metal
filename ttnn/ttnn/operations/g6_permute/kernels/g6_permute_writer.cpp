@@ -47,8 +47,10 @@ FORCE_INLINE void scatter_tile(const Accessor& output, uint32_t slot, const Curs
     for (uint32_t i = 0; i < rows; ++i) {
         const uint64_t dst = output.get_noc_addr(base_page + r * out_row_page_stride, dst_offset);
         const uint32_t src = slot + Geometry::face_off(r, 0);
-        noc_async_write<face_row_bytes>(src, dst, face_row_bytes);
-        noc_async_write<face_row_bytes>(src + Geometry::face_bytes, dst + Geometry::face_bytes, face_row_bytes);
+        noc_async_write_one_packet_set_state(dst, face_row_bytes);
+        noc_async_write_one_packet_with_state(src, static_cast<uint32_t>(dst));
+        noc_async_write_one_packet_with_state(
+            src + Geometry::face_bytes, static_cast<uint32_t>(dst) + Geometry::face_bytes);
         if (++r == rows) {
             r = 0;
         }
