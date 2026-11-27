@@ -523,6 +523,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
     # Kimi-K3 and Kimi-K3.1 share the launcher's layout handling; they differ in the request and the slot counts.
     KIMI_REQUEST_LEN = {"kimi_k3": 1049600, "kimi_k3_1": 1049600}
     KIMI_4X4_USERS = {"kimi_k3": "127", "kimi_k3_1": "100"}
+    # Packed holds more per forward (four chunks), so it fits fewer slots than the one-chunk run, not just one fewer.
+    KIMI_K31_PACKED_USERS = "95"
     KIMI_8X4_USERS = {"kimi_k3": "100", "kimi_k3_1": "76"}
     KIMI_4X4_SP_AXIS = {"kimi_k3": 1, "kimi_k3_1": 0}
 
@@ -611,8 +613,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_kimi_k3_1_sc1_packed_runs_four_chunks_per_forward(self):
-        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at one slot
-        fewer than kimi_k3_1.json, on the same two 4x4 stages, golden and PCC gate."""
+        """--variant packed: kimi_k3_1_packed.json's 2560-token chunks, four per forward (budget 10240), at its own
+        (smaller) slot count, on the same two 4x4 stages, golden and PCC gate."""
         result, records = self.run_harness(
             "kimi_k3_1", config="sc1", hosts=self.SC4_HOSTS[:1], args=["--variant", "packed"]
         )
@@ -627,7 +629,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(runner["PREFILL_CHUNK_SIZE"], "2560")
         self.assertNotIn("PREFILL_FORWARD_TOKENS_BUDGET", runner)
         self.assertEqual(runner["PREFILL_NUM_LAYERS"], "24")
-        self.assertEqual(runner["PREFILL_NUM_USERS"], str(int(self.KIMI_4X4_USERS["kimi_k3_1"]) - 1))
+        self.assertEqual(runner["PREFILL_NUM_USERS"], self.KIMI_K31_PACKED_USERS)
         self.assert_kimi_4x4_cache_check(result, records, "kimi_k3_1")
         producer = self.one_record(records, "producer")["env"]
         self.assertTrue(producer["PREFILL_PRODUCER_MANIFEST"].endswith("manifests/kimi_k3_1_packed.json"))
