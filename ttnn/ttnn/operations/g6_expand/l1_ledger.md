@@ -51,3 +51,22 @@ Two perf lamps of the design were turned on as live CT knobs (host constants in
   still written once, by one core. The reader flushes before any re-reserve and barriers before return.
 - `CORE_ORDER_STRIDE = 1` (core placement): measured flat at strides 7, 13 and 37, so it stays at the
   split's own order.
+
+### Refinement 2 (critical-path restructure)
+
+- `cb_bcast_tiles` page = **slot** = `slot_bytes` = 1 KiB when `HALF_TILE=1` (default; faces 0/1
+  only — an output tile is `[F0 F1 F0 F1]`, so each output page is written as two 1 KiB writes from
+  the one slot), 2 KiB when `HALF_TILE=0`. Capacity `bcast_depth * col_block` pages unchanged →
+  production footprint W=512 `2 * 1 KiB`, W ≤ 256 `1 KiB`; bound `2 * 64 * 1 KiB` (half) /
+  `2 * 64 * 2 KiB`.
+- Still the only CB. Producer of the CB handshake stays the reader; with `REPLICATE_SPLIT=1` (default,
+  gated to pure-RISC-V build + one block per core) the **writer also writes bytes into the slot**:
+  it fetches row 0 of face 1 (and builds face 1/3) into the slot at `get_read_ptr + j * slot_bytes`,
+  while the reader fetches/builds face 0/2 only — disjoint byte ranges, no slot reuse (single block).
+  BRISC→NCRISC "face 1 built" is a local counter semaphore `SEM_FACE1_BUILT` (no NoC, no CB); the
+  reader polls it before its write share. Multi-block cores (`max_cols_per_core > COL_BLOCK_CAP`)
+  keep the reader-only build (slot reuse would race the writer's build against the reader's in-flight
+  writes).
+- Data-movement budget unchanged: x — still `2 × row_fetch_bytes` per (core, column), now one request
+  on each RISC/NoC; out — every page written once (as 2 × 1 KiB with `HALF_TILE=1`). Core-local
+  replicate traffic: 0 B NoC (pure RISC-V stores, 15 rows per face, faces split over the two RISCs).

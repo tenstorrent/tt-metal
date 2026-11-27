@@ -28,7 +28,7 @@ COL_BLOCK_CAP = 64  # tiles (128 KiB of bf16) — L1 clamp on col_block
 REGIME = "R1-colmajor-row0fetch"
 # Replication mechanism (perf lamp): rows per face the reader RISC-V builds before local NoC
 # doubling copies take over; 2 * FACE_ROWS = all rows by RISC-V stores (no NoC copies).
-REPLICATE_CPU_ROWS = 8
+REPLICATE_CPU_ROWS = 16
 # Core placement (perf lamp): range k of the column-major order goes to core
 # ordered[(k * CORE_ORDER_STRIDE) % num_cores] (stride made coprime with num_cores). 1 = the
 # split's own row-wise order; a larger stride spreads the cores of one column (= one DRAM bank
@@ -43,6 +43,23 @@ READER_WRITE_EIGHTHS = 4
 # cores, taken row-wise (full NoC rows first) from the device grid. None / 1 = whole grid.
 MAX_CORES = 80  # measured on W=512 (Refinement 1): 80 → ~2.31 µs vs 110 → ~2.49 µs
 MIN_TILES_PER_CORE = 1
+# Broadcast-tile build (perf lamp "replicate on the critical path", Refinement 2): an output tile
+# is [F0 F1 F0 F1]. 1 = build faces 0/1 only in a 1 KiB slot and write every output page as two
+# 1 KiB writes from it (no faces 0/1 -> 2/3 copy, half the slot); 0 = build the whole 2 KiB tile
+# and write it as one page.
+HALF_TILE = 1
+# Row-0 fetch requests per column (design lamp "row-fetch request count"): 2 = row_fetch_bytes at
+# offsets 0 and FACE_BYTES; 1 = one read of FACE_BYTES + row_fetch_bytes from offset 0.
+ROW_FETCH_REQUESTS = 2
+# Replicate NoC topology (with REPLICATE_CPU_ROWS < FACE_ROWS): 0 = doubling (one barrier per
+# level); 1 = fan-out (each remaining chunk read from the CPU-built prefix, one barrier total).
+REPLICATE_NOC_FANOUT = 0
+# Replicate split across the two data-movement RISCs: 1 = the writer (BRISC) fetches + builds
+# face 1 (3) while the reader (NCRISC) builds face 0 (2), local semaphore handoff. Applies only
+# when the build is pure RISC-V (REPLICATE_CPU_ROWS >= FACE_ROWS) and each core has one block of
+# columns (no slot reuse); otherwise the reader builds the whole slot.
+REPLICATE_SPLIT = 1
+SEM_FACE1_BUILT = 0
 
 CB_BCAST_TILES = 0  # broadcast tiles: row 0 fetched + replicated in place; also the write source
 
@@ -112,16 +129,18 @@ def _build(input_tensor, output_tensor, grid):
     col_block = min(max_cols_per_core, COL_BLOCK_CAP)
     num_col_blocks_max = _div_up(max_cols_per_core, col_block)
     bcast_depth = 1 if num_col_blocks_max == 1 else 2
+    replicate_split = int(bool(REPLICATE_SPLIT) and REPLICATE_CPU_ROWS >= FACE_ROWS and num_col_blocks_max == 1)
 
     # ---- CB ----
+    slot_bytes = page_size // 2 if HALF_TILE else page_size  # one CB page = one broadcast slot
     cb_bcast_tiles = ttnn.CBDescriptor(
-        total_size=bcast_depth * col_block * page_size,
+        total_size=bcast_depth * col_block * slot_bytes,
         core_ranges=all_cores,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
                 buffer_index=CB_BCAST_TILES,
                 data_format=input_tensor.dtype,
-                page_size=page_size,
+                page_size=slot_bytes,
             )
         ],
     )
@@ -138,11 +157,29 @@ def _build(input_tensor, output_tensor, grid):
         REPLICATE_CPU_ROWS,
         READER_WRITE_EIGHTHS,
         Wt,
+        int(bool(HALF_TILE)),
+        ROW_FETCH_REQUESTS,
+        int(bool(REPLICATE_NOC_FANOUT)),
+        replicate_split,
+        SEM_FACE1_BUILT,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_ct_args = [CB_BCAST_TILES, Ht, Wt, page_size, READER_WRITE_EIGHTHS]
+    writer_ct_args = [
+        CB_BCAST_TILES,
+        Ht,
+        Wt,
+        page_size,
+        READER_WRITE_EIGHTHS,
+        int(bool(HALF_TILE)),
+        replicate_split,
+        SEM_FACE1_BUILT,
+        face_bytes,
+        face_row_bytes,
+        row_fetch_bytes,
+    ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
@@ -163,13 +200,13 @@ def _build(input_tensor, output_tensor, grid):
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt,
-        common_runtime_args=[output_tensor.buffer_address()],
+        common_runtime_args=[output_tensor.buffer_address(), input_tensor.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
     )
 
     descriptor = ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel],
-        semaphores=[],
+        semaphores=[ttnn.SemaphoreDescriptor(id=SEM_FACE1_BUILT, core_ranges=all_cores, initial_value=0)],
         cbs=[cb_bcast_tiles],
     )
     plan = {
@@ -188,6 +225,11 @@ def _build(input_tensor, output_tensor, grid):
         "split_cores": split_cores,
         "max_cores": MAX_CORES,
         "min_tiles_per_core": MIN_TILES_PER_CORE,
+        "half_tile": int(bool(HALF_TILE)),
+        "slot_bytes": slot_bytes,
+        "row_fetch_requests": ROW_FETCH_REQUESTS,
+        "replicate_noc_fanout": int(bool(REPLICATE_NOC_FANOUT)),
+        "replicate_split": replicate_split,
     }
     return descriptor, plan
 
@@ -213,6 +255,6 @@ def get_program(input_tensor, output_tensor):
     descriptor, plan = entry
     kernels = descriptor.kernels
     kernels[0].common_runtime_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
-    kernels[1].common_runtime_args = [output_tensor.buffer_address()]
+    kernels[1].common_runtime_args = [output_tensor.buffer_address(), input_tensor.buffer_address()]
     descriptor.kernels = kernels
     return descriptor, plan

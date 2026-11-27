@@ -7,15 +7,18 @@
 //   fetch_row0_block : land row 0 of faces 0 and 1 (row_fetch_bytes each, at offsets 0 and
 //                      face_bytes) straight into the column's slot of cb_bcast_tiles; all fetches
 //                      of a block are in flight under ONE read barrier.
-//   replicate_row0   : in place, face0 row0 -> face0 rows 1..15 + face2 rows 0..15 and
-//                      face1 row0 -> face1 rows 1..15 + face3 rows 0..15 (bytes only, bit-exact;
-//                      overwrites any fetched padding rows). Mechanism knob `cpu_rows` (CT):
-//                        cpu_rows == 2*face_rows : all rows by RISC-V word copies, per column;
-//                        cpu_rows <  face_rows   : RISC-V builds rows [0, cpu_rows) of faces 0/1, then
-//                          local NoC L1->L1 doubling copies grow them to 16 rows, then one local
-//                          copy of faces 0/1 onto faces 2/3 — every level batched over the block's
-//                          columns under one barrier (perf lamp "replication mechanism").
-//   publish          : push one page per column.
+//                      Knob `row_fetch_requests` (CT): 2 = two row_fetch_bytes reads; 1 = one
+//                      read of face_bytes + row_fetch_bytes (face 0 + row 0 of face 1).
+//   replicate_row0   : in place, face0 row0 -> face0 rows 1..15 and face1 row0 -> face1 rows 1..15
+//                      (bytes only, bit-exact; overwrites any fetched padding rows). Faces 2/3 are
+//                      copies of faces 0/1: built in the slot (half_tile == 0) or never built
+//                      (half_tile == 1: the slot is 1 KiB and every output page is written as two
+//                      1 KiB writes from it). Mechanism knob `cpu_rows` (CT): RISC-V builds rows
+//                      [0, min(cpu_rows, 16)) of faces 0/1, local NoC L1->L1 doubling copies grow
+//                      them to 16 rows (batched over the block under one barrier per level, or —
+//                      knob `noc_fanout` — every chunk copied from the prefix under ONE barrier); faces
+//                      2/3 by RISC-V when cpu_rows >= 32, else one local NoC copy.
+//   publish          : push one page per column when no NoC copy is involved, else per block.
 //   write_share      : (knob reader_write_eighths, CT) the reader also writes the last
 //                      (seg_len * reader_write_eighths) / 8 tiles of every column segment on NoC0,
 //                      straight from the slot it built (perf lamp "write issue on one RISC"); the
@@ -60,12 +63,35 @@ void kernel_main() {
     constexpr uint32_t cpu_rows = get_compile_time_arg_val(7);
     constexpr uint32_t reader_write_eighths = get_compile_time_arg_val(8);
     constexpr uint32_t Wt = get_compile_time_arg_val(9);
-    constexpr auto input_args = TensorAccessorArgs<10>();
+    constexpr uint32_t half_tile = get_compile_time_arg_val(10);
+    constexpr uint32_t row_fetch_requests = get_compile_time_arg_val(11);
+    constexpr uint32_t noc_fanout = get_compile_time_arg_val(12);
+    // Knob `replicate_split` (CT): the writer (BRISC) fetches + builds face 1 (and 3) of every slot
+    // while this RISC does face 0 (and 2); it publishes each finished column on `sem_face1_built`
+    // (a local counter, no NoC). Requires the pure-RISC-V build and a single block per core.
+    constexpr uint32_t replicate_split = get_compile_time_arg_val(13);
+    constexpr uint32_t sem_face1_built_id = get_compile_time_arg_val(14);
+    constexpr auto input_args = TensorAccessorArgs<15>();
     constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t face_rows = face_bytes / face_row_bytes;
-    constexpr bool all_cpu = cpu_rows >= 2 * face_rows;
-    static_assert(all_cpu || (cpu_rows >= 1 && cpu_rows <= face_rows && (cpu_rows & (cpu_rows - 1)) == 0));
+    // Slot = one CB page: the whole tile, or (half_tile) only faces 0/1 — the tile's two
+    // identical 1 KiB halves are then written from the same slot (faces 2/3 == faces 0/1).
+    constexpr uint32_t half_bytes = 2 * face_bytes;
+    constexpr uint32_t slot_bytes = half_tile ? half_bytes : page_size;
+    // Rows [1, cpu_face_rows) of faces 0/1 are RISC-V stores; local NoC doubling grows them to
+    // face_rows. Faces 2/3 (only when !half_tile): RISC-V when cpu_rows >= 2*face_rows, else one
+    // local NoC copy. No NoC copy at all => publish per column (finer publish).
+    constexpr uint32_t cpu_face_rows = cpu_rows < face_rows ? cpu_rows : face_rows;
+    constexpr bool cpu_faces23 = cpu_rows >= 2 * face_rows;
+    constexpr bool noc_doubling = cpu_face_rows < face_rows;
+    constexpr bool noc_faces23 = !half_tile && !cpu_faces23 && !replicate_split;
+    constexpr bool per_col_publish = !noc_doubling && !noc_faces23;
+    static_assert(cpu_rows >= 1 && (cpu_faces23 || (cpu_rows & (cpu_rows - 1)) == 0));
+    static_assert(row_fetch_requests == 1 || row_fetch_requests == 2);
+    static_assert(!replicate_split || !noc_doubling, "replicate_split needs cpu_rows >= face_rows");
+    [[maybe_unused]] volatile tt_l1_ptr uint32_t* sem_face1_built =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_face1_built_id));
 
     const uint32_t input_addr = get_common_arg_val<uint32_t>(0);
     [[maybe_unused]] const uint32_t output_addr = get_common_arg_val<uint32_t>(1);
@@ -94,51 +120,76 @@ void kernel_main() {
             DeviceZoneScopedN("G6E_FETCH");
             for (uint32_t j = 0; j < block_cols; ++j) {
                 const uint32_t col = first_col + c0 + j;
-                const uint32_t slot = block_base + j * page_size;
-                noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
-                noc_async_read(input_accessor.get_noc_addr(col, face_bytes), slot + face_bytes, row_fetch_bytes);
+                const uint32_t slot = block_base + j * slot_bytes;
+                if constexpr (replicate_split) {
+                    // face 1 is the writer's: touch only face 0.
+                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
+                } else if constexpr (row_fetch_requests == 1) {
+                    // One request: face 0 whole + row 0 of face 1 (rows other than row 0 are
+                    // overwritten by the replicate, so x's padding never reaches out).
+                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, face_bytes + row_fetch_bytes);
+                } else {
+                    noc_async_read(input_accessor.get_noc_addr(col, 0), slot, row_fetch_bytes);
+                    noc_async_read(input_accessor.get_noc_addr(col, face_bytes), slot + face_bytes, row_fetch_bytes);
+                }
             }
             noc_async_read_barrier();
         }
-        if constexpr (all_cpu) {
+        {
+            DeviceZoneScopedN("G6E_REPLICATE");
             for (uint32_t j = 0; j < block_cols; ++j) {
-                {
-                    DeviceZoneScopedN("G6E_REPLICATE");
-                    const uint32_t slot = block_base + j * page_size;
-                    // face0 row0 -> face0 rows 1..15, face2 rows 0..15
-                    fill_rows<face_row_bytes>(slot, slot + face_row_bytes, face_rows - 1);
-                    fill_rows<face_row_bytes>(slot, slot + 2 * face_bytes, face_rows);
-                    // face1 row0 -> face1 rows 1..15, face3 rows 0..15
-                    fill_rows<face_row_bytes>(slot + face_bytes, slot + face_bytes + face_row_bytes, face_rows - 1);
-                    fill_rows<face_row_bytes>(slot + face_bytes, slot + 3 * face_bytes, face_rows);
-                }
-                cb_push_back(cb_bcast_tiles, 1);
-            }
-        } else {
-            {
-                DeviceZoneScopedN("G6E_REPLICATE");
-                for (uint32_t j = 0; j < block_cols; ++j) {
-                    const uint32_t slot = block_base + j * page_size;
-                    if constexpr (cpu_rows > 1) {
-                        fill_rows<face_row_bytes>(slot, slot + face_row_bytes, cpu_rows - 1);
-                        fill_rows<face_row_bytes>(slot + face_bytes, slot + face_bytes + face_row_bytes, cpu_rows - 1);
+                const uint32_t slot = block_base + j * slot_bytes;
+                if constexpr (cpu_face_rows > 1) {
+                    fill_rows<face_row_bytes>(slot, slot + face_row_bytes, cpu_face_rows - 1);
+                    if constexpr (!replicate_split) {
+                        fill_rows<face_row_bytes>(
+                            slot + face_bytes, slot + face_bytes + face_row_bytes, cpu_face_rows - 1);
                     }
                 }
-                for (uint32_t rows = cpu_rows; rows < face_rows; rows *= 2) {
+                if constexpr (!half_tile && (cpu_faces23 || replicate_split)) {
+                    fill_rows<face_row_bytes>(slot, slot + 2 * face_bytes, face_rows);
+                    if constexpr (!replicate_split) {
+                        fill_rows<face_row_bytes>(slot + face_bytes, slot + 3 * face_bytes, face_rows);
+                    }
+                }
+                if constexpr (per_col_publish) {
+                    cb_push_back(cb_bcast_tiles, 1);
+                }
+            }
+            if constexpr (noc_doubling && noc_fanout) {
+                // Fan-out: every remaining chunk of rows copies the final CPU-built prefix, so all
+                // copies of the block are in flight under ONE barrier (no level-by-level waits).
+                constexpr uint32_t prefix_bytes = cpu_face_rows * face_row_bytes;
+                for (uint32_t j = 0; j < block_cols; ++j) {
+                    const uint32_t slot = block_base + j * slot_bytes;
+                    const uint64_t src0 = get_noc_addr(slot);
+                    const uint64_t src1 = get_noc_addr(slot + face_bytes);
+                    for (uint32_t off = prefix_bytes; off < face_bytes; off += prefix_bytes) {
+                        noc_async_read(src0, slot + off, prefix_bytes);
+                        noc_async_read(src1, slot + face_bytes + off, prefix_bytes);
+                    }
+                }
+                noc_async_read_barrier();
+            } else if constexpr (noc_doubling) {
+                for (uint32_t rows = cpu_face_rows; rows < face_rows; rows *= 2) {
                     const uint32_t bytes = rows * face_row_bytes;
                     for (uint32_t j = 0; j < block_cols; ++j) {
-                        const uint32_t slot = block_base + j * page_size;
+                        const uint32_t slot = block_base + j * slot_bytes;
                         noc_async_read(get_noc_addr(slot), slot + bytes, bytes);
                         noc_async_read(get_noc_addr(slot + face_bytes), slot + face_bytes + bytes, bytes);
                     }
                     noc_async_read_barrier();
                 }
+            }
+            if constexpr (noc_faces23) {
                 for (uint32_t j = 0; j < block_cols; ++j) {
-                    const uint32_t slot = block_base + j * page_size;
-                    noc_async_read(get_noc_addr(slot), slot + 2 * face_bytes, 2 * face_bytes);
+                    const uint32_t slot = block_base + j * slot_bytes;
+                    noc_async_read(get_noc_addr(slot), slot + half_bytes, half_bytes);
                 }
                 noc_async_read_barrier();
             }
+        }
+        if constexpr (!per_col_publish) {
             cb_push_back(cb_bcast_tiles, block_cols);
         }
         if constexpr (reader_write_eighths > 0) {
@@ -150,10 +201,20 @@ void kernel_main() {
                 const uint32_t mine = ((seg_end - seg_begin) * reader_write_eighths) / 8;
                 const uint32_t img = col / Wt;
                 const uint32_t wt = col - img * Wt;
-                const uint32_t slot = block_base + j * page_size;
+                const uint32_t slot = block_base + j * slot_bytes;
                 uint32_t page = (img * Ht + (seg_end - mine - col * Ht)) * Wt + wt;
+                if constexpr (replicate_split) {
+                    if (mine > 0) {
+                        noc_semaphore_wait_min(sem_face1_built, c0 + j + 1);  // face 1 of this slot built
+                    }
+                }
                 for (uint32_t k = 0; k < mine; ++k, page += Wt) {
-                    noc_async_write(slot, output_accessor.get_noc_addr(page), page_size);
+                    if constexpr (half_tile) {
+                        noc_async_write(slot, output_accessor.get_noc_addr(page, 0), half_bytes);
+                        noc_async_write(slot, output_accessor.get_noc_addr(page, half_bytes), half_bytes);
+                    } else {
+                        noc_async_write(slot, output_accessor.get_noc_addr(page), page_size);
+                    }
                 }
             }
             noc_async_writes_flushed();  // slot may be re-reserved by the next block

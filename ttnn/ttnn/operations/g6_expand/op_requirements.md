@@ -74,7 +74,7 @@ golden suite (20/20) and acceptance tests stay green bit-exactly, and no regress
 (W = 256, 196, 207, 185).
 **Outcome**: new `MAX_CORES` / `MIN_TILES_PER_CORE` grid knob (one host helper `_split_core_count`, reported in `last_plan`); co-tuned by a 9-rep-median device sweep on W=512 over cores {16…110} × `READER_WRITE_EIGHTHS` {0,2,3,4,5,6} × `CORE_ORDER_STRIDE` {1,3,7} × `REPLICATE_CPU_ROWS` {2,4,8,16,32}. Winner: `MAX_CORES=80`, eighths=4, stride=1, cpu_rows=8 → W=512 **2.49 → 2.31 µs** median (≈7 %, reproduced in 3 runs; 2.27–2.37 vs 2.37–2.59 range). Guards unchanged byte-for-byte (cap binds only when tiles > 80): W=256 1.73, 196 1.57, 207 1.57, 185 1.52 µs. Bank stagger is a no-op here: Wt=16 is a multiple of the 8 DRAM banks, so every tile of a column (and so every core's segment) is on one bank and rotating a segment start cannot change bank order; aggregate bank load is already balanced. Fewer cores (16–48) never beat ~2.45 µs: the cost is not grid sync alone but per-core fetch→replicate latency before the first write plus write drain — i.e. Refinement 2's critical path. Next: Refinement 2 (shorter fetch→replicate path), then R2 multicast.
 
-### [ ] Refinement 2 — Shorten the fetch → replicate → write critical path on W=512
+### [x] Refinement 2 — Shorten the fetch → replicate → write critical path on W=512
 
 **Type**: perf
 
@@ -102,6 +102,7 @@ is measured.
 **Done when**: measured device kernel ns on W=512 improves over the post-Refinement-1 number, golden
 + acceptance green bit-exactly (special values, poisoned padding, repeat, sequence), and no
 regression on the guard set (W = 256, 196, 207, 185).
+**Outcome**: landed three live knobs in the descriptor: `HALF_TILE=1` (faces 0/1 only in a 1 KiB slot, each page written as 2 × 1 KiB, no faces→2/3 copy), `REPLICATE_SPLIT=1` (BRISC fetches row 0 of face 1 on NoC1 and builds face 1 with RISC-V stores while NCRISC does face 0, local semaphore handoff; gated to the pure-RISC-V build and one block per core), and `REPLICATE_CPU_ROWS=16` (pure RISC-V build, so each column is published as soon as it is built). `ROW_FETCH_REQUESTS` (1 vs 2) and `REPLICATE_NOC_FANOUT` were measured flat or worse and are parked at the old byte-identical defaults (2 / 0). Device kernel time (paired A/B, 5–9 rep medians): W=512 **≈2.33 → ≈2.25 µs** (−3.5 %, consistent over 5 paired runs; first write p50 moved 2450 → 2200 cyc); guards improved: W=256 1.73 → 1.52, W=207 1.58 → 1.42, W=196 1.57 → 1.41, W=185 1.53 → 1.37 µs. What binds now is the write drain. A whole-op ablation (fetch + replicate both stubbed, sync kept) gives a **write-only floor of ≈1.79 µs** on W=512: 512 KiB in ≈1900 cyc ≈ 270 B/cyc, with the tail cores stalled in write issue/barrier. The 1.54 µs goal is therefore below the floor for this write pattern. The remaining pre-write path is the row-0 fetch latency (≈500 cyc) plus the halved replicate (≈230 cyc). Measured costs: RISC-V stores ≈1.8 cyc/word; a local NoC copy ≈25–30 cyc per issue plus ≈150 cyc per barrier, so more NoC fan-out loses. Next: raise write throughput (where the writes enter DRAM and how they are routed on the NoC — every column sits on one bank since Wt=16) and cut fetch contention (Refinement 3 multicast). Neither belongs in this mechanism-only refinement.
 
 ### [ ] Refinement 3 — Column-group multicast of the broadcast tile (regime R2) on W=512
 

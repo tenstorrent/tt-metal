@@ -39,3 +39,34 @@
 - Issues encountered: None
 - Tests added: tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand_knob_sweep.py (opt-in perf
   sweep tooling; skipped unless G6E_SWEEP=1)
+
+## Refinement 2 — Shorten the fetch → replicate → write critical path on W=512
+- Date: 2026-11-27
+- What was done: reader/writer mechanism change, everything behind single-source host knobs in
+  `g6_expand_program_descriptor.py` (reported in `last_plan`):
+  - `HALF_TILE=1` — build only faces 0/1 in a 1 KiB slot (CB page = slot) and write every output page
+    as two 1 KiB writes from it (reader and writer write shares both); drops the faces 0/1 → 2/3 copy.
+  - `REPLICATE_SPLIT=1` — the writer (BRISC) fetches row 0 of face 1 on NoC1 and builds face 1 (and
+    face 3 when not half) by RISC-V stores, in parallel with the reader building face 0. It hands
+    off through a local counter semaphore `SEM_FACE1_BUILT` that the reader polls before its write
+    share. The host gates it to the pure-RISC-V build and one block per core (no slot reuse).
+  - `REPLICATE_CPU_ROWS=16` — pure RISC-V build (no local NoC copies or barriers), each column
+    published as soon as it is built (finer publish).
+  - Measured and parked at the old byte-identical defaults: `ROW_FETCH_REQUESTS` (1 request of
+    face+row vs 2 × 64 B: flat) and `REPLICATE_NOC_FANOUT` (prefix fan-out under one barrier instead
+    of doubling: worse for prefixes < 8 rows, flat at 8).
+  - Device kernel ns (BH, paired A/B medians): W=512 ≈2.33 → ≈2.25 µs; W=256 1.73 → 1.52;
+    W=207 1.58 → 1.42; W=196 1.57 → 1.41; W=185 1.53 → 1.37 µs.
+  - Ablations (W=512): stubbing the replicate alone ≈ −0.25 µs. Stubbing fetch + replicate together
+    (sync kept) gives a write-only floor of ≈1.79 µs: 512 KiB of writes take ≈1900 cyc (≈270 B/cyc),
+    which is above the 1.54 µs goal. The remaining headroom is in write throughput and fetch latency
+    (≈500 cyc), not on-core replicate cost.
+- Accuracy achieved: bit-exact — PCC=1.0, relative RMS=0 on W ∈ {512, 256, 207, 196, 185} plus the
+  multi-column/multi-block knob-path matrix (int16 view equality, poisoned x padding).
+- Golden test progress: 20/20 passing
+- Issues encountered: tracy-capture crashed on a few `--profile` sweep runs for W=196 (capture
+  side; the test passed). W=196 was measured through the standard perf bench instead.
+- Tests added: tests/ttnn/unit_tests/operations/g6_expand/test_g6_expand_replicate_paths.py
+  (5 build paths × 4 geometries, including a single core with 16 columns and one with 66 columns,
+  i.e. two blocks with the split gated off). test_g6_expand_knob_sweep.py was extended with
+  half_tile / fetch_reqs / fanout / split fields.
