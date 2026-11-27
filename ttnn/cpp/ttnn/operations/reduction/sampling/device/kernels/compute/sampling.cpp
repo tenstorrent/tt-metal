@@ -63,8 +63,30 @@ void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
 }  // namespace
 
+#ifdef TRISC_MATH
+// exp(x * inv_temp) in place over one face in dest, where x = candidate - row max. The product stays
+// in an SFPU register (fp32) and only the exponential is written back. With fp32 dest accumulation
+// off, as on Wormhole and Blackhole, dest holds 16-bit values: writing x * inv_temp there first would
+// round it to bfloat16. A scaled logit near 40 sits on a 0.25 grid there, which moves exp of it by up
+// to e^0.125 - 1 = 13%.
+template <bool is_fp32_dest_acc_en>
+inline void scaled_exp_face(const uint32_t inv_temp_bits) {
+    // Not const: sfpi tries to spill a const vFloat that lives across a loop.
+    sfpi::vFloat inv_temp = __builtin_bit_cast(float, inv_temp_bits);
+    for (int row = 0; row < 8; ++row) {
+        const sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_exp_accurate_<is_fp32_dest_acc_en>(x * inv_temp);
+        sfpi::dst_reg++;
+    }
+}
+#endif
+
+// in0 = exp((in0 - in1) * inv_temp), in1 broadcast across columns. The row max of the unscaled values
+// is the max of the scaled ones for any inv_temp > 0, so no value is scaled before the subtraction.
+// The exponential is the accurate one: the approximate exp_tile<true> has an input-dependent error of
+// a few percent and reads low at 0, so it under-weights each row's top token against the rest.
 template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols>
-void sub_exp_block_bcast_cols_inplace() {
+void sub_scaled_exp_block_bcast_cols_inplace(const uint32_t inv_temp_bits) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -74,7 +96,7 @@ void sub_exp_block_bcast_cols_inplace() {
     DataflowBuffer in1_dfb_obj(in1_dfb);
 
     sub_bcast_cols_init(in0_dfb, in1_dfb);
-    exp_tile_init<true>();
+    exp_tile_init<false>();
     in0_dfb_obj.wait_front(rows * cols);
     in1_dfb_obj.wait_front(rows);
 
@@ -85,7 +107,8 @@ void sub_exp_block_bcast_cols_inplace() {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_dfb, in1_dfb, j, i, j);
-                exp_tile<true>(j);
+                MATH((_llk_math_eltwise_unary_sfpu_params_(
+                    scaled_exp_face<DST_ACCUM_MODE>, j, VectorMode::RC, inv_temp_bits)));
             }
             tile_regs_commit();
 
@@ -417,44 +440,6 @@ void top_k() {
     sfpu::_init_sfpu_config_reg();
 }
 
-template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace() {
-    // Precondition: in0_cb has num_tiles produced
-    // Precondition: in1_scalar_cb has 1 produced
-    // Postcondition: in0_cb has num_tiles produced
-    // Postcondition: in1_scalar_cb has 1 produced
-
-    DataflowBuffer in0_dfb_obj(in0_dfb);
-    DataflowBuffer in1_scalar_dfb_obj(in1_scalar_dfb);
-
-    const uint32_t dst_tiles = num_tiles;
-    const uint32_t granularity = 1;
-
-    reconfig_data_format(in0_dfb, in1_scalar_dfb);
-    mul_bcast_scalar_init(in0_dfb, in1_scalar_dfb);
-    in0_dfb_obj.wait_front(num_tiles);
-    in1_scalar_dfb_obj.wait_front(1);
-
-    for (uint32_t g = 0; g < granularity; ++g) {
-        tile_regs_acquire();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            mul_tiles_bcast_scalar(in0_dfb, in1_scalar_dfb, i, 0, i);
-        }
-        tile_regs_commit();
-
-        in0_dfb_obj.pop_front(static_cast<uint16_t>(dst_tiles));
-        in0_dfb_obj.reserve_back(static_cast<uint16_t>(dst_tiles));
-
-        tile_regs_wait();
-        for (uint32_t i = 0; i < dst_tiles; ++i) {
-            pack_tile(i, in0_dfb);
-        }
-        tile_regs_release();
-
-        in0_dfb_obj.push_back(static_cast<uint16_t>(dst_tiles));
-    }
-}
-
 void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
@@ -487,25 +472,28 @@ void kernel_main() {
         stable_sort>();
     constexpr uint32_t Kt = nearest32_K / tile_width;
 
-    // scale temperature
-
     // mask out all values except the top-k
     DataflowBuffer topk_mask_dfb(dfb::topk_mask);
     topk_mask_dfb.wait_front(Kt);
     add_block_inplace(dfb::values, dfb::topk_mask, Ht * Kt);
-    mul_block_bcast_scalar_inplace<dfb::values, dfb::temp, Ht * Kt>();
-    // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>();
 
-    sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
+    // softmax((values - max) * (1/T)); the writer puts this core's 1/T, as bfloat16, in element 0
+    // of the temp entry. The writer stores it from the RISC-V side, so drop any cached copy first.
+    DataflowBuffer temp_dfb(dfb::temp);
+    temp_dfb.wait_front(1);
+    invalidate_l1_cache();
+    const uint32_t inv_temp_bits = static_cast<uint32_t>(temp_dfb.read_tile_value<uint16_t>(0, 0)) << 16;
+
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>();
+    sub_scaled_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>(inv_temp_bits);
     reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
     recip_block_inplace(dfb::cur_sum, Ht);
     mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
 
     // Buffers this kernel waited and left unpopped, popped here so they are left balanced.
-    // sub_exp_block_bcast_cols_inplace waits Ht tiles of dfb::cur_max, which is produced and
+    // sub_scaled_exp_block_bcast_cols_inplace waits Ht tiles of dfb::cur_max, which is produced and
     // consumed entirely within this kernel. add_block_inplace waits Ht * Kt tiles of
-    // dfb::topk_mask, and mul_block_bcast_scalar_inplace waits 1 tile of dfb::temp.
+    // dfb::topk_mask, and 1 entry of dfb::temp is waited above.
     DataflowBuffer(dfb::cur_max).pop_front(Ht);
     DataflowBuffer(dfb::topk_mask).pop_front(Ht * Kt);
     DataflowBuffer(dfb::temp).pop_front(1);

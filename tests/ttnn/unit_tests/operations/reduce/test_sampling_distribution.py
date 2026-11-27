@@ -327,3 +327,151 @@ def test_host_threshold_grid_matches_the_reference():
         # The whole grid imbalance, spread over `draws` samples, is far below 4 sigma.
         imbalance = (max(counts) - min(counts)) / span
         assert imbalance < 4 * device_sigma
+
+
+# Serving logits are large (a row's top candidates sit around 20 to 30) and serving temperatures
+# are rarely powers of two. Each row below runs on USERS // 8 users with independent RNG streams,
+# so a row gets 4 * PRECISION_CALLS draws.
+PRECISION_CALLS = int(os.environ.get("SAMPLING_PRECISION_CALLS", "8000"))
+
+
+def _llm_logits(seed):
+    """32 distinct descending logits: 30.0, then steps of 0.125 * (1..4) from a fixed LCG, so the
+    32nd is near 20. Every value is a multiple of 0.125 below 32, so it is exact in BF16."""
+    values, x, s = [], 30.0, seed
+    for _ in range(32):
+        values.append(x)
+        s = (s * 1103515245 + 12345) % 2**31
+        x -= 0.125 * (1 + (s >> 16) % 4)
+    return values
+
+
+# (name, top-32 logits in descending order, T, k, p). The seeds of the top-p rows E and F keep the
+# reference nucleus edge at least 0.019 from p on both sides, so the BF16 rounding of the device
+# probabilities cannot move the edge token in or out of the nucleus.
+_PRECISION_ROWS = [
+    ("A", _llm_logits(144), 0.6, 32, 1.0),
+    ("B", _llm_logits(18), 0.7, 32, 1.0),
+    ("C", _llm_logits(142), 1.0, 32, 1.0),
+    ("D", _llm_logits(70), 1.2, 32, 1.0),
+    ("E", _llm_logits(185), 0.7, 20, 0.9),
+    ("F", _llm_logits(935), 1.2, 32, 0.9),
+    # T = 1 takes the temperature out, so this row reads the exponential alone. P(second) is 0.407;
+    # an exp(-0.375) that is 5% high relative to exp(0) moves it to 0.420, ~12 sigma at 32000 draws.
+    ("G", [28.0, 27.625] + [27.0 - 0.25 * j for j in range(30)], 1.0, 2, 1.0),
+    ("H", _llm_logits(122), 0.6, 16, 1.0),
+]
+
+
+def _precision_reference(logits, t, k, p):
+    """FP32 softmax(logits / T) over the top-k, then the nucleus at the BF16 p the device reads (the
+    smallest prefix whose mass exceeds p), renormalized. Returns probabilities by rank, zero past
+    the nucleus, and the distance of the nucleus edge from p."""
+    probs = torch.softmax(torch.tensor(logits[:k], dtype=torch.float32) / t, dim=-1)
+    p_dev = torch.tensor(p).to(torch.bfloat16).item()
+    kept, margin = k, float("inf")
+    if p_dev < 1.0:
+        cum = torch.cumsum(probs, dim=-1)
+        kept = int((cum > p_dev).nonzero()[0]) + 1
+        below = cum[kept - 2].item() if kept >= 2 else 0.0
+        margin = min(cum[kept - 1].item() - p_dev, p_dev - below)
+    ref = torch.zeros(k, dtype=torch.float64)
+    ref[:kept] = (probs[:kept] / probs[:kept].sum()).double()
+    return ref, margin
+
+
+def _chi_square(counts, ref):
+    """Pearson chi-square of counts against probabilities ref (both by rank, descending ref). Ranks
+    expecting fewer than 5 draws are pooled; a pool still below 5 joins the smallest single bin.
+    Returns (statistic, degrees of freedom, p-value)."""
+    counts, ref = counts.double(), ref.double()
+    expected = ref * counts.sum()
+    single = expected >= 5
+    obs, exp = list(counts[single]), list(expected[single])
+    if (~single).any():
+        pool_obs, pool_exp = counts[~single].sum(), expected[~single].sum()
+        if pool_exp >= 5 or not obs:
+            obs.append(pool_obs)
+            exp.append(pool_exp)
+        else:
+            obs[-1] = obs[-1] + pool_obs
+            exp[-1] = exp[-1] + pool_exp
+    obs, exp = torch.stack(obs), torch.stack(exp)
+    stat = ((obs - exp) ** 2 / exp).sum()
+    df = len(obs) - 1
+    p_value = torch.special.gammaincc(torch.tensor(df / 2, dtype=torch.float64), stat / 2).item() if df > 0 else 1.0
+    return stat.item(), df, p_value
+
+
+def test_sampling_precision_at_llm_logits(device):
+    """Device draws against FP32 softmax(logits / T) on the top-k (and top-p) set, at logits of 20
+    to 30 and T in {0.6, 0.7, 1.0, 1.2}, with temp = 1/T in BF16 as the op takes it.
+
+    Each row of _PRECISION_ROWS runs on 4 users, 4 * PRECISION_CALLS draws in all. A row passes when
+    its chi-square p-value (see _chi_square) is above 1e-4 and no draw falls outside its top-k /
+    top-p set. Every row is evaluated and printed before the assert.
+
+    The rows fail when the kernel rounds logits / T to BF16 before the max subtraction (a logit near
+    40 sits on a 0.25 grid there), when its exponential has a few percent of input-dependent error
+    (row G isolates that), or when p = 1.0 cuts the tail because the BF16 probabilities sum above 1.
+    """
+    reps = USERS // len(_PRECISION_ROWS)
+    values = torch.full((1, 1, USERS, W), 10.0)
+    k = torch.zeros(USERS, dtype=torch.int32)
+    p = torch.zeros(USERS)
+    inv_t = torch.zeros(USERS)
+    rows = []
+    for r, (name, logits, t, rk, rp) in enumerate(_PRECISION_ROWS):
+        ref, margin = _precision_reference(logits, t, rk, rp)
+        assert margin >= 0.015, f"row {name}: nucleus edge {margin:.3f} from p, too close for this check"
+        # Scatter the 32 candidates over the row so the top-k is not just the leading columns.
+        pos = torch.randperm(W, generator=torch.Generator().manual_seed(r))[:32]
+        users = slice(r * reps, (r + 1) * reps)
+        values[0, 0, users, pos] = torch.tensor(logits)
+        k[users], p[users], inv_t[users] = rk, rp, 1.0 / t
+        rows.append((name, t, rk, rp, users, pos[:rk], ref))
+
+    vt = ttnn.from_torch(values.to(torch.bfloat16), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    it = ttnn.from_torch(
+        torch.arange(W, dtype=torch.int32).expand(1, 1, USERS, W),
+        device=device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    kt = ttnn.from_torch(k, device=device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    pt = ttnn.from_torch(p, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt = ttnn.from_torch(inv_t, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    seeds = ttnn.from_torch(
+        torch.arange(1, USERS + 1, dtype=torch.int32) * 15485863,
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    user_ids = ttnn.from_torch(
+        torch.arange(USERS, dtype=torch.int32), device=device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    ttnn.manual_seed(seeds=seeds, user_ids=user_ids)
+    counts = torch.zeros(USERS, W)
+    for _ in range(PRECISION_CALLS):
+        out = ttnn.to_torch(ttnn.sampling(vt, it, k=kt, p=pt, temp=tt)).reshape(-1)[:USERS].long()
+        counts[torch.arange(USERS), out] += 1
+
+    print(
+        f"\n{'row':>3} {'T':>4} {'k':>2} {'p':>4} {'kept':>4} {'draws':>6} {'df':>3} {'chi2':>8} "
+        f"{'p-value':>9} {'P(top) ref':>10} {'P(top) dev':>10} {'outside':>7}"
+    )
+    bad = []
+    for name, t, rk, rp, users, ranks, ref in rows:
+        row_counts = counts[users].sum(0)
+        by_rank = row_counts[ranks]
+        kept = ref > 0
+        draws = row_counts.sum().item()
+        outside = int(draws - by_rank[kept].sum().item())
+        stat, df, p_value = _chi_square(by_rank[kept], ref[kept])
+        print(
+            f"{name:>3} {t:>4} {rk:>2} {rp:>4} {int(kept.sum()):>4} {int(draws):>6} {df:>3} {stat:>8.1f} "
+            f"{p_value:>9.2e} {ref[0].item():>10.4f} {by_rank[0].item() / draws:>10.4f} {outside:>7}"
+        )
+        if p_value <= 1e-4 or outside > 0:
+            bad.append(name)
+    assert not bad, f"rows {bad} deviate from FP32 softmax(logits / T) (chi-square p <= 1e-4 or draws outside the set)"
