@@ -16,7 +16,7 @@ from tests.didt.runner.config import load
 from tests.didt.runner.steps import INSPECTOR_PORT_BASE, double_iterations, run, sh, sh_all
 
 TESTDATA = Path(__file__).parent / "testdata"
-SHIPPED = Path(__file__).parents[1] / "didt_runner_config.json"
+SHIPPED = Path(__file__).parents[1] / "runner_configs" / "weekly.json"
 TRAY_BUS_HIGH = {1: 0x0, 2: 0x4, 3: 0xC, 4: 0x8}
 CFG = load(SHIPPED)
 KEYS = [s.key for s in CFG.steps]
@@ -433,6 +433,21 @@ def test_cli_bad_config_exit_2(tmp_path, capsys):
     bad.write_text("{}")
     assert main(["--config", str(bad), "--list"]) == 2
     assert "missing field" in capsys.readouterr().err
+
+
+def test_cli_config_tier_name(capsys):
+    assert main(["--config", "daily", "--list"]) == 0
+    assert capsys.readouterr().out.split("\n")[0] == "nd:minimal"
+
+
+def test_cli_unknown_config_tier_exit_2(capsys):
+    try:
+        main(["--config", "nightly", "--list"])
+    except SystemExit as e:
+        assert e.code == 2
+    else:
+        raise AssertionError("argparse accepted an unknown tier")
+    assert "unknown config tier 'nightly'; shipped tiers: daily, install, weekly" in capsys.readouterr().err
 
 
 def test_cli_help_has_sbatch_note(capsys):

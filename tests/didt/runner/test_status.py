@@ -24,7 +24,7 @@ HEADER = {
     "mode": "real",
     "commit": "d9006726d27",
     "run_dir": f"/data/x/{RUN}",
-    "config": {"path": "tests/didt/didt_runner_config.json", "sha256": "ab"},
+    "config": {"path": "tests/didt/runner_configs/weekly.json", "sha256": "ab"},
     "chips": [{"dev": 19, "bdf": "0000:84:00.0", "tray": 4, "asic": 4, "asic_id": "0x81caba39768f9912", "kmd": 27}],
 }
 

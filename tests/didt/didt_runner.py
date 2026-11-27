@@ -4,11 +4,12 @@
 
 """Run the DIDT ND/hang screens on one Blackhole galaxy and write status.json naming every failing chip.
 
-Steps, fallbacks and settings come from didt_runner_config.json; rules for changing any of it are in
-tests/didt/runner/CLAUDE.md. Run from the repo root with python_env active, on the galaxy itself (never on a login
-node):
+Steps, fallbacks and settings come from one config per tier in runner_configs/ (daily, weekly, install); rules for
+changing any of it are in tests/didt/runner/CLAUDE.md. Run from the repo root with python_env active, on the galaxy
+itself (never on a login node):
 
-  python tests/didt/didt_runner.py                       every step
+  python tests/didt/didt_runner.py                       every step of the weekly config
+  python tests/didt/didt_runner.py --config daily        the daily config; a path to a .json also works
   python tests/didt/didt_runner.py --only nd:ff1,nd:mcast-ack
   python tests/didt/didt_runner.py --co                  collect gate only, no device work
 
@@ -35,12 +36,24 @@ else:
     from runner.config import ConfigError, load
     from runner.steps import REPO, host, repo_commit, run
 
-DEFAULT_CONFIG = Path(__file__).resolve().parent / "didt_runner_config.json"
+CONFIG_DIR = Path(__file__).resolve().parent / "runner_configs"
+DEFAULT_CONFIG = "weekly"
 DEFAULT_OUT = REPO / "generated" / "didt_runner"
 
 
 def _keys(text: str) -> set[str]:
     return {k.strip() for k in text.split(",") if k.strip()}
+
+
+def config_path(value: str) -> Path:
+    """A shipped tier name (daily, weekly, install) or a path to a config file."""
+    if "/" in value or value.endswith(".json"):
+        return Path(value)
+    path = CONFIG_DIR / f"{value}.json"
+    if not path.is_file():
+        tiers = ", ".join(sorted(p.stem for p in CONFIG_DIR.glob("*.json")))
+        raise argparse.ArgumentTypeError(f"unknown config tier {value!r}; shipped tiers: {tiers}; or give a .json path")
+    return path
 
 
 def _run_dir(out: Path) -> Path:
@@ -57,7 +70,9 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
         prog="didt_runner.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="default: %(default)s")
+    ap.add_argument(
+        "--config", type=config_path, default=DEFAULT_CONFIG, help="tier name or .json path, default: %(default)s"
+    )
     ap.add_argument("--only", default="", help="comma-separated step keys to run")
     ap.add_argument("--skip", default="", help="comma-separated step keys to leave out")
     ap.add_argument("--co", action="store_true", help="collect gate only, no device work")

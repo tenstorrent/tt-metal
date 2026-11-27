@@ -21,7 +21,7 @@ This directory contains DIDT tests for validating the behavior, performance, and
 
 ## didt_runner
 
-`didt_runner.py` runs every DIDT ND/hang screen in `didt_runner_config.json` on one Blackhole galaxy, with one command.
+`didt_runner.py` runs the DIDT ND/hang screens of one config on one Blackhole galaxy, with one command.
 It writes one `status.json` that names each failing chip by hardware identity (`bdf tray asic asic_id kmd`) and,
 when the test logs it, the failing cores. A FAIL or HANG in one step never stops the next step.
 
@@ -37,15 +37,23 @@ when the test logs it, the failing cores. A FAIL or HANG in one step never stops
 
 | command | what it does |
 |---|---|
-| `python tests/didt/didt_runner.py` | every step in the config |
+| `python tests/didt/didt_runner.py` | every step of the weekly config |
 | `python tests/didt/didt_runner.py --list` | print step keys, test ids and fallbacks, then exit |
 | `python tests/didt/didt_runner.py --co` | collect gate only: every test id must still collect; no device work |
 | `python tests/didt/didt_runner.py --only nd:ff1,nd:mcast-ack` | only these step keys (comma-separated) |
 | `python tests/didt/didt_runner.py --skip nd:core-sweep` | every step except these |
-| `python tests/didt/didt_runner.py --config <file.json>` | another config; default `tests/didt/didt_runner_config.json` |
+| `python tests/didt/didt_runner.py --config daily` | a shipped tier config by name, or `--config <file.json>`; default `weekly` |
 | `python tests/didt/didt_runner.py --out <dir>` | parent of the run dir; default `generated/didt_runner` |
 
 Exit code: `0` every step PASS or WARN, `1` any step FAIL or HANG, `2` config/usage error or no chips found.
+
+Shipped configs, in `tests/didt/runner_configs/`:
+
+| tier | steps | used by |
+|---|---|---|
+| `daily` | `nd:minimal` with `throttle` and `pin_core` | exabox health check `daily` |
+| `weekly` | every step | exabox health check `weekly` and `full`; the default |
+| `install` | same as `weekly` today; kept apart because the two will diverge | deployment tests `test_runner.sh` |
 
 ### Results
 
@@ -127,7 +135,7 @@ python -m pytest -q --noconftest -p no:cacheprovider tests/didt/runner tests/did
   tests/didt/test_mcast_ack_scan_dirs.py tests/didt/test_op_test_base_min_loop.py tests/didt/test_nd_core_map.py
 ```
 
-Expected: 151 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
+Expected: 156 passed, 5 skipped. The skipped tests render `status.json` with the sweep page; they run only when they
 find the `build-gwdt-sweep` skill (set `GWDT_SWEEP_DIR` to the skill's folder).
 
 ### Changing the runner
