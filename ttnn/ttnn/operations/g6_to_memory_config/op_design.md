@@ -25,7 +25,7 @@ Second public function (BB-08 / BB-21): `plan_of(input_tensor, memory_config) ->
 | Property | Requirement |
 |----------|-------------|
 | Shape | `(..., H, W)`, rank 2–4; H any positive value; W a multiple of 32 in every production case (any W is still page-exact) |
-| Dtype | `bfloat16` (Phase 0); `bfloat8_b`, `bfloat4_b` (refinement — same kernels, page size is a parameter) |
+| Dtype | `bfloat16`, `bfloat8_b`, `bfloat4_b` (block formats since Refinement 1 — same kernels, page size is a parameter) |
 | Layout | TILE |
 | Memory | any: DRAM / L1 × interleaved / height / width / block sharded |
 
@@ -51,10 +51,10 @@ Axis names are TARGET's in `feature_spec.py`. Taggers read only the scenario dic
 | `tag_in_scheme` / `tag_out_scheme` | `scenario["in_memory"|"out_memory"]["scheme"]` |
 | `tag_in_buffer` / `tag_out_buffer` | `scenario["in_memory"|"out_memory"]["buffer"]` |
 
-| Declaration | Phase 0 value |
+| Declaration | Value (Refinement 1; Phase 0 had `dtype: [bfloat16]` and the DRAM width-sharded target excluded) |
 |---|---|
-| `SUPPORTED` | `dtype: [bfloat16]`, `layout: [TILE]`, `rank: [2,3,4]`, `alignment: ["tile_aligned","h_non_aligned"]`, `in_scheme`/`out_scheme`: all four, `in_buffer`/`out_buffer`: `["dram","l1"]` |
-| `EXCLUSIONS` | exactly `[{"out_scheme": "width_sharded", "out_buffer": "dram"}]` |
+| `SUPPORTED` | `dtype: [bfloat16, bfloat8_b, bfloat4_b]`, `layout: [TILE]`, `rank: [2,3,4]`, `alignment: ["tile_aligned","h_non_aligned"]`, `in_scheme`/`out_scheme`: all four, `in_buffer`/`out_buffer`: `["dram","l1"]` |
+| `EXCLUSIONS` | `[]` (SUPPORTED equals TARGET) |
 | INVALID | not declared, not checked (lives in feature_spec.py; empty) |
 
 `validate(input_tensor, memory_config)` order: (1) `ValueError` if the input is not a device tensor (the axes cannot be read otherwise); (2) build scenario, tag; (3) SUPPORTED per axis → `UnsupportedAxisValue`; (4) EXCLUSIONS → `ExcludedCell`; (5) structural checks below → `ValueError`. `UnsupportedAxisValue`/`ExcludedCell` subclass `NotImplementedError` (`_op_contract.py`), itself a `RuntimeError`, so a ROW_MAJOR input or a rank-5 input is refused with a `RuntimeError` subclass, as the spec requires.
@@ -222,7 +222,7 @@ TARGET placement axes as schemes (no axis is dependent, so every placement value
 |---|---|---|---|---|
 | L1 sharded | `pull_shard` / `push_shard` (more owners moves) | `push_shard` | `push_shard` | `push_shard` |
 | L1 interleaved | `pull_shard` | `pull_bank` (same bank both sides: local copies) | `push_bank` | `push_bank` |
-| DRAM interleaved | `pull_shard` | `pull_bank` | `bounce` | `bounce` (width: Phase 0 EXCLUSION; `bounce_dram_shard` deferred) |
+| DRAM interleaved | `pull_shard` | `pull_bank` | `bounce` | `bounce` (width: supported since Refinement 1; `bounce_dram_shard` is Refinement 2) |
 | DRAM sharded | `pull_shard` | `pull_bank` | `bounce` | `bounce` |
 
 Refinement classes: `dtype` bfloat8_b / bfloat4_b — knob-turn (`page_size` is the only dtype-dependent quantity; kernels move bytes). `out_scheme=width_sharded ∧ out_buffer=dram` — knob-turn on `bounce` (remove the EXCLUSION) plus the deferred `bounce_dram_shard` regime for performance.
@@ -310,7 +310,8 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply. No mi
 | `test_production_case` | Qwen 2058, 2154, 2067, 2064, 2157, FLUX 313 (`pull_shard`); Qwen 2078, 2105, 2089 (`pull_bank`); Qwen 2071, 2065, 2073, 2061, 2155, 2062, FLUX 314 (`push_shard`) | regime pinned, owner count, shape/dtype/layout, exact placement (grid range order included), bit-exact values |
 | `test_supported_cell_regimes` | L1 interleaved → DRAM interleaved on Qwen 2064's input (`push_bank`); DRAM interleaved → DRAM interleaved on Qwen 2077's shape (`bounce`) | regime pinned, placement, bit-exact values |
 | `test_repeat_call_cache_and_determinism` | Qwen 2104 shape (`pull_bank`), 2071 (`push_shard`), 2067 (`pull_shard`) | second call on a new input at a new address adds no program-cache entry and is exact; a repeat on the first input is bit-identical |
-| `test_refused_cells` | Panoptic 11 (bf8b), Qwen 2178 placements in bf16 | `UnsupportedAxisValue`, `ExcludedCell` |
+| `test_block_format_case` | Panoptic 11 bf8b (`push_shard`), Qwen 2178 bf4b (`bounce`, DRAM width-sharded target) | regime pinned, page size from the buffer, placement, bit-exact values |
+| `test_refused_cells` | Panoptic 11 placements in float32 (outside TARGET) | `UnsupportedAxisValue` (no `ExcludedCell` remains: EXCLUSIONS is empty) |
 | `test_validation_errors` | host tensor, ROW_MAJOR, col-major target shard spec, col-major input shard spec, shard shape not ×32, too few grid cores, rank 5 | `ValueError` / `RuntimeError` |
 
 ## Key Risks and Gotchas

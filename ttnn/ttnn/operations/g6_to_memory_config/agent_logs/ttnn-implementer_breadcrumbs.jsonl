@@ -17,3 +17,8 @@
 {"event":"test_run","result":"pass","detail":"acceptance 24/24 --dev and plain; golden 179 passed / 26 xfailed (bf8b/bf4b + dram width-sharded only) --dev and plain; knob test 15/15 (movers_per_owner 1/2, bounce_depth 2/4, all five regimes)","ts":"2026-11-27T07:15:23-05:00"}
 {"event":"profile","detail":"device kernel ns: Qwen2078 pull_bank 53739 (20.9MB, ~390GB/s); bounce 16x128x1536 31057; Qwen2067 pull_shard 3021; Qwen2073 push_shard 3649; Qwen2071 push_shard 3203; push_bank 1531; single-core shard cases 385-792","ts":"2026-11-27T07:15:23-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T08:20:13-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T09:04:20-05:00"}
+{"event":"test_run","result":"pass","detail":"test_g6_to_memory_config.py + precision_baseline: 32/32 incl. Panoptic 11 bf8b push_shard and Qwen 2178 bf4b bounce (DRAM width-sharded), bit-exact","ts":"2026-11-27T09:05:01-05:00"}
+{"event":"test_run","result":"pass","detail":"golden slice: 19 block-format/DRAM-width-sharded test_op cells + 12 test_op_loose = 31/31 passed, 0 xfail/xpass","ts":"2026-11-27T09:07:29-05:00"}
+{"event":"test_run","result":"pass","detail":"BB-05 probe: all 19 new cells under budget, max l1_op_bytes 429696 (2183 bounce, block 373); bf4b bounce on 110 movers, bf8b push_shard/pull_bank","ts":"2026-11-27T09:08:26-05:00"}
+{"event":"profile","detail":"Qwen 2183 bf4b bounce (3 cells: test_op + 2 loose), device kernel ns 312290 / 310352 / 313980, median 312.3 us; Phase 0 baseline 307-318 us -> no regression","ts":"2026-11-27T09:09:33-05:00"}
