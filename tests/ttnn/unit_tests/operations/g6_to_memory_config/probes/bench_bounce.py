@@ -29,6 +29,36 @@ SCENARIOS["bf16_interleaved"] = {
     "out_memory": {"buffer": "dram", "scheme": "interleaved"},
 }
 
+# 2183's volume, width-sharded over half the DRAM banks: 0-3 (one DRAM column) or 4-7 (the other).
+for name, (first, last) in {"banks0_3": (0, 3), "banks4_7": (4, 7)}.items():
+    SCENARIOS[name] = {
+        "shape": [2560, 16384],
+        "dtype": ttnn.bfloat4_b,
+        "in_memory": {"buffer": "dram", "scheme": "interleaved"},
+        "out_memory": {
+            "buffer": "dram",
+            "scheme": "width_sharded",
+            "grid": [[first, 0, last, 0]],
+            "shard_shape": [2560, 4096],
+            "orientation": "row_major",
+        },
+    }
+
+# 2183's target layout at 2 KB (bf16) and 1088 B (bf8b) pages: DRAM interleaved -> DRAM width-sharded on 8 banks.
+for name, dtype in {"bf16_ws": ttnn.bfloat16, "bf8b_ws": ttnn.bfloat8_b}.items():
+    SCENARIOS[name] = {
+        "shape": [2560, 8192],
+        "dtype": dtype,
+        "in_memory": {"buffer": "dram", "scheme": "interleaved"},
+        "out_memory": {
+            "buffer": "dram",
+            "scheme": "width_sharded",
+            "grid": [[0, 0, 7, 0]],
+            "shard_shape": [2560, 1024],
+            "orientation": "row_major",
+        },
+    }
+
 CASE_LIST = [c for c in os.environ.get("G6_CASES", "qwen2183").split(",") if c]
 
 
@@ -36,7 +66,7 @@ CASE_LIST = [c for c in os.environ.get("G6_CASES", "qwen2183").split(",") if c]
 def test_bench(device, monkeypatch, case):
     for item in [k for k in os.environ.get("G6_KNOBS", "").split(",") if k]:
         name, value = item.split("=")
-        monkeypatch.setattr(descriptor_module, name, int(value))
+        monkeypatch.setattr(descriptor_module, name, int(value) if value.lstrip("-").isdigit() else value)
     ablate = tuple(d for d in os.environ.get("G6_ABLATE", "").split(",") if d)
     monkeypatch.setattr(descriptor_module, "ABLATE_DEFINES", ablate)
     scenario = SCENARIOS[case]
@@ -51,7 +81,7 @@ def test_bench(device, monkeypatch, case):
     out_config = build_memory_config(scenario["out_memory"])
     plan = plan_of(tt_input, out_config)
     print(
-        f"BENCH {case}: regime={plan['regime']} order={plan['bounce_order']} block={plan['bounce_block_pages']} depth={plan['bounce_depth']}"
+        f"BENCH {case}: regime={plan['regime']} order={plan['bounce_order']} noc_swap={plan['bounce_noc_swap']} block={plan['bounce_block_pages']} depth={plan['bounce_depth']}"
     )
     output = g6_to_memory_config(tt_input, out_config)
     ttnn.synchronize_device(device)

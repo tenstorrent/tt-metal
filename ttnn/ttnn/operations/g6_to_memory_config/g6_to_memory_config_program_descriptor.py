@@ -25,7 +25,11 @@ PULL_KERNEL = KERNEL_DIR / "g6_to_memory_config_reader.cpp"
 PUSH_KERNEL = KERNEL_DIR / "g6_to_memory_config_writer.cpp"
 
 # Block knobs. Every CT/RT value, loop trip count and the CB capacity derive from these.
-BOUNCE_DEPTH = 2  # bounce blocks in flight: the reader fills block k+1 while the writer drains block k
+# Bounce blocks per core, all in flight at once: the reader fills later blocks while the writer drains earlier ones.
+# A staged (coalesced, reordered) block lands in one burst, so its writer needs finer blocks to start early and keep
+# up; a per-page block streams in and gains nothing from more, smaller blocks.
+BOUNCE_DEPTH = 2
+BOUNCE_STAGED_DEPTH = 6
 MOVERS_PER_OWNER = 1  # data-movement RISCs sharing one owner's block (1 or 2)
 # Pages per bounce NoC write: 0 = the whole run contiguous in the target (a sharded DRAM target holds a
 # shard row back to back in one bank), 1 = one write per page, N = runs capped at N pages.
@@ -36,11 +40,17 @@ BOUNCE_TARGET_ORDER = False
 # Page-order bounce into a sharded target: rotate each mover's walk so mover i starts on target shard i mod the
 # shard count (bank_stagger); False = every mover starts at its first page.
 BOUNCE_BANK_STAGGER = False
-# Bounce reads: True = one NoC read per run of pages contiguous in the source (an interleaved source has one run per
-# bank, reordered to page order in cb_bounce_stage); False = one read per page.
+# Bounce reads: True = one NoC read per run of pages contiguous in the source; False = one read per page.
 BOUNCE_READ_COALESCE = True
+# A strided source (interleaved: one run per bank) coalesces only for pages under this size, landing in cb_bounce_stage
+# and reordered to page order in L1. Per-page DRAM reads of 1088 B (bf8b) and 2048 B (bf16) pages already beat the
+# extra L1 pass; 576 B (bf4b) pages do not. 0 = strided sources always read per page.
+BOUNCE_STAGE_BELOW_PAGE_BYTES = 1024
 # Pages of cb_bounce_stage, the reorder unit of a coalesced interleaved source: 0 = one bounce block.
 BOUNCE_STAGE_PAGES = 0
+# Bounce cores whose reader runs on NoC1 and writer on NoC0 (the default is reads on NoC0, writes on NoC1), by
+# logical grid position: "none", "all", "odd_rows", "odd_cols", "checker", "bottom_half", "right_half".
+BOUNCE_NOC_SWAP = "none"
 # Kernel defines of both movers; perf ablation only (G6_ABLATE_READ / G6_ABLATE_WRITE stub the transfers,
 # G6_ABLATE_REORDER the L1 reorder of a staged read).
 ABLATE_DEFINES = ()
@@ -60,6 +70,16 @@ _WALK = {
 }
 
 _BOUNCE_ORDER = {"page": 0, "target_storage": 1}  # g6::BOUNCE_PAGE_ORDER, g6::BOUNCE_STORAGE_ORDER
+
+_NOC_SWAP = {
+    "none": lambda x, y, grid: False,
+    "all": lambda x, y, grid: True,
+    "odd_rows": lambda x, y, grid: y % 2 == 1,
+    "odd_cols": lambda x, y, grid: x % 2 == 1,
+    "checker": lambda x, y, grid: (x + y) % 2 == 1,
+    "bottom_half": lambda x, y, grid: y >= grid.y // 2,
+    "right_half": lambda x, y, grid: x >= grid.x // 2,
+}
 
 _bank_cover_by_device = {}
 
@@ -218,6 +238,7 @@ def build_plan(input_tensor, memory_config):
     full_grid = [(x, y) for y in range(grid.y) for x in range(grid.x)]
     roles = {}
     core_args = {}
+    bounce_depth = 0
     bounce_block_pages = 0
     bounce_stage_pages = 0
     owners = []
@@ -272,8 +293,13 @@ def build_plan(input_tensor, memory_config):
         core_pages_max = pages_1
         # A coalesced read of a strided source (interleaved, or a sharded one a single page wide) needs the stage;
         # BB-05 covers the ring and the stage together.
-        staged = BOUNCE_READ_COALESCE and source_strided(in_config, rows_tiles, cols_tiles, tile_h, tile_w)
-        block_slots, reserved = BOUNCE_DEPTH, 0
+        staged = (
+            BOUNCE_READ_COALESCE
+            and page_size < BOUNCE_STAGE_BELOW_PAGE_BYTES
+            and source_strided(in_config, rows_tiles, cols_tiles, tile_h, tile_w)
+        )
+        bounce_depth = BOUNCE_STAGED_DEPTH if staged else BOUNCE_DEPTH
+        block_slots, reserved = bounce_depth, 0
         if staged and BOUNCE_STAGE_PAGES == 0:
             block_slots += 1
         elif staged:
@@ -281,14 +307,18 @@ def build_plan(input_tensor, memory_config):
         bounce_block_pages = max(
             1,
             min(
-                math.ceil(core_pages_max / BOUNCE_DEPTH),
+                math.ceil(core_pages_max / bounce_depth),
                 (L1_OP_BUDGET_BYTES - reserved) // (block_slots * page_size),
             ),
         )
         if staged:
-            bounce_stage_pages = bounce_block_pages if BOUNCE_STAGE_PAGES == 0 else min(BOUNCE_STAGE_PAGES, bounce_block_pages)
+            bounce_stage_pages = (
+                bounce_block_pages if BOUNCE_STAGE_PAGES == 0 else min(BOUNCE_STAGE_PAGES, bounce_block_pages)
+            )
 
-    cb_pages = BOUNCE_DEPTH * bounce_block_pages if regime == "bounce" else 0
+    cb_pages = bounce_depth * bounce_block_pages
+    swapped = _NOC_SWAP[BOUNCE_NOC_SWAP]
+    noc_swap_cores = [core for core in full_grid if swapped(*core, grid)] if regime == "bounce" else []
     return {
         "regime": regime,
         "fallback_from_bank": fallback,
@@ -303,26 +333,33 @@ def build_plan(input_tensor, memory_config):
         "tensor_cols_tiles": cols_tiles,
         "page_size": page_size,
         "movers_per_owner": MOVERS_PER_OWNER if regime != "bounce" else 1,
-        "bounce_depth": BOUNCE_DEPTH,
+        "bounce_depth": bounce_depth,
         "bounce_block_pages": bounce_block_pages,
         "bounce_write_run_pages": BOUNCE_WRITE_RUN_PAGES,
         "bounce_order": bounce_order,
         "bounce_read_coalesce": regime == "bounce" and BOUNCE_READ_COALESCE,
         "bounce_stage_pages": bounce_stage_pages,
+        "bounce_noc_swap": BOUNCE_NOC_SWAP if regime == "bounce" else "none",
+        "noc_swap_cores": noc_swap_cores,
         "cb_bounce_pages": cb_pages,
         "l1_op_bytes": (dst_share_pages + cb_pages + bounce_stage_pages) * page_size,
     }
 
 
-def _mover_configs(regime, movers_per_owner):
+def _mover_configs(regime, movers_per_owner, noc_swapped=False):
     """(processor/NoC config, kernel source, mover_index) per kernel; mover 0 takes the default placement.
 
-    bounce is one mover split into a reader and a writer, so both halves are mover 0 of 1.
+    bounce is one mover split into a reader and a writer, so both halves are mover 0 of 1; noc_swapped puts its
+    reads on NoC1 and its writes on NoC0, each half keeping its RISC.
     """
     pull = ttnn.ReaderConfigDescriptor()
     pull_second = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1)
     push = ttnn.WriterConfigDescriptor()
     push_second = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0)
+    if regime == "bounce" and noc_swapped:
+        read = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1)
+        write = ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0)
+        return [(read, PULL_KERNEL, 0), (write, PUSH_KERNEL, 0)]
     if regime == "bounce":
         return [(pull, PULL_KERNEL, 0), (push, PUSH_KERNEL, 0)]
     if regime.startswith("pull"):
@@ -342,36 +379,55 @@ def create_program_descriptor(plan, input_tensor, output_tensor, program_hash):
     )
     common_args = [input_tensor.buffer_address(), output_tensor.buffer_address()]
 
-    kernels = []
-    for config, source, mover_index in _mover_configs(plan["regime"], plan["movers_per_owner"]):
-        ct_args = [
-            plan["walk"],
-            plan["page_size"],
-            plan["num_pages"],
-            plan["movers_per_owner"],
-            mover_index,
-            CB_BOUNCE_PAGES,
-            plan["bounce_block_pages"],
-            plan["bounce_write_run_pages"],
-            _BOUNCE_ORDER[plan["bounce_order"]],
-            int(plan["bounce_read_coalesce"]),
-            plan["bounce_stage_pages"],
-            CB_BOUNCE_STAGE,
-        ] + accessor_args
-        runtime_args = ttnn.RuntimeArgs()
-        for (x, y), args in plan["core_args"].items():
-            runtime_args[x][y] = args
-        kernels.append(
-            ttnn.KernelDescriptor(
-                kernel_source=str(source),
-                core_ranges=core_ranges,
-                compile_time_args=ct_args,
-                runtime_args=runtime_args,
-                common_runtime_args=common_args,
-                config=config,
-                defines=[(define, "1") for define in ABLATE_DEFINES],
-            )
+    # Kernel groups: (cores, NoC-swapped). A bounce NoC swap splits the grid into a default and a swapped group.
+    all_cores = [(x, y) for y in range(sy, ey + 1) for x in range(sx, ex + 1)]
+    swapped = set(plan["noc_swap_cores"])
+    groups = [
+        (group, flag)
+        for group, flag in (
+            ([c for c in all_cores if c not in swapped], False),
+            ([c for c in all_cores if c in swapped], True),
         )
+        if group
+    ]
+
+    kernels = []
+    for group, noc_swapped in groups:
+        group_ranges = (
+            core_ranges
+            if len(group) == len(all_cores)
+            else ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in group])
+        )
+        for config, source, mover_index in _mover_configs(plan["regime"], plan["movers_per_owner"], noc_swapped):
+            ct_args = [
+                plan["walk"],
+                plan["page_size"],
+                plan["num_pages"],
+                plan["movers_per_owner"],
+                mover_index,
+                CB_BOUNCE_PAGES,
+                plan["bounce_block_pages"],
+                plan["bounce_write_run_pages"],
+                _BOUNCE_ORDER[plan["bounce_order"]],
+                int(plan["bounce_read_coalesce"]),
+                plan["bounce_stage_pages"],
+                CB_BOUNCE_STAGE,
+            ] + accessor_args
+            runtime_args = ttnn.RuntimeArgs()
+            for x, y in group:
+                if (x, y) in plan["core_args"]:
+                    runtime_args[x][y] = plan["core_args"][(x, y)]
+            kernels.append(
+                ttnn.KernelDescriptor(
+                    kernel_source=str(source),
+                    core_ranges=group_ranges,
+                    compile_time_args=ct_args,
+                    runtime_args=runtime_args,
+                    common_runtime_args=common_args,
+                    config=config,
+                    defines=[(define, "1") for define in ABLATE_DEFINES],
+                )
+            )
 
     cbs = []
     if plan["regime"] == "bounce":

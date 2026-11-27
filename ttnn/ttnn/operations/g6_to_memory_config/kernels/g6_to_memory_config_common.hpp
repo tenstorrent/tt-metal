@@ -16,7 +16,7 @@
 //   8 bounce_order          BOUNCE_PAGE_ORDER | BOUNCE_STORAGE_ORDER (bounce walk only)
 //   9 bounce_read_coalesce  0 = one bounce read per page; 1 = one read per run of pages contiguous in the source
 //  10 bounce_stage_pages    pages of cb_bounce_stage, through which a coalesced strided (interleaved) source is
-//                           reordered; 0 = no stage (the source is not strided)
+//                           reordered; 0 = no stage, so a strided source reads one page per NoC read
 //  11 cb_bounce_stage       reader-private staging of a strided source (bounce walk only)
 //  12.. source TensorAccessorArgs, then target TensorAccessorArgs
 // Common runtime args: 0 source base address, 1 target base address.

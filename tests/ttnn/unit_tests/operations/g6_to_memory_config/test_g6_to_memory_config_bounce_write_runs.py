@@ -1,13 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounce knobs of the DRAM -> DRAM path: write runs, target-order assignment and bank stagger.
+"""Bounce knobs of the DRAM -> DRAM path: write runs, assignment order, bank stagger, read staging, NoC swap.
 
 `BOUNCE_WRITE_RUN_PAGES` coalesces pages contiguous in the target into one NoC write (1 = one write per
 page, 0 = the whole run, N = runs capped at N). `BOUNCE_TARGET_ORDER` assigns movers contiguous ranges of a
 sharded target's storage order instead of page-id ranges. `BOUNCE_BANK_STAGGER` rotates each mover's walk so
-movers start on different target shards. A knob may change speed, never values: every variant is checked
-bit-exact, including ragged edge shards of DRAM width-, height- and block-sharded targets.
+movers start on different target shards. `BOUNCE_READ_COALESCE` / `BOUNCE_STAGE_BELOW_PAGE_BYTES` /
+`BOUNCE_STAGE_PAGES` read an interleaved source one run per bank into cb_bounce_stage and reorder it in L1;
+`BOUNCE_NOC_SWAP` moves part of the grid's reads to NoC1 and writes to NoC0. A knob may change speed, never
+values: every variant is checked bit-exact, including ragged edge shards of DRAM width-, height- and
+block-sharded targets.
 """
 
 import pytest
@@ -58,23 +61,36 @@ SCENARIOS = {
     },
 }
 
-# variant: (BOUNCE_WRITE_RUN_PAGES, BOUNCE_TARGET_ORDER, BOUNCE_BANK_STAGGER)
+_DEFAULTS = {
+    "BOUNCE_WRITE_RUN_PAGES": 0,
+    "BOUNCE_TARGET_ORDER": False,
+    "BOUNCE_BANK_STAGGER": False,
+    "BOUNCE_READ_COALESCE": True,
+    "BOUNCE_STAGE_BELOW_PAGE_BYTES": 1024,
+    "BOUNCE_STAGE_PAGES": 0,
+    "BOUNCE_NOC_SWAP": "none",
+}
+
+# variant: knob overrides on top of _DEFAULTS
 VARIANTS = {
-    "per_page": (1, False, False),
-    "runs": (0, False, False),
-    "runs_capped": (5, False, False),
-    "stagger": (0, False, True),
-    "target_order": (0, True, False),
+    "per_page": {"BOUNCE_WRITE_RUN_PAGES": 1},
+    "runs": {},
+    "runs_capped": {"BOUNCE_WRITE_RUN_PAGES": 5},
+    "stagger": {"BOUNCE_BANK_STAGGER": True},
+    "target_order": {"BOUNCE_TARGET_ORDER": True},
+    "per_page_reads": {"BOUNCE_READ_COALESCE": False},
+    # Stage every page size, in chunks of 5 pages: ragged chunks and runs of one page per bank.
+    "staged_all": {"BOUNCE_STAGE_BELOW_PAGE_BYTES": 1 << 20, "BOUNCE_STAGE_PAGES": 5},
+    "noc_swap": {"BOUNCE_NOC_SWAP": "checker"},
 }
 
 
 @pytest.mark.parametrize("variant", list(VARIANTS))
 @pytest.mark.parametrize("case", list(SCENARIOS))
 def test_bounce_knobs_exact(device, monkeypatch, case, variant):
-    write_run_pages, target_order, stagger = VARIANTS[variant]
-    monkeypatch.setattr(descriptor_module, "BOUNCE_WRITE_RUN_PAGES", write_run_pages)
-    monkeypatch.setattr(descriptor_module, "BOUNCE_TARGET_ORDER", target_order)
-    monkeypatch.setattr(descriptor_module, "BOUNCE_BANK_STAGGER", stagger)
+    knobs = {**_DEFAULTS, **VARIANTS[variant]}
+    for name, value in knobs.items():
+        monkeypatch.setattr(descriptor_module, name, value)
     scenario = SCENARIOS[case]
     dram_grid = device.dram_grid_size()
     for _, _, ex, ey in scenario["out_memory"].get("grid", []):
@@ -93,9 +109,15 @@ def test_bounce_knobs_exact(device, monkeypatch, case, variant):
 
     plan = plan_of(tt_input, out_config)
     assert plan["regime"] == "bounce"
-    assert plan["bounce_write_run_pages"] == write_run_pages
+    assert plan["bounce_write_run_pages"] == knobs["BOUNCE_WRITE_RUN_PAGES"]
     sharded_target = out_config.is_sharded()
-    assert plan["bounce_order"] == ("target_storage" if target_order and sharded_target else "page")
+    assert plan["bounce_order"] == ("target_storage" if knobs["BOUNCE_TARGET_ORDER"] and sharded_target else "page")
+    staged = knobs["BOUNCE_READ_COALESCE"] and plan["page_size"] < knobs["BOUNCE_STAGE_BELOW_PAGE_BYTES"]
+    assert (plan["bounce_stage_pages"] > 0) == staged
+    expected_depth = descriptor_module.BOUNCE_STAGED_DEPTH if staged else descriptor_module.BOUNCE_DEPTH
+    assert plan["bounce_depth"] == expected_depth
+    assert plan["cb_bounce_pages"] == expected_depth * plan["bounce_block_pages"]
+    assert plan["bounce_noc_swap"] == knobs["BOUNCE_NOC_SWAP"]
 
     output = g6_to_memory_config(tt_input, out_config)
     assert output.memory_config() == out_config
