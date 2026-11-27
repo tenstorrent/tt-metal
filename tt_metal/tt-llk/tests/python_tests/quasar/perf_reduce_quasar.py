@@ -64,7 +64,7 @@ def _run_reduce_quasar_perf(
     run_types,
     loop_factor,
     is_perf,
-    tile_count=PERF_TILE_COUNT,
+    tile_cnt=PERF_TILE_COUNT,
 ):
     run_reduce_quasar(
         formats,
@@ -79,7 +79,7 @@ def _run_reduce_quasar_perf(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
-        input_dimensions=perf_input_dimensions(tile_dimensions, tile_count),
+        input_dimensions=perf_input_dimensions(tile_dimensions, tile_cnt),
     )
 
 
@@ -178,7 +178,7 @@ def test_perf_reduce_scalar_quasar(
     math_fidelity=[MathFidelity.HiFi4],
     tile_dimensions=CORE_TILE_DIMENSIONS,
     is_reduce_to_one=[False],
-    tile_count=BLOCK_LENGTH_TILE_COUNTS,
+    tile_cnt=BLOCK_LENGTH_TILE_COUNTS,
     **PERF_MEASUREMENT,
 )
 def test_perf_reduce_block_length_quasar(
@@ -190,7 +190,7 @@ def test_perf_reduce_block_length_quasar(
     math_fidelity,
     tile_dimensions,
     is_reduce_to_one,
-    tile_count,
+    tile_cnt,
     dest_sync,
     run_types,
     loop_factor,
@@ -209,7 +209,7 @@ def test_perf_reduce_block_length_quasar(
         run_types,
         loop_factor,
         is_perf,
-        tile_count=tile_count,
+        tile_cnt=tile_cnt,
     )
 
 
