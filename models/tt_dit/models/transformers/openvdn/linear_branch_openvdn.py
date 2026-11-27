@@ -86,8 +86,7 @@ def _pad_dim(x: ttnn.Tensor, dim: int, size: int) -> ttnn.Tensor:
         return x
     shape = list(x.shape)
     shape[dim] = size - shape[dim]
-    zeros = ttnn.zeros(shape, dtype=x.dtype, layout=x.layout, device=x.device())
-    return ttnn.concat([x, zeros], dim=dim)
+    return ttnn.concat([x, ops.zeros(x.device(), shape, x.dtype, x.layout)], dim=dim)
 
 
 def rows_slice(x: ttnn.Tensor, start: int, end: int) -> ttnn.Tensor:
@@ -279,7 +278,7 @@ class OpenVDNLinearBranch(Module):
         x = ttnn.transpose(acc, -2, -1)  # [1, F, S, C] fp32
 
         pad = self.KERNEL // 2
-        zeros = ttnn.zeros_like(ttnn.slice(x, [0, 0, 0, 0], [1, 1, per_frame, channels]))
+        zeros = ops.zeros(self.mesh_device, [1, 1, per_frame, channels], x.dtype)
         padded = ttnn.concat([zeros] * pad + [x] + [zeros] * pad, dim=1)
         weight = tm_weight
         acc = None
@@ -556,11 +555,8 @@ class OpenVDNLinearBranch(Module):
                 text_state=text_state,
                 rows=rows,
             )
-        zeros = ttnn.zeros(
-            [1, 1, per_frame, self.local_inner_dim],
-            dtype=ttnn.bfloat16 if rows is None else ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
+        zeros = ops.zeros(
+            self.mesh_device, [1, 1, per_frame, self.local_inner_dim], ttnn.bfloat16 if rows is None else ttnn.float32
         )
         if num_frames <= 2:
             return ttnn.concat([zeros] * num_frames, dim=2)

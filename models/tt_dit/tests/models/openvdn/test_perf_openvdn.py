@@ -71,6 +71,13 @@ NUM_VIDEO = NUM_FRAMES * GRID[0] * GRID[1]
 SEQ_LEN = NUM_TEXT + NUM_AUDIO + NUM_VIDEO
 CHUNK, RADIUS = 5, 1
 ITERS = int(os.environ.get("OPENVDN_PERF_ITERS", 2))
+#: OPENVDN_PERF_TRACE=1: capture the block forward in a trace (persistent CCL buffers) and time trace replays.
+TRACE = os.environ.get("OPENVDN_PERF_TRACE") == "1"
+MESH = (
+    pytest.param((4, 8), {**MESH_4X8_RING.values[1], "trace_region_size": 1_175_000_000}, id="4x8_traced")
+    if TRACE
+    else MESH_4X8_RING
+)
 
 
 def _pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
@@ -84,7 +91,7 @@ def _artifacts() -> Path:
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=True)
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH], indirect=True)
 def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
@@ -126,7 +133,7 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         is_fsdp=False,
-        use_persistent_ccl_buffers=False,
+        use_persistent_ccl_buffers=TRACE,
     )
     tt_block.load_torch_state_dict(block.state_dict())
     del block
@@ -170,6 +177,23 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     cold_ms = (time.perf_counter() - t0) * 1e3
     logger.info(f"block forward, cold (compile): {cold_ms:.0f} ms")
 
+    if TRACE:
+        eager = forward()  # warm, and every cached constant made before the capture
+        eager_out = tensor.to_torch(eager, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float()
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced = tt_block(spatial_1BND=spatial, **kwargs)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+        def forward() -> ttnn.Tensor:  # noqa: F811
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            return traced
+
+        forward()
+        same = torch.equal(tensor.to_torch(traced, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float(), eager_out)
+        pcc, rmse = _metrics(tensor.to_torch(traced, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float(), eager_out)
+        logger.info(f"block forward, traced replay identical to eager: {same} (PCC {pcc:.7f}, RMSE/std {rmse:.2e})")
+
     times = []
     for _ in range(ITERS):
         t0 = time.perf_counter()
@@ -191,7 +215,13 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     artifacts = _artifacts()
     torch.save(result.bfloat16(), artifacts / "block_out.pt")
     summary = dict(
-        seq_len=SEQ_LEN, padded_len=padded_len, cold_ms=cold_ms, warm_ms=warm_ms, runs_ms=times, sync_log=sync_log
+        seq_len=SEQ_LEN,
+        padded_len=padded_len,
+        cold_ms=cold_ms,
+        warm_ms=warm_ms,
+        runs_ms=times,
+        sync_log=sync_log,
+        traced=TRACE,
     )
 
     baseline = os.environ.get("OPENVDN_PERF_BASELINE")

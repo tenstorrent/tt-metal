@@ -24,6 +24,7 @@ import torch
 import ttnn
 
 from ....utils import tensor
+from . import linear_ops_openvdn as ops
 
 Range = tuple[int, int]
 
@@ -228,17 +229,18 @@ def _ceil(n: int, multiple: int = _PAD) -> int:
 
 
 class _AlignedLayout:
-    """The packed sequence with every segment padded to whole tiles: head globals `[0, vs)` -> `[0, A0)`, frame f ->
-    `[A0 + f*Sp, A0 + f*Sp + S)` of a `Sp`-row slot, tail globals after the frames. `valid` marks the real rows."""
+    """The packed sequence with every segment padded to whole tiles (`multiple` rows): head globals `[0, vs)` ->
+    `[0, A0)`, frame f -> `[A0 + f*Sp, A0 + f*Sp + S)` of a `Sp`-row slot, tail globals after the frames, then zero
+    rows up to a multiple of `total_multiple`. `valid` marks the real rows."""
 
-    def __init__(self, layout: WindowLayout) -> None:
+    def __init__(self, layout: WindowLayout, multiple: int = _PAD, total_multiple: int = 1) -> None:
         self.layout = layout
-        self.key = dataclasses.astuple(layout)
+        self.key = (*dataclasses.astuple(layout), multiple, total_multiple)
         vs, ve, s, f = layout.video_start, layout.video_end, layout.tokens_per_frame, layout.num_frames
-        self.head, self.slot = _ceil(vs), _ceil(s)
+        self.head, self.slot = _ceil(vs, multiple), _ceil(s, multiple)
         self.tail_start = self.head + f * self.slot
         self.tail_len = layout.total - ve
-        self.total = self.tail_start + _ceil(self.tail_len)
+        self.total = _ceil(self.tail_start + _ceil(self.tail_len, multiple), total_multiple)
         valid = torch.zeros(self.total, dtype=torch.bool)
         valid[:vs] = True
         for i in range(f):
@@ -265,7 +267,7 @@ class _AlignedLayout:
     def _zeros_rows(x: ttnn.Tensor, rows: int) -> ttnn.Tensor:
         shape = list(x.shape)
         shape[-2] = rows
-        return ttnn.zeros(shape, dtype=x.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=x.device())
+        return ops.zeros(x.device(), shape, x.dtype, ttnn.ROW_MAJOR_LAYOUT)
 
     def to_aligned(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`[1, H, N, d]` logical rows -> `[1, H, total, d]` aligned (zero pads), via one row-major round trip."""
@@ -284,8 +286,8 @@ class _AlignedLayout:
         parts.append(ttnn.reshape(video, [1, h, f * self.slot, d]))
         if self.tail_len:
             parts.append(ttnn.slice(x, [0, 0, ve, 0], [1, h, lay.total, d]))
-            if self.total - self.tail_start > self.tail_len:
-                parts.append(self._zeros_rows(parts[-1], self.total - self.tail_start - self.tail_len))
+        if self.total - self.tail_start > self.tail_len:
+            parts.append(self._zeros_rows(parts[-1], self.total - self.tail_start - self.tail_len))
         return ttnn.to_layout(ttnn.concat(parts, dim=2), ttnn.TILE_LAYOUT)
 
     def from_aligned(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -302,3 +304,80 @@ class _AlignedLayout:
             parts.append(ttnn.slice(x, [0, 0, self.tail_start, 0], [1, h, self.tail_start + self.tail_len, d]))
         out = ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0]
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+
+
+class SparseWindowSoftmax:
+    """The window softmax as one block-sparse ring attention (`ttnn.transformer.sparse_ring_sdpa`, the op H3's VSA
+    runs) instead of one dense SDPA per group (stage 4).
+
+    The sequence goes to the frame-padded layout with 64-row segments (`_AlignedLayout(multiple=64)`), so every
+    64-row block holds rows of one segment (head globals, one frame, tail globals), real rows first. The groups'
+    (query, key) pairs then become a static block mask, and `block_counts` (real rows per block) keeps the pad rows
+    out of every softmax. Exact: each query row's softmax runs over the same keys (in another order). Inputs and
+    output `[1, H, N, d]` replicated over SP, as `WindowSoftmax`; inside, q, k, v are split over SP and the op
+    gathers K/V around the ring itself.
+
+    `ring_sdpa(q, k, v, block_mask, block_counts)` runs the op with the caller's CCL setup."""
+
+    BLOCK = 64
+
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        layout: WindowLayout,
+        bounds: Sequence[Range],
+        *,
+        anchor_frames: str,
+        sp_axis: int,
+        sp_factor: int,
+        gather: Callable[[ttnn.Tensor], ttnn.Tensor],
+        ring_sdpa: Callable[..., ttnn.Tensor],
+        num_heads: int,
+    ) -> None:
+        block = self.BLOCK
+        self.device = device
+        self.sp_axis, self.gather, self.ring_sdpa = sp_axis, gather, ring_sdpa
+        self.geo = geo = _AlignedLayout(layout, multiple=block, total_multiple=block * sp_factor)
+        num_blocks = geo.total // block
+        per_shard = num_blocks // sp_factor
+        pad = per_shard + (-per_shard % 32)
+
+        valid = geo.valid.reshape(num_blocks, block)
+        counts = valid.sum(dim=1)
+        # real rows first in every block
+        assert bool((valid == (torch.arange(block)[None, :] < counts[:, None])).all())
+
+        def blocks(r0: int, r1: int) -> slice:
+            a0, a1 = geo.map(r0, r1)
+            return slice(a0 // block, -(-a1 // block))
+
+        keep = torch.zeros(num_blocks, num_blocks, dtype=torch.int32)
+        for (q0, q1), key_ranges in window_groups(layout, bounds, anchor_frames):
+            for r0, r1 in key_ranges:
+                keep[blocks(q0, q1), blocks(r0, r1)] = 1
+
+        def shard_cols(t: torch.Tensor) -> torch.Tensor:  # [..., num_blocks] -> [..., sp * pad], each shard padded
+            t = t.reshape(*t.shape[:-1], sp_factor, per_shard)
+            t = torch.nn.functional.pad(t, (0, pad - per_shard))
+            return t.reshape(*t.shape[:-2], sp_factor * pad)
+
+        mask = shard_cols(keep).reshape(sp_factor, per_shard, sp_factor * pad)
+        mask = torch.nn.functional.pad(mask, (0, 0, 0, pad - per_shard)).reshape(1, 1, sp_factor * pad, -1)
+        self.block_mask = tensor.from_torch(
+            mask.expand(1, num_heads, -1, -1).contiguous(),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_axes=[None, None, sp_axis, None],
+        )
+        self.block_counts = tensor.from_torch(
+            shard_cols(counts.to(torch.int32)).reshape(1, 1, 1, -1),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    def __call__(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+        q, k, v = (ttnn.mesh_partition(self.geo.to_aligned(t), dim=2, cluster_axis=self.sp_axis) for t in (q, k, v))
+        out = self.ring_sdpa(q, k, v, self.block_mask, self.block_counts)
+        return self.geo.from_aligned(self.gather(out))

@@ -99,8 +99,35 @@ def split_matmul(
     return out
 
 
+#: `(id(device), ...) -> (device, tensor)`. Holding the device keeps its id from being reused by a later device.
+_constants: dict[tuple, tuple[ttnn.MeshDevice, ttnn.Tensor]] = {}
+
+
+def _cached(device: ttnn.MeshDevice, key: tuple, make) -> ttnn.Tensor:
+    key = (id(device), *key)
+    if key not in _constants:
+        _constants[key] = (device, make())
+    return _constants[key][1]
+
+
+def _constant(device: ttnn.MeshDevice, key: tuple, make, dtype: ttnn.DataType) -> ttnn.Tensor:
+    """A host-built constant uploaded once per device (no host writes per call, so a forward can be traced)."""
+    return _cached(device, (dtype, *key), lambda: tensor.from_torch(make(), device=device, dtype=dtype))
+
+
+def zeros(
+    device: ttnn.MeshDevice, shape: Sequence[int], dtype: ttnn.DataType, layout: ttnn.Layout = ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
+    """A zero tensor made once per device, shape, dtype and layout and reused (read-only)."""
+    return _cached(
+        device,
+        ("zeros", tuple(shape), dtype, layout),
+        lambda: ttnn.zeros(list(shape), dtype=dtype, layout=layout, device=device),
+    )
+
+
 def identity(device: ttnn.MeshDevice, n: int) -> ttnn.Tensor:
-    return tensor.from_torch(torch.eye(n).reshape(1, 1, n, n), device=device, dtype=ttnn.float32)
+    return _constant(device, ("eye", n), lambda: torch.eye(n).reshape(1, 1, n, n), ttnn.float32)
 
 
 def _transpose(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -320,8 +347,7 @@ def gather_linear_state(
     num_frames, heads, dv, dk = prefix.shape
     device = prefix.device()
     idx = gather_indices(bounds, num_frames)
-    zeros = None if text_state is not None else ttnn.zeros_like(ttnn.slice(prefix, [0, 0, 0, 0], [1, heads, dv, dk]))
-    outside = text_state if text_state is not None else zeros
+    outside = text_state if text_state is not None else zeros(device, [1, heads, dv, dk], prefix.dtype)
 
     def pick(bank: ttnn.Tensor, rows: list[int], valid: list[bool]) -> ttnn.Tensor:
         cache = {}
@@ -340,10 +366,14 @@ def gather_linear_state(
 
     log_alpha = ttnn.log(ttnn.clamp(alpha_rows, min=1e-12))
     log_parts = split_bf16(log_alpha, 3)
-    sel_before, sel_after = bridge_matrices(bounds, num_frames)
     exps = []
-    for sel in (sel_before, sel_after):
-        sel_tt = tensor.from_torch(sel.reshape(1, 1, num_frames, num_frames), device=device, dtype=ttnn.bfloat16)
+    for side in (0, 1):
+        sel_tt = _constant(
+            device,
+            ("bridge", side, tuple(bounds), num_frames),
+            lambda: bridge_matrices(bounds, num_frames)[side].reshape(1, 1, num_frames, num_frames),
+            ttnn.bfloat16,
+        )
         exps.append(split_matmul(sel_tt, log_parts, config=config))
     bridge_before, bridge_after = (rows_to_heads(ttnn.exp(e), num_frames, heads, dk) for e in exps)
 
