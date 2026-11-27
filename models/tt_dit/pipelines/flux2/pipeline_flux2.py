@@ -112,7 +112,7 @@ class Flux2TransformerState:
 
 
 class _DenoiseState:
-    """The denoising state of one image size, with or without a reference image: the latents, the
+    """The denoising state of one image size and number of reference images: the latents, the
     reference tokens, their RoPE and the trace."""
 
     def __init__(self, *, step_tracer: Tracer) -> None:
@@ -168,9 +168,9 @@ class Flux2Pipeline(PipelineAPIMixin):
         self.is_fsdp = is_fsdp
         self.dynamic_load = dynamic_load
 
-        # The denoising states by image size and whether there is a reference image, and the VAE
-        # traces by image size.
-        self._denoise_states: dict[tuple[int, int, bool], _DenoiseState] = {}
+        # The denoising states by image size and number of reference images, and the VAE traces by
+        # image size.
+        self._denoise_states: dict[tuple[int, int, int], _DenoiseState] = {}
         self._vae_decoder_tracers: dict[tuple[int, int], Tracer] = {}
         self._vae_encoder_tracers: dict[tuple[int, int], Tracer] = {}
 
@@ -486,20 +486,17 @@ class Flux2Pipeline(PipelineAPIMixin):
         traced: bool = False,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
-        """Generate an image, or edit one if ``images`` holds a reference image.
+        """Generate an image, or edit if ``images`` holds one or more reference images.
 
         ``width`` and ``height`` default to the size the pipeline was created with and must be one
-        of ``resolutions``. The reference image is center-cropped to the output's aspect ratio and
-        resized to the output size, at most one megapixel. Each size gets its own
-        traces, with and without a reference, captured on the first traced call.
+        of ``resolutions``. Each reference image is center-cropped to the output's aspect ratio and
+        resized to the output size, at most one megapixel. Each size and number of reference images
+        gets its own denoising trace, captured on the first traced call.
         """
-        if images and len(images) > 1:
-            msg = "editing with more than one reference image is not supported"
-            raise NotImplementedError(msg)
         if images and self._vae_encoder is None:
             msg = "editing is not supported with dynamic loading"
             raise NotImplementedError(msg)
-        reference_image = images[0] if images else None
+        reference_images = list(images) if images else []
 
         width = width if width is not None else self._width
         height = height if height is not None else self._height
@@ -542,12 +539,15 @@ class Flux2Pipeline(PipelineAPIMixin):
             )
             _, prompt_sequence_length, _ = prompt_embeds.shape
 
-        if reference_image is not None:
-            logger.info("encoding the reference image...")
+        if reference_images:
+            logger.info(f"encoding {len(reference_images)} reference image(s)...")
             with event_section(on_event, "image_encoder"):
-                reference, reference_ids = self._encode_reference(
-                    reference_image, width=width, height=height, traced=traced
-                )
+                encoded = [
+                    self._encode_reference(image, width=width, height=height, index=i, traced=traced)
+                    for i, image in enumerate(reference_images)
+                ]
+            reference = torch.cat([tokens for tokens, _ in encoded], dim=1)
+            reference_ids = torch.cat([ids for _, ids in encoded], dim=0)
             reference_sequence_length = reference.shape[1]
         else:
             reference = reference_ids = None
@@ -571,7 +571,7 @@ class Flux2Pipeline(PipelineAPIMixin):
         shape = [transformer_batch_size, self._num_channels_latents * p * p, latents_height // p, latents_width // p]
         latents = torch.randn(shape, generator=generator, dtype=torch.bfloat16).flatten(2).transpose(1, 2).float()
 
-        state = self._denoise_state(width, height, edit=reference is not None)
+        state = self._denoise_state(width, height, reference_count=len(reference_images))
         image_ids = _prepare_ids(height=latents_height // self._patch_size, width=latents_width // self._patch_size)
         rope_cos, rope_sin = self._pos_embed.forward(image_ids)
 
@@ -700,16 +700,16 @@ class Flux2Pipeline(PipelineAPIMixin):
         on_event(SectionEnd("total"))
         return output
 
-    def _denoise_state(self, width: int, height: int, *, edit: bool) -> _DenoiseState:
-        state = self._denoise_states.get((width, height, edit))
+    def _denoise_state(self, width: int, height: int, *, reference_count: int) -> _DenoiseState:
+        state = self._denoise_states.get((width, height, reference_count))
         if state is None:
             # The step updates the latents in place, so the run before the capture works on copies.
             state = _DenoiseState(step_tracer=Tracer(self._step, device=self._mesh_device, clone_prep_inputs=True))
-            self._denoise_states[width, height, edit] = state
+            self._denoise_states[width, height, reference_count] = state
         return state
 
     def _encode_reference(
-        self, image: Image.Image, *, width: int, height: int, traced: bool
+        self, image: Image.Image, *, width: int, height: int, index: int, traced: bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode a reference image into normalized latent tokens and their position ids.
 
@@ -746,11 +746,11 @@ class Flux2Pipeline(PipelineAPIMixin):
 
         latents = to_torch(tt_latents).float()
         tokens = (self._patchify(latents) - self._latents_bn_mean) / self._latents_bn_std
-        # As diffusers, the first reference image is at time 10.
+        # As diffusers, reference image i is at time 10 + 10 * i.
         ids = _prepare_ids(
             height=reference_height // multiple,
             width=reference_width // multiple,
-            time=10,
+            time=10 + 10 * index,
         )
         return tokens, ids
 
