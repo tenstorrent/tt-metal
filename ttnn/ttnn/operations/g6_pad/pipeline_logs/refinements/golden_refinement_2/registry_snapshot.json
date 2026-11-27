@@ -1,0 +1,36 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16",
+      "FLOAT32",
+      "INT32",
+      "UINT32"
+    ],
+    "layout": [
+      "TILE",
+      "ROW_MAJOR"
+    ],
+    "memory_config": [
+      "dram",
+      "l1"
+    ],
+    "alignment": [
+      "tile_aligned",
+      "w_non_aligned",
+      "h_non_aligned"
+    ],
+    "rank": [
+      2,
+      3,
+      4
+    ],
+    "padded_dims": [
+      "leading",
+      "h",
+      "w",
+      "hw"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}
