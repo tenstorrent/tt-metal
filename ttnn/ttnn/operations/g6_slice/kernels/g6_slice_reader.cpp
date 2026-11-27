@@ -31,7 +31,10 @@ void kernel_main() {
     constexpr uint32_t cols_last_tile_col = get_compile_time_arg_val(11);
     constexpr bool ROW_RUNS = get_compile_time_arg_val(12) != 0;
     constexpr bool W_SHIFT = get_compile_time_arg_val(13) != 0;
-    constexpr auto x_args = TensorAccessorArgs<14>();
+    // The last output tile column holds <= 16 logical columns: only its face column half 0 moves.
+    constexpr bool LEFT_HALF_LAST_COL = get_compile_time_arg_val(14) != 0;
+    constexpr auto x_args = TensorAccessorArgs<15>();
+    static_assert(!(LEFT_HALF_LAST_COL && W_SHIFT), "col_realign picks its own face halves");
 
     using Geometry = g6_slice::TileGeometry<page_bytes>;
     using Walk = g6_slice::OutPageWalk<
@@ -64,8 +67,19 @@ void kernel_main() {
 
     const auto x = TensorAccessor(x_args, x_addr, page_bytes);
 
-    // Row classes: every tile row but an image's last has 32 output rows.
-    [[maybe_unused]] g6_slice::RunList fetch_full, fetch_last, right_full, right_last;
+    // Issues one run list for the output page whose upper input tile is `first_tile`.
+    auto issue_runs = [&](const g6_slice::RunList& runs, uint32_t first_tile, uint32_t page_l1) {
+        for (uint32_t r = 0; r < runs.count; ++r) {
+            const g6_slice::ByteRun& run = runs.runs[r];
+            const uint32_t tile = first_tile + run.src_tile * tensor_in_wt_tiles;
+            noc_async_read<page_bytes>(x.get_noc_addr(tile, run.src_offset), page_l1 + run.dst_offset, run.bytes);
+        }
+    };
+
+    // Row classes: every tile row but an image's last has 32 output rows. Column classes (narrow):
+    // the last tile column when LEFT_HALF_LAST_COL.
+    [[maybe_unused]] g6_slice::RunList fetch_full, fetch_last, fetch_full_narrow, fetch_last_narrow;
+    [[maybe_unused]] g6_slice::RunList right_full, right_last;
     [[maybe_unused]] bool last_col_needs_right = false;
     if constexpr (ROW_RUNS) {
         // col_realign: output columns [0, 32 - c) come from the left input tile's columns [c, 32), the
@@ -81,6 +95,13 @@ void kernel_main() {
             right_last = Geometry::fetch_runs(row_offset_in_tile, rows_last_tile_row, right_halves);
             last_col_needs_right = cols_last_tile_col + c > g6_slice::TILE_DIM;
         }
+    }
+    if constexpr (LEFT_HALF_LAST_COL) {
+        // page_copy has whole tile rows (off == 0, rv == 32), so its narrow list is fetch_full_narrow.
+        const uint32_t off = ROW_RUNS ? row_offset_in_tile : 0;
+        fetch_full_narrow = Geometry::fetch_runs(off, g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
+        fetch_last_narrow =
+            Geometry::fetch_runs(off, ROW_RUNS ? rows_last_tile_row : g6_slice::TILE_DIM, g6_slice::COL_HALF_LEFT);
     }
 
     const uint32_t num_blocks = (core_pages + block_pages - 1) / block_pages;
@@ -103,23 +124,13 @@ void kernel_main() {
             uint32_t page_l1 = block_l1;
             [[maybe_unused]] uint32_t right_page_l1 = right_l1;
             for (uint32_t p = 0; p < pages_this_block; ++p) {
-                if constexpr (ROW_RUNS) {
-                    const g6_slice::RunList& runs = walk.last_tile_row() ? fetch_last : fetch_full;
-                    for (uint32_t r = 0; r < runs.count; ++r) {
-                        const g6_slice::ByteRun& run = runs.runs[r];
-                        const uint32_t tile = walk.in_page + run.src_tile * tensor_in_wt_tiles;
-                        noc_async_read<page_bytes>(
-                            x.get_noc_addr(tile, run.src_offset), page_l1 + run.dst_offset, run.bytes);
-                    }
+                if (LEFT_HALF_LAST_COL && walk.last_tile_col()) {
+                    issue_runs(walk.last_tile_row() ? fetch_last_narrow : fetch_full_narrow, walk.in_page, page_l1);
+                } else if constexpr (ROW_RUNS) {
+                    issue_runs(walk.last_tile_row() ? fetch_last : fetch_full, walk.in_page, page_l1);
                     if constexpr (W_SHIFT) {
                         if (!walk.last_tile_col() || last_col_needs_right) {
-                            const g6_slice::RunList& right = walk.last_tile_row() ? right_last : right_full;
-                            for (uint32_t r = 0; r < right.count; ++r) {
-                                const g6_slice::ByteRun& run = right.runs[r];
-                                const uint32_t tile = walk.in_page + 1 + run.src_tile * tensor_in_wt_tiles;
-                                noc_async_read<page_bytes>(
-                                    x.get_noc_addr(tile, run.src_offset), right_page_l1 + run.dst_offset, run.bytes);
-                            }
+                            issue_runs(walk.last_tile_row() ? right_last : right_full, walk.in_page + 1, right_page_l1);
                         }
                         right_page_l1 += page_bytes;
                     }

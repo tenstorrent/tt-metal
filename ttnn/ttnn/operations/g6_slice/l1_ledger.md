@@ -18,8 +18,8 @@ Capacity equals live set in both rows (audit 1). No 16/32-bit DEST width questio
 | `page_bytes` | bf16 2048; ≤ 4096 over TARGET (fp32/int32/uint32 4096, bf8_b 1088, bf4_b 576) | dtype ∈ TARGET |
 | `cb_depth` | 2 | `CB_DEPTH` constant |
 | `slots_per_page` | `cb_depth` (+1 when `W_SHIFT`) | regime |
-| `block_pages` | `≤ min(core_pages_max, block_pages_cap)` | `_plan()` |
-| `block_pages_cap` | `floor((L1_budget − fixed_bytes) / (slots_per_page × page_bytes))`; bf16: 329 (`page_copy`/`row_runs`), 219 (`col_realign`) | BB-05 |
+| `block_pages` | `≤ min(core_pages_max, block_pages_cap)`; default 32 | `_plan()` |
+| `block_pages_cap` | `min(BLOCK_PAGES_CAP, floor((L1_budget − fixed_bytes) / (slots_per_page × page_bytes)))`; L1 bound bf16: 329 (`page_copy`/`row_runs`), 219 (`col_realign`); `BLOCK_PAGES_CAP` = 32 (overlap lamp, measured: p1 2534 µs vs 2573 µs at 329) | BB-05 + overlap lamp |
 | `L1_budget` | `min(1347776, ttnn.device.get_max_worker_l1_unreserved_size())` | BB-05 |
 | `fixed_bytes` | `out_l1_bytes_per_core + 64 × num_cbs` (CB allocation alignment) | — |
 | `out_l1_bytes_per_core` | 0 for DRAM `out` (Phase 0); L1 interleaved (refinement): `ceil(total_out_pages / num_l1_banks) × aligned_page_bytes`; width-sharded: one output shard | `memory_config` |
@@ -36,7 +36,7 @@ L1_op = slots_per_page × block_pages × page_bytes  +  ≤ 64 × num_cbs (CB al
 
 - `cb_slice_pages` scales with `block_pages` and `cb_depth`; `cb_right_col_tile` with `block_pages` only.
 - Nothing scales with `N` or `M` except through `block_pages ≤ core_pages_max`, which the `block_pages_cap` clamp bounds — no golden shape (including `N_{r-2} = 8448` and `N_{r-1} = 62080`) can push the footprint past the budget.
-- Phase 0 worst case (bf16, `page_copy`/`row_runs`, `block_pages = 329`): `2 × 329 × 2048 = 1,347,584 B ≤ 1,347,712 B`. `col_realign`: `3 × 219 × 2048 = 1,345,536 B`.
+- Phase 0 default (bf16, `BLOCK_PAGES_CAP = 32`): `2 × 32 × 2048 = 131,072 B` (`page_copy`/`row_runs`), `3 × 32 × 2048 = 196,608 B` (`col_realign`). With `BLOCK_PAGES_CAP = None` the L1 bound takes over: `2 × 329 × 2048 = 1,347,584 B ≤ 1,347,712 B`; `col_realign`: `3 × 219 × 2048 = 1,345,536 B`.
 
 ## Data-movement budget
 

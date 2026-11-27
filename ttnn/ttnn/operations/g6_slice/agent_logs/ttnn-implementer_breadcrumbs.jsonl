@@ -16,3 +16,4 @@
 {"event":"start","note":"inherited implementation files (boundary commit + uncommitted edits) deleted unread per integrity rules; rebuilding from op_design.md","ts":"2026-11-27T08:34:52-05:00"}
 {"event":"tool_use","tool":"Skill","skill":"interleaved-parallel","args":"","ts":"2026-11-27T08:35:15-05:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_slice/test_g6_slice.py","modes":["dev"],"passed":47,"ts":"2026-11-27T08:43:28-05:00"}
+{"event":"perf","note":"BLOCK_PAGES_CAP default 32 (overlap lamp): p1 2573->2534 us, c795 1294->1270, c1112 383->375; LEFT_HALF_LAST_COL (left-half lamp): c730 28.8->21.3 us; p1 1.024x of 2475.8 us roofline, stock 2930.5 us","ts":"2026-11-27T09:01:05-05:00"}

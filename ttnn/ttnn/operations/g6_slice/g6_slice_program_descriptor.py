@@ -56,6 +56,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
     tensor_out_wt_tiles = -(-m4[3] // tile)
     rows_last_tile_row = m4[2] - tile * (tensor_out_ht_tiles - 1)
     cols_last_tile_col = m4[3] - tile * (tensor_out_wt_tiles - 1)
+    # The last tile column's right face half (cols 16..31) holds no logical column: leave it unmoved.
+    # col_realign chooses its face halves from the column offset instead.
+    left_half_last_col = int(not w_shift and cols_last_tile_col <= tile // 2)
 
     cbs = [_cb(CB_SLICE_PAGES, cb_depth * block_pages, page_bytes, input_tensor.dtype, all_cores)]
     if w_shift:
@@ -76,6 +79,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
         cols_last_tile_col,
         row_runs,
         w_shift,
+        left_half_last_col,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -87,6 +91,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
         tensor_out_wt_tiles,
         rows_last_tile_row,
         row_runs,
+        left_half_last_col,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 

@@ -91,7 +91,7 @@ struct TileGeometry {
 
     // Writer: output rows [0, rv) from staging rows (i + off) mod 32, split where either side
     // crosses a face boundary (16 rows) or the staging rows wrap.
-    static RunList store_runs(uint32_t off, uint32_t rv) {
+    static RunList store_runs(uint32_t off, uint32_t rv, uint32_t col_halves) {
         RunList list;
         uint32_t i = 0;
         while (i < rv) {
@@ -104,7 +104,9 @@ struct TileGeometry {
                 rows = FACE_DIM - s % FACE_DIM;
             }
             for (uint32_t col_half = 0; col_half < 2; ++col_half) {
-                list.append(0, offset(s, col_half), offset(i, col_half), rows * face_row_bytes);
+                if (col_halves & (1u << col_half)) {
+                    list.append(0, offset(s, col_half), offset(i, col_half), rows * face_row_bytes);
+                }
             }
             i += rows;
         }

@@ -26,7 +26,10 @@ TILE = 32
 RANK = 4  # every kernel sees the op as rank 4 (left-padded with size-1 / begin-0 dims)
 
 # --- Blocking knobs (read at call time so a test can override them) -----------------------
-BLOCK_PAGES_CAP = None  # None -> the largest block the L1 budget holds
+# Overlap lamp of op_design.md, measured on BH (110 cores, p1 = case 703): 32-page blocks start the
+# writer sooner and run 1.5 % faster than the L1-filling 329 (2534 vs 2573 us); 16..32 is the
+# optimum on cases 795 and 1112 too. The L1 budget still clamps it; None -> the L1 bound alone.
+BLOCK_PAGES_CAP = 32
 CB_DEPTH = 2  # blocks resident in cb_slice_pages: fetch of k+1 overlaps store of k
 MAX_CORES = None  # None -> the full compute-with-storage grid
 L1_BUDGET_BYTES = 1347776  # BB-05: what the model leaves to the op on every core
