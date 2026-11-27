@@ -439,11 +439,12 @@ void wait_for_prewarm() {}
 """
 
 OFFLINE_MAIN = r"""
-const std::string C(40, 'c'), D(40, 'd'), TREE = "batch";  // gpp "batch" / "batch-stale" contain the tree path
+const std::string C(40, 'c'), D(40, 'd'), TREE = "batch";
 fs::path root;
 jit_server::CompileRequest req(uint64_t bk, const std::string& name, const std::string& commit, bool good = true) {
  jit_server::CompileRequest r; r.build_key = bk; r.kernel_name = name; r.gpp = good ? "batch" : "batch-stale";
- r.tree_commit = commit; jit_build::TargetRecipe t; t.target_name = "first"; r.targets = {t}; return r;
+ r.tree_commit = commit; jit_build::TargetRecipe t; t.target_name = "first";
+ t.includes = "-I. -I.. -I" + TREE; r.targets = {t}; return r;
 }
 // key 7: the live key, captured by commit C, plus the same kernels as an older commit D left them (stale
 // recipes), plus one recipe of another source tree. key 8: an old key without commits. key 9: stamped, all D.
@@ -451,7 +452,7 @@ std::vector<jit_server::CompileRequest> mixed_manifest() {
  std::vector<jit_server::CompileRequest> m;
  for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), C));
  for (int i = 0; i < 3; ++i) m.push_back(req(7, "k" + std::to_string(i), D, false));
- auto foreign = req(7, "f0", C); foreign.gpp = "/other/tree/g++"; m.push_back(foreign);
+ auto foreign = req(7, "f0", C); foreign.targets[0].includes = "-I. -I.. -I/other/tree"; m.push_back(foreign);
  for (int i = 10; i < 12; ++i) m.push_back(req(8, "k" + std::to_string(i), ""));
  for (int i = 20; i < 22; ++i) m.push_back(req(9, "k" + std::to_string(i), D, false));
  return m;

@@ -860,15 +860,16 @@ std::size_t run_prewarm(
             ++skipped_build_key;
             continue;
         }
-        // build_key covers arch + compile config but NOT the source tree, so sibling trees with the
-        // same config collide on one build_key and, under a shared cache root, on this one manifest.
-        // A recipe's gpp and -I flags are absolute paths into the tree that captured it: replaying a
-        // sibling's recipe compiles that tree's headers, which mismatch this tree's binaries. gpp
-        // lives under root_dir (<root>/runtime/sfpi/...), optionally behind a ccache prefix, so it
-        // identifies the owning tree. Skip foreign recipes: a shared root then costs recompiles
-        // rather than miscompiles. An empty root_dir means the caller cannot identify the tree, so
-        // the filter is inert.
-        if (!root_dir.empty() && req.gpp.find(root_dir) == std::string::npos) {
+        // JitBuildEnv starts includes with the working directories and source root. SFPI can
+        // be installed outside that root, so its compiler path does not identify the tree.
+        if (!root_dir.empty() &&
+            (req.targets.empty() || !std::all_of(req.targets.begin(), req.targets.end(), [&](const auto& target) {
+                 const auto includes = jit_build::utils::tokenize_flags(target.includes);
+                 return includes.size() >= 3 && includes[0] == "-I." && includes[1] == "-I.." &&
+                        includes[2].starts_with("-I") &&
+                        (fs::path(includes[2].substr(2)) / "").lexically_normal() ==
+                            (fs::path(root_dir) / "").lexically_normal();
+             }))) {
             ++skipped_foreign_tree;
             continue;
         }
