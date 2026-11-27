@@ -52,6 +52,7 @@ class _FakeOps:
 
     def __init__(self):
         self.heads, self.tails, self.routed, self.plans = [], 0, [], 0
+        self.weights_bf8 = []  # (each flat plan's weights_bf8)
 
     def plan_moe_head(self, resources, dtypes, accumulators, l1_free=None):
         self.plans += 1
@@ -77,6 +78,7 @@ class _FakeOps:
         return ("w_up", round(float(latent_up.sum()), 3))
 
     def flat_routed_expert_plan(self, mesh, Hr, I, epc, E, m, *, weights_bf8, pin, layout):
+        self.weights_bf8.append(weights_bf8)
         return SimpleNamespace(as_dict=lambda: dict(layout))
 
 
@@ -127,10 +129,10 @@ def _sd(latent: bool):
     return sd
 
 
-def _block(head_lay, flat=None, accumulators=16):
+def _block(head_lay, flat=None, accumulators=16, routed_weights=mbf.ttnn.bfloat4_b):
     return SimpleNamespace(
         resources=SimpleNamespace(head_lay=head_lay),
-        dtypes=SimpleNamespace(shared_weights="WeightDtype.Bf8"),
+        dtypes=SimpleNamespace(shared_weights="WeightDtype.Bf8", routed_weights=routed_weights),
         accumulators=accumulators,
         row_blocks=1,
         expert_kw={"max_tokens_per_expert": 5120, "layout": dict(flat or FLAT)},
@@ -183,3 +185,16 @@ def test_routed_layout_change(ops):
     assert w2.gate_up is not w1.gate_up and w2.head is w1.head and w2.w_up is w1.w_up
     assert w3 is w1
     assert len(ops.routed) == 2 and len(ops.heads) == 1 and ops.tails == 1
+
+
+def test_routed_dtype_change(ops):
+    """A block whose routed experts are another format (MoEDtypes.routed_weights) gets its own routed weights, laid out
+    by a plan for that format, even though its flat plan's packing fields are the same: bf4 weights served to a bf8
+    block are garbage. The head is kept."""
+    ffn = _ffn(True)
+    w4 = ffn._weights(_block(_lay()))
+    w8 = ffn._weights(_block(_lay(), routed_weights=mbf.ttnn.bfloat8_b))
+    assert w8.gate_up is not w4.gate_up and w8.head is w4.head
+    assert ffn._weights(_block(_lay())) is w4
+    assert len(ops.routed) == 2 and len(ops.heads) == 1
+    assert True in ops.weights_bf8 and False in ops.weights_bf8, f"plans asked for weights_bf8 {set(ops.weights_bf8)}"

@@ -314,8 +314,9 @@ void kernel_main() {
             for (uint32_t qg = 0; qg < q_groups; ++qg) {
                 const uint32_t row_base = qg * qsb;  // first query tile-row of this group
 
-                // Set exp to the softmax scale; salad's correction below re-inits it to unit scale.
-                exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
+                // Set exp to the softmax scale; salad's correction below re-inits it to unit scale. (The accurate
+                // exp's init ignores the scale: sub_exp applies it itself when !EXP_APPROX_MODE.)
+                exp_packthread_tile_init<EXP_APPROX_MODE, scale_fp32, InputClamping::None>();
 
                 // ===== Phase 1: Q@Kᵀ -> cb_qk_im band, mask, running row-max =====
                 {
@@ -431,7 +432,7 @@ void kernel_main() {
                     // Walk key-tile columns in exp_sbw steps (one step when the group fits DST); global_col_base
                     // drives the L1-accumulate across steps.
                     for (uint32_t kc = 0; kc < Skt; kc += exp_sbw) {
-                        sub_exp_block_bcast_cols<false, scale_fp32>(
+                        sub_exp_block_bcast_cols<false, scale_fp32, EXP_APPROX_MODE>(
                             cb_qk_im,
                             max_cur.get_cb_id(),
                             sum_cur.get_cb_id(),
@@ -479,7 +480,7 @@ void kernel_main() {
                     // (sub_exp_first_col_blocks applies scale itself; the group's init baked scale_fp32).
                     exp_packthread_tile_init<EXP_APPROX_MODE>();
                     corr_cb.reserve_back(qsb);
-                    sub_exp_first_col_blocks<false, scale_fp32>(
+                    sub_exp_first_col_blocks<false, scale_fp32, /*fp32_scale=*/true>(
                         max_prev.get_cb_id(), max_cur.get_cb_id(), cb_corr, /*q_subblock=*/qg, qsb);
                     corr_cb.push_back(qsb);
                     // cur.out += prev.out*corr ; cur.sum += prev.sum*corr (L1-acc). salad packs width=dst_size,
@@ -553,11 +554,11 @@ void kernel_main() {
                         max_block_sfpi(max_cur.get_cb_id(), cb_recv_max, max_prev.get_cb_id(), Sqt);
                         exp_packthread_tile_init<EXP_APPROX_MODE>();
                         corr_cb.reserve_back(Sqt);
-                        sub_exp_first_col_blocks<false, scale_fp32>(
+                        sub_exp_first_col_blocks<false, scale_fp32, /*fp32_scale=*/true>(
                             max_cur.get_cb_id(), max_prev.get_cb_id(), cb_corr, 0, Sqt);
                         corr_cb.push_back(Sqt);
                         corr2.reserve_back(Sqt);
-                        sub_exp_first_col_blocks<false, scale_fp32>(
+                        sub_exp_first_col_blocks<false, scale_fp32, /*fp32_scale=*/true>(
                             cb_recv_max, max_prev.get_cb_id(), cb_corr2, 0, Sqt);
                         corr2.push_back(Sqt);
                         out_prev.reserve_back(Sqt * vDHt);
