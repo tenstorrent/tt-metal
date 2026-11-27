@@ -33,12 +33,33 @@ def solver_for_scheduler(scheduler: Any) -> Solver:
         return EulerSolver()
 
     if isinstance(scheduler, UniPCMultistepScheduler):
-        if not scheduler.config.use_flow_sigmas:
+        config = scheduler.config
+        if not config.use_flow_sigmas:
             msg = "UniPCSolver requires a scheduler configured with use_flow_sigmas=True"
             raise ValueError(msg)
+        if config.prediction_type != "flow_prediction":
+            msg = (
+                f"UniPCSolver only supports prediction_type='flow_prediction', got '{config.prediction_type}'"
+            )
+            raise ValueError(msg)
+        if config.disable_corrector:
+            msg = "UniPCSolver does not support disable_corrector; the corrector always runs"
+            raise ValueError(msg)
+        if not config.lower_order_final:
+            msg = "UniPCSolver does not support lower_order_final=False; order is always tapered"
+            raise ValueError(msg)
+        if config.thresholding:
+            msg = "UniPCSolver does not support thresholding"
+            raise ValueError(msg)
+        if not config.predict_x0:
+            msg = "UniPCSolver does not support predict_x0=False"
+            raise ValueError(msg)
+        if config.solver_p is not None:
+            msg = "UniPCSolver does not support solver_p"
+            raise ValueError(msg)
         return UniPCSolver(
-            order=scheduler.config.solver_order,
-            variant=UniPCVariant(scheduler.config.solver_type),
+            order=config.solver_order,
+            variant=UniPCVariant(config.solver_type),
             scheduler=scheduler,
         )
 
