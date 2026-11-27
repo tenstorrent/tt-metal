@@ -38,7 +38,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.multimedia_store.reader import FetchRequest
+from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 from models.common.utils import block_cyclic_reorder
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media_embedding import plan_media_splice, warm_media_refs
@@ -104,27 +104,44 @@ class TtPrefillRuntimeConfig:
         return self.mesh_shape[self.tp_axis]
 
 
-def _media_rows_of(reader, hidden: int, media_refs: list):
-    """One fetch_batch for the forward's refs, as a rows_of(ref) callable.
+def _fetch_media(reader, hidden: int, media_refs: list, isolate: bool) -> tuple[dict, dict]:
+    """({key: rows}, {key: error}) for the forward's refs: one fetch_batch, and an error for each value that cannot
+    be served (missing, not image rows, a key the store rejects or cannot read). Without isolate, a failed fetch raises.
 
-    A value on another host is a view into the reader's buffer that the next fetch overwrites, so every
-    value is fetched together and its rows are copied out before the next fetch."""
+    A bad key fails the whole batch, so a one-byte fetch per key finds the bad ones and the rest are fetched together
+    again, until a batch succeeds; a store that is down fails every key the same way. When no key is found bad, the
+    batch is retried once before the rest fail. A value on another host is a view into the reader's buffer that the
+    next fetch overwrites, so the values the splice uses come from that one last fetch."""
     keys = list(dict.fromkeys(ref.media_key for ref in media_refs))
-    bufs = reader.fetch_batch([FetchRequest(k) for k in keys])
+    errors, retried = {}, False
+    for _ in range(len(keys) + 2):  # one retry, then each round drops at least one key; the last fetches none
+        try:
+            bufs = reader.fetch_batch([FetchRequest(k) for k in keys]) if keys else []
+            break
+        except (Missing, ValueError, StoreUnavailable) as e:
+            if not isolate:
+                raise
+            bad = {}
+            for k in keys:
+                try:
+                    reader.fetch_batch([FetchRequest(k, 0, 1)])
+                except (Missing, ValueError, StoreUnavailable) as probe_error:
+                    bad[k] = probe_error
+            if not bad and not retried:
+                retried = True
+                continue
+            errors.update(bad or {k: e for k in keys})
+            keys = [k for k in keys if k not in errors]
     values = {}
     for key, buf in zip(keys, bufs, strict=True):
-        kind = media_format.Header.read(buf).kind
-        if kind != "image":
-            raise ValueError(f"media key {key.hex()} holds {kind!r}, not image rows")
-        values[key] = media_format.embeddings(buf, hidden)
-
-    def rows_of(ref):
-        rows = values[ref.media_key]
-        if len(rows) != ref.num_tokens:
-            raise ValueError(f"{ref}: stored value has {len(rows)} tokens")
-        return rows
-
-    return rows_of
+        try:
+            kind = media_format.Header.read(buf).kind
+            if kind != "image":
+                raise ValueError(f"media key {key.hex()} holds {kind!r}, not image rows")
+            values[key] = media_format.embeddings(buf, hidden)
+        except ValueError as e:
+            errors[key] = e
+    return values, errors
 
 
 class TtPrefillRuntime:
@@ -163,6 +180,8 @@ class TtPrefillRuntime:
         self._on_layer_complete = None
         # Per-layer completion sink for pipelined prefill, registered via set_layer_completion_sink().
         self._layer_completion_sink = None
+        # Where a chunk whose media cannot be served is reported (chunk_failed); None raises instead.
+        self._chunk_failure_sink = None
 
         # The Model builds `hf_config.num_hidden_layers` decoder layers, but the KV cache (and gather /
         # PCC) is sized to `config.num_layers`. Pin them equal so a partial-model run (PREFILL_NUM_LAYERS
@@ -394,15 +413,40 @@ class TtPrefillRuntime:
             self.media_embedding_reader = real_reader
 
     def _media_splice(self, chunks: list, media_refs: list):
-        """The forward's image rows per SP row, refilled into buffers kept per table height."""
+        """The forward's image rows per SP row, refilled into buffers kept per table height.
+
+        A chunk with an image that cannot be served fails its request alone: it is reported through
+        _chunk_failure_sink, its image positions keep their token embeddings, and the other chunks splice as usual.
+        This runs in the embedding, before the forward's first layer, which is when the consumer needs the report."""
         if not media_refs:
             return None
+        sink = self._chunk_failure_sink
+        values, errors = _fetch_media(
+            self.media_embedding_reader, self.hf_config.hidden_size, media_refs, isolate=sink is not None
+        )
+        failed = {}  # chunk index -> the first error among its refs
+        for ref in media_refs:
+            rows = values.get(ref.media_key)
+            if rows is None:
+                failed.setdefault(ref.chunk_index, errors[ref.media_key])
+            elif len(rows) != ref.num_tokens:
+                failed.setdefault(ref.chunk_index, ValueError(f"{ref}: stored value has {len(rows)} tokens"))
+        if failed:
+            if sink is None:
+                raise next(iter(failed.values()))
+            for k, e in failed.items():
+                c = chunks[k]
+                logger.error(f"prefill: failing slot {c.slot_id} chunk [{c.actual_start}, {c.actual_end}): {e!r}")
+                sink.chunk_failed(c.slot_id, c.actual_start, c.actual_end)
+            media_refs = [ref for ref in media_refs if ref.chunk_index not in failed]
+            if not media_refs:
+                return None
         cfg = self.config
         by_position = not self.model.embedding.shard_vocab_on_sp
         plan = plan_media_splice(
             media_refs,
             chunks,
-            _media_rows_of(self.media_embedding_reader, self.hf_config.hidden_size, media_refs),
+            lambda ref: values[ref.media_key],
             cfg.sp_factor,
             cfg.chunk_size // cfg.sp_factor,
             by_position,
@@ -633,7 +677,11 @@ class TtPrefillRuntime:
         """Register the completion sink for pipelined prefill, fired per layer for each non-empty chunk of the
         prefill_forward() call."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
-        self._layer_completion_sink = sink
+        self._layer_completion_sink = self._chunk_failure_sink = sink
+
+    def set_chunk_failure_sink(self, sink) -> None:
+        """Register where chunk_failed goes when layer acks travel as D2H records rather than through a sink."""
+        self._chunk_failure_sink = sink
 
     def set_d2h_ack_service(self, service) -> None:
         """The runner calls this only for traced runtimes; this one takes the service per forward in prefill_forward."""

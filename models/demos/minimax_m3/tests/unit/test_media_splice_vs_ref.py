@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.multimedia_store.reader import FetchRequest, Missing
+from models.common.multimedia_store.reader import FetchRequest, Missing, StoreUnavailable
 from models.demos.common.prefill.chunk_layout import pack_forward_tokens
 from models.demos.common.prefill.media_embedding import plan_media_splice, table_height
 from models.demos.common.prefill.prefill_chunk import MediaRef, PrefillChunk
@@ -48,7 +48,14 @@ class Store:
         return bytes(buf)
 
     def fetch_batch(self, requests) -> list:
-        return [memoryview(self.values[FetchRequest(*r).media_key]) for r in requests]
+        """Raises Missing for the first key it does not hold, failing the whole batch, as the store does."""
+        out = []
+        for media_key, offset, length in (FetchRequest(*r) for r in requests):
+            if media_key not in self.values:
+                raise Missing(media_key.hex())
+            value = memoryview(self.values[media_key])[offset:]
+            out.append(value if length == -1 else value[:length])
+        return out
 
 
 class SharedBufferStore(Store):
@@ -63,8 +70,7 @@ class SharedBufferStore(Store):
         self.calls += 1
         self.buf[:] = bytes(len(self.buf))
         views, at = [], 0
-        for r in requests:
-            value = self.values[FetchRequest(*r).media_key]
+        for value in super().fetch_batch(requests):
             self.buf[at : at + len(value)] = value
             views.append(memoryview(self.buf)[at : at + len(value)])
             at += len(value)
@@ -85,6 +91,7 @@ def runtime_with(store, *, sp, chunk_size, mesh_shape, mesh_device=None, hidden=
         mesh_device=mesh_device,
         model=SimpleNamespace(embedding=SimpleNamespace(shard_vocab_on_sp=shard_vocab_on_sp)),
         _media_splice_buffers=None,
+        _chunk_failure_sink=None,
     )
 
 
@@ -338,6 +345,139 @@ def test_warm_media_reaches_packed_forwards(monkeypatch, shard_vocab_on_sp):
     runtime._media_splice_buffers = SimpleNamespace(release_tables=lambda: None)
     TtPrefillRuntime._warm_media(runtime, chunk, n_chunks)
     assert heights[-1] == table_height(n_chunks * chunk // sp + 1)
+
+
+class RejectingStore(Store):
+    """Raises `error` for any fetch naming `rejected`, as the store does for a key it cannot use (ValueError) or read
+    (StoreUnavailable, e.g. a value with several replicas)."""
+
+    def __init__(self, embs: dict, rejected: bytes, error: Exception):
+        super().__init__(embs)
+        self.rejected, self.error = rejected, error
+
+    def fetch_batch(self, requests) -> list:
+        if any(FetchRequest(*r).media_key == self.rejected for r in requests):
+            raise self.error
+        return super().fetch_batch(requests)
+
+
+class FlakyStore(Store):
+    """Fails its first fetch_batch with Missing, then serves every key: a value briefly not readable."""
+
+    def __init__(self, embs: dict):
+        super().__init__(embs)
+        self.calls = 0
+
+    def fetch_batch(self, requests) -> list:
+        self.calls += 1
+        if self.calls == 1:
+            raise Missing("briefly not a complete replica")
+        return super().fetch_batch(requests)
+
+
+@pytest.mark.parametrize("bad", ["missing", "wrong_size", "rejected_key", "unreadable_key"])
+def test_bad_media_fails_only_its_chunk(bad):
+    """A packed forward of two slots: the chunk whose image cannot be served is reported once through the failure
+    sink, and the other slot's image is still spliced."""
+    sp, chunk = 2, 128
+    good, other = bytes([1]) * 32, bytes([2]) * 32
+    embs = {good: torch.randn(40, HIDDEN).to(torch.bfloat16)}
+    if bad == "wrong_size":
+        embs[other] = torch.randn(10, HIDDEN).to(torch.bfloat16)
+    if bad in ("rejected_key", "unreadable_key"):  # stored, but the store rejects or cannot read the key
+        embs[other] = torch.randn(20, HIDDEN).to(torch.bfloat16)
+    chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(1, 0, chunk)]
+    refs = [MediaRef(0, 10, 50, good), MediaRef(1, 20, 40, other)]
+    errors = {"rejected_key": ValueError("not valid UTF-8"), "unreadable_key": StoreUnavailable("2 replicas")}
+    store = RejectingStore(embs, other, errors[bad]) if bad in errors else Store(embs)
+    runtime = runtime_with(store, sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    failed, plans = [], []
+    runtime._chunk_failure_sink = SimpleNamespace(chunk_failed=lambda *chunk_range: failed.append(chunk_range))
+    runtime._media_splice_buffers = SimpleNamespace(refill=plans.append)
+
+    TtPrefillRuntime._media_splice(runtime, chunks, refs)
+
+    assert failed == [(1, 0, chunk)]
+    u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+    want = plan_media_splice(refs[:1], chunks, u16, sp, chunk // sp)
+    assert len(plans) == 1 and torch.equal(plans[0].lookup, want.lookup)
+
+
+class EvictingStore(Store):
+    """Loses `evict` just before its fetch_batch call number `at`, as a store can evict a value between fetches."""
+
+    def __init__(self, embs: dict, evict: bytes, at: int):
+        super().__init__(embs)
+        self.evict, self.at, self.calls = evict, at, 0
+
+    def fetch_batch(self, requests) -> list:
+        self.calls += 1
+        if self.calls == self.at:
+            del self.values[self.evict]
+        return super().fetch_batch(requests)
+
+
+def test_a_key_lost_on_the_refetch_fails_only_its_chunk():
+    """The refetch can miss too, here for a value evicted after it was found: its chunk fails as well, and the forward
+    keeps the image that is still there."""
+    sp, chunk = 2, 128
+    a, b, gone = bytes([1]) * 32, bytes([2]) * 32, bytes([3]) * 32
+    embs = {a: torch.randn(30, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
+    chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(1, 0, chunk), PrefillChunk(2, 0, chunk)]
+    refs = [MediaRef(0, 10, 40, a), MediaRef(1, 20, 40, b), MediaRef(2, 5, 25, gone)]
+    # Calls: the batch, a check per key (3), then the refetch of a and b, which loses b.
+    runtime = runtime_with(EvictingStore(embs, evict=b, at=5), sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    failed, plans = [], []
+    runtime._chunk_failure_sink = SimpleNamespace(chunk_failed=lambda *chunk_range: failed.append(chunk_range))
+    runtime._media_splice_buffers = SimpleNamespace(refill=plans.append)
+
+    TtPrefillRuntime._media_splice(runtime, chunks, refs)
+
+    assert sorted(failed) == [(1, 0, chunk), (2, 0, chunk)]
+    u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+    assert torch.equal(plans[0].lookup, plan_media_splice(refs[:1], chunks, u16, sp, chunk // sp).lookup)
+
+
+def test_a_briefly_unreadable_value_is_retried_once():
+    """A batch that misses a key no one-byte fetch can find missing is retried once, and every image is spliced."""
+    sp, chunk = 2, 128
+    a, b = bytes([1]) * 32, bytes([2]) * 32
+    embs = {a: torch.randn(30, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
+    chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(1, 0, chunk)]
+    refs = [MediaRef(0, 10, 40, a), MediaRef(1, 20, 40, b)]
+    runtime = runtime_with(FlakyStore(embs), sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    failed, plans = [], []
+    runtime._chunk_failure_sink = SimpleNamespace(chunk_failed=lambda *chunk_range: failed.append(chunk_range))
+    runtime._media_splice_buffers = SimpleNamespace(refill=plans.append)
+
+    TtPrefillRuntime._media_splice(runtime, chunks, refs)
+
+    assert failed == []
+    u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+    assert torch.equal(plans[0].lookup, plan_media_splice(refs, chunks, u16, sp, chunk // sp).lookup)
+
+
+def test_missing_media_refetches_the_rest_in_one_batch():
+    """A missing key fails the whole batch, and finding it overwrites the shared buffer: the images that remain are
+    fetched again in one batch, so their spliced rows are their own."""
+    sp, chunk = 2, 128
+    a, b, gone = bytes([1]) * 32, bytes([2]) * 32, bytes([3]) * 32
+    embs = {a: torch.randn(30, HIDDEN).to(torch.bfloat16), b: torch.randn(20, HIDDEN).to(torch.bfloat16)}
+    chunks = [PrefillChunk(0, 0, chunk), PrefillChunk(1, 0, chunk), PrefillChunk(2, 0, chunk)]
+    refs = [MediaRef(0, 10, 40, a), MediaRef(1, 20, 40, b), MediaRef(2, 5, 25, gone)]
+    runtime = runtime_with(SharedBufferStore(embs), sp=sp, chunk_size=chunk, mesh_shape=(sp, 1))
+    failed, got = [], []
+    runtime._chunk_failure_sink = SimpleNamespace(chunk_failed=lambda *chunk_range: failed.append(chunk_range))
+    runtime._media_splice_buffers = SimpleNamespace(
+        refill=lambda plan: got.extend(run.rows.copy() for run in plan.runs)
+    )
+
+    TtPrefillRuntime._media_splice(runtime, chunks, refs)
+
+    assert failed == [(2, 0, chunk)]
+    u16 = lambda r: embs[r.media_key].view(torch.int16).numpy().view(np.uint16)
+    want = [run.rows for run in plan_media_splice(refs[:2], chunks, u16, sp, chunk // sp).runs]
+    assert len(got) == len(want) and all(np.array_equal(g, w) for g, w in zip(got, want))
 
 
 @pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["vocab_sharded_2d", "by_position_1d"])
