@@ -21,6 +21,10 @@ They are read from the environment each time a module asks, so set them before t
                              score matmul and key LayerNorm; layer 0's dense MLP (fp32 DEST); the MoE head's
                              shared expert and the tail's latent up; routed experts' x / h in bf16 (not bf8); the
                              MoE combine without its 2^-14 snap of every routed term (fp32 sums)
+    K3_ACC_COMBINE_SNAP      under K3_ACC_FIDELITY, the MoE combine's snap step instead of none: "1" or a step (on:
+                             2^-20). The routed terms then sum as an int32 count of the step, bit-identical in any
+                             arrival order, so K3_ACC runs are deterministic; at 2^-20 it costs nothing (A2: every
+                             score equal to 0.01 dB with the snap off). "0" turns it off (fp32 sums, arrival order)
     K3_ACC_MLA_FP32          MLA (and DSA indexer) accumulation in fp32 everywhere: ttMLA's default compute config with
                              fp32 DEST at HiFi4 (tuned matmul subblocks clipped to <= 4 tiles), the fused matmul +
                              reduce-scatter ops (q_a, o_proj, indexer wk / weights_proj; fp32 already) at HiFi4 instead
@@ -44,6 +48,7 @@ _ON = {
     "KV": "bf16",
     "FIDELITY": "1",
     "MLA_FP32": "1",
+    "COMBINE_SNAP": "9.5367431640625e-07",
 }
 
 
@@ -90,6 +95,12 @@ def fidelity() -> bool:
 def math_fidelity(production: ttnn.MathFidelity) -> ttnn.MathFidelity:
     """HiFi4 under K3_ACC_FIDELITY, else the production fidelity."""
     return ttnn.MathFidelity.HiFi4 if fidelity() else production
+
+
+def combine_snap() -> float:
+    """K3_ACC_COMBINE_SNAP's step (0.0: no snap); "1" means the on value, 2^-20."""
+    v = knob("COMBINE_SNAP")
+    return float(_ON["COMBINE_SNAP"] if v == "1" else v) if v else 0.0
 
 
 def mla_fp32() -> bool:
