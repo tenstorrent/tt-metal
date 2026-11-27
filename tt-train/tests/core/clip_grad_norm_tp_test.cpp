@@ -485,12 +485,13 @@ TEST_F(ClipGradNormTpTest, RejectsInvalidArguments) {
     const auto mapper = replicate_mapper();
     const auto values = random_bf16_exact({1U, 1U, 32U, 32U});
 
-    auto with_fp32 = params;
-    with_fp32["fp32"] = make_param(
-        core::from_xtensor<float, ttnn::DataType::FLOAT32>(values, device, ttnn::Layout::TILE, mapper.get()));
+    // fp32 gradients are cast to bf16 up front, so only another dtype can mismatch.
+    auto with_uint32 = params;
+    with_uint32["uint32"] = make_param(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
+        xt::xarray<uint32_t>(xt::ones<uint32_t>({1U, 1U, 32U, 32U})), device, ttnn::Layout::TILE, mapper.get()));
     EXPECT_THAT(
-        [&] { clip(with_fp32, 1.0F); },
-        ThrowsMessage<std::logic_error>(AllOf(HasSubstr("share one dtype"), HasSubstr("fp32"))));
+        [&] { clip(with_uint32, 1.0F); },
+        ThrowsMessage<std::logic_error>(AllOf(HasSubstr("share one dtype"), HasSubstr("uint32"))));
 
     auto with_l1 = params;
     with_l1["l1"] = make_param(ttnn::to_memory_config(distribute(values, *mapper), ttnn::L1_MEMORY_CONFIG));
