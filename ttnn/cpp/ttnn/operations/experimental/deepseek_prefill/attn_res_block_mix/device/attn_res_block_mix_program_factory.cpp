@@ -102,6 +102,69 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t num_groups = (num_sites + sites_per_group - 1) / sites_per_group;
 
     ////////////////////////////////////////////////////////////////////////////
+    //                         CircularBuffer Plan
+    ////////////////////////////////////////////////////////////////////////////
+    // Every circular buffer a core holds when its longest run is `max_run` tiles. The split
+    // below sizes L1 from this list and the program allocates exactly it, so the two cannot
+    // drift apart.
+    struct CbSpec {
+        CBIndex index;
+        uint32_t tiles;
+        uint32_t tile_size;
+        DataFormat format;
+    };
+    // Built while the previous one is drained: a group's weights, the shift and mass for the
+    // writer, the even groups' partials.
+    constexpr uint32_t double_buffered = 2;
+    const auto stats_cb = [&](CBIndex index, uint32_t tiles) {
+        return CbSpec{index, tiles, stats_tile_size, stats_format};
+    };
+    const auto value_cb = [&](CBIndex index, uint32_t tiles) {
+        return CbSpec{index, tiles, value_tile_size, value_format};
+    };
+    const auto cb_plan = [&](uint32_t max_run) {
+        std::vector<CbSpec> plan = {
+            // Scoring, in the statistics tile's own layout: a row is a token, a column a site.
+            stats_cb(cb_stats, num_candidates * num_partials),
+            stats_cb(cb_rr, num_candidates),
+            stats_cb(cb_scores, num_candidates),
+            stats_cb(cb_shift, 1),
+            stats_cb(cb_summed, num_candidates),
+            value_cb(cb_exp, num_candidates),
+            // The mixture: a site's weight is column 0 of its own tile, the column a broadcast
+            // MAC reads; the reader builds them from the packed exponentials. A run's candidate
+            // tiles stay resident for every site group.
+            value_cb(cb_values, max_run * num_candidates),
+            value_cb(cb_weights, double_buffered * sites_per_group * num_candidates),
+            stats_cb(cb_shift_out, double_buffered),
+            stats_cb(cb_mass_out, double_buffered),
+            // The partials go out on both NoCs, even site groups from the writer and odd ones
+            // from the reader. The reader drains an odd group only between building weights, so
+            // its buffer holds a whole group: compute must be able to finish one without waiting
+            // on it.
+            value_cb(cb_partials, double_buffered * sites_per_group),
+            value_cb(cb_partials_odd, sites_per_group * max_run),
+            stats_cb(cb_staging, num_open_sites),
+        };
+        if (num_closed_sites > 0) {
+            // A closed site's weights are its exponentials over its mass: compute keeps the
+            // mass, and turns it into a per-site factor that is 1 / mass in the closed sites'
+            // columns and 1 in the rest, through a mask the reader builds once.
+            plan.push_back(stats_cb(cb_mass, 1));
+            plan.push_back(stats_cb(cb_closed_mask, 1));
+            plan.push_back(stats_cb(cb_factor, 1));
+        }
+        return plan;
+    };
+    const auto l1_bytes = [](const std::vector<CbSpec>& plan) {
+        uint64_t bytes = 0;
+        for (const auto& spec : plan) {
+            bytes += uint64_t{spec.tiles} * spec.tile_size;
+        }
+        return bytes;
+    };
+
+    ////////////////////////////////////////////////////////////////////////////
     //                         Core Setup
     ////////////////////////////////////////////////////////////////////////////
     // A work item is a run of tiles along one token row-tile. Splitting rows alone would put
@@ -109,38 +172,24 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     // spreads them over the grid. Each core of a row scores that row itself, a few tiles of
     // arithmetic, rather than wait on another core for it.
     //
-    // A run's candidate tiles stay resident for every site group, and a group's weights are
-    // double-buffered so the next group is built while this one is mixed, so a core's L1
-    // grows with its run. Where the rows alone fill the grid a row is still cut into as many
-    // runs as L1 needs; the cores then take the extra items round-robin.
-    const uint32_t weight_tiles = 2 * sites_per_group * num_candidates;
-    const auto l1_per_core = [&](uint32_t max_run) {
-        return num_candidates * num_partials * stats_tile_size      // gathered statistics
-               + 3 * num_candidates * stats_tile_size               // summed, rsqrt, scores
-               + 5 * stats_tile_size                                // shift, shift and mass out
-               + num_candidates * value_tile_size                   // packed exponentials
-               + max_run * num_candidates * value_tile_size         // the run's candidate tiles
-               + weight_tiles * value_tile_size                     // per-site weights
-               + 2 * sites_per_group * value_tile_size              // even groups' partials
-               + sites_per_group * max_run * value_tile_size        // an odd group's partials
-               + num_open_sites * stats_tile_size                   // scalar staging
-               + (num_closed_sites > 0 ? 3 * stats_tile_size : 0);  // normalizing closed sites
-    };
+    // A core's L1 grows with its run, so where the rows alone fill the grid a row is still cut
+    // into as many runs as L1 needs; the cores then take the extra items round-robin.
     // An L1 bank spans the circular buffers' region: above the allocator base, below L1_SMALL.
-    const uint32_t l1_for_cbs = device->allocator()->get_bank_size(BufferType::L1);
+    const uint64_t l1_for_cbs = device->allocator()->get_bank_size(BufferType::L1);
+    const auto run_of = [&](uint32_t chunks) { return (Wt + chunks - 1) / chunks; };
     const auto grid = device->compute_with_storage_grid_size();
     const uint32_t grid_cores = grid.x * grid.y;
     uint32_t chunks_per_row = std::clamp(grid_cores / Ht, 1u, Wt);
-    while (chunks_per_row < Wt && l1_per_core((Wt + chunks_per_row - 1) / chunks_per_row) > l1_for_cbs) {
+    while (chunks_per_row < Wt && l1_bytes(cb_plan(run_of(chunks_per_row))) > l1_for_cbs) {
         ++chunks_per_row;
     }
-    const uint32_t max_run = (Wt + chunks_per_row - 1) / chunks_per_row;
-    const uint32_t value_tiles = max_run * num_candidates;
+    const uint32_t max_run = run_of(chunks_per_row);
+    const auto plan = cb_plan(max_run);
     TT_FATAL(
-        l1_per_core(max_run) <= l1_for_cbs,
+        l1_bytes(plan) <= l1_for_cbs,
         "AttnResBlockMix needs {} B of L1 per core for {} sites over {} candidates; the core has {} B for circular "
         "buffers",
-        l1_per_core(max_run),
+        l1_bytes(plan),
         num_sites,
         num_candidates,
         l1_for_cbs);
@@ -148,39 +197,9 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
     const uint32_t num_cores = std::min(num_items, grid_cores);
     const CoreRangeSet all_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
 
-    ////////////////////////////////////////////////////////////////////////////
-    //                         CircularBuffer Setup
-    ////////////////////////////////////////////////////////////////////////////
     ProgramDescriptor desc;
-    const auto cb = [&](CBIndex index, uint32_t tiles, uint32_t tile_size, DataFormat format) {
-        desc.cbs.push_back(make_cb(index, all_cores, tiles, tile_size, format));
-    };
-    // Scoring, in the statistics tile's own layout: a row is a token, a column a site.
-    cb(cb_stats, num_candidates * num_partials, stats_tile_size, stats_format);
-    cb(cb_rr, num_candidates, stats_tile_size, stats_format);
-    cb(cb_scores, num_candidates, stats_tile_size, stats_format);
-    cb(cb_shift, 1, stats_tile_size, stats_format);
-    cb(cb_summed, num_candidates, stats_tile_size, stats_format);
-    cb(cb_exp, num_candidates, value_tile_size, value_format);
-    // The mixture: a site's weight is column 0 of its own tile, the column a broadcast MAC
-    // reads; the reader builds them from the packed exponentials.
-    cb(cb_values, value_tiles, value_tile_size, value_format);
-    cb(cb_weights, weight_tiles, value_tile_size, value_format);  // a group's weights, twice
-    cb(cb_shift_out, 2, stats_tile_size, stats_format);
-    cb(cb_mass_out, 2, stats_tile_size, stats_format);
-    // The partials go out on both NoCs, even site groups from the writer and odd ones from
-    // the reader. The reader drains an odd group only between building weights, so its
-    // buffer holds a whole group: compute must be able to finish one without waiting on it.
-    cb(cb_partials, 2 * sites_per_group, value_tile_size, value_format);
-    cb(cb_partials_odd, sites_per_group * max_run, value_tile_size, value_format);
-    cb(cb_staging, num_open_sites, stats_tile_size, stats_format);
-    if (num_closed_sites > 0) {
-        // A closed site's weights are its exponentials over its mass: compute keeps the mass,
-        // and turns it into a per-site factor that is 1 / mass in the closed sites' columns
-        // and 1 in the rest, through a mask the reader builds once.
-        cb(cb_mass, 1, stats_tile_size, stats_format);
-        cb(cb_closed_mask, 1, stats_tile_size, stats_format);
-        cb(cb_factor, 1, stats_tile_size, stats_format);
+    for (const auto& spec : plan) {
+        desc.cbs.push_back(make_cb(spec.index, all_cores, spec.tiles, spec.tile_size, spec.format));
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -204,6 +223,7 @@ tt::tt_metal::ProgramDescriptor AttnResBlockMixProgramFactory::create_descriptor
         {"num_cores", num_cores},
         {"num_items", num_items},
         {"chunks_per_row", chunks_per_row},
+        {"max_run", max_run},
         {"cb_stats", cb_stats},
         {"cb_rr", cb_rr},
         {"cb_scores", cb_scores},
