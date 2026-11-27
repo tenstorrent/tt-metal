@@ -328,10 +328,12 @@ def scan_all_chips(iters=None, watchdog=30, work_dir=None, workload=None):
     """Run this test once per chip of the host, one process each with its own cold cache, and report
     which chips hang. Returns the list of hung chip ids.
 
-    Triage is disabled in the children because it halts cores and would disturb the other
-    processes; re-run a failing chip on its own to triage it. This gate detects a hang but cannot
-    clear one, so the failing chip stays wedged: reset the box (tt-smi -glx_reset_auto) before any
-    re-run, or the wedged chip will fail its neighbours and they will look faulty too."""
+    Triage is disabled in the children: they share the default inspector port and log dir, so a
+    chip's triage would read another child's process. Re-run a failing chip on its own to triage
+    it, or use tests/didt/didt_runner.py, which gives each chip its own inspector. This gate
+    detects a hang but cannot clear one, so the failing chip stays wedged: reset the box
+    (tt-smi -glx_reset_auto) before any re-run, or the wedged chip will fail its neighbours and
+    they will look faulty too."""
     workload = workload or os.environ.get("MATMUL_WORKLOAD", "wkv_b1")
     work_dir = Path(work_dir or Path(tempfile.gettempdir()) / "mm_mcast_write_ack_failure")
     shutil.rmtree(work_dir, ignore_errors=True)
