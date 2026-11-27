@@ -204,7 +204,12 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         reconfig_data_format(cb_cumsum_stage_X, cb_axis_3_buffer_read);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read);
 
+#ifdef ARCH_QUASAR
+        // Quasar broadcasts only row 0; the writer has already copied the last row there.
+        constexpr uint32_t LAST_ROW_INDEX = 0;
+#else
         constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
+#endif
 
         add_tiles_bcast_rows(
             cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG, LAST_ROW_INDEX);
