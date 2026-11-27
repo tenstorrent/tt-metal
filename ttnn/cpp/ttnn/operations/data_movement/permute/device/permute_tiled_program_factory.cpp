@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 #include <vector>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -567,6 +567,31 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
+uint64_t PermuteDeviceOperation::MultiCoreTiledGeneric::compute_xw_blocks(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& input_shape = input_tensor.logical_shape();
+    const auto& dims = operation_attributes.dims;
+    const uint32_t rank = dims.size();
+    const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+
+    const uint32_t x_dim_index_in_input = dims[rank - 1];
+    const uint32_t x = input_shape[x_dim_index_in_input];
+    const uint32_t w = input_shape[rank - 1];
+    const uint32_t x_block_size = tile_shape[1];
+    const uint64_t X_p = x_block_size * ((x + x_block_size - 1) / x_block_size);
+    const uint64_t W_p = tile_shape[1] * ((w + tile_shape[1] - 1) / tile_shape[1]);
+
+    uint64_t padded_xw_volume = X_p * W_p;
+    for (uint32_t i = 0; i < rank - 1; i++) {
+        if (i == x_dim_index_in_input) {
+            continue;
+        }
+        padded_xw_volume *= input_shape[i];
+    }
+    return padded_xw_volume / (tile_shape[0] * tile_shape[1]);
+}
+
 ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledGeneric::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
@@ -605,7 +630,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    uint32_t logical_volume = input_shape.volume();
+    uint32_t logical_volume = static_cast<uint32_t>(input_shape.volume());
     uint32_t num_rows = logical_volume / input_shape[rank - 1];
     uint32_t y_dim_index_in_input = dims[rank - 2];
 
@@ -642,15 +667,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     uint32_t num_faces_w = tile_shape[1] / face_shape[1];
 
-    uint32_t padded_xw_volume = X_p * W_p;
-    for (uint32_t i = 0; i < rank - 1; i++) {
-        if (i == x_dim_index_in_input) {
-            continue;
-        }
-        padded_xw_volume *= input_shape[i];
-    }
-
-    uint32_t xw_blocks = padded_xw_volume / (tile_shape[0] * tile_shape[1]);
+    uint32_t xw_blocks = static_cast<uint32_t>(compute_xw_blocks(operation_attributes, tensor_args));
 
     bool needs_x_padding = (x % tile_shape[1] != 0);
     bool needs_y_padding =

@@ -9,10 +9,10 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "tt-metalium/work_split.hpp"
-#include "tt-metalium/tensor_accessor_args.hpp"
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
+#include "tt-metalium/utils/work_split.hpp"
+#include "tt-metalium/workload/legacy/tensor_accessor_args.hpp"
+#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::prim::qsr {
 

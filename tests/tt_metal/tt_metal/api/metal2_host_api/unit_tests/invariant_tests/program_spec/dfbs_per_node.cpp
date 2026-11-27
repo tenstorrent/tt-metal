@@ -14,8 +14,8 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/hal.hpp>
+#include <tt-metalium/workload/mesh_workload.hpp>
+#include <tt-metalium/discovery/hal.hpp>
 
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"

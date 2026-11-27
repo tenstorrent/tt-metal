@@ -13,9 +13,9 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/global_semaphore.hpp"
-#include <tt-metalium/program.hpp>
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include <tt-metalium/workload/program.hpp>
+#include <tt-metalium/mesh/sub_device.hpp>
+#include <tt-metalium/workload/legacy/workload_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <vector>
 #include "ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata.hpp"

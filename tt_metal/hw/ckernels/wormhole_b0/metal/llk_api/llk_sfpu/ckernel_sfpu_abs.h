@@ -7,7 +7,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "lltt.h"
 
 using namespace sfpi;
 
@@ -21,8 +20,24 @@ inline void abs_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_abs_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Whether BF16 DEST runs the generated abs kernel as one call over the whole tile.
+inline constexpr bool abs_bf16_whole_tile = true;
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = true>
 inline void calculate_abs() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_abs()) {
+            calculate_abs_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
@@ -46,12 +61,12 @@ inline void calculate_abs_int32() {
     // the replay block, costing +30% cyc/tile.
     // The row body is recorded (and executed) once and replayed for the remaining rows: one RISC issue
     // per row. The store advances dest by one sfpi row (two dest counter steps) through ADDR_MOD_6.
-    lltt::record<lltt::Exec>(replay_start, replay_len);
+    TTI_REPLAY(replay_start, replay_len, 1, 1);
     TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, 0 /*dest_reg_addr*/);
     TTI_SFPABS(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPABS_MOD1_INT);
     TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0 /*dest_reg_addr*/);
     for (int d = 1; d < ITERATIONS; d++) {
-        lltt::replay(replay_start, replay_len);
+        TTI_REPLAY(replay_start, replay_len, 0, 0);
     }
 }
 }  // namespace sfpu

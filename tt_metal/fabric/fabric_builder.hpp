@@ -96,6 +96,8 @@ protected:
      */
     virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
 
+    virtual std::vector<RouterLocation> perimeter_router_locations() const { return {}; }
+
     /**
      * The chip's handshake master router, once its routers exist. Stock takes the first in routers_.
      */

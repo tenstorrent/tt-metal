@@ -97,7 +97,10 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
         for (const auto& format_descriptor : cb.remote_format_descriptors) {
             ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
         }
-        ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+        // Whether a buffer backs the CB, not which: it is bound at launch.
+        ttsl::hash::hash_combine(
+            hash,
+            cb.buffer != nullptr || cb.tensor != nullptr || cb.experimental_options.globally_allocated_bound_later);
         // A global CB's buffer and config addresses and its sender/receiver layout are baked into the
         // program, and a cache hit does not re-point them (only tensor-backed CBs are), so key which
         // global CB this is, not just whether there is one.
@@ -183,5 +186,22 @@ void prepare_generic_op(
     const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
     using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
     ttnn::device_operation::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
+}
+
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    return ttnn::device_operation::compile<OperationType>(operation_attributes, make_tensor_args(io_tensors));
+}
+
+ttnn::operations::generic::tensor_return_value_t run_compiled_generic_op(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    return ttnn::device_operation::run<OperationType>(
+        compiled, operation_attributes, make_tensor_args(io_tensors), kernel_config_buffer);
 }
 }  // namespace ttnn::prim

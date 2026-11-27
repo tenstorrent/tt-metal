@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 #include "hybrid_routed_expert_ffn_types.hpp"
 #include "ttnn/tensor/tensor.hpp"

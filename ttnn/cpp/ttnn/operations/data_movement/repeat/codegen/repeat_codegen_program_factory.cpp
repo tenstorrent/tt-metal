@@ -14,16 +14,16 @@
 
 #include <tt_stl/assert.hpp>
 
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/constants.hpp>
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/math.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh/allocator.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
+#include <tt-metalium/vocabulary/hal_types.hpp>
+#include <tt-metalium/utils/math.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/data_formats/data_format.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor.hpp"

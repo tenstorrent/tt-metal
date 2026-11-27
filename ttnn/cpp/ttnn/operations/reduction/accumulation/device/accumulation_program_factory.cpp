@@ -7,14 +7,14 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
-#include "tt-metalium/base_types.hpp"
-#include "tt-metalium/host_api.hpp"
-#include "tt-metalium/kernel_types.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
+#include "tt-metalium/workload/specification/compute_modes.hpp"
+#include "tt-metalium/workload/legacy/host_api.hpp"
+#include "tt-metalium/workload/legacy/kernel_types.hpp"
+#include "tt-metalium/data_formats/data_format.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/utils/work_split.hpp>
 
 #include <bit>
 #include <map>
@@ -537,6 +537,18 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
         {accum_make_dfb(ACCUM_SRC, input_dataformat, in_tiles),
          accum_make_dfb(ACCUM_DST, output_dataformat, out_tiles)},
         "accumulation_tile_axis");
+}
+
+ttnn::command_list::CmdListBindings AccumulationProgramFactory::map_cmd_list_parameters(
+    const AccumulationParams& attributes,
+    const AccumulationInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    // cumsum and cumprod share this factory but name their input keyword differently.
+    const char* input_keyword = attributes.op == AccumulationOp::CUMSUM ? "input" : "input_tensor";
+    binder.tensor(/*invoke_name=*/input_keyword, /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    return binder.finish();
 }
 
 }  // namespace ttnn::prim

@@ -14,6 +14,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.moe import glm_moe_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -104,8 +105,8 @@ def _glm_reference(x, sd):
 
 
 def _k3_weights(chips):
-    """test_kimi_k3_moe's creators and seeds; the routed experts one chip's worth repeated on every chip (896 distinct
-    experts would take the host ~120 GB)."""
+    """K3's weights from init_helpers' creators and seeds (as TtMoe's K3 test made them); the routed experts one chip's
+    worth repeated on every chip (896 distinct experts would take the host ~120 GB)."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         create_gate_weights,
         create_latent_weights,
@@ -222,6 +223,10 @@ def _m3_reference(x, sd):
     return acc + glu(x @ shared["gate_proj"].float().T, x @ shared["up_proj"].float().T) @ shared["down_proj"].float().T
 
 
+# The last seeded state dict built, by (model, chips): GLM-5.3's 256 distinct experts take ~65 s of host randn, so the
+# cases of one process share it. Read-only after it is built: the adapter and the host references only read it.
+_STATE_DICT_CACHE: dict = {}
+
 BARRIER_L1_SMALL = 4096  # (test_moe_block_perf's barrier: L1_SMALL a bank for its all-gathers)
 
 
@@ -237,6 +242,15 @@ class BlockModel:
     layer: int = 1  # (the layer index the random-weight block is built as)
     x_scale: float = 1.0  # (the random input's scale)
     weka: bool = False  # real layers + golden activations on Weka
+
+    def state_dict(self, chips: int) -> dict:
+        """weights(chips), reused while the process asks for the same (model, chips) (one entry kept: the host holds one
+        model's experts at a time)."""
+        key = (self.name, chips)
+        if key not in _STATE_DICT_CACHE:
+            _STATE_DICT_CACHE.clear()
+            _STATE_DICT_CACHE[key] = self.weights(chips)
+        return _STATE_DICT_CACHE[key]
 
     def mesh_params(self, trace_region: int = 64 << 20) -> dict:
         width = getattr(self.cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or self.cfg.EMB_SIZE
@@ -255,6 +269,8 @@ class BlockModel:
 MODELS = {
     "glm53": BlockModel("glm53", GLM53Config, _glm_weights, _glm_reference, pcc=0.982, layer=6, x_scale=0.5),
     "kimi_k3": BlockModel("kimi_k3", KimiK3Config, _k3_weights, _k3_reference, pcc=0.965, weka=True),
+    # K3.1: K3's MoE through K3.1's adapter, with K3.1's L1_SMALL_SIZE
+    "kimi_k3_1": BlockModel("kimi_k3_1", KimiK31Config, _k3_weights, _k3_reference, pcc=0.965),
     "dsv41_flash": BlockModel("dsv41_flash", DeepSeekV41FlashConfig, _dsv41_weights, _dsv41_reference, pcc=0.98),
     "minimax_m3": BlockModel("minimax_m3", MiniMaxM3BlockConfig, _m3_weights, _m3_reference, pcc=0.98, layer=3),
 }
@@ -276,5 +292,9 @@ MESHES = {  # id -> (mesh shape, device params maker, requires_mesh_topology's t
     # MiniMax-M3 on a 4x2 stage (SP 4 x TP 2, one tray's 8 chips, plain Fabric2D: run with TT_MESH_GRAPH_DESC_PATH =
     # experimental_descriptors/single_bh_galaxy_sub_4x2_graph_descriptor.textproto and TT_VISIBLE_DEVICES = 0-7)
     "4x2": ((4, 2), fabric2d_device_params, "mesh-4x2"),
+    # The 4x4 stage on the single-Galaxy [RING, RING] carve (sparse MLA's "Galaxy 4x4 subtorus"): SP on mesh axis 1 as
+    # on 4x4-sp1, rings on both axes (run through tests/run_subtorus_4x4_tests.sh, which narrows the Galaxy to the
+    # carve's 16 chips and the xy4 descriptor; its row selector matches the "-xy4" in the id)
+    "xy4-sp1": ((4, 4), torus_xy_device_params, "mesh-4x4"),
 }
-MESH_SP_AXIS = {"4x4-sp1": 1}  # (the mesh axis SP runs on; 0 elsewhere)
+MESH_SP_AXIS = {"4x4-sp1": 1, "xy4-sp1": 1}  # (the mesh axis SP runs on; 0 elsewhere)

@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "create_qkv_heads_from_separate_tensors_device_operation_types.hpp"
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 
 #include <variant>
