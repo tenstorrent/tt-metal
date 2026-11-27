@@ -6,7 +6,7 @@
 
 // Buffer enums for device (kernel) code.
 //
-// This is the device-side counterpart of the host header tt-metalium/buffer_types.hpp. The two files are
+// This is the device-side counterpart of the host header tt-metalium/memory/buffer/buffer_types.hpp. The two files are
 // deliberately separate: one is compiled by the host compiler, the other by the RISC-V kernel compiler, and
 // neither may include the other. Enumerator values are passed from host to device as compile-time args, so
 // every enumerator here must match the host header exactly; only the enums kernels use are mirrored.

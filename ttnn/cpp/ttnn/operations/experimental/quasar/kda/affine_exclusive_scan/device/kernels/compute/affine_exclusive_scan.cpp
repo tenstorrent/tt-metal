@@ -59,6 +59,7 @@ FORCE_INLINE void matmul_add_affine_b(AffineDFB& affine, StateDFB& state, OutDFB
             tile_regs_acquire();
             reconfig_data_format_srca(state_id, affine_id);
             copy_init(affine_id);
+            tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
             for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                 for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                     copy_tile(
@@ -67,6 +68,7 @@ FORCE_INLINE void matmul_add_affine_b(AffineDFB& affine, StateDFB& state, OutDFB
                         subblock_row * subblock_cols + subblock_col);
                 }
             }
+            tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
             reconfig_data_format_srca(affine_id, state_id);
             matmul_block_init(affine_id, state_id, false, subblock_cols, subblock_rows, Kt);
             for (uint32_t k = 0; k < Kt; ++k) {
@@ -129,6 +131,7 @@ FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, 
             if (n >= At) {
                 reconfig_data_format_srca(affine_id, local_b_id);
                 copy_init(local_b_id);
+                tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
                 for (uint32_t subblock_row = 0; subblock_row < subblock_rows; ++subblock_row) {
                     for (uint32_t subblock_col = 0; subblock_col < subblock_cols; ++subblock_col) {
                         copy_tile(
@@ -137,6 +140,7 @@ FORCE_INLINE void matmul_affine(ADFB& a, AffineDFB& affine, LocalBDFB& local_b, 
                             subblock_row * subblock_cols + subblock_col);
                     }
                 }
+                tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
                 reconfig_data_format_srca(local_b_id, affine_id);
                 matmul_block_init(a_id, affine_id, false, subblock_cols, subblock_rows, Kt);
             }
@@ -175,9 +179,11 @@ FORCE_INLINE void copy(InDFB& in, OutDFB& out, uint32_t tiles) {
     for (uint32_t first_tile = 0; first_tile < tiles; first_tile += dst_tiles) {
         const uint32_t batch_tiles = first_tile + dst_tiles <= tiles ? dst_tiles : tiles - first_tile;
         tile_regs_acquire();
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
             copy_tile(in_id, first_tile + tile, tile);
         }
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t tile = 0; tile < batch_tiles; ++tile) {
@@ -222,10 +228,14 @@ FORCE_INLINE void add(LhsDFB& lhs, RhsDFB& rhs, OutDFB& out, uint32_t tiles) {
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         tile_regs_acquire();
         copy_init(lhs_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(lhs_id, tile, 0);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format_srca(lhs_id, rhs_id);
         copy_init(rhs_id);
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>();
         copy_tile(rhs_id, tile, 1);
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>();
         reconfig_data_format_srca(rhs_id, lhs_id);
         add_binary_tile_init();
         add_binary_tile(0, 1, 0);

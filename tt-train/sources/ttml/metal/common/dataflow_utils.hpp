@@ -564,6 +564,70 @@ inline void write_full_row_tiles(
     }
 }
 
+// A core's slice of St tiles in a row of Wt tiles, from its nominal first tile slice * St. When St doesn't divide Wt,
+// the last slice moves left to end at Wt, and its first num_overlap tiles belong to the slice before it.
+struct RowSliceTiles {
+    uint32_t start;
+    uint32_t num_overlap;
+};
+template <uint32_t Wt, uint32_t St>
+inline RowSliceTiles row_slice_tiles(const uint32_t nominal_start) {
+    static_assert(St <= Wt, "A slice can't be wider than its row.");
+    const uint32_t start = nominal_start + St > Wt ? Wt - St : nominal_start;
+    return {start, nominal_start - start};
+}
+
+// read_tiles_by_row whose first num_zero_tiles slots are zero-filled instead of read.
+template <bool UseBarrier = true, typename AddrGen>
+inline void read_tiles_by_row_after_zeros(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t num_zero_tiles) {
+    cb_reserve_back(cb_idx, num_tiles);
+    uint32_t l1_addr = get_write_ptr(cb_idx);
+    for (uint32_t t = 0; t < num_tiles; ++t) {
+        if (t < num_zero_tiles) {
+            fill_tile_zeros(l1_addr, tile_bytes);
+        } else {
+            noc_async_read_page(start_idx + t, addr_gen, l1_addr);
+        }
+        l1_addr += tile_bytes;
+    }
+    if constexpr (UseBarrier) {
+        noc_async_read_barrier();
+        cb_push_back(cb_idx, num_tiles);
+    }
+}
+
+// write_tiles_by_row that pops all num_tiles but writes none of the first num_skipped.
+template <bool UseBarrier = true, typename AddrGen>
+inline void write_tiles_by_row_skipping(
+    const uint32_t cb_idx,
+    const AddrGen& addr_gen,
+    const uint32_t start_idx,
+    const uint32_t num_tiles,
+    const uint32_t tile_bytes,
+    const uint32_t num_skipped) {
+    cb_wait_front(cb_idx, num_tiles);
+    uint32_t l1_read_addr = get_read_ptr(cb_idx) + num_skipped * tile_bytes;
+    for (uint32_t t = num_skipped; t < num_tiles; ++t) {
+        noc_async_write_page(start_idx + t, addr_gen, l1_read_addr);
+        l1_read_addr += tile_bytes;
+    }
+    if constexpr (UseBarrier) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_idx, num_tiles);
+    }
+}
+
+// How many of the block_size tiles at column c of a slice fall in its first num_overlap tiles.
+inline uint32_t overlap_in_block(const uint32_t num_overlap, const uint32_t c, const uint32_t block_size) {
+    return num_overlap > c ? std::min(num_overlap - c, block_size) : 0U;
+}
+
 // Advance (sb, tile_base) to the next (b, sb) block of a Q tensor.
 // Packed layout is flat across blocks; head-major gives each (b, h) a contiguous page of Ts*Th
 // tiles, so head h at seq tile sb sits at (b*H + h)*Ts*Th + sb*Th. Wrapping sb therefore has to
@@ -690,4 +754,104 @@ inline void mcast_sender_signal_receivers_loopback(
     // Use loopback multicast for semaphore as well
     noc_semaphore_set_multicast_loopback_src(receiver_sem_addr, receiver_sem_noc_addr, num_dests_including_self);
     noc_async_atomic_barrier();
+}
+
+/**
+ * One round of an all-gather of one tile among `num_peers` cores: this core's tile from cb_local goes to slot `slot`
+ * of cb_gathered on every peer, itself included, and cb_gathered is pushed with all num_peers tiles once the other
+ * peers' tiles have arrived.
+ *
+ * All peers must create cb_local and cb_gathered with the same tile size, cb_gathered at the same address with
+ * 2 * num_peers tiles, and run the same rounds in the same order. A peer can be at most one round ahead, as it needs
+ * this core's tile of a round to finish it, so it writes its next round into the other half of cb_gathered as soon
+ * as this core has sent its tile. Reserving both halves before sending makes sure that half has been consumed.
+ *
+ * Semaphore `sem_id` counts the tiles the other peers delivered, so round `round` (counted from 0) is complete at
+ * (round + 1) * (num_peers - 1). Call all_gather_tile_finish after the last round.
+ *
+ * With `in_one_column`, the peers are one column of the NOC in slice order, from peer 0 to peer num_peers - 1, so the
+ * tile and the semaphore increments each go out as one multicast instead of one write per peer.
+ */
+template <uint32_t num_peers>
+inline void all_gather_tile(
+    const uint32_t cb_local,
+    const uint32_t cb_gathered,
+    const uint32_t slot,
+    const uint32_t (&peer_noc_x)[num_peers],
+    const uint32_t (&peer_noc_y)[num_peers],
+    const uint32_t sem_id,
+    const uint32_t round,
+    const bool in_one_column) {
+    const uint32_t tile_bytes = get_tile_size(cb_gathered);
+    const uint32_t sem_addr = get_semaphore(sem_id);
+    cb_wait_front(cb_local, onetile);
+    cb_reserve_back(cb_gathered, 2U * num_peers);
+    const uint32_t src_addr = get_read_ptr(cb_local);
+    const uint32_t dst_addr = get_write_ptr(cb_gathered) + slot * tile_bytes;
+    // NOC 1 runs the other way, so its multicast rectangle starts at the far corner.
+    const uint32_t first = noc_index == 0U ? 0U : num_peers - 1U;
+    const uint32_t last = num_peers - 1U - first;
+    if (in_one_column) {
+        noc_async_write_multicast_loopback_src(
+            src_addr,
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], dst_addr),
+            tile_bytes,
+            num_peers);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            noc_async_write(src_addr, get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], dst_addr), tile_bytes);
+        }
+    }
+    // The tile must land before the semaphore increment that announces it.
+    noc_async_write_barrier();
+    cb_pop_front(cb_local, onetile);
+    if (in_one_column) {
+        // Without loopback, so this core's own counter is left out.
+        noc_semaphore_inc_multicast(
+            get_noc_multicast_addr(
+                peer_noc_x[first], peer_noc_y[first], peer_noc_x[last], peer_noc_y[last], sem_addr),
+            1U,
+            num_peers - 1U);
+    } else {
+        for (uint32_t peer = 0; peer < num_peers; ++peer) {
+            if (peer != slot) {
+                noc_semaphore_inc(get_noc_addr(peer_noc_x[peer], peer_noc_y[peer], sem_addr), 1U);
+            }
+        }
+    }
+    noc_semaphore_wait_min(get_sem_ptr(sem_id), (round + 1U) * (num_peers - 1U));
+    cb_push_back(cb_gathered, num_peers);
+}
+
+// After the last round of all_gather_tile every increment to this core has arrived, so its counter can be reset.
+inline void all_gather_tile_finish(const uint32_t sem_id) {
+    noc_async_atomic_barrier();
+    noc_semaphore_set(get_sem_ptr(sem_id), 0U);
+}
+
+// A row-slice core's place in its row-group: its slice, whether the group is one NOC column it can multicast to, and
+// the NOC coordinates of the group's cores in slice order.
+template <uint32_t num_slices>
+struct RowSlicePeers {
+    uint32_t slice = 0U;
+    bool in_one_column = false;
+    uint32_t noc_x[num_slices] = {};
+    uint32_t noc_y[num_slices] = {};
+};
+
+// Reads RowSlicePeers from the runtime args at arg_idx, in the order row_slice_exchange_args writes them, and advances
+// arg_idx. Without slicing there are no such args, and slice 0 is the whole row.
+template <uint32_t num_slices>
+inline RowSlicePeers<num_slices> read_row_slice_peers(uint32_t& arg_idx) {
+    RowSlicePeers<num_slices> peers;
+    if constexpr (num_slices > 1U) {
+        peers.slice = get_arg_val<uint32_t>(arg_idx++);
+        peers.in_one_column = get_arg_val<uint32_t>(arg_idx++) != 0U;
+        for (uint32_t peer = 0; peer < num_slices; ++peer) {
+            peers.noc_x[peer] = get_arg_val<uint32_t>(arg_idx++);
+            peers.noc_y[peer] = get_arg_val<uint32_t>(arg_idx++);
+        }
+    }
+    return peers;
 }

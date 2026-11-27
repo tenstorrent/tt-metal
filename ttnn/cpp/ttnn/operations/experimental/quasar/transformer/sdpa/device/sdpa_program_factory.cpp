@@ -7,10 +7,10 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
-#include <tt-metalium/buffer.hpp>
-#include <tt-metalium/constants.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/workload/legacy/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include <hostdevcommon/common_values.hpp>
 #include <bit>

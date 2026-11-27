@@ -8,7 +8,7 @@
 #include <optional>
 #include <string>
 
-#include <tt-metalium/profiler_optional_metadata.hpp>
+#include <tt-metalium/observability/profiler/profiler_optional_metadata.hpp>
 
 #include "impl/profiler/profiler_types.hpp"
 

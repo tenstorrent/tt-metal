@@ -14,7 +14,7 @@
 #include <tt_stl/span.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -73,6 +73,10 @@ struct PermuteDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
+
+        // Number of tile-sized XW blocks the work is split over; may exceed uint32_t for very large tensors.
+        static uint64_t compute_xw_blocks(
+            const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     };
 
     using program_factory_t = std::variant<

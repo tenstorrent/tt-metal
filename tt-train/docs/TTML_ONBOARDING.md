@@ -191,7 +191,7 @@ os.chdir(os.path.join(os.environ.get("TT_METAL_HOME", "."), "tt-train"))
 # ============================================================
 # 2. Load Model Configuration
 # ============================================================
-model_config_path = "configs/model_configs/tinyllama.yaml"
+model_config_path = "configs/model_configs/tinyllama_bpe.yaml"
 model_yaml = load_config(model_config_path)
 print(f"Loaded model config: {model_config_path}")
 
@@ -263,10 +263,8 @@ ctx.close_device()
 
 **Quick Command (C++):**
 
-**Prerequisite:** The executable hard-codes
-`tt-train/configs/model_configs/tinyllama.yaml`, which is not included in
-the repository. Supply a model configuration matching your weights at
-that path before running this example; there is no CLI config override.
+The model configuration defaults to `tt-train/configs/model_configs/tinyllama_bpe.yaml`;
+pass `--model-config <path>` if your weights use a different one.
 
 ```bash
 # Build the inference example
