@@ -1,29 +1,42 @@
 ---
-# Shadow of the PR Gate's ASan build (build-artifact.yaml); never required.
+# The ASan build the shadow test jobs install from; never required.
 jobs:
   - id: asan-build
     name: ASan build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
-    timeout: 1h
+    # Leaves room for a build with a cold compiler cache.
+    timeout: 1h40m
     compiler-cache: ccache
     runs-on:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        image:
+          from-job: ci-build-image
+          image: ci-build
         resources:
           # Measured: 16 jobs peak at 13.2 GiB; a CPU limit throttled 53% of periods.
-          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
-          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
+          requests:
+            cpu: '16'
+            memory: 24Gi
+            ephemeral-storage: 100Gi
+          limits:
+            memory: 32Gi
+            ephemeral-storage: 150Gi
     env:
-      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
+      - name: CMAKE_BUILD_PARALLEL_LEVEL
+        value: '16'
       # Hash the compiler, not its mtime, so hits survive image rebuilds.
-      - {name: CCACHE_COMPILERCHECK, value: content}
-      # Keeps cache keys path-independent; remove once TorrentCI sets it by default.
-      - {name: CCACHE_BASEDIR, value: /workspace}
-      - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
+      - name: CCACHE_COMPILERCHECK
+        value: content
+      # Keeps cache keys path-independent.
+      - name: CCACHE_BASEDIR
+        value: /workspace
+      - name: CPM_SOURCE_CACHE
+        value: /workspace/.cpmcache
       # Keep git in cached sources (no .git) from finding tt-metal's repo.
-      - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
+      - name: GIT_CEILING_DIRECTORIES
+        value: /workspace/.cpmcache
     # CPM source cache: configure takes 25 s warm, 162 s cold.
     cache:
       key: 'cpm-v1-${ref_name}-${commit_sha}'
@@ -46,10 +59,15 @@ jobs:
         kind: shell
         shell:
           run:
+            # Key the CPM source cache on every file that declares a CPM dependency. The step
+            # shell is /bin/sh, which has no pipefail, so the pipeline runs under bash.
             - >-
-              cat cmake/CPM.cmake third_party/CMakeLists.txt tt_metal/third_party/CMakeLists.txt
-              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/dependencies.cmake
-              third_party/*.patch tt-train/cmake/*.patch .gitmodules | sha256sum | cut -d' ' -f1 > /tmp/cpm-deps.sha256
+              bash -o pipefail -c 'cat cmake/CPM.cmake third_party/CMakeLists.txt third_party/*.patch
+              tt_metal/third_party/CMakeLists.txt tt_metal/third_party/tracy/cmake/CPM.cmake
+              tt_metal/third_party/tracy/cmake/vendor.cmake tt_metal/third_party/umd/cmake/CPM.cmake
+              tt_metal/third_party/umd/third_party/CMakeLists.txt tt-train/cmake/CPM.cmake
+              tt-train/cmake/dependencies.cmake tt-train/sources/examples/mnist_mlp/CMakeLists.txt
+              | sha256sum | cut -d" " -f1 > /tmp/cpm-deps.sha256'
             - >-
               if [ ! -f .cpmcache/.deps.sha256 ]; then echo "CPM cache: miss";
               elif cmp -s .cpmcache/.deps.sha256 /tmp/cpm-deps.sha256; then
@@ -68,7 +86,10 @@ jobs:
             - configure
             # After a fresh download, normalise the tree the way the cache
             # stores it (no .git, symlinks or sparse files) and reconfigure, so
-            # ccache keys match later restored runs.
+            # ccache keys match later restored runs. Dropping .git changes no
+            # dependency version: google/benchmark and flatbuffers read `git describe`
+            # but fall back to their release numbers, and GIT_CEILING_DIRECTORIES
+            # keeps them from finding tt-metal's .git.
             - if [ -f /tmp/cpm-unchanged ]; then exit 0; fi
             - find .cpmcache -name .git -prune -exec rm -rf {} +
             - >-
@@ -85,7 +106,6 @@ jobs:
         shell:
           run:
             - cmake --build build --target install
-            - ccache -s
       - id: package
         kind: shell
         shell:
@@ -101,12 +121,11 @@ jobs:
               -printf '%f\n' | sort > packages.list
             - test -s packages.list
             - tar -cf packages.tar -C build -T packages.list
-            - ls -l packages.tar
       - id: stage-ttnn-import
         kind: shell
         shell:
           run:
-            # TT_FROM_PRECOMPILED_DIR layout, as the PR Gate stages it.
+            # The TT_FROM_PRECOMPILED_DIR layout build-docs imports.
             - rm -rf ttnn-import
             - mkdir -p ttnn-import/build/lib
             - cp -a build/lib/*.so* ttnn-import/build/lib/
@@ -114,7 +133,6 @@ jobs:
             - cp -a runtime ttnn-import/runtime
             - du -sh ttnn-import ttnn-import/build/lib
             - tar -I 'zstd -1 -T0' -cf ttnn-import.tar.zst -C ttnn-import .
-            - ls -l ttnn-import.tar.zst
       - id: cpm-cache-save
         kind: shell
         shell:

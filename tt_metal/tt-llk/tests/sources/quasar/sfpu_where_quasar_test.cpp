@@ -234,7 +234,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     dest_sync,
                     is_fp32_dest_acc_en,
                     calculate_where,
-                    (false /*APPROXIMATION_MODE*/),
+                    (APPROX_MODE),
                     DST_INDEX + 0u /*DST_IN0*/,
                     DST_INDEX + 1u /*DST_IN1*/,
                     DST_INDEX + 2u /*DST_IN2*/,

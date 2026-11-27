@@ -83,8 +83,8 @@ BMC_IP=... BMC_USER=... BMC_PASSWORD=... \
 |---|---|---|---|---|---|---|---|---|
 | `flash` | none | — | — | 2 reads, 30 s apart | — | yes, if installed and BMC credentials set | snapshot + 2 triage reads + 30 s + sys-triage | Quick ETH link health, the unit read as found |
 | `daily` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | — | yes, if installed | — | ~5 min + triage + ~7 min | The scheduled fleet run |
-| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | — | yes, if installed | — | ~18 min + triage + ~7 min | Every test, less often |
-| `full` | as `weekly` | as `weekly` | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
+| `weekly` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + gddr_act_c3 (pytest, ~10.3 min) + didt_matmul_galaxy (pytest, ~9 min); if gddr_act_c3 passed, `tt-smi -glx_reset`, a snapshot and gddr_act_c3 again (~11.3 min) | host_side + device_side | — | yes, if installed | — | ~40 min + triage + ~7 min | Every test, less often |
+| `full` | as `weekly` | as `weekly`, with gddr_act_all (pytest, ~25.5 min) in place of gddr_act_c3, which the retest after the reset runs again too | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | `weekly` + ~30 min + sys-triage | A unit with an issue: everything, for the logs on its DIIM ticket |
 | `pre_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data before a BMC reboot |
 | `post_bmc_reboot` | none | — | host_side + device_side | — | yes, if installed | yes, if installed and BMC credentials set | snapshot + triage + ~7 min + sys-triage | Collect data after a BMC reboot; for now the same as `pre_bmc_reboot` |
 
@@ -159,6 +159,24 @@ zero-collected runs are recorded as FAIL, same trap as the zero-match gtest
 filters above. Needs the venv (`./create_venv.sh`) and standard mesh cabling —
 on torus-cabled units set `TT_MESH_GRAPH_DESC_PATH` to the matching descriptor
 or fabric mesh mapping fails.
+
+GDDR ACT screen (pytest, `tests/dram/test_dram_act_patterns.py`):
+
+- Targets the lane-3 64 MB alias (address bit 26) that the DramDeployment patterns miss.
+- SDPA-like read stream (row 0x200, GDDR bank 3) on every chip, matmul load on, 300 s per pass.
+- `gddr_act_c3` (`weekly`): controller 3, then all 8 controllers at once.
+- `gddr_act_all` (`full`): all 8 at once, then the corner controllers 7, 3, 4, 0 alone. Superset of `gddr_act_c3`.
+- A hit skips the remaining passes. A self-test plants the alias first, so a decode bug fails.
+- The alias is boot-dependent: a pass clears one boot. So a passing ACT test gets a `retest`:
+  `tt-smi -glx_reset`, snapshot validation, rerun as `<check>_after_reset`. The retest snapshot is the
+  last `snapshot_after_*`, so the verdict uses it. `--skip-reset` / `--skip-tests` skip it;
+  `Tier.retest` / `Tier.retest_reset` set the tests and the reset.
+
+Output, per hit:
+
+- `details`: `hits: chip <id> (UBB<n> ASIC<n> tray <serial> <bdf> ASIC ID <id>) <n> bad reads on <target>`
+- `diag_report.json` `data.summary.hits`: same, plus alias bits and the first bad read.
+- `logs/<check>.json`: full per-target results (the runner sets `DIAG_RESULT_JSON` for every pytest).
 
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
@@ -547,7 +565,7 @@ wiring.
 **Budget.** The cage sweep is the dominant cost and the tool self-bounds it at
 its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
-`run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
+`run_health_check.py`'s whole-run `--timeout-minutes` (30, or 75 weekly and 120 full, by default), which
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 
@@ -617,8 +635,8 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 |---|---|---|
 | `--tier {flash,daily,weekly,full,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
-| `--skip-reset` | off | Skip the reset loop phase entirely |
-| `--skip-tests` | off | Skip the gtest phase entirely |
+| `--skip-reset` | off | Skip every reset: the reset loop, the retest and the post-test reset |
+| `--skip-tests` | off | Skip the tests and the retest |
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
 | `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
@@ -866,6 +884,7 @@ tools/scaleout/exabox/health_check_test_suite/
 │   ├── snapshot_checks.py  # phase 1: the checks over a snapshot
 │   ├── resets.py           # phase 2: pre-test reset loop; phase 4: post-test reset
 │   ├── device_tests.py     # phase 3: deployment gtests (TESTS) and pytests (PYTESTS)
+│   ├── retest.py           # phase 3b: test -> reset -> snapshot -> test for Tier.retest
 │   ├── external.py         # ingesting checks written by external tools
 │   ├── triage.py           # phase 5: kmd_triage tools (TRIAGE_TOOLS)
 │   ├── eth_status.py       # phase 6: ETH status read: PCIe gate, two tt-triage reads, and the

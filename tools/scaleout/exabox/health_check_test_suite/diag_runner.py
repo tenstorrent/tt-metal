@@ -43,6 +43,7 @@ from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
+from diag.retest import run_retest  # noqa: E402
 from diag.snapshot import (  # noqa: E402
     DEFAULT_TT_SMI_PROVISIONED,
     collect_fru_info,
@@ -62,8 +63,8 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="SYS-4365 diag tool")
     ap.add_argument("--tier", choices=[*TIERS, *DEPRECATED_TIER_ALIASES], required=True)
     ap.add_argument("--dry-run", action="store_true", help="Print intended subprocess calls; skip destructive steps.")
-    ap.add_argument("--skip-reset", action="store_true", help="Skip phase 3 (reset loop) entirely.")
-    ap.add_argument("--skip-tests", action="store_true", help="Skip phase 4 (gtest deployment binary) entirely.")
+    ap.add_argument("--skip-reset", action="store_true", help="Skip every reset, and so the retest.")
+    ap.add_argument("--skip-tests", action="store_true", help="Skip the tests and the retest.")
     ap.add_argument(
         "--skip-triage",
         action="store_true",
@@ -259,7 +260,7 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → gtests → retest → triage → ETH status → QSFP tests → sys-triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -357,6 +358,34 @@ def run_diag(
         _guarded(test_phase, "tests", FAIL, lambda: run_tests(tt_metal_path, plan.tests, test_phase, dry_run, logs_dir))
     # tests phase prints its own per-test lines as they run — no inline summary.
     _finish(report, test_phase, t0, summary=False)
+
+    # Phase 3b: retest (test -> reset -> test) for boot-dependent faults.
+    if plan.retest:
+        retest_phase = Phase(name="retest")
+        t0 = time.time()
+        if skip_tests or skip_reset:
+            retest_phase.add(
+                Check(name="retest", status=SKIP, details="--skip-tests" if skip_tests else "--skip-reset", ip="other")
+            )
+        else:
+
+            def _retest() -> None:
+                snap_phase = run_retest(
+                    tt_smi_path,
+                    tt_metal_path,
+                    plan.retest,
+                    plan.retest_reset,
+                    test_phase,
+                    retest_phase,
+                    dry_run,
+                    logs_dir,
+                    snap_out_for_resets,
+                )
+                if snap_phase is not None:
+                    report["phases"][snap_phase.name] = asdict(snap_phase)
+
+            _guarded(retest_phase, "retest", FAIL, _retest)
+        _finish(report, retest_phase, t0, summary=False, all_skip_stays_skip=True)
 
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,

@@ -46,9 +46,4 @@ inline ArrivalWaves arrival_waves(uint32_t ring_size, uint32_t ring_index, RingW
     return waves;
 }
 
-// Linear and Ring-2 do not have paired bidirectional arrival waves; retain their existing lane assignment.
-inline bool rotation_enabled(ttnn::ccl::Topology topology, uint32_t ring_size) {
-    return topology == ttnn::ccl::Topology::Ring && ring_size > 2;
-}
-
 }  // namespace ttnn::operations::experimental::indexer_score::program::ring_schedule
