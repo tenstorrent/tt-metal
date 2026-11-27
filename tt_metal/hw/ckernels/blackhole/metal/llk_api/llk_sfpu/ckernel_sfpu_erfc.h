@@ -184,8 +184,7 @@ inline void calculate_erfc() {
         sfpi::vFloat q = erfc_q2_poly(u * sfpi::vConstFloatPrgm0 - ERFC_Q_CENTER);
         sfpi::vFloat r = (e * u) * q;
         // r for x >= 0, 2 - r for x < 0
-        sfpi::vFloat x1 = sfpi::dst_reg[0];
-        sfpi::vFloat sg = sfpi::copysgn(sfpi::vFloat(1.0f), x1);
+        sfpi::vFloat sg = sfpi::copysgn(sfpi::vFloat(1.0f), x0);
         r = sg * r + (1.0f - sg);
         sfpi::dst_reg[0] = r;
         sfpi::dst_reg++;
