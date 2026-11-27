@@ -109,6 +109,11 @@ def _fits_emulator(item) -> bool:
     if not isinstance(case, dict):
         return True
 
+    # The full-width untilize capture (one tile row of 8192 tiles) exceeds the emulator time budget, so the emulator
+    # subset uses its small-grid companion, test_untilize_small_grid.py. The full shape still runs outside the subset.
+    if (case.get("op"), case.get("id")) == ("ttnn.untilize", "00_32x262144_bf8_int-dram"):
+        return False
+
     primary = _primary_input(case)
     if primary is not None and _rows_of(primary["shape"]) > _EMU_MAX_ROWS:
         return False

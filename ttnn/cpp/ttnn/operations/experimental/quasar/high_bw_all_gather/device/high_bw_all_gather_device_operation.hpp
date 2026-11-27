@@ -20,10 +20,11 @@ struct HighBwAllGatherDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
-    using program_factory_t = std::variant<HighBwAllGatherFabricFactory>;
+    using program_factory_t = std::variant<HighBwAllGatherMeshWorkloadFactory>;
 
     // The selected batch slot and valid prefix are patched into kernel runtime arguments. Hash only
-    // their presence, so a serving loop reuses one compiled program as either value changes.
+    // their presence, so a serving loop reuses one compiled program as either value changes; the values are
+    // re-applied on every cache hit by HighBwAllGatherMeshWorkloadFactory::override_runtime_arguments.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

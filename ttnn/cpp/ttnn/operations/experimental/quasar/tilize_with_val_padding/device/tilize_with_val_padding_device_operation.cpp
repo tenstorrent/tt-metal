@@ -110,6 +110,15 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
     }
 
+    // An MX output is written by the packer from a Float16_b / Float32 DEST; the pad value is packed in the input's
+    // format before the tilize, so padding never meets the MX block layout. Integer / fp8 inputs have no MX pack path.
+    TT_FATAL(
+        !is_mx(operation_attributes.output_dtype) ||
+            (input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32),
+        "tilize_with_val_padding to MX output dtype {} needs a bfloat16 or float32 row-major input, got {}",
+        operation_attributes.output_dtype,
+        input_tensor.dtype());
+
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
         // but 2D padded shape

@@ -48,6 +48,13 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      skip-package:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          Skip the CPack package step and run `cmake --install` into a temporary
+          prefix. Ignored when publish-package is true.
       use-system-sfpi:
         required: false
         type: boolean
@@ -750,6 +757,7 @@ jobs:
           ClangBuildAnalyzer --analyze capture.bin
 
       - name: 📦 Package
+        if: ${{ !inputs.skip-package || inputs.publish-package }}
         timeout-minutes: 10
         run: |
           cmake --build build --target package
@@ -759,6 +767,16 @@ jobs:
           else
             ls -1sh build/*.deb build/*.ddeb || true
           fi
+
+      - name: 📦 Install (package skipped)
+        if: ${{ inputs.skip-package && !inputs.publish-package }}
+        timeout-minutes: 10
+        run: |
+          # Run the install rules into a separate prefix.
+          install_dir="$(mktemp -d)"
+          cmake --install build --prefix "${install_dir}"
+          echo "Installed $(find "${install_dir}" -type f | wc -l) files into ${install_dir}"
+          rm -rf "${install_dir}"
 
       - name: Publish ccache summary
         run: |

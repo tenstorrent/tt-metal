@@ -41,6 +41,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
+#include "llrt/get_platform_architecture.hpp"
 #include "tt_metal/tools/profiler/tt_metal_tracy.hpp"
 
 #include <ttnn/graph/graph_query_op_constraints.hpp>
@@ -63,6 +64,57 @@ constexpr int kExitBadNumDevices = 2;
 constexpr int kExitBadMeshSize = 3;
 constexpr int kExitWorkFailed = 5;
 constexpr int kExitBufferVerificationFailed = 10;
+
+// The Coexisting* tests open a 1-chip and a 2-chip mock cluster of the silicon arch next to the real device. Only a
+// 1-chip Quasar mock descriptor exists (quasar_Q1.yaml), so they cannot run on Quasar until a 2-chip one is added.
+constexpr const char* kQuasarNoTwoChipMockSkipReason =
+    "Skipped on Quasar: needs a 2-chip mock cluster of the silicon arch, and only a 1-chip Quasar mock descriptor "
+    "(quasar_Q1.yaml) exists.";
+
+// Early skip for simulator/emulator runs. The arch is read from the simulator's descriptor directly: going through
+// MetalContext (e.g. test_utils::get_umd_arch_name) would create the default context and hold a simulator session
+// for the rest of the process, which breaks the later tests that open their own MetalEnv on the same socket.
+// On silicon the Coexisting* helpers skip after their own short-lived arch probe.
+#define SKIP_ON_QUASAR_SIMULATOR_NO_TWO_CHIP_MOCK()                                         \
+    do {                                                                                    \
+        const char* simulator_path = std::getenv("TT_METAL_SIMULATOR");                     \
+        if (simulator_path != nullptr &&                                                    \
+            tt::tt_metal::get_simulator_architecture(simulator_path) == tt::ARCH::QUASAR) { \
+            GTEST_SKIP() << kQuasarNoTwoChipMockSkipReason;                                 \
+        }                                                                                   \
+    } while (0)
+
+// Minimal Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0). The processor/noc go through config_1xx
+// (Wormhole/Blackhole) and are ignored on Quasar.
+ProgramSpec MakeMinimalNoOpProgramSpec(
+    const std::string& source = "void kernel_main() {}",
+    DataMovementProcessor processor = DataMovementProcessor::RISCV_0,
+    NOC noc = NOC::NOC_0) {
+    const KernelSpecName kernel_id{"dm_kernel"};
+    KernelSpec dm_kernel{
+        .unique_id = kernel_id,
+        .source = KernelSpec::SourceCode{source},
+        .num_threads = 1,
+        .hw_config =
+            DataMovementHardwareConfig{
+                .config_1xx =
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
+                        .processor = processor,
+                        .noc = noc,
+                    },
+            },
+    };
+
+    return ProgramSpec{
+        .name = "context_noop",
+        .kernels = {std::move(dm_kernel)},
+        .work_units = {WorkUnitSpec{
+            .name = "work_unit_0",
+            .kernels = {kernel_id},
+            .target_nodes = NodeCoord{0, 0},
+        }},
+    };
+}
 
 // Helper function to perform buffer operations and kernel launch on a MeshDevice.
 // Uses a sharded MeshBuffer so this works on both single- and multi-device meshes.
@@ -103,20 +155,14 @@ void PerformDeviceWork(
         throw std::runtime_error("Buffer read/write verification failed");
     }
 
-    auto program = CreateProgram(*mesh_device);
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
     // A no-op kernel only validates the create / JIT / dispatch pipeline,
     // so a single worker core is sufficient. (0, 0) is always a logical
     // compute core regardless of dispatch-core configuration.
-    auto core_range = CoreRange({0, 0}, {0, 0});
-
     std::string kernel_src = "void kernel_main() {\n    // " + kernel_identifier + "\n}";
 
-    CreateKernelFromString(
-        program,
-        kernel_src,
-        core_range,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    Program program(
+        *mesh_device, MakeMinimalNoOpProgramSpec(kernel_src, DataMovementProcessor::RISCV_1, NOC::RISCV_1_default));
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
@@ -240,48 +286,17 @@ struct ScopedProfilerSyncEnv {
 // Enqueues a single no-op kernel on one worker core of `target`, exercising the full
 // create-program / create-kernel / JIT-compile / enqueue-workload pipeline for that context.
 void RunNoOpProgram(distributed::MeshDevice& target, const std::string& label) {
-    auto program = CreateProgram(target);
+    // Single worker core; see comment in PerformDeviceWork.
+    Program program(target, MakeMinimalNoOpProgramSpec());
     // The program must be bound to the target's context, not the default (silicon) one. This matters
     // when a silicon context and mock contexts coexist.
     EXPECT_EQ(program.impl().get_context_id(), target.impl().get_context_id()) << label;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(target.shape());
-    // Single worker core; see comment in PerformDeviceWork.
-    auto core_range = CoreRange({0, 0}, {0, 0});
-
-    CreateKernelFromString(program, "void kernel_main() {}", core_range, DataMovementConfig{});
 
     distributed::MeshWorkload workload;
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(target.mesh_command_queue(), workload, true);
     log_info(tt::LogTest, "Successfully enqueued no-op program on {}", label);
-}
-
-// Minimal Gen1 Metal 2.0 ProgramSpec: one no-op DM kernel on node (0, 0).
-ProgramSpec MakeMinimalNoOpProgramSpec() {
-    const KernelSpecName kernel_id{"dm_kernel"};
-    KernelSpec dm_kernel{
-        .unique_id = kernel_id,
-        .source = KernelSpec::SourceCode{"void kernel_main() {}"},
-        .num_threads = 1,
-        .hw_config =
-            DataMovementHardwareConfig{
-                .config_1xx =
-                    DataMovementHardwareConfig::DataMovement1XXConfig{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::NOC_0,
-                    },
-            },
-    };
-
-    return ProgramSpec{
-        .name = "context_noop",
-        .kernels = {std::move(dm_kernel)},
-        .work_units = {WorkUnitSpec{
-            .name = "work_unit_0",
-            .kernels = {kernel_id},
-            .target_nodes = NodeCoord{0, 0},
-        }},
-    };
 }
 
 // The real (silicon) device takes DEFAULT_CONTEXT_ID and must keep the device profiler active when
@@ -351,6 +366,9 @@ void RunCoexistingMockAndSiliconDevice(bool expect_profiler) {
     // Create silicon mesh
     MetalEnv silicon_env;
     const tt::ARCH silicon_arch = silicon_env.get_device_properties().arch();
+    if (silicon_arch == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << kQuasarNoTwoChipMockSkipReason;
+    }
 
     auto mesh_shape = silicon_env.get_system_mesh().shape();
     auto mesh_device_config = distributed::MeshDeviceConfig(mesh_shape);
@@ -400,6 +418,9 @@ void RunCoexistingSiliconAndMockDevice(bool expect_profiler) {
     {
         MetalEnv probe;
         silicon_arch = probe.get_device_properties().arch();
+    }
+    if (silicon_arch == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << kQuasarNoTwoChipMockSkipReason;
     }
 
     // Create mock mesh device with 1 chip on the silicon arch
@@ -772,12 +793,14 @@ TEST(MetalContextIntegrationTest, MockProgramFromDescriptorCompileOnForeignMeshF
 }
 
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
+    SKIP_ON_QUASAR_SIMULATOR_NO_TWO_CHIP_MOCK();
     RunCoexistingSiliconAndMockDevice(/*expect_profiler=*/false);
 }
 
 // Same as CoexistingSiliconAndMockDevice, with the device profiler + host-device sync enabled
 // (regression for #48564).
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDeviceWithProfilerSync) {
+    SKIP_ON_QUASAR_SIMULATOR_NO_TWO_CHIP_MOCK();
 #if !defined(TRACY_ENABLE)
     GTEST_SKIP() << "Requires a Tracy-enabled build (ENABLE_TRACY=ON).";
 #endif
@@ -789,12 +812,14 @@ TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDeviceWithProfilerSync
 // Same test as above but reverse the order to ensure no hangs due to unexpected internal objects created for the
 // incorrect context id. See `CoexistingSiliconAndMockDevice` for why mock arch is matched to silicon arch.
 TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDevice) {
+    SKIP_ON_QUASAR_SIMULATOR_NO_TWO_CHIP_MOCK();
     RunCoexistingMockAndSiliconDevice(/*expect_profiler=*/false);
 }
 
 // Same as CoexistingMockAndSiliconDevice, with the device profiler + host-device sync enabled
 // (regression for #48564).
 TEST(MetalContextIntegrationTest, CoexistingMockAndSiliconDeviceWithProfilerSync) {
+    SKIP_ON_QUASAR_SIMULATOR_NO_TWO_CHIP_MOCK();
 #if !defined(TRACY_ENABLE)
     GTEST_SKIP() << "Requires a Tracy-enabled build (ENABLE_TRACY=ON).";
 #endif
