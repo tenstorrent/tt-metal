@@ -24,7 +24,19 @@ void IntImgDeviceOperation::validate_on_program_cache_miss(
         input_dtype == DataType::BFLOAT16 || input_dtype == DataType::FLOAT32,
         "only bf16 and fp32 dtypes are supported, {} was provided instead",
         input_dtype);
-    const uint32_t tile_width = tensor_args.tensor_spec().tile().get_width();
+    // The kernels assume 32x32 tiles of four 16x16 faces: the cumsum scans whole tiles, the cross-block carry adds row
+    // 31, and on Quasar the writer moves row 31 to row 0 by face offsets.
+    const auto& tile = tensor_args.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+            tile.get_face_shape()[0] == tt::constants::FACE_HEIGHT &&
+            tile.get_face_shape()[1] == tt::constants::FACE_WIDTH,
+        "intimg supports only 32x32 tiles made of 16x16 faces, but the input uses {}x{} tiles with {}x{} faces",
+        tile.get_height(),
+        tile.get_width(),
+        tile.get_face_shape()[0],
+        tile.get_face_shape()[1]);
+    const uint32_t tile_width = tile.get_width();
     const auto grid = get_intimg_core_grid(tensor_args.device()->compute_with_storage_grid_size());
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(
