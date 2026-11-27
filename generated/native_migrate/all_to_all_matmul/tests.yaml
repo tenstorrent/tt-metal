@@ -1,0 +1,22 @@
+{
+  "acceptance_source": "skill",
+  "golden": [
+    "tests/ttnn/unit_tests/operations/all_to_all_matmul/test_all_to_all_matmul.py",
+    "tests/ttnn/unit_tests/operations/all_to_all_matmul/test_all_to_all_matmul_non_aligned.py",
+    "tests/ttnn/unit_tests/operations/all_to_all_matmul/test_all_to_all_matmul_precision_baseline.py",
+    "eval/golden_tests/all_to_all_matmul/test_golden.py",
+    "eval/golden_tests/all_to_all_matmul/test_regression.py"
+  ],
+  "pytest_plugins": {
+    "eval/golden_tests/all_to_all_matmul/test_golden.py": [
+      "eval.hang_plugin",
+      "eval.metrics_plugin",
+      "eval.axes_plugin"
+    ],
+    "eval/golden_tests/all_to_all_matmul/test_regression.py": [
+      "eval.hang_plugin",
+      "eval.metrics_plugin",
+      "eval.axes_plugin"
+    ]
+  }
+}

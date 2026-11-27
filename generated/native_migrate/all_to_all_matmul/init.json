@@ -1,0 +1,9 @@
+{
+ "op": "all_to_all_matmul",
+ "checkout": "/data/malimpic/tt-metal-atamm",
+ "python_op_dir": "ttnn/ttnn/operations/all_to_all_matmul",
+ "cpp_op_dir": "ttnn/cpp/ttnn/operations/all_to_all_matmul",
+ "unit_test_dir": null,
+ "native_guard": null,
+ "tests_file": "/data/malimpic/tt-metal-atamm/generated/native_migrate/all_to_all_matmul/tests.yaml"
+}
