@@ -22,7 +22,7 @@ budget predicate, safety fraction or blocking search exists; the only L1-driven 
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_index_values` (128 B pages) | `INDEX_DEPTH` = 2 (constant) | 2 slots: indices of the tile-row being gathered + the prefetched next tile-row (in column_blocked: 1 slot used) | `{tile_row: streams → window INDEX_DEPTH, col_tile: not spanned (idx does not vary along D; one slot serves every column block of its tile-row), image: streams (folded), table_row: not spanned}` | UInt32 — dataflow-only payload, never enters DEST (audit 2 exemption) | reader | reader (RISC loads; ordered by the reader's read barrier) | whole reader kernel | cannot share `cb_gathered_rows`: concurrent (the prefetched slot is written while the current block's rows land) and a different page size/format |
+| `cb_index_values` (128 B pages) | `INDEX_DEPTH · BLOCK_TILE_ROWS` = 2 (one slot = one block-row of indices) | 2 slots: indices of the tile-row being gathered + the prefetched next tile-row (in column_blocked: 1 slot used) | `{tile_row: streams → window INDEX_DEPTH, col_tile: not spanned (idx does not vary along D; one slot serves every column block of its tile-row), image: streams (folded), table_row: not spanned}` | UInt32 — dataflow-only payload, never enters DEST (audit 2 exemption) | reader | reader (RISC loads; ordered by the reader's read barrier) | whole reader kernel | cannot share `cb_gathered_rows`: concurrent (the prefetched slot is written while the current block's rows land) and a different page size/format |
 | `cb_gathered_rows` (2048 B pages) | `ROWS_DEPTH · BLOCK_TILE_ROWS · block_col_tiles` = `2·block_col_tiles` | `2·block_col_tiles`: block k being tilized + block k+1 being gathered | `{tile_row: streams → window ROWS_DEPTH·BLOCK_TILE_ROWS, col_tile: spans → block_col_tiles, image: streams (folded), table_row: spans ≤ 32 gathered rows (the tile height, fixed)}` | UInt16 (bf16 bits) — 16-bit page under 16-bit DEST; UInt16 rather than Float16_b is the bit-exactness mechanism | reader | compute | whole kernel, block-pipelined | cannot alias `cb_output_tiles`: lifetimes overlap by design (tilize of block k runs while block k+1 is gathered and block k−1 is written); tilize is not in-place (`tilize_helpers.inl:89-90`). Capacity = live set (depth 2 is the overlap mechanism) |
 | `cb_output_tiles` (2048 B pages) | `OUT_DEPTH · BLOCK_TILE_ROWS · block_col_tiles` = `2·block_col_tiles` | `2·block_col_tiles`: block k being packed + block k−1 being written | `{tile_row: streams → window OUT_DEPTH·BLOCK_TILE_ROWS, col_tile: spans → block_col_tiles, image: streams (folded), table_row: not present (rows already placed)}` | UInt16 — 16-bit page under 16-bit DEST; bytes are the output tensor's bf16 tiles | compute | writer | whole kernel, block-pipelined | cannot alias `cb_gathered_rows` (concurrent, above); it is not a resident shard, so packing into the output tensor directly is not available (output is DRAM interleaved) |
 
@@ -31,7 +31,7 @@ budget predicate, safety fraction or blocking search exists; the only L1-driven 
 | Symbol | Bound | Predicate establishing it |
 |--------|-------|---------------------------|
 | `block_col_tiles` | `1 ≤ block_col_tiles ≤ min(tensor_col_tiles, col_tile_cap)`; production max 40 | `select_plan`: `q_l1` clamp; `block_col_tiles = tensor_col_tiles / col_blocks_per_row` |
-| `col_tile_cap` | 164 at Phase 0 depths | `floor((1_347_776 − INDEX_DEPTH·128) / ((ROWS_DEPTH + OUT_DEPTH)·BLOCK_TILE_ROWS·2048))` |
+| `col_tile_cap` | 164 at Phase 0 depths | `floor((1_347_776 − INDEX_DEPTH·BLOCK_TILE_ROWS·128) / ((ROWS_DEPTH + OUT_DEPTH)·BLOCK_TILE_ROWS·2048))` |
 | `INDEX_DEPTH`, `ROWS_DEPTH`, `OUT_DEPTH` | 2 each (constants) | module constants |
 | `BLOCK_TILE_ROWS` | 1 (constant) | module constant; reason in `op_design.md` Axes |
 | `tensor_col_tiles = D/32` | unbounded by the contract | appears in no capacity directly; only through the clamped `block_col_tiles` |
@@ -40,13 +40,13 @@ budget predicate, safety fraction or blocking search exists; the only L1-driven 
 ## Total per-core footprint
 
 ```
-L1(core) = INDEX_DEPTH·128 + (ROWS_DEPTH + OUT_DEPTH)·BLOCK_TILE_ROWS·block_col_tiles·2048
+L1(core) = INDEX_DEPTH·BLOCK_TILE_ROWS·128 + (ROWS_DEPTH + OUT_DEPTH)·BLOCK_TILE_ROWS·block_col_tiles·2048
          = 256 + 8192·block_col_tiles            (Phase 0)
 ```
 
 | Term | Scales with |
 |------|-------------|
-| `INDEX_DEPTH·128` | `INDEX_DEPTH` only (constant 256 B) |
+| `INDEX_DEPTH·BLOCK_TILE_ROWS·128` | `INDEX_DEPTH`, `BLOCK_TILE_ROWS` (256 B at Phase 0) |
 | `ROWS_DEPTH·…·2048` | `ROWS_DEPTH`, `BLOCK_TILE_ROWS`, `block_col_tiles` |
 | `OUT_DEPTH·…·2048` | `OUT_DEPTH`, `BLOCK_TILE_ROWS`, `block_col_tiles` |
 
@@ -88,3 +88,20 @@ Total: DRAM read 203 280 B, write 245 760 B, cross-core 0 B.
 > extra row transactions for `2·D·N·(col_blocks_per_row−1)/col_blocks_per_row` B of core-to-core
 > traffic), because both put a cross-core rendezvous on the serial chain of one-wave calls; the
 > reasons and reachability are in the regime table of `op_design.md`.
+
+## Implementation notes (deviations from the planner's inventory)
+
+- `cb_index_values` holds `INDEX_DEPTH` slots of one **block-row** (`BLOCK_TILE_ROWS` tile-rows) each,
+  so `BLOCK_TILE_ROWS > 1` stays a live knob (a block may then straddle images; each tile-row keeps
+  its own image, `valid_rows` and index segment). Identical to the planner's 2 × 128 B at Phase 0.
+- No CB was added, resized or merged. The two perf knobs below change NoC usage, not L1:
+  - `WRITER_BANK_ROTATION` (on): `store_block` starts each core's tile-row at tile
+    `core ordinal mod block_col_tiles`.
+  - `read_noc_split` (plan field; `READ_NOC_SPLIT_MAX_SEGMENT_BYTES = 256`, `READ_NOC_SPLIT_MIN_CORES = 16`,
+    token extent > 1): odd rows of each tile-row are read on NoC1, with both data-movement kernels in
+    `DM_DYNAMIC_NOC` mode. Narrow-segment gathers are bound by the request rate of the DRAM endpoints
+    per NoC (halving the grid barely moves them), so the second NoC adds request capacity. Measured on
+    Blackhole, 110 cores: `[16,4096]`×64 146 → 101 µs, `[1,4096]`×64 11.7 → 8.9 µs, `[1,128]`×1280
+    8.6 → 5.9 µs; on 2560-B segments it costs ~8% (p1 752 → 810 µs), hence the gate.
+- Data-movement budget above is unchanged: same bytes and transactions per tensor; only the NoC a row
+  read travels on differs.

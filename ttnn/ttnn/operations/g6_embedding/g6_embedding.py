@@ -22,6 +22,7 @@ from .g6_embedding_program_descriptor import (
     Plan,
     bind_program_descriptor,
     compute_plan,
+    core_roles,
     create_program_artifacts,
 )
 
@@ -31,7 +32,13 @@ BLOCK_TILE_ROWS = 1
 INDEX_DEPTH = 2
 ROWS_DEPTH = 2
 OUT_DEPTH = 2
+WRITER_BANK_ROTATION = True
+READ_NOC_SPLIT_MAX_SEGMENT_BYTES = 256
+READ_NOC_SPLIT_MIN_CORES = 16
 L1_BUDGET_BYTES = 1_347_776
+# Zone build (BB-21): set True before a profiled call to compile a named zone around every block
+# operation and blocking wait. Part of the program cache key; False leaves the kernels zone-free.
+DEVICE_ZONES = False
 
 KNOBS = Knobs(
     block_tile_rows=BLOCK_TILE_ROWS,
@@ -39,6 +46,9 @@ KNOBS = Knobs(
     rows_depth=ROWS_DEPTH,
     out_depth=OUT_DEPTH,
     l1_budget_bytes=L1_BUDGET_BYTES,
+    writer_bank_rotation=WRITER_BANK_ROTATION,
+    read_noc_split_max_segment_bytes=READ_NOC_SPLIT_MAX_SEGMENT_BYTES,
+    read_noc_split_min_cores=READ_NOC_SPLIT_MIN_CORES,
 )
 
 _LAYOUT_BY_NAME = {"ROW_MAJOR": ttnn.ROW_MAJOR_LAYOUT, "TILE": ttnn.TILE_LAYOUT}
@@ -174,6 +184,12 @@ def select_plan(input_tensor, weight) -> Plan:
     return _plan_for(tuple(input_tensor.shape), tuple(weight.shape), grid.x * grid.y)
 
 
+def dump_core_roles(input_tensor, weight):
+    """Role of every core of the call's program: [(core, first_block, num_blocks, roles)]."""
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    return core_roles(select_plan(input_tensor, weight), grid)
+
+
 # Keyed by everything that changes the program; the values hold no buffer address.
 _PROGRAM_CACHE = {}
 
@@ -186,6 +202,7 @@ def _program_key(input_tensor, weight, grid):
         weight.dtype,
         grid.x,
         grid.y,
+        DEVICE_ZONES,
     )
 
 
@@ -219,7 +236,7 @@ def g6_embedding(
     artifacts = _PROGRAM_CACHE.get(key)
     if artifacts is None:
         plan = select_plan(input_tensor, weight)
-        artifacts = create_program_artifacts(input_tensor, weight, output, plan, KNOBS, grid)
+        artifacts = create_program_artifacts(input_tensor, weight, output, plan, KNOBS, grid, DEVICE_ZONES)
         _PROGRAM_CACHE[key] = artifacts
 
     program_descriptor = bind_program_descriptor(artifacts, input_tensor, weight, output)

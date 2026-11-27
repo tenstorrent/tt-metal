@@ -39,6 +39,15 @@ class Knobs(NamedTuple):
     rows_depth: int
     out_depth: int
     l1_budget_bytes: int
+    # store_block starts each core's tile-row at tile (core ordinal mod block_col_tiles), so cores
+    # whose blocks start on the same DRAM bank do not walk the banks in lockstep.
+    writer_bank_rotation: bool
+    # Narrow row segments read by many cores at once are bound by the request rate of each NoC's DRAM
+    # endpoints, not by bytes, so odd rows go to the second NoC for its request capacity. Wide segments
+    # stay on the reader's NoC (NoC1 is left to the writes), and so do plans with few cores or one row
+    # per block, where too few requests are in flight for the split to pay for dynamic NoC mode.
+    read_noc_split_max_segment_bytes: int
+    read_noc_split_min_cores: int
 
 
 class Plan(NamedTuple):
@@ -55,6 +64,7 @@ class Plan(NamedTuple):
     tile_rows_per_image: int
     block_rows: int
     block_tile_rows: int
+    read_noc_split: bool
 
 
 def _divisors(n: int) -> list[int]:
@@ -94,6 +104,7 @@ def compute_plan(index_shape: tuple, weight_shape: tuple, num_grid_cores: int, k
     col_blocks_per_row = max(q_l1, q_fill)
     block_col_tiles = tensor_col_tiles // col_blocks_per_row
     total_blocks = block_rows * col_blocks_per_row
+    segment_bytes = block_col_tiles * TILE_WIDTH * 2
     return Plan(
         regime="whole_row" if col_blocks_per_row == 1 else "column_blocked",
         col_blocks_per_row=col_blocks_per_row,
@@ -108,6 +119,11 @@ def compute_plan(index_shape: tuple, weight_shape: tuple, num_grid_cores: int, k
         tile_rows_per_image=tile_rows_per_image,
         block_rows=block_rows,
         block_tile_rows=knobs.block_tile_rows,
+        read_noc_split=(
+            segment_bytes <= knobs.read_noc_split_max_segment_bytes
+            and min(total_blocks, num_grid_cores) >= knobs.read_noc_split_min_cores
+            and token_extent > 1
+        ),
     )
 
 
@@ -148,9 +164,22 @@ class ProgramArtifacts(NamedTuple):
     cbs: list
 
 
-def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Knobs, grid) -> ProgramArtifacts:
-    """Kernels and CBs of one plan. The address slots of the common runtime args are placeholders."""
+def core_roles(plan: Plan, grid):
+    """[(core, first_block, num_blocks, roles)]: every core of the program runs all three roles."""
+    _, assignment = _assign_blocks(plan, grid)
+    return [(core, first, count, ("reader", "compute", "writer")) for core, first, count in assignment]
+
+
+def create_program_artifacts(
+    input_tensor, weight, output, plan: Plan, knobs: Knobs, grid, device_zones: bool = False
+) -> ProgramArtifacts:
+    """Kernels and CBs of one plan. The address slots of the common runtime args are placeholders.
+
+    device_zones builds the profiling zones into the kernels (the zone build); off, the kernels carry
+    no zone code at all.
+    """
     all_cores, assignment = _assign_blocks(plan, grid)
+    defines = [("G6_DEVICE_ZONES", "1")] if device_zones else []
     b = knobs.block_tile_rows
     bct = plan.block_col_tiles
 
@@ -171,7 +200,7 @@ def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Kn
         cb(CB_OUTPUT_TILES, ttnn.uint16, TILE_BYTES, knobs.out_depth * b * bct),
     ]
 
-    reader_ct = [CB_INDEX_VALUES, CB_GATHERED_ROWS, bct, b, knobs.index_depth]
+    reader_ct = [CB_INDEX_VALUES, CB_GATHERED_ROWS, bct, b, knobs.index_depth, int(plan.read_noc_split)]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(ttnn.TensorAccessorArgs(weight).get_compile_time_args())
     writer_ct = [CB_OUTPUT_TILES, bct, b, TILE_BYTES]
@@ -181,9 +210,10 @@ def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Kn
     reader_rt = ttnn.RuntimeArgs()
     writer_rt = ttnn.RuntimeArgs()
     compute_rt = ttnn.RuntimeArgs()
-    for core, first_block, num_blocks in assignment:
+    for ordinal, (core, first_block, num_blocks) in enumerate(assignment):
+        tile_rotation = ordinal % bct if knobs.writer_bank_rotation else 0
         reader_rt[core.x][core.y] = [first_block, num_blocks]
-        writer_rt[core.x][core.y] = [first_block, num_blocks]
+        writer_rt[core.x][core.y] = [first_block, num_blocks, tile_rotation]
         compute_rt[core.x][core.y] = [_tile_rows_in_run(plan, first_block, num_blocks)]
 
     # Common runtime args: slots 0..1 (reader) and 0 (writer) are buffer addresses, patched per call.
@@ -199,13 +229,27 @@ def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Kn
     ]
     writer_common = [0, plan.tensor_col_tiles, plan.tensor_tile_rows, plan.col_blocks_per_row]
 
+    # Reads on both NoCs need dynamic NoC mode on both data-movement kernels: a read barrier then
+    # counts the responses of both RISCs on that NoC.
+    if plan.read_noc_split:
+        reader_config = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        )
+        writer_config = ttnn.DataMovementConfigDescriptor(
+            processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1, noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC
+        )
+    else:
+        reader_config = ttnn.ReaderConfigDescriptor()
+        writer_config = ttnn.WriterConfigDescriptor()
+
     reader = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
         common_runtime_args=reader_common,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=reader_config,
+        defines=defines,
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_writer.cpp"),
@@ -213,7 +257,8 @@ def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Kn
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
         common_runtime_args=writer_common,
-        config=ttnn.WriterConfigDescriptor(),
+        config=writer_config,
+        defines=defines,
     )
     compute = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "g6_embedding_compute.cpp"),
@@ -221,6 +266,7 @@ def create_program_artifacts(input_tensor, weight, output, plan: Plan, knobs: Kn
         compile_time_args=compute_ct,
         runtime_args=compute_rt,
         config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False, dst_full_sync_en=False),
+        defines=defines,
     )
     return ProgramArtifacts(plan=plan, reader=reader, writer=writer, compute=compute, cbs=cbs)
 

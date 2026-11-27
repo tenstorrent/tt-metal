@@ -16,6 +16,13 @@
 #include "api/tile_constants.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
+#if defined(G6_DEVICE_ZONES)
+#include "api/debug/kernel_profiler.hpp"
+#define G6_ZONE(name) DeviceZoneScopedN(name)
+#else
+#define G6_ZONE(name)
+#endif
+
 namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
@@ -31,7 +38,9 @@ void kernel_main() {
     constexpr uint32_t block_col_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t block_tile_rows = get_compile_time_arg_val(3);
     constexpr uint32_t index_depth = get_compile_time_arg_val(4);
-    constexpr auto index_args = TensorAccessorArgs<5>();
+    // Odd rows of every tile-row are read on the other NoC (host enables it for narrow segments).
+    constexpr bool read_noc_split = get_compile_time_arg_val(5) != 0;
+    constexpr auto index_args = TensorAccessorArgs<6>();
     constexpr auto weight_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t segment_bytes = block_col_tiles * TILE_COLUMN_ROW_BYTES;
@@ -53,6 +62,7 @@ void kernel_main() {
     const auto index_accessor = TensorAccessor(index_args, index_addr, index_page_bytes);
     const auto weight_accessor = TensorAccessor(weight_args, weight_addr, weight_page_bytes);
     const uint32_t index_base = get_write_ptr(cb_index_values);
+    const uint8_t other_noc = 1 - noc_index;
 
     auto tile_rows_in = [&](uint32_t block_row) -> uint32_t {
         const uint32_t left = tensor_tile_rows - block_row * block_tile_rows;
@@ -83,38 +93,65 @@ void kernel_main() {
     uint32_t col_block = first_block - block_row * col_blocks_per_row;
     uint32_t slot = 0;
 
-    fetch_index_block(block_row, index_base);
-    noc_async_read_barrier();
+    {
+        G6_ZONE("fetch_index_block");
+        fetch_index_block(block_row, index_base);
+    }
+    {
+        G6_ZONE("index_read_barrier");
+        noc_async_read_barrier();
+    }
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t slot_addr = index_base + slot * index_slot_bytes;
         const uint32_t tile_rows = tile_rows_in(block_row);
         const uint32_t block_pages = tile_rows * block_col_tiles;
         const uint32_t segment_offset = col_block * segment_bytes;
+        const bool last_col_block_of_row = (col_block + 1 == col_blocks_per_row);
 
-        // gather_rows_block
-        cb_reserve_back(cb_gathered_rows, block_pages);
+        {
+            G6_ZONE("gathered_rows_reserve_wait");
+            cb_reserve_back(cb_gathered_rows, block_pages);
+        }
         const uint32_t staged_base = get_write_ptr(cb_gathered_rows);
-        for (uint32_t t = 0; t < tile_rows; ++t) {
-            const uint32_t tile_row = block_row * block_tile_rows + t;
-            const uint32_t tile_row_in_image = tile_row % tile_rows_per_image;
-            const uint32_t valid_rows = valid_rows_of(tile_row_in_image);
-            volatile tt_l1_ptr uint32_t* indices = dataflow_kernel_lib::addr_to_l1_ptr(slot_addr + t * INDEX_ROW_BYTES);
-            uint32_t staged_row = staged_base + t * staged_tile_row_bytes;
-            for (uint32_t r = 0; r < valid_rows; ++r) {
-                noc_async_read(weight_accessor.get_noc_addr(indices[r], segment_offset), staged_row, segment_bytes);
-                staged_row += segment_bytes;
+        {
+            G6_ZONE("gather_rows_block");
+            for (uint32_t t = 0; t < tile_rows; ++t) {
+                const uint32_t tile_row = block_row * block_tile_rows + t;
+                const uint32_t valid_rows = valid_rows_of(tile_row % tile_rows_per_image);
+                volatile tt_l1_ptr uint32_t* indices =
+                    dataflow_kernel_lib::addr_to_l1_ptr(slot_addr + t * INDEX_ROW_BYTES);
+                uint32_t staged_row = staged_base + t * staged_tile_row_bytes;
+                for (uint32_t r = 0; r < valid_rows; ++r) {
+                    if constexpr (read_noc_split) {
+                        const uint8_t noc = (r & 1) ? other_noc : noc_index;
+                        noc_async_read(
+                            weight_accessor.get_noc_addr(indices[r], segment_offset, noc),
+                            staged_row,
+                            segment_bytes,
+                            noc);
+                    } else {
+                        noc_async_read(
+                            weight_accessor.get_noc_addr(indices[r], segment_offset), staged_row, segment_bytes);
+                    }
+                    staged_row += segment_bytes;
+                }
+            }
+
+            // The next block-row's indices ride on this block's barrier. Its slot is free: the block-row
+            // that last used it has issued all its reads (index values are consumed at issue time).
+            if (last_col_block_of_row && block + 1 < num_blocks) {
+                slot = (slot + 1 == index_depth) ? 0 : slot + 1;
+                fetch_index_block(block_row + 1, index_base + slot * index_slot_bytes);
             }
         }
-
-        // The next block-row's indices ride on this block's barrier. Its slot is free: the block-row
-        // that last used it has issued all its reads (index values are consumed at issue time).
-        const bool last_col_block_of_row = (col_block + 1 == col_blocks_per_row);
-        if (last_col_block_of_row && block + 1 < num_blocks) {
-            slot = (slot + 1 == index_depth) ? 0 : slot + 1;
-            fetch_index_block(block_row + 1, index_base + slot * index_slot_bytes);
+        {
+            G6_ZONE("gather_read_barrier");
+            noc_async_read_barrier();
+            if constexpr (read_noc_split) {
+                noc_async_read_barrier(other_noc);
+            }
         }
-        noc_async_read_barrier();
         cb_push_back(cb_gathered_rows, block_pages);
 
         if (last_col_block_of_row) {
