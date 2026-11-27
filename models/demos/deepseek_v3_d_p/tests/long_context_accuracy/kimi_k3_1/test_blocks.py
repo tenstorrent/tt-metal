@@ -31,7 +31,7 @@ class _Mesh:
 def test_a_moe_weight_digest_mismatch_fails_before_device_work(tmp_path, monkeypatch, expect_error) -> None:
     """The layer-1 case against a copy of its golden's manifest whose ``layers.1`` digest differs: ``run_case`` raises
     ``GoldenMismatch`` naming it and never builds the device Block."""
-    (case,) = [c for c in MOE_CASES if c.id.endswith("layer1")]
+    (case,) = [c for c in MOE_CASES if c.id == "k31-l1-moe"]
     checkpoint = case.checkpoint()
     manifest = json.loads((golden_root() / case.golden_id / MANIFEST).read_text())
     manifest["identity"]["weights_sha256"]["layers.1"] = "0" * 64

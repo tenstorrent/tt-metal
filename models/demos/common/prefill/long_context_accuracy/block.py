@@ -129,7 +129,7 @@ class PreparedCase:
 class LongContextCase:
     """One Block of one model against one golden, at its context lengths.
 
-    * ``id``: the case's name in results and test ids;
+    * ``id``: the case's name in results and test ids, ``<model>-l<layer>-<kind>`` (``k31-l1-moe``);
     * ``golden_id`` and ``golden_reader``: the registered golden and the ``Fp64Golden`` reader of its layout;
     * ``placement``: the ``pytest.param`` of ``(mesh_shape, device_params)`` (with marks) the device test opens;
     * ``chunk``: rows per device call; a context length that is not a multiple ends in a partial chunk;

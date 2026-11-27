@@ -100,7 +100,7 @@ def _prepare_moe(layer: int, golden: Fp64Golden, checkpoint: Path, context_len: 
 
 def moe_case(layer: int) -> LongContextCase:
     return LongContextCase(
-        id=f"k31-moe-layer{layer}",
+        id=f"k31-l{layer}-moe",
         golden_id=K31_CHAIN_1M,
         golden_reader=KimiK31ChainGolden,
         placement=K31_PLACEMENT,
