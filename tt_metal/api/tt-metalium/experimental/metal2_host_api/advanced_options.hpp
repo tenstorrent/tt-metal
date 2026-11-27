@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/vocabulary/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/fabric_connections_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
 #include <tt-metalium/workload/utils/group.hpp>
@@ -85,7 +86,27 @@ struct ProgramAdvancedOptions {
     // AdvancedProgramRunArgs::prefetcher_pipe_args. A kernel's sender/receiver role is
     // derived from its WorkUnitSpec node coverage; see prefetcher_pipe_parameter.hpp.
     Group<PrefetcherPipeParameter> prefetcher_pipe_parameters;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Fabric connections (experimental)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Fabric connections let data-movement kernels send packets into the fabric routers of their device.
+    // See fabric_connections_spec.hpp.
+    Group<FabricConnectionsSpec> fabric_connections;
+
+    // Relaxations of the checks on the Program's fabric connections (fabric_connections).
+    struct FabricConnectionAdvancedOptions {
+        // Turns off the check that, on each device, each (direction, link) is used by at most one
+        // fabric connection of the Program.
+        // The op must then make sure that its kernels share each fabric router correctly,
+        // for example by having only one connection to a router open at a time.
+        bool disable_exclusive_fabric_link_check = false;
+    };
+    FabricConnectionAdvancedOptions fabric_connection_options;
 };
+
+using FabricConnectionAdvancedOptions = ProgramAdvancedOptions::FabricConnectionAdvancedOptions;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -247,6 +268,21 @@ struct KernelAdvancedOptions {
         NodeRangeSet extra_nodes;
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Fabric connection bindings (experimental, data-movement kernels only)
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // Declares that this kernel opens the fabric connections of a FabricConnectionsSpec
+    // (declared in ProgramAdvancedOptions::fabric_connections) on each of its nodes; each node must be in the
+    // spec's links.
+    // The kernel builds a fabric sender or a connection manager from the binding token:
+    //   WorkerToFabricEdmSender::build_from_binding(fabric::<accessor_name>)
+    struct FabricConnectionBinding {
+        FabricConnectionsSpecName fabric_connections_spec_name;  // identify the spec within the ProgramSpec
+        std::string accessor_name;  // fabric connection accessor name (used in the kernel source code)
+    };
+    Group<FabricConnectionBinding> fabric_connection_bindings;
 };
 
 // Describes a resource allocation within a program's SRAM arena parameter.
@@ -351,8 +387,10 @@ struct DFBAdvancedOptions {
     //
     // Requirements (validated at Program construction):
     //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
-    //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
-    //    named pipe (all named pipes share ring_size and entry_size)
+    //  - entry_size divides the pipe entry_size (the relay may page one pipe entry as several
+    //    relay entries), and entry_size * num_entries equals the pipe's ring_size rounded down to
+    //    a multiple of the pipe entry_size, for every named pipe (all named pipes share ring_size
+    //    and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) is the receiver kernel's node set:
     //    the union of the named pipes' receiver nodes, which must be pairwise disjoint, plus that
     //    kernel's extra_nodes (KernelAdvancedOptions::PrefetcherPipeBinding::extra_nodes). The
@@ -360,6 +398,9 @@ struct DFBAdvancedOptions {
     //  - every PRODUCER kernel binds exactly this pipe set under one accessor
     //    (KernelAdvancedOptions::prefetcher_pipe_bindings); it is the pipes' receiver kernel, and
     //    its num_threads is the pipes' receiver-side credit lane count
+    //  - a BLOCKED producer's block is one pipe entry (block_size == relay entries
+    //    per pipe entry). Any other producer pattern with several relay entries per pipe entry
+    //    needs a single-threaded producer kernel. The consumer may use any pattern.
     //
     // Naming more than one pipe makes a single DFB serve several 1:N pipes whose receiver sets
     // tile the DFB's nodes (one relay for a whole grid fed by several senders), mirroring the
@@ -572,6 +613,7 @@ struct SemaphoreAdvancedOptions {
 //------------------------------------------------
 
 using PrefetcherPipeBinding = KernelAdvancedOptions::PrefetcherPipeBinding;
+using FabricConnectionBinding = KernelAdvancedOptions::FabricConnectionBinding;
 using PrefetcherPipeArgument = AdvancedProgramRunArgs::PrefetcherPipeArgument;
 using SRAMArenaArgument = AdvancedProgramRunArgs::SRAMArenaArgument;
 

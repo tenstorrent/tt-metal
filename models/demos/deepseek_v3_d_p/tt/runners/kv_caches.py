@@ -27,6 +27,17 @@ class MlaKvCaches(KvCaches):
     index: Optional[ttnn.Tensor] = None
 
 
+def kv_cache_slots(num_users: int, *, forward_chunks: int = 1, use_trace: bool = False) -> int:
+    """KV-cache user slots a runtime addresses: ``num_users``, plus one scratch slot (index ``num_users``, the last)
+    for a TRACED packed forward, whose warm passes and captures (and MTP layer) run chunk positions with empty
+    metadata, into the scratch slot; a model whose packed forward cannot skip empty positions also replays them
+    there. The scratch slot is
+    past every real one, so the engine and migration keep addressing slots [0, num_users) unchanged
+    and never see it: it is never acked or published in the KV chunk table. TtPrefillRuntimeConfig.cache_num_users
+    and the adapters' allocate_kv_cache both size the caches with this."""
+    return num_users + (1 if forward_chunks > 1 and use_trace else 0)
+
+
 @dataclass
 class KimiK3KvCaches(MlaKvCaches):
     """Kimi-K3's caches: the MLA kvpe cache plus the store of every KDA layer's state; on Kimi-K3.1 also

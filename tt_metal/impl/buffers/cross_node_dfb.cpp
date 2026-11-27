@@ -3,25 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
-#include <buffer.hpp>
-#include <buffer_types.hpp>
-#include <core_coord.hpp>
-#include <device.hpp>
+#include <tt-metalium/memory/buffer/buffer.hpp>
+#include <tt-metalium/memory/buffer/buffer_types.hpp>
+#include <tt-metalium/vocabulary/core_coord.hpp>
+#include <tt-metalium/mesh/legacy/device.hpp>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/program/program_impl.hpp"
-#include "tt_metal/api/tt-metalium/hal_types.hpp"
-#include <tt-metalium/math.hpp>
+#include "tt_metal/api/tt-metalium/vocabulary/hal_types.hpp"
+#include <tt-metalium/utils/math.hpp>
 #include <cstdint>
 #include <variant>
 #include <vector>
 
-#include "distributed.hpp"
+#include "tt-metalium/execution/distributed.hpp"
 #include "hostdev/remote_dfb_config_layout.h"
-#include "mesh_buffer.hpp"
-#include "mesh_device.hpp"
+#include "tt-metalium/memory/buffer/mesh_buffer.hpp"
+#include "tt-metalium/mesh/mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {

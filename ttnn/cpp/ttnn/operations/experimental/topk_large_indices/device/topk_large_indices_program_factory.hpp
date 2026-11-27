@@ -28,7 +28,8 @@ struct CoreRowAssignment {
 
 // The canonical mapping used to populate reader/writer runtime arguments. Visible so a host-only test can pin
 // its ordering across discontiguous CoreRangeSets.
-// num_chunks counts the K chunks of the searched row prefix. row_split must be the compiled program's
+// num_chunks counts the K chunks of the row's physical width (the kernels bound the searched prefix on the
+// device). row_split must be the compiled program's
 // capability (see row_split_enabled): when it is false the caller reads only start_row and num_rows, so the
 // halved layout must not be produced at all.
 std::vector<CoreRowAssignment> derive_core_row_assignments(

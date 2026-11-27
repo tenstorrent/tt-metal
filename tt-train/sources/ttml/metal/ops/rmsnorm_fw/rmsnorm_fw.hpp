@@ -16,6 +16,8 @@ namespace ttml::metal {
 // With `gate`, output = rmsnorm(input) * gamma * silu(gate) (gated mode). `input` is head-major [B*H, 1, T, V],
 // normalized over V, and `gate` head-merged [B, 1, T, H*V]; the output and its gradient take the gate's layout,
 // while rms and the input gradient stay head-major. H = 1 is a plain gated RMSNorm.
+//
+// When whole tile-rows would leave cores idle, an ungated row may be split into column slices on several cores.
 std::vector<std::optional<ttnn::Tensor>> rmsnorm_fw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,

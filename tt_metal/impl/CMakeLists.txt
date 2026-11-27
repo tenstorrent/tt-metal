@@ -96,6 +96,7 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/simulator_termination.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/drisc_service/seat_lock.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
@@ -128,8 +129,6 @@ target_include_directories(
     PUBLIC
         ${PROJECT_SOURCE_DIR}/tt_metal
         .
-        debug
-        profiler
         ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         # internal/profiler/perf_counters.hpp includes the shared tt-llk counter headers
         ${PROJECT_SOURCE_DIR}/tt_metal/tt-llk/tools/include
