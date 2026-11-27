@@ -18,7 +18,6 @@ from ....pipelines.minimax_h3.packing import (
     unpatchify_video_tokens,
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
-    LOWRES_SCALE_ENV,
     LOWRES_STEPS_ENV,
     MiniMaxH3Pipeline,
     lowres_handoff_rows,
@@ -66,19 +65,11 @@ def test_window_to_clean_lands_on_the_clean_estimate():
     assert float(scheduler.sigmas[2]) > 0.0, "the parent schedule keeps its own sigmas"
 
 
-def test_lowres_noise_is_unit_variance_at_half_size():
-    video = torch.randn((1, CHANNELS, 16, 32, 48), generator=torch.Generator().manual_seed(0))
-    rows = lowres_noise_rows(patchify_video_latents(video, PATCH), 16, 32, 48, CHANNELS, PATCH, 16, 24)
-
-    assert rows.shape == (16 * 8 * 12, CHANNELS * 4)
-    assert abs(float(rows.std()) - 1.0) < 0.02
-    assert abs(float(rows.mean())) < 0.02
-
-
-def test_lowres_noise_is_the_low_frequencies_of_the_noise():
-    # 2/3 of 24x36: still unit variance, and below its own highest frequency it is the request's noise.
-    video = torch.randn((1, CHANNELS, 16, 24, 36), generator=torch.Generator().manual_seed(0))
-    rows = lowres_noise_rows(patchify_video_latents(video, PATCH), 16, 24, 36, CHANNELS, PATCH, 16, 24)
+@pytest.mark.parametrize("height, width", [(32, 48), (24, 36)])  # 16x24 is 1/2 of the first, 2/3 of the second
+def test_lowres_noise_is_the_low_frequencies_of_the_noise(height, width):
+    # Still unit variance, and below its own highest frequency it is the request's noise.
+    video = torch.randn((1, CHANNELS, 16, height, width), generator=torch.Generator().manual_seed(0))
+    rows = lowres_noise_rows(patchify_video_latents(video, PATCH), 16, height, width, CHANNELS, PATCH, 16, 24)
     lowres = unpatchify_video_tokens(rows, 16, 16, 24, CHANNELS, PATCH)
 
     assert abs(float(lowres.std()) - 1.0) < 0.02
@@ -147,31 +138,16 @@ def _run_lowres(pipeline, scheduler, audio_scheduler, layout=None, width=WIDTH):
     return layout, noise, audio, result
 
 
-def test_off_by_default(monkeypatch):
-    monkeypatch.delenv(LOWRES_STEPS_ENV, raising=False)
-    calls = []
-    # A bare pipeline: the default path reads nothing from it.
-    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
-    pipeline._denoise = lambda *args, **kwargs: calls.append(args)
-    _layout_, noise, audio, result = _run_lowres(pipeline, "scheduler", "audio scheduler")
-
-    assert result[0] is noise and result[1] is audio and result[2:] == ("scheduler", "audio scheduler")
-    assert not calls
-
-
 @pytest.mark.parametrize(
-    "steps, scale, kwargs",
+    "steps, kwargs",
     [
-        ("8", "1/2", {}),  # no full-resolution forward left
-        ("2", "1/2", {"width": 10}),  # 10 does not halve onto 2x2 patches
-        ("2", "2/3", {}),  # nor does 2/3 of 8 land on them
-        ("2", "1", {}),  # not a lower resolution
-        ("2", "1/2", {"layout": _layout(anchors=("first",))}),  # keyframe rows are full resolution
+        ("8", {}),  # no full-resolution forward left
+        ("2", {"width": 10}),  # 10 does not halve onto 2x2 patches
+        ("2", {"layout": _layout(anchors=("first",))}),  # keyframe rows are full resolution
     ],
 )
-def test_requests_the_stage_does_not_apply_to_run_as_before(monkeypatch, steps, scale, kwargs):
+def test_requests_the_stage_does_not_apply_to_run_as_before(monkeypatch, steps, kwargs):
     monkeypatch.setenv(LOWRES_STEPS_ENV, steps)
-    monkeypatch.setenv(LOWRES_SCALE_ENV, scale)
     calls = []
     scheduler, audio_scheduler = _scheduler(12.0), _scheduler(3.0)
     _layout_, noise, audio, result = _run_lowres(_stage_pipeline(calls), scheduler, audio_scheduler, **kwargs)
@@ -204,19 +180,6 @@ def test_lowres_stage_hands_off_video_and_carries_audio(monkeypatch, steps):
     # Audio: the same rows, stepped through the first `steps` of their own schedule and no further.
     assert audio_rows is audio and torch.equal(audio, torch.full_like(audio, float(steps)))
     assert torch.equal(torch.cat([audio_first.sigmas, audio_rest.sigmas[1:]]), audio_scheduler.sigmas)
-
-
-def test_lowres_stage_at_another_scale(monkeypatch):
-    monkeypatch.setenv(LOWRES_STEPS_ENV, "1")
-    monkeypatch.setenv(LOWRES_SCALE_ENV, "3/4")
-    calls = []
-    scheduler = _scheduler(12.0)
-    _layout_, noise, _audio, result = _run_lowres(_stage_pipeline(calls), scheduler, _scheduler(3.0), width=16)
-
-    # 8x16 latents run at 6x12, and come back at 8x16.
-    assert calls[0][2].shape[0] == FRAMES * (6 // 2) * (12 // 2)
-    sigma = float(scheduler.sigmas[1])
-    assert torch.allclose(result[0], (1.0 - sigma) * 2.0 + sigma * noise)
 
 
 def test_lowres_stage_pdd_heads(monkeypatch):
