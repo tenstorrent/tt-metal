@@ -41,6 +41,12 @@ inline void for_each_attn_res_block_mix_item(Body body) {
     }
 }
 
+// Slots a run takes in a buffer that holds one: the longest run (the program's `max_run`, which
+// sized the buffers), whatever this one's length. A circular buffer's pointers wrap only on
+// landing exactly at its end, so a core whose items are of different lengths has to move them
+// by the same amount every item.
+constexpr uint32_t attn_res_block_mix_run_slots() { return get_named_compile_time_arg_val("max_run"); }
+
 // Sites in `group` when the sites are split into groups of `sites_per_group`: all but the
 // last group are full. A short last group still takes a full group's slots in every circular
 // buffer, so their pointers stay aligned from one item to the next.
