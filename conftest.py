@@ -1083,8 +1083,7 @@ def pytest_addoption(parser):
         "--vf-sweep-devices",
         action="store",
         default=None,
-        help="With --didt-vf-sweep: force AICLK/VDD only on these devices (comma separated metal device ids, e.g. 16, "
-        "or pciN for the chip on /dev/tenstorrent/N). The "
+        help="With --didt-vf-sweep: force AICLK/VDD only on these device ids (comma separated, e.g. 16). The "
         "workload still runs on every device; the others stay at the firmware's clock and voltage",
     )
     parser.addoption(

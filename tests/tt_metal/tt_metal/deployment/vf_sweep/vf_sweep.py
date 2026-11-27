@@ -79,15 +79,11 @@ CHIP_LINE = re.compile(
     r"NOC (mismatch|failure|timeout|hang|not run):|No host progress|previously wedged|^\s*chip \d+ \(.*\): noc \d+ batch"
 )
 CHIP_ID = re.compile(r"\bchip (\d+)\b")
-# UMD names the chip of a timed-out MMIO op by its PCIe index: "MMIO per-op timeout on PCIe device ID 17, NOC0: ..."
-MMIO_TIMEOUT_PCI = re.compile(r"MMIO per-op timeout on PCIe device ID (\d+)")
 DEVICE_FAIL = re.compile(r"Device (\d+) (?:PCC: (?!1\.0\b)|output failed|reference output)")
 
 
 def failing_chips(text):
-    """Chips a test log names as failing (unused-channel lines excluded); empty when the log names none. Metal device
-    ids are ints; a chip UMD named in an MMIO timeout is "pciN" (its /dev/tenstorrent index), which OpTestBase maps to
-    the metal device id when the sweep starts."""
+    """Device ids a test log names as failing (unused-channel lines excluded); empty when the log names none."""
     chips = set()
     for line in text.splitlines():
         if UNUSED.search(line):
@@ -100,13 +96,7 @@ def failing_chips(text):
         m = DEVICE_FAIL.search(line)
         if m:
             chips.add(int(m.group(1)))
-        m = MMIO_TIMEOUT_PCI.search(line)
-        if m:
-            chips.add(f"pci{m.group(1)}")
-    # A chip named by metal id is usually the one whose MMIO then timed out, so the PCIe-indexed name is only used
-    # when the log names no chip otherwise (it cannot be matched to a metal id without the cluster descriptor).
-    metal = sorted(c for c in chips if isinstance(c, int))
-    return metal or sorted(chips, key=lambda c: int(c[3:]))
+    return sorted(chips)
 
 
 # Where a point hung. All of them count as a hang at that point; the label says which part of it hung.
@@ -383,11 +373,7 @@ def summarize(a, steps, status, abort_reason, out):
             ref_failed.setdefault(e.get("step", 0), set()).update(e["failed"])
 
     points = {}  # (mhz, off) -> dict(verdict, text, vcore{dev: mV}, bad_devices)
-    # The chips the sweep actually forced (metal ids, after "pciN" was resolved); judge only those.
-    forced = next((e["devices"] for e in events if e["event"] == "forced"), None)
-    judged = None
-    if a.devices:
-        judged = set(forced) if forced else {d for d in a.devices if isinstance(d, int)}
+    judged = set(a.devices) if a.devices else None
     others = {}  # device not forced/judged -> points where it failed anyway
     for idx, (mhz, off) in enumerate(steps):
         if idx in status:
@@ -615,7 +601,7 @@ def sweep_qualifies(entry):
 def slug(entry, chip):
     sel = entry["node"].split("::")[-1] if entry["node"] else (entry["k"] or TESTS[entry["test"]]["k"])
     name = entry["test"] + "_" + re.sub(r"[^A-Za-z0-9]+", "_", sel).strip("_")
-    return name + (f"_chip{chip}" if isinstance(chip, int) else f"_{chip}" if chip else "_all_chips")
+    return name + (f"_chip{chip}" if chip is not None else "_all_chips")
 
 
 def cmd_followup(a):
@@ -643,12 +629,7 @@ def cmd_followup(a):
         # died on an MMIO timeout without saying which chip), the sweep forces every chip.
         for chip in e["chips"] or [None]:
             key = (e["test"], e["node"] or e["k"] or TESTS[e["test"]]["k"], chip)
-            if chip is None:
-                who = "all chips (failing chip not named in the log)"
-            elif isinstance(chip, int):
-                who = f"chip {chip}"
-            else:
-                who = f"chip on /dev/tenstorrent/{chip[3:]} (named by UMD's MMIO timeout)"
+            who = f"chip {chip}" if chip is not None else "all chips (failing chip not named in the log)"
             if key not in swept:
                 sweep_dir = Path(a.output) / f"vf_sweep_{slug(e, chip)}"
                 print(
@@ -720,10 +701,9 @@ def main():
     sel.add_argument("-k", dest="k", help="pytest -k expression within the test (e.g. 'galaxy and eth')")
     s.add_argument(
         "--devices",
-        type=lambda v: [int(d) if d.strip().isdigit() else d.strip() for d in v.split(",") if d.strip()],
+        type=lambda v: [int(d) for d in v.split(",") if d.strip()],
         default=None,
-        help="force AICLK/VDD only on these devices and judge only them: metal device ids, or pciN for the chip on "
-        "/dev/tenstorrent/N (comma separated; default: all)",
+        help="force AICLK/VDD only on these device ids and judge only them (comma separated; default: all)",
     )
     s.add_argument("--output", required=True, help="directory for sweep.log, events.jsonl, summary.json, verdict.txt")
     s.add_argument("--no-initial-reset", action="store_true", help="do not reset the boards before the sweep")

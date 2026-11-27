@@ -41,12 +41,7 @@ def didt_vf_sweep(request):
         "vdd_offsets": offsets,
         "start_step": request.config.getoption("--vf-sweep-start-step") if freqs else 0,
         "results_path": request.config.getoption("--vf-sweep-results") if freqs else None,
-        # metal device ids, or "pciN" for the chip on /dev/tenstorrent/N
-        "devices": [
-            int(d) if d.strip().isdigit() else d.strip()
-            for d in (request.config.getoption("--vf-sweep-devices") or "").split(",")
-            if d.strip()
-        ]
+        "devices": [int(d) for d in (request.config.getoption("--vf-sweep-devices") or "").split(",") if d.strip()]
         or None,
     }
     yield

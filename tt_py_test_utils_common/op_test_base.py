@@ -108,7 +108,6 @@ class OpTestBase:
         # others stay at the firmware's clock and voltage, so one failing chip can be swept on its own.
         self.vf_devices = list(vf_sweep_devices) if vf_sweep_devices else list(self.device_ids)
         if self.vf_sweep_freqs:
-            self.vf_devices = self._resolve_vf_devices(self.vf_devices)
             unknown = sorted(set(self.vf_devices) - set(self.device_ids))
             if unknown:
                 raise ValueError(f"VF sweep devices {unknown} are not in this mesh ({sorted(self.device_ids)})")
@@ -126,27 +125,6 @@ class OpTestBase:
         # Weights and activations tensors are needed for subclasses to run the operation
         self.activations = None
         self.inputs = []
-
-    @staticmethod
-    def _resolve_vf_devices(devices):
-        """Metal device ids for --vf-sweep-devices entries: an int is a metal device id, "pciN" is the chip on
-        /dev/tenstorrent/N (how UMD names a chip in its errors), mapped through the cluster descriptor."""
-        if all(isinstance(d, int) for d in devices):
-            return devices
-        from tt_py_test_utils_common.aiclk_control import metal_id_to_pci_index
-
-        pci_to_metal = {pci: metal for metal, pci in metal_id_to_pci_index().items()}
-        resolved = []
-        for d in devices:
-            if isinstance(d, int):
-                resolved.append(d)
-                continue
-            pci = int(str(d).removeprefix("pci"))
-            if pci not in pci_to_metal:
-                raise ValueError(f"VF sweep: no device on /dev/tenstorrent/{pci} ({sorted(pci_to_metal)})")
-            logger.info(f"VF sweep: /dev/tenstorrent/{pci} is device {pci_to_metal[pci]}")
-            resolved.append(pci_to_metal[pci])
-        return resolved
 
     def get_device(self, device_idx):
         return self.mesh_device
@@ -219,7 +197,6 @@ class OpTestBase:
             from tt_py_test_utils_common.aiclk_control import AiclkController
 
             clock = AiclkController(self.vf_devices)
-            self._record_sweep_event("forced", devices=[int(d) for d in self.vf_devices])
             forced = "all devices" if len(self.vf_devices) == len(self.device_ids) else f"devices {self.vf_devices}"
             logger.info(
                 f"VF sweep on {forced}: AICLK {self.vf_sweep_freqs} MHz x VDD offsets {self.vdd_offsets} mV, "
