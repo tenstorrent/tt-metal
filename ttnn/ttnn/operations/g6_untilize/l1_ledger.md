@@ -1,58 +1,60 @@
 # L1 Ledger: g6_untilize
 
-Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking decisions: `op_design.md` → *Blocking Model*.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Blocking axes: `rows` (with `batch`
+folded in) and `tile_cols` (`op_design.md`, Blocking Model).
 
 ## Inventory
 
-There is one buffer. Rule 3 was applied before any sizing:
-
-- **Pack into the destination.** The gather lands every face-row piece directly at its final row-major position in the buffer the store reads. No tile-staging buffer exists between "read tiles" and "reorder".
-- **Transform in place.** Not needed: the reorder happens in transit (NoC read addressing), not in L1.
-- **Alias** and **fold into DEST** do not apply: there is no second buffer and no compute kernel.
+There is one buffer. The op has no compute phase, so no phase boundary needs storage. The reader packs each
+face-row piece straight into its final row-major position (Rule 3 pattern 1: pack into the destination). The
+writer drains that same buffer to DRAM. No scratch, staging or tile-order copy exists: the
+`tile_stage_local_reorder` regime that would need one is rejected in the regime table. No budget solve, safety
+fraction or blocking search was introduced. `block_tile_cols` has a fit check only so that the bound below
+holds for every shape, and at Phase 0 it never binds.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_row_staging` | `staging_depth · block_rows` pages of `staged_row_bytes = block_tile_cols · tile_w · elem` bytes. Phase 0: `1 · 1` page of `4 · 32 · 4 = 512` B. | `staging_depth · block_rows` pages. Each slot's rows are all resident between the read barrier and the store issue; at depth 2 one slot fills while the other drains. Capacity = live set. | `{row: spans → block_rows; tile_col: spans → block_tile_cols (page width); batch: folded into row}` | `UInt32` (`ttnn.uint32`): a dataflow-only payload of raw bytes that never enters DEST. There is no compute kernel, so `fp32_dest_acc_en` does not apply (audit 2: mechanism reason "dataflow-only payload"). | `untilize_rows` (NoC reads) | `untilize_rows` (NoC write) | whole kernel | No other CB exists to share with. The input tiles are never staged: the gather writes into this buffer directly (Rule 3, pattern 1). |
+| `cb_row_block` | `block_tile_cols · buffer_depth` tile pages of `tile_bytes`. Phase 0: `4 · 1 = 4` pages = 16384 B | one block per slot: `block_rows` rows × `chunk_row_bytes`, at stride `padded_chunk_row_bytes` inside the slot's `block_tile_cols` pages. Phase 0: 1 row = 512 B, inside a 16384-B slot | `{rows: spans → block_rows ≤ TILE_HEIGHT (capacity sized at the cap: one tile page column holds 32 rows), tile_cols: spans → block_tile_cols, batch: streams (folded into rows), blocks-per-core: streams → buffer_depth window}` | UInt32. Dataflow-only payload: NoC in, NoC out, never unpacked and never in DEST, so the DEST-width audit does not apply | reader | writer | whole kernel; each slot lives from `cb_reserve_back` of a block to `cb_pop_front` after that block's write barrier | Nothing to share with: it is the only buffer. **Capacity > live set at Phase 0** (16384 B allocated, 512 B live) for a mechanism reason. The store helper's wait/pop quantum is `width_in_tiles` tile pages per ≤ 32-row block (`tilize_helpers_dataflow.inl:209,229,239`), so a slot is sized for a full 32-row block whatever `core_rows` is. Shrinking it would mean replacing the helper; the slack is 16 KB of a 1347776-B budget |
 
 ## Symbol table
 
 | Symbol | Meaning | Bound | Predicate establishing the bound |
 |--------|---------|-------|----------------------------------|
-| `elem` | bytes per element | `= 4` | dtype ∈ SUPPORTED = {uint32} (validate) |
-| `tile_w` | tile width in elements | `= 32` | input tile shape 32×32 (TILE layout of the producer) |
-| `Wt` | `ceil(W / 32)` | production 4; unbounded in general | bounds the capacity only through `block_tile_cols ≤ Wt` and the L1 clamp below |
-| `block_tile_cols` | tile columns per block | `1 ≤ block_tile_cols ≤ Wt`; Phase 0 `= Wt = 4` | `plan()` L1 clamp |
-| `block_rows` | rows per block | `1 ≤ block_rows ≤ max_i n_i`; Phase 0 `= 1` | `plan()` L1 clamp; `n_i` = rows owned by core `i` |
-| `staging_depth` | slots | `∈ {1, 2}`; Phase 0 `= 1` | `plan()`: `1` iff every core owns at most one block |
-| `L1_BUDGET` | per-core L1 the op may use | `1347776` B | model environment (BB-05) |
+| `tile_bytes` | one 32×32 uint32 tile | = 4096 | dtype = uint32 (SUPPORTED) |
+| `TILE_HEIGHT` | rows per tile page column, rows-per-wait cap of the store helper | = 32 | CB tile shape 32×32 (`tile_constants.h:18`) |
+| `tensor_tile_cols` | `ceil(W/32)` | any ≥ 1 (production 4) | input shape |
+| `block_tile_cols` | tile columns per block | `1 ≤ block_tile_cols ≤ tensor_tile_cols`; divides `tensor_tile_cols`; `buffer_depth · block_tile_cols · tile_bytes ≤ L1_OP_BUDGET_BYTES` | `derive_block_tile_cols` (largest divisor that fits); production 4 |
+| `buffer_depth` | slots in flight | `1 ≤ buffer_depth ≤ ROW_BLOCK_DEPTH = 2` | `min(ROW_BLOCK_DEPTH, max_blocks_per_core)`; production 1 |
+| `block_rows` | rows in one block | `1 ≤ block_rows ≤ TILE_HEIGHT` | `min(core_rows − 32k, TILE_HEIGHT)`; production 1 |
+| `padded_chunk_row_bytes` | row stride inside a slot | `= block_tile_cols · 128` (a multiple of 64) | helper's `round_up(row_bytes, tile_row_bytes)` (`tilize_helpers_dataflow.inl:208`) |
+| `L1_OP_BUDGET_BYTES` | model's free L1 per core (BB-05) | = 1347776 | spec, Model environment |
 
-Clamp in `plan()`: `staging_depth · block_rows · block_tile_cols · tile_w · elem ≤ L1_BUDGET` (mechanism caps in `op_design.md`).
+## Per-core footprint
 
-## Total per-core footprint
+`L1_op = buffer_depth · block_tile_cols · tile_bytes`
 
-`staging_depth · block_rows · block_tile_cols · tile_w · elem` bytes = `staging_depth · block_rows · block_tile_cols · 128` B for uint32.
-
-- Phase 0 (production `(1, 1, 32, 128)` on 8×4 cores): `1 · 1 · 4 · 128 = 512` B per core, 0.04 % of `L1_BUDGET`.
-- Scales linearly with `block_rows` (the row knob), `block_tile_cols` (the tile-column knob) and `staging_depth`. No term scales with an unbounded op dimension: the clamp bounds all three.
-
-## Audits
-
-| Audit | Result |
-|-------|--------|
-| 1. Capacity vs live set | Equal (no over- or under-allocation). The buffer spans both block axes, and its capacity scales with both. |
-| 2. Page format vs DEST width | No compute kernel and no DEST; UInt32 is the raw payload. |
-| 3. Disjoint lifetimes without justification | None: there is one buffer. |
-| 4. Bounds and closed form | Every symbol is bounded above; the total is closed-form. |
+- scales with `block_tile_cols` (linearly) and `buffer_depth` (linearly). It is constant in `block_rows`,
+  because the tile-page quantum already provides 32 row slots.
+- Phase 0: `1 · 4 · 4096 = 16384 B` per core on each of 32 cores, against the 1347776-B bound.
+- Worst case for any shape: `2 · block_tile_cols · 4096 ≤ L1_OP_BUDGET_BYTES` by the `block_tile_cols`
+  derivation. With `block_tile_cols ≥ 1` this needs only 8192 B, so no shape needs a host refusal.
 
 ## Data-movement budget
 
-Split: `row` across a `cx × cy` rectangle (production 8×4), gather-on-read (regime R1).
+Chosen split: `rows` only, regime `row_gather`, Phase 0 shape `(1, 1, 32, 128)`.
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `x` (input, 16384 B) | 1 | Each face-row piece is fetched exactly once, by the one core whose row needs it, straight to its row-major L1 position. Tiles are never staged or re-read. Shape: `B·H·2·Wt` reads of 64 B (production 256). | 0 |
-| `out` (output, 16384 B) | 1 | Each page is written once, whole, by its one owning core from the staged row. Shape: `B·H` writes of `W·4` B (production 32 × 512 B). | 0 |
+| x (input, TILE) | 1 read: 16384 B as 256 reads × 64 B | each face-row piece is read once, by the core that owns its output row, directly into its final L1 position. No piece is resident twice or re-read | 0 |
+| out (output, ROW_MAJOR) | 1 write: 16384 B as 32 writes × 512 B | each row page is written whole, once, by its owning core from the gathered block | 0 |
 
-Totals per device: DRAM 16384 B read + 16384 B written. Cross-core NoC 0 B. Core-local L1: 16384 B written by the NoC reads and read once by the NoC writes.
+Totals per call: DRAM 16384 B read + 16384 B written, in 288 transactions; cross-core NoC 0 B; core-local
+L1 copies 0 B (no byte is moved within L1).
 
-> Cheapest-traffic split considered: `row` across cores with gather-on-read (R1). Every legal split moves the same bytes per tier: delta 0 B DRAM and 0 B cross-core for R2 (scatter-on-write), R3 (tile read + L1 reorder) and the tile-column split. R2 also ties on transaction count (288). Implemented: R1, which is also the cheapest split (tied with R2). R2 is deferred because R1 already serves every shape R2 would. R2 reuses R1's skeleton (plan → one gather → one store per block) with the 64 B granularity moved from the read side to the write side.
+> Cheapest-traffic split considered: `rows` only. It is the implemented split, at minimum bytes per tier
+> (each tensor crosses DRAM exactly once, nothing crosses between cores) and with the fewest DRAM
+> transactions of any minimum-byte split (`rows × tile_cols` and `tile_cols` only: +96 partial-page writes).
+> The one split with an equal transaction count, the mirror `tile_scatter` (32 × 512-B reads + 256 × 64-B
+> writes), moves the same bytes. It is a `deferred` regime row because `row_gather` covers every INPUTS
+> shape with identical traffic and writes every output page whole from one core. The shared rectangle, CB
+> and row ranges keep it reachable.

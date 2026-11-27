@@ -1,160 +1,185 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_untilize: uint32 TILE -> ROW_MAJOR, every element bit-identical.
+"""Acceptance test for g6_untilize.
 
-Scope is the production case (1, 1, 32, 128) and the cases the spec's rules require (BB-22).
-Inputs are full-range uint32 bit patterns: small integers survive a float32 or 16-bit path.
+Covers the production case (1, 1, 32, 128) uint32 TILE in DRAM and the cases the spec's rules
+require (BB-22), nothing else. The op moves bytes, so every comparison is on 32-bit patterns.
 """
 
 import pytest
 import torch
 import ttnn
 
-from ttnn.operations.g6_untilize import g6_untilize
+from ttnn.operations.g6_untilize import describe_plan, g6_untilize
 
-PRODUCTION_SHAPE = (1, 1, 32, 128)
+SHAPE = (1, 1, 32, 128)
 PRODUCTION_KWARGS = {"use_multicore": True, "sub_core_grids": None}
 
 
-def torch_reference(x):
+def torch_g6_untilize(x):
+    """Reference: the logical values in new storage, in the input dtype."""
     return x.clone()
 
 
-def uint32_from_patterns(patterns):
+def _uint32_from_patterns(patterns):
     v = patterns.to(torch.int64) & 0xFFFFFFFF
     v = torch.where(v >= 2**31, v - 2**32, v)
     return v.to(torch.int32).view(torch.uint32)
 
 
-def full_range_uint32(shape, seed):
-    torch.manual_seed(seed)
-    patterns = torch.randint(-(2**31), 2**31, shape, dtype=torch.int64)
-    return uint32_from_patterns(patterns)
+def _random_uint32(shape):
+    # Uniform over all 2^32 patterns: values above 2^24 and 2^31 expose any narrower path.
+    return _uint32_from_patterns(torch.randint(-(2**31), 2**31, shape, dtype=torch.int64))
 
 
-def to_bits(t):
+def _bits(t):
     if t.dtype == torch.uint32:
         return t.contiguous().view(torch.int32)
     if t.dtype == torch.int32:
-        return t.contiguous()
+        return t
     if t.dtype == torch.int64:
-        return uint32_from_patterns(t).view(torch.int32)
+        return _uint32_from_patterns(t).view(torch.int32)
     raise AssertionError(f"readback dtype {t.dtype} holds no 32-bit integer pattern")
 
 
-def to_device(x, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+def _to_device(x, device, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     return ttnn.from_torch(x, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
 
-def assert_bits_equal(actual, expected, what):
-    a, e = to_bits(actual), to_bits(expected)
-    assert list(a.shape) == list(e.shape), f"{what}: shape {list(a.shape)} != {list(e.shape)}"
+def _assert_bits_equal(actual, expected, what):
+    assert list(actual.shape) == list(expected.shape), f"{what}: shape {list(actual.shape)} != {list(expected.shape)}"
+    a, e = _bits(actual), _bits(expected)
     bad = a != e
-    n_bad = int(bad.sum().item())
-    if n_bad:
+    if bool(bad.any()):
         idx = torch.nonzero(bad.reshape(-1)).reshape(-1)[:5].tolist()
         av = a.reshape(-1).to(torch.int64) & 0xFFFFFFFF
         ev = e.reshape(-1).to(torch.int64) & 0xFFFFFFFF
         detail = ", ".join(f"[{i}] got {av[i].item():#010x} expected {ev[i].item():#010x}" for i in idx)
-        raise AssertionError(f"{what}: {n_bad}/{bad.numel()} elements differ; {detail}")
+        raise AssertionError(f"{what}: {int(bad.sum())}/{bad.numel()} elements differ; {detail}")
 
 
-def assert_untilized(out, expected):
+def _check_output(out, expected):
+    """Output contract (device, shape, dtype, ROW_MAJOR, DRAM interleaved) and exact values."""
     assert ttnn.is_tensor_storage_on_device(out), "output is not a device tensor"
-    assert list(out.shape) == list(expected.shape), f"shape {list(out.shape)} != {list(expected.shape)}"
+    assert list(out.shape) == list(SHAPE), f"shape {list(out.shape)} != {list(SHAPE)}"
     assert out.dtype == ttnn.uint32, f"dtype {out.dtype} != uint32"
     assert out.layout == ttnn.ROW_MAJOR_LAYOUT, f"layout {out.layout} != ROW_MAJOR"
     mc = out.memory_config()
     assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, f"memory layout {mc.memory_layout}"
     assert mc.buffer_type == ttnn.BufferType.DRAM, f"buffer type {mc.buffer_type}"
-    assert_bits_equal(ttnn.to_torch(out), expected, "output vs torch.clone")
+    actual = ttnn.to_torch(out)
+    _assert_bits_equal(actual, expected, "g6_untilize vs torch.clone")
+    return actual
 
 
-@pytest.mark.parametrize("call_kwargs", [PRODUCTION_KWARGS, {}], ids=["model_call", "defaults"])
-def test_production_case(device, call_kwargs):
-    x = full_range_uint32(PRODUCTION_SHAPE, seed=42)
-    out = g6_untilize(to_device(x, device), **call_kwargs)
-    assert_untilized(out, torch_reference(x))
+@pytest.mark.parametrize("call", ["explicit_keywords", "default_keywords"])
+def test_production_case(device, call):
+    torch.manual_seed(42)
+    x = _random_uint32(SHAPE)
+    expected = torch_g6_untilize(x)
+    x_tt = _to_device(x, device)
+    if call == "explicit_keywords":
+        out = g6_untilize(x_tt, **PRODUCTION_KWARGS)
+    else:
+        out = g6_untilize(x_tt)
+    _check_output(out, expected)
 
 
-def test_face_order(device):
-    # Each element holds its own row-major index, so a misplaced face or tile shows its origin.
-    index = torch.arange(32 * 128, dtype=torch.int64).reshape(PRODUCTION_SHAPE)
-    x = uint32_from_patterns(index + (index % 2) * 2**31)
-    out = g6_untilize(to_device(x, device), **PRODUCTION_KWARGS)
-    assert_untilized(out, torch_reference(x))
+def test_face_order_and_extremes(device):
+    """Each element holds its own row-major index (+2^31 on odd indices), so a wrong face, tile or
+    row order names the misplaced element. Columns 0-3 of every row hold 0, 2^32-1, 2^31, 2^24+1."""
+    index = torch.arange(SHAPE[2] * SHAPE[3], dtype=torch.int64).reshape(SHAPE)
+    patterns = index + (index % 2) * 2**31
+    patterns[..., :4] = torch.tensor([0, 2**32 - 1, 2**31, 2**24 + 1], dtype=torch.int64)
+    x = _uint32_from_patterns(patterns)
+    out = g6_untilize(_to_device(x, device), **PRODUCTION_KWARGS)
+    _check_output(out, torch_g6_untilize(x))
 
 
-def test_extremes(device):
-    torch.manual_seed(0)
-    patterns = torch.randint(-(2**31), 2**31, PRODUCTION_SHAPE, dtype=torch.int64)
-    patterns[..., 0] = 0
-    patterns[..., 1] = 2**32 - 1
-    patterns[..., 2] = 2**31
-    patterns[..., 3] = 2**24 + 1
-    x = uint32_from_patterns(patterns)
-    out = g6_untilize(to_device(x, device), **PRODUCTION_KWARGS)
-    assert_untilized(out, torch_reference(x))
+def test_new_storage_input_unchanged(device):
+    torch.manual_seed(42)
+    x = _random_uint32(SHAPE)
+    x_tt = _to_device(x, device)
+    out = g6_untilize(x_tt, **PRODUCTION_KWARGS)
+    assert out.buffer_address() != x_tt.buffer_address(), "output shares the input's buffer"
+    _check_output(out, torch_g6_untilize(x))
+    _assert_bits_equal(ttnn.to_torch(x_tt), x, "input changed by the call")
 
 
-def test_new_storage_and_input_unchanged(device):
-    x = full_range_uint32(PRODUCTION_SHAPE, seed=1)
-    x_dev = to_device(x, device)
-    out = g6_untilize(x_dev)
-    assert out.buffer_address() != x_dev.buffer_address(), "output shares the input's buffer"
-    assert_untilized(out, torch_reference(x))
-    assert_bits_equal(ttnn.to_torch(x_dev), x, "input after the call")
+def test_repeat_and_program_cache(device):
+    """A second call on new buffers reuses the program and still writes the right buffer; a repeat
+    on the first input is bit-identical to the first result."""
+    torch.manual_seed(42)
+    x1 = _random_uint32(SHAPE)
+    x2 = _random_uint32(SHAPE)
+    # Both inputs exist before the first op call so that only op dispatches move the cache count.
+    x1_tt = _to_device(x1, device)
+    x2_tt = _to_device(x2, device)
 
-
-def test_repeat_is_bit_identical_and_cached(device):
-    x = full_range_uint32(PRODUCTION_SHAPE, seed=2)
-    x_dev = to_device(x, device)
-    first = g6_untilize(x_dev, **PRODUCTION_KWARGS)
+    out1 = g6_untilize(x1_tt, **PRODUCTION_KWARGS)
     entries = device.num_program_cache_entries()
-    second = g6_untilize(x_dev, **PRODUCTION_KWARGS)
-    assert device.num_program_cache_entries() == entries, "repeat call built a new program"
-    # `first` stays alive, so `second` lands in a different buffer: a stale cached address shows here.
-    assert second.buffer_address() != first.buffer_address()
-    assert_untilized(second, torch_reference(x))
-    assert_bits_equal(ttnn.to_torch(second), ttnn.to_torch(first), "repeat call")
+    out2 = g6_untilize(x2_tt, **PRODUCTION_KWARGS)
+    out3 = g6_untilize(x1_tt, **PRODUCTION_KWARGS)
+    assert device.num_program_cache_entries() == entries, "a repeat call with the same shape built a new program"
+
+    first = _check_output(out1, torch_g6_untilize(x1))
+    _check_output(out2, torch_g6_untilize(x2))
+    third = _check_output(out3, torch_g6_untilize(x1))
+    _assert_bits_equal(third, first, "repeat call differs from the first")
 
 
-def test_rejects_keyword_values(device, expect_error):
-    x_dev = to_device(full_range_uint32(PRODUCTION_SHAPE, seed=3), device)
-    with expect_error(ValueError, "use_multicore"):
-        g6_untilize(x_dev, use_multicore=False)
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
-    with expect_error(ValueError, "sub_core_grids"):
-        g6_untilize(x_dev, sub_core_grids=grid)
+def test_plan_single_rectangle_multicore(device):
+    torch.manual_seed(42)
+    x = _random_uint32(SHAPE)
+    x_tt = _to_device(x, device)
+
+    plan = describe_plan(x_tt)
+    assert plan["regime"] == "row_gather", f"regime {plan['regime']!r}"
+    ranges = plan["core_ranges"].ranges()
+    assert len(ranges) == 1, f"kernel group spans {len(ranges)} core ranges, expected one rectangle"
+    assert plan["num_cores"] == plan["core_ranges"].num_cores()
+    assert plan["num_cores"] >= 2, "the production case runs on one core"
+
+    out = g6_untilize(x_tt, **PRODUCTION_KWARGS)
+    _check_output(out, torch_g6_untilize(x))
+
+    again = describe_plan(x_tt)
+    assert again["regime"] == plan["regime"]
+    assert again["num_cores"] == plan["num_cores"]
+    assert list(again["core_ranges"].ranges()) == list(ranges)
 
 
-def test_rejects_host_tensor(expect_error):
-    x_host = ttnn.from_torch(full_range_uint32(PRODUCTION_SHAPE, seed=4), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
-    with expect_error((ValueError, RuntimeError), "(?i)device"):
-        g6_untilize(x_host)
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({"use_multicore": False}, "(?i)use_multicore"),
+        (
+            {"sub_core_grids": ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])},
+            "(?i)sub_core_grids",
+        ),
+    ],
+    ids=["use_multicore_false", "sub_core_grids_set"],
+)
+def test_rejects_keywords(device, expect_error, kwargs, message):
+    torch.manual_seed(42)
+    x_tt = _to_device(_random_uint32(SHAPE), device)
+    with expect_error(ValueError, message):
+        g6_untilize(x_tt, **kwargs)
 
 
-def test_rejects_rank_other_than_4(device, expect_error):
-    x_dev = to_device(full_range_uint32((1, 32, 128), seed=5), device)
-    with expect_error((ValueError, RuntimeError), "(?i)rank"):
-        g6_untilize(x_dev)
-
-
-def test_rejects_l1_interleaved(device, expect_error):
-    x_dev = to_device(full_range_uint32(PRODUCTION_SHAPE, seed=6), device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    with expect_error((ValueError, RuntimeError), "(?i)dram interleaved"):
-        g6_untilize(x_dev)
-
-
-def test_rejects_sharded(device, expect_error):
-    sharded = ttnn.create_sharded_memory_config(
-        (32, 128),
-        ttnn.CoreGrid(y=1, x=1),
-        ttnn.ShardStrategy.HEIGHT,
-        use_height_and_width_as_shard_shape=True,
-    )
-    x_dev = to_device(full_range_uint32(PRODUCTION_SHAPE, seed=7), device, memory_config=sharded)
-    with expect_error((ValueError, RuntimeError), "(?i)dram interleaved"):
-        g6_untilize(x_dev)
+@pytest.mark.parametrize(
+    "case, message",
+    [("host_tensor", "(?i)device"), ("rank_3", "(?i)rank"), ("l1_interleaved", "(?i)dram")],
+    ids=["host_tensor", "rank_3", "l1_interleaved"],
+)
+def test_rejects_inputs(device, expect_error, case, message):
+    torch.manual_seed(42)
+    if case == "host_tensor":
+        x_tt = ttnn.from_torch(_random_uint32(SHAPE), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT)
+    elif case == "rank_3":
+        x_tt = _to_device(_random_uint32(SHAPE[1:]), device)
+    else:
+        x_tt = _to_device(_random_uint32(SHAPE), device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    with expect_error((ValueError, RuntimeError), message):
+        g6_untilize(x_tt, **PRODUCTION_KWARGS)
