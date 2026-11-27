@@ -393,22 +393,34 @@ _CALL_HOOKS: list = []  # F283: [(settings prefix, hooks.batch_call_settings)] o
 def _call_hooks() -> list:
     import importlib
 
-    if _CALL_HOOKS:
-        return _CALL_HOOKS[0]
+    # F305: keyed on the hooks / settings files' mtimes, reloaded when one changed: a long-lived orchestrator must see a
+    # switch an agent made call-time (DeepSeek-V4.1 WA.3: a stale import refused a one-load gate on DS41_WOA_BANK)
+    files = sorted(_REPO.glob("models/demos/*/bringup/hooks.py"))
+    stamp = tuple(
+        (str(f), f.stat().st_mtime_ns, (f.parent.parent / "tt" / "settings.py").stat().st_mtime_ns)
+        for f in files
+        if (f.parent.parent / "tt" / "settings.py").exists()
+    )
+    if _CALL_HOOKS and _CALL_HOOKS[0][0] == stamp:
+        return _CALL_HOOKS[0][1]
+    fresh = bool(_CALL_HOOKS)
     out = []
-    for f in sorted(_REPO.glob("models/demos/*/bringup/hooks.py")):
+    for f in files:
         if "def batch_call_settings" not in f.read_text(errors="replace"):
             continue
         name = f.parent.parent.name
         try:
-            hooks = importlib.import_module(f"models.demos.{name}.bringup.hooks")
             st = importlib.import_module(f"models.demos.{name}.tt.settings")
+            hooks = importlib.import_module(f"models.demos.{name}.bringup.hooks")
+            if fresh:
+                st = importlib.reload(st)
+                hooks = importlib.reload(hooks)
         except Exception:  # noqa: BLE001 -- a model whose hooks do not import: its switches stay configuration
             continue
         prefix = next((v.prefix for v in vars(st).values() if isinstance(getattr(v, "prefix", None), str)), None)
         if prefix:
             out.append((prefix, hooks.batch_call_settings))
-    _CALL_HOOKS.append(out)
+    _CALL_HOOKS[:] = [(stamp, out)]
     return out
 
 

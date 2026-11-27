@@ -2968,3 +2968,12 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   before WA.4's A/B) would repeat it.
 - Fix: Orchestrator.perf_pick is false for `ab_mode: none` (task-level); such a task takes the normal gate. Perf picks
   without `ab` keep the on-only measurement (test_perf_ab.py). Selftest: selftest/test_cpu_perf_task.py.
+
+## F305 (2026-11-27, DeepSeek-V4.1 WA.3): call-time switches follow an edit of hooks.py in a long-lived process
+- Seen: WA.3's agent made DS41_WOA_BANK call-time (bringup/hooks.py batch_call_settings); every gate unit passed, but the
+  orchestrator (started before the edit) refused the gate on the one-load rule ("2 executed-layer model loads ... differ
+  in DS41_WOA_BANK"): core/batch._call_hooks cached the hooks imported at process start. A fresh `validate` found no error.
+  The task would have gone to a second agent attempt for a framework false failure.
+- Fix: _call_hooks keys its cache on the hooks / settings files' mtimes and reloads both modules when one changed.
+  Selftest: test_resident_gate.py::test_call_hooks_follow_an_edit_of_the_hooks_file (the X_ fixture now patches
+  _call_hooks).
