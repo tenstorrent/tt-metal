@@ -30,12 +30,7 @@ def test_profile(device, shape, dtype, torch_dtype):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     for _ in range(3):
-        if dtype == ttnn.float32:
-            out = g6_zeros_like(x)
-        else:
-            # bfloat8_b is outside Phase 0 SUPPORTED; dispatch the same program directly.
-            out = ttnn.allocate_tensor_on_device(x.spec, device)
-            ttnn.generic_op([out], pd.get_program_descriptor(out))
+        out = g6_zeros_like(x)
         ttnn.synchronize_device(device)
         ttnn.deallocate(out)
     ttnn.ReadDeviceProfiler(device)
@@ -96,9 +91,7 @@ def test_profile_core_knobs_bf8(device, monkeypatch, num_cores_cap, row_wise):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     for _ in range(5):
-        # bfloat8_b is outside Phase 0 SUPPORTED; dispatch the same program directly.
-        out = ttnn.allocate_tensor_on_device(x.spec, device)
-        ttnn.generic_op([out], pd.get_program_descriptor(out))
+        out = g6_zeros_like(x)
         ttnn.synchronize_device(device)
         ttnn.deallocate(out)
     ttnn.ReadDeviceProfiler(device)

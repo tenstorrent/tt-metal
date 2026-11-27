@@ -37,7 +37,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat8_b],
 }
 
 

@@ -32,7 +32,7 @@
 - **Golden baseline**: 4 / 4 supported cells pass, 2 `xfail_expected` (bfloat8_b), 8 / 8 regression tests pass, 0 loud categories.
 - **Perf baseline (flagged shape)**: 3603 ns median kernel time (12 samples; goal ≤ 2310 ns, stock 4920 ns).
 
-### [ ] Refinement 1 — bfloat8_b
+### [x] Refinement 1 — bfloat8_b
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. This moves the 2 `xfail_expected` golden cells (`test_op[5x1x32x256-new_output-dtype=BFLOAT8_B]` and its loose twin) to passing. Expected kernel and host delta: none.
 - The page size already comes from `output.buffer_aligned_page_size()` (1088 B).
@@ -58,6 +58,8 @@ Also flip the test drivers that bypass `validate()` for bf8b to the public entry
 - The golden suite shows 6 / 6 axis cells passing, with `xpass_drift = xfail_wrong_mode = supported_fail = 0`.
 - Acceptance, precision baseline (bf8b exact: 0 of 40960 elements ≠ 0) and trace tests are green.
 - The bf8b production case's kernel time is recorded in `changelog.md` as its perf-guard baseline (median of ≥ 12 samples).
+
+**Outcome**: `bfloat8_b` added to `SUPPORTED["dtype"]`; no kernel or host change. Golden: both bf8b cells pass (6 / 6 axis cells). bf8b exact: 0 of 40960 elements ≠ 0. Perf-guard baseline for bfloat8_b (5,1,32,256) new_output through the public entry point: 813.5 ns median of 16 (789–841 ns), 40 cores.
 
 ### [ ] Refinement 2 — DRAM write stream of the perf-flagged profile
 

@@ -25,7 +25,7 @@ No compute configuration and no other option exists (spec). Host-side knobs that
 | Property | Requirement |
 |----------|-------------|
 | Shape | `(d_0, d_1, d_2, d_3)`, rank 4, `d_2`, `d_3` multiples of 32, volume > 0 |
-| Dtype | `float32` (Phase 0 SUPPORTED); `bfloat8_b` (TARGET, refinement) |
+| Dtype | `float32` (Phase 0 SUPPORTED); `bfloat8_b` (SUPPORTED since Refinement 1) |
 | Layout | TILE |
 | Memory | DRAM interleaved |
 | Data | never read — not by a kernel, not into L1, not on the host. The input's buffer is not in `io_tensors` and no TensorAccessor is built for it. |
@@ -234,7 +234,7 @@ Registry (op file `ttnn/ttnn/operations/g6_zeros_like/g6_zeros_like.py`; names m
 | Declaration | Value |
 |-------------|-------|
 | `INPUT_TAGGERS` | `{"dtype": tag_dtype}`; `tag_dtype(inputs, axes) -> inputs[0]["dtype"]` (`inputs = (scenario,)`, `scenario = {"input_shape", "dtype", "with_optional_tensor"}`) |
-| `SUPPORTED` (Phase 0) | `{"dtype": [ttnn.float32]}` — the implementer owns this block; bfloat8_b needs no kernel or host change beyond adding it here (same zero bytes, page size read from the buffer) |
+| `SUPPORTED` | `{"dtype": [ttnn.float32, ttnn.bfloat8_b]}` (bfloat8_b since Refinement 1) — the implementer owns this block; bfloat8_b needed no kernel or host change beyond adding it here (same zero bytes, page size read from the buffer) |
 | `EXCLUSIONS` | `[]` |
 | Forbidden | any tagger beyond `tag_dtype`; a size, rank, layout or call-form axis; an EXCLUSIONS entry; refusing a call because `optional_tensor` is given |
 
