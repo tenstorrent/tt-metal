@@ -3,9 +3,9 @@
 
 """g6_zeros program descriptor: bank-run zero write.
 
-Work split (bank-affine): worker core c (row-major over the worker grid) owns DRAM bank c mod B and
-a contiguous share of that bank's rows. Within one bank consecutive rows are consecutive addresses,
-so each core's share is one contiguous DRAM run, written from one Z-byte zeroed L1 source.
+Work split (bank-affine): worker c owns DRAM bank c mod B and a contiguous share of that bank's rows.
+Within one bank consecutive rows are consecutive addresses, so each core's share is one contiguous
+DRAM run, written from one Z-byte zeroed L1 source.
 
 The kernel takes a bank-major page range [range_start, range_start + range_count): bank-major
 position q = prefix(b) + row maps to page id row * B + b. Any placement of ranges on cores is a
@@ -33,11 +33,18 @@ _NOC_MAX_BURST_SIZE = {
 
 @dataclass(frozen=True)
 class Knobs:
-    # Worker cores W, enumerated row-major from (0, 0); None = the whole worker grid.
-    # Clamped to [B, grid cores]: every bank needs at least one core.
+    # Worker cores W; None = B, one writer per DRAM bank. Clamped to [B, grid cores]: every bank
+    # needs at least one core. The op is bound by the DRAM banks; more writers per bank only add
+    # contention at the endpoints.
     num_worker_cores: int | None = None
-    # Upper bound on the transfer quantum Z; None = NOC_MAX_BURST_SIZE.
-    zero_chunk_bytes_cap: int | None = None
+    # Which core writes which bank.
+    #   "dram_adjacent": one core per bank, the worker the device reports nearest that bank on the
+    #                    writer's NoC, so the writers' NoC paths do not cross; requires W == B.
+    #   "row_major":     core c (row-major from (0, 0)) owns bank c mod B.
+    placement: str = "dram_adjacent"
+    # Upper bound on the transfer quantum Z. Z is zeroed once per core before the first write, so
+    # it is fixed cost on small calls; DRAM-bound calls are insensitive to it from 4096 up.
+    zero_chunk_bytes_cap: int | None = 4096
 
 
 DEFAULT_KNOBS = Knobs()
@@ -57,6 +64,7 @@ class CoreAssignment:
 @dataclass(frozen=True)
 class Plan:
     regime: str
+    placement: str
     num_pages: int
     page_bytes: int
     num_banks: int
@@ -76,12 +84,14 @@ def _plan(num_pages, page_bytes, device, knobs):
     num_banks = _num_banks(device)
     assert num_banks <= grid_cores, f"g6_zeros: {num_banks} DRAM banks but only {grid_cores} worker cores"
 
-    requested = grid_cores if knobs.num_worker_cores is None else knobs.num_worker_cores
+    requested = num_banks if knobs.num_worker_cores is None else knobs.num_worker_cores
     num_workers = max(num_banks, min(requested, grid_cores))
+
+    coords = _worker_coords(device, knobs.placement, num_workers, num_banks)
 
     rows_per_bank, banks_with_extra_row = divmod(num_pages, num_banks)
     cores = []
-    for c in range(num_workers):
+    for c, (x, y) in enumerate(coords):
         bank = c % num_banks
         slot = c // num_banks
         cores_of_bank = (num_workers - 1 - bank) // num_banks + 1
@@ -92,8 +102,8 @@ def _plan(num_pages, page_bytes, device, knobs):
         bank_prefix = bank * rows_per_bank + min(bank, banks_with_extra_row)
         cores.append(
             CoreAssignment(
-                x=c % grid.x,
-                y=c // grid.x,
+                x=x,
+                y=y,
                 role="zero_writer" if core_bank_rows > 0 else "idle",
                 bank=bank,
                 start_row=start_row,
@@ -118,6 +128,7 @@ def _plan(num_pages, page_bytes, device, knobs):
 
     return Plan(
         regime="bank_run",
+        placement=knobs.placement,
         num_pages=num_pages,
         page_bytes=page_bytes,
         num_banks=num_banks,
@@ -127,15 +138,29 @@ def _plan(num_pages, page_bytes, device, knobs):
     )
 
 
-def _worker_core_ranges(num_workers, grid):
-    """The first num_workers cores of the grid, row-major: at most a full-row rectangle plus one row."""
-    full_rows, partial = divmod(num_workers, grid.x)
-    ranges = []
-    if full_rows > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, full_rows - 1)))
-    if partial > 0:
-        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(partial - 1, full_rows)))
-    return ttnn.CoreRangeSet(ranges)
+def _worker_coords(device, placement, num_workers, num_banks):
+    """Logical (x, y) of worker c, for c in [0, num_workers); worker c owns bank c mod B."""
+    if placement == "row_major":
+        grid_x = device.compute_with_storage_grid_size().x
+        return [(c % grid_x, c // grid_x) for c in range(num_workers)]
+    if placement == "dram_adjacent":
+        assert num_workers == num_banks, f"g6_zeros: dram_adjacent placement needs W == B, got W={num_workers}"
+        writer_noc = ttnn.NOC.NOC_1  # WriterConfigDescriptor's default NoC
+        return [(c.x, c.y) for c in device.get_optimal_dram_bank_to_logical_worker_assignment(writer_noc)]
+    raise ValueError(f"g6_zeros: unknown placement {placement!r}")
+
+
+def _worker_core_ranges(plan, grid):
+    if plan.placement == "row_major":
+        # The first W cores row-major: at most a full-row rectangle plus one partial row.
+        full_rows, partial = divmod(plan.num_worker_cores, grid.x)
+        ranges = []
+        if full_rows > 0:
+            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, full_rows - 1)))
+        if partial > 0:
+            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(partial - 1, full_rows)))
+        return ttnn.CoreRangeSet(ranges)
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in plan.cores])
 
 
 def _page_bytes(output):
@@ -147,7 +172,7 @@ def _page_bytes(output):
 
 def create_program_descriptor(output, device, plan):
     grid = device.compute_with_storage_grid_size()
-    core_ranges = _worker_core_ranges(plan.num_worker_cores, grid)
+    core_ranges = _worker_core_ranges(plan, grid)
 
     # Raw L1 bytes, never unpacked or packed; declared in a non-block format so Z need not be a
     # whole number of block-float tiles.
