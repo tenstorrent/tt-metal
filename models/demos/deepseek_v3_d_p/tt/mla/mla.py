@@ -48,6 +48,10 @@ MLA_A2AMM_IMPL = os.environ.get("MLA_A2AMM_IMPL", "native")
 # Native op only: keep its L1 scratch across calls (one per mesh and shape, shared by all layers) instead of the
 # op allocating it per call. MLA_A2AMM_PERSISTENT_SCRATCH=0 restores the per-call allocation.
 MLA_A2AMM_PERSISTENT_SCRATCH = os.environ.get("MLA_A2AMM_PERSISTENT_SCRATCH", "1") != "0"
+# Native impl only: the whole early-Q stem before RoPE (head split + all-to-all + wkv_b1 on nope, all-to-all on rope) as
+# ONE all_to_all_matmul call in q-stem mode (qk_rope_head_dim set) on the unsplit q_b_proj output. 0 = the previous
+# three ops (nlp_create_q_heads_split, all_to_all_matmul, all_to_all_async_generic).
+MLA_A2AMM_QSTEM = os.environ.get("MLA_A2AMM_QSTEM", "1") != "0"
 _A2AMM_SCRATCH = {}
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
@@ -1705,6 +1709,8 @@ class ttMLA:
             assert (
                 all_to_all_matmul is not None
             ), "this build has no C++ ttnn.all_to_all_matmul (MLA_A2AMM_IMPL=generic)"
+            if MLA_A2AMM_QSTEM and tt_q.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+                return self._q_stem_seq_sharded_qstem(tt_q, seq_len_local)
 
         nope, rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
@@ -1713,19 +1719,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
-        # The chain's wkv_b1 settings: HiFi2, 16-bit DEST, output in L1 when it fits.
-        mm_memory_config = self._early_q_wkv_b1_kwargs(seq_len_local)["memory_config"]
-        compute_config = ttnn.ComputeConfigDescriptor()
-        compute_config.math_fidelity = ttnn.MathFidelity.HiFi2
-        compute_config.fp32_dest_acc_en = False
-        compute_config.math_approx_mode = False
-        a2amm_kwargs = dict(
-            cluster_axis=self.tp_axis,
-            topology=ttnn.Topology.Ring,
-            num_links=self.ccl_num_links,
-            memory_config=mm_memory_config,
-            compute_kernel_config=compute_config,
-        )
+        a2amm_kwargs = self._a2amm_kwargs(seq_len_local)
         if MLA_A2AMM_IMPL != "generic" and MLA_A2AMM_PERSISTENT_SCRATCH:
             # The op's L1 landing scratch, allocated once per (mesh, shape) and shared by every layer: without it the
             # op allocates (and frees) it on every call, ~70 us of host time per call (LoudBox 1x4, measured).
@@ -1754,6 +1748,48 @@ class ttMLA:
             cluster_axis=self.tp_axis,
         )
         ttnn.deallocate(rope)
+        return prefix, rope_seq
+
+    def _a2amm_kwargs(self, seq_len_local):
+        """all_to_all_matmul arguments of the early-Q stem: the chain's wkv_b1 settings (HiFi2, 16-bit DEST, output in
+        L1 when it fits), the TP ring."""
+        compute_config = ttnn.ComputeConfigDescriptor()
+        compute_config.math_fidelity = ttnn.MathFidelity.HiFi2
+        compute_config.fp32_dest_acc_en = False
+        compute_config.math_approx_mode = False
+        return dict(
+            cluster_axis=self.tp_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=self.ccl_num_links,
+            memory_config=self._early_q_wkv_b1_kwargs(seq_len_local)["memory_config"],
+            compute_kernel_config=compute_config,
+        )
+
+    def _q_stem_seq_sharded_qstem(self, tt_q, seq_len_local):
+        """_q_stem_seq_sharded_fused as ONE native all_to_all_matmul call in q-stem mode (MLA_A2AMM_QSTEM=1): it takes
+        the unsplit q_b_proj output [1, 1, S/sp, H/tp*(qk_nope+qk_rope)] and returns (prefix, rope_seq), the nope
+        columns through the exchange + wkv_b1 and the rope columns through the same exchange."""
+        a2amm_kwargs = self._a2amm_kwargs(seq_len_local)
+        a2amm_kwargs["qk_rope_head_dim"] = self.qk_rope_head_dim
+        if MLA_A2AMM_PERSISTENT_SCRATCH:
+            key = (
+                "qstem",
+                self.mesh_device.id(),
+                tuple(tt_q.shape),
+                tt_q.dtype,
+                tuple(self.wkv_b1_weight.shape),
+                self.tp_axis,
+                self.ccl_num_links,
+            )
+            scratch = _A2AMM_SCRATCH.get(key)
+            if scratch is None:
+                scratch = ttnn.all_to_all_matmul_scratch_tensor(tt_q, self.wkv_b1_weight, **a2amm_kwargs)
+                _A2AMM_SCRATCH[key] = scratch
+            a2amm_kwargs["scratch_tensor"] = scratch
+        prefix, rope_seq = ttnn.all_to_all_matmul(
+            tt_q, self.wkv_b1_weight, rope_memory_config=ttnn.DRAM_MEMORY_CONFIG, **a2amm_kwargs
+        )
+        ttnn.deallocate(tt_q)
         return prefix, rope_seq
 
     def _q_stem_seq_sharded_rope(self, prefix, rope_seq, rope_tensors, kv_actual_isl, metadata):

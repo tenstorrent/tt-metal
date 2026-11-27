@@ -229,6 +229,7 @@ def test_early_q_block_ab(request, mesh_device, device_params, variant, case_nam
         "fabric_payload_bytes": model_fabric_payload(variant.name),
         "visible_devices": os.environ.get("TT_VISIBLE_DEVICES"),
         "fused_impl": mla_module.MLA_A2AMM_IMPL,
+        "qstem": mla_module.MLA_A2AMM_QSTEM,
         "rounds": ROUNDS,
         "best_ms": {f"{p}/{m}": min(v) for (p, m), v in samples.items() if v},
         "samples_ms": {f"{p}/{m}": v for (p, m), v in samples.items()},
@@ -326,14 +327,20 @@ def test_early_q_host_ops(request, mesh_device, device_params, variant, case_nam
         q_in, num_heads=mla.num_heads // mla.tp_factor, **split_kw
     )
     scratch = ttnn.all_to_all_matmul_scratch_tensor(nope_l, mla.wkv_b1_weight, **a2amm_kw)
+    qstem_kw = dict(a2amm_kw, qk_rope_head_dim=mla.qk_rope_head_dim)
+    scratch_qstem = ttnn.all_to_all_matmul_scratch_tensor(q_in, mla.wkv_b1_weight, **qstem_kw)
 
-    def stem(path):
+    def stem(path, qstem=None):
         def fn(q):
             _set_path(path)
+            saved = mla_module.MLA_A2AMM_QSTEM
+            if qstem is not None:
+                mla_module.MLA_A2AMM_QSTEM = qstem
             try:
                 return mla._q_stem_seq_sharded(q, case.rope, cache, seq_len_local, None)
             finally:
                 _set_path("chain")
+                mla_module.MLA_A2AMM_QSTEM = saved
 
         return fn
 
@@ -364,9 +371,20 @@ def test_early_q_host_ops(request, mesh_device, device_params, variant, case_nam
         "fused/all_to_all_async_generic(rope)": _host_us(
             mesh_device, lambda: ttnn.experimental.all_to_all_async_generic(rope_l, in_dim=1, out_dim=2, **a2a_kw)
         ),
+        "qstem/all_to_all_matmul(q-stem, scratch given)": _host_us(
+            mesh_device,
+            lambda: ttnn.all_to_all_matmul(
+                q_in,
+                mla.wkv_b1_weight,
+                scratch_tensor=scratch_qstem,
+                rope_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **qstem_kw,
+            ),
+        ),
         "ref/clone(q)": _host_us(mesh_device, lambda: ttnn.clone(q_in)),
         "stem/chain": _host_us(mesh_device, stem("chain"), setup=clone_q),
-        "stem/fused": _host_us(mesh_device, stem("fused"), setup=clone_q),
+        "stem/fused(3 ops)": _host_us(mesh_device, stem("fused", qstem=False), setup=clone_q),
+        "stem/fused(q-stem, 1 op)": _host_us(mesh_device, stem("fused", qstem=True), setup=clone_q),
     }
     result = {
         "kind": "host_ops",
@@ -374,6 +392,7 @@ def test_early_q_host_ops(request, mesh_device, device_params, variant, case_nam
         "box": BOX.name,
         "mesh": f"{BOX.mesh[0]}x{BOX.mesh[1]}",
         "fused_impl": "native",
+        "qstem": mla_module.MLA_A2AMM_QSTEM,
         "n": HOST_N,
         "host_us": rows,
         "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
