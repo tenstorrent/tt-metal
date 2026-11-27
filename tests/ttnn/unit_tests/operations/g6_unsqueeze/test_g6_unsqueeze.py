@@ -1,19 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Acceptance test for g6_unsqueeze: the production cases, graded bit for bit.
+"""Acceptance test for g6_unsqueeze: the production calls, graded bit for bit.
 
-The spec limits tests to the production cases and the cases its rules require (BB-22), so
-every case here is p1 [1, 512] or p2 [1, 256], float32 TILE in DRAM interleaved:
+The spec limits tests to the production cases and the cases its rules require (BB-22): p1
+[1, 512] and p2 [1, 256], float32 TILE in DRAM interleaved. The four cases cross both shapes
+with both names of the new axis (2 positional, -1 keyword) and with both stressors the rules
+name: float32 special bit patterns (rule 1, a converting path changes them) and NaN in every
+input tile-padding position (rule 2, padding must never reach a logical output).
 
-- p1, dim 2: randn with special float32 bit patterns mixed in (NaN payloads, +-inf, -0.0,
-  subnormals); a converting path changes them (rule 1).
-- p2, dim 2: randn with NaN in every padding position of the input tiles; padding must not
-  reach a logical output (rule 2).
-- p1, dim=-1 passed as a keyword: the same position named from the end.
-
-A moved value is graded by bit equality, never by a tolerance (helpers.TOLERANCES holds
-("exact", None) for float32).
+The op moves values, so there is no tolerance: logical values are compared as int32 bit
+patterns, NaN payloads included.
 """
 
 import pytest
@@ -22,8 +19,8 @@ import torch
 import ttnn
 from ttnn.operations.g6_unsqueeze import g6_unsqueeze
 
-# float32 patterns a converting path changes: NaN payloads (quiet, negative quiet, signaling),
-# +-inf, -0.0, subnormals, largest and smallest normal magnitudes.
+# NaN payloads (quiet, negative quiet, signaling), +-inf, -0.0, subnormals, largest and smallest
+# normal magnitudes.
 SPECIAL_BITS = (
     0x7FC12345,
     0xFFFC5433,
@@ -38,7 +35,8 @@ SPECIAL_BITS = (
     0x00800000,
     0x80800000,
 )
-# A prime stride puts the patterns in every tile and in both 16-column faces of a tile.
+# Coprime to 32 and to 16: the patterns reach every tile, both face halves of a tile row, and
+# every lane position.
 SPECIAL_STRIDE = 7
 
 
@@ -50,53 +48,67 @@ def _bits(tensor):
     return tensor.contiguous().view(torch.int32)
 
 
-def _as_int32(pattern):
-    return pattern - (1 << 32) if pattern >= (1 << 31) else pattern
-
-
 def _make_input(shape, special_values):
     torch.manual_seed(42)
     x = torch.randn(shape, dtype=torch.float32)
     if special_values:
+        # Written as int32 so no float operation can quiet a NaN on the way in.
+        patterns = torch.tensor([p - (1 << 32) if p >= (1 << 31) else p for p in SPECIAL_BITS], dtype=torch.int32)
         flat = x.view(-1).view(torch.int32)
-        for i, position in enumerate(range(0, flat.numel(), SPECIAL_STRIDE)):
-            flat[position] = _as_int32(SPECIAL_BITS[i % len(SPECIAL_BITS)])
+        positions = torch.arange(0, flat.numel(), SPECIAL_STRIDE)
+        flat[positions] = patterns[torch.arange(positions.numel()) % patterns.numel()]
     return x
 
 
-def _to_device(torch_input, device, pad_value):
-    host = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, pad_value=pad_value)
-    return ttnn.to_device(host, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-
-def _assert_input_as_built(ttnn_input, torch_input, pad_value):
-    """The case tests what it claims: the device input holds the torch bits, and the poison
-    value fills the tile padding."""
-    back = ttnn.to_torch(ttnn_input)
-    assert torch.equal(_bits(back), _bits(torch_input)), "harness: host conversion changed input bits"
-    if pad_value is None:
-        return
+def _padding_values(ttnn_input, logical_shape):
     padded = ttnn_input.cpu().to_torch_with_padded_shape()
     logical = torch.zeros(padded.shape, dtype=torch.bool)
-    logical[tuple(slice(0, n) for n in ([1] * (padded.dim() - torch_input.dim()) + list(torch_input.shape)))] = True
-    padding = padded[~logical]
-    assert padding.numel() > 0 and bool(torch.isnan(padding).all()), "harness: tile padding does not hold NaN"
+    leading = [1] * (padded.dim() - len(logical_shape))
+    logical[tuple(slice(0, n) for n in leading + list(logical_shape))] = True
+    return padded[~logical]
+
+
+def _to_device(torch_input, device, nan_padding):
+    """Build the DRAM interleaved TILE input and confirm it holds what the case claims.
+
+    A harness that cannot place the input bits or the NaN padding skips with a reason starting
+    "harness:", so its failure is never charged to the op.
+    """
+    ttnn_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        pad_value=float("nan") if nan_padding else None,
+        preserve_nan_values=True,
+    )
+    back = ttnn.to_torch(ttnn_input)
+    if not torch.equal(_bits(back), _bits(torch_input)):
+        pytest.skip("harness: the host round trip changed input bit patterns")
+    if nan_padding:
+        padding = _padding_values(ttnn_input, tuple(torch_input.shape))
+        if not bool(torch.isnan(padding).all()):
+            ttnn_input = ttnn.fill_implicit_tile_padding(ttnn_input, float("nan"))
+            padding = _padding_values(ttnn_input, tuple(torch_input.shape))
+        if padding.numel() == 0 or not bool(torch.isnan(padding).all()):
+            pytest.skip("harness: NaN did not reach the input tile padding")
+    return ttnn_input
 
 
 @pytest.mark.parametrize(
-    "shape, dim, pass_dim_as, special_values, pad_value",
+    "shape, dim, pass_dim_as, special_values, nan_padding",
     [
-        pytest.param((1, 512), 2, "positional", True, None, id="p1-1x512-dim2-special_values"),
-        pytest.param((1, 256), 2, "positional", False, float("nan"), id="p2-1x256-dim2-nan_padding"),
-        pytest.param((1, 512), -1, "keyword", False, None, id="p1-1x512-dim-1-keyword"),
+        pytest.param((1, 512), 2, "positional", True, False, id="p1-1x512-dim2-special_values"),
+        pytest.param((1, 256), 2, "positional", False, True, id="p2-1x256-dim2-nan_padding"),
+        pytest.param((1, 512), -1, "keyword", False, True, id="p1-1x512-dim-1-keyword-nan_padding"),
+        pytest.param((1, 256), -1, "keyword", True, False, id="p2-1x256-dim-1-keyword-special_values"),
     ],
 )
-def test_g6_unsqueeze(device, shape, dim, pass_dim_as, special_values, pad_value):
+def test_g6_unsqueeze(device, shape, dim, pass_dim_as, special_values, nan_padding):
     torch_input = _make_input(shape, special_values)
     expected = pytorch_g6_unsqueeze(torch_input, dim)
-
-    ttnn_input = _to_device(torch_input, device, pad_value)
-    _assert_input_as_built(ttnn_input, torch_input, pad_value)
+    ttnn_input = _to_device(torch_input, device, nan_padding)
 
     if pass_dim_as == "keyword":
         output = g6_unsqueeze(ttnn_input, dim=dim)
@@ -109,7 +121,8 @@ def test_g6_unsqueeze(device, shape, dim, pass_dim_as, special_values, pad_value
     memory_config = output.memory_config()
     assert memory_config.buffer_type == ttnn.BufferType.DRAM
     assert memory_config.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-    assert output.buffer_address() != ttnn_input.buffer_address(), "output must not alias the input buffer"
+    assert output.buffer_address() != ttnn_input.buffer_address(), "the output must not alias the input buffer"
+    assert tuple(output.shape) == tuple(expected.shape)
 
     actual = ttnn.to_torch(output)
     assert tuple(actual.shape) == tuple(expected.shape)
