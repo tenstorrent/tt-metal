@@ -154,7 +154,7 @@ def h3_host_deltas(path: str, prefixes: tuple[str, ...], *, scale: float = 1.0) 
 def iter_h3_host_deltas(
     path: str, prefixes: tuple[str, ...], *, scale: float = 1.0
 ) -> Iterator[tuple[str, torch.Tensor]]:
-    """`h3_host_deltas` one target at a time, so only one dense delta is alive."""
+    """`h3_host_deltas` one target at a time, so only one LoRA product is alive (exact deltas are held as read)."""
     with safe_open(path, framework="pt", device="cpu") as handle:
         metadata = dict(handle.metadata() or {})
         raw = {key: handle.get_tensor(key) for key in handle.keys() if _strip_prefixes(key).startswith(prefixes)}

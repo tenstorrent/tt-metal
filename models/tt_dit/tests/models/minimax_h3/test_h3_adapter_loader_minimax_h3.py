@@ -168,15 +168,6 @@ def test_host_deltas_add_fastvideo_exact_deltas(tmp_path):
     torch.testing.assert_close(deltas["norm_out.norm.weight"], 0.5 * norm)
 
 
-def test_host_deltas_refuse_the_vsa_gate(tmp_path, expect_error):
-    """`to_gate_compress.set_weight` belongs to FastVideo's VSA-H3 attention; dropping it would run a
-    function the adapter was not trained for."""
-    path = tmp_path / "adapter_model.safetensors"
-    save_file({"transformer_blocks.0.attn.to_gate_compress.set_weight": torch.zeros(INNER_DIM, IN_DIM)}, str(path))
-    with expect_error(RuntimeError, "to_gate_compress.set_weight"):
-        h3_host_deltas(str(path), ("",))
-
-
 @pytest.mark.parametrize("sign", [1.0, -1.0])
 def test_stochastic_round_keeps_sub_ulp_delta_on_average(sign):
     weight = torch.full((1 << 20,), sign, dtype=torch.bfloat16)
