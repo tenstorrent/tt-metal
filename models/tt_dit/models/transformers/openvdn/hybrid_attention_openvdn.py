@@ -315,6 +315,11 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
         self._mark("window softmax")
         softmax_1BND = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(softmax_BHNE), 0)
+        # The whole-sequence heads only feed the softmax: free them before the linear branch, whose fp32 temporaries
+        # set the peak (the coresident pipeline is ~0.4 GB short at 5 s otherwise).
+        for t in (q_BHNE, k_BHNE, v_BHNE, softmax_BHNE):
+            ttnn.deallocate(t)
+        del q_BHNE, k_BHNE, v_BHNE, softmax_BHNE
         if local_out:
             softmax_1BND = to_local(softmax_1BND)
 
