@@ -62,4 +62,17 @@ enum class WrcfgCompletion : std::uint8_t
     Deferred
 };
 
+/**
+ * @brief Scratch::val section that @ref add_scratch adds to its destination word.
+ *
+ * Thread selects the issuing thread's section: section 0 for unpack, 1 for math, 2 for pack.
+ */
+enum class ScratchSec : std::uint8_t
+{
+    S0     = 0,
+    S1     = 1,
+    S2     = 2,
+    Thread = 3
+};
+
 } // namespace hal::cfg
