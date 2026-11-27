@@ -598,17 +598,18 @@ class VaeAttention(Module):
         self._ctx = ctx
         self._num_channels = num_channels
 
-    def warm_sdpa(self) -> None:
-        """Run the attention's SDPA once at each of its two programs.
+    def warm_sdpa(self, max_tokens: int) -> None:
+        """Run the attention's SDPA once at each of its programs that up to ``max_tokens`` tokens per chip reach.
 
         With runtime_seq_len the SDPA serves every token count from one program, except that its Q circular buffer
         is doubled once a core gets more than one Q chunk, which takes a second program. A model warmed at a size on
-        one side of that would build the other at the first size on the far side; this builds both, with one K
-        chunk."""
+        one side of that would build the other at the first size on the far side; this builds each side the token
+        counts reach, with one K chunk. Only those: the doubled buffer may not fit beside what else holds L1."""
         grid = self._sdpa_program_config.compute_with_storage_grid_size
         q_chunk = self._sdpa_program_config.q_chunk_size
         k_chunk = self._sdpa_program_config.k_chunk_size
-        for q_rows in (q_chunk, grid.x * grid.y * q_chunk + 1):
+        one_chunk_per_core = grid.x * grid.y * q_chunk
+        for q_rows in (q_chunk, one_chunk_per_core + 1) if max_tokens > one_chunk_per_core else (q_chunk,):
 
             def upload(rows: int) -> ttnn.Tensor:
                 return ttnn.from_torch(

@@ -271,6 +271,7 @@ class Flux2Pipeline:
             ccl_manager=self._vae_ccl_manager,
             use_conv3d=self._vae_use_conv3d,
         )
+        self._vae_decoder.warm_sdpa((height, width) for width, height in self._resolutions)
 
         # Editing is not supported with dynamic loading, which would have to evict the encoder too.
         if self.dynamic_load:
@@ -285,6 +286,11 @@ class Flux2Pipeline:
                 device=self._mesh_device,
                 parallel_config=self._vae_parallel,
                 ccl_manager=self._vae_ccl_manager,
+            )
+            # The reference images are encoded at most at one megapixel (_reference_size).
+            self._vae_encoder.warm_sdpa(
+                (h, w)
+                for w, h in (self._reference_size(width=width, height=height) for width, height in self._resolutions)
             )
             cache.load_model(
                 tt_model=self._vae_encoder,
