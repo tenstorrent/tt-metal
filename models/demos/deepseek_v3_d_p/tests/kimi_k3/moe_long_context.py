@@ -3,9 +3,10 @@
 """Kimi-K3.1 MoE long-context accuracy against the FP64 chain: the device routing readback, the per-chunk scoring and
 the bars of ``test_kimi_k3_1_moe_long_context.py``.
 
-Every row is scored (``tests/accuracy``): the MoE output's absolute and relative error (``windowed.errors``: RMS error,
-the reference's RMS, pooled NRMSE, PCC) and the median per-row NRMSE, and the routing against the FP64 top-16
-(``moe.routing_rows``: recall, the FP64 weight on missed experts, missed experts ranked in the FP64 selection).
+Every row is scored (``common/prefill/long_context_accuracy``): the MoE output's absolute and relative error
+(``windowed_errors.errors``: RMS error, the reference's RMS, pooled NRMSE, PCC) and the median per-row NRMSE, and the
+routing against the FP64 top-16 (``routing_error.routing_rows``: recall, the FP64 weight on missed experts, missed
+experts ranked in the FP64 selection).
 
 Bars (``BARS``), each held in every window: the study's MoE teacher-feed bars (``moe_teacher_feed.BARS``, branch
 ``mvasilijevic/k31/accuracy-harness-consumers``), proposed there against the vLLM trace over 9 layers at 128K. Its
@@ -21,28 +22,28 @@ from __future__ import annotations
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.accuracy.moe import routing_rows
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
+from models.demos.common.prefill.long_context_accuracy.moe.routing_error import routing_rows
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     SUM_YY,
-    Bar,
-    RowSeries,
     Window,
+    WindowedErrors,
     errors,
     quantile,
     row_nrmse,
     row_sums,
 )
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 
 TOP_K = KimiK31Config.NUM_EXPERTS_PER_TOKEN  # 16
 NUM_EXPERTS = KimiK31Config.NUM_ROUTED_EXPERTS  # 896
 
 BARS = [
-    Bar("moe_row_nrmse_median", "max", 0.20),
-    Bar("recall_mean", "min", 0.98),
-    Bar("miss_top_half_fraction", "max", 0.01),
-    Bar("dropped_weight_mean", "max", 0.01),
+    AcceptanceBar("moe_row_nrmse_median", "max", 0.20),
+    AcceptanceBar("recall_mean", "min", 0.98),
+    AcceptanceBar("miss_top_half_fraction", "max", 0.01),
+    AcceptanceBar("dropped_weight_mean", "max", 0.01),
 ]
 
 
@@ -92,7 +93,7 @@ def device_routing(ffn, block, rows: int) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 def append_chunk(
-    series: RowSeries,
+    series: WindowedErrors,
     start: int,
     *,
     output: torch.Tensor,
@@ -117,17 +118,17 @@ def append_chunk(
     series.add_events("misses", **{**r["misses"], "row": r["misses"]["row"] + start})
 
 
-def row_floor(series: RowSeries) -> float:
+def row_floor(series: WindowedErrors) -> float:
     """The per-row NRMSE floor (``golden_floor``: 1% of the median reference row norm) over the whole series."""
     return golden_floor(series.column("sums")[:, SUM_YY].sqrt())
 
 
 def measure(floor: float):
-    """A window's measures (``RowSeries.windows`` / ``whole``) with per-row NRMSE floored at ``floor``: the output's
-    absolute and relative error (``moe_*``), the median / p99 / max per-row NRMSE, and the routing: mean recall of
-    the FP64 top-16, the fraction of rows with the FP64 set, the FP64 weight on missed experts (mean, p99), the
-    misses and the fraction of them in the top half of the FP64 selection, the largest weight error on a shared
-    expert (median)."""
+    """A window's measures (``WindowedErrors.windows`` / ``whole``) with per-row NRMSE floored at ``floor``: the
+    output's absolute and relative error (``moe_*``), the median / p99 / max per-row NRMSE, and the routing: mean recall
+    of the FP64 top-16, the fraction of rows with the FP64 set, the FP64 weight on missed experts (mean, p99), the
+    misses and the fraction of them in the top half of the FP64 selection, the largest weight error on a shared expert
+    (median)."""
 
     def of(w: Window) -> dict:
         nr, recall, rank = row_nrmse(w["sums"], floor), w["recall"], w["misses"]["rank"]

@@ -1,17 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The windowed scoring core on small hand-computed values. CPU only, no device."""
+"""Windowed errors on small hand-computed values. CPU only, no device."""
 
 import math
 
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
-    Bar,
-    GrowthBar,
-    RowSeries,
-    check,
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
+    WindowedErrors,
     errors,
     nrmse,
     pcc,
@@ -20,7 +18,6 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
     rms_ref,
     row_nrmse,
     row_sums,
-    trend,
 )
 
 # Golden rows of norm 5 (3, 4) or 0; the device is off by (0, 1) on rows 1 and 3, so those rows have error norm 1.
@@ -81,10 +78,12 @@ def test_pcc_fails_closed_on_a_constant_or_non_finite_device_side() -> None:
     golden = torch.tensor([[1.0, 2.0, 3.0]])
     zero = errors(row_sums(golden, torch.zeros(1, 3)), "kv_")
     assert zero["kv_pcc"] == 0.0 and zero["kv_nrmse"] == 1.0
-    assert check([{"start": 0, "end": 1, **zero}], [Bar("kv_pcc", "min", 0.999)]) == ["kv_pcc 0 < 0.999 in [0, 1)"]
+    assert check([{"start": 0, "end": 1, **zero}], [AcceptanceBar("kv_pcc", "min", 0.999)]) == [
+        "kv_pcc 0 < 0.999 in [0, 1)"
+    ]
     broken = errors(row_sums(golden, torch.tensor([[1.0, float("nan"), 3.0]])), "kv_")
     assert math.isnan(broken["kv_pcc"])
-    assert check([{"start": 0, "end": 1, **broken}], [Bar("kv_pcc", "min", 0.999)]) == [
+    assert check([{"start": 0, "end": 1, **broken}], [AcceptanceBar("kv_pcc", "min", 0.999)]) == [
         "kv_pcc nan is not finite in [0, 1)"
     ]
 
@@ -100,7 +99,7 @@ def test_quantile_interpolates_and_is_nan_when_empty() -> None:
 
 def test_windows_align_to_absolute_rows_whatever_the_chunking() -> None:
     sums = row_sums(EXPECTED, ACTUAL)
-    one, two = RowSeries(), RowSeries()
+    one, two = WindowedErrors(), WindowedErrors()
     one.append(0, sums=sums)
     for start in range(4):  # one-row chunks
         two.append(start, sums=sums[start : start + 1])
@@ -116,7 +115,7 @@ def test_windows_align_to_absolute_rows_whatever_the_chunking() -> None:
 def test_windows_slice_every_column_and_event_and_leave_out_undefined_quantities() -> None:
     """Row columns slice by row; events (any order, fields with one entry per event, here a row-sums field too)
     fall in the window of their absolute row; a measure's None is left out."""
-    series = RowSeries()
+    series = WindowedErrors()
     series.append(0, recall=torch.tensor([1.0, 0.5]))
     series.append(2, recall=torch.tensor([1.0, 0.75]))
     series.add_events("misses", row=torch.tensor([3, 1]), rank=torch.tensor([7, 2]))
@@ -139,11 +138,11 @@ def test_windows_slice_every_column_and_event_and_leave_out_undefined_quantities
     ]
     assert "sampled_nrmse" not in windows[0] and windows[1]["sampled_nrmse"] == pytest.approx(0.2)
     assert "miss_rank_min" not in series.windows(1, measure)[0]  # row 0 has no miss: not defined, not NaN
-    assert check(series.windows(1, measure), [Bar("miss_rank_min", "min", 0)]) == []
+    assert check(series.windows(1, measure), [AcceptanceBar("miss_rank_min", "min", 0)]) == []
 
 
 def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -> None:
-    series = RowSeries()
+    series = WindowedErrors()
     series.append(0, sums=row_sums(EXPECTED[:2], ACTUAL[:2]))
     with expect_error(ValueError, "does not continue"):
         series.append(3, sums=row_sums(EXPECTED[:1], ACTUAL[:1]))
@@ -152,45 +151,8 @@ def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -
     with expect_error(ValueError, "differ"):
         series.append(2, other=torch.zeros(1))
     with expect_error(ValueError, "same leading row count"):
-        RowSeries().append(0, sums=row_sums(EXPECTED, ACTUAL), recall=torch.zeros(3))
+        WindowedErrors().append(0, sums=row_sums(EXPECTED, ACTUAL), recall=torch.zeros(3))
     with expect_error(ValueError, "one entry per event"):
         series.add_events("misses", row=torch.tensor([1, 2]), rank=torch.tensor([3]))
     with expect_error(ValueError, "no rows accumulated"):
-        RowSeries().windows(2, dict)
-
-
-WINDOWS = [
-    {"start": 0, "end": 10, "e": 0.010, "p": 0.999},
-    {"start": 10, "end": 20, "e": 0.012, "p": 0.998},
-    {"start": 20, "end": 30, "e": 0.011},  # this window does not measure p
-]
-
-
-def test_trend_reports_first_last_and_worst() -> None:
-    assert trend(WINDOWS, "e", "max") == {
-        "first": 0.010,
-        "last": 0.011,
-        "worst": 0.012,
-        "worst_start": 10,
-        "worst_over_first": pytest.approx(1.2),
-    }
-    assert trend(WINDOWS, "p", "min")["worst"] == 0.998 and trend(WINDOWS, "p", "min")["last"] == 0.998
-
-
-def test_bars_pass_at_the_value_and_name_each_breaking_window() -> None:
-    assert check(WINDOWS, [Bar("e", "max", 0.012), Bar("p", "min", 0.998), GrowthBar("e", 1.2)]) == []
-    failures = check(WINDOWS, [Bar("e", "max", 0.0115), Bar("p", "min", 0.9985), GrowthBar("e", 1.1)])
-    assert failures == [
-        "e 0.012 > 0.0115 in [10, 20)",
-        "p 0.998 < 0.9985 in [10, 20)",
-        "e grows 1.2x (> 1.1) from 0.01 to 0.012 at row 10",
-    ]
-
-
-def test_bars_fail_closed() -> None:
-    nan = [{"start": 0, "end": 1, "e": math.nan}]
-    assert check(nan, [Bar("e", "max", 1.0)]) == ["e nan is not finite in [0, 1)"]
-    assert check(nan, [GrowthBar("e", 2.0)]) == ["e nan is not finite in [0, 1)"]
-    assert check(WINDOWS, [Bar("missing", "max", 1.0)]) == ["missing: not measured by any window"]
-    exact_first = [{"start": 0, "end": 1, "e": 0.0}, {"start": 1, "end": 2, "e": 1e-9}]
-    assert check(exact_first, [GrowthBar("e", 1000.0)]) == ["e grows infx (> 1000.0) from 0 to 1e-09 at row 1"]
+        WindowedErrors().windows(2, dict)

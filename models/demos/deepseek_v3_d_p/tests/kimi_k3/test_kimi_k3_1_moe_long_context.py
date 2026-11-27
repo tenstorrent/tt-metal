@@ -30,8 +30,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import WindowedErrors, trend
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import RowSeries, check, trend
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import K31_CHAIN_1M, open_k31_chain, read_rows
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_long_context import (
@@ -87,7 +88,7 @@ def test_k31_moe_long_context(mesh_device, device_params, layer: int, rows: int)
     dims = [None, None]
     dims[layout.sp_axis], dims[layout.tp_axis] = -2, -1
     mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=tuple(dims))
-    series = RowSeries()
+    series = WindowedErrors()
     num_chunks = -(-rows // chunk)  # (a partial last chunk is zero-padded, its real span passed, as in production)
 
     def span(c: int) -> tuple[int, int]:

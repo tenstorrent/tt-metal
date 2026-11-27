@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """MoE accuracy against a reference: what a routing difference costs, per row.
 
-The MoE output is a continuous product, scored by ``windowed.errors`` (absolute and relative). Routing is
+The MoE output is a continuous product, scored by ``windowed_errors.errors`` (absolute and relative). Routing is
 scored here. ``dropped`` is in the router's own weight units (the reference weight lost), so it is absolute already;
 ``recall`` and set equality are fractions. Router math (scores, bias, top-k, scaling) is the model's and stays with
 the model. MoE is stateless: judge its error per window absolutely, not by growth over context.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
 
 
 def routing_rows(
@@ -29,7 +29,7 @@ def routing_rows(
     * ``dropped``: the reference weight on the experts ``got`` misses;
     * ``weight_err``: the largest weight difference on an expert both pick (0 when none is shared);
     * ``misses``: every missed reference expert, ranked in the reference's selection by ``want_scores`` (its score
-      of each of its experts, larger first; ``topk.missed_keys``)."""
+      of each of its experts, larger first; ``topk_selection.missed_keys``)."""
     rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
     missed = ~torch.isin(rows + want, rows + got)
     dropped = (want_weights.float() * missed).sum(dim=1)

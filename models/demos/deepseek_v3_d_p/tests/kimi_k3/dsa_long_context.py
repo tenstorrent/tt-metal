@@ -13,7 +13,7 @@ rows before trusting it.
 Per scored row, three FP64 attentions over the golden's FP64 keys, each against the reference (FP64 attention over
 the golden's top-k):
 
-* the device output itself: its absolute and relative error (``windowed.errors``), gated;
+* the device output itself: its absolute and relative error (``windowed_errors.errors``), gated;
 * ``sel``, the selection-only arm: FP64 attention over the device's own top-k. It isolates what the device's
   selection costs, the part of the device error that grows with context (m06n.3); its per-row NRMSE is gated by
   its window median;
@@ -22,8 +22,8 @@ the golden's top-k):
   at the cut; ``sel`` far above it as misses of keys that carry weight. Diagnostic.
 
 Also per scored row, the largest attention weight (FP64 softmax over the golden's selection) of one key the device
-missed, per head, maximised over heads (``accuracy.dsa.selection_masses``): a per-head outlier diagnostic, not a bar
-(the user's provisional default, epic m06n). Per row of the run: top-k recall and the share of misses ranked in the
+missed, per head, maximised over heads (``dsa.selection_error.selection_masses``): a per-head outlier diagnostic, not a
+bar (the user's provisional default, epic m06n). Per row of the run: top-k recall and the share of misses ranked in the
 top half of the golden's selection, diagnostics; any selected future key, an exact causality contract, gated at 0.
 """
 
@@ -36,20 +36,20 @@ from pathlib import Path
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
-from models.demos.deepseek_v3_d_p.tests.accuracy.dsa import selection_masses
-from models.demos.deepseek_v3_d_p.tests.accuracy.topk import missed_keys, topk_recall
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar
+from models.demos.common.prefill.long_context_accuracy.dsa.selection_error import selection_masses
+from models.demos.common.prefill.long_context_accuracy.topk_selection import missed_keys, topk_recall
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
     SUM_YY,
-    Bar,
-    RowSeries,
     Window,
+    WindowedErrors,
     errors,
     nrmse,
     quantile,
     row_nrmse,
     row_sums,
 )
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 
 C = KimiK31Config
 LAYER = 3  # 0-based: the first DSA layer, the one the FP64 chain golden covers
@@ -87,7 +87,7 @@ class Dims:
 
 def load_weights(checkpoint: Path) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     """``WEIGHTS`` of layer 3 from a K3.1 checkpoint in FP64, and the digest of the tensor set the chain read for
-    the layer (``Golden.require(weights_sha256=...)`` checks the golden was built from these weights)."""
+    the layer (``Fp64Golden.require(weights_sha256=...)`` checks the golden was built from these weights)."""
     from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import layer_weights
 
     tensors, digest = layer_weights(checkpoint, LAYER)
@@ -178,7 +178,7 @@ def scored_rows(rows: int, sampled: torch.Tensor, dims: Dims = Dims(), per_windo
 
 @dataclass
 class RowArms:
-    """Per scored row: the row sums (``windowed.row_sums``) of the device output, the selection arm and the tail
+    """Per scored row: the row sums (``windowed_errors.row_sums``) of the device output, the selection arm and the tail
     baseline against the reference, and the largest missed-key weight."""
 
     rows: torch.Tensor
@@ -272,14 +272,16 @@ def measure(window: Window, floor: float, dims: Dims = Dims()) -> dict:
     }
 
 
-def bars(rung: Mapping[str, float]) -> list[Bar]:
+def bars(rung: Mapping[str, float]) -> list[AcceptanceBar]:
     """The gated bars of one rung: ``rung`` maps ``sel_nrmse_median``, ``attn_nrmse`` and ``attn_rms_err`` to their
     per-window maxima; future keys must be 0 at every rung. A non-finite value (a bar not yet set) raises: ``check``
     would pass it, since no comparison with NaN fails."""
     unset = [metric for metric, value in rung.items() if not math.isfinite(value)]
     if unset:
         raise ValueError(f"no bar value for {unset}")
-    return [Bar(metric, "max", value) for metric, value in rung.items()] + [Bar("future_keys", "max", 0)]
+    return [AcceptanceBar(metric, "max", value) for metric, value in rung.items()] + [
+        AcceptanceBar("future_keys", "max", 0)
+    ]
 
 
 CACHE_NAMES = ("kv_latent", "kv_rope", "index_key")
@@ -306,7 +308,7 @@ class RunScorer:
         self.latent = torch.empty(rows, dims.lora, dtype=torch.float64)
         self.kpe = torch.empty(rows, dims.rope, dtype=torch.float64)
         self.index_key = torch.empty(rows, index_dim, dtype=torch.float64)
-        self.series = RowSeries()
+        self.series = WindowedErrors()
         self.arms: list[RowArms] = []
         self.recompute: list[torch.Tensor] = []
         self._chunk: dict | None = None
@@ -383,7 +385,7 @@ class RunScorer:
         floor = floor_of(arms["device"])  # every arm's sums hold the same reference row norms
         self.series.add_events("scored", row=arms.pop("rows"), **arms)
         lora, kvpe, index = self.dims.lora, kvpe.double(), index.double()
-        caches = RowSeries()
+        caches = WindowedErrors()
         caches.append(
             0,
             kv_latent=row_sums(self.latent, kvpe[:, :lora]),

@@ -9,10 +9,10 @@ and any window can be read back with the exact state before it. The run never op
 load a prepared golden, so the CPU work never holds the device.
 
 ``manifest.json`` is the golden's only metadata, in the long-context golden registry's format
-(``tests/accuracy/golden_registry.py``; the golden's id is its directory name): what produced it (producer,
-identity, provenance of each run session), the prompt (``token_ids.pt``), which segments are complete and how long
-each took, the products, and, once complete, the token floor for per-token NRMSE. Example (Kimi-K3 ``layers.0``
-on the code tokens of a vLLM trace, written straight into the registry as golden ``k3-l0-kda-fp64-1m``)::
+(``common/prefill/long_context_accuracy/fp64_golden.py``; the golden's id is its directory name): what produced it
+(producer, identity, provenance of each run session), the prompt (``token_ids.pt``), which segments are complete and how
+long each took, the products, and, once complete, the token floor for per-token NRMSE. Example (Kimi-K3 ``layers.0`` on
+the code tokens of a vLLM trace, written straight into the registry as golden ``k3-l0-kda-fp64-1m``)::
 
     nice -n 19 python -m models.demos.deepseek_v3_d_p.tests.kda.long_context_golden \\
         --checkpoint $KIMI_K3_CKPT --tokens /path/to/vllm/trace --count 1044480 \\
@@ -32,11 +32,9 @@ from pathlib import Path
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     MANIFEST,
-    Golden,
+    Fp64Golden,
     make_golden_dir,
     manifest_problems,
     open_golden,
@@ -46,6 +44,8 @@ from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
     write_manifest,
     write_token_ids,
 )
+from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
+from models.demos.deepseek_v3_d_p.reference.kda.layer import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 
 PRODUCER = "models.demos.deepseek_v3_d_p.tests.kda.long_context_golden"
@@ -158,7 +158,7 @@ def run_golden(
     return manifest
 
 
-def open_k3_layer0_golden() -> Golden:
+def open_k3_layer0_golden() -> Fp64Golden:
     """The registered Kimi-K3 ``layers.0`` golden, checked to be this producer's, on the first-layer input."""
     from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT
 

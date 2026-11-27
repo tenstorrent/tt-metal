@@ -10,9 +10,9 @@ from pathlib import Path
 
 import torch
 
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import GOLDEN_DIR_MODE, GOLDEN_FILE_MODE, open_golden
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.tests.helpers import make_config, random_weights
-from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import GOLDEN_DIR_MODE, GOLDEN_FILE_MODE, open_golden
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
     MANIFEST,

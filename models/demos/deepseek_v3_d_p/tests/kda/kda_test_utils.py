@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from loguru import logger
 
 import ttnn
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import golden_floor  # noqa: F401 (re-export)
 
 
 def encode_tail(rows: torch.Tensor, page_channels: int | None) -> torch.Tensor:
@@ -82,21 +83,11 @@ def _pcc_per_slice(expected: torch.Tensor, actual: torch.Tensor, keep_dims: Sequ
     return torch.tensor([_pcc(e, a) for e, a in zip(slices, actual_slices)], dtype=torch.float64)
 
 
-NRMSE_FLOOR_FRACTION = 0.01
-
-
 def _as_float64(name: str, tensor: torch.Tensor) -> torch.Tensor:
     tensor = tensor.detach().to(torch.float64)
     if not torch.isfinite(tensor).all():
         raise ValueError(f"{name} has {int((~torch.isfinite(tensor)).sum())} non-finite values")
     return tensor
-
-
-def golden_floor(slice_norms: torch.Tensor) -> float:
-    """NRMSE denominator floor for a golden whose slices have these norms: 1% of their median."""
-    if slice_norms.numel() <= 1:
-        return 0.0
-    return NRMSE_FLOOR_FRACTION * float(slice_norms.to(torch.float64).median())
 
 
 def nrmse(

@@ -11,7 +11,8 @@ import math
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import RowSeries, check
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import WindowedErrors
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.moe_long_context import BARS, append_chunk, measure, owner_positions
 
 
@@ -27,7 +28,7 @@ def test_owner_positions_hand_case() -> None:
 def test_a_scored_chunk_reports_the_hand_case() -> None:
     """3 rows, hidden 2, top-2. Output: rows 0 and 2 exact, row 1 off by 1 in one element (reference [0, 2]).
     Routing: row 0 the FP64 set; row 1 misses FP64 rank 1 (weight 0.4); row 2 misses FP64 rank 0 (weight 0.6)."""
-    series = RowSeries()
+    series = WindowedErrors()
     want_output = torch.tensor([[3.0, 4.0], [0.0, 2.0], [6.0, 8.0]])
     append_chunk(
         series,
@@ -54,7 +55,7 @@ def test_a_scored_chunk_reports_the_hand_case() -> None:
 
 def test_misses_land_in_the_window_of_their_absolute_row() -> None:
     """Two 2-row chunks; only the second (rows 2-3) misses an expert, so only window [2, 4) counts it."""
-    series = RowSeries()
+    series = WindowedErrors()
     out = torch.ones(2, 2)
     for start, ids in ((0, [[0, 1], [0, 1]]), (2, [[0, 1], [0, 7]])):
         append_chunk(

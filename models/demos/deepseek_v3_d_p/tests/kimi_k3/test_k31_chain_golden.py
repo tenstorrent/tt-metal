@@ -11,7 +11,7 @@ import json
 import torch
 from safetensors.torch import save_file
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     GoldenMismatch,
     GoldenNotFound,
     product_schema,

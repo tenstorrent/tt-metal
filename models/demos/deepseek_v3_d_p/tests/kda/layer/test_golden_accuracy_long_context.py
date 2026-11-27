@@ -4,11 +4,11 @@
 
 The device runs consecutive full prefill calls from token 0, carrying its own state, over the real code tokens the
 golden holds. The golden (``tests/kda/long_context_golden.py``, ``K3_LAYER0_GOLDEN`` in the long-context golden
-registry, ``tests/accuracy/golden_registry.py``) was prepared on CPU outside the device lock, and this test only
-loads it; a missing or incomplete golden fails the test. Error is scored with the shared windowed core
-(``tests/accuracy/windowed.py``) and gated as NRMSE against the golden: per call (with PCC), over the whole run,
-per 1,024-token window (drift with context), per token (the golden-wide floor from its manifest), and for the final
-recurrent state per head (one drifting head is not averaged away).
+registry, ``common/prefill/long_context_accuracy/fp64_golden.py``) was prepared on CPU outside the device lock, and this
+test only loads it; a missing or incomplete golden fails the test. Error is scored with the shared windowed core
+(``common/prefill/long_context_accuracy/windowed_errors.py``) and gated as NRMSE against the golden: per call (with
+PCC), over the whole run, per 1,024-token window (drift with context), per token (the golden-wide floor from its
+manifest), and for the final recurrent state per head (one drifting head is not averaged away).
 
 Needs ``KIMI_K3_CKPT`` (layers.0 and embedding shards, checked against the golden's digests); skips without it.
 """
@@ -23,16 +23,15 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import (
-    Bar,
-    RowSeries,
-    check,
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
+    WindowedErrors,
     errors,
     nrmse,
     row_nrmse,
     row_sums,
 )
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import assert_accurate, make_actual_start
@@ -110,7 +109,7 @@ def test_kimi_k3_layer0_long_context_accuracy(
     actual_end_tt = make_actual_start(layer.device, _CALL)
 
     state = layer.allocate_state(batch_size=1)
-    series = RowSeries()
+    series = WindowedErrors()
     for start in range(0, tokens, _CALL):
         hidden_tt = to_sp_input(build(token_ids[start : start + _CALL])[:, permutation, :], mesh_device, sp_axis)
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -170,6 +169,10 @@ def test_kimi_k3_layer0_long_context_accuracy(
         pcc_keep_dims=(0,),
     )
     failures = check(
-        [whole], [Bar("output_nrmse", "max", thresholds["output"]), Bar("token_nrmse_max", "max", thresholds["token"])]
-    ) + check(windows, [Bar("window_nrmse", "max", thresholds["window"])])
+        [whole],
+        [
+            AcceptanceBar("output_nrmse", "max", thresholds["output"]),
+            AcceptanceBar("token_nrmse_max", "max", thresholds["token"]),
+        ],
+    ) + check(windows, [AcceptanceBar("window_nrmse", "max", thresholds["window"])])
     assert not failures, failures

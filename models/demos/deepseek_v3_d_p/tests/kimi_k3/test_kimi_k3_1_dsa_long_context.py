@@ -33,7 +33,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import check
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_long_context as dsa
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_chain_golden import PRODUCER, PRODUCER_VERSION, open_k31_chain

@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reader of the Kimi-K3.1 FP64 CPU chain goldens: K3.1 layers 0-3 from prompt token ids, per-row products.
 
-The chain (producer ``fp64_chain``) runs embed -> layer 0 (KDA, dense FFN) -> layers 1 and 2 (KDA, MoE) -> layer 3
-(DSA) in FP64 with the AttnRes reads, segment by segment, and is registered in the long-context golden registry
-(``tests/accuracy/golden_registry.py``) under its id. Tests open it by id only; a missing, incomplete or other-producer
-golden fails. Its per-row products (manifest ``products`` of kind ``row``) are stored fp32 (keys FP64):
+The chain (producer ``fp64_chain``) runs embed -> layer 0 (KDA, dense FFN) -> layers 1 and 2 (KDA, MoE) -> layer 3 (DSA)
+in FP64 with the AttnRes reads, segment by segment, and is registered in the long-context golden registry
+(``common/prefill/long_context_accuracy/fp64_golden.py``) under its id. Tests open it by id only; a missing, incomplete
+or other-producer golden fails. Its per-row products (manifest ``products`` of kind ``row``) are stored fp32 (keys
+FP64):
 
 * MoE layers ``L`` = 1, 2: ``moe_input_L`` (the gate input, after ``post_attention_layernorm``), ``moe_output_L``
   (routed + shared, before the residual add), ``routing_ids_L`` (FP64 top-16, best first), ``routing_weights_L``,
@@ -23,7 +24,7 @@ only the requested rows are copied.
 
 The chain's ``identity.weights_sha256`` holds one digest per layer's non-routed weights (``layers.<l>``) as the chain
 read them. ``layer_weights`` reads DSA layer 3's set from a checkpoint with its digest, for
-``Golden.require(weights_sha256=...)``; no consumer digests layers 0-2.
+``Fp64Golden.require(weights_sha256=...)``; no consumer digests layers 0-2.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from pathlib import Path
 import torch
 from safetensors import safe_open
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import Golden, open_golden
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import Fp64Golden, open_golden
 
 K31_CHAIN_1M = "k31-l0-3-fp64-1m"  # layers 0-3 over the vLLM K3.1-Pro 1M prompt (1,044,480 rows)
 PRODUCER = "fp64_chain"
@@ -73,7 +74,7 @@ DSA_WEIGHTS = tuple(
 ) + ("self_attn.indexer.k_norm.bias",)
 
 
-def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> Golden:
+def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> Fp64Golden:
     """The registered K3.1 FP64 chain ``golden_id``, checked to be ``fp64_chain`` version ``PRODUCER_VERSION`` of
     ``MODEL``. Raises the registry's ``GoldenError``s (missing, incomplete, malformed, mismatched)."""
     golden = open_golden(golden_id, root)
@@ -81,15 +82,15 @@ def open_k31_chain(golden_id: str = K31_CHAIN_1M, root: Path | None = None) -> G
     return golden
 
 
-def segment_file(golden: Golden, index: int) -> Path:
+def segment_file(golden: Fp64Golden, index: int) -> Path:
     return golden.path / f"segment_{index:06d}.pt"
 
 
-def state_file(golden: Golden, index: int) -> Path:
+def state_file(golden: Fp64Golden, index: int) -> Path:
     return golden.path / f"state_{index:06d}.pt"
 
 
-def read_rows(golden: Golden, names: Sequence[str], start: int, end: int) -> dict[str, torch.Tensor]:
+def read_rows(golden: Fp64Golden, names: Sequence[str], start: int, end: int) -> dict[str, torch.Tensor]:
     """Rows ``[start, end)`` of the per-row products ``names``, each ``[end - start, ...]`` in its stored dtype."""
     products = golden.manifest["products"]
     not_rows = [n for n in names if products.get(n, {}).get("kind") != "row"]
@@ -113,7 +114,7 @@ def read_rows(golden: Golden, names: Sequence[str], start: int, end: int) -> dic
     return {n: torch.cat(v) for n, v in parts.items()}  # (the cat copies out of the mapped files)
 
 
-def read_sampled(golden: Golden, end: int | None = None) -> dict[str, torch.Tensor]:
+def read_sampled(golden: Fp64Golden, end: int | None = None) -> dict[str, torch.Tensor]:
     """The sampled-row products below row ``end`` (default: all): ``sampled_rows`` (absolute rows, ascending, int64)
     and ``attn_output_3`` (FP64 ``[n, hidden]``)."""
     end = golden.rows if end is None else end
@@ -140,7 +141,7 @@ def tensor_digest(tensors: dict[str, torch.Tensor]) -> str:
 def layer_weights(checkpoint: Path, layer: int) -> tuple[dict[str, torch.Tensor], dict[str, str]]:
     """DSA layer ``layer``'s weights as the chain read them (``ATTN_RES_WEIGHTS``, ``ROUTER_WEIGHTS``,
     ``DSA_WEIGHTS``) in their checkpoint dtype, keyed by layer-local name, and their digest as
-    ``{"layers.<layer>": sha256}`` (for ``Golden.require(weights_sha256=...)``). Only ``DSA_LAYER`` is supported."""
+    ``{"layers.<layer>": sha256}`` (for ``Fp64Golden.require(weights_sha256=...)``). Only ``DSA_LAYER`` is supported."""
     if layer != DSA_LAYER:
         raise ValueError(f"layer_weights reads the chain's DSA layer {DSA_LAYER}'s weight set, not layer {layer}'s")
     checkpoint = Path(checkpoint)

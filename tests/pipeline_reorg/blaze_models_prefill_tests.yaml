@@ -321,7 +321,7 @@
           models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_cache.py::test_index_key_basis_follows_the_model_config \
           models/demos/deepseek_v3_d_p/tests/test_chunked_trace_helpers.py::test_single_file_read_past_the_end_raises \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_kda_golden.py \
-          models/demos/deepseek_v3_d_p/tests/accuracy \
+          models/demos/common/prefill/long_context_accuracy/tests \
           models/demos/deepseek_v3_d_p/tests/kda/test_long_context_golden.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dsa_long_context.py \
           models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k31_chain_golden.py \

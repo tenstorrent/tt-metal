@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.golden_registry import (
+from models.demos.common.prefill.long_context_accuracy.fp64_golden import (
     GOLDEN_DIR_MODE,
     GOLDEN_FILE_MODE,
     MANIFEST,

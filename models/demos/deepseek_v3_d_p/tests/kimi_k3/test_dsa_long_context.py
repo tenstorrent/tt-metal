@@ -11,7 +11,8 @@ import math
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tests.accuracy.windowed import RowSeries, check
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import WindowedErrors
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_long_context as dsa
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_chain_golden
 
@@ -140,7 +141,7 @@ def windows_of(device_out: torch.Tensor, got: torch.Tensor):
     dims, w, latent, kpe, normed = small_case()
     rows, want = torch.tensor([4, 5]), torch.tensor([[3, 1, 0], [5, 2, 4]])
     arms, _ = dsa.score_rows(rows, normed, device_out, got, want, latent, kpe, w, dims)
-    series = RowSeries()
+    series = WindowedErrors()
     series.append(
         0,
         recall=torch.ones(6),

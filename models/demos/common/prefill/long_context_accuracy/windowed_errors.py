@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Shared windowed scoring core for long-context accuracy: per-row sums, fixed row windows, trends and bars.
+"""Windowed errors for long-context accuracy: per-row sums, fixed row windows, trends and the per-row NRMSE floor.
 
 A device result over a long prompt is scored chunk by chunk without holding its rows: each chunk becomes per-row
 FP64 sufficient statistics (``row_sums``), from which the NRMSE, PCC and absolute RMS error of any set of rows follow
@@ -12,8 +12,8 @@ that stays flat while the golden grows is a growing absolute error downstream, s
 error is the RMS over all elements of the window (``rms_err``), next to the golden's own RMS (``rms_ref``);
 ``nrmse = rms_err / rms_ref``.
 
-Bars are checked fail closed: a NaN or infinite metric fails, and a bar on a metric no window measured fails. A
-metric a window does not define is left out of that window (its function returns ``None``), never reported as NaN.
+A metric a window does not define is left out of that window (its function returns ``None``), never reported as NaN.
+Bars on these windows are in ``acceptance_bars``.
 """
 
 from __future__ import annotations
@@ -93,6 +93,17 @@ def pcc(sums: torch.Tensor) -> float:
     return c_xy / math.sqrt(m2_x * m2_y)
 
 
+# A golden's per-row NRMSE floor is this fraction of its median row norm (``golden_floor``).
+NRMSE_FLOOR_FRACTION = 0.01
+
+
+def golden_floor(slice_norms: torch.Tensor) -> float:
+    """NRMSE denominator floor for a golden whose slices have these norms: 1% of their median."""
+    if slice_norms.numel() <= 1:
+        return 0.0
+    return NRMSE_FLOOR_FRACTION * float(slice_norms.to(torch.float64).median())
+
+
 def row_nrmse(sums: torch.Tensor, floor: float) -> torch.Tensor:
     """Per-row NRMSE with each row's golden norm floored at ``floor`` (the golden's typical scale, so a near-zero row
     does not report its own magnitude); an exact row is 0."""
@@ -134,7 +145,7 @@ def errors(sums: torch.Tensor, prefix: str = "") -> dict[str, float]:
 
 @dataclass(frozen=True)
 class Window:
-    """Rows ``[start, end)`` of a ``RowSeries``: ``window[name]`` is a row column's ``[rows, ...]`` slice, or an
+    """Rows ``[start, end)`` of a ``WindowedErrors``: ``window[name]`` is a row column's ``[rows, ...]`` slice, or an
     event column's events inside the window (a dict of tensors, ``row`` absolute)."""
 
     start: int
@@ -151,7 +162,7 @@ class Window:
 Measure = Callable[[Window], dict]
 
 
-class RowSeries:
+class WindowedErrors:
     """Named per-row columns of a result from row 0, plus row-tagged event columns, measured per window.
 
     ``append(start, **columns)`` adds the rows ``[start, start + n)`` of every row column (each ``[n, ...]``; the same
@@ -241,23 +252,6 @@ class RowSeries:
 Kind = Literal["max", "min"]
 
 
-@dataclass(frozen=True)
-class Bar:
-    """``metric`` must stay at most (``max``) or at least (``min``) ``value`` in every window that measures it."""
-
-    metric: str
-    kind: Kind
-    value: float
-
-
-@dataclass(frozen=True)
-class GrowthBar:
-    """A larger-is-worse ``metric``'s worst window must stay within ``factor`` times its first window."""
-
-    metric: str
-    factor: float
-
-
 def trend(windows: Sequence[dict], metric: str, worse: Kind) -> dict:
     """First, last and worst (``worse``: which way is worse) value of ``metric`` over the windows that measure it,
     where the worst one starts, and worst over first."""
@@ -274,32 +268,3 @@ def trend(windows: Sequence[dict], metric: str, worse: Kind) -> dict:
         "worst_start": worst["start"],
         "worst_over_first": ratio,
     }
-
-
-def check(windows: Sequence[dict], bars: Sequence[Bar | GrowthBar]) -> list[str]:
-    """Every bar failure, as text naming the metric, value and window. Fail closed: a non-finite value fails, and so
-    does a bar whose metric no window measures."""
-    failures = []
-    for bar in bars:
-        measured = [w for w in windows if bar.metric in w]
-        if not measured:
-            failures.append(f"{bar.metric}: not measured by any window")
-            continue
-        bad = [w for w in measured if not math.isfinite(w[bar.metric])]
-        failures += [f"{bar.metric} {w[bar.metric]} is not finite in [{w['start']}, {w['end']})" for w in bad]
-        if bad:
-            continue
-        if isinstance(bar, Bar):
-            for w in measured:
-                value = w[bar.metric]
-                if value > bar.value if bar.kind == "max" else value < bar.value:
-                    sign = ">" if bar.kind == "max" else "<"
-                    failures.append(f"{bar.metric} {value:.6g} {sign} {bar.value} in [{w['start']}, {w['end']})")
-        else:
-            t = trend(measured, bar.metric, "max")
-            if t["worst_over_first"] > bar.factor:
-                failures.append(
-                    f"{bar.metric} grows {t['worst_over_first']:.4g}x (> {bar.factor}) from {t['first']:.6g} "
-                    f"to {t['worst']:.6g} at row {t['worst_start']}"
-                )
-    return failures

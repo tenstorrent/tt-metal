@@ -3,8 +3,8 @@
 """Sparse attention (DSA) accuracy against a reference: what a different key selection costs.
 
 Keys (latent, rope part, index keys) and the attention output are continuous products, scored by
-``windowed.errors`` (absolute and relative). Selection recall and misses come from ``topk``. This module adds
-the attention weight a selection difference moves, given the reference attention weights over each selection
+``windowed_errors.errors`` (absolute and relative). Selection recall and misses come from ``topk_selection``. This
+module adds the attention weight a selection difference moves, given the reference attention weights over each selection
 (computing them is the model's). These are diagnostics: no bar is defined on them.
 """
 

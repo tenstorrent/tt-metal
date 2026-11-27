@@ -175,7 +175,7 @@ def manifest_problems(golden_id: str, manifest: dict) -> list[str]:
 
 
 @dataclass(frozen=True)
-class Golden:
+class Fp64Golden:
     """One registered, complete golden: its directory and validated manifest."""
 
     path: Path
@@ -236,7 +236,7 @@ class Golden:
         return ids
 
 
-def open_golden(golden_id: str, root: Path | None = None) -> Golden:
+def open_golden(golden_id: str, root: Path | None = None) -> Fp64Golden:
     """The complete golden ``golden_id`` under ``root`` (default ``golden_root()``).
 
     Raises ``GoldenNotFound`` without a directory or manifest and ``GoldenInvalid`` when the manifest breaks the
@@ -253,4 +253,4 @@ def open_golden(golden_id: str, root: Path | None = None) -> Golden:
     problems = manifest_problems(golden_id, manifest) if isinstance(manifest, dict) else ["not a JSON object"]
     if problems:
         raise GoldenInvalid(f"golden {golden_id!r} at {path}: " + "; ".join(problems))
-    return Golden(path, manifest)
+    return Fp64Golden(path, manifest)
