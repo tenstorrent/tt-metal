@@ -16,10 +16,12 @@
 #include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
+#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/descriptor_runtime_args.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim::qsr {
@@ -72,6 +74,29 @@ constexpr uint32_t kGatherSemAddrIdx = 2;
 
 }  // namespace
 
+// Unique per translation unit: unity builds merge the anonymous namespaces of sibling factories, which define
+// constants with the same names (e.g. kGatherKernel in attn_res_block_stats).
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Kernel handles are positions in `desc.kernels`, pinned to create_descriptor's push order.
+constexpr tt::tt_metal::KernelHandle kReaderKernel = 0;
+constexpr tt::tt_metal::KernelHandle kWriterKernel = 1;
+// The compute kernel sits at 2.
+constexpr tt::tt_metal::KernelHandle kGatherKernel = 3;
+
+// Semaphore ids in the order the legacy program created them.
+constexpr uint32_t kReadySemId = 0;
+constexpr uint32_t kDoneSemId = 1;
+constexpr uint32_t kChunkSemId = 2;
+
+// The core held back for the fabric connection: the last core of the grid, row-wise.
+// Shared with the override, which needs it to find the gather kernel's per-core args.
+CoreCoord attn_res_gather_core(const CoreCoord& grid) { return CoreCoord{grid.x - 1, grid.y - 1}; }
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
+using namespace CMAKE_UNIQUE_NAMESPACE;
+
 AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
     const AttnResGatherSoftmaxParams& operation_attributes, const AttnResGatherSoftmaxInputs& tensor_args) {
     const auto& input_shape = tensor_args.partial.padded_shape();
@@ -93,11 +118,13 @@ AttnResGatherSoftmaxSiteOffsets attn_res_gather_softmax_site_offsets(
     };
 }
 
-AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMeshWorkloadFactory::create_at(
+ProgramDescriptor AttnResGatherSoftmaxProgramFactory::create_descriptor(
     const AttnResGatherSoftmaxParams& operation_attributes,
-    const ttnn::MeshCoordinate& mesh_coord,
     const AttnResGatherSoftmaxInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    TT_FATAL(mesh_coordinate.has_value(), "attn_res_gather_softmax builds one program per mesh coordinate");
+    const ttnn::MeshCoordinate& mesh_coord = *mesh_coordinate;
     ttnn::MeshDevice* mesh_device = tensor_args.partial.device();
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(mesh_view.is_mesh_2d(), "attn_res_gather_softmax requires a 2D mesh to resolve the cluster axis");
@@ -177,7 +204,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     ////////////////////////////////////////////////////////////////////////////
     //                            Core Assignment
     ////////////////////////////////////////////////////////////////////////////
-    tt::tt_metal::Program program{};
+    ProgramDescriptor desc;
     const auto grid = mesh_device->compute_with_storage_grid_size();
 
     // One split for both passes (see `kernels/attn_res_core_runs.hpp`): a unit is a run of
@@ -209,7 +236,8 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TT_FATAL(chunks_per_row == 1 || units_per_core == 1, "a split row must take one core per chunk");
     const CoreRangeSet unit_cores = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
     const auto worker_cores = corerange_to_cores(unit_cores, std::nullopt, /*row_wise=*/true);
-    const CoreCoord gather_core = grid_cores.back();
+    const CoreCoord gather_core = attn_res_gather_core(grid);
+    TT_FATAL(gather_core == grid_cores.back(), "the gather core must be the grid's last core");
     const CoreRangeSet gather_core_set{CoreRange(gather_core, gather_core)};
     TT_FATAL(!unit_cores.contains(gather_core), "the gather core must hold no rows");
     const CoreRangeSet all_cores = unit_cores.merge(gather_core_set);
@@ -269,12 +297,17 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     //                      Circular Buffers and Semaphores
     ////////////////////////////////////////////////////////////////////////////
     const auto make_cb =
-        [&program](
+        [&desc](
             uint32_t index, const CoreRangeSet& cores, uint32_t num_tiles, uint32_t tile_size, tt::DataFormat format) {
-            tt::tt_metal::CircularBufferConfig config =
-                tt::tt_metal::CircularBufferConfig(num_tiles * tile_size, {{index, format}})
-                    .set_page_size(index, tile_size);
-            return tt::tt_metal::CreateCircularBuffer(program, cores, config);
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = num_tiles * tile_size,
+                .core_ranges = cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(index),
+                    .data_format = format,
+                    .page_size = tile_size,
+                }}},
+            });
         };
 
     make_cb(tt::CBIndex::c_0, unit_cores, resident_tiles, wide_tile_size, wide_data_format);  // partial
@@ -324,10 +357,13 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // Local counters, so a program-launch reset is what we want: the workers that
     // increment `ready` and the gather core that increments `done` are all in this
     // program on this chip.
-    const auto ready_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
-    const auto done_sem_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    const uint32_t ready_sem_id = kReadySemId;
+    const uint32_t done_sem_id = kDoneSemId;
+    desc.semaphores.push_back(SemaphoreDescriptor{.id = ready_sem_id, .core_ranges = all_cores, .initial_value = 0});
+    desc.semaphores.push_back(SemaphoreDescriptor{.id = done_sem_id, .core_ranges = all_cores, .initial_value = 0});
     // A row leader's count of its other chunks' pairs.
-    const auto chunk_sem_id = tt::tt_metal::CreateSemaphore(program, unit_cores, 0);
+    const uint32_t chunk_sem_id = kChunkSemId;
+    desc.semaphores.push_back(SemaphoreDescriptor{.id = chunk_sem_id, .core_ranges = unit_cores, .initial_value = 0});
 
     ////////////////////////////////////////////////////////////////////////////
     //                              Kernels
@@ -346,11 +382,12 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*pending.buffer()).append_to(reader_ct_args);
     reader_ct_args.insert(reader_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
-    const auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "dataflow/reader_attn_res_gather_softmax.cpp",
-        unit_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelDescriptor reader;
+    reader.kernel_source = std::string(kKernelDir) + "dataflow/reader_attn_res_gather_softmax.cpp";
+    reader.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader.core_ranges = unit_cores;
+    reader.compile_time_args = std::move(reader_ct_args);
+    reader.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {
         Wt, ring_size, Ht, ready_sem_id, done_sem_id, static_cast<uint32_t>(fuse_add), chunk_sem_id};
@@ -361,11 +398,12 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     TensorAccessorArgs(*total.buffer()).append_to(writer_ct_args);
     writer_ct_args.insert(writer_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
-    const auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "dataflow/writer_attn_res_gather_softmax.cpp",
-        unit_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+    KernelDescriptor writer;
+    writer.kernel_source = std::string(kKernelDir) + "dataflow/writer_attn_res_gather_softmax.cpp";
+    writer.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer.core_ranges = unit_cores;
+    writer.compile_time_args = std::move(writer_ct_args);
+    writer.config = WriterConfigDescriptor{};
 
     std::vector<uint32_t> compute_ct_args = {
         Wt,
@@ -375,57 +413,60 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         static_cast<uint32_t>(fuse_add)};
     compute_ct_args.insert(compute_ct_args.end(), split_ct_args.begin(), split_ct_args.end());
 
-    tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "compute/attn_res_gather_softmax.cpp",
-        unit_cores,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_ct_args});
+    KernelDescriptor compute;
+    compute.kernel_source = std::string(kKernelDir) + "compute/attn_res_gather_softmax.cpp";
+    compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute.core_ranges = unit_cores;
+    compute.compile_time_args = std::move(compute_ct_args);
+    compute.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     std::vector<uint32_t> gather_ct_args = {ring_size, Ht, num_parking_cores, ready_sem_id, done_sem_id, stage_tiles};
     TensorAccessorArgs(*stats.buffer()).append_to(gather_ct_args);
 
-    auto gather_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        std::string(kKernelDir) + "dataflow/gather_attn_res_gather_softmax.cpp",
-        gather_core_set,
-        tt::tt_metal::ReaderDataMovementConfig(gather_ct_args));
+    KernelDescriptor gather;
+    gather.kernel_source = std::string(kKernelDir) + "dataflow/gather_attn_res_gather_softmax.cpp";
+    gather.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    gather.core_ranges = gather_core_set;
+    gather.compile_time_args = std::move(gather_ct_args);
+    gather.config = ReaderConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                           Runtime Arguments
     ////////////////////////////////////////////////////////////////////////////
+    // The common args are everything a program-cache hit patches (see the override).
+    // Without a pending write the kernel never reads through the pending address, so an
+    // absent `pending` binds no buffer and the slot holds 0.
     const auto gather_physical = mesh_device->worker_core_from_logical_core(gather_core);
-    tt::tt_metal::SetCommonRuntimeArgs(
-        program,
-        reader_kernel_id,
+    reader.emplace_common_runtime_args(
         {site_offsets.partial,
-         running_sum.mesh_buffer().address(),
-         partial.mesh_buffer().address(),
-         q.mesh_buffer().address(),
-         pending.mesh_buffer().address()});
-    std::vector<uint32_t> writer_common = {
-        site_offsets.shift,
-        site_offsets.mass,
-        stats.mesh_buffer().address(),
-        shift.mesh_buffer().address(),
-        mass.mesh_buffer().address(),
-        output.mesh_buffer().address(),
-        total.mesh_buffer().address(),
-        my_rank,
-        gather_physical.x,
-        gather_physical.y};
+         running_sum.buffer(),
+         partial.buffer(),
+         q.buffer(),
+         fuse_add ? tensor_args.pending->buffer() : static_cast<Buffer*>(nullptr)});
+    KernelDescriptor::RTArgList writer_common;
+    writer_common.push_back(site_offsets.shift);
+    writer_common.push_back(site_offsets.mass);
+    writer_common.push_back(stats.buffer());
+    writer_common.push_back(shift.buffer());
+    writer_common.push_back(mass.buffer());
+    writer_common.push_back(output.buffer());
+    writer_common.push_back(total.buffer());
+    writer_common.push_back(my_rank);
+    writer_common.push_back(static_cast<uint32_t>(gather_physical.x));
+    writer_common.push_back(static_cast<uint32_t>(gather_physical.y));
     if (chunks_per_row > 1) {
         // Each row's leader, its chunk 0 core, where the row's other chunks send their pairs.
         for (uint32_t g = 0; g < Ht; ++g) {
             const auto leader = mesh_device->worker_core_from_logical_core(worker_cores.at(g * chunks_per_row));
-            writer_common.push_back((leader.x << 16) | leader.y);
+            writer_common.push_back(static_cast<uint32_t>((leader.x << 16) | leader.y));
         }
     }
-    tt::tt_metal::SetCommonRuntimeArgs(program, writer_kernel_id, writer_common);
+    writer.emplace_common_runtime_args(writer_common);
 
     // The closed form the kernels use, checked against the cores it stands in for.
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -453,10 +494,12 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         release_args.push_back(static_cast<uint32_t>(range.size()));
     }
 
+    // Slot 0 is the statistics tensor's address, bound below once the fabric args are in.
     std::vector<uint32_t> gather_rt_args = {
-        stats.mesh_buffer().address(),
+        0u,
         my_rank,
-        static_cast<uint32_t>(operation_attributes.semaphore.address()),
+        static_cast<uint32_t>(
+            operation_attributes.semaphore.address()),  // smuggled-rta-ok: caller's GlobalSemaphore, patched per hit
         static_cast<uint32_t>(fold_ranges.size())};
     gather_rt_args.insert(gather_rt_args.end(), release_args.begin(), release_args.end());
 
@@ -507,6 +550,16 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         per_connection_links.push_back(links.front());
     }
 
+    // The kernels go in in the order the override's handles assume. The fabric helper
+    // below adds defines to the gather kernel and its semaphores to the program, so the
+    // gather kernel has to be in the descriptor before it runs.
+    desc.kernels.push_back(std::move(reader));
+    desc.kernels.push_back(std::move(writer));
+    desc.kernels.push_back(std::move(compute));
+    desc.kernels.push_back(std::move(gather));
+    tt::tt_metal::KernelHandle gather_kernel_id = kGatherKernel;
+    TT_FATAL(desc.kernels.size() == kGatherKernel + 1, "the gather kernel must be the program's fourth");
+
     // The count first: the kernel reads it before building the manager from what follows.
     gather_rt_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
@@ -514,7 +567,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         src_fabric_node_id,
         dst_nodes,
         per_connection_links,
-        program,
+        desc,
         gather_kernel_id,
         gather_core,
         gather_rt_args);
@@ -526,75 +579,52 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
         gather_rt_args.push_back(*fabric_node_ids.at(p).mesh_id);
         gather_rt_args.push_back(fabric_node_ids.at(p).chip_id);
     }
-    tt::tt_metal::SetRuntimeArgs(program, gather_kernel_id, gather_core, gather_rt_args);
+    static_assert(kGatherStatsAddrIdx == 0, "the statistics address must lead the gather kernel's args");
+    ttnn::ccl::emplace_runtime_args_with_leading_buffers(
+        desc.kernels[kGatherKernel], gather_core, {stats.buffer()}, gather_rt_args);
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .gather_kernel_id = gather_kernel_id,
-         .gather_core = gather_core}};
+    return desc;
 }
 
-AttnResGatherSoftmaxMeshWorkloadFactory::cached_mesh_workload_t
-AttnResGatherSoftmaxMeshWorkloadFactory::create_mesh_workload(
-    const AttnResGatherSoftmaxParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AttnResGatherSoftmaxInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-
-    for (const auto& mesh_coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : mesh_coord_range) {
-            const ttnn::MeshCoordinateRange single_coord_range{mesh_coord, mesh_coord};
-            auto cached_program = create_at(operation_attributes, mesh_coord, tensor_args, tensor_return_value);
-            shared_variables[single_coord_range] = cached_program.shared_variables;
-            mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
-        }
-    }
-
-    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
-}
-
-void AttnResGatherSoftmaxMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+void AttnResGatherSoftmaxProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
     const AttnResGatherSoftmaxParams& operation_attributes,
     const AttnResGatherSoftmaxInputs& tensor_args,
-    std::vector<Tensor>& tensor_return_value) {
+    std::vector<Tensor>& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    // Nothing else refreshes on a hit once this hook exists, so every buffer address is
+    // rewritten here alongside the hash-excluded site offsets and semaphore. The rank,
+    // gather core and fabric routes come from hashed inputs and the program's own
+    // coordinate, so a hit already has them right.
     const auto site_offsets = attn_res_gather_softmax_site_offsets(operation_attributes, tensor_args);
     const bool fuse_add = tensor_args.pending.has_value();
-    const auto pending_addr =
-        fuse_add ? tensor_args.pending->mesh_buffer().address() : tensor_args.running_sum.mesh_buffer().address();
-    const auto total_addr = fuse_add ? tensor_return_value.at(1).mesh_buffer().address()
-                                     : tensor_return_value.at(0).mesh_buffer().address();
+    const uint32_t pending_addr = fuse_add ? tensor_args.pending->mesh_buffer().address() : 0u;
+    const auto stats_addr = tensor_args.stats.mesh_buffer().address();
+    const auto output_addr = tensor_return_value.at(0).mesh_buffer().address();
+    const auto total_addr = fuse_add ? tensor_return_value.at(1).mesh_buffer().address() : output_addr;
 
-    for (auto& [range, shared_vars] : cached_workload.shared_variables) {
-        auto& program = cached_workload.workload.get_programs().at(range);
+    // The site is a page offset, so a new site is a common-arg patch rather than a
+    // new program. That is what keeps one cached program serving every read site.
+    auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernel);
+    reader_common[kReaderSite] = site_offsets.partial;
+    reader_common[kReaderPrefixAddr] = tensor_args.running_sum.mesh_buffer().address();
+    reader_common[kReaderPartialAddr] = tensor_args.partial.mesh_buffer().address();
+    reader_common[kReaderQAddr] = tensor_args.q.mesh_buffer().address();
+    reader_common[kReaderPendingAddr] = pending_addr;
 
-        // The site is a page offset, so a new site is a common-arg patch rather than a
-        // new program. That is what keeps one cached program serving every read site.
-        auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.reader_kernel_id);
-        reader_common[kReaderSite] = site_offsets.partial;
-        reader_common[kReaderPrefixAddr] = tensor_args.running_sum.mesh_buffer().address();
-        reader_common[kReaderPartialAddr] = tensor_args.partial.mesh_buffer().address();
-        reader_common[kReaderQAddr] = tensor_args.q.mesh_buffer().address();
-        reader_common[kReaderPendingAddr] = pending_addr;
+    auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernel);
+    writer_common[kWriterShiftSite] = site_offsets.shift;
+    writer_common[kWriterMassSite] = site_offsets.mass;
+    writer_common[kWriterStatsAddr] = stats_addr;
+    writer_common[kWriterShiftAddr] = tensor_args.shift.mesh_buffer().address();
+    writer_common[kWriterMassAddr] = tensor_args.mass.mesh_buffer().address();
+    writer_common[kWriterOutAddr] = output_addr;
+    writer_common[kWriterTotalAddr] = total_addr;
 
-        auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_vars.writer_kernel_id);
-        writer_common[kWriterShiftSite] = site_offsets.shift;
-        writer_common[kWriterMassSite] = site_offsets.mass;
-        writer_common[kWriterStatsAddr] = tensor_args.stats.mesh_buffer().address();
-        writer_common[kWriterShiftAddr] = tensor_args.shift.mesh_buffer().address();
-        writer_common[kWriterMassAddr] = tensor_args.mass.mesh_buffer().address();
-        writer_common[kWriterOutAddr] = tensor_return_value.at(0).mesh_buffer().address();
-        writer_common[kWriterTotalAddr] = total_addr;
-
-        auto& gather_args_by_core = GetRuntimeArgs(program, shared_vars.gather_kernel_id);
-        auto& gather_args = gather_args_by_core[shared_vars.gather_core.x][shared_vars.gather_core.y];
-        gather_args[kGatherStatsAddrIdx] = tensor_args.stats.mesh_buffer().address();
-        gather_args[kGatherSemAddrIdx] = operation_attributes.semaphore.address();
-    }
+    const auto gather_core = attn_res_gather_core(tensor_args.partial.device()->compute_with_storage_grid_size());
+    auto& gather_args = tt::tt_metal::GetRuntimeArgs(program, kGatherKernel, gather_core);
+    gather_args[kGatherStatsAddrIdx] = stats_addr;
+    gather_args[kGatherSemAddrIdx] = operation_attributes.semaphore.address();
 }
 
 }  // namespace ttnn::experimental::prim::qsr

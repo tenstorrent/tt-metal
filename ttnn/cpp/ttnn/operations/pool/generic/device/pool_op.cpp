@@ -240,6 +240,7 @@ std::vector<ttnn::Tensor> pool2d(
     uint32_t memory_used,
     bool config_tensor_in_dram) {
     using OperationType = ttnn::operations::pool::Pool2D;
+    ttnn::verify_numerical_configuration(input_tensor.device()->arch(), compute_kernel_config);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .sliding_window_config_ = sliding_window_config,

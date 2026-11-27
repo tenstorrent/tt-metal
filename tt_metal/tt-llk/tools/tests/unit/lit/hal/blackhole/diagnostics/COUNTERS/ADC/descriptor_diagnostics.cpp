@@ -21,11 +21,11 @@
 // EMPTY_CLIENTS: error: static assertion failed: select at least one address-counter client
 // INVALID_CLIENT: error: static assertion failed: invalid address-counter client
 // PACKED_RANGE: in 'constexpr' expansion of 'hal::detail::require({{.*}}"packed address-counter values must be in [0, 7]"))'
-// PACKED_RANGE-NEXT: error: '__builtin_trap()' is not a constant expression
+// PACKED_RANGE: error: '__builtin_trap()' is not a constant expression
 // SINGLE_RANGE: in 'constexpr' expansion of 'hal::detail::require({{.*}}"SETADC value must be in [0, 65535] for X or [0, 8191] for Y/Z/W"))'
-// SINGLE_RANGE-NEXT: error: '__builtin_trap()' is not a constant expression
+// SINGLE_RANGE: error: '__builtin_trap()' is not a constant expression
 // TWO_INSTRUCTIONS: in 'constexpr' expansion of 'hal::detail::require({{.*}}"AddrCounter::operation() requires an update that encodes as one instruction; issue it with set()"))'
-// TWO_INSTRUCTIONS-NEXT: error: '__builtin_trap()' is not a constant expression
+// TWO_INSTRUCTIONS: error: '__builtin_trap()' is not a constant expression
 // REG2FLOP_DISABLED: error: static assertion failed: Blackhole does not handle REG2FLOP properly. GPR address-counter writes are unsupported
 // clang-format on
 

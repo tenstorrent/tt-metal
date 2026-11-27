@@ -25,9 +25,11 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
 
     // Reject dtype/layout combinations that would hard-fail during tt::tt_metal::TensorSpec construction in
     // compute_output_specs(). These low-precision packed formats require tiled layout.
-    const bool output_dtype_requires_tile = output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B;
+    const bool output_dtype_requires_tile =
+        output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B || tt::tt_metal::is_mx(output_dtype);
     if (output_dtype_requires_tile && input_tensor.layout() == Layout::ROW_MAJOR) {
-        return {false, "Output dtype BFLOAT8_B/BFLOAT4_B requires TILE layout, but input tensor layout is ROW_MAJOR"};
+        return {
+            false, "Output dtype BFLOAT8_B/BFLOAT4_B/MX requires TILE layout, but input tensor layout is ROW_MAJOR"};
     }
 
     // tt::tt_metal::TensorSpec construction normalizes ND shard specs to equivalent 2D layouts when possible.

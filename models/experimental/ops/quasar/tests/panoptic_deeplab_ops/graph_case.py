@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 from typing import Any
 
 import pytest
@@ -92,16 +93,37 @@ DTYPE = {
     "UINT8": ttnn.uint8,
 }
 
+
 # Quasar has no block-float formats (``is_supported_quasar`` in tt_backend_api_types.cpp), so a
-# captured bfloat8_b / bfloat4_b case is rejected before the op runs. With
-# ``TTNN_GRAPH_OPS_BF8_AS_BF16=1`` those tensors — and a ``DataType::BFLOAT8_B`` inside a
-# ``Conv2dConfig`` (``_CPP_ENUM_OVERRIDES``) — are materialized and checked as bfloat16 instead;
-# the PCC floor keeps the block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the
-# capture string, not on the ttnn dtype. Same switch as the qwen3_vl / gpt_oss suites (#59575).
-BF8_AS_BF16 = os.environ.get("TTNN_GRAPH_OPS_BF8_AS_BF16", "") not in ("", "0", "false", "False")
+# captured bfloat8_b / bfloat4_b case is rejected before the op runs. Three env switches pick what
+# those tensors are materialized and checked as instead (at most one may be set; same switches as
+# the gpt_oss suite):
+#
+#   * ``TTNN_GRAPH_OPS_BF8_AS_BF16=1``   bfloat8_b and bfloat4_b -> bfloat16
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8R=1`` bfloat8_b -> MXFP8R (``ttnn.mxfp8_e5m2``, 5-bit exponent)
+#   * ``TTNN_GRAPH_OPS_BF8_AS_MXFP8P=1`` bfloat8_b -> MXFP8P (``ttnn.mxfp8_e4m3``, 4-bit exponent)
+#
+# The MX switches leave bfloat4_b as bfloat16 (there is no MX stand-in for it). MX is TILE-only,
+# which every captured bfloat8_b tensor already is. A ``DataType::BFLOAT8_B`` / ``BFLOAT4_B`` inside
+# a ``Conv2dConfig`` (``_CPP_ENUM_OVERRIDES``) becomes bfloat16 under every switch: those are
+# conv-internal weight/activation dtypes, not tensors this harness builds. The PCC floor keeps the
+# block-float allowance because ``_PCC_BY_DTYPE`` is keyed on the capture string, not on the ttnn
+# dtype. Same switch as the qwen3_vl / gpt_oss suites (#59575).
+def _env_flag(name):
+    return os.environ.get(name, "") not in ("", "0", "false", "False")
+
+
+BF8_AS_BF16 = _env_flag("TTNN_GRAPH_OPS_BF8_AS_BF16")
+BF8_AS_MXFP8R = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8R")
+BF8_AS_MXFP8P = _env_flag("TTNN_GRAPH_OPS_BF8_AS_MXFP8P")
+if BF8_AS_BF16 + BF8_AS_MXFP8R + BF8_AS_MXFP8P > 1:
+    raise ValueError(
+        "set at most one of TTNN_GRAPH_OPS_BF8_AS_BF16, TTNN_GRAPH_OPS_BF8_AS_MXFP8R, TTNN_GRAPH_OPS_BF8_AS_MXFP8P"
+    )
+BF8_AS_MX = BF8_AS_MXFP8R or BF8_AS_MXFP8P
 _CPP_ENUM_OVERRIDES = {}
-if BF8_AS_BF16:
-    DTYPE["BFLOAT8_B"] = ttnn.bfloat16
+if BF8_AS_BF16 or BF8_AS_MX:
+    DTYPE["BFLOAT8_B"] = ttnn.bfloat16 if BF8_AS_BF16 else (ttnn.mxfp8_e5m2 if BF8_AS_MXFP8R else ttnn.mxfp8_e4m3)
     DTYPE["BFLOAT4_B"] = ttnn.bfloat16
     _CPP_ENUM_OVERRIDES = {"DataType::BFLOAT8_B": ttnn.bfloat16, "DataType::BFLOAT4_B": ttnn.bfloat16}
 
@@ -1257,6 +1279,9 @@ _EXACT_INTO = {
     ttnn.bfloat8_b: {ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32},
     ttnn.bfloat16: {ttnn.bfloat16, ttnn.float32},
     ttnn.float32: {ttnn.float32},
+    # an MX element under a shared power-of-two scale is exact in bfloat16
+    ttnn.mxfp8_e5m2: {ttnn.mxfp8_e5m2, ttnn.bfloat16, ttnn.float32},
+    ttnn.mxfp8_e4m3: {ttnn.mxfp8_e4m3, ttnn.bfloat16, ttnn.float32},
 }
 
 
@@ -1279,7 +1304,7 @@ def _holds_exactly(case, out):
 # operand is concatenated with itself (a ``dim=2`` concat, and every other op in
 # ``LOSSLESS``, is bit-exact). These keep the PCC check against the read-back inputs.
 _REPACKS_BLOCK_FLOAT = frozenset({"ttnn.permute", "ttnn.concat"})
-_BLOCK_FLOAT = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+_BLOCK_FLOAT = (ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.mxfp8_e5m2, ttnn.mxfp8_e4m3)
 
 
 def _bit_exact(op_name, case, out):
@@ -1726,7 +1751,7 @@ def _aliased_arg(name, spec, case, args):
     return args[0] if case["args"][0] == spec else None
 
 
-def run_case(op, case, mesh_device, *, op_name=None, pcc=None, before_inputs=None, before_op=None):
+def _run_case_impl(op, case, mesh_device, *, op_name=None, pcc=None, before_inputs=None, before_op=None):
     """Materialize one captured call, run it, and check the result.
 
     ``op`` is the callable (``ttnn.linear``, or a small lambda for operators like
@@ -1782,3 +1807,26 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None, before_inputs=Non
                     U.assert_pcc(one, tensors[i], pcc=floor, mesh_device=mesh_device)
 
     return out
+
+
+# binary_ng's Quasar-native slice admits MX tensor-tensor ops but refuses a subtile broadcast
+# (ROW/COL/SCALAR), a scalar and an activation beside MX (QUASAR_NATIVE_DESIGN.md, F6): those paths are
+# not validated with MX. A captured bias-add (ROW_B broadcast) therefore cannot run as MX yet; skip
+# rather than fail, only under the MX switches, so the case runs once the kernel gains support.
+_MX_BINARY_UNSUPPORTED = re.compile(r"binary op \w+ is not supported for a DataType::MX\w+ ", re.DOTALL)
+
+
+def _mx_binary_unsupported(exc):
+    return BF8_AS_MX and _MX_BINARY_UNSUPPORTED.search(str(exc)) is not None
+
+
+def run_case(op, case, mesh_device, *, op_name=None, pcc=None, before_inputs=None, before_op=None):
+    """Run one captured call (see ``_run_case_impl``); skip a call binary_ng cannot run as MX yet."""
+    try:
+        return _run_case_impl(
+            op, case, mesh_device, op_name=op_name, pcc=pcc, before_inputs=before_inputs, before_op=before_op
+        )
+    except RuntimeError as e:
+        if _mx_binary_unsupported(e):
+            pytest.skip("binary_ng refuses MX with a subtile broadcast / scalar / activation (not validated yet)")
+        raise
