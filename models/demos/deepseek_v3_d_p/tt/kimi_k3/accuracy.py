@@ -115,7 +115,7 @@ def mmrs_kwargs(arch) -> dict:
     fp32 partial sums itself), else nothing (its HiFi2 default)."""
     if not mla_fp32():
         return {}
-    return {"compute_kernel_config": ttnn.init_device_compute_kernel_config(arch, math_fidelity=ttnn.MathFidelity.HiFi4)}
+    return {"compute_kernel_config": ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4)}
 
 
 def kv_bf16() -> bool:
