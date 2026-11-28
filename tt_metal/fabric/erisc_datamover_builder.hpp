@@ -152,6 +152,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t buffer_alignment = 32;
     static constexpr std::size_t eth_word_l1_alignment = 16;
     static constexpr uint32_t default_iterations_between_ctx_switch_and_teardown_checks = 32;
+    // Longer rounds on Blackhole compute routers to reduce latency jitter from the per-round overhead.
+    static constexpr uint32_t blackhole_iterations_between_ctx_switch_and_teardown_checks = 512;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
 
     // Global
@@ -301,6 +303,9 @@ struct FabricRiscConfig {
     tt::tt_metal::NOC get_configured_noc() const { return noc_; };
 
     void set_configured_noc(tt::tt_metal::NOC noc) { noc_ = noc; };
+    void set_iterations_between_ctx_switch_and_teardown_checks(size_t iterations) {
+        iterations_between_ctx_switch_and_teardown_checks_ = iterations;
+    }
     bool telemetry_enabled() const { return telemetry_enabled_; }
     void set_telemetry_enabled(bool enabled) { telemetry_enabled_ = enabled; }
     uint8_t telemetry_stats_mask() const { return telemetry_stats_mask_; }

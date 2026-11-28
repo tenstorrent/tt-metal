@@ -818,8 +818,19 @@ __attribute__((noinline)) void run(DownstreamConnections& downstreams) {
         if constexpr (telemetry::any_option) {
             telemetry::round_start</*SENDER=*/false>();
         }
-        for (size_t n = 0; n < iterations_between_ctx_switch_and_teardown_checks; n++) {
-            pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
+        constexpr size_t passes_per_check =
+            std::min(iterations_between_ctx_switch_and_teardown_checks, FOLLOW_POLL_PASSES);
+        constexpr bool check_within_round =
+            follows_within_round && passes_per_check < iterations_between_ctx_switch_and_teardown_checks;
+        for (size_t c = 0; c < iterations_between_ctx_switch_and_teardown_checks / passes_per_check; c++) {
+            for (size_t n = 0; n < passes_per_check; n++) {
+                pass(loop_copy, credit_frame_due, states, credits, downstreams, my_chip);
+            }
+            if constexpr (check_within_round) {
+                if (context_switch_requested()) [[unlikely]] {
+                    break;
+                }
+            }
         }
         end_round(round, true);
         if constexpr (telemetry::any_option) {

@@ -113,6 +113,15 @@ FORCE_INLINE void follow_context_switch() {
     }
 }
 
+// We need to check for context switch within the middle of our inner loop to avoid long stalls while erisc0 waits for
+// erisc1.
+constexpr size_t FOLLOW_POLL_PASSES = 32;
+constexpr bool follows_within_round = !is_context_switch_master && NUM_ACTIVE_ERISCS > 1;
+
+FORCE_INLINE bool context_switch_requested() {
+    return context_switch_state() == static_cast<uint32_t>(ContextSwitchState::RETRAIN_INTENT);
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Rounds
 // ---------------------------------------------------------------------------------------------------------------------
