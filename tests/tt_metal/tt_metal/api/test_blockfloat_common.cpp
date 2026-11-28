@@ -101,6 +101,45 @@ INSTANTIATE_TEST_SUITE_P(
     // clang-format on
 );
 
+// Exponent-A cannot represent magnitudes below 2^-14. The device packer flushes
+// EXP_B < 113 to +0, including exact 2^-15. Exponent-B keeps those values.
+TEST(BlockfloatCommonTests, ExpAValuesBelowMinNormalFlushToZero) {
+    constexpr uint32_t kMinNormalBits = 113u << 23;       // 2^-14
+    constexpr uint32_t kBelowMinNormalBits = 112u << 23;  // 2^-15
+    constexpr uint32_t kMaxBelowMinNormalBits = kBelowMinNormalBits | 0x007fffffu;
+    constexpr uint32_t kSign = 0x80000000u;
+
+    const uint32_t flushed[] = {
+        kBelowMinNormalBits,
+        kBelowMinNormalBits | kSign,
+        kMaxBelowMinNormalBits,
+        kMaxBelowMinNormalBits | kSign,
+        std::bit_cast<uint32_t>(1e-6f),
+        std::bit_cast<uint32_t>(-1e-6f),
+    };
+    for (uint32_t input : flushed) {
+        for (uint32_t shared_exp : {0u, 15u}) {
+            const uint8_t mantissa =
+                convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(input, shared_exp, /*is_exp_a=*/true);
+            EXPECT_EQ(mantissa, 0u) << std::hex << input << " shared_exp=" << shared_exp;
+            const uint32_t decoded =
+                convert_bfp_to_u32(tt::DataFormat::Bfp8, mantissa, static_cast<uint8_t>(shared_exp), /*is_exp_a=*/true);
+            EXPECT_EQ(decoded, 0u);
+        }
+    }
+
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp4, false>(kBelowMinNormalBits, 0, true)), 0u);
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp2, false>(kBelowMinNormalBits, 0, true)), 0u);
+
+    constexpr uint32_t kMinNormalSharedExp = 1;
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits, kMinNormalSharedExp, true)), 0x40u);
+    EXPECT_EQ(
+        (convert_u32_to_bfp<tt::DataFormat::Bfp8, false>(kMinNormalBits | kSign, kMinNormalSharedExp, true)), 0xc0u);
+    EXPECT_EQ(convert_bfp_to_u32(tt::DataFormat::Bfp8, 0x40, kMinNormalSharedExp, true), kMinNormalBits);
+
+    EXPECT_EQ((convert_u32_to_bfp<tt::DataFormat::Bfp8_b, false>(kBelowMinNormalBits, 112, false)), 0x40u);
+}
+
 // FP8_E4M3 is supported on Blackhole and Quasar but not Wormhole. Verify the arch guard in
 // get_single_pack_src_format() matches that: QUASAR and BLACKHOLE pass, WORMHOLE_B0 throws.
 // Host-only: calls the public get_pack_src_formats() wrapper, no device required.
