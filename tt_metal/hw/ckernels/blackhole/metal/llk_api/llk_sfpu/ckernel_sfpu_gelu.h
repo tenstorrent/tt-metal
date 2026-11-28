@@ -14,7 +14,7 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
-#include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
+#include "ckernel_sfpu_erf.h"
 #include "ckernel_sfpu_piecewise_rational.h"
 #include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "sfpi.h"
@@ -258,7 +258,8 @@ inline void calculate_gelu_appx() {
 }
 
 // FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
-// Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
+// These were the FP32 erf coefficients in ckernel_sfpu_erf.h until #58282 replaced that kernel with
+// two polynomial pieces; GELU keeps its own copy and still evaluates this rational.
 // piecewise_rational_eval_parity_numer_denom() takes const float* — no std::array needed.
 constexpr float GELU_ERF_NUM[17] = {  // odd powers only (c0=0, c2=0, ..., c16=0)
     0.0f,

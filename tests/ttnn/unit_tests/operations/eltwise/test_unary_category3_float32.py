@@ -6,7 +6,6 @@ import torch
 import pytest
 import torch.nn.functional as F
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_with_pcc, assert_allclose
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     assert_all_nonfinite,
@@ -64,8 +63,7 @@ Accuracy criteria (SNB = smallest normal bfloat16)
 |                  |          |                       | atol 1e-6                    |
 |                  | both     | x <= -87.5            | exactly 0                    |
 |                  | both     | x >= 89               | +inf (fast mode xfail: NaN)  |
-| erf              | accurate | [-10, 10]             | ULP ≤ 3 (BH 4)               |
-|                  | fast     | [-10, 10]             | rtol 1.1e-4 (BH 5.4e-3)      |
+| erf              | both     | [-10, 10]             | ULP ≤ 1                      |
 | gelu             | accurate | x >= 0                | ULP ≤ 2                      |
 |                  | accurate | -1 < x < 0            | ULP ≤ 3                      |
 |                  | accurate | x <= -1               | abs ≤ 4.5e-7                 |
@@ -247,7 +245,7 @@ def test_exp_overflow(device, fast):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# erf — bounded [-1, 1]; ULP ≤ 3 (BH 4) in accurate mode, rtol 1.1e-4 (BH 5.4e-3) in fast mode
+# erf — bounded [-1, 1]; ULP ≤ 1 in both modes (no reciprocal in the FP32 kernel)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -256,10 +254,13 @@ def test_erf_accurate(device):
 
     | Arch      | Input range | Check   | Measured                                       |
     |-----------|-------------|---------|------------------------------------------------|
-    | wormhole  | [-10, 10]   | ULP ≤ 3 | max 3 ULP at 68 values, spread over the range  |
-    | blackhole | [-10, 10]   | ULP ≤ 4 | max 4 ULP at 10 values: ±0.2119, ±0.2139,      |
-    |           |             |         | ±0.2236, ±0.4570, ±1.8516; device is slightly  |
-    |           |             |         | smaller in magnitude each time                 |
+    | wormhole  | [-10, 10]   | ULP ≤ 1 | max 1 ULP at 654 of 33,346 inputs, all with    |
+    |           |             |         | -4 < x < 4; 32,350 match the golden exactly    |
+    | blackhole | [-10, 10]   | ULP ≤ 1 | same outputs as wormhole, bit for bit          |
+
+    Measured on a bit-exact model of the SFPMAD arithmetic (#66809). The
+    previous kernel (a single n16/d16 rational) measured 3 ULP on wormhole and
+    4 ULP on blackhole here, so a threshold of 1 catches a regression.
     """
     input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -267,21 +268,20 @@ def test_erf_accurate(device):
     golden = torch.erf(input_tensor.float()).to(torch.float32)
     result = ttnn.to_torch(ttnn.erf(tt_in, fast_and_approximate_mode=False)).to(torch.float32)
 
-    ulp_threshold = 4 if is_blackhole() else 3
-    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp_threshold)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 def test_erf_fast(device):
-    """erf in fast mode. The relative error is near-constant, so ULP doesn't fit.
+    """erf in fast mode. The FP32 kernel uses no reciprocal, so fast mode runs the
+    same code as accurate mode and gets the same bound.
 
-    | Arch      | Input range | Check               | Measured max relative error            |
-    |-----------|-------------|---------------------|----------------------------------------|
-    | wormhole  | [-10, 10]   | rtol 1.1e-4, atol 0 | 1.02e-4 (up to 1711 ULP)               |
-    | blackhole | [-10, 10]   | rtol 5.4e-3, atol 0 | 5.35e-3 at x = ±6.03, where the device |
-    |           |             |                     | saturates to ±0.9947 instead of ±1     |
+    | Arch      | Input range | Check   | Measured                     |
+    |-----------|-------------|---------|------------------------------|
+    | wormhole  | [-10, 10]   | ULP ≤ 1 | same as test_erf_accurate    |
+    | blackhole | [-10, 10]   | ULP ≤ 1 | same as test_erf_accurate    |
 
-    Blackhole is roughly bfloat16-accurate in fast mode: median relative error
-    2^-8, about 50 times worse than wormhole.
+    The previous kernel was checked with rtol 1.1e-4 (wormhole, up to 1711 ULP)
+    and rtol 5.4e-3 (blackhole) here.
     """
     input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -289,8 +289,7 @@ def test_erf_fast(device):
     golden = torch.erf(input_tensor.float()).to(torch.float32)
     result = ttnn.to_torch(ttnn.erf(tt_in, fast_and_approximate_mode=True)).to(torch.float32)
 
-    rtol = 5.4e-3 if is_blackhole() else 1.1e-4
-    assert_allclose(expected_result=golden, actual_result=result, rtol=rtol, atol=0)
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
