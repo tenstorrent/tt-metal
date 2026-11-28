@@ -25,6 +25,14 @@
 
 #include "common.hpp"
 
+// Quasar binds the pack destination buffer at pack_init; pack_reconfig_data_format only changes the format there,
+// so every switch of pack destination needs a pack_init. WH/BH need no re-init.
+#ifdef ARCH_QUASAR
+#define QSR_PACK_INIT(cb) pack_init(cb)
+#else
+#define QSR_PACK_INIT(cb)
+#endif
+
 namespace {
 
 // The DFB indices that used to live in this struct are now Metal 2.0 DFB bindings, referenced as
@@ -89,6 +97,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
 
         acc_cb.reserve_back(ONE_TILE);
         pack_reconfig_data_format(cb_acc);
+        QSR_PACK_INIT(cb_acc);
         pack_tile(WORKING_REG, cb_acc);
         acc_cb.push_back(ONE_TILE);
 
@@ -104,11 +113,13 @@ FORCE_INLINE void cumsum_cube_axis_2(
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_stage_0);
+        QSR_PACK_INIT(cb_cumsum_stage_0);
         pack_tile(WORKING_REG, cb_cumsum_stage_0, FIRST_TILE);
 
         if ((tile_i == block_depth - 1) && save_last_tile) {
             const WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
             pack_reconfig_data_format(cb_axis_2_buffer);
+            QSR_PACK_INIT(cb_axis_2_buffer);
             pack_tile(WORKING_REG, cb_axis_2_buffer, FIRST_TILE);
         }
 
@@ -135,6 +146,7 @@ FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_c
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_output);
+        QSR_PACK_INIT(cb_cumsum_output);
         pack_tile(WORKING_REG, cb_cumsum_output, FIRST_TILE);
 
         tile_regs_release();
@@ -161,6 +173,7 @@ FORCE_INLINE void propagate_tile_into_cube(
         tile_regs_wait();
 
         pack_reconfig_data_format(cb_cumsum_stage_b);
+        QSR_PACK_INIT(cb_cumsum_stage_b);
         pack_tile(WORKING_REG, cb_cumsum_stage_b, FIRST_TILE);
         if (tile_i == block_depth - 1) {  // when last tile in block gets propagated on, finally release the axis 2
                                           // buffer CB and save last tile only when there's a specific request. it
@@ -169,6 +182,7 @@ FORCE_INLINE void propagate_tile_into_cube(
             if (save_last_tile) {
                 const WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
                 pack_reconfig_data_format(cb_axis_2_buffer);
+                QSR_PACK_INIT(cb_axis_2_buffer);
                 pack_tile(WORKING_REG, cb_axis_2_buffer, FIRST_TILE);
             }
         }
@@ -190,7 +204,12 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         reconfig_data_format(cb_cumsum_stage_X, cb_axis_3_buffer_read);
         bcast_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_cumsum_stage_X, cb_axis_3_buffer_read);
 
+#ifdef ARCH_QUASAR
+        // Quasar broadcasts only row 0; the writer has already copied the last row there.
+        constexpr uint32_t LAST_ROW_INDEX = 0;
+#else
         constexpr uint32_t LAST_ROW_INDEX = TILE_HEIGHT - 1;
+#endif
 
         add_tiles_bcast_rows(
             cb_cumsum_stage_X, cb_axis_3_buffer_read, FIRST_TILE, FIRST_TILE, WORKING_REG, LAST_ROW_INDEX);
@@ -199,6 +218,7 @@ FORCE_INLINE void get_and_propagate_adder_cube(
         tile_regs_commit();
 
         pack_reconfig_data_format(cb_output);
+        QSR_PACK_INIT(cb_output);
         pack_tile(WORKING_REG, cb_output, FIRST_TILE);
 
         tile_regs_release();

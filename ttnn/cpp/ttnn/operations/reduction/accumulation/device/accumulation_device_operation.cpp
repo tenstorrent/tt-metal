@@ -81,6 +81,26 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
             "and cumprod on 32x32 tiles (only bf16 cumsum on Quasar)",
             acc_dim,
             logical_rank);
+
+        // Quasar: every scan that is not a tile-axis bf16 cumsum runs the general accumulation kernel, which unpacks
+        // its accumulator straight to 32-bit Dest. tt-metal makes that routing kernel-wide on Quasar (UnpackToDestEn),
+        // so the input is unpacked straight to Dest too, and Quasar's unpacker cannot widen data narrower than 32 bits
+        // on that path (bf16 -> Float32 is not a supported unpack-to-Dest conversion), so the results are wrong. Only
+        // 32-bit inputs are safe there. Removing this limit needs per-buffer unpack routing or a float32 conversion.
+        const bool general_kernel =
+            !is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op);
+        const bool input_is_32_bit =
+            input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::INT32;
+        TT_FATAL(
+            !(input_tensor.device()->arch() == tt::ARCH::QUASAR && general_kernel && !input_is_32_bit),
+            "ttnn accumulation operations (cumprod, cumsum) on Quasar do not support {} input for this scan. It runs "
+            "the general accumulation kernel, which keeps its running total in 32-bit Dest; on Quasar this makes every "
+            "unpack in the kernel go straight to Dest, and Quasar's unpacker cannot widen data narrower than 32 bits "
+            "on "
+            "that path, so the results would be wrong. Use a float32 or int32 input instead (for example, pass "
+            "dtype=ttnn.float32). A forward bfloat16 cumsum along one of the last two dimensions, with a bfloat16 "
+            "output and 32x32 tiles, uses a different kernel and is supported.",
+            input_tensor.dtype());
     }
 }
 

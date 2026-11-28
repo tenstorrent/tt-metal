@@ -78,6 +78,26 @@ inline void kahan_step_tile() {
 #define QSR_DUMMY_UNPACK(dfb_id)
 #endif
 
+// Quasar binds the unpack source buffer at copy_init and the pack destination buffer at pack_init;
+// the *_reconfig_data_format calls only change formats there. WH/BH need neither re-init.
+#ifdef ARCH_QUASAR
+#define QSR_COPY_INIT(dfb_id) copy_init(dfb_id)
+#define QSR_PACK_INIT(dfb_id) pack_init(dfb_id)
+#else
+#define QSR_COPY_INIT(dfb_id)
+#define QSR_PACK_INIT(dfb_id)
+#endif
+
+// Copy one tile into Dest. On Quasar the acc DFB unpacks straight to Dest, which makes every unpack in this
+// kernel go to Dest (UnpackToDestEn is kernel-wide), and an unpack to Dest must borrow the Dest section from
+// MATH or it lands unsynchronized. tile_regs_borrow/return compile to nothing on WH/BH.
+#define ACC_COPY_TILE(dfb_id, dst_idx)                          \
+    do {                                                        \
+        tile_regs_borrow<DstClient::MATH, DstClient::UNPACK>(); \
+        copy_tile(dfb_id, 0, dst_idx);                          \
+        tile_regs_return<DstClient::MATH, DstClient::UNPACK>(); \
+    } while (0)
+
 void kernel_main() {
     constexpr auto default_acc_value = get_arg(args::default_acc_value);
 
@@ -121,18 +141,34 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; i++) {
         // Synchronize unpacker-packer between iterations
         // This is necessary to avoid data-races on the accumulator buffer
-        // TEN-4746: a bare wait_front/pop_front needs a real unpacker op between on Quasar (QSR_DUMMY_UNPACK).
+#ifdef ARCH_QUASAR
+        // Quasar: a Dest section takes its implied data format from what is unpacked into it, and an
+        // SFPU-only write (the fill below) leaves it unset, which the SFPU then rejects. Copy the
+        // stale acc/comp entries into the slots the fill overwrites so the section has a format. The
+        // copies are also the real unpacker ops TEN-4746 needs between wait_front and pop_front.
+        tile_regs_acquire();
+        reconfig_data_format(dfb::acc, dfb::acc);
+        copy_init(dfb::acc);
         dfb_acc_obj.wait_front(ONE_TILE);
-        QSR_DUMMY_UNPACK(dfb::acc);
+        ACC_COPY_TILE(dfb::acc, DST_ACC);
+        dfb_acc_obj.pop_front(ONE_TILE);
+#ifdef COMPENSATED_SUM
+        copy_init(dfb::comp);
+        dfb_comp_obj.wait_front(ONE_TILE);
+        ACC_COPY_TILE(dfb::comp, DST_COMP);
+        dfb_comp_obj.pop_front(ONE_TILE);
+#endif
+#else
+        dfb_acc_obj.wait_front(ONE_TILE);
         dfb_acc_obj.pop_front(ONE_TILE);
 #ifdef COMPENSATED_SUM
         dfb_comp_obj.wait_front(ONE_TILE);
-        QSR_DUMMY_UNPACK(dfb::comp);
         dfb_comp_obj.pop_front(ONE_TILE);
 #endif
 
         tile_regs_acquire();
         reconfig_data_format(dfb::acc, dfb::acc);
+#endif
 
         fill_tile_init();
         FILL_TILE(DST_ACC, default_acc_value);
@@ -148,10 +184,12 @@ void kernel_main() {
         dfb_acc_obj.reserve_back(ONE_TILE);
 
         pack_reconfig_data_format(dfb::acc);
+        QSR_PACK_INIT(dfb::acc);
         pack_tile(DST_ACC, dfb::acc);
 #ifdef COMPENSATED_SUM
         dfb_comp_obj.reserve_back(ONE_TILE);
         pack_reconfig_data_format(dfb::comp);
+        QSR_PACK_INIT(dfb::comp);
         pack_tile(DST_COMP, dfb::comp);
 #endif
         tile_regs_release();
@@ -173,20 +211,22 @@ void kernel_main() {
 
 #ifdef COMPENSATED_SUM
             // in, acc and comp are all Float32 here (the factory sets COMPENSATED_SUM only then): one unpack
-            // configuration serves the three copies.
+            // format configuration serves the three copies (on Quasar each still needs its own copy_init).
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
-            copy_tile(dfb::in, 0, DST_IN);
-            copy_tile(dfb::acc, 0, DST_ACC);
-            copy_tile(dfb::comp, 0, DST_COMP);
+            ACC_COPY_TILE(dfb::in, DST_IN);
+            QSR_COPY_INIT(dfb::acc);
+            ACC_COPY_TILE(dfb::acc, DST_ACC);
+            QSR_COPY_INIT(dfb::comp);
+            ACC_COPY_TILE(dfb::comp, DST_COMP);
 #else
             reconfig_data_format(dfb::in, dfb::in);
             copy_init(dfb::in);
-            copy_tile(dfb::in, 0, DST_IN);
+            ACC_COPY_TILE(dfb::in, DST_IN);
 
             reconfig_data_format(dfb::acc, dfb::acc);
             copy_init(dfb::acc);
-            copy_tile(dfb::acc, 0, DST_ACC);
+            ACC_COPY_TILE(dfb::acc, DST_ACC);
 #endif
 #ifdef COMPENSATED_SUM
             // Compensated (Kahan) summation on the running total. The plain path computes
@@ -222,16 +262,19 @@ void kernel_main() {
 
             dfb_out_obj.reserve_back(ONE_TILE);
             pack_reconfig_data_format(dfb::acc, dfb::out);  // Needed for fp32_acc_to_dest=True
+            QSR_PACK_INIT(dfb::out);
             pack_tile(DST_RESULT, dfb::out);
             dfb_out_obj.push_back(ONE_TILE);
 
             dfb_acc_obj.reserve_back(ONE_TILE);
 
             pack_reconfig_data_format(dfb::out, dfb::acc);  // Needed for fp32_acc_to_dest=True
+            QSR_PACK_INIT(dfb::acc);
             pack_tile(DST_RESULT, dfb::acc);
 #ifdef COMPENSATED_SUM
             dfb_comp_obj.reserve_back(ONE_TILE);
             pack_reconfig_data_format(dfb::acc, dfb::comp);
+            QSR_PACK_INIT(dfb::comp);
             pack_tile(DST_COMP, dfb::comp);
 #endif
 
