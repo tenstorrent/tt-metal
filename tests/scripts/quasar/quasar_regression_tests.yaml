@@ -102,6 +102,13 @@ unit_tests_legacy:
     config: 2x3_DISPATCH
     back2back: true
 
+  # A reduced worker grid leaves Tensix outside the compute grid on the FDS wire.
+  - filter: "*TestSubDeviceReducedGridReadAfterProgram*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "0,1"
+
   # - filter: "*QuasarMultiSemaphorePipeline"
   #   config: 2x3_DISPATCH
   #   back2back: true

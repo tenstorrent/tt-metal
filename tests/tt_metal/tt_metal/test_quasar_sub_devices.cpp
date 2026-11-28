@@ -198,6 +198,66 @@ SyncWorkloads create_sync_workloads(
     return result;
 }
 
+// Enqueues, without blocking, a program whose kernel on `node` writes `value` to an L1 buffer after a delay, then
+// queues a read of that buffer: under fast dispatch the read waits for the program's workers to report done.
+uint32_t read_after_delayed_write(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const NodeCoord& node,
+    uint32_t value,
+    const std::string& id) {
+    constexpr uint32_t page_size = 64;
+    constexpr uint32_t delay_iterations = 2000;
+    auto make_buffer = [&]() {
+        ShardSpecBuffer shard_spec(
+            CoreRangeSet(CoreRange(node, node)), {1, 16}, ShardOrientation::ROW_MAJOR, {1, 16}, {1, 1});
+        distributed::DeviceLocalBufferConfig local_config{
+            .page_size = page_size,
+            .buffer_type = BufferType::L1,
+            .sharding_args = BufferShardingArgs(std::move(shard_spec), TensorMemoryLayout::HEIGHT_SHARDED)};
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = page_size}, local_config, mesh_device.get());
+    };
+    auto output = make_buffer();
+    auto scratch = make_buffer();
+    auto& cq = mesh_device->mesh_command_queue();
+    const std::vector<uint32_t> zero(page_size / sizeof(uint32_t), 0);
+    distributed::EnqueueWriteMeshBuffer(cq, output, zero, /*blocking=*/true);
+
+    const KernelSpecName kernel_name{"delayed_l1_write_" + id};
+    ProgramSpec spec{
+        .name = "sub_device_delayed_l1_write_" + id,
+        .kernels = {KernelSpec{
+            .unique_id = kernel_name,
+            .source = "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delayed_l1_write.cpp",
+            .num_threads = 1,
+            .runtime_arg_schema =
+                {.runtime_arg_names = {"address", "scratch", "core_x", "core_y", "iterations", "value"}},
+            .hw_config = DataMovementHardwareConfig{}}},
+        .work_units = {WorkUnitSpec{.name = "writer_" + id, .kernels = {kernel_name}, .target_nodes = node}},
+    };
+    Program program(*mesh_device, spec);
+    const auto physical = mesh_device->worker_core_from_logical_core(node);
+    program.set_program_run_args(ProgramRunArgs{
+        .kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+            .kernel = kernel_name,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"address", static_cast<uint32_t>(output->address())},
+                 {"scratch", static_cast<uint32_t>(scratch->address())},
+                 {"core_x", physical.x},
+                 {"core_y", physical.y},
+                 {"iterations", delay_iterations},
+                 {"value", value}})}}});
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    // Not blocking: only the dispatcher's wait for the workers orders the read after the kernel's write.
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+
+    std::vector<uint32_t> result;
+    distributed::EnqueueReadMeshBuffer(cq, result, output, /*blocking=*/true);
+    return result.empty() ? 0 : result.front();
+}
+
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
@@ -434,4 +494,37 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
             EXPECT_EQ(read_l1_word(*mesh_device, node, address), value);
         }
     }
+}
+
+// Under FDS every Tensix takes every go on the FDS wire. A reduced worker grid leaves Tensix outside the compute
+// grid; unless they get the unused go index they answer sub-device 0's go, its done count runs ahead of the real
+// worker, and a read queued after the program sees L1 before the kernel's last write.
+TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceReducedGridReadAfterProgram) {
+    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
+        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
+                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
+    }
+    if (!MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "Only fast dispatch waits for the workers before a read";
+    }
+
+    auto mesh_device = devices_[0];
+    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord logical_grid = mesh_device->logical_grid_size();
+    if (worker_grid.x >= logical_grid.x && worker_grid.y >= logical_grid.y) {
+        GTEST_SKIP() << "Test requires a reduced worker grid. Set TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE.";
+    }
+    const NodeCoord node{0, 0};
+
+    EXPECT_EQ(read_after_delayed_write(mesh_device, node, 0x55550001, "default_manager"), 0x55550001u)
+        << "the read ran before the program's worker finished (default sub-device manager)";
+
+    const auto manager = mesh_device->create_sub_device_manager({full_grid_sub_device(worker_grid)}, kLocalL1Size);
+    mesh_device->load_sub_device_manager(manager);
+    EXPECT_EQ(read_after_delayed_write(mesh_device, node, 0x55550002, "custom_manager"), 0x55550002u)
+        << "the read ran before the program's worker finished (custom sub-device manager)";
+
+    mesh_device->clear_loaded_sub_device_manager();
+    EXPECT_EQ(read_after_delayed_write(mesh_device, node, 0x55550003, "cleared_manager"), 0x55550003u)
+        << "the read ran before the program's worker finished (after clearing the sub-device manager)";
 }
