@@ -1392,3 +1392,126 @@ def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scal
     assert (
         quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
     ), f"expected L1 output, got {quantized_tt.memory_config()}"
+
+
+def test_requantize_all_tensor_per_channel_honors_output_tensor_and_memory_config(device):
+    """All-tensor per-channel requantize must populate preallocated output_tensor and honor memory_config (#64667 item 1)."""
+    torch.manual_seed(0)
+    q_tr = torch.randint(-50, 50, (2, 4, 32, 32), dtype=torch.int32)
+    axis = 1
+    in_scale_tr = torch.tensor([0.02, 0.04, 0.05, 0.1], dtype=torch.float32)
+    in_zp_tr = torch.tensor([1, -2, 3, 0], dtype=torch.int32)
+    out_scale_tr = torch.tensor([0.05, 0.02, 0.1, 0.04], dtype=torch.float32)
+    out_zp_tr = torch.tensor([0, 4, -3, 2], dtype=torch.int32)
+
+    q_tt = ttnn.from_torch(q_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    in_scale_tt = ttnn.from_torch(in_scale_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    in_zp_tt = ttnn.from_torch(in_zp_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_scale_tt = ttnn.from_torch(out_scale_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_zp_tt = ttnn.from_torch(out_zp_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    preallocated_out = ttnn.zeros(
+        q_tr.shape,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    res_tt = ttnn.requantize(
+        q_tt,
+        in_scale_tt,
+        in_zp_tt,
+        out_scale_tt,
+        out_zp_tt,
+        axis=axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tensor=preallocated_out,
+    )
+    assert res_tt.buffer_address() == preallocated_out.buffer_address()
+    assert res_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
+
+    s_in = in_scale_tr.view(1, 4, 1, 1)
+    z_in = in_zp_tr.view(1, 4, 1, 1).to(torch.float32)
+    s_out = out_scale_tr.view(1, 4, 1, 1)
+    z_out = out_zp_tr.view(1, 4, 1, 1).to(torch.float32)
+    expected = torch.round((q_tr.to(torch.float32) - z_in) * (s_in / s_out) + z_out).to(torch.int32)
+    check_match_ratio(expected, ttnn.to_torch(preallocated_out), ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
+
+
+@pytest.mark.parametrize("bad_axis", [4, -5])
+def test_quant_dequant_requant_out_of_range_axis_raises_tt_fatal(device, expect_error, bad_axis):
+    """Out-of-range axis must hit TT_FATAL bounds check before Shape::operator[] (#64667 item 2)."""
+    x_tt = ttnn.from_torch(torch.ones((2, 4, 32, 32), dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    q_tt = ttnn.from_torch(torch.ones((2, 4, 32, 32), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    scale_tt = ttnn.from_torch(torch.full((4,), 0.05, dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zp_tt = ttnn.from_torch(torch.zeros((4,), dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    with expect_error(RuntimeError, "outside the range"):
+        ttnn.quantize(x_tt, scale_tt, zp_tt, axis=bad_axis)
+    with expect_error(RuntimeError, "outside the range"):
+        ttnn.dequantize(q_tt, scale_tt, zp_tt, axis=bad_axis)
+    with expect_error(RuntimeError, "outside the range"):
+        ttnn.requantize(q_tt, scale_tt, zp_tt, scale_tt, zp_tt, axis=bad_axis)
+
+
+def test_quant_dequant_requant_unit_axis_with_non_1d_scalar_tensor(device):
+    """Non-1D volume-1 scalar tensors on a size-1 axis must be treated as per-tensor (#64667 item 3)."""
+    torch.manual_seed(0)
+    x_tr = torch.rand((2, 1, 32, 32), dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    scale_2d_tt = ttnn.from_torch(torch.tensor([[0.05]], dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zp_2d_tt = ttnn.from_torch(torch.tensor([[2]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_scale_2d_tt = ttnn.from_torch(torch.tensor([[0.1]], dtype=torch.float32), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_zp_2d_tt = ttnn.from_torch(torch.tensor([[-1]], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    q_tt = ttnn.quantize(x_tt, scale_2d_tt, zp_2d_tt, axis=1)
+    dq_tt = ttnn.dequantize(q_tt, scale_2d_tt, zp_2d_tt, axis=1, dtype=ttnn.float32)
+    rq_tt = ttnn.requantize(q_tt, scale_2d_tt, zp_2d_tt, out_scale_2d_tt, out_zp_2d_tt, axis=1)
+
+    q_ref = ttnn.to_torch(ttnn.quantize(x_tt, 0.05, 2))
+    dq_ref = ttnn.to_torch(ttnn.dequantize(q_tt, 0.05, 2, dtype=ttnn.float32))
+    rq_ref = ttnn.to_torch(ttnn.requantize(q_tt, 0.05, 2, 0.1, -1))
+
+    check_match_ratio(q_ref, ttnn.to_torch(q_tt), ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
+    assert torch.allclose(dq_ref, ttnn.to_torch(dq_tt), atol=1e-3, rtol=1e-3)
+    check_match_ratio(rq_ref, ttnn.to_torch(rq_tt), ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
+
+
+def test_mixed_per_channel_and_scalar_scale_or_zero_point_dispatch(device):
+    """Covers mixed per-channel/per-tensor requantize (item 4a) and scalar-scale + 1D per-channel zero-point across quantize/dequantize/requantize (item 4b)."""
+    torch.manual_seed(0)
+    x_tr = torch.randn((2, 4, 32, 32), dtype=torch.float32)
+    x_tt = ttnn.from_torch(x_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    in_scale_vec = torch.tensor([0.02, 0.05, 0.08, 0.1], dtype=torch.float32)
+    in_scale_1d_tt = ttnn.from_torch(in_scale_vec, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_scale_scalar_tt = convert_scalar_to_ttnn_tensor(device, 0.04, 1, ttnn.float32)
+
+    # Item 4a: 1D per-channel in_scale + scalar in_zp=0 -> volume-1 out_scale tensor + scalar out_zp=0
+    q_in_tr = torch.randint(-40, 40, (2, 4, 32, 32), dtype=torch.int32)
+    q_in_tt = ttnn.from_torch(q_in_tr, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    rq_4a = ttnn.to_torch(ttnn.requantize(q_in_tt, in_scale_1d_tt, 0, out_scale_scalar_tt, 0, axis=1))
+    expected_4a = torch.round(q_in_tr.to(torch.float32) * (in_scale_vec.view(1, 4, 1, 1) / 0.04)).to(torch.int32)
+    check_match_ratio(expected_4a, rq_4a, ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
+
+    # Item 4b: scalar float scale + 1D per-channel zero_point tensor in quantize, dequantize, and requantize
+    zp_vec = torch.tensor([3, -4, 7, -2], dtype=torch.int32)
+    zp_1d_tt = ttnn.from_torch(zp_vec, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_zp_vec = torch.tensor([-1, 5, -3, 2], dtype=torch.int32)
+    out_zp_1d_tt = ttnn.from_torch(out_zp_vec, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    q_4b = ttnn.quantize(x_tt, 0.05, zp_1d_tt, axis=1)
+    expected_q_4b = torch.round(x_tr / 0.05 + zp_vec.view(1, 4, 1, 1).to(torch.float32)).to(torch.int32)
+    check_match_ratio(expected_q_4b, ttnn.to_torch(q_4b), ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
+
+    dq_4b = ttnn.to_torch(ttnn.dequantize(q_in_tt, 0.05, zp_1d_tt, axis=1, dtype=ttnn.float32))
+    expected_dq_4b = (q_in_tr.to(torch.float32) - zp_vec.view(1, 4, 1, 1).to(torch.float32)) * 0.05
+    assert torch.allclose(expected_dq_4b, dq_4b, atol=1e-3, rtol=1e-3)
+
+    rq_4b = ttnn.to_torch(ttnn.requantize(q_in_tt, 0.05, zp_1d_tt, 0.1, out_zp_1d_tt, axis=1))
+    expected_rq_4b = torch.round(
+        (q_in_tr.to(torch.float32) - zp_vec.view(1, 4, 1, 1).to(torch.float32)) * (0.05 / 0.1)
+        + out_zp_vec.view(1, 4, 1, 1).to(torch.float32)
+    ).to(torch.int32)
+    check_match_ratio(expected_rq_4b, rq_4b, ttnn.int32, min_match_ratio=0.99, rtol=0, atol=1)
