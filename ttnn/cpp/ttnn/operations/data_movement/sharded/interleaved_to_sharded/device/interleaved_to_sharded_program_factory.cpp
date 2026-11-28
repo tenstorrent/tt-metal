@@ -29,6 +29,35 @@ namespace ttnn::prim {
 constexpr uint32_t num_slices = 1;
 constexpr uint32_t slice_index = 0;
 
+InterleavedToShardedScratch interleaved_to_sharded_row_major_scratch(
+    const Tensor& input,
+    uint32_t input_unit_size,
+    uint32_t num_units_per_shard_height,
+    TensorMemoryLayout shard_strategy,
+    uint32_t num_cores) {
+    constexpr uint32_t bank_runs_stage_bytes = 16 * 1024;
+    constexpr uint32_t bank_runs_max_page_bytes = 256;
+    constexpr uint32_t bank_runs_min_pages_per_bank = 8;
+    constexpr uint32_t bank_runs_min_cores = 32;
+    const uint32_t dram_alignment = hal::get_dram_alignment();
+    const auto& src_buffer = input.mesh_buffer();
+    const bool src_is_dram = src_buffer.device_local_config().buffer_type == BufferType::DRAM;
+    const uint32_t num_dram_banks = input.device()->allocator()->get_num_banks(BufferType::DRAM);
+    InterleavedToShardedScratch scratch;
+    scratch.page_stride = src_is_dram ? static_cast<uint32_t>(src_buffer.aligned_page_size()) : 0;
+    const bool unaligned_pages = input_unit_size % dram_alignment != 0;
+    scratch.bank_runs = input.device()->arch() == tt::ARCH::BLACKHOLE && src_is_dram &&
+                        shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED &&
+                        input_unit_size == src_buffer.page_size() && scratch.page_stride <= bank_runs_max_page_bytes &&
+                        num_units_per_shard_height >= bank_runs_min_pages_per_bank * num_dram_banks &&
+                        (unaligned_pages || num_cores >= bank_runs_min_cores);
+    scratch.size_per_node =
+        scratch.bank_runs
+            ? std::min(bank_runs_stage_bytes, num_units_per_shard_height * scratch.page_stride)
+            : tt::align(input_unit_size + dram_alignment, dram_alignment) * interleaved_to_sharded_num_trids;
+    return scratch;
+}
+
 ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::create_program_artifacts(
     const InterleavedToShardedParams& /*operation_attributes*/,
     const InterleavedToShardedInputs& tensor_args,
@@ -162,19 +191,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
-    uint32_t num_trids = 4;
-    constexpr uint32_t bank_runs_stage_bytes = 16 * 1024;
-    constexpr uint32_t bank_runs_max_page_bytes = 256;
-    constexpr uint32_t bank_runs_min_pages_per_bank = 8;
-    constexpr uint32_t bank_runs_min_cores = 32;
-    const uint32_t num_dram_banks = input.device()->allocator()->get_num_banks(BufferType::DRAM);
-    const uint32_t page_stride = src_is_dram ? static_cast<uint32_t>(src_buffer->aligned_page_size()) : 0;
-    const bool unaligned_pages = input_unit_size % dram_alignment != 0;
-    const bool use_bank_runs = is_blackhole && !is_tile && src_is_dram &&
-                               shard_strategy == TensorMemoryLayout::HEIGHT_SHARDED &&
-                               input_unit_size == src_buffer->page_size() && page_stride <= bank_runs_max_page_bytes &&
-                               num_units_per_shard_height >= bank_runs_min_pages_per_bank * num_dram_banks &&
-                               (unaligned_pages || all_cores.num_cores() >= bank_runs_min_cores);
+    uint32_t num_trids = interleaved_to_sharded_num_trids;
+    const auto scratch = interleaved_to_sharded_row_major_scratch(
+        input, input_unit_size, num_units_per_shard_height, shard_strategy, all_cores.num_cores());
+    const bool use_bank_runs = !is_tile && scratch.bank_runs;
     // The scratchpad stages DRAM (64B) reads down to L1 (16B) alignment. See issue #34414. Only the
     // row-major reader has a use for it -- the tile reader never receives a handle to it -- so the
     // tile path declares no spec at all rather than an unbound one.
@@ -182,15 +202,9 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         (src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned;
     const bool has_scratch = !is_tile && needs_scratch;
     if (has_scratch) {
-        uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
-        // Whole region the former DFB reserved on each node: entry_size * num_entries.
-        uint32_t scratch_size = scratch_page_size * num_trids;
-        if (use_bank_runs) {
-            scratch_size = std::min(bank_runs_stage_bytes, num_units_per_shard_height * page_stride);
-        }
         scratchpads.push_back(ScratchpadSpec{
             .unique_id = SCRATCH,
-            .size_per_node = scratch_size,
+            .size_per_node = scratch.size_per_node,
         });
     }
 
@@ -238,7 +252,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         reader.compile_time_args = {{"num_trids", num_trids}};
         if (use_bank_runs) {
             reader.compiler_options.defines.emplace("I2S_BANK_RUNS", "1");
-            reader.compiler_options.defines.emplace("I2S_BANK_RUNS_PAGE_STRIDE", std::to_string(page_stride));
+            reader.compiler_options.defines.emplace("I2S_BANK_RUNS_PAGE_STRIDE", std::to_string(scratch.page_stride));
         }
         // The kernel reads no equivalent of the legacy arg 1 (num_units_per_row), so the named schema
         // has no slot for it.

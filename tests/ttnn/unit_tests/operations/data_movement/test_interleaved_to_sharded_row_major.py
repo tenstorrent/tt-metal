@@ -60,3 +60,51 @@ def test_interleaved_to_sharded_row_major_dram(device, dtype, row_bytes, rows_pe
         assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
         assert torch.equal(_bits(ttnn.to_torch(out)), _bits(torch_input))
         ttnn.deallocate(out)
+
+
+def test_to_memory_config_row_major_falls_back_to_copy_when_l1_is_nearly_full(device):
+    num_cores, rows_per_core, width = 8, 512, 16
+    shard_bytes = rows_per_core * width * 2
+    slack = 8 * 1024
+    filler_row_bytes = 1024
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    torch_input = _make((1, 1, num_cores * rows_per_core, width), ttnn.bfloat16, seed=7)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
+    bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    low = device.lowest_occupied_compute_l1_address()
+    free = bank if low is None else min(low - base, bank)
+    filler_rows = (free - shard_bytes - slack) // filler_row_bytes
+    filler = ttnn.from_torch(
+        torch.zeros((1, 1, num_cores * filler_rows, filler_row_bytes // 2), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (filler_rows, filler_row_bytes // 2), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+    try:
+        gap = device.lowest_occupied_compute_l1_address() - base
+        assert shard_bytes + slack <= gap < shard_bytes + slack + filler_row_bytes
+        sharded_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (rows_per_core, width), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out = ttnn.to_memory_config(tt_input, sharded_config)
+        assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        assert torch.equal(_bits(ttnn.to_torch(out)), _bits(torch_input))
+        ttnn.deallocate(out)
+    finally:
+        ttnn.deallocate(filler)
