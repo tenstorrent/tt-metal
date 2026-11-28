@@ -49,10 +49,22 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
         topk_shape[-1]);
 
     TT_FATAL(
+        mapping_shape[-2] % num_devices == 0,
+        "Expected number of experts ({}) to be divisible by num_devices ({})",
+        mapping_shape[-2],
+        num_devices);
+
+    TT_FATAL(
         metadata_shape[1] == topk_shape[1],
         "Expected metadata dim 1 to be equal to topk dim 1 (batch size), got {} and {}, respectively",
         metadata_shape[1],
         topk_shape[1]);
+
+    TT_FATAL(
+        metadata_shape[2] == topk_shape[2],
+        "Expected metadata dim 2 to be equal to topk dim 2 (sequence size), got {} and {}, respectively",
+        metadata_shape[2],
+        topk_shape[2]);
 
     const uint32_t batch_seq = metadata_shape[1] * metadata_shape[2];
     const auto reduction_size = operation_attributes.reduction_size;
@@ -63,6 +75,31 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
         "every reduction_size metadata pages and does not flush a partial trailing group",
         batch_seq,
         reduction_size);
+
+    const auto& opt_mapping = tensor_args.optional_output_mapping_tensor;
+    const auto& opt_reduced = tensor_args.optional_output_reduced_tensor;
+    if (opt_mapping.has_value() || opt_reduced.has_value()) {
+        const auto expected_specs = compute_output_specs(operation_attributes, tensor_args);
+        auto check_output = [](const Tensor& t, const TensorSpec& expected, const char* name) {
+            TT_FATAL(
+                t.logical_shape() == expected.logical_shape() && t.dtype() == expected.data_type() &&
+                    t.layout() == expected.layout() && !t.memory_config().is_sharded(),
+                "Invalid {} spec: got shape {} dtype {} layout {}, expected shape {} dtype {} layout {} (interleaved)",
+                name,
+                t.logical_shape(),
+                t.dtype(),
+                t.layout(),
+                expected.logical_shape(),
+                expected.data_type(),
+                expected.layout());
+        };
+        if (opt_mapping.has_value()) {
+            check_output(opt_mapping.value(), expected_specs[0], "optional_output_mapping_tensor");
+        }
+        if (opt_reduced.has_value()) {
+            check_output(opt_reduced.value(), expected_specs[1], "optional_output_reduced_tensor");
+        }
+    }
 }
 
 MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDeviceOperation::compute_output_specs(
