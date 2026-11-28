@@ -214,8 +214,18 @@ StochasticRoundingResult run_stochastic_rounding(
 
 using namespace unit_tests::compute::stochastic_rounding;
 
-class StochasticRoundingSingleCardFixture : public UnitMeshCQFixture,
-                                            public testing::WithParamInterface<StochasticRoundingConfig> {};
+class StochasticRoundingFixture : public UnitMeshCQFixture,
+                                  public testing::WithParamInterface<StochasticRoundingConfig> {
+protected:
+    void SetUp() override {
+        if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) == tt::ARCH::QUASAR) {
+            GTEST_SKIP() << "Not ported to Quasar: creates DataMovement and Compute kernels, which Quasar rejects";
+        }
+        UnitMeshCQFixture::SetUp();
+    }
+};
+
+class StochasticRoundingSingleCardFixture : public StochasticRoundingFixture {};
 
 TEST_P(StochasticRoundingSingleCardFixture, TensixStochasticRoundingCorrectness) {
     StochasticRoundingConfig test_config = GetParam();
@@ -245,8 +255,7 @@ INSTANTIATE_TEST_SUITE_P(
             .num_tiles = 128U, .seed = 55555U, .base_value = 256.0f},  // Next representable value in BF16 is 258.0
         StochasticRoundingConfig{.num_tiles = 128U, .seed = 555U, .base_value = -0.5f}));
 
-class StochasticRoundingDistributionFixture : public UnitMeshCQFixture,
-                                              public testing::WithParamInterface<StochasticRoundingConfig> {};
+class StochasticRoundingDistributionFixture : public StochasticRoundingFixture {};
 
 TEST_P(StochasticRoundingDistributionFixture, TensixStochasticRoundingDistribution) {
     StochasticRoundingConfig test_config = GetParam();
