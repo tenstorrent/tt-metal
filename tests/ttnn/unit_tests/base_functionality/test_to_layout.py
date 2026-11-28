@@ -504,6 +504,88 @@ def test_int8_to_layout_pad_value_on_host(shape, pad_value):
     assert torch.equal(torch_output_tensor, output_tensor.to(torch.int8))
 
 
+def test_host_tensor_pad_unpad_bounds_on_host(expect_error):
+    # Host-only pad/unpad bounds. pad allocates output_padded_shape.volume() and memcpy's
+    # each input row at input_tensor_start offsets, so an output smaller than the input, or
+    # a start that pushes the input past the output, wrote past the heap buffer. unpad
+    # gathers with strides from the padded shape and had its bounds as TT_ASSERT, which
+    # compiles out of release builds. Both now TT_FATAL, i.e. raise RuntimeError.
+    torch.manual_seed(0)
+
+    def host(shape, dtype=ttnn.bfloat16):
+        values = torch.randint(-100, 100, shape, dtype=torch.int32).to(torch.bfloat16)
+        return ttnn.from_torch(values, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT), values
+
+    # --- valid pad control, checked against torch.nn.functional.pad ---
+    # pad keeps the logical shape and moves the extent to the padded shape, so the shape
+    # assertion is on padded_shape and the values are read with the padding included.
+    source, values = host([1, 1, 32, 40])
+    padded = source.pad([1, 1, 64, 64], [0, 0, 16, 8], 0.0)
+    expected = torch.nn.functional.pad(values, (8, 64 - 48, 16, 64 - 48), mode="constant", value=0.0)
+    assert padded.shape == (1, 1, 32, 40), f"logical shape {padded.shape}, expected the input's (1, 1, 32, 40)"
+    assert list(padded.padded_shape) == [1, 1, 64, 64], f"padded shape {list(padded.padded_shape)}"
+    assert_equal(expected.to(torch.bfloat16), padded.to_torch_with_padded_shape())
+
+    # --- valid unpad control ---
+    # unpad takes an inclusive start and an exclusive end per dim; the result has no padding,
+    # so its logical and padded shapes agree.
+    source, values = host([1, 1, 64, 64])
+    unpadded = source.unpad([0, 0, 16, 8], [1, 1, 48, 48])
+    assert unpadded.shape == (1, 1, 32, 40)
+    assert list(unpadded.padded_shape) == [1, 1, 32, 40]
+    assert_equal(values[0:1, 0:1, 16:48, 8:48], ttnn.to_torch(unpadded))
+
+    # --- output smaller than the input ---
+    source, values = host([1, 1, 32, 40])
+    with expect_error(RuntimeError, "exceeds output_padded_shape"):
+        source.pad([1, 1, 16, 16], [0, 0, 0, 0], 0.0)
+
+    # --- start that pushes the input past the output ---
+    source, values = host([1, 1, 32, 40])
+    with expect_error(RuntimeError, "exceeds output_padded_shape"):
+        source.pad([1, 1, 64, 40], [0, 0, 40, 0], 0.0)
+    with expect_error(RuntimeError, "exceeds output_padded_shape"):
+        source.pad([1, 1, 32, 64], [0, 0, 0, 33], 0.0)
+
+    # --- wrong rank ---
+    source, values = host([1, 1, 32, 40])
+    # A lower-rank shape is promoted to the input rank, so it fails the bounds check instead.
+    with expect_error(RuntimeError, "exceeds output_padded_shape"):
+        source.pad([2048], [0], 0.0)
+    # A lower-rank start is promoted with leading zeros, so this is valid: start [0, 0, 0, 0].
+    padded = source.pad([1, 1, 32, 64], [0], 0.0)
+    assert list(padded.padded_shape) == [1, 1, 32, 64]
+    assert_equal(
+        torch.nn.functional.pad(values, (0, 24)).to(torch.bfloat16),
+        padded.to_torch_with_padded_shape(),
+    )
+
+    # A rank-2 input is not promoted, so rank-4 shapes are wrong there.
+    source, values = host([32, 40])
+    with expect_error(RuntimeError, "must both be rank"):
+        source.pad([1, 1, 32, 40], [0, 0, 0, 0], 0.0)
+
+    # --- unpast out of range: end past the input ---
+    source, values = host([1, 1, 64, 64])
+    with expect_error(RuntimeError, "exceeds input shape"):
+        source.unpad([0, 0, 0, 0], [1, 1, 65, 64])
+
+    # start past the input
+    source, values = host([1, 1, 64, 64])
+    with expect_error(RuntimeError, "exceeds input shape"):
+        source.unpad([0, 0, 80, 0], [1, 1, 80, 64])
+
+    # start after end
+    source, values = host([1, 1, 64, 64])
+    with expect_error(RuntimeError, "exceeds output_tensor_end"):
+        source.unpad([0, 0, 40, 40], [1, 1, 20, 20])
+
+    # a rank that does not match the input is rejected before any indexing
+    source, values = host([1, 1, 64, 64])
+    with expect_error(RuntimeError, "must both be rank"):
+        source.unpad([0], [10])
+
+
 @pytest.mark.parametrize("shape", [[143], [64], [380]])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
