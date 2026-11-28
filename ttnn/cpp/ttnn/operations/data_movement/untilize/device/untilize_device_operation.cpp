@@ -87,6 +87,9 @@ void UntilizeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input;
+    TT_FATAL(
+        !operation_attributes.sub_core_grids.has_value() || operation_attributes.sub_core_grids->num_cores() > 0,
+        "sub_core_grids must contain at least one core");
 
     uint32_t tensor_width = input_tensor_a.padded_shape()[-1];
     // tensor_width is 0 for a zero-width input; the height is 0 there in any case.

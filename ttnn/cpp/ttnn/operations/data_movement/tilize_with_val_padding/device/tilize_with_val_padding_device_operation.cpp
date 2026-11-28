@@ -107,6 +107,9 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
+    TT_FATAL(
+        !operation_attributes.sub_core_grids.has_value() || operation_attributes.sub_core_grids->num_cores() > 0,
+        "sub_core_grids must contain at least one core");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
