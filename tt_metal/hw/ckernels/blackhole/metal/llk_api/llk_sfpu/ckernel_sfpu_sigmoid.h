@@ -68,8 +68,24 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
         x, EXP_21F_ONE_LN2, EXP_21F_C0, EXP_21F_C1, EXP_21F_C2, EXP_FP32_NEG_LN2_HI, EXP_FP32_P0, EXP_FP32_P1);
 }
 
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_sigmoid_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// Whether BF16 DEST runs the generated sigmoid kernel as one call over the whole tile.
+inline constexpr bool sigmoid_bf16_whole_tile = true;
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
+    if constexpr (!is_fp32_dest_acc_en && !APPROXIMATION_MODE && ITERATIONS == 32) {
+        if (bf16_dest_sigmoid()) {
+            calculate_sigmoid_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (!APPROXIMATION_MODE) {
         // The exp's constants, loaded once and kept in LRegs for the whole loop; only the arm's own set is
         // hoisted (the other stays a float). Nothing but the row is live, so every constant fits.
