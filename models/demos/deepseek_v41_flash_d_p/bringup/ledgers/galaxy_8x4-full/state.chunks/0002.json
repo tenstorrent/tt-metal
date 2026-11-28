@@ -244,6 +244,38 @@
   },
   "waiting": null
  },
+ "NC.10": {
+  "attempts": 0,
+  "duration_s": 1078.5,
+  "history": [
+   {
+    "s": 1078.5,
+    "status": "PASS",
+    "t": "2026-11-28T09:59:24"
+   }
+  ],
+  "last_run": "2026-11-28T09:59:21",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/NC.10.log",
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "NC.10#test_determinism": "cb0d4a2b5652d709",
+    "NC.10#test_no_rebuild": "17587b219a75af15",
+    "NC.10#test_packed_walls": "efbaa8e71d9eb2a5",
+    "NC.10#test_skip_positions": "c38940ba4bdea3a6"
+   }
+  },
+  "started": "2026-11-28T09:41:23",
+  "status": "PASS",
+  "units": {
+   "NC.10#test_determinism": "PASS",
+   "NC.10#test_no_rebuild": "PASS",
+   "NC.10#test_packed_walls": "PASS",
+   "NC.10#test_skip_positions": "PASS"
+  }
+ },
  "NC.2": {
   "agent": {
    "defs": {

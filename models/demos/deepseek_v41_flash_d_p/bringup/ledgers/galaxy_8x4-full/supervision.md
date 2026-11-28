@@ -1637,3 +1637,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 08:57 OWNER: then model_bringup: port QB.1 (wq_b bank) + the NC.9 fusions that apply to single requests (MB task, op-level), then its 5120 ladder + cold no-rebuild; tables for both branches at the end.
 - 09:12 heartbeat: QB.1 accept gate running; RAM used 276 GB; / 96G free.
 - 09:20 QB.1 PASS -> 3ca2cf6a70d (WQB_BANK default on): 40-layer reference err_final_hidden 0.1345 / 0.2422 (last), 0.1400 / 0.2586 (from0), top-5 1.0, determinism 0.0; ladders + cold no-rebuild PASS. QUEUED NC.9 (remaining fusions, op-level) and NC.10 (8192 ladder + no-rebuild assessment); validate: valid.
+- 09:40 NC.9 PASS -> e19a95cdda7: ids reorder folded into the embedding reader (host 162 -> 132 us, device 48 -> 36 us, 3 -> 2 programs), replay rotation 2 copies -> 1, window carry 2 -> 1; history-tail fusion not on the shipped path (dropped). Identical, repeats 0, no cache growth. NC.10 next.
+- 09:42 heartbeat: NC.10 running; RAM used 83 GB; / 94G free.
