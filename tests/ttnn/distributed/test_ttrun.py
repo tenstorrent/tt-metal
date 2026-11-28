@@ -12,6 +12,7 @@ import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
@@ -564,6 +565,135 @@ class TestMPICommandBuilding:
         cmd = build_mpi_command(config, program, mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE)
         pairs = list(zip(cmd, cmd[1:]))
         assert ("--bind-to", "none") not in pairs
+
+
+def _rank_tails(cmd, length):
+    """The last ``length`` arguments of each rank's segment; a rank's program ends its segment."""
+    segments, current = [], []
+    for arg in cmd:
+        if arg == ":":
+            segments.append(current)
+            current = []
+        else:
+            current.append(arg)
+    segments.append(current)
+    return [segment[-length:] for segment in segments]
+
+
+class TestRankCpuBinding:
+    """tt-run starts each rank through rank_cpu_binding.py unless MPI binds the ranks or the user opts out."""
+
+    def _wrapped(self, *exclude):
+        return [sys.executable, "-I", str(ttrun_module.RANK_CPU_BINDING_SCRIPT), *exclude, "--", "echo", "hello"]
+
+    def _tails(self, cmd, *exclude):
+        return _rank_tails(cmd, len(self._wrapped(*exclude)))
+
+    @pytest.mark.parametrize(
+        "mpi_args",
+        [None, ["--bind-to", "none"], ["--bind-to=none:overload-allowed"]],
+        ids=["default", "explicit_none", "none_with_qualifier"],
+    )
+    def test_unbound_ranks_start_through_the_binding_script(self, sample_rank_binding_yaml, mpi_args):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(config, ["echo", "hello"], mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE)
+        assert self._tails(cmd) == [self._wrapped(), self._wrapped()]
+
+    def test_exclude_reaches_every_rank(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, rank_cpu_exclude="1,2"
+        )
+        assert self._tails(cmd, "--exclude", "1,2") == [self._wrapped("--exclude", "1,2")] * 2
+
+    @pytest.mark.parametrize(
+        "mpi_args, binding",
+        [(None, "none"), (["--bind-to", "core"], "auto"), (["--bind-to=socket"], "auto")],
+        ids=["opted_out", "mpi_binds_cores", "mpi_binds_sockets"],
+    )
+    def test_no_binding_script_when_off_or_mpi_binds(self, sample_rank_binding_yaml, mpi_args, binding):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], mpi_args, rankfile_syntax=RankfileSyntax.RANKFILE, rank_cpu_binding=binding
+        )
+        assert _rank_tails(cmd, 2) == [["echo", "hello"], ["echo", "hello"]]
+        assert str(ttrun_module.RANK_CPU_BINDING_SCRIPT) not in cmd
+
+    @pytest.mark.parametrize(
+        "mpi_args, binding",
+        [(None, "none"), (["--bind-to", "core"], "auto")],
+        ids=["opted_out", "mpi_binds_cores"],
+    )
+    def test_exclude_without_the_binding_script_is_an_error(
+        self, sample_rank_binding_yaml, mpi_args, binding, expect_error
+    ):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        with expect_error(click.UsageError, "--rank-cpu-exclude has no effect"):
+            build_mpi_command(
+                config,
+                ["echo", "hello"],
+                mpi_args,
+                rankfile_syntax=RankfileSyntax.RANKFILE,
+                rank_cpu_binding=binding,
+                rank_cpu_exclude="1,2",
+            )
+
+    def test_rankfile_placement_keeps_mpi_binding(self, sample_rank_binding_yaml, temp_dir):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        rankfile = temp_dir / "rf"
+        rankfile.write_text("rank 0=h slot=0\nrank 1=h slot=1\n")
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], ["--rankfile", str(rankfile)], rankfile_syntax=RankfileSyntax.RANKFILE
+        )
+        assert str(ttrun_module.RANK_CPU_BINDING_SCRIPT) not in cmd
+
+    def test_binding_script_wraps_gdbserver(self, sample_rank_binding_yaml):
+        config = parse_binding_config(sample_rank_binding_yaml)
+        cmd = build_mpi_command(
+            config, ["echo", "hello"], rankfile_syntax=RankfileSyntax.RANKFILE, debug_gdbserver=True
+        )
+        first = _rank_tails(cmd, 7)[0]
+        assert first[:6] == [sys.executable, "-I", str(ttrun_module.RANK_CPU_BINDING_SCRIPT), "--", "bash", "-c"]
+
+    def test_invalid_exclude_is_rejected(self, runner, sample_rank_binding_yaml):
+        result = runner.invoke(
+            main, ["--rank-binding", str(sample_rank_binding_yaml), "--rank-cpu-exclude", "1-x", "--dry-run", "echo"]
+        )
+        assert result.exit_code != 0
+        assert "invalid CPU list" in result.output
+
+    @pytest.mark.parametrize(
+        "binding, exclude, expected",
+        [
+            ("auto", None, []),
+            ("auto", "1,2", ["--rank-cpu-exclude", "1,2"]),
+            ("none", None, ["--rank-cpu-binding", "none"]),
+        ],
+        ids=["default", "exclude", "opted_out"],
+    )
+    def test_phase2_rerun_command_keeps_cpu_policy(self, temp_dir, binding, exclude, expected):
+        """The logged Phase 2 re-run line places ranks on the same CPUs as the run it came from."""
+        ctx = click.Context(main)
+        ctx.args = ["echo", "hello"]
+        with patch.object(ttrun_module, "get_mpi_launcher", return_value="mpirun"), patch.object(
+            ttrun_module, "logger"
+        ) as fake_logger:
+            ttrun_module._log_new_mode_phase2_rerun_command(
+                ctx,
+                temp_dir / "rank_bindings.yaml",
+                temp_dir / "rankfile",
+                None,
+                ["--bind-to", "none"],
+                RankfileSyntax.RANKFILE,
+                rank_cpu_binding=binding,
+                rank_cpu_exclude=exclude,
+            )
+        parts = shlex.split(fake_logger.info.call_args.args[0].split(": ", 1)[1])
+        flags = parts[: parts.index("--mpi-args")]
+        cpu_flags = [
+            p for i, p in enumerate(flags) if p.startswith("--rank-cpu") or flags[i - 1].startswith("--rank-cpu")
+        ]
+        assert cpu_flags == expected
 
 
 class TestLegacyFlow:

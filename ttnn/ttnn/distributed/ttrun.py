@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import importlib.util
 import json
@@ -31,6 +32,9 @@ DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+# Runs in front of each rank's program to give it its own CPUs. A file path, not a module, so it works when tt-run
+# itself runs as a script and costs a rank no package import.
+RANK_CPU_BINDING_SCRIPT = Path(__file__).resolve().with_name("rank_cpu_binding.py")
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
 # mpirun --version / stderr (OpenMPI 4.x and 5.x)
 _OPENMPI_VERSION_RE = re.compile(
@@ -263,16 +267,41 @@ def detect_rankfile_syntax(mpi_launcher: str, _subprocess_run=subprocess.run) ->
     return RankfileSyntax.RANKFILE
 
 
+def mpi_args_bind_to_value(mpi_args: Optional[List[str]]) -> Optional[str]:
+    """The binding policy ``mpi_args`` sets (e.g. ``"none"``, ``"core:overload-allowed"``), ``""`` for a bare
+    trailing ``--bind-to``, or None when it sets none."""
+    args = list(mpi_args or [])
+    for i, arg in enumerate(args):
+        if arg in ("--bind-to", "-bind-to"):
+            return args[i + 1] if i + 1 < len(args) else ""
+        for flag in ("--bind-to=", "-bind-to="):
+            if arg.startswith(flag):
+                return arg[len(flag) :]
+    return None
+
+
 def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
     """True if ``mpi_args`` already sets a binding policy (``--bind-to`` / ``-bind-to``)."""
-    if not mpi_args:
-        return False
-    for arg in mpi_args:
-        if arg in ("--bind-to", "-bind-to"):
-            return True
-        if arg.startswith("--bind-to=") or arg.startswith("-bind-to="):
-            return True
-    return False
+    return mpi_args_bind_to_value(mpi_args) is not None
+
+
+@functools.lru_cache(maxsize=None)
+def _rank_cpu_binding_module():
+    spec = importlib.util.spec_from_file_location("rank_cpu_binding", RANK_CPU_BINDING_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def parse_rank_cpu_exclude(value: Optional[str]) -> Optional[str]:
+    """Validate a ``--rank-cpu-exclude`` CPU list (``"1,2"``, ``"0-3"``) and return it unchanged."""
+    if not value:
+        return None
+    try:
+        _rank_cpu_binding_module().parse_cpu_list(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e))
+    return value
 
 
 def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
@@ -2151,8 +2180,15 @@ def build_mpi_command(
     debug_gdbserver: bool = False,
     rankfile_syntax: Optional[RankfileSyntax] = None,
     tracy_config: Optional[TracyConfig] = None,
+    rank_cpu_binding: Literal["auto", "none"] = "auto",
+    rank_cpu_exclude: Optional[str] = None,
 ) -> List[str]:
-    """Build OpenMPI command with per-rank environment variables."""
+    """Build OpenMPI command with per-rank environment variables.
+
+    With ``rank_cpu_binding="auto"`` and ranks that MPI leaves unbound, each rank starts through
+    ``rank_cpu_binding.py``, which gives the ranks sharing a host disjoint sets of physical cores, minus
+    ``rank_cpu_exclude``.
+    """
     mpi_launcher = get_mpi_launcher()
     syntax = rankfile_syntax if rankfile_syntax is not None else detect_rankfile_syntax(mpi_launcher)
     effective_mpi_args = normalize_rankfile_mpi_args(mpi_args, syntax)
@@ -2170,6 +2206,16 @@ def build_mpi_command(
         logger.debug(
             f"{TT_RUN_PREFIX} Skipping default --bind-to none because rankfile placement is present in MPI args"
         )
+
+    # When MPI binds the ranks itself, its binding stands.
+    bind_to_policy = (mpi_args_bind_to_value(effective_mpi_args) or "").split(":")[0]
+    ranks_unbound = (not bind_to_already_specified and not rankfile_placement) or bind_to_policy == "none"
+    bind_rank_cpus = rank_cpu_binding == "auto" and ranks_unbound
+    if rank_cpu_binding == "auto" and not ranks_unbound:
+        logger.debug(f"{TT_RUN_PREFIX} Skipping per-rank CPU binding because MPI binds the ranks")
+    if rank_cpu_exclude and not bind_rank_cpus:
+        reason = "--rank-cpu-binding none" if rank_cpu_binding == "none" else "MPI binding the ranks itself"
+        raise click.UsageError(f"--rank-cpu-exclude has no effect with {reason}")
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
@@ -2206,6 +2252,10 @@ def build_mpi_command(
             quoted_program_args = " ".join(shlex.quote(arg) for arg in rank_program)
             cmd_str = f"{echo_part} {gdbserver_part} {quoted_program_args}"
             rank_program = ["bash", "-c", cmd_str]
+        if bind_rank_cpus:
+            # Outermost, so everything the rank starts inherits its CPUs.
+            exclude_args = ["--exclude", rank_cpu_exclude] if rank_cpu_exclude else []
+            rank_program = [sys.executable, "-I", str(RANK_CPU_BINDING_SCRIPT), *exclude_args, "--", *rank_program]
         cmd.extend(rank_program)
 
     return cmd
@@ -2349,6 +2399,8 @@ def legacy_flow(
     rankfile_syntax: Optional[RankfileSyntax] = None,
     phase2_failure_hint: Phase2FailureHint = "legacy",
     tracy_args: Optional[str] = None,
+    rank_cpu_binding: Literal["auto", "none"] = "auto",
+    rank_cpu_exclude: Optional[str] = None,
     factory_system_descriptor: Optional[Path] = None,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
@@ -2730,6 +2782,8 @@ def legacy_flow(
         debug_gdbserver=debug_gdbserver,
         rankfile_syntax=effective_rankfile_syntax,
         tracy_config=tracy_config,
+        rank_cpu_binding=rank_cpu_binding,
+        rank_cpu_exclude=rank_cpu_exclude,
     )
 
     if verbose or dry_run:
@@ -2771,8 +2825,10 @@ def _log_new_mode_phase2_rerun_command(
     rankfile_syntax: Optional[RankfileSyntax],
     *,
     bindings_input_is_rank_bindings_mapping_yaml: bool = False,
+    rank_cpu_binding: Literal["auto", "none"] = "auto",
+    rank_cpu_exclude: Optional[str] = None,
 ) -> None:
-    """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + --mpi-args + program args)."""
+    """Log the Phase-2-equivalent tt-run line (rank binding + rankfile + CPU binding + --mpi-args + program args)."""
 
     def _path_for_display(p: Path) -> str:
         try:
@@ -2795,6 +2851,10 @@ def _log_new_mode_phase2_rerun_command(
             else "mca"
         )
         phase2_parts.extend(["--rankfile-syntax", syntax_name])
+    if rank_cpu_binding != "auto":
+        phase2_parts.extend(["--rank-cpu-binding", rank_cpu_binding])
+    if rank_cpu_exclude:
+        phase2_parts.extend(["--rank-cpu-exclude", rank_cpu_exclude])
     mpi_launcher = get_mpi_launcher()
     rankfile_args = inject_rankfile_mpi_args(
         rankfile_path,
@@ -2834,6 +2894,8 @@ def new_mode_flow(
     rankfile_syntax: Optional[RankfileSyntax] = None,
     force_rediscovery: bool = False,
     tracy_args: Optional[str] = None,
+    rank_cpu_binding: Literal["auto", "none"] = "auto",
+    rank_cpu_exclude: Optional[str] = None,
     factory_system_descriptor: Optional[Path] = None,
     offline: bool = False,
 ) -> None:
@@ -3022,6 +3084,8 @@ def new_mode_flow(
                 mpi_args,
                 rankfile_syntax,
                 bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
+                rank_cpu_binding=rank_cpu_binding,
+                rank_cpu_exclude=rank_cpu_exclude,
             )
             logger.info(
                 f"{TT_RUN_PREFIX} Dry-run: Phase 2 mpirun command not printed (requires Phase 1 rank binding "
@@ -3075,6 +3139,8 @@ def new_mode_flow(
         mpi_args,
         rankfile_syntax,
         bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
+        rank_cpu_binding=rank_cpu_binding,
+        rank_cpu_exclude=rank_cpu_exclude,
     )
 
     # Stale-cache hint only if Phase 1 was skipped via cache; fresh Phase 1 or --force-rediscovery → no hint.
@@ -3097,6 +3163,8 @@ def new_mode_flow(
         rankfile_syntax=rankfile_syntax,
         phase2_failure_hint=phase2_failure_hint,
         tracy_args=tracy_args,
+        rank_cpu_binding=rank_cpu_binding,
+        rank_cpu_exclude=rank_cpu_exclude,
         factory_system_descriptor=resolved_fsd,  # Propagate FSD to Phase 2 workload
     )
 
@@ -3238,6 +3306,20 @@ def new_mode_flow(
         'Examples: --tracy "-r -v --no-device" or --tracy "" for defaults.'
     ),
 )
+@click.option(
+    "--rank-cpu-binding",
+    type=click.Choice(["auto", "none"]),
+    default="auto",
+    help="auto (default): when several ranks share a host and MPI leaves them unbound, give each one its own "
+    "set of physical cores, so their device worker threads do not pin onto the same CPUs. none: leave ranks unbound.",
+)
+@click.option(
+    "--rank-cpu-exclude",
+    callback=lambda ctx, param, value: parse_rank_cpu_exclude(value),
+    default=None,
+    help="CPUs to keep every rank off, with their hyperthread siblings, e.g. '1,2' or '0-3', also when ranks are "
+    "not split (one rank per host). Needs --rank-cpu-binding auto and ranks MPI leaves unbound.",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -3260,6 +3342,8 @@ def main(
     rankfile_syntax: str,
     force_rediscovery: bool,
     tracy_args: Optional[str],
+    rank_cpu_binding: str,
+    rank_cpu_exclude: Optional[str],
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -3356,6 +3440,8 @@ def main(
             tcp_interface=tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             tracy_args=tracy_args,
+            rank_cpu_binding=rank_cpu_binding,
+            rank_cpu_exclude=rank_cpu_exclude,
             factory_system_descriptor=factory_system_descriptor,
         )
         return
@@ -3391,6 +3477,8 @@ def main(
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
+            rank_cpu_binding=rank_cpu_binding,
+            rank_cpu_exclude=rank_cpu_exclude,
             factory_system_descriptor=factory_system_descriptor,
             offline=offline,
         )
