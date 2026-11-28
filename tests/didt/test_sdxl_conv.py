@@ -7,6 +7,7 @@ from loguru import logger
 import pytest
 import torch
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
@@ -382,6 +383,14 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         slice_config=slice_config,
     )
 
+    # ND core attribution: conv2d picks its DRAM slicing and shard layout at run time, so each check observes the
+    # call (graph capture) and attributes through that call's slices
+    sdxlConvTest.nd_core_capture = "conv2d"
+    sdxlConvTest.nd_conv_out_hw = (
+        (input_height + 2 * pad_h - dilation * (filter_height - 1) - 1) // stride_h + 1,
+        (input_width + 2 * pad_w - dilation * (filter_width - 1) - 1) // stride_w + 1,
+    )
+
     sdxlConvTest.run_op_test()
 
 
@@ -403,8 +412,9 @@ def test_specific_chip_sdxl_conv(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    chip = pick_submesh(mesh_device.create_submeshes(ttnn.MeshShape((1, 1))), logical_chip_id)
     test_sdxl_conv(
-        mesh_device.get_device(logical_chip_id),
+        chip,
         didt_workload_iterations,
         determinism_check_interval,
         test_config,

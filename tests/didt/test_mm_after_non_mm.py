@@ -152,4 +152,8 @@ def test_ff1_matmul(
     )
 
     # Run test
+    # ND core attribution (matmul 2D factory): core (x, y) computes and writes output block (by = y, bx = x)
+    ff1_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    ff1_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     ff1_test.run_op_test()

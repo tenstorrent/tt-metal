@@ -7,6 +7,7 @@ import pytest
 import torch
 import random
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
@@ -96,6 +97,11 @@ def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check
         determinism_check_interval=determinism_check_interval,
     )
 
+    # Per-core output block (row-wise core order), used to map non-deterministic elements back to the core that produced them
+    lm_head_test.nd_core_block = (seq_len, 32 * per_core_N)
+    lm_head_test.nd_core_linear_x = compute_grid.x
+    lm_head_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
+
     # Run test
     lm_head_test.run_op_test()
 
@@ -116,8 +122,10 @@ def test_specific_chip_lm_head_matmul(
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    # Debug: MeshDevice.get_device() no longer exists; select the chip via a 1x1 submesh like test_specific_chip_ff1_matmul
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_lm_head_matmul(
-        mesh_device.get_device(logical_chip_id),
+        pick_submesh(submesh_devices, logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
     )

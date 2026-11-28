@@ -20,7 +20,8 @@ Everything printed to the console is also written to a single log file per run.
 
 An iteration is a board reset followed by one run of the Ethernet, DRAM, DRAM ACT and PCIe tests.
 The DRAM ACT test takes about 10.3 minutes per iteration.
-After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once.
+After all iterations, the NOC tests run once, then the boards are reset and DIDT runs once:
+tests/didt/didt_runner.py with its install config, results under <logdir>/didt.
 
 Optional:
     --output <logdir>                       Directory where the log file is written
@@ -385,7 +386,8 @@ else
 	fi
 fi
 
-# DIDT runs once, after NOC, regardless of whether anything above failed.
+# DIDT runs once, after NOC, regardless of whether anything above failed. The runner resets before each of its own
+# attempts and exits non-zero on any FAIL, HANG, skipped or uncollected test; its status.json names the failing chips.
 emit_banner "DIDT (single run after all iterations)"
 didt_reset_ok=1
 if [ "$SKIP_RESET" -eq 0 ]
@@ -401,7 +403,7 @@ then
 	didt_ok=0
 else
 	sleep 5
-	run_test 'DIDT tests' sh tests/tt_metal/tt_metal/deployment/didt/test_runner.sh --output "$LOGDIR/didt" --mgd "$MGD" &&
+	run_test 'DIDT tests' $PYTHON tests/didt/didt_runner.py --config install --out "$LOGDIR/didt" &&
 		didt_ok=1 || didt_ok=0
 fi
 

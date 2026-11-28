@@ -14,11 +14,11 @@
 #                   + sys-triage bundle, if the host has the package and BMC credentials.
 #                   No resets, no tests
 #   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
-#                   + eth link_up + eth bandwidth
+#                   + eth link_up + eth bandwidth + DIDT runner daily config (minimal matmul)
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
-#                   + eth bandwidth + didt matmul stress (pytest, galaxy mesh)
+#                   + eth bandwidth + DIDT runner weekly config (every DIDT screen)
 #                   + gddr_act_c3 GDDR ACT screen (pytest); if it passed: -glx_reset + snapshot + rerun
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
@@ -49,9 +49,9 @@ Tiers:
                   tt-triage check_eth_status reads 30 s apart + sys-triage. No resets,
                   no tests.
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
-                  + post-test reset + triage + QSFP tests
+                  + DIDT runner (minimal matmul) + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
-                  + didt matmul stress (pytest) + gddr_act_c3 (pytest, rerun after -glx_reset if it passed)
+                  + DIDT runner (every DIDT screen) + gddr_act_c3 (pytest, rerun after -glx_reset if it passed)
                   + post-test reset + triage + QSFP tests
   full            weekly with gddr_act_all in place of gddr_act_c3
                   + sys-triage: everything, for the logs on a DIIM ticket

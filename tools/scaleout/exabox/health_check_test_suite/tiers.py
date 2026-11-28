@@ -21,7 +21,8 @@ Where the steps a tier can name are defined:
 
     resets, post_test_resets,
     retest_reset              tt-smi flags: "-r" or "-glx_reset"
-    tests, retest             TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
+    tests, retest             TESTS (gtest), PYTESTS (pytest) and DIDT_RUNNERS (tests/didt/didt_runner.py)
+                              in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
 A name that isn't defined there fails at import, so a typo stops
@@ -38,7 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from diag.device_tests import PYTESTS, TESTS
+from diag.device_tests import DIDT_RUNNERS, PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
 from diag.triage import TRIAGE_TOOLS
 
@@ -49,7 +50,7 @@ class Tier:
     # stick to -glx_reset. Each is followed by a fresh snapshot, revalidated.
     resets: tuple[str, ...] = ()
 
-    # Device tests, in order: names from TESTS / PYTESTS.
+    # Device tests, in order: names from TESTS / PYTESTS / DIDT_RUNNERS.
     tests: tuple[str, ...] = ()
 
     # Rerun after retest_reset + snapshot: the GDDR ACT alias is boot-dependent.
@@ -93,7 +94,7 @@ class Tier:
 
 _WEEKLY = Tier(
     resets=("-r", "-glx_reset", "-glx_reset"),
-    tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_matmul_galaxy"),
+    tests=("gddr_full", "gddr_act_c3", "eth_link_up", "eth_bandwidth", "didt_runner_weekly"),
     retest=("gddr_act_c3",),
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
@@ -112,10 +113,11 @@ TIERS: dict[str, Tier] = {
         eth_summary=True,
         sys_triage=True,
     ),
-    # The scheduled run.
+    # The scheduled run. The DIDT runner goes last: it resets the galaxy before each of its attempts, so the gtests
+    # still see the unit as the pre-test resets left it.
     "daily": Tier(
         resets=("-r", "-glx_reset"),
-        tests=("gddr_fast", "eth_link_up", "eth_bandwidth"),
+        tests=("gddr_fast", "eth_link_up", "eth_bandwidth", "didt_runner_daily"),
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
@@ -166,7 +168,11 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
-        problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
+        problems += [
+            f"{name}: unknown test {t!r}"
+            for t in tier.tests
+            if t not in TESTS and t not in PYTESTS and t not in DIDT_RUNNERS
+        ]
         problems += [f"{name}: retest {t!r} is not in its tests" for t in tier.retest if t not in tier.tests]
         if tier.retest_reset not in RESET_FLAGS:
             problems.append(f"{name}: unknown retest reset flag {tier.retest_reset!r}")

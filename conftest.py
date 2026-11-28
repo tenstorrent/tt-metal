@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import contextlib
 import json
 import os
@@ -982,6 +983,18 @@ ALL_ARCHS = set(
 )
 
 
+def _didt_vf_sweep_freqs(value):
+    """--didt-vf-sweep value: comma-separated AICLK MHz. Rejecting anything else at parse time keeps a test path written
+    right after the bare flag (nargs="?") from being taken as the frequency list."""
+    freqs = value.replace(" ", "").split(",")
+    if not all(f.isdigit() and int(f) > 0 for f in freqs):
+        raise argparse.ArgumentTypeError(
+            f"expected comma-separated AICLK MHz such as 800,1000,1350, got {value!r} "
+            "(put the test path before --didt-vf-sweep, or give the flag a value)"
+        )
+    return value
+
+
 def pytest_addoption(parser):
     import ttnn
 
@@ -1029,10 +1042,41 @@ def pytest_addoption(parser):
         help="Check determinism every nth iteration",
     )
     parser.addoption(
+        "--didt-vf-sweep",
+        action="store",
+        nargs="?",
+        const="800,1000,1200,1350",
+        default=None,
+        type=_didt_vf_sweep_freqs,
+        help="Run didt tests as a VF sweep: force AICLK (MHz, comma separated, run in this order; "
+        "no value = 800,1000,1200,1350) for --sweep-iterations iterations each, through ARC messages",
+    )
+    parser.addoption(
+        "--sweep-iterations",
+        action="store",
+        type=int,
+        default=None,
+        help="Iterations to run at each --didt-vf-sweep clock and VDD offset (default 1000)",
+    )
+    parser.addoption(
+        "--enable-vdd-offsets",
+        action="store_true",
+        default=False,
+        help="With --didt-vf-sweep: at every clock run the firmware's VCORE, then VDD forced to that VCORE +25 mV "
+        "and +50 mV through ARC (without it, only the firmware's VCORE)",
+    )
+    parser.addoption(
         "--grid-size",
         action="store",
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
+    )
+    parser.addoption(
+        "--grid-origin",
+        action="store",
+        default=None,
+        help="Logical core (x by y, e.g. 6x0) the --grid-size grid starts at; default 0x0. Supported by tests/didt "
+        "test_deepseek_v3_128k_matmul (core-exclusion windows).",
     )
 
 
@@ -1050,6 +1094,19 @@ def grid_size(request):
             return (rows, cols)
         except ValueError:
             raise ValueError(f"Invalid grid size format: {grid_size_str}. Use format 'rows x cols'.")
+    return None
+
+
+@pytest.fixture
+def grid_origin(request):
+    """Logical (x, y) the --grid-size grid starts at, from --grid-origin XxY; None if not provided."""
+    origin_str = request.config.getoption("--grid-origin")
+    if origin_str:
+        try:
+            x, y = map(int, origin_str.split("x"))
+            return (x, y)
+        except ValueError:
+            raise ValueError(f"Invalid grid origin format: {origin_str}. Use format 'XxY', e.g. 6x0.")
     return None
 
 

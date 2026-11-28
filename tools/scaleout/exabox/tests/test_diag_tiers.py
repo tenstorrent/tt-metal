@@ -40,6 +40,17 @@ def tier_arms(script: str) -> list[set[str]]:
     return [set(m.group(1).split("|")) for m in TIER_ARM_RE.finditer(text) if "daily" in m.group(1)]
 
 
+class TestDidtRunnerTiers(unittest.TestCase):
+    def test_daily_runs_the_daily_config_last(self):
+        self.assertEqual(TIERS["daily"].tests[-1], "didt_runner_daily")
+
+    def test_weekly_and_full_run_the_weekly_config(self):
+        for tier in ("weekly", "full"):
+            with self.subTest(tier):
+                self.assertIn("didt_runner_weekly", TIERS[tier].tests)
+                self.assertNotIn("didt_runner_daily", TIERS[tier].tests)
+
+
 class TestShellWrappersAgree(unittest.TestCase):
     def test_run_diag_accepts_every_tier(self):
         arms = tier_arms("run_diag.sh")

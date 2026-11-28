@@ -4,7 +4,7 @@
 
 """Phase 3: the device tests — deployment gtests and pytest stress tests.
 
-TESTS and PYTESTS define the steps a tier can list under ``tests`` in tiers.py.
+TESTS, PYTESTS and DIDT_RUNNERS define the steps a tier can list under ``tests`` in tiers.py.
 """
 from __future__ import annotations
 
@@ -13,7 +13,9 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Sequence
@@ -59,37 +61,7 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 # Pytest-based tests, keyed like TESTS but run through the repo venv's pytest
 # (python_env/bin/pytest, falling back to PATH) instead of the gtest binary.
 # Each entry is a pytest node id plus its extra args.
-#
-# didt_matmul_galaxy: dI/dt worst-case matmul across the full galaxy mesh (8x4),
-# 1000 workload iterations with a determinism check every 50 (20 checks) —
-# catches droop-induced non-determinism the short deployment gtests don't.
-# Measured 545 s in-suite on a BH galaxy (bh-glx6u-28, 2026-09-01):
-# iterations ~69 ms each, each determinism check ~13 s (reads the full
-# 16k x 16k output back from all 32 chips), plus ~3.5 min cold 32-chip
-# bring-up/compile. Check density is the dominant cost: the same test at 5000 iterations
-# across all four dtype variants (-k galaxy) measures ~2 h. Note a longer
-# soak catches more: a marginal chip on the bench unit failed 2/10 checks at
-# 5000 iterations but passed shorter runs — bump iterations for deep triage.
 PYTESTS = {
-    "didt_matmul_galaxy": {
-        "target": "tests/didt/test_minimal_matmul.py::test_minimal_matmul",
-        "args": [
-            "-k",
-            "galaxy and bf16_HiFi2",
-            "--didt-workload-iterations",
-            "1000",
-            "--determinism-check-interval",
-            "50",
-            "-s",
-            # pytest.ini sets a repo-wide 300s pytest-timeout; this run always
-            # exceeds it (~545s measured). 1200s keeps >2x headroom while still
-            # bounding a standalone deploy run if a device test wedges (the
-            # test-infrastructure wrapper adds its own wall-clock timeout, but
-            # run_diag.sh / container entrypoints invoke this script directly).
-            "--timeout",
-            "1200",
-        ],
-    },
     # SDPA K-read mimic: ctrl 3, then all 8 ctrls, 300 s each (~10.3 min). Catches the 64 MB alias
     # (bit 26) DramDeployment misses. A hit skips the remaining passes. Timeout is a marker on the test.
     "gddr_act_c3": {
@@ -102,6 +74,21 @@ PYTESTS = {
         "args": ["-s"],
     },
 }
+
+
+# tests/didt/didt_runner.py, keyed like TESTS: every DIDT ND/hang screen of one runner config, each with its
+# fallbacks (throttle, pin_core), and a status.json naming each failing chip by BDF, tray and ASIC. The runner resets
+# the galaxy before each of its attempts. Measured on BH galaxies: the daily config (minimal matmul, 1000
+# iterations) ~7 min when it passes; the weekly config (8 screens) ~25 min when everything passes, 30-70 min when
+# steps fail and fallbacks run. timeout_s bounds a wedged run; the fleet harness's own 30-minute wall still applies.
+DIDT_RUNNER = "tests/didt/didt_runner.py"
+DIDT_RUNNERS = {
+    "didt_runner_daily": {"config": "daily", "timeout_s": 45 * 60},
+    "didt_runner_weekly": {"config": "weekly", "timeout_s": 120 * 60},
+}
+# After the timeout the runner gets SIGTERM, which kills its own workloads; SIGKILL follows if it is still up.
+DIDT_RUNNER_TERM_GRACE_S = 120
+RUNNER_RUN_DIR_RE = re.compile(r"^run dir (\S+)")
 
 
 # gtest progress markers — used for per-testcase pass/fail accounting.
@@ -263,16 +250,135 @@ def read_result_summary(path: Path) -> dict | None:
     return summary if isinstance(summary, dict) else None
 
 
+def resolve_python(tt_metal: Path) -> str:
+    """The repo venv's python when there is one; else this interpreter (the exabox-tools image's /opt/venv)."""
+    venv_python = tt_metal / "python_env" / "bin" / "python"
+    return str(venv_python) if venv_python.is_file() else sys.executable
+
+
+def didt_runner_counts(status_json: Path) -> tuple[int, int, list[str]]:
+    """(passed, failed, failures) over the runner steps that ran. A step PASSes or WARNs, or FAILs or HANGs; steps
+    left out by the config or by the user (SKIP) count as neither."""
+    doc = json.loads(status_json.read_text())
+    passed, failed, failures = 0, 0, []
+    for step in doc.get("steps", []):
+        status = step.get("status")
+        if status in ("PASS", "WARN"):
+            passed += 1
+        elif status in ("FAIL", "HANG", "PENDING", "RUNNING"):
+            failed += 1
+            failures.append(f"{step.get('key')}: {status} {step.get('reason', '')}".rstrip())
+    return passed, failed, failures
+
+
+def run_didt_runner(
+    name: str, spec: dict, tt_metal: Path, env: dict, phase: Phase, dry_run: bool, logs_dir: Path
+) -> None:
+    """Run one DIDT_RUNNERS entry. PASS needs exit code 0, the runner's status.json, and at least one step that
+    passed with none failed: a run that never wrote its status, or ran nothing, is a FAIL."""
+    out_dir = logs_dir.parent / name
+    cmd = [resolve_python(tt_metal), DIDT_RUNNER, "--config", spec["config"], "--out", str(out_dir)]
+    test_env = env.copy()
+    test_env.setdefault("PYTHONPATH", str(tt_metal))
+    log_path = logs_dir / f"{name}.log"
+    cmdline = shlex.join(cmd)
+    log(f"--- test '{name}' (didt_runner) ---")
+    log(f"  cmd:  {cmdline}")
+    log(f"  log:  {log_path}")
+
+    if dry_run:
+        print(f"  {name:30} (dry-run)")
+        phase.add(
+            Check(
+                name=name,
+                status=PASS,
+                ip="other",
+                details=f"(dry) config={spec['config']} log={log_path}",
+                data={
+                    "config": spec["config"],
+                    "command": cmdline,
+                    "rc": 0,
+                    "duration_s": 0.0,
+                    "log_file": str(log_path),
+                    "status_json": None,
+                    "testcases": {"passed": 0, "failed": 0, "failures": []},
+                },
+            )
+        )
+        return
+
+    emit_running(name)
+    t0 = time.time()
+    timed_out = False
+    with log_path.open("w") as logf:
+        proc = subprocess.Popen(
+            cmd, stdout=logf, stderr=subprocess.STDOUT, env=test_env, cwd=str(tt_metal), start_new_session=True
+        )
+        try:
+            rc = proc.wait(timeout=spec["timeout_s"])
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                rc = proc.wait(timeout=DIDT_RUNNER_TERM_GRACE_S)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                rc = proc.wait()
+    dt = time.time() - t0
+
+    run_dir = next(
+        (Path(m.group(1)) for m in map(RUNNER_RUN_DIR_RE.match, log_path.read_text().splitlines()) if m), None
+    )
+    status_json = run_dir / "status.json" if run_dir else None
+    passed, failed, failures = 0, 0, []
+    note = ""
+    if status_json is None or not status_json.is_file():
+        note = f" no status.json ({'no run dir in the log' if run_dir is None else status_json})"
+    else:
+        try:
+            passed, failed, failures = didt_runner_counts(status_json)
+        except (OSError, ValueError) as e:
+            note = f" unreadable status.json: {e}"
+    if timed_out:
+        note += f" timeout after {spec['timeout_s']} s"
+    status = PASS if rc == 0 and not note and failed == 0 and passed > 0 else FAIL
+    suffix = f"({dt:.1f}s)"
+    if status == FAIL:
+        suffix += f"  passed={passed} failed={failed}{note}"
+    emit_result(name, status, suffix=suffix)
+    details = (
+        f"config={spec['config']} rc={rc} dur={dt:.1f}s passed={passed} failed={failed}{note} "
+        f"status={status_json} log={log_path}"
+    )
+    phase.add(
+        Check(
+            name=name,
+            status=status,
+            details=details,
+            data={
+                "config": spec["config"],
+                "command": cmdline,
+                "rc": rc,
+                "duration_s": dt,
+                "log_file": str(log_path),
+                "status_json": str(status_json) if status_json else None,
+                "testcases": {"passed": passed, "failed": failed, "failures": failures},
+            },
+            ip="other",
+        )
+    )
+
+
 def run_tests(
     tt_metal: Path, names: Sequence[str], phase: Phase, dry_run: bool, logs_dir: Path, name_suffix: str = ""
 ) -> None:
-    """Run the named TESTS / PYTESTS entries, in order. ``name_suffix`` keeps a rerun's checks and logs apart."""
+    """Run the named TESTS / PYTESTS / DIDT_RUNNERS entries, in order. ``name_suffix`` keeps a rerun's checks and logs apart."""
     binary = next(
         (tt_metal / c for c in DEPLOYMENT_BIN_CANDIDATES if (tt_metal / c).is_file()),
         None,
     )
     if binary is None and any(n in TESTS for n in names):
-        # Pytest-based entries don't need the gtest binary — record the FAIL
+        # Pytest and runner entries don't need the gtest binary — record the FAIL
         # for the gtest set but keep going so they still run.
         phase.add(
             Check(
@@ -296,6 +402,9 @@ def run_tests(
         name = f"{test}{name_suffix}"
         if test in PYTESTS:
             run_pytest_test(name, PYTESTS[test], tt_metal, env, phase, dry_run, logs_dir)
+            continue
+        if test in DIDT_RUNNERS:
+            run_didt_runner(name, DIDT_RUNNERS[test], tt_metal, env, phase, dry_run, logs_dir)
             continue
         if binary is None:
             continue

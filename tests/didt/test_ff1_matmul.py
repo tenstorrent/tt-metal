@@ -7,6 +7,7 @@ import pytest
 import torch
 import random
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
@@ -53,6 +54,10 @@ def test_ff1_matmul(
 
     # Initialize input configurations
     compute_grid = get_mesh_grid_size(mesh_device)
+    # Debug: restrict the compute grid (anchored at core 0,0) with DIDT_GRID_X / DIDT_GRID_Y
+    grid_x = min(int(os.environ.get("DIDT_GRID_X", compute_grid.x)), compute_grid.x)
+    grid_y = min(int(os.environ.get("DIDT_GRID_Y", compute_grid.y)), compute_grid.y)
+    compute_grid = ttnn.CoreCoord(grid_x, grid_y)
     logger.info(f"Running on {compute_grid} cores")
 
     start_core = ttnn.CoreCoord(0, 0)
@@ -90,6 +95,10 @@ def test_ff1_matmul(
         fused_activation=[ttnn.UnaryOpType.GELU, True] if gelu else None,
     )
 
+    # Debug: override math fidelity with DIDT_MATH_FIDELITY (ttnn.MathFidelity name: LoFi, HiFi2, HiFi3, HiFi4)
+    if os.environ.get("DIDT_MATH_FIDELITY"):
+        math_fidelity = getattr(ttnn.MathFidelity, os.environ["DIDT_MATH_FIDELITY"])
+    logger.info(f"Math fidelity: {math_fidelity}")
     ComputeConfigClass = ttnn.types.BlackholeComputeKernelConfig if is_blackhole() else ttnn.WormholeComputeKernelConfig
     compute_config = ComputeConfigClass(
         math_fidelity=math_fidelity,
@@ -98,23 +107,33 @@ def test_ff1_matmul(
         packer_l1_acc=True,
     )
 
+    # Debug: override data types with DIDT_IN0_DTYPE / DIDT_IN1_DTYPE / DIDT_OUT_DTYPE (ttnn.DataType names, e.g. BFLOAT4_B)
+    in0_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_IN0_DTYPE", "BFLOAT16"))
+    in1_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_IN1_DTYPE", "BFLOAT8_B"))
+    out_dtype = getattr(ttnn.DataType, os.environ.get("DIDT_OUT_DTYPE", "BFLOAT16"))
+    logger.info(f"Data types: in0={in0_dtype} in1={in1_dtype} out={out_dtype}")
+
     in0_shape = [1, 1, 32 * per_core_M * compute_grid.y, 576 * compute_grid.x]
     in1_shape = [1, 1, 576 * compute_grid.x, 32 * per_core_N * compute_grid.x]
 
     ff1_test = FF1Test(
         mesh_device,
-        OpParameter(in0_shape, ttnn.DataType.BFLOAT16, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
+        OpParameter(in0_shape, in0_dtype, ttnn.TILE_LAYOUT, in0_mem_config),  # activations
         [
-            OpParameter(in1_shape, ttnn.DataType.BFLOAT8_B, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
+            OpParameter(in1_shape, in1_dtype, ttnn.TILE_LAYOUT, in1_mem_config),  # inputs
         ],
         out_mem_config=out_mem_config,
-        out_dtype=ttnn.DataType.BFLOAT16,
+        out_dtype=out_dtype,
         program_config=program_config,
         compute_config=compute_config,
         loop_count=didt_workload_iterations,
         determinism_check_enabled=determinism_check_interval > 0,
         determinism_check_interval=determinism_check_interval,
     )
+
+    # Per-core output block, used to map non-deterministic elements back to the core that produced them
+    ff1_test.nd_core_block = (32 * per_core_M, 32 * per_core_N)
+    ff1_test.nd_core_grid_size = (compute_grid.x, compute_grid.y)
 
     # Run test
     ff1_test.run_op_test()
@@ -164,7 +183,7 @@ def test_specific_chip_ff1_matmul(
 ):
     submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape((1, 1)))
     test_ff1_matmul(
-        submesh_devices[logical_chip_id],
+        pick_submesh(submesh_devices, logical_chip_id),
         gelu,
         math_fidelity,
         didt_workload_iterations,

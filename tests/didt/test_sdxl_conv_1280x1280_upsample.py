@@ -7,6 +7,7 @@ from loguru import logger
 import pytest
 import torch
 
+from tests.didt.didt_chip import pick_submesh
 from tests.didt.op_test_base import OpTestBase, OpParameter, get_mesh_grid_size
 import ttnn
 from models.common.utility_functions import skip_for_blackhole, is_blackhole
@@ -227,6 +228,9 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         compute_with_storage_grid_size=compute_grid,
     )
 
+    # ND core attribution: the output is sharded and each shard is written by the core holding it
+    sdxlConvTest.nd_core_from_shard_spec = True
+
     sdxlConvTest.run_op_test()
 
 
@@ -245,11 +249,11 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
 def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
+    chip = pick_submesh(mesh_device.create_submeshes(ttnn.MeshShape((1, 1))), logical_chip_id)
     test_sdxl_conv(
-        mesh_device.get_device(logical_chip_id),
+        chip,
         didt_workload_iterations,
         determinism_check_interval,
-        False,
     )
 
 
@@ -262,4 +266,4 @@ def test_specific_chip_sdxl_conv(mesh_device, logical_chip_id, didt_workload_ite
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_specific_board_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval):
-    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
+    test_sdxl_conv(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval)
