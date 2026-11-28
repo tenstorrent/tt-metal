@@ -7,6 +7,15 @@ import torch
 from loguru import logger
 
 
+def test_unsqueeze_to_4D(device):
+    # Create a rank-2 tensor
+    input_tensor = ttnn.rand((32, 64), dtype=ttnn.bfloat16, device=device)
+
+    # Add dimensions of size 1 in front until the tensor has rank 4
+    output_tensor = ttnn.unsqueeze_to_4D(input_tensor)
+    logger.debug(f"Output Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 32, 64])
+
+
 def test_concat(device):
     # Create two tensors to concatenate
     tensor1 = ttnn.rand([1, 1, 64, 32], dtype=ttnn.bfloat16, device=device)

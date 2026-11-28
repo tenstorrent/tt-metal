@@ -131,7 +131,59 @@ void py_module(nb::module_& mod) {
         nb::arg("dst_full_sync_en") = false,
         nb::arg("throttle_level") = nb::cast(ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE));
 
-    mod.def("unsqueeze_to_4D", &ttnn::unsqueeze_to_4D, nb::arg("tensor"));
+    mod.def(
+        "unsqueeze_to_4D",
+        [](const ttnn::Tensor& tensor) {
+            // The rank-4 view keeps the buffer but rebuilds the padded shape from the logical shape, so a TILE input
+            // padded past the next tile multiple would read the wrong tiles. The docstring leaves such inputs out.
+            const auto& logical = tensor.logical_shape();
+            if (tensor.layout() == ttnn::TILE_LAYOUT && logical.rank() >= 2 && logical.rank() < 4) {
+                const auto& padded = tensor.padded_shape();
+                const auto tile = tensor.tensor_spec().tile();
+                const auto round_up = [](uint32_t value, uint32_t multiple) {
+                    return (value + multiple - 1) / multiple * multiple;
+                };
+                TT_FATAL(
+                    padded[-2] == round_up(logical[-2], tile.get_height()) &&
+                        padded[-1] == round_up(logical[-1], tile.get_width()),
+                    "unsqueeze_to_4D needs a TILE tensor padded only up to the next tile multiple, but shape {} is "
+                    "padded to {}",
+                    logical,
+                    padded);
+            }
+            return ttnn::unsqueeze_to_4D(tensor);
+        },
+        nb::arg("tensor"),
+        R"doc(
+            Returns `tensor` as a rank-4 tensor, with dimensions of size 1 added in front: a tensor of shape ``[H, W]`` gives ``[1, 1, H, W]``. A rank-4 tensor is returned unchanged.
+
+            The output is a view of `tensor`: it shares the input's buffer and no data moves.
+
+            Args:
+                tensor (ttnn.Tensor): the input tensor, of rank 4 or less. A TILE input of rank less than 4 must have 32x32 tiles, with the last two dimensions padded only up to the next multiple of 32.
+
+            Returns:
+                ttnn.Tensor: the rank-4 output tensor, with the input's dtype, layout and memory configuration.
+
+            Note:
+                Supported dtypes and layouts:
+
+                .. list-table::
+                   :header-rows: 1
+
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                     - TILE, ROW_MAJOR
+                   * - BFLOAT8_B, BFLOAT4_B
+                     - TILE
+
+                On Blackhole, the input can also be an ``FP8_E4M3`` tensor in ROW_MAJOR layout.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
+                - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1
+        )doc");
 
     mod.def(
         "to_device",
