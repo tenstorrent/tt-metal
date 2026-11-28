@@ -388,6 +388,8 @@ ttnn::Tensor transpose_impl(
     } else {
         // covered in main if branch => not a TT_FATAL
         TT_ASSERT(normalized_dim1 != normalized_dim2, "Unsupported transpose dims");
+        // Only a transpose that runs a kernel needs a 32x32 tile; the no-ops above return the input.
+        validate_default_tile(input_unsqueezed, "ttnn.transpose");
 
         using ttnn::prim::TransposeOpDim;
         constexpr auto tod_default_value = TransposeOpDim::NW;
