@@ -51,8 +51,8 @@ for run, cores in ev.items():
     t0 = min(d["kstart"] for d in per.values())
     for core, d in per.items():
         stats["start"].append(d["kstart"] - t0)
-        stats["issue"].append(d["S2I-STORE-BLOCK"])
-        stats["barrier"].append(d["S2I-WRITE-BARRIER"])
+        stats["issue"].append(d["S2I_STORE_BLOCK"])
+        stats["barrier"].append(d["S2I_DRAIN"])
         stats["end"].append(d["kend"] - t0)
     for core, d in sorted(per.items(), key=lambda kv: -kv[1]["kend"])[:3]:
         last_cores[core] += 1

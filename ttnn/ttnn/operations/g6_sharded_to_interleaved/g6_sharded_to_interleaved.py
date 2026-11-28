@@ -16,12 +16,12 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .g6_sharded_to_interleaved_program_descriptor import (
-    DEFAULT_KNOBS,
     TILE,
     Knobs,
     bind_call,
     build_program_descriptor,
     core_roles,
+    select_knobs,
 )
 
 _OP = "g6_sharded_to_interleaved"
@@ -189,10 +189,16 @@ def roles(input_tensor):
 
 
 def g6_sharded_to_interleaved(
-    input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig, *, _knobs: Knobs = DEFAULT_KNOBS
+    input_tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig, *, _knobs: Knobs | None = None
 ) -> ttnn.Tensor:
     scenario = validate(input_tensor, memory_config)
     global _LAST_PLAN
+    if _knobs is None:
+        padded = tuple(input_tensor.padded_shape)
+        num_pages = (padded[-1] // TILE) * (padded[-2] // TILE)
+        for d in padded[:-2]:
+            num_pages *= d
+        _knobs = select_knobs(memory_config.buffer_type, num_pages)
 
     output_tensor = ttnn.allocate_tensor_on_device(
         input_tensor.shape,

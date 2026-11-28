@@ -156,6 +156,36 @@ def test_g6_sharded_to_interleaved(device, case_id):
         ttnn.deallocate(t)
 
 
+# Refinement 2: the L1-output plan (dual_noc + bank_stagger) is selected only for an L1 output with
+# enough pages to congest one NoC (p1: 1024 pages); p2 (160 pages, DRAM or L1) keeps the Phase 0 plan.
+_EXPECT_L1_PLAN = {
+    "p2_flux_width_bf16_dram": False,
+    "p2_flux_to_l1": False,
+    "p1_panoptic_height_bf8b_l1": True,
+}
+
+
+@pytest.mark.parametrize("case_id", list(_EXPECT_L1_PLAN))
+def test_g6_sharded_to_interleaved_plan_selection(device, case_id):
+    from ttnn.operations.g6_sharded_to_interleaved import last_plan
+
+    case = CASES[case_id]
+    tt_input = ttnn.from_torch(
+        _make_input(case["shape"]),
+        dtype=case["dtype"],
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=_input_mc(device, case),
+    )
+    out = g6_sharded_to_interleaved(tt_input, _OUT_MC[case["buffer"]])
+    plan = last_plan()
+    want = _EXPECT_L1_PLAN[case_id]
+    assert plan["dual_noc"] is want and plan["bank_stagger"] is want, plan
+    assert plan["writer_lanes"] == 1
+    for t in (out, tt_input):
+        ttnn.deallocate(t)
+
+
 @pytest.mark.parametrize(
     "bad",
     ["interleaved_input", "interleaved_mc_required"],

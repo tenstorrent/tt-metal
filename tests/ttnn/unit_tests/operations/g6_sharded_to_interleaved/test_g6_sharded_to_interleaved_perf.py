@@ -33,6 +33,15 @@ CASES = {
         (((0, 0), (7, 3)),),
         ttnn.DRAM_MEMORY_CONFIG,
     ),
+    # Guard: the p2 tensor written to L1 interleaved instead (L1-output plan on a small grid).
+    "p2l1": (
+        (1, 5120),
+        ttnn.bfloat16,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        (32, 160),
+        (((0, 0), (7, 3)),),
+        ttnn.L1_MEMORY_CONFIG,
+    ),
     # Panoptic-DeepLab (1, 128, 256, 32) bf8b, 103 height shards of 10 x 1 tiles -> L1 interleaved (PERF FOCUS).
     "p1": (
         (1, 128, 256, 32),
@@ -43,7 +52,17 @@ CASES = {
         ttnn.L1_MEMORY_CONFIG,
     ),
 }
-KNOBS = {"default": Knobs(), "lanes2": Knobs(writer_lanes=2)}
+KNOBS = {
+    "auto": None,  # the entry point's own plan (select_knobs): what a model gets
+    "default": Knobs(),
+    "lanes2": Knobs(writer_lanes=2),
+    # Refinement 2 levers: bank_stagger, noc_placement (lane NoC choice), and their combinations.
+    "stagger": Knobs(bank_stagger=True),
+    "noc0": Knobs(lane_nocs=(0, 1)),
+    "lanes2_stagger": Knobs(writer_lanes=2, bank_stagger=True),
+    "dual": Knobs(dual_noc=True),
+    "dual_stagger": Knobs(dual_noc=True, bank_stagger=True),
+}
 
 
 def _input(device, case):

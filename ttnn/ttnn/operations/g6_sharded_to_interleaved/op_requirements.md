@@ -46,7 +46,7 @@ EXCLUSIONS stays `[]`. The prompt forbids gating any production cell, and no siz
 - the acceptance file shows 8 passed, 0 xfailed;
 - the precision baseline stays bit-exact on all four cases.
 
-### [ ] Refinement 2 — Speed up the perf-flagged profile: kernel-side write issue
+### [x] Refinement 2 — Speed up the perf-flagged profile: kernel-side write issue
 
 **Type**: perf
 
@@ -68,6 +68,7 @@ These are T2 knob-turns on the surface the planner exposed, so several can be tr
 - measured DEVICE KERNEL DURATION on the flagged p1 config improves over 1939 ns with replay ns/op not above ~5960;
 - the gate stays exact and the golden suite is green;
 - there is no regression across the guard set: one representative per kernel path × placement, i.e. p2 width bf16 → DRAM (1429.5 ns kernel / 2820 ns replay) and p2 → L1.
+**Outcome**: p1 kernel 1939 → **1299 ns** (−33%), replay 5952–5960 → **5883–5887 ns/op**; gate exact, golden 17/17. Bottleneck was NoC congestion, not RISC issue cost: on one lane the 10-write issue zone took 1198 cycles p50 (2215 max) against 292 uncontended, and at every step the 103 cores hit only 11 of the 110 L1 banks. Winning plan (gated by `select_knobs`: L1 output with ≥ `L1_OUTPUT_MIN_PAGES`=512 pages) = one BRISC kernel in DM_DYNAMIC_NOC that alternates writes over NoC0/NoC1 (`dual_noc`), plus a host-derived start slot `(first_page // num_banks) % lane_slots` (`bank_stagger`). Neither wins alone (stagger 2067, dual 1710); together they reach 1297, beating the second-lane variants (lanes2 1570, lanes2+stagger 1390) without the second kernel's replay cost. NoC0 for the single lane loses (2397). Guards unchanged: p2 → DRAM keeps the Phase 0 plan (dual/NoC0 hurt DRAM writes), and p2 → L1 (160 pages) keeps it too (dual was a flat kernel and +1.5% replay). Now: per-core end spread is tight (max 1821 cycles vs 2812), and issue is ~98 cycles/write evenly across the grid (aggregate L1-bank/NoC throughput) plus ~230 cycles of launch skew. Next would be per-call dispatch cost (Refinement 3, which dominates replay at ~3× kernel). Not tried here because it is out of this heading's scope.
 
 ### [ ] Refinement 3 — Speed up the perf-flagged profile: per-call dispatch / launch cost
 

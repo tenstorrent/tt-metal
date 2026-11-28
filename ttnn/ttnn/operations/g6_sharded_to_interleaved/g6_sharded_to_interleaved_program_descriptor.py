@@ -37,12 +37,52 @@ REGIME = "owner_writes"
 class Knobs:
     blocks_per_shard: int = 1
     writer_lanes: int = 1
+    # NoC per lane (lane 0 = BRISC, lane 1 = NCRISC). Default = the Writer/Reader config defaults
+    # (BRISC/NoC1, NCRISC/NoC0) -> byte-identical to the Phase 0 kernels. Catalog ``noc_placement``.
+    lane_nocs: tuple = (1, 0)
+    # Rotate each lane's walk so its first write lands on a different output bank than its
+    # neighbours' (catalog ``bank_stagger``). Host-derived start slot per lane:
+    #   (first_page // num_output_banks) % lane_slots
+    # Lanes whose first pages share a bank (first_page % banks equal) differ in first_page // banks,
+    # so they start on different slots. False -> start slot 0 (Phase 0 walk).
+    bank_stagger: bool = False
+    # One RISC writes on BOTH NoCs (DM_DYNAMIC_NOC, alternate per page): the second NoC's link
+    # capacity without a second kernel instance (whose dispatch cost shows up in trace replay).
+    dual_noc: bool = False
 
 
 DEFAULT_KNOBS = Knobs()
 
-# lane index -> data-movement config (lane 0 = BRISC / NoC1, lane 1 = NCRISC / NoC0)
-_LANE_CONFIGS = (ttnn.WriterConfigDescriptor, ttnn.ReaderConfigDescriptor)
+# Plan for an L1-interleaved output (Refinement 2). L1 pages spread over every worker core's bank,
+# so the writes are all-to-all across the grid and congest one NoC's links: splitting them over both
+# NoCs (dual_noc) and de-clustering the banks the cores hit at each step (bank_stagger) pays.
+# Measured on p1 (103 cores, bf8b -> L1): 1939 -> 1289 ns kernel, replay 5931 -> 5882 ns/op.
+# A DRAM output stays on DEFAULT_KNOBS: its 8 edge banks are reached best on NoC1 alone (NoC0 doubles
+# p2's kernel time) and dual_noc there costs ~+2.7% replay with a flat kernel.
+# DM_DYNAMIC_NOC carries a fixed launch cost (~25-40 ns FW / replay), so the plan only pays once the
+# grid injects enough pages to congest one NoC: p1 (1030 pages) wins, p2 -> L1 (160 pages) is a
+# flat kernel (987 -> 974 ns) and +1.5% replay, so it stays on DEFAULT_KNOBS.
+L1_OUTPUT_KNOBS = Knobs(bank_stagger=True, dual_noc=True)
+L1_OUTPUT_MIN_PAGES = 512
+
+
+def select_knobs(output_buffer_type, num_pages):
+    """Host predicate: the plan for this call (reported via last_plan(), part of the cache key)."""
+    if output_buffer_type == ttnn.BufferType.L1 and num_pages >= L1_OUTPUT_MIN_PAGES:
+        return L1_OUTPUT_KNOBS
+    return DEFAULT_KNOBS
+
+
+# lane index -> data-movement processor (lane 0 = BRISC, lane 1 = NCRISC); NoC from Knobs.lane_nocs
+_LANE_PROCESSORS = (ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1)
+_NOCS = (ttnn.NOC.NOC_0, ttnn.NOC.NOC_1)
+
+
+def _lane_config(lane, knobs):
+    mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if knobs.dual_noc else ttnn.NOC_MODE.DM_DEDICATED_NOC
+    return ttnn.DataMovementConfigDescriptor(
+        processor=_LANE_PROCESSORS[lane], noc=_NOCS[knobs.lane_nocs[lane]], noc_mode=mode
+    )
 
 
 def shard_geometry(input_tensor):
@@ -105,16 +145,17 @@ def _lane_rects(rows, cols, lanes):
     return [(0, off, rows, ln) for off, ln in _split(cols, lanes)]
 
 
-def _lane_rt_args(geo, rect, knobs):
-    """RT args [num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot]."""
+def _lane_rt_args(geo, rect, knobs, num_banks):
+    """RT args [num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot, start_slot]."""
     row0, col0, r_off, c_off, rows, cols = rect
     if rows == 0 or cols == 0:
-        return [0, 0, 0, 0, 0, 0]
+        return [0, 0, 0, 0, 0, 0, 0]
     block_rows = -(-rows // knobs.blocks_per_shard)
     num_blocks = -(-rows // block_rows)
     first_page = (row0 + r_off) * geo["tensor_col_tiles"] + (col0 + c_off)
     src_first_slot = r_off * geo["shard_col_tiles"] + c_off  # slot stride = full shard width
-    return [num_blocks, block_rows, cols, rows, first_page, src_first_slot]
+    start_slot = (first_page // num_banks) % (rows * cols) if knobs.bank_stagger else 0
+    return [num_blocks, block_rows, cols, rows, first_page, src_first_slot, start_slot]
 
 
 def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT_KNOBS):
@@ -123,6 +164,7 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
     Returns (kernel_descriptors, plan). The shard CB is bound per call
     (``bind_call``) because it carries the input buffer pointer."""
     assert knobs.writer_lanes in (1, 2), "writer_lanes must be 1 or 2"
+    assert len(knobs.lane_nocs) == 2 and all(n in (0, 1) for n in knobs.lane_nocs)
     assert knobs.blocks_per_shard >= 1
     geo = shard_geometry(input_tensor)
     assert geo["tensor_row_tiles"] * geo["tensor_col_tiles"] < 2**32
@@ -142,9 +184,12 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
         geo["tensor_col_tiles"],
         out_page_size,
         in_slot_bytes,
+        int(knobs.dual_noc),
     ]
     ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    out_buffer_type = output_tensor.memory_config().buffer_type
+    num_banks = ttnn.get_memory_view(output_tensor.device(), out_buffer_type).num_banks
     lane_rt = [ttnn.RuntimeArgs() for _ in range(knobs.writer_lanes)]
     for k, core in enumerate(cores):
         if k < num_shards:
@@ -154,7 +199,7 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
             row0 = col0 = 0
             rects = [(0, 0, 0, 0)] * knobs.writer_lanes
         for lane, (r_off, c_off, lr, lc) in enumerate(rects):
-            lane_rt[lane][core.x][core.y] = _lane_rt_args(geo, (row0, col0, r_off, c_off, lr, lc), knobs)
+            lane_rt[lane][core.x][core.y] = _lane_rt_args(geo, (row0, col0, r_off, c_off, lr, lc), knobs, num_banks)
 
     kernels = []
     for lane in range(knobs.writer_lanes):
@@ -165,7 +210,7 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
                 compile_time_args=ct_args,
                 runtime_args=lane_rt[lane],
                 common_runtime_args=[output_tensor.buffer_address()],
-                config=_LANE_CONFIGS[lane](),
+                config=_lane_config(lane, knobs),
             )
         )
 
@@ -175,6 +220,10 @@ def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT
         "grid_cores": len(cores),
         "writer_lanes": knobs.writer_lanes,
         "blocks_per_shard": knobs.blocks_per_shard,
+        "lane_nocs": tuple(knobs.lane_nocs[: knobs.writer_lanes]),
+        "bank_stagger": knobs.bank_stagger,
+        "dual_noc": knobs.dual_noc,
+        "knobs": knobs,
     }
     return kernels, plan
 
