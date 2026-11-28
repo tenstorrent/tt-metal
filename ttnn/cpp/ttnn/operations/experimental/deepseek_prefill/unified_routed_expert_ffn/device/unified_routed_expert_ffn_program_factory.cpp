@@ -1375,6 +1375,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Weight tiles stored transposed within themselves: every matmul transposes in1 as it unpacks it.
         compute_defines.emplace_back("WEIGHTS_TILE_TRANSPOSED", "1");
     }
+    if (from_pages) {
+        // GU_FULL_M: gate / up K-blocks as one matmul over every row when the N slice is narrow (fused_swiglu.cpp).
+        // Page mode only, so the tensor path's compute program is unchanged.
+        compute_defines.emplace_back("GU_FULL_M", "1");
+    }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =

@@ -522,8 +522,13 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #else
         8;
 #endif
-    // Rows per matmul: as many as DST holds (kGuDst / out_subblock_w), in groups when per_core_M is larger.
+    // Rows per matmul: as many as DST holds (kGuDst / out_subblock_w), in groups when per_core_M is larger. Only with
+    // GU_FULL_M (weight pages): the tensor path keeps one matmul per subblock.
+#ifdef GU_FULL_M
     constexpr bool kFullM = out_subblock_h == 1 && in1_num_subblocks == 1 && 2 * out_subblock_w <= kGuDst;
+#else
+    constexpr bool kFullM = false;
+#endif
     constexpr uint32_t kRowGroup = kFullM ? kGuDst / out_subblock_w : 1;
     const uint32_t gu_rt = kFullM ? (EFF_M < kRowGroup ? EFF_M : kRowGroup) : out_subblock_h;
     uint32_t cur_rt = gu_rt;  // rt_dim of the last matmul_block_init (a tail row group re-inits)
