@@ -5,6 +5,7 @@
 
 // Hand-coded parameter encoding for various GPR mappings
 #include <cstdint>
+#include <initializer_list>
 
 namespace ckernel
 {
@@ -23,8 +24,6 @@ struct p_gpr_unpack
 {
     constexpr static std::uint32_t X_DIM_TOP     = 50; // top halo params
     constexpr static std::uint32_t X_DIM_BOT     = 51; // bottom halo params
-    constexpr static std::uint32_t WEIGHT_OFFSET = 50; //
-    constexpr static std::uint32_t WEIGHT_INCR   = 51; //
     constexpr static std::uint32_t TEMPORARY     = 52; //
     constexpr static std::uint32_t DATUM_CNT_TOP = 56; // top halo params
     constexpr static std::uint32_t DATUM_CNT_BOT = 57; // bottom halo params
@@ -59,8 +58,6 @@ struct p_gpr_pack
     constexpr static std::uint32_t TILE_RESERVED  = 43; // reserved
     constexpr static std::uint32_t DEST_OFFSET_HI = 56; // dest upper bank offsets
     constexpr static std::uint32_t DEST_OFFSET_LO = 60; // dest lower bank offsets
-    constexpr static std::uint32_t FLUSH_COUNTERS = 56; // flush pack counters
-    constexpr static std::uint32_t FLUSH_OFFSET   = 60; // flush dest read offsets
 
     // Special packer spilling to L1 scratch buffer
     constexpr static std::uint32_t OUTPUT_FORMAT        = 50; // output buffer format
@@ -70,6 +67,57 @@ struct p_gpr_pack
     constexpr static std::uint32_t TEMPORARY            = 54; //
     constexpr static std::uint32_t PACK_COUNTERS        = 55; // only used if counter reprogramming is required
 };
+
+// Each struct describes one thread's GPR file, so an index may appear only once per struct.
+constexpr bool gpr_indices_distinct(std::initializer_list<std::uint32_t> indices)
+{
+    for (const std::uint32_t* a = indices.begin(); a != indices.end(); ++a)
+    {
+        for (const std::uint32_t* b = a + 1; b != indices.end(); ++b)
+        {
+            if (*a == *b)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static_assert(
+    gpr_indices_distinct({p_gpr_unpack::X_DIM_TOP, p_gpr_unpack::X_DIM_BOT, p_gpr_unpack::TEMPORARY, p_gpr_unpack::DATUM_CNT_TOP, p_gpr_unpack::DATUM_CNT_BOT}),
+    "p_gpr_unpack assigns one GPR index to two names");
+static_assert(
+    gpr_indices_distinct(
+        {p_gpr_math::TEMP0,
+         p_gpr_math::TILE_SHAPE_IDX,
+         p_gpr_math::DEST_REGW_OFFSET,
+         p_gpr_math::DEST_REGW_INCR,
+         p_gpr_math::DEST_REGW_OFFSET2,
+         p_gpr_math::DEST_REGW_INCR2}),
+    "p_gpr_math assigns one GPR index to two names");
+static_assert(
+    gpr_indices_distinct(
+        {p_gpr_pack::TEMP0,
+         p_gpr_pack::TEMP1,
+         p_gpr_pack::TEMP2,
+         p_gpr_pack::SYNC_FLAG,
+         p_gpr_pack::OUTPUT_ADDR,
+         p_gpr_pack::MSGINFO_ADDR,
+         p_gpr_pack::FORCE_MAX_XY,
+         p_gpr_pack::TILE_HEADER,
+         p_gpr_pack::TILE_METADATA,
+         p_gpr_pack::TILE_ZERO_MASK,
+         p_gpr_pack::TILE_RESERVED,
+         p_gpr_pack::DEST_OFFSET_HI,
+         p_gpr_pack::DEST_OFFSET_LO,
+         p_gpr_pack::OUTPUT_FORMAT,
+         p_gpr_pack::SCRATCH_FORMAT,
+         p_gpr_pack::TILE_STITCHER_HEADER,
+         p_gpr_pack::TILE_STITCHER_GAP,
+         p_gpr_pack::TEMPORARY,
+         p_gpr_pack::PACK_COUNTERS}),
+    "p_gpr_pack assigns one GPR index to two names");
 
 struct p_params
 {
