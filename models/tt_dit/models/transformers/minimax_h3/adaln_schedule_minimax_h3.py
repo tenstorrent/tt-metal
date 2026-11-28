@@ -14,8 +14,8 @@ Layout. Each block keeps six `[capacity, hidden_local]` tables, one per modulati
 schedule takes `num_steps * len(roles) * MODALITY_NUM` contiguous rows, step-major, then role, then
 modality: the row `_modulation_tables` puts at `slot * MODALITY_NUM + modality` for a forward whose
 `temb` carries every role sits at `offset + step * rows_per_step + role * MODALITY_NUM + modality`. The
-rows are made by the block's own `_modulation_tables` on device (same programs, same `temb` shape as a
-full-role forward), so they already carry the `1 +` and the folded norm weight on the scale rows that
+rows are made by the block's own `_modulation_tables` on device (`WRITE_SLOTS` slots at a time, the tile
+shapes of a forward), so they already carry the `1 +` and the folded norm weight on the scale rows that
 #58676 moved into the table.
 
 Selection. A forward gets a `[len(slot_roles) * MODALITY_NUM, capacity]` bf16 one-hot selector per step
