@@ -91,6 +91,38 @@ no measurement allowed on the only target cell, there is no evidence to pick amo
 fixed-cost (launch) bound at ~1.4 µs. Next lever if a >32-tile production cell ever appears: A/B the
 rectangle against the row line and test bank-staggered issue order on that cell.
 
+
+
+### [x] Refinement 1b — Core placement, core-range count and NoC selection on p1 (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: golden responsible cells 0/9 below majority threshold.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+
+**Outcome**: the 0/9 was not an op failure. In the harness golden runs (Phase 0 and Refinement 1 both),
+all 20 tests *errored at setup* with `Read 0xffffffff over PCIe ID 1: the board should be reset`. The
+cause was the precompile warm pass (`tests/plugins/up_front_collect.py`). Its `_drives_capture()` only
+scans the test function's own source, so the `traced_replay` case, which captures inside
+`helpers._run_traced`, was collected under NO_DISPATCH. Its real `begin_trace_capture` corrupted the
+device, the next module's `CreateDevice` segfaulted, and the graded run found a hung board.
+Reproduced locally, and confirmed that deselecting `trace` makes precompile clean. Fix: the collect
+window now always patches `ttnn.begin_trace_capture` / `begin_mesh_trace_capture` to `pytest.skip`, so
+a capture is refused wherever it is called from and runs only in the real pass.
+Full golden suite after the fix:
+- `eval_test_runner.sh --precompile` (L1 capture on, as the harness runs): warm pass completes
+  (skipped-capture 1, 4 programs). 10/20 pass: 8/9 responsible cells, plus test_repeat_bit_identical.
+- The 10 failures are the 9 validation-refusal cases (`L1ProfilingError peak_total=0`) and the traced
+  case (`!is_capturing_trace`, because L1 capture disables the program cache). Both are documented
+  L1-capture harness limitations; neither is an op defect.
+- With `EVAL_CAPTURE_L1=0`: 20/20.
+
+Unit tests 59/59. The op and kernels are unchanged.
 ### [ ] Refinement 2 — Output write transfer shape on p1
 
 **Type**: perf

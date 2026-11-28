@@ -50,3 +50,21 @@
 - Issues encountered: None.
 - Tests added: `test_core_placement_rectangle` in `test_g6_unsqueeze_knobs.py`. It checks one range
   for p1, p2 and the full grid, the row-wise fallback for 13 cores, and bit-exact output.
+
+## Refinement 1b — Core placement, core-range count and NoC selection on p1 (debug: gate fix)
+- Date: 2026-11-28
+- What was done: diagnosed the gate's "golden responsible cells 0/9". All 20 harness golden tests had
+  errored at setup on a hung board (`Read 0xffffffff over PCIe`). The cause was the precompile warm
+  pass running the `traced_replay` case's `begin_trace_capture` under NO_DISPATCH: the helper-driven
+  capture slipped past `up_front_collect._drives_capture()`'s source scan, and the next `CreateDevice`
+  segfaulted. Fixed in `tests/plugins/up_front_collect.py` with an always-on collect-window guard that
+  turns `ttnn.begin_trace_capture` / `begin_mesh_trace_capture` into `pytest.skip`. No op or kernel
+  change.
+- Accuracy achieved: bit-exact (unchanged) on [1,512]->[1,512,1] and [1,256]->[1,256,1].
+- Golden test progress:
+  - 20/20 with `EVAL_CAPTURE_L1=0`.
+  - 10/20 with precompile and L1 capture on, which is 8/9 responsible cells. The 9 validation-refusal
+    cases and the traced case fail under L1 capture, a known harness limitation.
+  - Before the fix: 0/20, all setup errors.
+- Issues encountered: the harness precompile crash; it also affected the Phase 0 harness golden run.
+- Tests added: none (unit 59/59).

@@ -441,9 +441,33 @@ def _boundary_patches(stats):
     ]
 
 
+def _capture_guard_patches(stats):
+    """Refuse trace capture inside a collected body, wherever it is called from.
+
+    _drives_capture() only scans the test function's own source, so a capture driven from a suite
+    helper (e.g. a golden helpers.py running the traced-replay case) slips through and runs
+    begin_trace_capture against a NO_DISPATCH device. That corrupts the device: the next
+    CreateDevice segfaults and the board reads 0xffffffff over PCIe for the graded run. Raising
+    pytest.skip at the call keeps the body's earlier (eager) ops stashed and leaves the capture to
+    the real pass, exactly as for a body _drives_capture() recognizes. Always active (not gated on
+    fast collect): this is a safety guard, not a speed substitution."""
+    import ttnn
+
+    def _refuse(_orig):
+        def _skip(*_a, **_k):
+            stats.skipped_capture += 1
+            pytest.skip("up_front_collect: trace capture runs only in the real pass")
+
+        return _skip
+
+    names = ("begin_trace_capture", "begin_mesh_trace_capture")
+    return [_AttrPatch(ttnn, n, _refuse) for n in names if hasattr(ttnn, n)]
+
+
 def _collect_patches(stats):
-    """The patch set active during the collect window (empty unless fast collect is on)."""
-    patches = []
+    """The patch set active during the collect window (the capture guard always; the speed
+    substitutions only when fast collect is on)."""
+    patches = _capture_guard_patches(stats)
     if _FAST_COLLECT:
         patches += _reference_op_patches()
         patches += _verifier_patches()
@@ -454,7 +478,7 @@ def _collect_patches(stats):
 @contextlib.contextmanager
 def _collect_window(stats):
     """Enter every active patch under one ExitStack, run the body, restore on exit. With no active
-    patches (UP_FRONT_FAST_COLLECT=0) it's a transparent pass-through (body runs with real torch)."""
+    speed patches (UP_FRONT_FAST_COLLECT=0) the body runs with real torch, under the capture guard only."""
     with contextlib.ExitStack() as stack:
         for patch in _collect_patches(stats):
             stack.enter_context(patch)
