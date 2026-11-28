@@ -47,7 +47,6 @@ struct params {
     uint32_t dram_all_nius;
     uint32_t packet_size;
     uint32_t burst;
-    uint32_t vc;
     uint32_t tensix_rows;
     uint32_t watchdog_s;
 };
@@ -57,17 +56,16 @@ static params get_params() {
     TEST_PARAM(uint32_t, slice_size, 4096, "NOC_TEST_SLICE_SIZE");
     TEST_PARAM(uint32_t, timeout_ms, 2000, "NOC_TEST_TIMEOUT_MS");
     TEST_PARAM(uint32_t, dram_all_nius, 0, "NOC_TEST_DRAM_ALL_NIUS");
-    // Defaults mirror fabric EDM local writes: 2 KB packets on VC 2, many in flight.
+    // 2 KB packets mirror fabric EDM local writes. Every transaction type (see noc_integrity_types.hpp) uses them,
+    // on its own VC. NOC_TEST_BURST > 1 adds stress, but rewrites the same slice, so only the last write is checked.
     TEST_PARAM(uint32_t, packet_size, 2048, "NOC_TEST_PACKET_SIZE");
-    TEST_PARAM(uint32_t, burst, 8, "NOC_TEST_BURST");
-    TEST_PARAM(uint32_t, vc, 2, "NOC_TEST_VC");
+    TEST_PARAM(uint32_t, burst, 1, "NOC_TEST_BURST");
     TEST_PARAM(uint32_t, tensix_rows, 0, "NOC_TEST_TENSIX_ROWS");
     TEST_PARAM(uint32_t, watchdog_s, 120, "NOC_TEST_WATCHDOG_S");
     TT_FATAL(slice_size >= 64 && (slice_size % 64) == 0, "NOC_TEST_SLICE_SIZE must be a multiple of 64");
     TT_FATAL(packet_size >= 16 && (packet_size % 16) == 0, "NOC_TEST_PACKET_SIZE must be a multiple of 16");
     TT_FATAL(burst >= 1, "NOC_TEST_BURST must be at least 1");
-    TT_FATAL(vc < 4, "NOC_TEST_VC must be a unicast VC (0-3)");
-    return {iterations, slice_size, timeout_ms, dram_all_nius, packet_size, burst, vc, tensix_rows, watchdog_s};
+    return {iterations, slice_size, timeout_ms, dram_all_nius, packet_size, burst, tensix_rows, watchdog_s};
 }
 
 struct core_layout {
@@ -102,6 +100,13 @@ static core_layout alloc_core_layout(l1_allocator* alloc, uint32_t slice_size) {
     return l;
 }
 
+// How many sources' slots fit in a destination region after the core layout.
+static uint32_t slot_capacity(l1_allocator alloc, uint32_t slice_size) {
+    alloc_core_layout(&alloc, slice_size);
+    const uint32_t start = ROUND_UP(alloc.start, DEFAULT_L1_ALIGNMENT);
+    return start < alloc.end ? (alloc.end - start) / slice_size : 0;
+}
+
 static dest_layout make_layout(l1_allocator alloc, uint32_t slice_size, uint32_t num_slots) {
     dest_layout l{};
     l.core = alloc_core_layout(&alloc, slice_size);
@@ -118,7 +123,8 @@ struct source {
     bool is_eth;
     bool active;
     int chan;
-    uint32_t slot;
+    uint32_t slot;        // this source's slot in every destination, within its wave
+    bool eth_dests_only;  // non-corner Tensix sources only target Ethernet cores
 };
 
 struct dest {
@@ -287,36 +293,44 @@ static vector<source> get_eth_sources(const shared_ptr<distributed::MeshDevice>&
             .active = active.contains(logical),
             .chan = soc_d.logical_eth_core_to_chan_map.at(logical),
             .slot = slot++,
+            .eth_dests_only = false,
         });
     }
     return sources;
 }
 
-static vector<source> get_tensix_sources(const shared_ptr<distributed::MeshDevice>& mesh) {
+// Every Tensix core in the rows under test sends to every Ethernet core. The four corners of those rows also
+// send to every other destination, which tells a source-side fault from a destination-side one.
+static vector<source> get_tensix_sources(const shared_ptr<distributed::MeshDevice>& mesh, const params& p) {
     auto* const device = mesh->impl().get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
+    const uint32_t rows = p.tensix_rows ? min<uint32_t>(p.tensix_rows, grid.y) : grid.y;
     set<CoreCoord> corners = {
         {0, 0},
         {grid.x - 1, 0},
-        {0, grid.y - 1},
-        {grid.x - 1, grid.y - 1},
+        {0, rows - 1},
+        {grid.x - 1, rows - 1},
     };
 
     vector<source> sources;
     uint32_t slot = 0;
-    for (const auto& logical : corners) {
-        CoreCoord virt = device->worker_core_from_logical_core(logical);
-        sources.push_back({
-            .mesh = mesh,
-            .device = device,
-            .logical = logical,
-            .virt = virt,
-            .noc0 = to_noc0(device, virt, CoreType::TENSIX),
-            .is_eth = false,
-            .active = false,
-            .chan = -1,
-            .slot = slot++,
-        });
+    for (uint32_t y = 0; y < rows; y++) {
+        for (uint32_t x = 0; x < grid.x; x++) {
+            CoreCoord logical(x, y);
+            CoreCoord virt = device->worker_core_from_logical_core(logical);
+            sources.push_back({
+                .mesh = mesh,
+                .device = device,
+                .logical = logical,
+                .virt = virt,
+                .noc0 = to_noc0(device, virt, CoreType::TENSIX),
+                .is_eth = false,
+                .active = false,
+                .chan = -1,
+                .slot = slot++,
+                .eth_dests_only = !corners.contains(logical),
+            });
+        }
     }
     return sources;
 }
@@ -679,13 +693,15 @@ static vector<failure> run_phase(
                         p.timeout_ms,
                         p.packet_size,
                         p.burst,
-                        p.vc,
                     },
                 .seed = 0x9E3779B9u ^ (s.device->id() << 24) ^ (s.slot << 8) ^ noc,
             };
             const auto& soc_d = MetalContext::instance().get_cluster().get_soc_desc(s.device->id());
             for (const auto& d : dests_per_chip.at(s.device->id())) {
                 if (!d.is_dram && d.noc0 == s.noc0) {
+                    continue;
+                }
+                if (s.eth_dests_only && (d.is_tensix || d.is_dram)) {
                     continue;
                 }
                 if (d.is_dram && !dram_niu_usable(d, noc, p)) {
@@ -843,6 +859,7 @@ static vector<failure> run_phase(
                     rec[NOC_RESULT_STATUS] = NOC_STATUS_HANG;
                     rec[NOC_RESULT_PATTERN] = prog[NOC_PROGRESS_PATTERN];
                     rec[NOC_RESULT_ITERATION] = prog[NOC_PROGRESS_ITERATION];
+                    rec[NOC_RESULT_TXN] = prog[NOC_PROGRESS_TXN];
                 }
                 if (rec[NOC_RESULT_STATUS] == NOC_STATUS_DONE && rec[NOC_RESULT_MISMATCHES] == 0) {
                     continue;
@@ -1008,6 +1025,7 @@ static void print_failure_summary(const vector<failure>& failures, const map<Chi
 }
 
 struct test_result {
+    params p;
     vector<failure> failures;
     vector<failure> warnings;
     map<ChipId, wedged_chip> wedged;
@@ -1018,45 +1036,72 @@ static bool is_warning(const failure& f) {
            is_unused_eth_chan(f.src.device, !f.dst.is_tensix && !f.dst.is_dram, f.dst.chan);
 }
 
-static string failure_str(const failure& f) {
+// A transaction type, e.g. "vc 3, linked, 64 B".
+static string txn_str(uint32_t txn, const params& p) {
+    return fmt::format(
+        "vc {}, {}{} B",
+        txn & NOC_TXN_VC_MASK,
+        txn & NOC_TXN_LINKED ? "linked, " : "",
+        txn & NOC_TXN_SMALL ? static_cast<uint32_t>(NOC_SMALL_PACKET) : p.packet_size);
+}
+
+// Every transaction type that read back wrong at least once, e.g. "all 16" or "vc 0, 2048 B; vc 0, linked, 2048 B".
+static string txns_str(uint32_t mask, const params& p) {
+    if (mask == (1u << NOC_TXNS) - 1) {
+        return fmt::format("all {}", static_cast<uint32_t>(NOC_TXNS));
+    }
+    string out;
+    for (uint32_t txn = 0; txn < NOC_TXNS; txn++) {
+        if (mask & (1u << txn)) {
+            out += (out.empty() ? "" : "; ") + txn_str(txn, p);
+        }
+    }
+    return out;
+}
+
+static string failure_str(const failure& f, const params& p) {
     const auto& rec = f.record;
     string prefix =
         fmt::format("{} {} -> {} @0x{:x} noc {}", chip_str(f.src.device), src_str(f.src), dst_str(f.dst), f.addr, f.noc);
+    const string where = fmt::format(
+        "{}, {}, iteration {}",
+        noc_pattern_name(rec[NOC_RESULT_PATTERN]),
+        txn_str(rec[NOC_RESULT_TXN], p),
+        rec[NOC_RESULT_ITERATION]);
+    const string txns = rec[NOC_RESULT_TXN_MASK]
+                            ? fmt::format("; failing transaction types: {}", txns_str(rec[NOC_RESULT_TXN_MASK], p))
+                            : "";
     switch (rec[NOC_RESULT_STATUS]) {
         case NOC_STATUS_WRITE_TIMEOUT:
         case NOC_STATUS_READ_TIMEOUT:
             return fmt::format(
-                "NOC timeout: {}: {} barrier timed out ({}, iteration {})",
+                "NOC timeout: {}: {} barrier timed out ({}){}",
                 prefix,
                 rec[NOC_RESULT_STATUS] == NOC_STATUS_WRITE_TIMEOUT ? "write" : "read",
-                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                rec[NOC_RESULT_ITERATION]);
+                where,
+                txns);
         case NOC_STATUS_NOT_RUN:
             return fmt::format("NOC not run: {}: source stopped before this destination", prefix);
         case NOC_STATUS_HANG:
-            return fmt::format(
-                "NOC hang: {}: source stopped making progress ({}, iteration {})",
-                prefix,
-                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                rec[NOC_RESULT_ITERATION]);
+            return fmt::format("NOC hang: {}: source stopped making progress ({}){}", prefix, where, txns);
         default:
             return fmt::format(
-                "NOC mismatch: {}: {} words in {} transfers, first at +0x{:x}, expected 0x{:08x}, got 0x{:08x} "
-                "({}, iteration {})",
+                "NOC mismatch: {}: {} words in {} transfers, first at +0x{:x}, expected 0x{:08x}, got 0x{:08x} ({}){}",
                 prefix,
                 rec[NOC_RESULT_MISMATCHES],
                 rec[NOC_RESULT_TRANSFERS],
                 rec[NOC_RESULT_FIRST_OFFSET],
                 rec[NOC_RESULT_EXPECTED],
                 rec[NOC_RESULT_ACTUAL],
-                noc_pattern_name(rec[NOC_RESULT_PATTERN]),
-                rec[NOC_RESULT_ITERATION]);
+                where,
+                txns);
     }
 }
 
 static void report(const test_result& result) {
+    const params& p = result.p;
     for (const auto& f : result.warnings) {
-        log_warning(tt::LogTest, "{} (unused Ethernet channel on Blackhole Galaxy)", failure_str(f));
+        log_warning(tt::LogTest, "{} (unused Ethernet channel on Blackhole Galaxy)", failure_str(f, p));
     }
     if (!result.warnings.empty()) {
         log_warning(
@@ -1067,7 +1112,7 @@ static void report(const test_result& result) {
 
     const auto& failures = result.failures;
     for (const auto& f : failures) {
-        log_critical(tt::LogTest, "{}", failure_str(f));
+        log_critical(tt::LogTest, "{}", failure_str(f, p));
     }
 
     if (failures.empty() && result.wedged.empty()) {
@@ -1099,10 +1144,26 @@ static test_result run_test(
     const watchdog_scope wd(p.watchdog_s);
 
     vector<vector<source>> sources_per_chip;
-    uint32_t num_slots = 0;
+    uint32_t max_sources = 0;
     for (const auto& mesh : devices) {
-        sources_per_chip.push_back(tensix_sources ? get_tensix_sources(mesh) : get_eth_sources(mesh));
-        num_slots = max<uint32_t>(num_slots, sources_per_chip.back().size());
+        sources_per_chip.push_back(tensix_sources ? get_tensix_sources(mesh, p) : get_eth_sources(mesh));
+        max_sources = max<uint32_t>(max_sources, sources_per_chip.back().size());
+    }
+
+    // Each source owns a slot in every destination. When they don't all fit, sources run in waves that
+    // reuse the slots.
+    const uint32_t capacity = min(
+        slot_capacity(new_common_eth_allocator(), p.slice_size), slot_capacity(new_tensix_allocator(), p.slice_size));
+    TT_FATAL(capacity > 0, "NOC_TEST_SLICE_SIZE {} leaves no room for a destination slot", p.slice_size);
+    const uint32_t num_slots = min(max_sources, capacity);
+    const uint32_t num_waves = (max_sources + num_slots - 1) / num_slots;
+    vector<vector<vector<source>>> waves(num_waves, vector<vector<source>>(sources_per_chip.size()));
+    for (size_t c = 0; c < sources_per_chip.size(); c++) {
+        for (size_t i = 0; i < sources_per_chip[c].size(); i++) {
+            source s = sources_per_chip[c][i];
+            s.slot = i % num_slots;
+            waves[i / num_slots][c].push_back(s);
+        }
     }
 
     const dest_layout eth_l = make_layout(new_common_eth_allocator(), p.slice_size, num_slots);
@@ -1110,13 +1171,15 @@ static test_result run_test(
 
     log_info(
         tt::LogTest,
-        "slice {} B, packet {} B, burst {}, vc {}, {} slots, iterations {}, tensix rows {}, "
+        "slice {} B, packets {} and {} B, burst {}, VC 0-3, linked and not, "
+        "{} slots, {} wave(s), iterations {}, tensix rows {}, "
         "eth L1 dest region 0x{:x}, tensix L1 dest region 0x{:x}, DRISC firmware {}",
         p.slice_size,
         p.packet_size,
+        static_cast<uint32_t>(NOC_SMALL_PACKET),
         p.burst,
-        p.vc,
         num_slots,
+        num_waves,
         p.iterations,
         p.tensix_rows,
         eth_l.dest_region,
@@ -1150,11 +1213,16 @@ static test_result run_test(
         dests_per_chip[device->id()] = std::move(dests);
     }
 
-    test_result result;
+    test_result result{.p = p};
     for (uint32_t noc = 0; noc < 2; noc++) {
-        auto f = run_phase(fixture, noc, sources_per_chip, dests_per_chip, eth_l, tensix_l, p, result.wedged);
-        for (auto& fail : f) {
-            (is_warning(fail) ? result.warnings : result.failures).push_back(std::move(fail));
+        for (size_t w = 0; w < waves.size(); w++) {
+            if (waves.size() > 1) {
+                log_info(tt::LogTest, "noc {} wave {}/{}", noc, w + 1, waves.size());
+            }
+            auto f = run_phase(fixture, noc, waves[w], dests_per_chip, eth_l, tensix_l, p, result.wedged);
+            for (auto& fail : f) {
+                (is_warning(fail) ? result.warnings : result.failures).push_back(std::move(fail));
+            }
         }
     }
     return result;

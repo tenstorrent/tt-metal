@@ -23,6 +23,7 @@ enum : uint32_t {
     NOC_PROGRESS_DEST,
     NOC_PROGRESS_PATTERN,
     NOC_PROGRESS_ITERATION,
+    NOC_PROGRESS_TXN,
     NOC_PROGRESS_WORDS,
 };
 
@@ -41,7 +42,19 @@ enum : uint32_t {
     NOC_RESULT_PATTERN,
     NOC_RESULT_ITERATION,
     NOC_RESULT_TRANSFERS,
+    NOC_RESULT_TXN,
+    NOC_RESULT_TXN_MASK,  // bit n set: transaction type n read back wrong at least once
     NOC_RESULT_WORDS,
+};
+
+// Every destination runs every transaction type, for each pattern and iteration: VC 0-3, unlinked and linked,
+// at the full packet size and at one flit. A transaction type is numbered by these bits.
+enum : uint32_t {
+    NOC_TXN_VC_MASK = 0x3,
+    NOC_TXN_LINKED = 1u << 2,
+    NOC_TXN_SMALL = 1u << 3,  // NOC_SMALL_PACKET bytes instead of the packet size
+    NOC_TXNS = 16,
+    NOC_SMALL_PACKET = 64,
 };
 
 enum : uint32_t {
