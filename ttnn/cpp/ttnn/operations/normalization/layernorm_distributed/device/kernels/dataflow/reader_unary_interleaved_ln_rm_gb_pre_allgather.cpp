@@ -29,9 +29,11 @@ void kernel_main() {
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
 
+#ifdef LAYERNORM_INIT_REDUCE
     // The reduce-scalar tile the compute kernel's row reduction multiplies by.
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<dfb::reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+#endif
 
     const auto src_a = TensorAccessor(tensor::src);
 
