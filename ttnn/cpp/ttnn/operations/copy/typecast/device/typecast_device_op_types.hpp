@@ -19,6 +19,8 @@ struct TypecastParams {
     const bool preserve_fp32_precision = false;
     const bool bfp8_pack_precise = false;
     const std::optional<CoreRangeSet> sub_core_grids = std::nullopt;
+    // Unset keeps the input layout.
+    const std::optional<tt::tt_metal::Layout> output_layout = std::nullopt;
 };
 
 struct TypecastInputs {

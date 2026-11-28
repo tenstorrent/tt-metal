@@ -101,6 +101,7 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
+    cpp/ttnn/operations/copy/typecast/device/typecast_layout_change_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
 )

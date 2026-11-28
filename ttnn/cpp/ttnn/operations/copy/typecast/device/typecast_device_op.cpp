@@ -12,6 +12,13 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+bool row_major_page_elements_match(const TensorSpec& input_spec, const TensorSpec& output_spec) {
+    const auto elements_per_page = [](const TensorSpec& spec) {
+        return spec.compute_page_size_bytes() / tt::datum_size(cb_dataformat_for(spec.data_type()));
+    };
+    return elements_per_page(input_spec) == elements_per_page(output_spec);
+}
+
 namespace {
 bool can_use_sharded_optimized_factory(const TypecastParams& args, const TypecastInputs& tensor_args) {
     const auto& input = tensor_args.input;
@@ -37,6 +44,11 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     if (args.output_memory_config.buffer_type() == BufferType::DRAM) {
         return false;
     }
+    // Input and output DFBs are borrowed from the shards, so both must share one shard layout.
+    if (args.output_memory_config.memory_layout() != input.memory_config().memory_layout() ||
+        args.output_memory_config.shard_spec() != input.shard_spec()) {
+        return false;
+    }
 
     if (args.input_dtype != DataType::BFLOAT8_B && args.input_dtype != DataType::BFLOAT4_B) {
         if ((shard_spec.shape[1] * tt::datum_size(act_df)) % hal::get_l1_alignment() != 0) {
@@ -55,6 +67,10 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
 
 TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_program_factory(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
+    if (args.output_layout.value_or(tensor_args.input.layout()) != tensor_args.input.layout()) {
+        log_debug(tt::LogOp, "Using TypecastLayoutChangeProgramFactory");
+        return TypecastLayoutChangeProgramFactory{};
+    }
     if (tensor_args.input.is_sharded()) {
         if (can_use_sharded_optimized_factory(args, tensor_args)) {
             log_debug(tt::LogOp, "Using TypecastShardedProgramFactory");
@@ -108,6 +124,27 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         "Typecast to {} is not supported on Quasar (no uint32/uint16 LLK store mode); cast to INT32 instead.",
         args.output_dtype);
 
+    if (args.output_layout.value_or(input_tensor.layout()) != input_tensor.layout()) {
+        if (preallocated_output_tensor.has_value()) {
+            const auto& output = preallocated_output_tensor.value();
+            TT_FATAL(
+                output.logical_shape() == input_tensor.logical_shape() && output.layout() == args.output_layout &&
+                    output.dtype() == args.output_dtype,
+                "Typecast preallocated output must be {} {} with shape {}, got {}",
+                args.output_dtype,
+                args.output_layout.value(),
+                input_tensor.logical_shape(),
+                output.tensor_spec());
+        }
+        TT_FATAL(
+            can_fuse_typecast_layout_change(input_tensor, compute_output_specs(args, tensor_args)),
+            "Typecast cannot change layout from {} to {} for input {} in one pass",
+            input_tensor.layout(),
+            args.output_layout.value(),
+            input_tensor.tensor_spec());
+        return;
+    }
+
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
@@ -144,12 +181,14 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
-    TT_FATAL(
-        input_tensor_memory_layout == out_memory_config.memory_layout(),
-        "Typecast operation requires Input and Output memory layout to match. Input layout: {}, Output layout: {}",
-        input_tensor_memory_layout,
-        out_memory_config.memory_layout());
+    if (input_tensor.layout() == Layout::ROW_MAJOR && out_memory_config != input_tensor.memory_config()) {
+        const auto output_spec = compute_output_specs(args, tensor_args);
+        TT_FATAL(
+            row_major_page_elements_match(input_tensor.tensor_spec(), output_spec),
+            "Typecast ROW_MAJOR requires matching page widths, got input {} B and output {} B pages",
+            input_tensor.tensor_spec().compute_page_size_bytes(),
+            output_spec.compute_page_size_bytes());
+    }
 
     if (input_tensor.is_sharded()) {
         const uint32_t l1_alignment = hal::get_l1_alignment();
@@ -182,7 +221,7 @@ tt::tt_metal::TensorSpec TypecastDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    const Layout output_layout = tensor_args.input.layout();
+    const Layout output_layout = args.output_layout.value_or(tensor_args.input.layout());
 
     const Shape output_shape = tensor_args.input.logical_shape();
     return tt::tt_metal::TensorSpec(
@@ -214,7 +253,8 @@ Tensor typecast(
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     return ttnn::device_operation::launch<TypecastDeviceOperation>(
         TypecastParams{
             .input_dtype = input.dtype(),
@@ -224,6 +264,7 @@ Tensor typecast(
             .preserve_fp32_precision = preserve_fp32_precision,
             .bfp8_pack_precise = bfp8_pack_precise,
             .sub_core_grids = sub_core_grids,
+            .output_layout = output_layout,
         },
         TypecastInputs{.input = input, .preallocated_output = preallocated_output});
 }

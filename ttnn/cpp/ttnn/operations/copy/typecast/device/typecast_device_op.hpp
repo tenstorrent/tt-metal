@@ -11,6 +11,7 @@
 #include "typecast_program_factory.hpp"
 #include "typecast_sharded_program_factory.hpp"
 #include "typecast_rm_chunked_program_factory.hpp"
+#include "typecast_layout_change_program_factory.hpp"
 #include "typecast_device_op_types.hpp"
 
 namespace ttnn::prim {
@@ -25,7 +26,8 @@ struct TypecastDeviceOperation {
         TypecastProgramFactory,
         TypecastShardedProgramFactory,
         TypecastSubgridProgramFactory,
-        TypecastRowMajorChunkedProgramFactory>;
+        TypecastRowMajorChunkedProgramFactory,
+        TypecastLayoutChangeProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -38,6 +40,10 @@ struct TypecastDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };
 
+// Row-major pages are copied one-to-one, so both sides must hold the same number of elements per page.
+bool row_major_page_elements_match(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
 Tensor typecast(
     const Tensor& input,
     DataType output_dtype,
@@ -46,5 +52,6 @@ Tensor typecast(
     bool preserve_fp32_precision,
     bool bfp8_pack_precise,
     const std::optional<Tensor>& preallocated_output,
-    const std::optional<CoreRangeSet>& sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout = std::nullopt);
 }  // namespace ttnn::prim
