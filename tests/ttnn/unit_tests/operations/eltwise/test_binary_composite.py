@@ -942,3 +942,110 @@ def test_prelu_scalar_honours_memory_config(input_shapes, device, weight, reques
 
     if requested_memcfg is not None:
         assert_equal(ttnn.to_torch(output), ttnn.to_torch(ttnn.prelu(input_tensor, weight)))
+
+
+# maximum needs a negative scalar for the post RELU to change the result; the others need a positive one.
+_SCALAR_FOR_OP = {"maximum": -0.25, "minimum": 0.25, "bias_gelu": 0.25}
+
+
+def _scalar_op_reference(op, torch_a, scalar, activation_kind):
+    """Torch reference: the lhs SQUARE runs before the op, the post RELU after it."""
+    a = torch_a.float()
+    if activation_kind == "lhs":
+        a = a**2
+    if op == "maximum":
+        result = torch.maximum(a, torch.tensor(scalar))
+    elif op == "minimum":
+        result = torch.minimum(a, torch.tensor(scalar))
+    else:
+        result = torch.nn.functional.gelu(a + scalar)
+    return torch.relu(result) if activation_kind == "post" else result
+
+
+def _scalar_activation_kwargs(activation_kind):
+    if activation_kind == "post":
+        return {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)]}
+    return {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]}
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+@pytest.mark.parametrize("activation_kind", ["post", "lhs"])
+def test_binary_composite_scalar_applies_activations(op, activation_kind, device):
+    torch.manual_seed(0)
+    scalar = _SCALAR_FOR_OP[op]
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.full_like(torch_a, scalar), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_op = getattr(ttnn, op)
+    kwargs = _scalar_activation_kwargs(activation_kind)
+
+    actual = ttnn.to_torch(ttnn_op(a, scalar, **kwargs)).float()
+
+    # Against torch, so a wrong activation order cannot pass by matching the tensor-tensor overload.
+    assert_with_pcc(_scalar_op_reference(op, torch_a, scalar, activation_kind), actual, 0.999)
+    # The tensor-tensor overload applies the activations too; the scalar overload must give the same result.
+    expected = ttnn.to_torch(ttnn_op(a, b, **kwargs)).float()
+    assert torch.allclose(actual, expected, rtol=1e-2, atol=1e-2), (actual - expected).abs().max()
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+@pytest.mark.parametrize("variant", ["output_tensor", "dtype_float32"])
+def test_binary_composite_scalar_post_activation_with_output(op, variant, device):
+    torch.manual_seed(0)
+    scalar = _SCALAR_FOR_OP[op]
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = _scalar_activation_kwargs("post")
+    if variant == "output_tensor":
+        kwargs["output_tensor"] = ttnn.from_torch(torch.zeros_like(torch_a), layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        kwargs["dtype"] = ttnn.float32
+
+    result = getattr(ttnn, op)(a, scalar, **kwargs)
+
+    if variant == "output_tensor":
+        # The caller's tensor holds the activated result, not the value before the activation.
+        actual = ttnn.to_torch(kwargs["output_tensor"]).float()
+    else:
+        assert result.dtype == ttnn.float32
+        actual = ttnn.to_torch(result).float()
+    assert_with_pcc(_scalar_op_reference(op, torch_a, scalar, "post"), actual, 0.999)
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+def test_binary_composite_scalar_rejects_rhs_activations(op, device, expect_error):
+    a = ttnn.from_torch(torch.randn(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "input_tensor_b_activations are not supported"):
+        getattr(ttnn, op)(a, 0.5, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+@pytest.mark.parametrize("variant", ["dtype", "output_tensor"])
+def test_binary_composite_scalar_activation_keeps_float32_precision(op, variant, device):
+    # A SQUARE post activation on a bfloat16 input with a float32 output must run in float32, not be packed to
+    # bfloat16 first: the bfloat16 error is about 4e-3 relative, far above the bound below.
+    torch.manual_seed(0)
+    scalar = 0.1
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]}
+    output_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    if variant == "dtype":
+        kwargs["dtype"] = ttnn.float32
+    else:
+        kwargs["output_tensor"] = output_tensor
+
+    result = getattr(ttnn, op)(a, scalar, **kwargs)
+    actual = ttnn.to_torch(result if variant == "dtype" else output_tensor).double()
+
+    a64 = torch_a.double()
+    if op == "maximum":
+        inner = torch.clamp(a64, min=scalar)
+    elif op == "minimum":
+        inner = torch.clamp(a64, max=scalar)
+    else:
+        inner = torch.nn.functional.gelu(a64 + scalar)
+    expected = inner**2
+    assert torch.allclose(actual, expected, rtol=2e-4, atol=1e-6), (actual - expected).abs().max()
