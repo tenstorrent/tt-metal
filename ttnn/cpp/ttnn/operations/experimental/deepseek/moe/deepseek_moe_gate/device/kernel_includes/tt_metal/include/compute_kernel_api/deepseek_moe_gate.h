@@ -48,8 +48,14 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
         transpose_tile(icb0, 0, 0);
-        // Sigmoid (SFPU)
-        sigmoid_tile<VectorMode::RC_custom, false>(0);
+        // Sigmoid (SFPU): scores tile gets sigmoid - 0.5 as the ranking key, unbiased sigmoid parked in interm
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            deepseek_moe_gate_sigmoid_centered,
+            (APPROX, DST_ACCUM_MODE),
+            0 /*dst_index*/,
+            VectorMode::RC_custom));
         // Init add binary reuse (FPU)
         UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             false, false, icb1)));
@@ -61,6 +67,14 @@ ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t
         UNPACK((llk_unpack_A<BroadcastType::NONE, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(icb1, 0)));
         MATH((llk_math_deepseek_moe_gate_eltwise_binary<EltwiseBinaryType::ELWADD, DST_ACCUM_MODE, MATH_FIDELITY>(
             icb1, icb1, 0, true)));
+        // Restore the unbiased sigmoid into the scores tile (SFPU)
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            deepseek_moe_gate_restore_scores,
+            (APPROX, DST_ACCUM_MODE),
+            0 /*dst_index*/,
+            VectorMode::RC_custom));
         // Init transpose dest addrmods (does not conflict with add binary reuse)
         MATH((llk_math_deepseek_moe_gate_transpose_dest_single_face_common_init<is_32bit>()));
         // Init topk (SFPU)
