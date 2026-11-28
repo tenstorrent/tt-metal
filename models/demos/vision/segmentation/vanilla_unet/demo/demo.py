@@ -6,6 +6,7 @@ import argparse
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 from loguru import logger
@@ -87,8 +88,11 @@ def run_torch_inference(model, x):
 
 def save_visualization(y_pred_np, y_true_np, output_path):
     """Create and save visualization with predicted and ground truth outlines."""
-    image = demo_utils.gray2rgb(y_pred_np[0, 0])
-    image = demo_utils.outline(image, y_pred_np[0, 0], color=[255, 0, 0])  # Predicted (red)
+    # y_pred_np holds probabilities. Form the 0.5 mask first: gray2rgb rescales its argument in place
+    # (min shift and max divide), which would move the threshold if outline saw the rescaled values.
+    pred_mask = np.round(y_pred_np[0, 0])
+    image = demo_utils.gray2rgb(y_pred_np[0, 0].copy())
+    image = demo_utils.outline(image, pred_mask, color=[255, 0, 0])  # Predicted (red)
     image = demo_utils.outline(image, y_true_np[0, 0], color=[0, 255, 0])  # Ground truth (green)
     imsave(output_path, image)
     logger.info(f"Saved result to: {output_path}")
@@ -153,7 +157,9 @@ def run_unet_demo_single_image(
         else:
             y_pred = run_ttnn_inference(ttnn_model, x, batch_size, resolution, device, ttnn_configs)
 
-        y_pred_np = y_pred.detach().cpu().numpy()
+        # The model returns raw logits (no final sigmoid), so map them to probabilities
+        # before the 0.5 threshold in demo_utils.outline.
+        y_pred_np = torch.sigmoid(y_pred).detach().cpu().numpy()
         y_true_np = y_true.detach().cpu().numpy()
         output_path = os.path.join(PRED_DIR, filename)
         save_visualization(y_pred_np, y_true_np, output_path)
