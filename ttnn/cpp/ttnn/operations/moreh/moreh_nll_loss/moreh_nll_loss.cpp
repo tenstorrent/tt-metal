@@ -35,7 +35,7 @@ Tensor moreh_nll_loss(
             ignore_index,
             reduction,
             output_tensor.has_value() ? output_tensor.value().dtype() : input_tensor.dtype(),
-            input_tensor.padded_shape()[1],
+            input_tensor.logical_shape()[1],
             memory_config,
             compute_kernel_config_val);
 
