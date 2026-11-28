@@ -90,8 +90,9 @@ static inline void x280_pause(void) { __asm__ volatile(".word 0x0100000F" ::: "m
  * the next reset -- there is no way back, which is what makes it the right
  * response to an unrecoverable error and the wrong response to "this hart has
  * no work". A hart that must idle but stay reachable belongs in a poll loop
- * (see rt/x280_idle.h); WFI would strand it, because host NOC writes raise no
- * interrupt on this part.
+ * (see rt/x280_idle.h). WFI strands it unless the image itself enabled an
+ * interrupt to end it: the harness enables none. A NOC write to the MSI catcher
+ * raises PLIC source 6 for an image that enables it (rt/x280_plic.h).
  *
  * boot/entry.S emits the same encoding at the end of its trap handler.
  *
