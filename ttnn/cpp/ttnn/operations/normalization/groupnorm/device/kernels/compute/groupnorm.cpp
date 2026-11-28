@@ -240,7 +240,8 @@ void kernel_main() {
     std::uint32_t index_subblock_w_offset = 0;
     std::uint32_t index_h_offset = 0;
     bool apply_gamma_beta[block_w];
-    constexpr std::uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
+    // Logical channels per group; per_core_N * tile_width / group would count the C tile padding.
+    constexpr std::uint32_t data_per_core_N_per_group = get_named_compile_time_arg_val("num_channels_per_group");
 
     constexpr int dfb_outgamma_id = do_beta ? dfb_in_id : dfb_out0_id;
     constexpr int dfb_inbeta_id = do_gamma ? dfb_outgamma_id : dfb_reread_write_out_id;
@@ -894,8 +895,9 @@ void kernel_main() {
                         index_block_w += 1;
                     }
 
-                    const bool is_past_end_of_group =
-                        (((w + index_g_offset) + 1) * tile_width) > ((g + 1) * data_per_core_N_per_group);
+                    // The last group completes every tile it touches, including the C tile padding.
+                    const bool is_past_end_of_group = (g + 1 < group) && ((((w + index_g_offset) + 1) * tile_width) >
+                                                                          ((g + 1) * data_per_core_N_per_group));
                     apply_gamma_beta[w] = !is_past_end_of_group;
                 }
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));

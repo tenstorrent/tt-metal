@@ -145,6 +145,11 @@ GroupNormShardedConfigAndGridSize determine_expected_group_norm_sharded_config_a
 }
 
 uint32_t compute_num_virtual_cols(uint32_t grid_x, int num_groups, uint32_t num_channels) {
+    // Non-tile-aligned C (logical): the tile padding follows the last channel, so keep every
+    // channel on one core rather than split the channels across cores.
+    if (num_channels % ttnn::types::TILE_SIZE != 0) {
+        return (grid_x > 0 && num_groups > 0) ? 1 : 0;
+    }
     uint32_t nvc = std::min<uint32_t>(grid_x, num_groups);
     while (nvc > 0 && ((num_channels / nvc) % ttnn::types::TILE_SIZE != 0 || (num_groups % nvc) != 0)) {
         nvc -= 1;

@@ -45,24 +45,30 @@ bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfi
 GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
     uint32_t height,
     uint32_t width,
+    uint32_t logical_width,
     uint32_t num_batches,
     uint32_t num_groups,
     tt::tt_metal::CoreCoord grid,
     uint32_t tile_height,
     uint32_t tile_width) {
     GroupNormInterleavedGeometry geometry;
-    if (height == 0 || width == 0 || num_batches == 0 || num_groups == 0 || grid.x == 0 || grid.y == 0 ||
-        tile_height == 0 || tile_width == 0 || height % tile_height != 0 || width % tile_width != 0 ||
-        width % num_groups != 0) {
+    if (height == 0 || width == 0 || logical_width == 0 || logical_width > width || num_batches == 0 ||
+        num_groups == 0 || grid.x == 0 || grid.y == 0 || tile_height == 0 || tile_width == 0 ||
+        height % tile_height != 0 || width % tile_width != 0 || logical_width % num_groups != 0) {
         return geometry;
     }
 
     geometry.height_tiles = height / tile_height;
     geometry.width_tiles = width / tile_width;
-    geometry.num_virtual_cols = std::min<uint32_t>(grid.x, num_groups);
-    while (geometry.num_virtual_cols > 0 &&
-           ((width / geometry.num_virtual_cols) % tile_width != 0 || num_groups % geometry.num_virtual_cols != 0)) {
-        --geometry.num_virtual_cols;
+    if (logical_width % tile_width != 0) {
+        // Non-tile-aligned C: the tile padding follows the last channel, so all channels stay on one core.
+        geometry.num_virtual_cols = 1;
+    } else {
+        geometry.num_virtual_cols = std::min<uint32_t>(grid.x, num_groups);
+        while (geometry.num_virtual_cols > 0 &&
+               ((width / geometry.num_virtual_cols) % tile_width != 0 || num_groups % geometry.num_virtual_cols != 0)) {
+            --geometry.num_virtual_cols;
+        }
     }
     if (geometry.num_virtual_cols == 0) {
         return geometry;
@@ -80,7 +86,8 @@ GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
     geometry.per_core_height_group_1 = geometry.per_core_height_tiles_group_1 * tile_height;
     geometry.per_core_width = width / geometry.num_virtual_cols;
     geometry.per_core_width_tiles = (geometry.per_core_width + tile_width - 1) / tile_width;
-    geometry.channels_per_group = width / num_groups;
+    // Groups come from the logical C; tile counts above stay on the padded width.
+    geometry.channels_per_group = logical_width / num_groups;
     geometry.channels_per_group_mod_tile_width =
         geometry.channels_per_group % tile_width == 0 ? tile_width : geometry.channels_per_group % tile_width;
     geometry.num_row_shards = height / geometry.per_core_height_group_1;
@@ -96,7 +103,7 @@ GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
     geometry.groups_per_core = num_groups > geometry.num_col_shards ? num_groups / geometry.num_col_shards : 1;
     geometry.rows_per_batch_per_core_group_1 = geometry.per_core_height_group_1 / geometry.batches_per_core_group_1;
     const auto [block_width_tiles, num_groups_per_reset] =
-        find_max_tile_span(geometry.per_core_width, geometry.channels_per_group, tile_width);
+        find_max_tile_span(logical_width / geometry.num_virtual_cols, geometry.channels_per_group, tile_width);
     geometry.block_width_tiles = block_width_tiles;
     geometry.num_groups_per_reset = num_groups_per_reset;
     geometry.block_height_tiles_group_1 = geometry.per_core_height_tiles_group_1 / geometry.batches_per_core_group_1;
@@ -428,8 +435,11 @@ GroupNormShardedStaticCbSizes compute_sharded_gn_static_cb_sizes(
     const uint32_t num_batches = padded_shape[0];
     const uint32_t H = padded_shape[2] * num_batches;
     const uint32_t W = padded_shape[3];
-    const uint32_t group_size = W / num_groups;
-    const uint32_t block_wt = find_max_tile_span(per_core_N, group_size).first;
+    // Groups come from the logical C; non-tile-aligned C has all channels on one core (the factory enforces it).
+    const uint32_t C = input.logical_shape()[3];
+    const uint32_t per_core_C = C == W ? per_core_N : C;
+    const uint32_t group_size = C / num_groups;
+    const uint32_t block_wt = find_max_tile_span(per_core_C, group_size).first;
 
     const uint32_t num_shards_r = H / per_core_M;
     const uint32_t num_shards_c = W / per_core_N;

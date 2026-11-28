@@ -29,7 +29,7 @@ GroupNormDeviceOperation::program_factory_t GroupNormDeviceOperation::select_pro
     const auto& program_config = std::get<GroupNormMultiCoreProgramConfig>(args.program_config);
     CoreCoord grid_size = program_config.compute_with_storage_grid_size;
     uint32_t batch = input.padded_shape()[0];
-    uint32_t W = input.padded_shape()[3];
+    uint32_t W = input.logical_shape()[3];
     uint32_t num_virtual_cols =
         ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
     TT_FATAL(
@@ -63,14 +63,15 @@ GroupNormInterleavedPlan GroupNormDeviceOperation::select_interleaved_plan(
     const std::uint32_t num_batches = shape[0];
     const std::uint32_t height = shape[1] * shape[2] * num_batches;
     const std::uint32_t width = shape[3];
+    const std::uint32_t logical_width = input.logical_shape()[3];
     const std::uint32_t num_groups = args.num_groups;
     const auto grid = config.compute_with_storage_grid_size;
     if (tile_height == 0 || tile_width == 0 || height == 0 || width == 0 || num_groups == 0 || grid.x == 0 ||
-        grid.y == 0 || height % tile_height != 0 || width % tile_width != 0 || width % num_groups != 0) {
+        grid.y == 0 || height % tile_height != 0 || width % tile_width != 0 || logical_width % num_groups != 0) {
         return {};
     }
-    const auto geometry =
-        derive_groupnorm_interleaved_geometry(height, width, num_batches, num_groups, grid, tile_height, tile_width);
+    const auto geometry = derive_groupnorm_interleaved_geometry(
+        height, width, logical_width, num_batches, num_groups, grid, tile_height, tile_width);
     if (!geometry.valid) {
         return {};
     }
@@ -193,7 +194,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
             tile_width);
     }
     TT_FATAL(args.num_groups > 0, "num_groups must be greater than 0, got {}", args.num_groups);
-    TT_FATAL(a.padded_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
+    TT_FATAL(a.logical_shape()[3] % args.num_groups == 0, "channel must be divisible by num_groups!");
     TT_FATAL(a.padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
     TT_FATAL(
         (a.padded_shape()[1] * a.padded_shape()[2]) % tile_height == 0,
@@ -420,7 +421,7 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
     if (!a.is_sharded()) {
         if (const auto* mc_config = std::get_if<GroupNormMultiCoreProgramConfig>(&args.program_config)) {
             CoreCoord grid_size = mc_config->compute_with_storage_grid_size;
-            uint32_t W = a.padded_shape()[3];
+            uint32_t W = a.logical_shape()[3];
             uint32_t num_batches = a.padded_shape()[0];
             uint32_t nvc = ttnn::operations::normalization::compute_num_virtual_cols(grid_size.x, args.num_groups, W);
             if (nvc > 0) {

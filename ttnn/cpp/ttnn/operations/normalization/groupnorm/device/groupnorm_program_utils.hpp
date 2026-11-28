@@ -97,9 +97,11 @@ struct GroupNormInterleavedGeometry {
     uint32_t last_row_with_extra_batch = 0;
 };
 
+// width is the padded C (tile counts); logical_width is the logical C (group size).
 GroupNormInterleavedGeometry derive_groupnorm_interleaved_geometry(
     uint32_t height,
     uint32_t width,
+    uint32_t logical_width,
     uint32_t num_batches,
     uint32_t num_groups,
     tt::tt_metal::CoreCoord grid,
