@@ -215,9 +215,14 @@ inline void run_datacopy_transpose_loop(
                 _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
             }
 
-            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
-            _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-            _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            // transpose_tile (32-bit, faces on) inits once in INIT; topk_large_indices and copy + transpose_dest
+            // re-init per section.
+            if constexpr (!(unpack_to_dest && MATH_TRANSPOSE_FACES))
+            {
+                // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            }
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
             {
                 _llk_math_transpose_dest_(dst_index + i);
@@ -267,6 +272,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        if constexpr (unpack_to_dest)
+        {
+            // The unpack-to-dest datacopy init of transpose_init / copy_init.
+            _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
+            if constexpr (MATH_TRANSPOSE_FACES)
+            {
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            }
+        }
         PROFILER_SYNC();
     }
     {
