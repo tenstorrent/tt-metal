@@ -160,8 +160,14 @@ std::map<ChipId, std::optional<uint32_t>> open_cluster_with_tdp_limit(const std:
 class TdpLimitFixture : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Saved before the skip below: TearDown() still runs after a skipped SetUp() and restores this value.
         const char* prev = getenv(kTdpLimitEnvVar);
         prev_ = prev != nullptr ? std::optional<std::string>(prev) : std::nullopt;
+        // Checked via the environment on purpose: MetalContext::instance() would start a simulator/emulator session.
+        if (getenv("TT_METAL_SIMULATOR") != nullptr) {
+            GTEST_SKIP() << "TDP limit is a board-firmware feature; simulators and emulators have no firmware info "
+                            "provider to read it from.";
+        }
     }
 
     void TearDown() override {

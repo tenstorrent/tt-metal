@@ -28,6 +28,7 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/mesh/multihost/distributed_context.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <llrt/tt_cluster.hpp>
 
 namespace tt::tt_metal {
@@ -48,27 +49,42 @@ namespace unit_tests_common::basic::test_device_init {
 /// @return
 bool load_all_blank_kernels(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     bool pass = true;
-    tt_metal::Program program = tt_metal::CreateProgram(*mesh_device);
+    namespace m2 = tt::tt_metal;
     auto mesh_workload = distributed::MeshWorkload();
 
     CoreCoord compute_grid_size = mesh_device->compute_with_storage_grid_size();
     CoreRange all_cores = CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1));
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default});
 
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+    // Metal 2.0 program. config_1xx applies only on Wormhole/Blackhole and is ignored on Quasar, so the same spec runs
+    // on both.
+    const m2::KernelSpecName DM_RISCV_1{"blank_dm_riscv_1"};
+    const m2::KernelSpecName DM_RISCV_0{"blank_dm_riscv_0"};
+    const m2::KernelSpecName COMPUTE{"blank_compute"};
 
-    CreateKernel(
-        program, "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", all_cores, tt::tt_metal::ComputeConfig{});
+    m2::KernelSpec dm_riscv_1_spec{
+        .unique_id = DM_RISCV_1,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        .hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::RISCV_1_default}}};
+    m2::KernelSpec dm_riscv_0_spec{
+        .unique_id = DM_RISCV_0,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
+        .hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx = m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default}}};
+    m2::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+        .hw_config = m2::ComputeHardwareConfig{}};
+
+    m2::ProgramSpec spec{
+        .name = "load_all_blank_kernels",
+        .kernels = {dm_riscv_1_spec, dm_riscv_0_spec, compute_spec},
+        .work_units = {{.name = "main", .kernels = {DM_RISCV_1, DM_RISCV_0, COMPUTE}, .target_nodes = all_cores}},
+    };
+    tt_metal::Program program(*mesh_device, spec);
+    program.set_program_run_args(m2::ProgramRunArgs{});
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
     return pass;

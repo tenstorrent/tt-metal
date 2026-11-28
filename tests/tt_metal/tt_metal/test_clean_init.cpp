@@ -24,7 +24,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/workload/program.hpp>
-#include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/execution/distributed.hpp>
@@ -89,22 +89,40 @@ int main(int argc, char** /*argv*/) {
             auto output_dram_buffer =
                 distributed::MeshBuffer::create(global_buffer_config, local_dram_config, device.get());
 
-            Program program = CreateProgram(*device);
             auto mesh_workload = distributed::MeshWorkload();
 
-            constexpr CoreCoord core = {0, 0};
+            const NodeCoord core{0, 0};
 
-            std::vector<uint32_t> compile_time_args;
-            TensorAccessorArgs(*input_dram_buffer).append_to(compile_time_args);
-            TensorAccessorArgs(*output_dram_buffer).append_to(compile_time_args);
-            KernelHandle dram_copy_kernel_id = CreateKernel(
-                program,
-                "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-                core,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = NOC::RISCV_0_default,
-                    .compile_args = compile_time_args});
+            // Metal 2.0 program: one data-movement kernel that copies the input DRAM buffer to L1 and from there
+            // to the output DRAM buffer.
+            const KernelSpecName DRAM_COPY{"dram_copy"};
+            KernelSpec dram_copy_spec{
+                .unique_id = DRAM_COPY,
+                .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_named_args.cpp",
+                .num_threads = 1,
+                .runtime_arg_schema =
+                    {.runtime_arg_names =
+                         {"l1_buffer_addr",
+                          "dram_buffer_src_addr",
+                          "dram_src_bank_id",
+                          "dram_buffer_dst_addr",
+                          "dram_dst_bank_id",
+                          "dram_buffer_size"}},
+                .hw_config =
+                    DataMovementHardwareConfig{
+                        .config_1xx =
+                            DataMovementHardwareConfig::DataMovement1XXConfig{
+                                .processor = DataMovementProcessor::RISCV_0,
+                                .noc = NOC::RISCV_0_default,
+                            },
+                    },
+            };
+            ProgramSpec spec{
+                .name = "clean_init_dram_loopback",
+                .kernels = {dram_copy_spec},
+                .work_units = {{.name = "main", .kernels = {DRAM_COPY}, .target_nodes = core}},
+            };
+            Program program(*device, spec);
 
             /*
              * Create input data and runtime arguments, then execute
@@ -113,13 +131,20 @@ int main(int argc, char** /*argv*/) {
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
             distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
 
-            const std::array<uint32_t, 4> runtime_args = {
-                l1_buffer->address(),
-                input_dram_buffer->address(),
-                output_dram_buffer->address(),
-                num_tiles};
-
-            SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
+            // Each DRAM buffer is a single page, which lives in DRAM bank 0.
+            ProgramRunArgs run_args;
+            run_args.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+                .kernel = DRAM_COPY,
+                .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                    core,
+                    {{"l1_buffer_addr", static_cast<uint32_t>(l1_buffer->address())},
+                     {"dram_buffer_src_addr", static_cast<uint32_t>(input_dram_buffer->address())},
+                     {"dram_src_bank_id", 0u},
+                     {"dram_buffer_dst_addr", static_cast<uint32_t>(output_dram_buffer->address())},
+                     {"dram_dst_bank_id", 0u},
+                     {"dram_buffer_size", dram_buffer_size}}),
+            }};
+            program.set_program_run_args(run_args);
             mesh_workload.add_program(distributed::MeshCoordinateRange(device->shape()), std::move(program));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");
