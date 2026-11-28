@@ -11,18 +11,21 @@ namespace ckernel::sfpu {
 template <int ITERATIONS = 32>
 inline void calculate_tanh_bw_bf16() {
     using namespace sfpi;
+    // One DEST tile is 32 SFPI rows (64 rows / SFP_DESTREG_STRIDE).
+    constexpr int dst_tile_size_sfpi = 32;
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++) {
         // Wormhole's multiply gives a NaN the sign of its product, which the pack stores as an infinity of
         // that sign (Blackhole gives the positive NaN): a NaN gradient becomes the positive NaN first.
-        v_if(sfpi::is_nan(vFloat(dst_reg[32 + d]))) { dst_reg[32 + d] = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(sfpi::is_nan(vFloat(dst_reg[dst_tile_size_sfpi]))) {
+            dst_reg[dst_tile_size_sfpi] = std::numeric_limits<float>::quiet_NaN();
+        }
         v_endif;
         vFloat es;
         {
-            vFloat a = setsgn((dst_reg[d] * 2.0f), 0);
+            vFloat a = setsgn((dst_reg[0] * 2.0f), 0);
             vFloat core_t = (-a) * 1.4426950216293335f;
             v_if(core_t < -191.0f) { core_t = -191.0f; }
-            v_elseif(core_t > 127.0f) { core_t = 127.0f; }
             v_endif;
             vFloat core_f = core_t + 12582912.0f;
             vFloat core_n = core_f - 12582912.0f;
@@ -48,7 +51,7 @@ inline void calculate_tanh_bw_bf16() {
         v_if(e < 2.9802322387695312e-08f) { P = 1.0f; }
         v_endif;
         vFloat N = e * P;
-        vFloat x = dst_reg[d];
+        vFloat x = dst_reg[0];
         vFloat S = P;
         vFloat T = N;
         v_if(x < 0.0f) {
@@ -57,35 +60,40 @@ inline void calculate_tanh_bw_bf16() {
         }
         v_endif;
         S = as<vFloat>(as<vInt>(S) + 1);
-        vFloat product = dst_reg[32 + d] * (4.0f * S * T);
+        vFloat product = dst_reg[dst_tile_size_sfpi] * (4.0f * S * T);
         v_if(setsgn(x, 0) >= 34.65736389160156f && x < 0.0f) {
             vFloat Ss = es * P;
-            product =
-                convert<vFloat16b>(dst_reg[32 + d] * (4.0f * Ss * T), RoundMode::Nearest) * 5.421010862427522e-20f;
+            product = convert<vFloat16b>(dst_reg[dst_tile_size_sfpi] * (4.0f * Ss * T), RoundMode::Nearest) *
+                      5.421010862427522e-20f;
         }
         v_endif;
         v_if(setsgn(x, 0) >= 34.65736389160156f && x >= 0.0f) {
             vFloat Ts = es * P;
-            product =
-                convert<vFloat16b>(dst_reg[32 + d] * (4.0f * S * Ts), RoundMode::Nearest) * 5.421010862427522e-20f;
+            product = convert<vFloat16b>(dst_reg[dst_tile_size_sfpi] * (4.0f * S * Ts), RoundMode::Nearest) *
+                      5.421010862427522e-20f;
         }
         v_endif;
         v_if(es == 0.0f) {
             product = 0.0f;
-            v_if(exexp(vFloat(dst_reg[32 + d])) == 128) {
-                product = dst_reg[32 + d];
+            v_if(exexp(vFloat(dst_reg[dst_tile_size_sfpi])) == 128) {
+                product = dst_reg[dst_tile_size_sfpi];
                 v_if(setsgn(x, 0) >= 374.0f) { product = std::numeric_limits<float>::quiet_NaN(); }
                 v_endif;
             }
             v_endif;
         }
         v_endif;
+        v_if(exexp(vFloat(dst_reg[dst_tile_size_sfpi])) == 128 && setsgn(x, 0) >= 19.125f) {
+            product = std::numeric_limits<float>::quiet_NaN();
+        }
+        v_endif;
         vFloat result = convert<vFloat16b>(product, RoundMode::Nearest);
         // DEST holds x as BF16 bits: exponent 7:0, mantissa 14:8, sign 15 (not the encoding's 0x7f80, 0x007f).
-        vUInt raw = dst_reg[d].mode<::sfpi::DataLayout::U16>();
+        vUInt raw = dst_reg[0].mode<::sfpi::DataLayout::U16>();
         v_if((raw & 0x00ff) == 0x00ff && (raw & 0x7f00) != 0) { result = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
-        dst_reg[d] = result;
+        dst_reg[0] = result;
+        dst_reg++;
     }
 }
 
