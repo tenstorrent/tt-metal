@@ -20,6 +20,13 @@ class SlowTestsExceededError(SlowTestDetectionError):
 
 
 def detect_slow_tests(report_dir, timeout):
+    """Print the tests slower than `timeout` and return them.
+
+    A test list that lives in the return value, not only in stdout, is what lets
+    the caller say "detected" or "none detected" exactly once: the summary line
+    printed here used to be unconditional, so a run with slow tests reported both
+    that they were found and that none were.
+    """
     # Find all XML files in the report directory
     report_files = [
         os.path.join(root, file) for root, dirs, files in os.walk(report_dir) for file in files if file.endswith(".xml")
@@ -49,6 +56,8 @@ def detect_slow_tests(report_dir, timeout):
         print()
         # raise SlowTestsExceededError(f"Some tests exceeded {timeout}s:\n" + "\n".join(slow_tests))
 
+    return slow_tests
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 3:
@@ -59,8 +68,9 @@ if __name__ == "__main__":
     timeout = float(sys.argv[2])
 
     try:
-        detect_slow_tests(report_dir, timeout)
+        slow_tests = detect_slow_tests(report_dir, timeout)
     except SlowTestDetectionError as e:
         print(e)
         sys.exit(1)
-    print(f"No slow tests slower than {timeout}s detected.")
+    if not slow_tests:
+        print(f"No slow tests slower than {timeout}s detected.")
