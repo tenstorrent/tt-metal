@@ -439,7 +439,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    // Serve simulation devices over sockets for a debug tool to attach; enable with
+    // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
     // Use the DRAM size the soc descriptor declares on the emulator models that back less
@@ -482,6 +483,7 @@ class RunTimeOptions {
 
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
+    bool socket_coowners_mirror = false;
 
     struct TraceAllocationOptions {
         bool tracking_enabled = false;
@@ -587,6 +589,8 @@ public:
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
     void set_allocator_mode_hybrid(bool enable) { allocator_mode_hybrid = enable; }
+
+    bool get_socket_coowners_mirror() const { return socket_coowners_mirror; }
 
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();

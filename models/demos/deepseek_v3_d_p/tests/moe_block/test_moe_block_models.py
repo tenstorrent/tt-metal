@@ -37,6 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
@@ -460,6 +461,8 @@ def _traced_times(run: _Run, mesh_device, out=None) -> dict:
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 def test_moe_block_perf(case, mesh_device, device_params):
+    if case.mesh == "xy4-sp1":
+        require_high_power("[RING, RING] 4x4 MoE block perf")
     run = _setup(case, mesh_device)
     ttnn.deallocate(run())  # (weights, programs)
 

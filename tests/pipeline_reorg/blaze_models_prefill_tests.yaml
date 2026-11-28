@@ -998,10 +998,11 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       # GLM-5.3 sparse MLA host-time gate, full-indexer and shared (no indexer) layers: warm and long, each untraced
-      # (fastest of 10 after 10 warm-up) and traced (one replay), on 8x4 and on one 4x4 stage (top tray half, 2.5k
-      # chunks). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
+      # (fastest of 10 after 10 warm-up) and traced (one replay), on 8x4 and on one [RING, RING] 4x4 stage (the
+      # sub-torus carve, 2.5k chunks). Before DS_PREFILL_REUSE_MODEL, as its targets
+      # were taken.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
-      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 4 models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 || exit $?
       # The same layers on a real prompt (pretrained weights, the model's top-k), median and max layer, 64K-512K, 8x4.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_real_data_perf -vvv --tb=short || exit $?
       # CCL perf gates of the 4x4 [RING, RING] carve (a 16-chip sub-torus of this Galaxy): the whole-mesh high_bw_all_gather
@@ -1009,6 +1010,12 @@
       # numbers depend on the power rating of the host, so they run here and not in the 8 kW GLM components leg.
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
       models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
+      # The rest of the stage's per-layer ops on the same carve, at GLM-5.3's production shape (SP 4 x TP 4, 2,560-token
+      # chunks): matmul_reduce_scatter_prefill (MLA q_a and o_proj, the indexer's key and weights projections, the dense
+      # down projection), the dense FFN (fused all-gather matmul + matmul reduce-scatter) and the fused RMSNorm.
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 5 tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_matmul_reduce_scatter_prefill_perf_bh.py -k ring_ring_4x4_perf || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -k ring_ring_4x4_perf || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 2 models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm_fused.py -k ring_ring_4x4_perf || exit $?
       # MoE block perf: host time of one layer on 8x4 @5120, then host time and per-op device time on the carve
       # in forwards of one, two and four packed 2,560-token chunks, in one process (one seeded weight build for the six
       # cases). ~5 min.
@@ -1026,8 +1033,9 @@
   test_group: module
   skus:
     bh_sc1_high_power:
-      # The slowest of the last 5 completed runs of this job is 51 min; the carve's CCL perf gates add about 3 min and the
-      # MoE block perf gates about 5, so the bound only caps a hang.
+      # The slowest of the last 5 completed runs of this job is 51 min; the carve's CCL perf gates add about 3 min, its
+      # per-layer op gates (matmul reduce-scatter, dense FFN, RMSNorm) about 9 (1.5 + 1.5 + 1.5 min measured wall-clock on
+      # two Galaxies, plus three groups' mesh opens) and the MoE block perf gates about 5, so the bound only caps a hang.
       timeout: 166
       tier: 2
       release_ready: false
@@ -2199,15 +2207,17 @@
     fi
     # One run gates PCC and throughput both. The gate reads the deepest probe (@55k) from the
     # runner-side perf JSON, taken during the measured request so the KV readback sits outside it.
-    # The band spans a 44% spread across two galaxies; re-cut it once the CI pool has several runs.
-    export PREFILL_EXPECTED_TPS=36900
+    # Expected throughput from the 14 kW pool this leg runs on (one CI run: 49,387 tok/s @55k); the 25% band
+    # leaves room for host spread until the pool has several runs to re-cut it from.
+    export PREFILL_EXPECTED_TPS=49400
     export PREFILL_PERF_MARGIN=0.25
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh mistral4
   test_type: mistral4_pp4_kv_pcc
   test_tags: [mistral4, runner, kv_cache]
   test_group: module
   skus:
-    bh_sc1:
+    # High-power pool, like the other SC1 perf legs: its throughput gate is meant for 14 kW hosts.
+    bh_sc1_high_power:
       # 12 min on CI run 34660979358; 30 is 2.5x, looser than the siblings because this leg also
       # pays per-galaxy column probing and a 36-layer weight load.
       timeout: 30
@@ -2353,6 +2363,96 @@
   sp_config: sc4
 
 
+# GLM-5.3 on the production prefill shape: the SC4 pod carved into eight [RING,RING] 4x4 tori (sc4_4x4_rr_mgd), 12
+# ranks by tt-run discovery. Four stages sit inside one Galaxy; the four seam stages span two neighbouring hosts
+# (PREFILL_STAGE_HOSTS=1,2,1,2,1,2,1,2), with row-block D2D services on each 1-host <-> 2-host boundary. One
+# 2,560-token chunk per forward; every rank's KV and index caches are PCC'd against the 1M golden tail. Perf is
+# gated at the 1M probe against the sc4_rr baseline.
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] KV accuracy 1M tail@2.5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 40
+      tier: 1
+      release_ready: true
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+# The packed twin of the SC4 [RING,RING] leg above: the same 8 [RING,RING] 4x4 stages and golden tail, two 2,560-token
+# chunks per forward, traced, with D2H acks from each stage leader's chips. PCC- and perf-gated (glm53.sc4_rr_packed).
+- name: "(GLM-5.3-744B) disaggregated prefill 8x[4,4] [RING,RING] packed KV accuracy 1M tail@2.5k, two chunks per forward, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4_rr --variant packed
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 40
+      tier: 1
+      release_ready: true
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# The production [RING,RING] 4x4 stage on one Galaxy: the in-Galaxy torus (ASICs {3,4,7,8} of every tray, sc1_4x4_rr_mgd), one
+# rank, running GLM-5.3's first 38 layers (38 is a `full`-indexer layer start, about half of the 78 two stages hold; the
+# stage's last layer is KV-only, as on any last stage). [1/2] runs one 2,560-token chunk per forward, [2/2] two per forward
+# (packed, traced, D2H layer acks); both PCC the stage's KV and index caches (layers 0-37) against the 1M golden tail.
+# Perf is reported, not gated: no [RING,RING] baseline yet. The job took 21.4 min with the reset (steps 807 s cold and
+# 444 s warm); with both steps cold it would take about 28.
+- name: "(GLM-5.3-744B) disaggregated prefill 1x[4,4] [RING,RING] 38 layers KV accuracy 1M tail@2.5k, unpacked + packed, SC1"
+  cmd: |
+    set -uo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    export PREFILL_PERF_GATE=0 TABLE_WAIT_SECS=3000 PREFILL_STALL_SECS=600
+    echo "===== [1/2] (GLM-5.3-744B) 1x[4,4] [RING,RING] 38 layers KV accuracy 1M tail@2.5k, one chunk per forward, SC1 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_rr; rc1=$?
+    echo "===== [1/2] rc=${rc1} ====="
+    echo "===== [2/2] (GLM-5.3-744B) 1x[4,4] [RING,RING] 38 layers packed KV accuracy 1M tail@2.5k, two chunks per forward, SC1 ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_rr --variant packed; rc2=$?
+    echo "===== [2/2] rc=${rc2} ====="
+    exit $(( rc1 != 0 || rc2 != 0 ))
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      timeout: 35
+      tier: 1
+      release_ready: false
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
 # Kimi-K3 with RadixArk's DSpark drafter, through the same launcher and the same 8 stages of [4,4]. Traced at 1M
 # with 24 slots: the drafter's K/V on the last stage leaves room for 26 (it fails at 27 in the per-stage
 # capacity probe, PR #61481), and 24 keeps two of margin as the trunk leg does. Slot 0 is PCC'd on 55k, where
@@ -2440,40 +2540,6 @@
   sp_config: sc1
 
 
-# The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 0,
-# bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
-# chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
-# no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4) first.
-# [2/2] runs the same request packed: two 2,560-token chunks per forward (glm53_4x4_packed.json), traced with D2H
-# acks, against the same golden tail; perf is gated on glm53/sc1_4x4_packed in perf_baselines.json once it has an
-# entry, and until then must still measure. It measured 8-10 min on exabox
-# (2026-11-20), so the bound grew 40 -> 50, taken from the 8x4 SC1 job above.
-- name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
-  cmd: |
-    set -euo pipefail
-    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
-    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
-      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
-    fi
-    cd "${TT_METAL_HOME}"
-    export PREFILL_JOB_DEADLINE=$(( $(date +%s) + 50 * 60 ))  # the bh_sc1_high_power timeout below
-    echo "===== [1/2] (GLM-5.3-744B) 2x[4,4] prefill KV accuracy 1M tail@2.5k + perf 1M@2.5k, one chunk per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 || exit $?
-    echo "===== [2/2] (GLM-5.3-744B) 2x[4,4] packed prefill KV accuracy 1M tail@2.5k, two chunks per forward ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4 --variant packed || exit $?
-    echo "===== both runs passed ====="
-  test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm_packed]
-  test_group: disagg_prefill
-  skus:
-    bh_sc1_high_power:
-      timeout: 50
-  owner_id: U0AC4LTJH1P # Jaksa Jovicic
-  team: shield
-  budget_type: demo
-  sp_config: sc1
-
-
 # Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy and throughput, same launcher as the SC4 entry
 # above and the control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill
 # itself. Runs the same 1M request as SC4, so the scaling summary has an SC1 baseline at every probe.
@@ -2522,7 +2588,8 @@
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm_mtp_kv_share, glm53_trace]
   test_group: disagg_prefill
   skus:
-    bh_sc1:
+    # High-power pool, like the other SC1 perf legs: its perf numbers are meant for 14 kW hosts.
+    bh_sc1_high_power:
       timeout: 120
       tier: 1
       release_ready: false

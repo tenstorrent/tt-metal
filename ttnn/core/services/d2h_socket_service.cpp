@@ -395,8 +395,12 @@ D2HStreamService::D2HStreamService(const std::shared_ptr<distributed::MeshDevice
         const auto& tcoords = topology.mesh_coords();
         coords.assign(tcoords.begin(), tcoords.end());
     } else {
+        // Metadata-only (layer acks): every chip this process drives. On a mesh several hosts share ([RING,RING]
+        // seam stage) the co-owners' chips are theirs; each host builds its own service if it needs one.
         for (const auto& c : distributed::MeshCoordinateRange(mesh_device_->shape())) {
-            coords.push_back(c);
+            if (mesh_device_->is_local(c)) {
+                coords.push_back(c);
+            }
         }
     }
 
@@ -1019,13 +1023,16 @@ std::shared_ptr<const StreamSenderCoordTable> D2HStreamService::get_sender_coord
     TT_FATAL(shape.dims() == 2, "D2HStreamService::get_sender_coord_table: expects a 2D mesh");
     return sender_coord_table_cache_.get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
         const distributed::MeshCoordinate coord(row, col);
-        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
-        table.service_cores.push_back(get_service_core(coord));
+        // A service on part of the mesh (a seam host's own chips) holds zeros elsewhere; the op skips those.
+        const bool covered = service_cores_.contains(coord);
+        table.participates.push_back(covered ? 1 : 0);
+        table.data_ready_addrs.push_back(covered ? static_cast<uint32_t>(get_data_ready_counter_addr(coord)) : 0u);
+        table.service_cores.push_back(covered ? get_service_core(coord) : CoreCoord{0, 0});
         if (!metadata_input_addrs_.empty()) {
-            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
+            table.metadata_addrs.push_back(covered ? static_cast<uint32_t>(get_metadata_addr(coord)) : 0u);
         }
         if (!termination_addrs_.empty()) {
-            table.termination_addrs.push_back(static_cast<uint32_t>(get_termination_addr(coord)));
+            table.termination_addrs.push_back(covered ? static_cast<uint32_t>(get_termination_addr(coord)) : 0u);
         }
     });
 }

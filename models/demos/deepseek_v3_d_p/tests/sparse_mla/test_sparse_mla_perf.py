@@ -66,9 +66,9 @@ MODES = ("untraced", "traced")
 # Host time of one chunk forward through device synchronization, in ms, per case: (warm untraced, warm traced, long
 # untraced, long traced), run as the CI jobs run them (LOGURU_LEVEL=ERROR, TT_METAL_SHM_TRACKING_DISABLED=1, one pytest
 # process per model). Each value is the mean over runs of that run's measurement: the fastest untraced sample, the
-# traced replay. Galaxy 4x4 subtorus has no CI leg: measured on a subtorus-cabled Galaxy. Galaxy 4x4 GLM-5.3
-# no-indexer long: re-centred once the sparse KV push ran on its TORUS_X fabric (the shared layer had gathered the
-# whole prefix).
+# traced replay. Galaxy 4x4 subtorus: GLM-5.3 on the GLM chunked perf leg's 14 kW CI hosts; K3.1 has no CI leg, measured
+# on a subtorus-cabled Galaxy. Galaxy 4x4 GLM-5.3 no-indexer long: re-centred once the sparse KV push ran on its TORUS_X
+# fabric (the shared layer had gathered the whole prefix).
 _TARGETS_MS = {
     "Galaxy": {
         "kimi_k3_1": (2.88, 2.53, 6.34, 6.09),
@@ -82,8 +82,8 @@ _TARGETS_MS = {
     },
     "Galaxy 4x4 subtorus": {
         "kimi_k3_1": (2.97, 2.80, 6.62, 6.37),
-        "glm_5_3": (2.78, 2.52, 6.43, 6.15),
-        "glm_5_3-no_indexer": (2.14, 1.98, 2.22, 2.08),
+        "glm_5_3": (2.92, 2.64, 6.60, 6.26),
+        "glm_5_3-no_indexer": (2.00, 1.86, 2.08, 1.89),
     },
     "LoudBox": {
         "kimi_k3_1": (2.58, 2.41, 3.78, 3.60),

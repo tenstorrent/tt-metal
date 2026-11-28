@@ -28,6 +28,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
+from models.demos.common.prefill.runners.stage_layout import has_multi_host_stage
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import mesh_cache_key
 
@@ -96,6 +97,10 @@ class MLAPrefillAdapter(PrefillModelAdapter):
             return None
         arch = "bh" if is_blackhole() else "wh"
         num_devices = ttnn.get_num_devices()
+        if has_multi_host_stage():
+            # A [RING,RING] seam stage's mesh spans two hosts, so this process sees only its own half of the
+            # chips; the cache is keyed by the stage mesh, which every stage of the run shares.
+            num_devices = int(mesh_shape[0]) * int(mesh_shape[1])
         path = Path(env_cache) / f"{self.name}_{arch}_{num_devices}dev" / self.weight_cache_key(mesh_shape, sp_axis)
         path.mkdir(parents=True, exist_ok=True)
         return path

@@ -464,18 +464,11 @@ CachedProgramFactory create_mesh_workload(
     std::optional<CachedProgramFactory> created;
     // WorkloadFactory is unconstrained — dispatch_to_mesh_workload_factory resolves the type.
     dispatch_to_mesh_workload_factory<mesh_device_operation_t>(program_factory, [&]<typename WorkloadFactory>() {
-        ttnn::MeshCoordinateRangeSet tensor_coords;
-        if (mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
-            // Fast path - a range covers the entire mesh.
-            tensor_coords.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
-        } else {
-            // Slow path - iterate over coordinates and merge them into a range set one by one.
+        if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
             log_msg_func();  // Work around for g++12 compiler bug
-            for (const auto& coord :
-                 mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-                tensor_coords.merge(ttnn::MeshCoordinateRange(coord, coord));
-            }
         }
+        const ttnn::MeshCoordinateRangeSet tensor_coords =
+            mesh_device_operation_utils::launch_ranges(tensor_args, mesh_device);
         created.emplace(
             create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value),

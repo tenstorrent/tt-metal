@@ -237,6 +237,10 @@ public:
     // convert via worker_core_from_logical_core before using as a NoC target.
     tt::tt_metal::CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
+    // Whether the service covers this coordinate (its mapper's topology holds it). A service built over a row
+    // block of its mesh covers only those rows.
+    bool has_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
     // Fabric lanes this coord's sender runs: min(Config::max_sender_lanes, forwarding
     // links toward the receiver that no other D2D service on the chip holds).
     uint32_t get_num_lanes(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
@@ -330,6 +334,10 @@ public:
     // Logical CoreCoord of this coord's receiver service core. Workers must
     // convert via worker_core_from_logical_core before using as a NoC target.
     tt::tt_metal::CoreCoord get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
+
+    // Whether the service covers this coordinate (its mapper's topology holds it). A service built over a row
+    // block of its mesh covers only those rows.
+    bool has_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const;
 
     // Worker-L1 GlobalSemaphore. Receiver workers spin on the local copy each
     // iter; the service kernel multicast-incs after the transfer has landed.

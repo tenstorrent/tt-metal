@@ -106,6 +106,10 @@ elif args and args[0].endswith("ttrun.py"):
                 ranks = hosts + hosts
             lines = ["rank %d=%s slot=%d\n" % (i, host, ranks[:i].count(host)) for i, host in enumerate(ranks)]
             (rankfile.parent / "rank_bindings.yaml").write_text("rank_bindings: []\n")
+        elif args[args.index("--mesh-graph-descriptor") + 1].endswith("sc1_4x4_rr_mgd.textproto"):
+            # One mesh on one host.
+            lines = ["rank 0=%s slot=0\n" % args[args.index("--hosts") + 1].split(",")[0]]
+            (rankfile.parent / "rank_bindings.yaml").write_text("rank_bindings: []\n")
         else:
             lines = ["rank %d=worker%d slot=0\n" % (i, i) for i in range(4)]
         rankfile.write_text("".join(lines))
@@ -309,6 +313,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for path in (
             "models/demos/common/prefill/runners/topology_configuration/pipeline_prefill_intragalaxy_2x4x4_sp1_mgd.textproto",
             "models/demos/common/prefill/runners/topology_configuration/ci/sc4_4x4_sp1_mgd.textproto",
+            "models/demos/common/prefill/runners/topology_configuration/ci/sc1_4x4_rr_mgd.textproto",
         ):
             (metal / path).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / path, metal / path)
@@ -855,6 +860,25 @@ class MultirankPccHarnessTests(unittest.TestCase):
         # SP on axis 0 from the manifest (no knob exported): the probe checks the axis-0 cache, glm_5_3_bh_16dev/4x4.
         self.assertNotIn("PREFILL_SP_AXIS", runner)
         self.assertRegex(result.stdout, rf"4x4 weight cache {re.escape(self.root)}/cache/glm_5_3_bh_16dev/4x4\n")
+        self.assertIn("PCC GATE PASS", result.stdout)
+
+    def test_glm53_sc1_rr_is_one_ring_ring_stage_of_the_first_38_layers(self):
+        result, records = self.run_harness("glm53", config="sc1_rr", hosts=self.SC4_HOSTS[:1])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        launch = self.one_record(records, "runner_launch")["args"]
+        self.assertTrue(launch[launch.index("--mesh-graph-descriptor") + 1].endswith("ci/sc1_4x4_rr_mgd.textproto"))
+        runner = self.one_record(records, "runner")["env"]
+        producer = self.one_record(records, "producer")["env"]
+        # The stage runs and the producer compares the same 38 layers; 38 is a `full`-indexer layer start.
+        self.assertEqual(runner["PREFILL_NUM_LAYERS"], "38")
+        self.assertEqual(producer["PREFILL_NUM_LAYERS"], "38")
+        self.assertEqual(runner["PREFILL_NUM_USERS"], "1")
+        self.assertEqual(runner["PREFILL_FABRIC_MODE"], "2d_torus_xy")
+        self.assertNotIn("PREFILL_STAGE_HOSTS", runner)
+        self.assertTrue(runner["PREFILL_MANIFEST"].endswith("manifests/glm53_4x4.json"))
+        # SP on axis 1 over the manifest's tray-half axis 0: the probe checks the axis-1 cache, glm_5_3_bh_16dev/4x4_sp1.
+        self.assertEqual(runner["PREFILL_SP_AXIS"], "1")
+        self.assertRegex(result.stdout, rf"4x4 weight cache {re.escape(self.root)}/cache/glm_5_3_bh_16dev/4x4_sp1\n")
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_glm53_sc1_4x4_packed_runs_two_chunks_per_forward(self):

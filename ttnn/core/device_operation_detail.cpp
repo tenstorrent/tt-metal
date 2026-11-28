@@ -236,6 +236,27 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
     return tensor_coordinates;
 }
 
+MeshCoordinateRangeSet launch_ranges_impl(
+    const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    bool uniform_storage) {
+    // A mesh that several hosts share ([RING,RING] seam stage): every process launches on the chips it drives and
+    // the co-owners launch on theirs. A tensor allocated on the whole mesh still lists every coordinate, so the remote
+    // ones are dropped here; a program factory would otherwise ask for a device this process does not have.
+    const bool shared_mesh = mesh_device != nullptr && mesh_device->get_devices().size() != mesh_device->num_devices();
+    MeshCoordinateRangeSet ranges;
+    if (uniform_storage && !shared_mesh) {
+        ranges.merge(MeshCoordinateRange(mesh_device->shape()));
+        return ranges;
+    }
+    for (const auto& coord : extract_tensor_coordinates_impl(tensors, mesh_device)) {
+        if (!shared_mesh || mesh_device->is_local(coord)) {
+            ranges.merge(MeshCoordinateRange(coord, coord));
+        }
+    }
+    return ranges;
+}
+
 std::vector<std::uint32_t> compute_tensor_alias_signature(
     const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors) {
     // Tensors without an allocated MeshTensor never alias: no binding can reference them.

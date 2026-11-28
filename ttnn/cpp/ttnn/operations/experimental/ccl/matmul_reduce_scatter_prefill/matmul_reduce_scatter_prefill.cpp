@@ -67,22 +67,12 @@ std::vector<std::vector<Coord>> build_groups(uint32_t rows, uint32_t cols, int32
 }
 
 // The fewest forwarding links over every hop of the groups along cluster_axis, both directions, ring wrap included.
-// Also refuses a mesh with a device on another host: every chip's program places its neighbours' ports itself (the
-// port cores its packets target), which needs each neighbour's Ethernet cores, so a remote neighbour would be placed
-// differently from its own program and its port would never receive the ready word.
+// Reads fabric node ids and routes only, so it also holds on a mesh whose devices are on several hosts.
 size_t count_usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster_axis, bool ring) {
     const auto& mesh_shape = mesh->shape();
     auto node = [&](const Coord& c) { return mesh->get_fabric_node_id(ttnn::MeshCoordinate(c.first, c.second)); };
     size_t avail = std::numeric_limits<size_t>::max();
     for (const auto& group : build_groups(mesh_shape[0], mesh_shape[1], cluster_axis)) {
-        for (const Coord& c : group) {
-            TT_FATAL(
-                mesh->is_local(ttnn::MeshCoordinate(c.first, c.second)),
-                "matmul_reduce_scatter_prefill: device ({}, {}) of the mesh is on another host; a multi-host mesh is "
-                "not supported",
-                c.first,
-                c.second);
-        }
         std::vector<std::pair<Coord, Coord>> pairs;
         for (size_t i = 0; i + 1 < group.size(); ++i) {
             pairs.emplace_back(group[i], group[i + 1]);

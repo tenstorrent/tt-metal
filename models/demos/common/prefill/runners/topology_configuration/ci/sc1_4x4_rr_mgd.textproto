@@ -1,0 +1,51 @@
+# Prefill on one Galaxy as a single 4x4 [RING,RING] stage: the in-Galaxy torus, ASICs {3,4,7,8} on all four trays
+# (mesh 0 of sc2_4x4_rr_mgd.textproto, which is also sc4_4x4_rr_mgd.textproto's mesh 0). One host, one rank.
+# The other tray half closes into a torus only across the cable to a neighbouring Galaxy, so one Galaxy holds one
+# such stage. Intra-mesh channels are STRICT 2.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+
+# --- Pinnings ---------------------------------------------------------------
+# Corner pinnings fix the torus orientation (no rotation, folding or reflection), so SP is mesh axis 1 and TP axis 0.
+# Rev A/B and Rev C swap trays 2/3, so each corner pin names its revision.
+# Middle column (asic 3)
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 0 }
+  physical_asic_position { tray_id: 1 asic_location: 3 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 1 }
+  physical_asic_position { tray_id: 1 asic_location: 7 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 3 }
+  physical_asic_position { tray_id: 2 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 12 }
+  physical_asic_position { tray_id: 3 asic_location: 3 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id: 15 }
+  physical_asic_position { tray_id: 4 asic_location: 3 }
+}

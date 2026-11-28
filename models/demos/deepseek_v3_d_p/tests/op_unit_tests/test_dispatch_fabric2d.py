@@ -30,6 +30,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tests.mesh_local import local_device_tensors
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS, _mesh_param
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     dispatch_fabric2d_min_payload_bytes,
@@ -50,6 +51,7 @@ FWD_VC_PAGES = 64
 # neither cross-group routing nor the 2D torus.
 _MESH_IDS = (
     "fabric2d-torus-xy-8x4-2link",
+    "fabric2d-torus-xy-4x4-2link",
     "fabric2d-torus-y-8x1-2link",
 )
 _MESH_CONFIGS = [param for param in ALL_MESH_CONFIGS if param.id in _MESH_IDS]
@@ -267,14 +269,14 @@ def test_dispatch_fabric2d(mesh_device, device_params, num_links, capacity_div, 
     # Every page any chip sourced should now be in place: the downstream chip's by a single hop, farther
     # ones forwarded through the fwd_sections, and this chip's own by the local phase. `src_of`
     # marks the pages no token lands on, which stay untouched.
-    got_payload = ttnn.get_device_tensors(payload)
-    got_meta = ttnn.get_device_tensors(metadata)
+    got_payload = local_device_tensors(payload, mesh_device)
+    got_meta = local_device_tensors(metadata, mesh_device)
     mesh_cols = tuple(mesh_device.shape)[1]
 
     checked = 0
     checked_local = 0
     bad = 0
-    for dev in range(H * G):
+    for dev in got_payload:
         r, g = dev // mesh_cols, dev % mesh_cols
         pages = [p for p in range(max_dispatch_buffer_token_size) if int(src_of[g, r, p]) >= 0]
         local = sum(1 for p in pages if int(src_of[g, r, p]) == r)

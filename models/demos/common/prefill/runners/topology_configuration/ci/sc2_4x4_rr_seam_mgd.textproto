@@ -1,0 +1,47 @@
+# The seam torus of sc2_4x4_rr_mgd.textproto on its own: one 4x4 [RING,RING] mesh split over two hosts
+# (mesh_host_rank 0 holds rows 0-1, 1 holds rows 2-3), for running a single two-host stage without its
+# neighbours. Same pinnings as mesh 1 of the 3-stage descriptor, so its two hosts are the ones that follow each
+# other in the pod's cabling ring.
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M1" mesh_id: 0 } }
+
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 0 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 15 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_AB
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 0 }
+  physical_asic_position { tray_id: 3 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 15 }
+  physical_asic_position { tray_id: 2 asic_location: 2 }
+  board_revision: BH_REV_C
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 3 }
+  physical_asic_position { tray_id: 4 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 12 }
+  physical_asic_position { tray_id: 1 asic_location: 2 }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id_regex: "0" chip_id: 13 }
+  physical_asic_position { tray_id: 1 asic_location: 6 }
+}

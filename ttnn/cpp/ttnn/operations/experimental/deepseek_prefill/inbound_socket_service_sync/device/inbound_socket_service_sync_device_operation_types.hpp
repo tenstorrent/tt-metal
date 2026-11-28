@@ -38,6 +38,9 @@ struct InboundSocketServiceSyncParams {
     std::vector<uint32_t> consumed_addrs;  // L1 addr on each coord's service core
     std::vector<uint32_t> service_core_x;  // LOGICAL service-core x per coord
     std::vector<uint32_t> service_core_y;  // LOGICAL service-core y per coord
+    // 1 per coordinate the service covers. A D2D receiver over a row block of the mesh covers only those rows; the
+    // workload skips the rest (its backing spans the whole mesh, so the launch coordinates would include them).
+    std::vector<uint8_t> participates;
 };
 
 struct InboundSocketServiceSyncInputs {

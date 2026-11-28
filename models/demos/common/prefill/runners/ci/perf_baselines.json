@@ -61,6 +61,36 @@
           "ttft_s": 83.77,
           "chunk_time_ms": 485
         }
+      },
+      "sc4_rr": {
+        "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.1,
+            "ttft_s": 0.03,
+            "chunk_time_ms": 0.25
+          }
+        },
+        "8kw": {
+          "throughput_tok_s": 31225,
+          "ttft_s": 25.42,
+          "chunk_time_ms": 572
+        }
+      },
+      "sc4_rr_packed": {
+        "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.1,
+            "ttft_s": 0.03,
+            "chunk_time_ms": 0.25
+          }
+        },
+        "8kw": {
+          "throughput_tok_s": 34998,
+          "ttft_s": 23.95,
+          "chunk_time_ms": 1089
+        }
       }
     },
     "kimi_k3": {

@@ -42,6 +42,7 @@ from models.demos.common.prefill.runners.layer_completion_ring_reader import (
     wait_for_layer_completions,
 )
 from models.demos.common.prefill.runners.migration import (
+    _host_tag_int,
     is_per_host_storage,
     migration_table_path,
     rank_scoped_device_map_path,
@@ -54,6 +55,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     num_mtp_tokens,
     resolve_trace_dir,
 )
+from models.demos.common.prefill.runners.stage_layout import has_multi_host_stage, host_name_of_tag
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
@@ -884,25 +886,48 @@ def _has_index_config(table) -> bool:
     return _num_model_configs(table) > 1 and ADAPTER.cache_kind(1) == "index"
 
 
-def _read_chunks(table, device_map, config_id, layer, slot_id, positions) -> list:
-    """Raw bytes of the chunk at each position of one layer, from a single batched read."""
+# A [RING,RING] seam stage spans two hosts, so each layer's KV lies on chips of both: a validator reads the chunks
+# on its own host's chips and scores those positions (the other host's validator scores the rest). The table records
+# the host of every chip (``chip_host_tags``, see stage_layout.collapse_to_stages), which says whose chip it is.
+_MULTI_HOST_STAGES = has_multi_host_stage()
+
+
+def _local_host_name(multi_host_stages: bool):
+    """This process's host name as the table records it; None when no stage spans hosts (every chip is local)."""
+    return host_name_of_tag(_host_tag_int()) if multi_host_stages else None
+
+
+def _read_chunks(table, device_map, config_id, layer, slot_id, positions, local_host=None) -> list:
+    """Raw bytes of the chunk at each position of one layer, from a single batched read. ``local_host``: the
+    table's name for this host; a chunk whose chips the table places on another host comes back as None, and
+    every chunk on this host is read (a failing read raises)."""
     locs = [table.lookup(layer, pos, slot_id, config_id) for pos in positions]
     unique_ids = {}
     for loc in locs:
-        if loc.device_group_index not in unique_ids:
-            unique_ids[loc.device_group_index] = _resolve_unique_id(
-                table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
+        if loc.device_group_index in unique_ids:
+            continue
+        nodes = list(table.get_device_group(loc.device_group_index).fabric_node_ids)
+        if local_host is not None:
+            nodes = [node for node in nodes if table.get_host(node) == local_host]
+        unique_ids[loc.device_group_index] = _resolve_unique_id(nodes, device_map) if nodes else None
+    present = [loc for loc in locs if unique_ids[loc.device_group_index] is not None]
+    sizes = [loc.size_bytes for loc in present]
+    blob = (
+        memoryview(
+            ttnn.experimental.disaggregation.read_dram_umd_batch(
+                [unique_ids[loc.device_group_index] for loc in present], [loc.noc_addr for loc in present], sizes
             )
-    sizes = [loc.size_bytes for loc in locs]
-    blob = memoryview(
-        ttnn.experimental.disaggregation.read_dram_umd_batch(
-            [unique_ids[loc.device_group_index] for loc in locs], [loc.noc_addr for loc in locs], sizes
         )
+        if present
+        else memoryview(b"")
     )
     chunks, offset = [], 0
-    for size in sizes:
-        chunks.append(blob[offset : offset + size])
-        offset += size
+    for loc in locs:
+        if unique_ids[loc.device_group_index] is None:
+            chunks.append(None)
+            continue
+        chunks.append(blob[offset : offset + loc.size_bytes])
+        offset += loc.size_bytes
     return chunks
 
 
@@ -919,12 +944,60 @@ def _prefetched(items, load):
             yield item, loaded
 
 
-def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
+def _read_kv_slice_masked(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
+    """Rows of one cache slice and a bool mask of the rows this process could read. Rows on another host's chips
+    are NaN placeholders with ``available`` False; availability comes from the read path, never from the data."""
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
 
     positions = range(start, read_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
-    rows = [decode(raw, head_dim) for raw in _read_chunks(table, device_map, config_id, layer, slot_id, positions)]
-    return torch.cat(rows, dim=0)[: read_len - start]
+    raws = _read_chunks(
+        table, device_map, config_id, layer, slot_id, positions, local_host=_local_host_name(_MULTI_HOST_STAGES)
+    )
+    rows = [None if raw is None else decode(raw, head_dim) for raw in raws]
+    available = torch.tensor([r is not None for r in rows]).repeat_interleave(NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+    dtype = next((r.dtype for r in rows if r is not None), torch.float32)
+    rows = [
+        torch.full((NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim), float("nan"), dtype=dtype) if r is None else r
+        for r in rows
+    ]
+    return torch.cat(rows, dim=0)[: read_len - start], available[: read_len - start]
+
+
+def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, *, start=0):
+    """Rows of one cache slice, all of which must be readable from this host's chips. A two-host stage has rows
+    that are not; callers that can score a subset use _read_kv_slice_masked."""
+    rows, available = _read_kv_slice_masked(
+        table, device_map, config_id, layer, slot_id, read_len, head_dim, decode, start=start
+    )
+    if not bool(available.all()):
+        raise RuntimeError(
+            f"_read_kv_slice: config {config_id} layer {layer} slot {slot_id}: "
+            f"{int((~available).sum())} of {available.numel()} rows lie on another host's chips; "
+            "use _read_kv_slice_masked to score the rows this host can read"
+        )
+    return rows
+
+
+def _visible_mask(device_rows: torch.Tensor, available: torch.Tensor, what: str) -> torch.Tensor:
+    """The rows to score: those ``available`` (read from this host's chips, see _read_kv_slice_masked). A host that
+    scores no row has not validated its share, and a NaN in a row that was read is corrupt data; both raise
+    instead of passing an empty or NaN-dropping comparison."""
+    if not bool(available.any()):
+        raise RuntimeError(f"{what}: none of the {available.numel()} rows lie on this host's chips, nothing to score")
+    bad = torch.isnan(device_rows[available].float()).any(dim=-1)
+    if bool(bad.any()):
+        raise RuntimeError(f"{what}: {int(bad.sum())} of the {int(available.sum())} rows read from the device are NaN")
+    if not bool(available.all()):
+        logger.info(
+            f"[producer]   {what}: scoring the {int(available.sum())}/{available.numel()} rows on this host's chips"
+        )
+    return available
+
+
+def _visible_rows(device_rows: torch.Tensor, available: torch.Tensor, golden: torch.Tensor, what: str):
+    """Drop the rows a seam-stage validator could not read from both sides."""
+    mask = _visible_mask(device_rows, available, what)
+    return device_rows[mask], golden[mask]
 
 
 def _golden_pe_as_device(golden_pe, layout: str):
@@ -988,20 +1061,24 @@ def _check_mtp_kv_slots(
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
-        kv = _read_kv_slice(
+        kv, available = _read_kv_slice_masked(
             table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
-        )[skip_rows : skip_rows + cmp_len]
-        assert torch.isfinite(kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
-        assert kv.abs().max() > 0, (
+        )
+        kv, available = kv[skip_rows : skip_rows + cmp_len], available[skip_rows : skip_rows + cmp_len]
+        # A two-host stage: the rows on the other host's chips belong to its validator.
+        local_kv = kv[_visible_mask(kv, available, f"MTP level {k} KV (layer {layer})")]
+        assert torch.isfinite(local_kv).all(), f"MTP level {k} KV (layer {layer}) has non-finite entries"
+        assert local_kv.abs().max() > 0, (
             f"MTP level {k} KV slot (layer {layer}) is all zeros over {span}: the level never "
             f"wrote it (cache slot never reached, or the level did not run)."
         )
-        logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={kv.abs().max():.4f}")
-        per_level.append((k, kv))
+        logger.info(f"[producer] slot {slot_id} MTP level {k} (layer {layer:>2}) KV max|.|={local_kv.abs().max():.4f}")
+        per_level.append((k, kv, available))
     for i in range(len(per_level)):
         for j in range(i + 1, len(per_level)):
-            (a, ka), (b, kb) = per_level[i], per_level[j]
-            assert not torch.equal(ka, kb), (
+            (a, ka, avail_a), (b, kb, avail_b) = per_level[i], per_level[j]
+            both = avail_a & avail_b
+            assert not both.any() or not torch.equal(ka[both], kb[both]), (
                 f"MTP levels {a} and {b} wrote IDENTICAL KV over {span}: they are sharing one "
                 f"cache slot (level k must write slot NUM_LAYERS+k)."
             )
@@ -1011,14 +1088,19 @@ def _check_mtp_kv_slots(
     )
     # Decode reads its later levels through their own rows, so read them that way too: they must return
     # level 0's KV bit for bit, which is what the golden scores below.
-    level0_kv = dict(per_level).get(0)
-    if level0_kv is not None and MTP_DECODE_LEVELS > MTP_LEVELS:
+    level0 = next(((kv, available) for k, kv, available in per_level if k == 0), None)
+    if level0 is not None and MTP_DECODE_LEVELS > MTP_LEVELS:
         for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
             layer = NUM_LAYERS + k
-            alias_kv = _read_kv_slice(
+            level0_kv, on_host = level0
+            alias_kv, alias_available = _read_kv_slice_masked(
                 table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
-            )[skip_rows : skip_rows + cmp_len]
-            assert torch.equal(alias_kv, level0_kv), (
+            )
+            alias_kv, alias_available = (
+                alias_kv[skip_rows : skip_rows + cmp_len],
+                alias_available[skip_rows : skip_rows + cmp_len],
+            )
+            assert torch.equal(alias_available, on_host) and torch.equal(alias_kv[on_host], level0_kv[on_host]), (
                 f"MTP decode level {k} (layer {layer}) reads back different KV than level 0's row over {span}, "
                 f"though the table gives both the same addresses: something wrote that memory between the reads."
             )
@@ -1031,7 +1113,7 @@ def _check_mtp_kv_slots(
         return None
 
     golden_dir, pe_layout, _ = _mtp_golden_source(trace_dir)
-    missing = [NUM_LAYERS + k for k, _ in per_level if not kvpe_golden_present(golden_dir, NUM_LAYERS + k)]
+    missing = [NUM_LAYERS + k for k, _, _ in per_level if not kvpe_golden_present(golden_dir, NUM_LAYERS + k)]
     if missing:
         logger.info(
             f"[producer] slot {slot_id} MTP: golden KV comparison SKIPPED -- {golden_dir} carries no "
@@ -1045,9 +1127,10 @@ def _check_mtp_kv_slots(
 
     rejected = "half_split" if pe_layout == "interleaved" else "interleaved"
     min_pcc = 1.0
-    for k, kv in per_level:
+    for k, kv, available in per_level:
         layer = NUM_LAYERS + k
         golden = _load_golden_kv_post(golden_dir, layer, cmp_len, start=golden_offset)
+        kv, golden = _visible_rows(kv, available, golden, f"MTP level {k} (layer {layer}) KV")
         pcc_nope, pcc_pe = _kvpe_pcc_vs_golden(golden, kv, kv_lora, pe_layout)
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
         _, pe_rejected = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], rejected), kv[:, kv_lora:])
@@ -1419,12 +1502,13 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         local_layers.append(layer)
 
     def read_kvpe(layer):
-        return _read_kv_slice(
+        kv, available = _read_kv_slice_masked(
             table, device_map, 0, layer, slot_id, read_end, HEAD_DIM, _decode_kv_chunk, start=first_pos
-        )[skip_rows : skip_rows + cmp_len]
+        )
+        return kv[skip_rows : skip_rows + cmp_len], available[skip_rows : skip_rows + cmp_len]
 
     logger.info(f"[producer] slot {slot_id} KV check: torch threads={torch.get_num_threads()}")
-    for layer, device_kv in _prefetched(local_layers, read_kvpe):
+    for layer, (device_kv, available) in _prefetched(local_layers, read_kvpe):
         # A single PCC scalar per half per layer cannot separate a static per-column error from one
         # that accumulates per token, which is the question the depth curve actually poses. The
         # tensor is already in host memory here, so dumping it costs no device time. bfloat16 is
@@ -1441,6 +1525,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
 
         golden = _load_golden_kv_post(trace_dir, layer, cmp_len, start=golden_offset)
+        device_kv, golden = _visible_rows(device_kv, available, golden, f"layer {layer} KVPE")
         # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
         # rope dims pass through unrotated, so applying the half-split re-interleave scores the
         # transform instead of the cache -- 0.02 against a nope half of 0.998.
@@ -1542,11 +1627,12 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             local_index_rows.append((layer, golden_dir))
 
         def read_index(row):
-            return _read_kv_slice(
+            ik, available = _read_kv_slice_masked(
                 table, device_map, 1, row[0], slot_id, read_end, index_head_dim, _decode_kv_chunk, start=first_pos
-            )[skip_rows : skip_rows + cmp_len]
+            )
+            return ik[skip_rows : skip_rows + cmp_len], available[skip_rows : skip_rows + cmp_len]
 
-        for (layer, golden_dir), dev_ik in _prefetched(local_index_rows, read_index):
+        for (layer, golden_dir), (dev_ik, available) in _prefetched(local_index_rows, read_index):
             is_mtp_row = layer == mtp_index_layer
             golden_ik = _load_golden_index_k(
                 golden_dir,
@@ -1557,13 +1643,14 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 position0=first_pos + skip_rows,
             )
             dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
+            visible = _visible_mask(dev_ik, available, f"layer {layer} index")
+            dev_ik, golden_ik = dev_ik[visible], golden_ik[visible]
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
                 if mtp_index_layout != "interleaved":
-                    _, pcc_stored = comp_pcc(
-                        _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset), dev_ik
-                    )
+                    stored_ik = _load_golden_index_k(golden_dir, layer, cmp_len, start=golden_offset)
+                    _, pcc_stored = comp_pcc(stored_ik[visible], dev_ik)
                     logger.info(
                         f"[producer]   mtp_index golden as-stored ({mtp_index_layout}) {pcc_stored:.6f} -> "
                         f"re-based onto the device's rope pairing {pcc_index:.6f}"

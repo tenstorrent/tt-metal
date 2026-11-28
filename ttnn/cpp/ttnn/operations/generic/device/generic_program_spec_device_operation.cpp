@@ -666,19 +666,11 @@ GenericProgramSpecOperation::tensor_args_t make_program_spec_tensor_args(const s
 }
 
 // The ranges ttnn's framework gives the tensors (device_operation.hpp, on a cache miss): the whole mesh when every
-// tensor has a shard on every device, else the devices of the tensor on the fewest devices.
+// tensor has a shard on every device, else the devices of the tensor on the fewest devices; on a mesh several hosts
+// share, only this process's devices.
 ttnn::MeshCoordinateRangeSet tensor_ranges(const GenericProgramSpecOperation::tensor_args_t& tensor_args) {
-    namespace utils = ttnn::device_operation::mesh_device_operation_utils;
-    auto* mesh_device = tensor_args.output_tensor.device();
-    ttnn::MeshCoordinateRangeSet ranges;
-    if (utils::all_tensors_have_uniform_storage(tensor_args)) {
-        ranges.merge(ttnn::MeshCoordinateRange(mesh_device->shape()));
-    } else {
-        for (const auto& coord : utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-            ranges.merge(ttnn::MeshCoordinateRange(coord, coord));
-        }
-    }
-    return ranges;
+    return ttnn::device_operation::mesh_device_operation_utils::launch_ranges(
+        tensor_args, tensor_args.output_tensor.device());
 }
 
 // On a cache hit ttnn's framework rebinds each PrefetcherPipe of the cached programs to the pipe at the position in

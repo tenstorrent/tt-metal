@@ -1315,6 +1315,14 @@ const TensorSpec& D2DStreamServiceSender::get_per_shard_spec() const { return im
 
 CoreRange D2DStreamServiceSender::get_worker_cores() const { return impl_->worker_cores; }
 
+bool D2DStreamServiceSender::has_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    return impl_->data_ready_counter_addrs.contains(coord);
+}
+
+bool D2DStreamServiceReceiver::has_coord(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
+    return impl_->consumed_counter_addrs.contains(coord);
+}
+
 CoreCoord D2DStreamServiceSender::get_service_core(const tt::tt_metal::distributed::MeshCoordinate& coord) const {
     auto it = impl_->service_cores.find(coord);
     TT_FATAL(
@@ -1364,10 +1372,14 @@ std::shared_ptr<const tt::tt_metal::StreamSenderCoordTable> D2DStreamServiceSend
     TT_FATAL(shape.dims() == 2, "D2DStreamServiceSender::get_sender_coord_table: expects a 2D mesh");
     return impl_->sender_coord_table_cache->get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
         const tt::tt_metal::distributed::MeshCoordinate coord(row, col);
-        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
-        table.service_cores.push_back(get_service_core(coord));
+        // A service whose mapper covers part of the mesh has no state at the other coordinates: hold their slots
+        // with zeros and mark them, so outbound_socket_service_sync launches only on the covered ones.
+        const bool covered = has_coord(coord);
+        table.participates.push_back(covered ? 1 : 0);
+        table.data_ready_addrs.push_back(covered ? static_cast<uint32_t>(get_data_ready_counter_addr(coord)) : 0u);
+        table.service_cores.push_back(covered ? get_service_core(coord) : CoreCoord{0, 0});
         if (impl_->metadata_size_bytes > 0) {
-            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
+            table.metadata_addrs.push_back(covered ? static_cast<uint32_t>(get_metadata_addr(coord)) : 0u);
         }
     });
 }

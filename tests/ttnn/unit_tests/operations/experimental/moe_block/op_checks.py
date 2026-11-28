@@ -28,6 +28,7 @@ from loguru import logger
 import ttnn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[6]))  # (the repo root: tests.ttnn.profiling)
+from models.common.ci_failure import assert_perf_gate  # noqa: E402
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged  # noqa: E402
 
 # the MoE block's ops, each by a path its program's kernel sources contain
@@ -182,7 +183,7 @@ def check_perf(label: str, measured_us: float, baseline_us, margin: float = 0.05
 def assert_no_perf_failures(failures):
     """A test with several numbers: each logged and checked first (perf_failure), then every failure in one message."""
     failures = [f for f in failures if f]
-    assert not failures, f"{len(failures)} perf number(s) slower than their limit:\n" + "\n".join(failures)
+    assert_perf_gate(not failures, f"{len(failures)} perf number(s) slower than their limit:\n" + "\n".join(failures))
 
 
 # Every perf measurement: the median of this many runs (traced replays, eager calls or host-timed repetitions).

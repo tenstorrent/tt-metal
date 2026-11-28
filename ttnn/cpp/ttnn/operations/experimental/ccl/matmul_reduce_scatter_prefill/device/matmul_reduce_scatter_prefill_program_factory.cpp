@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
+#include <fmt/format.h>
 #include <map>
 #include <mutex>
 #include <set>
@@ -31,6 +32,7 @@
 #include "ttnn/kernel_lib/mcast/host/mcast.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/mesh_chip_exchange.hpp"
 #include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -187,6 +189,73 @@ std::map<PortKey, CoreCoord> mrs_place_ports(
         TT_FATAL(cores.contains(key), "matmul_reduce_scatter_prefill: no free strip cell for a port");
     }
     return cores;
+}
+
+// A port's core on its own chip, and the address another chip uses for it.
+struct PlacedPort {
+    CoreCoord logical;
+    CoreCoord translated;
+};
+
+// The ports of every chip of the mesh, indexed by linear chip index. A rank can only read the layout of its own
+// chips, so each places the ports of its own chips and the ranks swap the results. Words per port: logical core (2),
+// translated core (2), for the 2 * num_links ports of a chip.
+std::vector<std::map<PortKey, PlacedPort>> mrs_place_mesh_ports(
+    distributed::MeshDevice* mesh,
+    detail::Strip strip,
+    uint32_t gx,
+    uint32_t gy,
+    uint32_t num_links,
+    uint32_t axis,
+    bool ring) {
+    const uint32_t G = mesh->shape()[axis];
+    const uint32_t num_ports = 2 * num_links;
+    const auto records = ttnn::operations::ccl::common::exchange_chip_records(
+        *mesh,
+        ttnn::operations::ccl::common::mesh_distributed_context(*mesh),
+        num_ports * 4,
+        [mesh, strip, gx, gy, num_links, axis, ring, G, num_ports](const MeshCoordinate& coord) {
+            const uint32_t pos = coord[axis];
+            auto coord_at = [&coord, axis](uint32_t at) {
+                MeshCoordinate peer = coord;
+                peer[axis] = at;
+                return peer;
+            };
+            std::array<std::optional<MeshCoordinate>, 2> peers;
+            if (ring || pos + 1 < G) {
+                peers[kFwd] = coord_at((pos + 1) % G);
+            }
+            if (ring || pos > 0) {
+                peers[kBwd] = coord_at((pos + G - 1) % G);
+            }
+            const auto logical = mrs_place_ports(mesh, coord, strip, gx, gy, num_links, peers);
+            auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
+            ttnn::operations::ccl::common::RecordWriter writer(num_ports * 4);
+            for (uint32_t i = 0; i < num_ports; ++i) {
+                const CoreCoord& core = logical.at({i % 2, i / 2});
+                writer.put_core(core);
+                writer.put_core(device->worker_core_from_logical_core(core));
+            }
+            return writer.finish();
+        },
+        fmt::format(
+            "matmul_reduce_scatter_prefill ports strip={} gx={} gy={} links={} axis={} ring={}",
+            static_cast<int>(strip),
+            gx,
+            gy,
+            num_links,
+            axis,
+            ring));
+    std::vector<std::map<PortKey, PlacedPort>> ports(records.size());
+    for (std::size_t chip = 0; chip < records.size(); ++chip) {
+        ttnn::operations::ccl::common::RecordReader reader(records[chip]);
+        for (uint32_t i = 0; i < num_ports; ++i) {
+            const CoreCoord logical = reader.get_core();
+            const CoreCoord translated = reader.get_core();
+            ports[chip][{i % 2, i / 2}] = PlacedPort{logical, translated};
+        }
+    }
+    return ports;
 }
 
 // plan_mcast_senders: families a, a2, b, b2; absent when the window is not split. Both regimes place the senders
@@ -447,19 +516,15 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     auto link_of = [&](uint32_t k) { return k % L; };
     const CoreRangeSet mm_crs(CoreRange(mm_core(0, 0), mm_core(gd.grid_m - 1, gd.grid_n - 1)));
 
-    std::map<uint32_t, std::map<PortKey, CoreCoord>> ports_by_pos;
-    auto ports_at = [&](uint32_t pos) -> const std::map<PortKey, CoreCoord>& {
-        auto it = ports_by_pos.find(pos);
-        if (it == ports_by_pos.end()) {
-            it = ports_by_pos.emplace(pos, mrs_place_ports(mesh, coord_at(pos), gd.strip, gx, gy, L, peers_of(pos)))
-                     .first;
-        }
-        return it->second;
+    const auto mesh_ports = mrs_place_mesh_ports(mesh, gd.strip, gx, gy, L, axis, ring);
+    auto ports_at = [&mesh_ports, &coord_at, mesh](uint32_t pos) -> const std::map<PortKey, PlacedPort>& {
+        return mesh_ports.at(coord_at(pos).to_linear_index(mesh->shape()));
     };
-    const std::map<PortKey, CoreCoord> ports = ports_at(p);
-    auto port_vcore = [&](uint32_t pos, uint32_t d, uint32_t l) {
-        return mesh->worker_core_from_logical_core(ports_at(pos).at({d, l}));
-    };
+    std::map<PortKey, CoreCoord> ports;
+    for (const auto& [key, port] : ports_at(p)) {
+        ports[key] = port.logical;
+    }
+    auto port_vcore = [&ports_at](uint32_t pos, uint32_t d, uint32_t l) { return ports_at(pos).at({d, l}).translated; };
     std::vector<std::array<bool, 2>> link_halves(L, {false, false});
     for (uint32_t k = 0; k < n_cores; ++k) {
         link_halves[link_of(k)][half(k)] = true;

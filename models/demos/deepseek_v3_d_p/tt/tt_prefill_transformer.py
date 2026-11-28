@@ -12,6 +12,7 @@ Equivalent to the reference Transformer class (models/demos/deepseek_v3/referenc
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -333,7 +334,10 @@ class TtPrefillTransformer(LightweightModule):
                 use_fused=(
                     use_fused_rmsnorm
                     if use_fused_rmsnorm is not None
-                    else getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+                    else getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False)
+                    and is_blackhole()
+                    and is_chunked
+                    and os.environ.get("PREFILL_FUSED_RMSNORM", "1") != "0"
                 ),
             )
             if build_tail
@@ -1296,9 +1300,9 @@ class TtPrefillTransformer(LightweightModule):
                 MTPTraceEmbedSource(
                     union,
                     geometry,
-                    embed_fn=(lambda h, g=geometry: self.mtp_generate_embedding_selected(h, g.lm_rows))
-                    if generate
-                    else None,
+                    embed_fn=(
+                        (lambda h, g=geometry: self.mtp_generate_embedding_selected(h, g.lm_rows)) if generate else None
+                    ),
                     all_gather_sp=all_gather_sp,
                 )
                 for union, geometry in zip(unions, geometries)

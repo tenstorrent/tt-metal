@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 #include <tt_stl/move_only_function.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include <tt_stl/span.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +58,10 @@ class ThreadPool;
 struct TraceDescriptor;
 
 namespace distributed {
+
+namespace multihost {
+class DistributedContext;
+}  // namespace multihost
 
 class MeshCommandQueue;
 class MeshDeviceView;
@@ -239,6 +244,11 @@ public:
         "get_device_ids instead. This will be removed after 2026-11-19.")]]
     std::vector<IDevice*> get_devices() const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
+
+    // Sub-context over the ranks driving this mesh's devices, or nullopt when this rank drives all of them. Created on
+    // first use, collectively across the co-owners. The mesh owns the context: the reference is valid only while the
+    // mesh is alive, and ownership is not shared with the caller.
+    ttsl::optional_reference<const multihost::DistributedContext> coowner_context() const;
 
     DeviceIds get_device_ids() const;
 

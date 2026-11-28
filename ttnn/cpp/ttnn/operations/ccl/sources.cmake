@@ -13,6 +13,7 @@ set(TTNN_OP_CCL_SRCS
     common/host/ccl_worker_builder.cpp
     common/host/ccl_command_stream_builders.cpp
     common/host/moe_utils.cpp
+    common/host/mesh_chip_exchange.cpp
     common/host/mesh_ring_plan.cpp
     common/host/ccl_topology_utils.cpp
     all_broadcast/all_broadcast.cpp

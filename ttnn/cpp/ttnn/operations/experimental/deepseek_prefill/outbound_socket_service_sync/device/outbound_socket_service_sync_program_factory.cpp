@@ -176,7 +176,14 @@ tt::tt_metal::WorkloadDescriptor OutboundSocketServiceSyncProgramFactory::create
     Tensor& backing_out,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor workload;
+    const auto& table = *args.coords;
     for (const auto& coord : tensor_coords.coords()) {
+        // A service covering a row block of the mesh: its input spans the whole mesh, but only the covered
+        // coordinates have a service to feed.
+        const uint32_t idx = coord[0] * table.num_cols + coord[1];
+        if (!table.participates.empty() && (idx >= table.participates.size() || table.participates[idx] == 0)) {
+            continue;
+        }
         workload.programs.push_back(
             {ttnn::MeshCoordinateRange(coord), build_descriptor_at(args, tensor_args, backing_out, coord)});
     }
