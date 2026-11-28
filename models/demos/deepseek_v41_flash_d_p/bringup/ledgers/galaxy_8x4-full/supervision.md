@@ -1601,3 +1601,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 01:50 heartbeat: NC.5 native_migrate running; RAM used 64 GB; / 67G free.
 - 02:21 heartbeat: NC.5 running (pair_pool ported; pack_fp8_rows final pass); RAM used 64 GB; / 102G free.
 - 02:51 heartbeat: NC.5 running (unpack_fp8_rows rounds); RAM used 64 GB; / 102G free.
+- 03:08 NC.5 PASS -> d9d05d50b5c (C++ ttnn.pair_pool, pack_fp8_rows, unpack_fp8_rows, ckv_bfp4_rows). Identical on 10 cases, repeats 0, no cache growth; host a call ~60-89 -> 20-32 us; ~1.0 ms host a 8192 chunk; device unchanged. Accepted.
+- 03:20 heartbeat: NC.6 agent active; RAM used 63 GB; / 102G free.
+- 03:50 heartbeat: NC.6 agent active; RAM used 63 GB; / 101G free.
+- 04:20 heartbeat: NC.6 (block_keys, block_gather ported; block_max_bf16 running); RAM used 64 GB; / 101G free.

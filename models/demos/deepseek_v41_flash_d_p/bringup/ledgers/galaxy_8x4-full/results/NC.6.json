@@ -1,0 +1,261 @@
+{
+ "metrics": {
+  "native_cache_growth_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 0
+  },
+  "native_cache_growth_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 0
+  },
+  "native_cache_growth_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 0
+  },
+  "native_cache_growth_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 0
+  },
+  "native_cache_growth_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 0
+  },
+  "native_cache_growth_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 0
+  },
+  "native_cache_growth_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 0
+  },
+  "native_cache_growth_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 0
+  },
+  "native_device_us_generic_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 389.35
+  },
+  "native_device_us_generic_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 118.12
+  },
+  "native_device_us_generic_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 74.2
+  },
+  "native_device_us_generic_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 118.02
+  },
+  "native_device_us_generic_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 135.48
+  },
+  "native_device_us_generic_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 246.05
+  },
+  "native_device_us_generic_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 22.71
+  },
+  "native_device_us_generic_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 33.33
+  },
+  "native_device_us_native_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 389.39
+  },
+  "native_device_us_native_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 118.18
+  },
+  "native_device_us_native_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 74.27
+  },
+  "native_device_us_native_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 117.89
+  },
+  "native_device_us_native_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 135.49
+  },
+  "native_device_us_native_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 245.8
+  },
+  "native_device_us_native_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 22.71
+  },
+  "native_device_us_native_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 33.33
+  },
+  "native_host_us_generic_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 151.7
+  },
+  "native_host_us_generic_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 61.2
+  },
+  "native_host_us_generic_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 58.4
+  },
+  "native_host_us_generic_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 62.7
+  },
+  "native_host_us_generic_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 79.2
+  },
+  "native_host_us_generic_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 122.4
+  },
+  "native_host_us_generic_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 88.3
+  },
+  "native_host_us_generic_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 87.1
+  },
+  "native_host_us_native_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 32.2
+  },
+  "native_host_us_native_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 20.9
+  },
+  "native_host_us_native_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 20.3
+  },
+  "native_host_us_native_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 20.8
+  },
+  "native_host_us_native_direct_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 44.2
+  },
+  "native_host_us_native_direct_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 20.3
+  },
+  "native_host_us_native_direct_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 19.7
+  },
+  "native_host_us_native_direct_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 19.9
+  },
+  "native_host_us_native_direct_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 20.3
+  },
+  "native_host_us_native_direct_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 30.6
+  },
+  "native_host_us_native_direct_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 29.7
+  },
+  "native_host_us_native_direct_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 29.4
+  },
+  "native_host_us_native_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 21.4
+  },
+  "native_host_us_native_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 30.0
+  },
+  "native_host_us_native_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 31.1
+  },
+  "native_host_us_native_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 30.9
+  },
+  "native_mismatch_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 0.0
+  },
+  "native_mismatch_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 0.0
+  },
+  "native_mismatch_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 0.0
+  },
+  "native_mismatch_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 0.0
+  },
+  "native_mismatch_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 0.0
+  },
+  "native_mismatch_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 0.0
+  },
+  "native_mismatch_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 0.0
+  },
+  "native_mismatch_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 0.0
+  },
+  "native_repeat_bmax_fold": {
+   "t": "2026-11-28T04:24:31",
+   "value": 0.0
+  },
+  "native_repeat_bmax_p8192": {
+   "t": "2026-11-28T04:23:42",
+   "value": 0.0
+  },
+  "native_repeat_bmax_s5120": {
+   "t": "2026-11-28T04:23:48",
+   "value": 0.0
+  },
+  "native_repeat_bmax_s8192": {
+   "t": "2026-11-28T04:23:31",
+   "value": 0.0
+  },
+  "native_repeat_gather5120": {
+   "t": "2026-11-28T04:24:47",
+   "value": 0.0
+  },
+  "native_repeat_gather8192": {
+   "t": "2026-11-28T04:24:40",
+   "value": 0.0
+  },
+  "native_repeat_keys5120": {
+   "t": "2026-11-28T04:24:51",
+   "value": 0.0
+  },
+  "native_repeat_keys8192": {
+   "t": "2026-11-28T04:24:49",
+   "value": 0.0
+  }
+ },
+ "task": "NC.6"
+}

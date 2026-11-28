@@ -93,6 +93,9 @@
 #include "ttnn/operations/pack_fp8_rows/pack_fp8_rows_nanobind.hpp"
 #include "ttnn/operations/unpack_fp8_rows/unpack_fp8_rows_nanobind.hpp"
 #include "ttnn/operations/ckv_bfp4_rows/ckv_bfp4_rows_nanobind.hpp"
+#include "ttnn/operations/block_gather/block_gather_nanobind.hpp"
+#include "ttnn/operations/block_keys/block_keys_nanobind.hpp"
+#include "ttnn/operations/block_max_bf16/block_max_bf16_nanobind.hpp"
 
 namespace nb = nanobind;
 
@@ -266,6 +269,15 @@ void py_module(nb::module_& mod) {
 
     auto m_ckv_bfp4_rows = mod.def_submodule("ckv_bfp4_rows", "ckv_bfp4_rows operation");
     ckv_bfp4_rows::bind_ckv_bfp4_rows_operation(m_ckv_bfp4_rows);
+
+    auto m_block_gather = mod.def_submodule("block_gather", "block_gather operation");
+    block_gather::bind_block_gather_operation(m_block_gather);
+
+    auto m_block_keys = mod.def_submodule("block_keys", "block_keys operation");
+    block_keys::bind_block_keys_operation(m_block_keys);
+
+    auto m_block_max_bf16 = mod.def_submodule("block_max_bf16", "block_max_bf16 operation");
+    block_max_bf16::bind_block_max_bf16_operation(m_block_max_bf16);
 }
 }  // namespace ttnn::operations
 

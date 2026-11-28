@@ -1,0 +1,136 @@
+{
+ "used": [
+  {
+   "id": "DS41-401",
+   "how": "checked the three entries' call sites under the shipped settings and the WA.4R packed walls (indexer_bmax / indexer_gather sections) before porting: all three run, ported all",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-402",
+   "how": "after the block_gather and block_keys runs, put the sibling entries' kernels back in block_select_ttnn/kernels and restored KERNELS before the next run (e47062de62f, 8dabc1d89f2 on the port branch)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-398",
+   "how": "expected host saving a call taken from NC.1 / NC.5 native vs prepared numbers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-399",
+   "how": "checked block_select_ttnn for sibling generic_op modules before native_migrate (one module): 'generic route: none' in all three runs",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a native C++ op returns a new Python wrapper over a caller's output_tensor (identity checks in tests free the caller's buffer): now DS41-403"
+ ],
+ "overseer": [
+  {
+   "id": "OV-82",
+   "answer": "done",
+   "evidence": "INDEXER_BLOCK_SELECT=on, INDEXER_BMAX_COMPUTE=on (defaults; tasks.yaml packed gates set BMAX on): single TtIndexer.__call__ -> block_topk(n=) and packed tt/packed_glued.py:1581 -> block_topk(n_tensor=) call block_max_bf16(strip_major), block_gather, block_keys above 163840 / 196608 keys; logs/WA.4R.shared/WA.4R_test_packed_walls.log lanes4x2k p524288: indexer_bmax 0.22-0.23 ms, indexer_gather 0.85 ms. All three ported; the fold mode (BMAX_COMPUTE=off, not shipped) is a branch of the same entry, carried by the port and left out of the saving."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the ports keep the same programs, grids and shapes"
+  }
+ ],
+ "cited_only": [
+  "DS41-403"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.6",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T04:26:43",
+  "head": "d9d05d50b5c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.6.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.6_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.6.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_block_select.py",
+   "tests/ttnn/unit_tests/operations/block_gather/pre_migration/block_gather_pm_ref.py",
+   "tests/ttnn/unit_tests/operations/block_gather/pre_migration/conftest.py",
+   "tests/ttnn/unit_tests/operations/block_gather/pre_migration/test_acceptance.py",
+   "tests/ttnn/unit_tests/operations/block_gather/pre_migration/test_block_gather_host_perf.py",
+   "tests/ttnn/unit_tests/operations/block_gather/pre_migration/test_golden_cut.py",
+   "tests/ttnn/unit_tests/operations/block_keys/pre_migration/conftest.py",
+   "tests/ttnn/unit_tests/operations/block_keys/pre_migration/test_acceptance.py",
+   "tests/ttnn/unit_tests/operations/block_keys/pre_migration/test_block_keys_host_perf.py",
+   "tests/ttnn/unit_tests/operations/block_keys/pre_migration/test_golden_cut.py",
+   "tests/ttnn/unit_tests/operations/block_keys/pre_migration/test_golden_cut_mesh.py",
+   "tests/ttnn/unit_tests/operations/block_max_bf16/pre_migration/block_max_ref.py",
+   "tests/ttnn/unit_tests/operations/block_max_bf16/pre_migration/conftest.py",
+   "tests/ttnn/unit_tests/operations/block_max_bf16/pre_migration/test_acceptance.py",
+   "tests/ttnn/unit_tests/operations/block_max_bf16/pre_migration/test_block_max_bf16_host_perf.py",
+   "tests/ttnn/unit_tests/operations/block_max_bf16/pre_migration/test_golden_cut.py",
+   "ttnn/cpp/ttnn-nanobind/__init__.cpp",
+   "ttnn/cpp/ttnn/operations/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/block_gather/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/block_gather/block_gather.cpp",
+   "ttnn/cpp/ttnn/operations/block_gather/block_gather.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/block_gather_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/block_gather/block_gather_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/block_gather_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/block_gather_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/block_gather_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/block_gather_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/block_gather_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/kernels/block_gather.cpp",
+   "ttnn/cpp/ttnn/operations/block_gather/device/kernels/block_gather_args.hpp",
+   "ttnn/cpp/ttnn/operations/block_gather/sources.cmake",
+   "ttnn/cpp/ttnn/operations/block_keys/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/block_keys/block_keys.cpp",
+   "ttnn/cpp/ttnn/operations/block_keys/block_keys.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/block_keys_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/block_keys/block_keys_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/block_keys_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/block_keys_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/block_keys_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/block_keys_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/block_keys_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/kernels/block_keys.cpp",
+   "ttnn/cpp/ttnn/operations/block_keys/device/kernels/block_keys_args.hpp",
+   "ttnn/cpp/ttnn/operations/block_keys/sources.cmake",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/block_max_bf16.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/block_max_bf16.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/block_max_bf16_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/block_max_bf16_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/block_max_bf16_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/block_max_bf16_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/block_max_bf16_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/block_max_bf16_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/block_max_bf16_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/kernels/block_max_bf16.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/kernels/block_max_bf16_args.hpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/device/kernels/block_max_strip.cpp",
+   "ttnn/cpp/ttnn/operations/block_max_bf16/sources.cmake",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/README.md",
+   "ttnn/ttnn/bringup/block_select_ttnn/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/__init__.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/block_select.py",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/kernels/block_gather.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/kernels/block_keys.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/kernels/block_max_bf16.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/generic/kernels/block_max_strip.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_gather.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_keys.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_bf16.cpp",
+   "ttnn/ttnn/bringup/block_select_ttnn/kernels/block_max_strip.cpp"
+  ]
+ }
+}

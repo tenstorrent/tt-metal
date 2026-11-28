@@ -2031,3 +2031,47 @@
 - Left for later: tests/perf/test_ckv_rows_host.py (a PB.MB4 perf probe, outside this task's paths) reads the removed
   `_ROWS_PREPARED`; bfp_round (shipped, indexer query) and the plain ckv_bfp4 are still Python prepared programs.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.5 --spec $BRINGUP_SPEC --check`.
+
+## NC.6 (perf, attempt 1): the indexer block-select fork (block_max_bf16, block_gather, block_keys) to native C++
+
+- OV-82 (which programs run on the shipped path; checked before any port):
+  - INDEXER_BLOCK_SELECT=on (default), INDEXER_BMAX_COMPUTE=on (default; tasks.yaml packed gates set it on too),
+    INDEXER_BLOCK_SELECT_MIN / _MIN_PACKED auto = 163840 / 196608 compressed keys (tt/indexer.py BSEL_MIN_AUTO).
+  - Single chunk: TtIndexer.__call__ -> use_block_select -> topk_of -> block_topk(n=int):
+    block_max_bf16(strip_major=True, n=), block_gather(block=32), block_keys(block=32).
+  - Packed glued (DS41_PACKED*=on, POS_DYNAMIC=on): tt/packed_glued.py:1581 use_block_select(packed=True) ->
+    block_topk(n_tensor=each chip's [1] uint32) (the same three ops, the strip mode with a device length).
+  - Run evidence: logs/WA.4R.shared/WA.4R_test_packed_walls.log, lanes4x2k p524288 / p786432 / p1024000: sections
+    indexer_bmax 0.22-0.23 ms and indexer_gather 0.85-0.86 ms a chunk (the block path ran).
+  - All three entries run: all ported. block_max_bf16's fold mode (factor=4, INDEXER_BMAX_COMPUTE=off) does not run
+    on the shipped path, but it is a branch of the same entry: the port carries it (one op, two modes).
+- Expected saving a chunk (before measuring; perf_guide: host-only, the same kernels): device ~0; host ~35-50 us a call
+  (DS41-398 / NC.5: Python prepared 58-89 us -> native 20-32 us) x 3 ops x the index layers on the block path
+  (3 index layers past the threshold, single 8192 at >= 655k tokens; packed glued 4 x 2k: 3 layers x passes) =
+  ~0.3-0.5 ms host a chunk at long context, 0 below the threshold.
+- Ports (tt_ops_code_gen native_migrate in /scratch/dnijemcevic/native/tt-metal; dnijemcevic/native_gmm fast-forwarded
+  to d9d05d50b5c; one entry a run, each stacked on the previous port branch; golden = the fork's
+  tests/unit/test_block_select.py for all three; runs under devjob): block_gather 20.9 min ported; block_keys 27.2 min
+  ported (one golden-parity bounce in its final pass, fixed in round 5); block_max_bf16 22.0 min ported (both modes).
+  DS41-402 hit after each of the first two runs: the tool moved the whole kernels dir and pointed KERNELS at the new
+  op's dir; the siblings' kernels were put back in block_select_ttnn/kernels and KERNELS restored, committed on the
+  port branch, before the next run (e47062de62f, 8dabc1d89f2).
+- Brought in with `git diff --binary d9d05d50b5c HEAD | git apply` (no conflicts) + `cmake --build build --target
+  install`. On top: block_select_ttnn/generic/ (test only): the pre-port block_select.py byte for byte below a note,
+  and its four kernels. Model call sites unchanged (tt/indexer.py block_topk: same imports, kwargs, returns; max_grid
+  is the ttnn.CoreCoord the C++ bindings take).
+- No setting: the allowed paths exclude tt/settings.py (as NC.1-NC.5); the old routes are reachable for the test only.
+- Gate test tests/native/test_native_block_select.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads, 95 s):
+  8 cases at the model's calls (strip transpose single 8192 / packed n_tensor / 5120; fold factor 4; gather and keys at
+  8192 and 5120; T 524288 / 522240, Sq 256 / 160, max_grid). Mismatch / repeat / cache growth 0 in every case. First
+  gate run failed in the test itself (DS41-403: freed the caller's output by id), fixed, then PASS.
+- Measured (results/NC.6_layer.md): host a warm call native vs Python: strip 20.3-20.9 / 58.4-62.7 us, gather
+  21.4-30.0 / 79.2-122.4, keys 30.9-31.1 / 87.1-88.3, fold 32.2 / 151.7. Device equal in every case (gather 246 us,
+  strip 118 us, keys 33 us at 8192). Saving ~0.52 ms host a chunk on the block path (3 calls each op), 0 below the
+  threshold; device 0 (expected 0.3-0.5 ms host).
+- Cores (rule 18): unchanged (no matmul; the Python programs' grids, capped by the model's max_grid: 11 x 10 = 110).
+- Rule 20, per-chunk values touched: block_max_bf16's n (kv_len // 32, single path) is a common runtime arg rewritten
+  on a program-cache hit (0 growth with a new n in the test), as the prepared program's value slot was; the packed
+  path's n_tensor is device data (each chip's length); gather / keys have none (addresses only). Nothing new on the host.
+- Not run: `orchestrator measure` (op-level only, owner), any model load, the fork regression suite (owner).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.6 --spec $BRINGUP_SPEC --check`.
