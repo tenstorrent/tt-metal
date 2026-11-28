@@ -183,14 +183,13 @@ class H3Carry(NamedTuple):
     stack_args: tuple
     stack_kwargs: dict
     trace_key: tuple
+    temb: ttnn.Tensor
     timestep_idx: ttnn.Tensor
     video_out_indices: ttnn.Tensor
     audio_out_indices: ttnn.Tensor
 
 
-def _as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
-    t = ttnn.reshape(t, (1, t.shape[-1]))
-    return t if t.dtype == ttnn.uint32 else ttnn.typecast(t, ttnn.uint32)
+_as_indices = MiniMaxH3TransformerBlock._gather_indices
 
 
 class MiniMaxH3Transformer3DModel(Module):
@@ -625,6 +624,7 @@ class MiniMaxH3Transformer3DModel(Module):
 
         carry = H3Carry(
             stack_args=(logical_n, temb, adaln_idx, rope_cos, rope_sin),
+            temb=temb,
             stack_kwargs={
                 "eye": eye,
                 "adaln_tile_map": adaln_tile_map,
@@ -656,11 +656,7 @@ class MiniMaxH3Transformer3DModel(Module):
 
     def epilogue(self, hidden: ttnn.Tensor, carry: H3Carry, /) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """The blocks' output to `forward`'s result."""
-        hidden = self.norm_out(
-            hidden,
-            carry.stack_args[1],  # temb
-            carry.timestep_idx,
-        )
+        hidden = self.norm_out(hidden, carry.temb, carry.timestep_idx)
         ag_kwargs = {"num_workers_per_link": _DYNAMIC_AG_WORKERS_PER_LINK} if self.dynamic_length else {}
         if self.tp_factor > 1:
             hidden = self.ccl_manager.all_gather(
