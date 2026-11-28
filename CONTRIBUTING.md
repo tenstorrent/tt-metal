@@ -519,14 +519,7 @@ make clean
 make html
 ```
 
-You can optionally build and view the ttnn sweeps results with:
-
-```
-make ttnn_sweeps/check_directory
-make ttnn_sweeps
-```
-
-then turn on the server to view.
+Then turn on the server to view.
 
 ```
 make server
