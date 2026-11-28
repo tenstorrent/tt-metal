@@ -177,6 +177,10 @@ class MiniMaxH3TurboPipeline(MiniMaxH3Pipeline):
     def _dit_weight_mode(self) -> str:
         return f"{super()._dit_weight_mode()}_{self.lora_path.stem}_{self._lora_digest[:12]}_x{self.lora_strength!r}"
 
+    def _lowres_weights(self) -> str | None:
+        # The adapter as its clips were judged: at its own strength, over the plain weights.
+        return self._lora_digest if self.lora_strength == 1.0 and self.transformer_file is None else None
+
     def _read_safetensors(self, subfolder: str) -> dict[str, torch.Tensor]:
         state = super()._read_safetensors(subfolder)
         if subfolder != self.transformer_subfolder:

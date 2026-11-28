@@ -49,7 +49,7 @@ def _run(pipeline, on_audio):
         prompt_embeds=None,
         video_rows=torch.zeros(1),
         audio_rows=torch.zeros(1),
-        scheduler=None,
+        scheduler=SimpleNamespace(num_inference_steps=1),
         audio_scheduler=None,
         num_inference_steps=1,
         num_latent_frames=1,

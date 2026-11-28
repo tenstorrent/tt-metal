@@ -42,6 +42,7 @@ itself (~2.8 s), never the reload. `coresident=False` evicts each stage and disa
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -644,6 +645,21 @@ def draw_request_latents(
 
 LOWRES_STEPS_ENV = "MINIMAX_H3_LOWRES_STEPS"
 LOWRES_SCALE_ENV = "MINIMAX_H3_LOWRES_SCALE"
+# Weights are named by a sha256, never by a file name: of a transformer file's safetensors header (its tensor
+# table and merge recipe), or of the whole adapter file merged into the plain weights.
+EROS_MAX_BETA7_FIX1 = "d17bd72c3ed451da8bbb04b904d70121315efd4c4918e91c4858b1d7ee67c146"
+# (weights, latent frames, latent height, latent width, forwards) -> (low-res first forwards, scale): what a request
+# runs when `MINIMAX_H3_LOWRES_STEPS` is unset. A cell is listed only once its clips passed the side-by-side look
+# and VBench against full resolution, at the setting they passed with. All are 1344x768 with the first two forwards
+# at 896x512.
+LOWRES_DEFAULTS = {
+    (EROS_MAX_BETA7_FIX1, 47, 48, 84, 4): (2, "2/3"),  # 6 s
+}
+
+
+def safetensors_header_digest(path: Path) -> str:
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read(int.from_bytes(handle.read(8), "little"))).hexdigest()
 
 
 def lowres_noise_rows(
@@ -775,6 +791,7 @@ class MiniMaxH3Pipeline:
     # without __init__ (the unit tests) schedules as before.
     _pdd: dict | None = None
     _pdd_active: tuple | None = None
+    transformer_file: Path | None = None
 
     def __init__(
         self,
@@ -3527,6 +3544,11 @@ class MiniMaxH3Pipeline:
             else f"attention: Sol-Attn (tau {sol[3]}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
         )
 
+    def _lowres_weights(self) -> str | None:
+        """What `LOWRES_DEFAULTS` names these weights by; None for the plain ones. Read at each request: serving
+        swaps the file on a live pipeline."""
+        return safetensors_header_digest(self.transformer_file) if self.transformer_file is not None else None
+
     def _denoise_lowres(
         self,
         transformer: MiniMaxH3Transformer3DModel,
@@ -3542,21 +3564,27 @@ class MiniMaxH3Pipeline:
         num_audio_latents: int,
         on_event: PipelineEventCallback,
     ) -> tuple[torch.Tensor, torch.Tensor, MiniMaxH3Scheduler, MiniMaxH3Scheduler]:
-        """The first `MINIMAX_H3_LOWRES_STEPS` forwards (default 0: none) at `MINIMAX_H3_LOWRES_SCALE` (default
-        1/2) of the height and width, then the hand-off to full resolution. Returns the rows and the schedules for
-        the steps that are left.
+        """The first `MINIMAX_H3_LOWRES_STEPS` forwards at `MINIMAX_H3_LOWRES_SCALE` (default 1/2) of the height
+        and width, then the hand-off to full resolution. With `MINIMAX_H3_LOWRES_STEPS` unset, `LOWRES_DEFAULTS`
+        gives both for this request, or none; 0 turns the stage off. Returns the rows and the schedules for the
+        steps that are left.
 
         The video's last low-res step lands on its clean estimate, which is upscaled and re-noised to the sigma of
         the next step; the audio rows keep stepping through their own schedule, whatever the video's resolution.
         A request with condition rows, with a latent the scale does not put on the patch grid, or with no
         full-resolution forward left is returned as it came.
         """
-        steps = int(os.environ.get(LOWRES_STEPS_ENV, "0"))
+        total = scheduler.num_inference_steps
+        steps = os.environ.get(LOWRES_STEPS_ENV)
+        if steps is None:
+            request = (self._lowres_weights(), num_latent_frames, latent_height, latent_width, total)
+            steps, scale = LOWRES_DEFAULTS.get(request, (0, None))
+        else:
+            steps, scale = int(steps), os.environ.get(LOWRES_SCALE_ENV, "1/2")
         if steps <= 0:
             return video_rows, audio_rows, scheduler, audio_scheduler
-        total = scheduler.num_inference_steps
         patch_size = self.patch_size
-        scale = Fraction(os.environ.get(LOWRES_SCALE_ENV, "1/2"))
+        scale = Fraction(scale)
         lowres_height, lowres_width = latent_height * scale, latent_width * scale
         if (
             steps >= total
@@ -3566,7 +3594,7 @@ class MiniMaxH3Pipeline:
             or layout.num_condition_video_rows
             or layout.num_condition_audio_rows
         ):
-            self._log(f"{LOWRES_STEPS_ENV}={steps} does not apply to this request: all at full resolution")
+            self._log(f"{steps} low-res first steps do not apply to this request: all at full resolution")
             return video_rows, audio_rows, scheduler, audio_scheduler
         lowres_size = (int(lowres_height), int(lowres_width))
         self._log(f"low-res first stage: {steps} of {total} forwards at latent {lowres_size[0]}x{lowres_size[1]}")
