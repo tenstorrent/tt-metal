@@ -386,6 +386,9 @@ it. The inputs must be either all interleaved or all sharded.</p>
 <p>Interleaved inputs with different layouts are converted to the first input’s layout, or to ROW_MAJOR if a
 ROW_MAJOR input is not tile-aligned. A TILE input that is padded along <cite>dim</cite> needs every input to be TILE.
 Sharded inputs must also have the same layout, shard grid, sharding scheme and shard orientation.</p>
+<p>Aliasing: inputs with <cite>logical_shape[dim] == 0</cite> are dropped (torch.cat-lenient); if exactly one survivor
+remains and its memory_config already matches the output, the result aliases that input’s buffer — do not
+deallocate or in-place write the surviving input until the concat result is no longer read.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>

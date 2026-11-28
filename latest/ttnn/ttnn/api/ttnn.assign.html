@@ -430,7 +430,7 @@ sets the output’s dtype and memory configuration.</p>
 of 32.</p>
 <p>An output dtype other than the input’s needs a TILE input: a <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code> input can
 give a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> output, and a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> output when its
-values are not NaN.</p>
+values are not NaN or -0.0.</p>
 <p>On Blackhole, the input and the output can also be <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> tensors in ROW_MAJOR layout.</p>
 </div>
 <dl class="simple">

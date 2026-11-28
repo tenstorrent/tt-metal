@@ -426,9 +426,17 @@
 <td><p>BFLOAT8_B</p></td>
 <td><p>TILE</p></td>
 </tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">ttnn.MX_DTYPES</span></code> (Quasar only)</p></td>
+<td><p>TILE</p></td>
+</tr>
 </tbody>
 </table>
 <p><code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> is supported for interleaved tensors of rank 4 or less.</p>
+<p>MX tensors are supported for any rank. Swapping N and C of a rank-4 tensor, and the identity permutation,
+run natively. Every other permutation, including rank &gt; 4, requires interleaved input and output (sharded MX
+tensors are rejected; convert with <code class="docutils literal notranslate"><span class="pre">ttnn.to_memory_config</span></code> first); it is done in BFLOAT16 (staged in DRAM)
+and the result is converted back to the input’s MX format.</p>
 <p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input values must not be NaN when <code class="docutils literal notranslate"><span class="pre">dims</span></code> moves the last dimension.</p>
 </div>
 <dl class="simple">

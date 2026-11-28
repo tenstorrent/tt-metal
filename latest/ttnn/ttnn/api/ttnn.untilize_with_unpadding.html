@@ -402,7 +402,7 @@ each dimension <code class="docutils literal notranslate"><span class="pre">i</s
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, in ROW_MAJOR layout with the input’s dtype. A <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> input gives a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> output.</span></p>
+<p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the output tensor, in ROW_MAJOR layout with the input’s dtype. A <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> or MX input gives a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> output.</span></p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -417,7 +417,11 @@ each dimension <code class="docutils literal notranslate"><span class="pre">i</s
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8</p></td>
+<td><p>BFLOAT16, FLOAT32, BFLOAT8_B, INT32, UINT32, UINT16, UINT8, INT8</p></td>
+<td><p>TILE</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">ttnn.MX_DTYPES</span></code> (Quasar only)</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>

@@ -317,8 +317,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel9rsub_tileE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1ae56fe236cbce161cc69af6a64abd6580"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">rsub_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">param0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel9rsub_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_bEN7ckernel9rsub_tileEv8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">is_fp32_dest_acc_en</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">DST_ACCUM_MODE</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a2c108e8b77f30d7e1b58e59a0b3c08bd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">rsub_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">scalar</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_bEN7ckernel9rsub_tileEv8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Performs element-wise computation of rsub ( rsub(x,y) = y -x) on each element of a tile and y is a constant param in DST register at index tile_index. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine.</p>
@@ -327,7 +327,7 @@
 <div class="tt-api-param-list colwidths-auto docutils container">
 <p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
 <p class="tt-api-param-row"><span class="tt-api-param-name">idst  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to perform the computation on  </span></p>
-<p class="tt-api-param-row"><span class="tt-api-param-name">param0  </span><span class="tt-api-param-desc">Constant value that is being subtracted from  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">scalar  </span><span class="tt-api-param-desc">Constant value that is being subtracted from  </span></p>
 </div>
 
 </dd>

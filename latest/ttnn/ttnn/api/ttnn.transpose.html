@@ -391,6 +391,13 @@
 :param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: padding value for when tiles are broken in a transpose. Defaults to <cite>0.0</cite>.
 :type * <code class="xref py py-attr docutils literal notranslate"><span class="pre">pad_value</span></code>: float, optional</p>
 <p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: Memory Config of the output tensor</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>MX tensors (<code class="docutils literal notranslate"><span class="pre">ttnn.MX_DTYPES</span></code>: <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp8_e4m3</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp8_e5m2</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp6_e2m3</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp6_e3m2</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp4</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint8</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint4</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint2</span></code>; Quasar only) are TILE layout only. The N&lt;-&gt;C swap
+moves whole tiles and runs natively, as does a transpose that moves no data. Every other transpose requires
+interleaved input and output (sharded MX tensors are rejected; convert with <code class="docutils literal notranslate"><span class="pre">ttnn.to_memory_config</span></code>
+first); it is done in BFLOAT16 (staged in DRAM) and the result is converted back to the input’s MX format.</p>
+</div>
 </dd>
 </dl>
 

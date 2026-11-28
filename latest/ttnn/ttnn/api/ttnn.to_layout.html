@@ -373,9 +373,17 @@ the last two dimensions depending on the requested layout.</p>
 <li><p><span class="tt-api-param-name"><strong>pad_value</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">the optional pad value. Defaults to <cite>0.0f</cite>.</span></p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>MX formats (<code class="docutils literal notranslate"><span class="pre">ttnn.MX_DTYPES</span></code>: <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp8_e4m3</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp8_e5m2</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp6_e2m3</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp6_e3m2</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxfp4</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint8</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint4</span></code>, <code class="docutils literal notranslate"><span class="pre">ttnn.mxint2</span></code>; Quasar only) exist in TILE layout only. Converting an
+MX tensor to ROW_MAJOR_LAYOUT returns a BFLOAT16 tensor (<code class="docutils literal notranslate"><span class="pre">dtype</span></code>, if given, must be <code class="docutils literal notranslate"><span class="pre">ttnn.bfloat16</span></code>). A
+ROW_MAJOR BFLOAT16 or FLOAT32 tensor is converted to an MX TILE tensor by passing the MX format as <code class="docutils literal notranslate"><span class="pre">dtype</span></code>.</p>
+</div>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
-<dd class="field-even">
+<dd class="field-odd">
 <p><span class="tt-api-param-name"><em>ttnn.Tensor</em></span><span class="tt-api-param-desc">the tensor with the requested layout.</span></p>
 </dd>
 </dl>
