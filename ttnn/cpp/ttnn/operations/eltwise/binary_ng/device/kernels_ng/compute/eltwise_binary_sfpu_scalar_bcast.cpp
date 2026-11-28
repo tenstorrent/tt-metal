@@ -38,70 +38,30 @@
 
 ALWI void process_tile(
     tt::CBIndex cb_bcast,
-    tt::CBIndex cb_llk_post,
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
+    tt::CBIndex cb_pre_other,
+    tt::CBIndex cb_post_other,
     tt::CBIndex cb_out,
+    uint32_t bcast_dst_offset,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
 
-#if BCAST_INPUT
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_PRE_OTHER cb_pre_lhs
-#define CB_POST_OTHER cb_post_lhs
-#define EXP_CB_POST_BCAST exp_dfb_post_rhs
-#define EXP_CB_POST_OTHER exp_dfb_post_lhs
-#else
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_PRE_OTHER cb_pre_rhs
-#define CB_POST_OTHER cb_post_rhs
-#define EXP_CB_POST_BCAST exp_dfb_post_lhs
-#define EXP_CB_POST_OTHER exp_dfb_post_rhs
-#endif
+    const uint32_t other_dst_offset = 1 - bcast_dst_offset;
     DataflowBuffer exp_dfb_bcast(cb_bcast);
-    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
-    DataflowBuffer exp_dfb_post_lhs(cb_post_lhs);
-    DataflowBuffer exp_dfb_post_rhs(cb_post_rhs);
+    DataflowBuffer exp_dfb_post_other(cb_post_other);
     DataflowBuffer exp_dfb_out(cb_out);
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
-    pack_reconfig_data_format(cb_out, cb_llk_post);
-    reconfig_data_format(cb_bcast, cb_bcast);
-    unary_bcast_init<BroadcastType::SCALAR>(cb_bcast);
-    exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
-    tile_regs_acquire();
-    unary_bcast<BroadcastType::SCALAR>(cb_bcast, 0, 0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile(0, cb_llk_post);
-    exp_dfb_llk_post.push_back(num_tiles_per_cycle);
-    tile_regs_release();
-
-    pack_reconfig_data_format(cb_llk_post, cb_out);
-
-    PREPROCESS(
-        BCAST_OP,
-        CircularBuffer(CB_PRE_BCAST),
-        CircularBuffer(CB_POST_BCAST),
-        CircularBuffer(cb_out),
-        num_tiles_per_cycle);
-    EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
         PREPROCESS(
             OTHER_OP,
-            CircularBuffer(CB_PRE_OTHER),
-            CircularBuffer(CB_POST_OTHER),
+            CircularBuffer(cb_pre_other),
+            CircularBuffer(cb_post_other),
             CircularBuffer(cb_out),
             num_tiles_per_cycle);
-        EXP_CB_POST_OTHER.wait_front(num_tiles_per_cycle);
+        exp_dfb_post_other.wait_front(num_tiles_per_cycle);
 
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
 
@@ -109,15 +69,15 @@ ALWI void process_tile(
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
-        copy_init(cb_post_lhs);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        unary_bcast_init<BroadcastType::SCALAR>(cb_bcast);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs, i, i * 2);
+            unary_bcast<BroadcastType::SCALAR>(cb_bcast, i, i * 2 + bcast_dst_offset);
         }
-        reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
-        copy_init(cb_post_rhs);
+        reconfig_data_format_srca(cb_bcast, cb_post_other);
+        copy_init(cb_post_other);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs, i, i * 2 + 1);
+            copy_tile(cb_post_other, i, i * 2 + other_dst_offset);
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
@@ -138,9 +98,8 @@ ALWI void process_tile(
         tile_regs_release();
 
         exp_dfb_out.push_back(num_tiles_per_cycle);
-        EXP_CB_POST_OTHER.pop_front(num_tiles_per_cycle);
+        exp_dfb_post_other.pop_front(num_tiles_per_cycle);
     }
-    EXP_CB_POST_BCAST.pop_front(num_tiles_per_cycle);
     exp_dfb_bcast.pop_front(num_tiles_per_cycle);
 }
 
@@ -161,22 +120,26 @@ void kernel_main() {
 
     constexpr auto cb_out = tt::CBIndex::c_2;
 
+    // The broadcast operand reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
 #if SRC_BCAST
+#if HAS_ACTIVATIONS(LHS)
+#error "LLK scalar broadcast of LHS does not support LHS activations"
+#endif
     constexpr auto cb_bcast = tt::CBIndex::c_0;
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    constexpr auto cb_pre_lhs = cb_llk_post;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_llk_post;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
+    constexpr auto cb_pre_other = tt::CBIndex::c_1;
+    constexpr auto cb_post_other = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
+    constexpr uint32_t bcast_dst_offset = 0;
 #endif
 #if SRC_BCAST_B
-    constexpr auto cb_bcast = tt::CBIndex::c_1;
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = cb_llk_post;
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
+#if HAS_ACTIVATIONS(RHS)
+#error "LLK scalar broadcast of RHS does not support RHS activations"
 #endif
+    constexpr auto cb_bcast = tt::CBIndex::c_1;
+    constexpr auto cb_pre_other = tt::CBIndex::c_0;
+    constexpr auto cb_post_other = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
+    constexpr uint32_t bcast_dst_offset = 1;
+#endif
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
 
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
     copy_init(cb_post_lhs);
@@ -194,12 +157,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
             cb_bcast,
-            cb_llk_post,
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
+            cb_pre_other,
+            cb_post_other,
             cb_out,
+            bcast_dst_offset,
             tile_freq,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
@@ -208,12 +169,10 @@ void kernel_main() {
     if (remaining_iterations > 0) {
         process_tile(
             cb_bcast,
-            cb_llk_post,
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
+            cb_pre_other,
+            cb_post_other,
             cb_out,
+            bcast_dst_offset,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);

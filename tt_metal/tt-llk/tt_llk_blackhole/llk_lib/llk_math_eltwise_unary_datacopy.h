@@ -22,6 +22,31 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
+ * @brief Whether a COL or SCALAR B2D broadcast moves SrcB with MOVB2D rather than ELWADD against a zeroed SrcA.
+ *
+ * MOVB2D copies SrcB datums into a 16-bit Dst without arithmetic, so NaN survives. -0.0 survives only while
+ * ALU_ACC_CTRL_Zero_Flag_disabled_src is set; otherwise MOVB2D flushes every datum with a zero exponent to +0.0, so
+ * the caller owns the zero-flag state (unary_bcast_init sets it). ELWADD computes 0 + x in the FPU, which turns -0.0
+ * into +0.0 and does not follow IEEE754 for NaN (ISA doc ELWADD.md, functional-model note).
+ *
+ * ELWADD stays where MOVB2D cannot do the job: acc_to_dest needs the add, and MOVB2D writes a 16-bit Dst unless
+ * SrcAFmt is TF32, so it cannot widen into an FP32 Dst. UInt16 always takes MOVB2D, since ELWADD would treat it as a
+ * float.
+ *
+ * @note MOVB2D takes its exponent width from SrcAFmt, which on Blackhole is the implied format of the SrcB bank
+ * the unpacker just wrote (DISABLE_IMPLIED_SRCA_FMT left at 0), so it follows the broadcast operand without caller setup.
+ *
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam acc_to_dest: B2D broadcast accumulates into dest.
+ * @param dst_format: Destination data format (DataFormat enum underlying value).
+ */
+template <bool is_fp32_dest_acc_en, bool acc_to_dest>
+inline bool eltwise_unary_b2d_uses_movb2d(const std::uint32_t dst_format)
+{
+    return (dst_format == to_underlying(DataFormat::UInt16)) || (!is_fp32_dest_acc_en && !acc_to_dest);
+}
+
+/**
  * @brief Copy a tile into the destination register, optionally broadcasting source B.
  *
  * For the unpack-to-dest path with 32-bit data, applies the Blackhole hi16/lo16 broadcast workarounds
@@ -348,16 +373,18 @@ inline void _llk_math_eltwise_unary_datacopy_(
 }
 
 /**
- * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for UInt16) dest/source steps.
+ * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for MOVB2D column broadcast) dest/source steps.
  *
  * The increment pattern depends on the datacopy direction (A2D walks SrcA, B2D walks SrcB) and broadcast type;
- * UInt16 B2D uses 4-row steps because it relies on MOVB2D.
+ * a B2D column broadcast uses 4-row steps when it moves with MOVB2D (see @ref eltwise_unary_b2d_uses_movb2d).
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @param dst_format: Destination data format (DataFormat enum underlying value); selects the UInt16 4-row step.
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register; must match the MOP.
+ * @tparam acc_to_dest: B2D broadcast accumulates into dest; must match the MOP.
+ * @param dst_format: Destination data format (DataFormat enum underlying value).
  */
-template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
+template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE, bool is_fp32_dest_acc_en = false, bool acc_to_dest = false>
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 {
     addr_mod_t {
@@ -414,7 +441,7 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
                 .set(ADDR_MOD_0);
 
             // Just unpack into B and move to Dest
-            if (dst_format == to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D, which is 4 rows per op
+            if (eltwise_unary_b2d_uses_movb2d<is_fp32_dest_acc_en, acc_to_dest>(dst_format)) // MOVB2D moves 4 rows per op
             {
                 addr_mod_t {
                     .srca = {.incr = 0},
@@ -440,8 +467,8 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
  *
  * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT (except UInt16, which stays on MOVA2D) or the datum is UInt8; B2D uses
- * MOVB2D (or ELWADD for non-UInt16 column/scalar broadcast, and for every broadcast with acc_to_dest) with loop counts derived from the
- * broadcast type.
+ * MOVB2D (or ELWADD for column/scalar broadcast into an FP32 dest, and for every broadcast with acc_to_dest; see
+ * @ref eltwise_unary_b2d_uses_movb2d) with loop counts derived from the broadcast type.
  *
  * @tparam type: Datacopy direction, values = <A2D/B2D>
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
@@ -452,7 +479,8 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
  * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
  * @param total_rows: Total rows to move across the inner loop.
  * @param tensor_shape: Tile geometry; only the total face count is used today.
- * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects the UInt16/UInt8 A2D paths and,
+ *                    for COL/SCALAR B2D, MOVB2D vs ELWADD (see @ref eltwise_unary_b2d_uses_movb2d).
  */
 template <
     DataCopyType type,
@@ -501,15 +529,15 @@ inline void eltwise_unary_configure_mop(
         // One outer iteration per face: end_op clears a SrcB DVALID each iteration.
         std::uint32_t outerloop = num_faces;
         auto broadcast_type     = p_movb2d::MOV_1_ROW; // No broadcast;
+        const bool use_movb2d   = eltwise_unary_b2d_uses_movb2d<is_fp32_dest_acc_en, acc_to_dest>(dst_format);
 
         if constexpr (bcast_type == BroadcastType::COL)
         {
             innerloop = 16 >> 3; // elwadd produces 8 rows per op
             // The mop only runs for 2 outer loops and mop is called twice for col broadcast
-            outerloop = 2;
-            // ELWADD with zeros will be used for non UInt16 case, since it moves 8 rows per cycle
+            outerloop      = 2;
             broadcast_type = p_elwise::SRCB_BCAST_COL;
-            if (dst_format == to_underlying(DataFormat::UInt16))
+            if (use_movb2d)
             {
                 innerloop      = 16 >> 2; // movb2d produces 4 rows per op
                 broadcast_type = p_movb2d::MOV_4_ROWS_D0_BRCST;
@@ -525,31 +553,27 @@ inline void eltwise_unary_configure_mop(
             outerloop      = 1;
             innerloop      = num_faces * (total_rows >> 3);
             broadcast_type = p_elwise::SRCB_BCAST_ALL;
-            if (dst_format == to_underlying(DataFormat::UInt16))
+            if (use_movb2d)
             {
                 broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
             }
         }
 
-        // ELWADD moves 8 rows/cycle (vs MOVB2D's 4) but routes through the FPU, which interprets
-        // UInt16 bit patterns as floats and flushes values with exp=0. UInt16 falls back to MOVB2D.
         // MOVB2D cannot accumulate, so acc_to_dest always takes ELWADD; the init rejects UInt16.
         constexpr std::uint32_t dest_accum = acc_to_dest ? p_elwise::DEST_ACCUM_EN : p_elwise::DEST_ACCUM_DIS;
 
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
-                                              ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                              : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
+            const std::uint32_t copy_op = use_movb2d ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                                     : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
             ckernel_template tmp(outerloop, innerloop, copy_op);
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
             tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
-            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16))
-                                              ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
-                                              : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
+            const std::uint32_t copy_op = use_movb2d ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                                     : TT_OP_ELWADD(p_elwise::CLR_NONE, dest_accum, broadcast_type, addr_mod, 0 /*dst*/);
             // With acc_to_dest, _llk_unpack_A_ publishes one zeroed SrcA bank per face.
             constexpr std::uint32_t clr_srca = acc_to_dest ? p_setrwc::CLR_A : 0;
             ckernel_template tmp(outerloop, innerloop, copy_op);
@@ -629,7 +653,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
                 tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
             "Column broadcast datacopy supports only 32x32 tiles");
     }
-    eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
+    eltwise_unary_configure_addrmod<type, src_b_bcast_type, is_fp32_dest_acc_en, acc_to_dest>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)
     {
@@ -640,7 +664,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     }
     else if constexpr (type == DataCopyType::B2D)
     {
-        eltwise_unary_configure_mop<type, false, src_b_bcast_type, false /*tilize*/, false /*is_int_fpu_en*/, acc_to_dest>(
+        eltwise_unary_configure_mop<type, is_fp32_dest_acc_en, src_b_bcast_type, false /*tilize*/, false /*is_int_fpu_en*/, acc_to_dest>(
             p_movb2d::MOV_4_ROWS, 16, tensor_shape, dst_format);
     }
 

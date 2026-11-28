@@ -1362,10 +1362,10 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
         }
     }
 
-    // The LLK row-broadcast compute kernels stage each row-broadcast operand in a DFB of its own.
-    // The kernel broadcasts the operand's first row into that DFB, then reads the tile back from it.
-    // A staging DFB exists only when one of those kernels runs and that operand is row-broadcast
-    // (BCAST_A / BCAST_B / BCAST_C, which the kernels test before they touch the DFB).
+    // The FPU addcmul/addcdiv row-broadcast kernel stages each row-broadcast operand in a DFB of its own:
+    // it broadcasts the operand's first row into that DFB, then reads the tile back from it. A staging DFB
+    // exists only for that kernel and only for a row-broadcast operand (BCAST_A / BCAST_B / BCAST_C, which
+    // the kernel tests before it touches the DFB). The SFPU TTT kernel broadcasts straight into DEST.
     Group<std::pair<DFBSpecName, std::string>> llk_bcast_dfbs;  // {spec name, accessor name}
     std::map<std::string, std::string> kernel_defines;
     if (variant == TernaryVariant::TTT) {
@@ -1378,6 +1378,7 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
             CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
                 compute_kernel, broadcast_type, operation_attributes.ternary_op_type);
             reader_defines["BCAST_LLK"] = "1";
+            const bool stages_llk_bcast = compute_kernel == KernelName::ComputeRowBcastAddcOp;
 
             auto add_llk_bcast_dfb = [&](const DFBSpecName& name, uint32_t tile_size, DataFormat data_format) {
                 spec.dataflow_buffers.push_back(DataflowBufferSpec{
@@ -1388,13 +1389,13 @@ ttnn::device_operation::ProgramArtifacts TernaryDeviceOperation::TernaryProgramF
                 });
                 llk_bcast_dfbs.emplace_back(name, name.get());
             };
-            if (pred_is_bcast) {
+            if (stages_llk_bcast && pred_is_bcast) {
                 add_llk_bcast_dfb(BCAST_A_DFB, predicate_single_tile_size, predicate_data_format);
             }
-            if (true_is_bcast) {
+            if (stages_llk_bcast && true_is_bcast) {
                 add_llk_bcast_dfb(BCAST_B_DFB, value_true_single_tile_size, value_true_data_format);
             }
-            if (false_is_bcast) {
+            if (stages_llk_bcast && false_is_bcast) {
                 add_llk_bcast_dfb(BCAST_C_DFB, value_false_single_tile_size, value_false_data_format);
             }
         } else {

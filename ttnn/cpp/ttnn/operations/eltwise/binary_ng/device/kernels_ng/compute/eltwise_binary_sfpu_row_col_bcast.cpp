@@ -46,71 +46,49 @@ ALWI void process_tile(
     using namespace ckernel;
     CircularBuffer exp_cb_out(cb_out);
 
+    // The row-broadcast operand reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
 #if BCAST_INPUT  // ROW_A_COL_B
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_POST_OTHER cb_post_lhs
-    constexpr auto cb_raw_other = tt::CBIndex::c_0;
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    auto cb_left = cb_post_lhs;
-    auto cb_right = cb_post_rhs;
-#else  // ROW_B_COL_A
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_POST_OTHER cb_post_rhs
-    constexpr auto cb_raw_other = tt::CBIndex::c_1;
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    auto cb_left = cb_post_lhs;
-    auto cb_right = cb_post_rhs;
+#if HAS_ACTIVATIONS(LHS)
+#error "LLK row broadcast of LHS does not support LHS activations"
 #endif
+#define CB_PRE_COL cb_pre_rhs
+#define CB_POST_COL cb_post_rhs
+    constexpr auto cb_row = tt::CBIndex::c_0;
+    constexpr uint32_t row_dst_offset = 0;
+#else  // ROW_B_COL_A
+#if HAS_ACTIVATIONS(RHS)
+#error "LLK row broadcast of RHS does not support RHS activations"
+#endif
+#define CB_PRE_COL cb_pre_lhs
+#define CB_POST_COL cb_post_lhs
+    constexpr auto cb_row = tt::CBIndex::c_1;
+    constexpr uint32_t row_dst_offset = 1;
+#endif
+    constexpr uint32_t col_dst_offset = 1 - row_dst_offset;
 
-    CircularBuffer exp_cb_raw_other(cb_raw_other);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_bcast(CB_POST_BCAST);
-    CircularBuffer exp_cb_post_other(CB_POST_OTHER);
+    CircularBuffer exp_cb_row(cb_row);
+    CircularBuffer exp_cb_post_col(CB_POST_COL);
 
-    // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
-    // exactly once); process_tile is called per iteration, so it only re-inits the copy op here.
-    copy_init(cb_left);
-    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
-    exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
+    // BCAST_OP is the reader's broadcast input, which is the column-held operand here, not the row broadcast.
+    PREPROCESS(BCAST_OP, CircularBuffer(CB_PRE_COL), exp_cb_post_col, exp_cb_out, num_tiles_per_cycle);
+    exp_cb_post_col.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        exp_cb_raw_other.wait_front(num_tiles_per_cycle);
-        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format(cb_raw_other, cb_raw_other);
-        unary_bcast_init<BroadcastType::ROW>(cb_raw_other);
-
-        tile_regs_acquire();
-        unary_bcast<BroadcastType::ROW>(cb_raw_other, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_llk_post);
-        exp_cb_llk_post.push_back(num_tiles_per_cycle);
-        tile_regs_release();
-        exp_cb_raw_other.pop_front(num_tiles_per_cycle);
-        // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
-
-        PREPROCESS(OTHER_OP, CircularBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
-        exp_cb_post_other.wait_front(num_tiles_per_cycle);
-
+        exp_cb_row.wait_front(num_tiles_per_cycle);
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_right, cb_left);
-        copy_init(cb_left);
+        reconfig_data_format(cb_row, cb_row);
+        unary_bcast_init<BroadcastType::ROW>(cb_row);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_left, i, i * 2);
+            unary_bcast<BroadcastType::ROW>(cb_row, i, i * 2 + row_dst_offset);
         }
-        reconfig_data_format_srca(cb_left, cb_right);
-        copy_init(cb_right);
+        reconfig_data_format_srca(cb_row, CB_POST_COL);
+        copy_init(CB_POST_COL);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_right, i, i * 2 + 1);
+            copy_tile(CB_POST_COL, i, i * 2 + col_dst_offset);
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
@@ -130,9 +108,9 @@ ALWI void process_tile(
         }
         tile_regs_release();
         exp_cb_out.push_back(num_tiles_per_cycle);
-        exp_cb_post_other.pop_front(num_tiles_per_cycle);
+        exp_cb_row.pop_front(num_tiles_per_cycle);
     }
-    exp_cb_post_bcast.pop_front(num_tiles_per_cycle);
+    exp_cb_post_col.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {
@@ -152,22 +130,12 @@ void kernel_main() {
 
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-#if BCAST_INPUT  // ROW_A_COL_B: A=row bcast, B=col bcast
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    constexpr auto cb_pre_lhs = cb_llk_post;
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_llk_post;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
-#else  // ROW_B_COL_A: B=row bcast, A=col bcast
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = cb_llk_post;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
-#endif
+    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
 
-    // One-time hardware startup: must be the first Compute API call and run exactly once. cb_left
-    // inside process_tile is always cb_post_lhs, so configure the pipeline for that here.
+    // One-time hardware startup: must be the first Compute API call and run exactly once.
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
 
 #ifdef PACK_RELU

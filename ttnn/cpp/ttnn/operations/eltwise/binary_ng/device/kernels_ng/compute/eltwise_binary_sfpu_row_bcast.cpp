@@ -46,27 +46,33 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
     CircularBuffer exp_cb_out(cb_out);
 
+    // Invariant of every SFPU LLK-broadcast kernel (binary, where, ternary TTT): the broadcast operand goes from
+    // L1 through unary_bcast into its DEST slot with no pack in between, so NaN and -0.0 reach the SFPU op as
+    // they are; a bf16 pack from a 16-bit DEST would turn them into inf and +0.0. A pre-activation on that
+    // operand would need such a pack, so the host sends those cases to the reader-broadcast kernels.
 #if SRC_BCAST
+#if HAS_ACTIVATIONS(LHS)
+#error "LLK row broadcast of LHS does not support LHS activations"
+#endif
     constexpr auto cb_bcast = tt::CBIndex::c_0;
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    constexpr auto cb_pre_lhs = cb_llk_post;
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_llk_post;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
+    constexpr auto cb_other = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
+    constexpr uint32_t bcast_dst_offset = 0;
+    constexpr uint32_t other_dst_offset = 1;
 #endif
 #if SRC_BCAST_B
-    constexpr auto cb_bcast = tt::CBIndex::c_1;
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
-    constexpr auto cb_pre_rhs = cb_llk_post;
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
+#if HAS_ACTIVATIONS(RHS)
+#error "LLK row broadcast of RHS does not support RHS activations"
 #endif
+    constexpr auto cb_bcast = tt::CBIndex::c_1;
+    constexpr auto cb_other = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
+    constexpr uint32_t bcast_dst_offset = 1;
+    constexpr uint32_t other_dst_offset = 0;
+#endif
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
 
     CircularBuffer exp_cb_bcast(cb_bcast);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
-    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
-    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
+    CircularBuffer exp_cb_other(cb_other);
 
     compute_kernel_hw_startup(cb_post_lhs, cb_out);
     copy_init(cb_post_lhs);
@@ -79,44 +85,25 @@ void kernel_main() {
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        PREPROCESS(LHS, CircularBuffer(tt::CBIndex::c_0), CircularBuffer(cb_post_lhs), exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, CircularBuffer(tt::CBIndex::c_1), CircularBuffer(cb_post_rhs), exp_cb_out, num_tiles_per_cycle);
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
-        exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format(cb_bcast, cb_bcast);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
-
-        tile_regs_acquire();
-        unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_llk_post);
-        exp_cb_llk_post.push_back(num_tiles_per_cycle);
-        tile_regs_release();
-        exp_cb_bcast.pop_front(num_tiles_per_cycle);
-        // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
-
-        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
-        exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
-
-        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
-        exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
+        exp_cb_other.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
 #if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
         BINARY_SFPU_INIT
 #endif
         tile_regs_acquire();
-        reconfig_data_format_srca(cb_post_rhs, cb_post_lhs);
-        copy_init(cb_post_lhs);
+        reconfig_data_format(cb_bcast, cb_bcast);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs, i, i * 2);
+            unary_bcast<BroadcastType::ROW>(cb_bcast, i, i * 2 + bcast_dst_offset);
         }
-        reconfig_data_format_srca(cb_post_lhs, cb_post_rhs);
-        copy_init(cb_post_rhs);
+        reconfig_data_format_srca(cb_bcast, cb_other);
+        copy_init(cb_other);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs, i, i * 2 + 1);
+            copy_tile(cb_other, i, i * 2 + other_dst_offset);
 
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
@@ -138,7 +125,7 @@ void kernel_main() {
         tile_regs_release();
 
         exp_cb_out.push_back(num_tiles_per_cycle);
-        exp_cb_post_lhs.pop_front(num_tiles_per_cycle);
-        exp_cb_post_rhs.pop_front(num_tiles_per_cycle);
+        exp_cb_bcast.pop_front(num_tiles_per_cycle);
+        exp_cb_other.pop_front(num_tiles_per_cycle);
     }
 }

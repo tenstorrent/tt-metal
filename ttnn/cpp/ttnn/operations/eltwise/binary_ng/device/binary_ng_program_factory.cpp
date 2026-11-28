@@ -349,6 +349,14 @@ constexpr uint32_t kMaxColGroup = 4;
 constexpr uint32_t kColGroupMinTiles = 128;
 constexpr uint32_t kColGroupFewBanksMinTiles = 48;
 
+// The operand the LLK broadcast expands: A (c_0) or B (c_1). ROW_A_COL_B row-broadcasts A.
+bool llk_bcast_operand_is_a(const SubtileBroadcastType subtile_broadcast_type) {
+    return subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
+           subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
+           subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+           subtile_broadcast_type == SubtileBroadcastType::SCALAR_A;
+}
+
 bool is_llk_bcast(
     const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
@@ -1263,12 +1271,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         add_activation_defines(compute_kernel_defines, rhs_activations, "RHS", b_dtype, &runtime_scalars);
 
         // The PACK_RELU fast path applies ZERO_RELU via the packer config set once at the top
-        // of the compute kernel.  Subtile-broadcast kernels do an intermediate
-        // `pack_tile(0, cb_llk_post)` followed by `pack_reconfig_data_format(cb_llk_post, cb_out)`
-        // per iteration, which clears the packer's ZERO_RELU state, so the final pack to
-        // `cb_out` no longer clips negatives and RELU is silently dropped.  Restrict the
-        // PACK_RELU optimization to the non-broadcast case and fall through to the SFPU
-        // activation path (used by every other unary post-activation) for broadcast cases.
+        // of the compute kernel.  The FPU LLK-broadcast kernels stage the broadcast operand with
+        // `pack_tile(0, cb_llk_post)` and `pack_reconfig_data_format(cb_llk_post, cb_out)` per
+        // iteration, which clears the packer's ZERO_RELU state, so RELU would be silently dropped.
+        // The kernel is not chosen yet at this point, so every broadcast case takes the SFPU
+        // activation path (used by every other unary post-activation) instead.
         const bool is_subtile_broadcast = operation_attributes.subtile_broadcast_type != SubtileBroadcastType::NONE;
 
         if (lhs_activations.empty() and rhs_activations.empty() and post_activations.size() == 1) {
@@ -1345,6 +1352,85 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const bool inputs_row_major =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, has_sharding);
 
+    const tt::ARCH arch = a.device()->arch();
+    bool use_llk_bcast =
+        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
+                                 arch, operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
+
+    // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
+    // amplifies beyond acceptable tolerance.
+    if (use_llk_bcast && op_has_exp) {
+        use_llk_bcast = false;
+    }
+
+    // Where op does not support LLK bcast for scalar and col broadcast
+    if (use_llk_bcast && is_where_op &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
+    // Integer relational/equality ops on UInt16 use direct SFPU comparison
+    // (LT/GT/LE/GE/EQ/NE), with DEST configured for Fp16_b accumulation
+    // (fp32_dest_acc_en is false for UInt16).  Under SCALAR broadcast the B2D
+    // datacopy unpacker writes a single u16 lane into all DEST positions; the
+    // resulting Fp16_b-tagged DEST is then read back by the SFPU comparison
+    // kernel, which interprets the integer bit pattern through the
+    // format-conversion path and corrupts the comparison result (#36217).
+    // Fall back to software broadcast for this combination - non-broadcast u16
+    // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
+    // unaffected.
+    if (use_llk_bcast && a_data_format == tt::DataFormat::UInt16 && b_data_format == tt::DataFormat::UInt16 &&
+        (op_config.postprocess.has_value() ||
+         (std::holds_alternative<OpConfig::SfpuBinaryOp>(op_config.binary_op) &&
+          (std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GT ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LE ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::EQ ||
+           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::NE))) &&
+        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
+         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
+        use_llk_bcast = false;
+    }
+
+    // On Blackhole, the B2D datacopy path (MOVB2D) has a known issue in FP32 dest
+    // accumulation mode with non-32-bit source formats (BH Issue #449).  SCALAR and
+    // ROW broadcasts use MOVB2D, which produces corrupted results when
+    // fp32_dest_acc_en is true.  COL broadcast is unaffected because it uses ELWADD
+    // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
+    // broadcast types on Blackhole when FP32 dest accumulation is active.
+    if (use_llk_bcast && fp32_dest_acc_en) {
+        if (arch == tt::ARCH::BLACKHOLE) {
+            auto sbt = operation_attributes.subtile_broadcast_type;
+            bool uses_movb2d =
+                (sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B ||
+                 sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
+                 sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
+            if (uses_movb2d) {
+                use_llk_bcast = false;
+            }
+        }
+    }
+
+    // The SFPU broadcast kernels expand the LLK-broadcast operand straight into DEST (see the invariant in
+    // eltwise_binary_sfpu_row_bcast.cpp), so they cannot apply a pre-activation to it. Where never carries
+    // activations: where_operation_with_scalar passes none.
+    const bool llk_bcast_is_a =
+        CMAKE_UNIQUE_NAMESPACE::llk_bcast_operand_is_a(operation_attributes.subtile_broadcast_type);
+    if (use_llk_bcast && is_sfpu_op) {
+        const auto activations =
+            compute_kernel_defines.find(llk_bcast_is_a ? "PROCESS_LHS_ACTIVATIONS(i)" : "PROCESS_RHS_ACTIVATIONS(i)");
+        if (activations != compute_kernel_defines.end() && !activations->second.empty()) {
+            use_llk_bcast = false;
+        }
+    }
+
+    // Only the FPU LLK-broadcast kernels stage the broadcast operand through c_5 (A) or c_6 (B).
+    const bool llk_bcast_uses_staging_cb = use_llk_bcast && !is_sfpu_op && !is_where_op;
+
     // CB: a (c_0)
     {
         uint32_t a_num_pages = a_num_tiles_per_shard.value_or(2);
@@ -1407,10 +1493,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         });
     }
 
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A) {
+    if (llk_bcast_uses_staging_cb && llk_bcast_is_a) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = a_single_tile_size * 2,
             .core_ranges = all_device_cores,
@@ -1421,10 +1504,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             }}},
         });
     }
-    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B) {
+    if (llk_bcast_uses_staging_cb && !llk_bcast_is_a) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = b_single_tile_size * 2,
             .core_ranges = all_device_cores,
@@ -1543,8 +1623,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[src1_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src0interim_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             unpack_to_dest_mode[src1interim_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[tt::CBIndex::c_5] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-            unpack_to_dest_mode[tt::CBIndex::c_6] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         } else {
             unpack_to_dest_mode[src0_cb_index] = (a_dtype == DataType::FLOAT32)
                                                      ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
@@ -1558,79 +1636,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             unpack_to_dest_mode[src1interim_cb_index] = (b_dtype == DataType::FLOAT32)
                                                             ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
                                                             : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_5] = (a_dtype == DataType::FLOAT32)
-                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
-                                                        : tt::tt_metal::UnpackToDestMode::Default;
-            unpack_to_dest_mode[tt::CBIndex::c_6] = (b_dtype == DataType::FLOAT32)
-                                                        ? tt::tt_metal::UnpackToDestMode::UnpackToDestFp32
-                                                        : tt::tt_metal::UnpackToDestMode::Default;
         }
     }
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
-
-    const tt::ARCH arch = a.device()->arch();
-    bool use_llk_bcast =
-        !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
-                                 arch, operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
-
-    // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
-    // amplifies beyond acceptable tolerance.
-    if (use_llk_bcast && op_has_exp) {
-        use_llk_bcast = false;
-    }
-
-    // Where op does not support LLK bcast for scalar and col broadcast
-    if (use_llk_bcast && is_where_op &&
-        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_A ||
-         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::COL_B ||
-         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
-         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
-        use_llk_bcast = false;
-    }
-
-    // Integer relational/equality ops on UInt16 use direct SFPU comparison
-    // (LT/GT/LE/GE/EQ/NE), with DEST configured for Fp16_b accumulation
-    // (fp32_dest_acc_en is false for UInt16).  Under SCALAR broadcast the B2D
-    // datacopy unpacker writes a single u16 lane into all DEST positions; the
-    // resulting Fp16_b-tagged DEST is then read back by the SFPU comparison
-    // kernel, which interprets the integer bit pattern through the
-    // format-conversion path and corrupts the comparison result (#36217).
-    // Fall back to software broadcast for this combination - non-broadcast u16
-    // relational ops and broadcasted arithmetic u16 ops (no postprocess) are
-    // unaffected.
-    if (use_llk_bcast && a_data_format == tt::DataFormat::UInt16 && b_data_format == tt::DataFormat::UInt16 &&
-        (op_config.postprocess.has_value() ||
-         (std::holds_alternative<OpConfig::SfpuBinaryOp>(op_config.binary_op) &&
-          (std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LT ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GT ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::LE ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::GE ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::EQ ||
-           std::get<OpConfig::SfpuBinaryOp>(op_config.binary_op) == OpConfig::SfpuBinaryOp::NE))) &&
-        (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_A ||
-         operation_attributes.subtile_broadcast_type == SubtileBroadcastType::SCALAR_B)) {
-        use_llk_bcast = false;
-    }
-
-    // On Blackhole, the B2D datacopy path (MOVB2D) has a known issue in FP32 dest
-    // accumulation mode with non-32-bit source formats (BH Issue #449).  SCALAR and
-    // ROW broadcasts use MOVB2D, which produces corrupted results when
-    // fp32_dest_acc_en is true.  COL broadcast is unaffected because it uses ELWADD
-    // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
-    // broadcast types on Blackhole when FP32 dest accumulation is active.
-    if (use_llk_bcast && fp32_dest_acc_en) {
-        if (arch == tt::ARCH::BLACKHOLE) {
-            auto sbt = operation_attributes.subtile_broadcast_type;
-            bool uses_movb2d =
-                (sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B ||
-                 sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
-                 sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
-            if (uses_movb2d) {
-                use_llk_bcast = false;
-            }
-        }
-    }
 
     if (use_llk_bcast) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(

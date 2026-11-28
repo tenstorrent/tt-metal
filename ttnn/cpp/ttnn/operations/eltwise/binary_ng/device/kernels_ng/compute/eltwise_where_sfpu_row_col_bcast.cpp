@@ -25,69 +25,52 @@ ALWI void process_tile(
     using namespace ckernel;
     DataflowBuffer exp_dfb_out(cb_out);
 
-#if BCAST_INPUT  // ROW_A_COL_B
-                 // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
-#define CB_BCAST cb_in1
-#define CB_OTHER cb_in0
-    constexpr auto cb_llk_post = tt::CBIndex::c_5;
-    constexpr auto cb_left = tt::CBIndex::c_5;
-    auto cb_right = cb_in1;
-#else  // ROW_B_COL_A
-    // BCAST_INPUT == 0 : input A (condition tensor)  is broadcasted
-#define CB_BCAST cb_in0
-#define CB_OTHER cb_in1
-    constexpr auto cb_llk_post = tt::CBIndex::c_6;
-    auto cb_left = cb_in0;
-    constexpr auto cb_right = tt::CBIndex::c_6;
+    // DEST slots per tile: [0] = condition, [1] = true value, [2] = false value, stride 3.
+#if WHERE_TTS
+    constexpr uint32_t tensor_dst_offset = 1;
+#else
+    constexpr uint32_t tensor_dst_offset = 2;
+#endif
+    // The row-broadcast input reaches DEST without a pack: see the invariant in eltwise_binary_sfpu_row_bcast.cpp.
+#if BCAST_INPUT  // ROW_A_COL_B: condition (A) is row-broadcast, B is held across the column
+#define CB_COL cb_in1
+#define CB_ROW cb_in0
+    constexpr uint32_t row_dst_offset = 0;
+    constexpr uint32_t col_dst_offset = tensor_dst_offset;
+#else  // ROW_B_COL_A: B is row-broadcast, condition (A) is held across the column
+#define CB_COL cb_in0
+#define CB_ROW cb_in1
+    constexpr uint32_t row_dst_offset = tensor_dst_offset;
+    constexpr uint32_t col_dst_offset = 0;
 #endif
 
-    DataflowBuffer exp_dfb_bcast(CB_BCAST);
-    DataflowBuffer exp_dfb_other(CB_OTHER);
-    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
+    DataflowBuffer exp_dfb_col(CB_COL);
+    DataflowBuffer exp_dfb_row(CB_ROW);
 
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the op here.
-    copy_init(cb_left);
+    copy_init(CB_COL);
     BINARY_SFPU_INIT
 
-    exp_dfb_bcast.wait_front(num_tiles_per_cycle);
+    exp_dfb_col.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        exp_dfb_other.wait_front(num_tiles_per_cycle);
-        exp_dfb_llk_post.reserve_back(num_tiles_per_cycle);
-        pack_reconfig_data_format(cb_out, cb_llk_post);
-        reconfig_data_format(CB_OTHER, CB_OTHER);
-        unary_bcast_init<BroadcastType::ROW>(CB_OTHER);
-
-        tile_regs_acquire();
-        unary_bcast<BroadcastType::ROW>(CB_OTHER, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_llk_post);
-        exp_dfb_llk_post.push_back(num_tiles_per_cycle);
-        tile_regs_release();
-
-        exp_dfb_other.pop_front(num_tiles_per_cycle);
-        // unary_bcast_uninit<BroadcastType::ROW>(CB_OTHER);
-        pack_reconfig_data_format(cb_llk_post, cb_out);
-
+        exp_dfb_row.wait_front(num_tiles_per_cycle);
         exp_dfb_out.reserve_back(num_tiles_per_cycle);
-        exp_dfb_llk_post.wait_front(num_tiles_per_cycle);
 
         tile_regs_acquire();
-
-        copy_init(cb_left);
+        reconfig_data_format(CB_ROW, CB_ROW);
+        unary_bcast_init<BroadcastType::ROW>(CB_ROW);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_left, i, i * 3);
+            unary_bcast<BroadcastType::ROW>(CB_ROW, i, i * 3 + row_dst_offset);
         }
-        copy_init(cb_right);
+        reconfig_data_format_srca(CB_ROW, CB_COL);
+        copy_init(CB_COL);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-// TTS: tensor is true value, goes to dst_reg 1
-#if WHERE_TTS
-            copy_tile(cb_right, i, i * 3 + 1);  // Copy true tensor to dst_reg 1
+            copy_tile(CB_COL, i, i * 3 + col_dst_offset);
             fill_tile_init();
 // TTS: scalar is false value, goes to dst_reg 2
+#if WHERE_TTS
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 2, *scalar_val);
 #endif
@@ -96,11 +79,8 @@ ALWI void process_tile(
 #endif
 #endif
 
-// TST: tensor is false value, goes to dst_reg 2
-#if WHERE_TST
-            copy_tile(cb_right, i, i * 3 + 2);  // Copy false tensor to dst_reg 2
-            fill_tile_init();
 // TST: scalar is true value, goes to dst_reg 1
+#if WHERE_TST
 #ifdef FILL_WITH_VALUE_FLOAT
             FILL_LLK(i * 3 + 1, *scalar_val);
 #endif
@@ -121,9 +101,9 @@ ALWI void process_tile(
         tile_regs_release();
 
         exp_dfb_out.push_back(num_tiles_per_cycle);
-        exp_dfb_llk_post.pop_front(num_tiles_per_cycle);
+        exp_dfb_row.pop_front(num_tiles_per_cycle);
     }
-    exp_dfb_bcast.pop_front(num_tiles_per_cycle);
+    exp_dfb_col.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {
@@ -143,14 +123,8 @@ void kernel_main() {
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    // One-time hardware startup: must be the first Compute API call and run exactly once. Match the
-    // cb_left process_tile configures the copy from (c_5 when the bcast input is B, else cb_in0).
-#if BCAST_INPUT
-    constexpr auto cb_startup_lhs = tt::CBIndex::c_5;
-#else
-    constexpr auto cb_startup_lhs = cb_in0;
-#endif
-    compute_kernel_hw_startup(cb_startup_lhs, cb_out);
+    // One-time hardware startup: must be the first Compute API call and run exactly once.
+    compute_kernel_hw_startup(cb_in0, cb_out);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;

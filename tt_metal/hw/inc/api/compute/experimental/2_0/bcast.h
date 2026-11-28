@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "data_format_derive.h"  // ckernel::infer_unpack_dst_format
 
 #ifdef TRISC_MATH
 #include "experimental/2_0/llk_math_unary_datacopy.h"
@@ -80,6 +81,12 @@ ALWI void unary_bcast_init(LLKOperand<Format, Shape> /*src*/) {
           dcopy,
           is_fp32_dest_acc_en,
           bcast_type>()));
+    if constexpr (dcopy == DataCopyType::B2D) {
+        // Same Src zero-flag policy as copy_init: unless Zero_Flag_disabled_src is set, MOVB2D flushes every
+        // datum with a zero exponent, turning bf16 -0.0 into +0.0.
+        MATH((ckernel::math::_configure_copy_zero_flag_state_(
+            static_cast<std::uint32_t>(ckernel::infer_unpack_dst_format(Format, is_fp32_dest_acc_en)))));
+    }
 }
 
 // clang-format off
