@@ -30,7 +30,7 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
-RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slot\s*=.*$", re.IGNORECASE)
+RANKFILE_LINE_PATTERN = re.compile(r"^\s*rank\s+\d+\s*=\s*([^\s]+)\s+slots?\s*=.*$", re.IGNORECASE)
 MPI_HOST_FLAGS = ("--host", "-host", "--hostfile", "-hostfile", "--default-hostfile")
 # mpirun --version / stderr (OpenMPI 4.x and 5.x)
 _OPENMPI_VERSION_RE = re.compile(
