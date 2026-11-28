@@ -12,3 +12,5 @@
 {"event":"perf_measure","method":"device kernel duration, one fresh run each","design_phase0_ns":{"p1":1330776,"p2":58357,"p3":30456,"p4":1806},"bank_affine_1perbank_z4k_ns":{"p1":559553,"p2":25599,"p3":13316,"p4":1527},"p1_gbps":510.7,"bound":"DRAM (512 GB/s nominal)","ts":"2026-11-27T06:06:40-05:00"}
 {"event":"fix_applied","what":"defaults CORE_ORDER=bank_affine, WRITER_CORES_PER_BANK=1, ZERO_SRC_BYTES_MAX=4096 (design lamps); design Phase 0 values stay one knob away","ts":"2026-11-27T06:06:40-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 19 passed 4 xfailed (--dev, plain); bank_run debug 14 passed (--dev, plain); golden 13 passed 6 xfailed; perf_knobs 3 passed","ts":"2026-11-27T06:06:40-05:00"}
+{"event":"test_run","phase":"bank_run rebuild","result":"pass","acceptance":"17 passed, 4 xfailed (plain and --dev)","golden":"13 passed, 6 xfailed","perf_ns":{"p2":49884,"p3":24917},"cores":104,"ts":"2026-11-27T20:41:42-05:00"}
+{"event":"fix_applied","what":"describe_plan used nonexistent ttnn.round_up when called before any g6_zeros call; replaced with integer round-up","ts":"2026-11-27T20:41:42-05:00"}

@@ -109,3 +109,33 @@ SUPPORTED-only change.
 imports; it is kept as a record. `test_g6_zeros_perf_knobs.py` runs against the new knobs through
 the public entry point; its `BANKS_PER_CORE` case (every core walks every bank, the design's rejected
 `page_id_split_bank_coalesced`) was dropped.
+
+## Rebuild from the bank-major zero-run design (implementer)
+
+Built the design's single regime `bank_run` with its Phase 0 values unchanged: one writer kernel
+(BRISC, NoC1), no reader or compute kernel. `writers_per_bank = max(1, min(grid // N, ceil(P / N)))`
+gives 13 writers per bank, 104 cores in 2 row-wise rectangles. Writer `w` serves bank `w mod N` and
+writes a contiguous slot run from a 16 KiB `cb_zero_source`, filled once per core by NoC loopback.
+Each write is at most 16 KiB, there is one barrier per core, and no CB handshake. SUPPORTED: `dtype`
+float32, `layout` TILE.
+
+Live knobs, each defined once in `g6_zeros_program_descriptor.py`:
+- `WRITERS_PER_BANK` (None means the Phase 0 rule)
+- `ZERO_SOURCE_BYTES` (16384)
+- `ZERO_SOURCE_REGIONS` (1)
+- the per-core block count, which reaches the kernel as the runtime arg `num_blocks`
+
+Plan check (`describe_plan`, probe_014): the per-core slot counts match the design's table for
+p1–p4. Bank runs cover `[0, P)` exactly once for the production page counts and for ragged counts
+1, 5, 8, 9, 103, 105 and 1000003.
+
+Device kernel duration (Blackhole, one fresh `--profile` run each):
+
+| case | cores | ns | DRAM write rate |
+|------|-------|----|-----------------|
+| p2 (16,12,128,128) fp32 | 104 | 49,884 | 252 GB/s |
+| p3 (8,12,128,128) fp32 | 104 | 24,917 | 252 GB/s |
+
+That is about 49 % of the 512 GB/s nominal DRAM peak, so p2 and p3 are not at the DRAM bound with
+these values. The design's grid-sync lamp (`writers_per_bank` in {1, 2, 4, 8, 13}) and its
+core↔bank placement lamp are the next things to measure. Both are knob turns with no kernel change.
