@@ -102,7 +102,8 @@ Board::Board(
         case BoardType::P100:
         case BoardType::P150:
         case BoardType::P300:
-        case BoardType::UBB_BLACKHOLE: arch_ = tt::ARCH::BLACKHOLE; break;
+        case BoardType::UBB_BLACKHOLE:
+        case BoardType::UBB_BLACKHOLE_CF: arch_ = tt::ARCH::BLACKHOLE; break;
         default: throw std::runtime_error("Invalid board type");
     }
     // Validate that there are no duplicate ASIC channels
@@ -139,7 +140,8 @@ Board::Board(
     // Currently UBB has a different definition of board in this representation compared to UMD.
     // TODO: This exception shouldn't live here.
     uint32_t expected_asic_indices = 0;
-    if (board_type_ == BoardType::UBB_WORMHOLE || board_type_ == BoardType::UBB_BLACKHOLE) {
+    if (board_type_ == BoardType::UBB_WORMHOLE || board_type_ == BoardType::UBB_BLACKHOLE ||
+        board_type_ == BoardType::UBB_BLACKHOLE_CF) {
         expected_asic_indices = 8;
     } else {
         expected_asic_indices = get_number_of_chips_from_board_type(board_type_);
@@ -397,7 +399,8 @@ private:
 // UBB_BLACKHOLE board class
 class UBB_BLACKHOLE : public Board {
 public:
-    UBB_BLACKHOLE() : Board(create_ubb_blackhole_ports_and_connections(), BoardType::UBB_BLACKHOLE) {}
+    explicit UBB_BLACKHOLE(BoardType board_type = BoardType::UBB_BLACKHOLE) :
+        Board(create_ubb_blackhole_ports_and_connections(), board_type) {}
 
 private:
     static std::pair<
@@ -484,6 +487,8 @@ Board create_board(BoardType board_type) {
                 case BoardType::P150: return P150();
                 case BoardType::P300: return P300();
                 case BoardType::UBB_BLACKHOLE: return UBB_BLACKHOLE();
+                // Bin6 BH Galaxy: same ports/connections as UBB_BLACKHOLE
+                case BoardType::UBB_BLACKHOLE_CF: return UBB_BLACKHOLE(BoardType::UBB_BLACKHOLE_CF);
                 default:
                     throw std::runtime_error("Unknown board type: " + std::string(enchantum::to_string(board_type)));
             }

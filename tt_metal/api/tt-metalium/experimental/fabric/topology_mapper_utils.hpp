@@ -73,7 +73,7 @@ inline bool pinning_active_for_board(
     bool bh_galaxy = false;
     bool wh_galaxy = false;
     for (const auto& [_, desc] : physical_system_descriptor.get_asic_descriptors()) {
-        if (desc.board_type == BoardType::UBB_BLACKHOLE) {
+        if (desc.board_type == BoardType::UBB_BLACKHOLE || desc.board_type == BoardType::UBB_BLACKHOLE_CF) {
             bh_galaxy = true;
         } else if (desc.board_type == BoardType::UBB_WORMHOLE) {
             wh_galaxy = true;
