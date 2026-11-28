@@ -108,11 +108,8 @@ def _sqrt_bw_torch_reference(grad, x, flush):
 
 
 def _sqrt_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
-    result = _sqrt_bw_torch_reference(grad, x, flush)
-    x32 = x.to(torch.float32)
-    result = torch.where(((x32 == torch.inf)), torch.zeros_like(result), result)
-    return result
+    """Torch."""
+    return _sqrt_bw_torch_reference(grad, x, flush)
 
 
 def _sqrt_bw_round_to_bfloat16(t):

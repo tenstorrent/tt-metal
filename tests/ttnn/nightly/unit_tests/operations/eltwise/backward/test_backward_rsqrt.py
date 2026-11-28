@@ -111,10 +111,11 @@ def _rsqrt_bw_torch_reference(grad, x, flush):
 
 
 def _rsqrt_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where x >= 8.574e+37, where the program's factor flushes below the smallest normal, as
+    the composite's does."""
     result = _rsqrt_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
-    result = torch.where((x32 >= 8.573520572812707e37) | ((x32 == torch.inf)), torch.zeros_like(result), result)
+    result = torch.where(((x32 >= 8.573520572812707e37)) & torch.isfinite(x32), torch.zeros_like(result), result)
     return result
 
 

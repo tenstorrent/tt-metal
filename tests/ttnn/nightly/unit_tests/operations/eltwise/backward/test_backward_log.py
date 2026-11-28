@@ -104,10 +104,13 @@ def _log_bw_torch_reference(grad, x, flush):
 
 
 def _log_bw_reference(grad, x, flush):
-    """Torch, except on the declared lanes."""
+    """Torch, except: 0 where |Q(x)| = |x| reaches 2^126 in FP32, where the reciprocal is 0 on both boards (the
+    composite's reciprocal is 0 there too)."""
     result = _log_bw_torch_reference(grad, x, flush)
     x32 = x.to(torch.float32)
-    result = torch.where(((x32).abs() >= 8.507059173023462e37) | (torch.isinf(x32)), torch.zeros_like(result), result)
+    result = torch.where(
+        (((x32).abs() >= 8.507059173023462e37)) & torch.isfinite(x32), torch.zeros_like(result), result
+    )
     return result
 
 
