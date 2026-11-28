@@ -35,10 +35,7 @@ dashboards:
       - job: llk-smoke-n150-g2
         when:
           changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]
-      # runtime-examples and ttnn-examples (sdk-examples.yaml, wh_n150_civ2).
-      - job: runtime-examples-n150-asan
-        when:
-          changed: [cmake, tt-metalium, image]
-      - job: ttnn-examples-n150-asan
-        when:
-          changed: [cmake, tt-metalium, tt-nn, image]
+      # runtime-examples and ttnn-examples (sdk-examples.yaml, wh_n150_civ2) wait on
+      # torrentci#1849 P3 (distro packages in the card VM); then add runtime-examples-n150-asan
+      # (changed: [cmake, tt-metalium, image]) and ttnn-examples-n150-asan
+      # (changed: [cmake, tt-metalium, tt-nn, image]).

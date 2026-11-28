@@ -1,23 +1,38 @@
 ---
 # PR Gate ttnn-examples (sdk-examples.yaml, product tt-nn; wh_n150_civ2 in
-# tests/pipeline_reorg/ttnn_examples_pr_gate_tests.yaml): tests/scripts/run_sdk_examples.sh on one n150
-# against asan-build's packages. It checks that the installed SDK exports no
-# internal include dirs, then builds each example with ASan/UBSan flags against
-# the installed -dev packages and runs it on the card.
-# Differences from GitHub, forced by the platform: the packages come straight
-# from asan-build onto the ci-build image (no per-suite prebuilt image); no
-# libprotobuf-dev (card VM distro packages wait on torrentci#1849 P3); kernel
-# JIT runs cold (no hugepages, no remote kernel ccache), so 45 m, not 15 m.
+# tests/pipeline_reorg/ttnn_examples_pr_gate_tests.yaml): tests/scripts/run_sdk_examples.sh on one n150.
+# It checks that the installed SDK exports no internal include dirs (#58511),
+# then builds each installed example with ASan/UBSan flags and runs it.
+#
+# Intent (f686c4693d2, #21488; b3864ce7602, #21095): prove the .debs declare
+# every dependency, so a consumer can simply `apt install` them. So the guest
+# is a clean ubuntu:24.04, the asan-build packages are installed by apt, and
+# apt resolves every dependency through the cluster mirror. GitHub's later
+# basic-dev tools and prebuilt image (97de6de0da7, #54911) would hide a
+# missing dependency; nothing is preinstalled here.
+# distro is only what a consumer brings: a toolchain matching the packages'
+# (cmake, ninja, build-essential, clang-20 and its ASan runtime) and
+# libprotobuf-dev, which sdk-examples.yaml installs on purpose to catch
+# protobuf symbol conflicts (5bc5bc2b12e, #29976). g++-12 is dropped: it was
+# for 22.04's gcc-11 and Release builds; ASan builds use clang-20.
+# tt-metalium-jit carries SFPI, as in release packages (asan-build ships it).
+#
+# Waits on tenstorrent/torrentci#1849 P3 (distro packages in the card VM):
+# S3b and S3c-a (torrentci#3929, #3931), S3c-b (agent wiring), then
+# capabilities.vmDisk.distroPackages on civ2 (S6 acceptance, S7 default).
+# Until then it is not a shadow-pr-gate member.
+# Kernel JIT runs cold (no hugepages, no remote kernel ccache): 45 m, not 15 m.
 jobs:
   - id: ttnn-examples-n150-asan
     name: TT-NN SDK examples n150 (ASan)
-    description: "Build and run the PR Gate tt-nn SDK examples on one n150 with the ASan packages"
+    description: "Build and run the PR Gate tt-nn SDK examples on one n150, apt-installed into clean Ubuntu 24.04"
     timeout: 1h30m
     runs-on:
       kubernetes:
         os: linux
         arch: amd64
-        image: {from-job: ci-build-image, image: ci-build}
+        # ubuntu:24.04, 2026-11-23.
+        image: docker.io/library/ubuntu:24.04@sha256:562111b88caa79c71391c0c4d3c2114a7d5c35915c20561fd893cb1e07929e6b
         accelerator: {type: n150, count: 1}
         resources:
           requests: {cpu: '8', memory: 16Gi, ephemeral-storage: 30Gi}
@@ -26,7 +41,8 @@ jobs:
       artifacts:
         - from-job: asan-build
           name: packages-ubuntu-24.04-amd64-ASan-x86_64-linux-clang-20-libstdcpp
-          install: [tt-metalium, tt-metalium-dev, tt-nn, tt-nn-dev, tt-nn-examples]
+          install: [tt-metalium, tt-metalium-jit, tt-metalium-dev, tt-nn, tt-nn-dev, tt-nn-examples]
+      distro: [cmake, ninja-build, build-essential, clang-20, libclang-rt-20-dev, libprotobuf-dev]
     env:
       - {name: HOME, value: /tmp/home}
       - {name: TT_METAL_CACHE, value: /tmp/tt-metal-cache}
