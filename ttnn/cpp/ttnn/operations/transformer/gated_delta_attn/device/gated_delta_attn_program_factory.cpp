@@ -316,7 +316,8 @@ GatedDeltaAttnSeqDeviceOperation::GatedDeltaAttnSeqProgramFactory::create_progra
         .runtime_arg_schema = {.runtime_arg_names = {"num_chunks"}},
         .hw_config =
             ComputeHardwareConfig{
-                .fpu_math_fidelity = MathFidelity::HiFi2,
+                .fpu_math_fidelity = std::get<0>(
+                    ttnn::get_compute_kernel_config_args(in.L_unit.device()->arch(), attrs.compute_kernel_config)),
                 .sfpu_precision_mode = Precision::Precise,
                 .enable_32_bit_dest = true,
                 .unpack_modes = unpack_modes,
