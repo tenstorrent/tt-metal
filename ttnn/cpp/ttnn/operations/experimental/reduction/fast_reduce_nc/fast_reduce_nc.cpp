@@ -41,9 +41,17 @@ ttnn::Tensor fast_reduce_nc(
     ttsl::SmallVector<int32_t> sorted_dims(dims.begin(), dims.end());
     std::sort(sorted_dims.begin(), sorted_dims.end());
 
-    const std::optional<tt::tt_metal::DataType> intermediate_dtype =
-        fp32_intermediate_stages ? std::optional<tt::tt_metal::DataType>{tt::tt_metal::DataType::FLOAT32}
-                                 : std::nullopt;
+    // A BFLOAT8_B tile shares one exponent per 16 lanes, which would round away cancellation between partial sums.
+    const bool bf16_intermediate_stages =
+        !fp32_intermediate_stages && input.dtype() == tt::tt_metal::DataType::BFLOAT8_B;
+    std::optional<tt::tt_metal::DataType> intermediate_dtype;
+    if (fp32_intermediate_stages) {
+        intermediate_dtype = tt::tt_metal::DataType::FLOAT32;
+    } else if (bf16_intermediate_stages) {
+        intermediate_dtype = tt::tt_metal::DataType::BFLOAT16;
+    }
+    const std::optional<tt::tt_metal::DataType> final_dtype =
+        bf16_intermediate_stages ? output_dtype.value_or(input.dtype()) : output_dtype;
     // Accurate fp32 sums on the SFPU (the FPU truncates fp32 to tf32); falls back to the FPU like reduce_op.
     const auto use_sfpu_reduce = [&](const Tensor& stage_input) {
         return !fast_and_approximate_mode && stage_input.dtype() == tt::tt_metal::DataType::FLOAT32 &&
@@ -69,7 +77,7 @@ ttnn::Tensor fast_reduce_nc(
         memory_config,
         kernel_config_val,
         sub_core_grids,
-        output_dtype,
+        final_dtype,
         use_sfpu_reduce(temp_input),
         post_mul_scaler);
 }

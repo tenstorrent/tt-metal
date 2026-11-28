@@ -309,3 +309,26 @@ def test_fast_reduce_nc_post_mul_shares_program(device, shape, dim, dtype):
         torch.testing.assert_close(actual, torch_sum * factor, rtol=1e-2 if dtype == ttnn.bfloat16 else 1e-6, atol=0)
         entries = entries or device.num_program_cache_entries()
         assert device.num_program_cache_entries() == entries
+
+
+# Summing over C gives 330 and -320, and BFLOAT8_B cannot hold 330 (it rounds to 332).
+# A BFLOAT8_B partial sum therefore turns each exact 10 into 12.
+@pytest.mark.parametrize("preallocated", [False, True])
+def test_fast_reduce_nc_bf8b_partial_sums_cancel(device, preallocated):
+    x = torch.tensor([[64, 64, 64, 64, 74], [-64] * 5], dtype=torch.float32)[:, :, None, None].expand(2, 5, 32, 32)
+    x = x.contiguous()
+    # A same-shape BFLOAT16 call first, so a cached program with the wrong intermediate dtype would be reused.
+    ttnn.experimental.fast_reduce_nc(
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device), dims=[0, 1]
+    )
+    input_tensor = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = None
+    if preallocated:
+        output = ttnn.from_torch(
+            torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        )
+
+    result = ttnn.experimental.fast_reduce_nc(input_tensor, dims=[0, 1], output=output)
+
+    assert result.dtype == ttnn.bfloat8_b
+    assert torch.equal(ttnn.to_torch(result).float(), torch.full((1, 1, 32, 32), 10.0))
