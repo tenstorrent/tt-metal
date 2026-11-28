@@ -683,7 +683,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         is_conv_1d_depthwise_conv,
         skip_activation_mcast,
         input_channels_padded,
-        reader_indices_actual_page_size);
+        reader_indices_actual_page_size,
+        operation_attributes.fp32_partials);
 
     // Emit CBDescriptors directly onto the ProgramDescriptor.  The framework
     // tracks the globally-allocated CBs (ACT_SHARDED on input, OUT/PARTIALS on
@@ -1053,10 +1054,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     const bool check_skip_compute = input_cores != output_cores;
 
-    // Unpack-to-Dest overrides for the fp32 depthwise path; empty (default) for every other conv.
+    // UnpackToDestMode overrides for the fp32 depthwise path and the Float32 partials reload; empty for other convs.
     // Pairs with the SFPU path in compute_depthwise_conv1d.cpp -- that fixes the arithmetic, this
     // makes sure the tiles reaching DST aren't already TF32-truncated by the unpacker.
-    std::vector<tt::tt_metal::UnpackToDestMode> depthwise_unpack_to_dest;
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode;
 
     std::vector<uint32_t> compute_kernel_args;
     if (is_conv_1d_depthwise_conv) {
@@ -1080,7 +1081,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             b.dtype() == tt::tt_metal::DataType::FLOAT32 &&
             get_cb_info_by_name(cb_info, Conv2dCb::OUT).data_format == tt::DataFormat::Float32;
         if (use_fp32_sfpu_depthwise) {
-            depthwise_unpack_to_dest.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+            unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
             // ACT is included as well as ACT_TILIZED: the tilize step unpacks ACT through SrcA, which
             // rounds fp32 to TF32 *before* ACT_TILIZED is ever written, so overriding only the
             // tilized buffer would leave the activation already truncated.
@@ -1089,7 +1090,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                   get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
                   get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
                   dest_reuse_scratch_cb_id}) {
-                depthwise_unpack_to_dest[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+                unpack_to_dest_mode[cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
             }
         }
 
@@ -1210,6 +1211,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         .noc = activation_noc,
     };
 
+    if (operation_attributes.fp32_partials && !is_conv_1d_depthwise_conv && fp32_dest_acc_en && !packer_l1_acc_en) {
+        mark_fp32_partials_reload(cb_info, unpack_to_dest_mode, has_bias);
+        if (partials_format_differs_from_output(cb_info)) {
+            compute_defines["PACK_RECONFIG_PARTIALS"] = "1";
+        }
+    }
+
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel;
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -1221,7 +1229,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = depthwise_unpack_to_dest,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
     };
 
     // Helper lambda to setup mcast arguments

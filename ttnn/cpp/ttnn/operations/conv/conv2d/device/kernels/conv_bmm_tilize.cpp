@@ -236,6 +236,11 @@ void kernel_main() {
     constexpr bool pack_relu = get_compile_time_arg_val(27);
     constexpr bool packer_untilize = get_compile_time_arg_val(28);
     constexpr bool packer_l1_acc = get_compile_time_arg_val(29);
+#ifdef PACK_RECONFIG_PARTIALS
+    constexpr bool pack_reconfig_partials = true;
+#else
+    constexpr bool pack_reconfig_partials = packer_l1_acc;
+#endif
     constexpr bool fuse_bias = get_compile_time_arg_val(30);
     constexpr bool split_reader = get_compile_time_arg_val(31);
     constexpr bool activation_reuse = get_compile_time_arg_val(32);
@@ -318,7 +323,7 @@ void kernel_main() {
                                 pack_relu_config(ReluConfig::none());
                             }
                         }
-                        if constexpr (packer_l1_acc) {
+                        if constexpr (pack_reconfig_partials) {
                             // curr_matmul_out_cb is the upcoming pack target, not necessarily PACK's current format.
                             // After K0, PACK is configured for partials until this tilize starts.
                             if (in0_block_w_i == 0) {
@@ -326,7 +331,9 @@ void kernel_main() {
                             } else {
                                 pack_reconfig_data_format(matmul_partials_cb, tilized_in0_cb_id);
                             }
-                            pack_reconfig_l1_acc(0);
+                            if constexpr (packer_l1_acc) {
+                                pack_reconfig_l1_acc(0);
+                            }
                         }
                         tilize_in<
                             in0_block_w,
@@ -349,7 +356,7 @@ void kernel_main() {
                             pack_relu_config(ReluConfig::none());
                         }
                     }
-                    if constexpr (packer_l1_acc) {
+                    if constexpr (pack_reconfig_partials) {
                         // curr_matmul_out_cb is the upcoming pack target, not necessarily PACK's current format.
                         // After K0, PACK is configured for partials until this tilize starts.
                         if (in0_block_w_i == 0) {
@@ -357,7 +364,9 @@ void kernel_main() {
                         } else {
                             pack_reconfig_data_format(matmul_partials_cb, tilized_in0_cb_id);
                         }
-                        pack_reconfig_l1_acc(0);
+                        if constexpr (packer_l1_acc) {
+                            pack_reconfig_l1_acc(0);
+                        }
                     }
 
                     if constexpr (!activation_reuse) {
@@ -416,7 +425,7 @@ void kernel_main() {
                     }
                 }
 
-                if constexpr (packer_l1_acc) {
+                if constexpr (pack_reconfig_partials) {
                     pack_reconfig_data_format(curr_matmul_out_cb);
                 }
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
@@ -566,8 +575,10 @@ void kernel_main() {
                 }  // in0_num_subblocks
             }
             if constexpr (untilize_out) {
-                if constexpr (packer_l1_acc) {
+                if constexpr (pack_reconfig_partials) {
                     pack_reconfig_data_format(matmul_partials_cb, out_cb_id);
+                }
+                if constexpr (packer_l1_acc) {
                     pack_reconfig_l1_acc(0);
                 }
                 if constexpr (pack_relu) {
