@@ -182,3 +182,51 @@ def test_col_tilize_to_device_and_back(device, dtype, K, N):
     assert result_col.shape == result_manual.shape
     pcc_threshold = 0.99 if dtype == ttnn.bfloat8_b else 0.98
     assert_with_pcc(result_manual, result_col, pcc=pcc_threshold)
+
+
+def _sharded_memory_config(device, memory_layout, shard_shape):
+    core_grid = ttnn.num_cores_to_corerangeset(2, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("H", [40, 64])
+def test_from_torch_sharded_bfp_matches_interleaved_height(device, dtype, H):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, H, 64, dtype=torch.float32)
+    interleaved = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device))
+    sharded_cfg = _sharded_memory_config(device, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 64))
+    sharded = ttnn.to_torch(
+        ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_cfg)
+    )
+    assert torch.equal(interleaved, sharded)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_from_torch_sharded_bfp_matches_interleaved_width(device, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 64, dtype=torch.float32)
+    interleaved = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device))
+    sharded_cfg = _sharded_memory_config(device, ttnn.TensorMemoryLayout.WIDTH_SHARDED, (64, 32))
+    sharded = ttnn.to_torch(
+        ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_cfg)
+    )
+    assert torch.equal(interleaved, sharded)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.parametrize("src_dtype", [torch.float16, torch.float64])
+@pytest.mark.parametrize("sharded", [False, True])
+def test_from_torch_bfp_source_dtype_matches_float32(device, dtype, src_dtype, sharded):
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 64, dtype=src_dtype)
+    reference = ttnn.to_torch(ttnn.from_torch(torch_input.float(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device))
+    if sharded:
+        sharded_cfg = _sharded_memory_config(device, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 64))
+        got = ttnn.to_torch(
+            ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_cfg)
+        )
+    else:
+        got = ttnn.to_torch(ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device))
+    assert torch.equal(reference, got)
