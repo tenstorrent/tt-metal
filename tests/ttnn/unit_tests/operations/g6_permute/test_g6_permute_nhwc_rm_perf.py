@@ -62,7 +62,7 @@ def test_block_w_sweep(buffer, knobs, device, fresh_cache, monkeypatch):
     print(
         f"PLAN {buffer} {knobs}: block_w={plan.block_w} tail_w={plan.tail_w} units={plan.tensor_units} "
         f"cores={plan.num_cores} units/core={plan.units_per_core_g1}/{plan.units_per_core_g2} "
-        f"block_units={plan.block_units} depth={plan.input_depth}"
+        f"kw={plan.kw} depth={plan.input_depth}"
     )
     actual = ttnn.to_torch(g6_permute(ttnn_input, NHWC))
     expected = torch.permute(torch_input, NHWC).contiguous()

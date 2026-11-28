@@ -7,11 +7,10 @@
 #include <cstdint>
 #include <utility>
 
-// Core-local transpose of ROW_MAJOR bfloat16 pages, shared by the ROW_MAJOR regimes' writers
-// (blocks_rm_gather, nhwc_rm_transpose). RISC-V loads and stores only: the values never pass
-// through an unpacker or packer, so every bit pattern survives. Plain (non-volatile) accesses: the
-// caller fences them against the CB handshake before and the NoC writes after.
-// Raw dataflow: kernel_lib has no block helper that transposes halfwords between strided L1 rows.
+// Core-local transpose of ROW_MAJOR bfloat16 pages for the blocks_rm_gather writer. RISC-V loads and
+// stores only: the values never pass through an unpacker or packer, so every bit pattern survives. Plain (non-volatile)
+// accesses: the caller fences them against the CB handshake before and the NoC writes after. Raw dataflow: kernel_lib
+// has no block helper that transposes halfwords between strided L1 rows.
 namespace g6_permute {
 
 // One word of the page pairs (2q, 2q + 1), page 2q's word at src + 2q * src_page_stride, becomes word q

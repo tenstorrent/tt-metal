@@ -172,28 +172,26 @@ p3: 1024 tile reads and 1024 tile writes, 1114112 B each way; no core-local NoC 
 
 ## CB ledger (`nhwc_rm_transpose`)
 
-Unit `(n, h, wb)`: `width` input pages of `C` values (`width = block_w`, or `tail_w` for the last unit of a row) → `C` partial output rows of `width` values. `unit_slot_bytes = block_w · slot_bytes`, `row_bytes = align_up(block_w · 2, 16)`, `unit_row_bytes = C · row_bytes`. Same two CBs, indices and roles as `blocks_rm_gather` (shared reader).
+Unit `(n, h, wb)`: `width` input pages of `C` values (`width = block_w`, or `tail_w` for the last unit of a row) → `C` partial output rows of `width` values. `ct = ⌈C/32⌉`, `slot_bytes = ct · 64` (one row of a `ct`-tile tilize block), `kw = ⌈block_w/32⌉` w-tiles per unit (≤ 8: one 16-bit half-sync DEST batch). Every CB is UInt16 (opaque 16-bit moves through unpack and pack; Float16_b alters denormals, NaN payloads and −0).
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_input_slots` | `min(input_depth, max_blocks_per_core) · block_units` pages of `unit_slot_bytes` (p4: 2 × 4 × 4096 B) | with ≥ 2 blocks per core the reader fills block `k+1` while the writer transposes block `k`; capacity = live set. A block's pages are packed back to back (a tail unit leaves the block's end unused) | `{w: spans → block_units · block_w · depth (one input page per slot of slot_bytes = the page's bank stride); c: spans → C (the page); n, h: folded into the unit}` | Float16_b, dataflow-only payload | reader | writer | whole program | Cannot take the rows: the transpose reads all `width` slots of a unit while it writes the unit's `C` rows, so in-place rows overwrite unread values |
-| `cb_output_rows` | `block_units` pages of `unit_row_bytes` (p4: 4 × 4096 B), never pushed or popped | one block of transposed rows: the transpose of block `k+1` starts only after `noc_async_writes_flushed` releases block `k`'s rows | `{c: spans → C rows; w: spans → block_w values per row, padded to row_bytes (a 16 B-aligned NoC write source)}` | Float16_b | writer (transpose) | writer (NoC write source) | whole program | The writer's private staging area. Cannot be the output tensor: the `C` rows of a unit live in `C` different pages and banks. Cannot alias `cb_input_slots`: both are live during the transpose |
+| `cb_input_slots` (0) | `input_depth · kw` w-tile pages of `32 · slot_bytes` (L1 reader), or `input_depth` unit pages of `kw · 32 · slot_bytes` (shared DRAM reader). p4: 4 × 2048 B | a unit always takes `kw` w-tiles (a tail unit pushes pad pages) so it never straddles the wrap; the reader fills unit `k+1` while compute tilizes unit `k` | `{w: spans → 32 · kw · depth slots; c: spans → 32 · ct values per slot (C live); n, h: folded into the unit}` | UInt16 | reader | compute (tilize) | whole program | Cannot take the tiles: tilize reads all `kw` w-tiles of the unit while `cb_tiles` is written |
+| `cb_output_rows` (1) | `ROWS_DEPTH = 2` pages of `kw · 2048 B` (p4: 2 × 4096 B) | compute packs c-tile `k+1` while the writer sends c-tile `k` | `{c: spans → 32 rows per page; w: spans → 32 · kw values per row}` | UInt16 | compute (pack_untilize) | writer | whole program | Cannot alias `cb_tiles`: the transpose unpacks tiles while rows are packed |
+| `cb_tiles` (2) | `kw · ct` tiles of 2048 B (p4: 2 × 2048 B) | one unit's tilized blocks, consumed by the transpose of the same unit | `{w: spans → kw tiles; c: spans → ct tiles}` | UInt16 | compute (tilize) | compute (transpose) | whole program | Intra-kernel staging between the two compute passes |
 
 ### Symbol table (`nhwc_rm_transpose`)
 
 | Symbol | Bound | Established by |
 |--------|-------|----------------|
-| `slot_bytes` | `input_tensor.buffer_aligned_page_size()` = 64 for C = 32 (L1 and DRAM) | read alignment (local ≡ remote mod 64 on DRAM, mod 16 on L1) |
-| `block_w` | `W`, or a multiple of 8 below `W` (16 B write alignment of the offset `wb · block_w · 2`); `BLOCK_W` when set, else `_choose_block_w`, among the widths whose one unit fits the budget. p4: 64 | host plan, single source |
-| `block_units` | `min(units_per_core_g1, block_cap, ceil(BLOCK_PAGES / block_w))`, `BLOCK_PAGES = 256`. p4: 4 | host plan, single source |
-| `block_cap` | `floor((L1_OP_BUDGET_BYTES − out_l1_bytes_per_core) / (INPUT_DEPTH · unit_slot_bytes + unit_row_bytes))` | mechanism cap (BB-05); `RuntimeError` when no width fits one unit |
-| `input_depth` | `min(INPUT_DEPTH = 2, max_blocks_per_core)` | host constant |
+| `block_w` | `W` (whole rows, `W ≤ 256`), or a multiple of 8 of at most 8 w-tiles (16 B write alignment of `wb · block_w · 2`); `BLOCK_W` when set, else `_choose_block_w` over 8, 16, 32, 64, 128, 256 among the widths whose unit fits. p4: 64 | host plan, single source |
+| `input_depth` | `min(INPUT_DEPTH = 2, units_per_core_g1)`, lowered until the footprint fits | host constant |
 | `out_l1_bytes_per_core` | `ceil(N · C · H / num_l1_banks) · align_up(W · 2, 16)` in L1; p4: 38 × 512 = 19456 B | output placement |
 
 ### Total per-core footprint (`nhwc_rm_transpose`)
 
-`input_depth · block_units · unit_slot_bytes + block_units · unit_row_bytes + out_l1_bytes_per_core ≤ L1_OP_BUDGET_BYTES` (reported as `l1_bytes_per_core` + `out_l1_bytes_per_core` by the plan).
-Panoptic p4 `[1,128,256,32]` in L1: 32768 + 16384 B of CBs + 19456 B of output pages = 68608 B per core (L17 runs it with 1347776 B free).
+`input_depth · kw · 32 · slot_bytes + ROWS_DEPTH · kw · 2048 + kw · ct · 2048 + out_l1_bytes_per_core ≤ L1_OP_BUDGET_BYTES` (reported as `l1_bytes_per_core` + `out_l1_bytes_per_core` by the plan); `RuntimeError` when no width fits one unit.
+Panoptic p4 `[1,128,256,32]` in L1: 8192 + 8192 + 4096 B of CBs + 19456 B of output pages = 39936 B per core.
 
 ## Data-movement budget (`nhwc_rm_transpose`)
 
@@ -202,4 +200,4 @@ Panoptic p4 `[1,128,256,32]` in L1: 32768 + 16384 B of CBs + 19456 B of output p
 | `x` | 1, one read per `C·2` B input page into its own slot | each unit belongs to one core; its pages are read once | 0 |
 | `out` | 1, `C` writes of `width · 2` B per unit | each output value is transposed once and written once, by the unit that owns its `w` | 0 |
 
-p4 (`block_w` = 64): 32768 reads of 64 B and 16384 writes of 128 B, 2 MiB each way. Core-local: every value moves once by RISC-V loads and stores (the transpose).
+p4 (`block_w` = 64): 32768 reads of 64 B and 16384 writes of 128 B, 2 MiB each way. Core-local: tilize, transpose and pack-untilize on the Tensix engine; no RISC-V touches a value.

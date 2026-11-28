@@ -111,6 +111,14 @@ def test_special_values_move_bit_for_bit(device):
     _permute_and_check(bits.view(torch.bfloat16).reshape(shape), device, "l1")
 
 
+@pytest.mark.parametrize("buffer", ["l1", "dram"])
+def test_every_bfloat16_pattern_moves_bit_for_bit(buffer, device):
+    # The transpose runs through unpack and pack: every one of the 65536 patterns must survive.
+    bits = torch.arange(-(1 << 15), 1 << 15, dtype=torch.int32).to(torch.int16)
+    torch_input = bits[torch.randperm(bits.numel(), generator=torch.Generator().manual_seed(3))]
+    _permute_and_check(torch_input.view(torch.bfloat16).reshape(1, 2, 1024, 32), device, buffer)
+
+
 def test_negative_dims_equal_canonical(device):
     torch.manual_seed(42)
     _permute_and_check(_randn((1, 6, 40, 32)), device, "dram", call_dims=(0, -1, 1, -2))
@@ -157,12 +165,15 @@ def knobs(monkeypatch):
     op_module._PROGRAM_CACHE.clear()
 
 
-# id, shape, buffer, knob overrides: unit widths with and without a tail, multi-block rings across
-# rows, every input depth, and each DRAM read path of the shared reader.
+# id, shape, buffer, knob overrides: unit widths with and without a tail (sub-tile, multi-tile with a
+# partial last w-tile, the 8-tile maximum, whole rows), every input depth, one rows page, and each DRAM
+# read path of the shared reader.
 FORCED_PLANS = [
-    ("w8_blocks_of_1_depth3", (1, 4, 60, 32), "l1", dict(BLOCK_W=8, BLOCK_PAGES=1, INPUT_DEPTH=3)),
-    ("w24_tail_ragged_blocks", (2, 5, 100, 6), "dram", dict(BLOCK_W=24, BLOCK_PAGES=50, INPUT_DEPTH=2)),
-    ("whole_rows_depth1", (1, 30, 72, 16), "l1", dict(BLOCK_W=10**6, BLOCK_PAGES=100, INPUT_DEPTH=1)),
+    ("w8_depth3", (1, 4, 60, 32), "l1", dict(BLOCK_W=8, INPUT_DEPTH=3)),
+    ("w24_tail", (2, 5, 100, 6), "dram", dict(BLOCK_W=24, INPUT_DEPTH=2)),
+    ("whole_rows_depth1", (1, 30, 72, 16), "l1", dict(BLOCK_W=10**6, INPUT_DEPTH=1)),
+    ("w40_partial_w_tile_rows1", (1, 6, 130, 40), "l1", dict(BLOCK_W=40, ROWS_DEPTH=1)),
+    ("w256_eight_w_tiles", (1, 3, 600, 32), "l1", dict(BLOCK_W=256)),
     ("w16_page_order_one_noc", (1, 9, 50, 32), "dram", dict(BLOCK_W=16, BANK_MAJOR=False, READ_ALT_NOC_SHARE=0)),
     ("w32_bank_major_quarter_alt", (1, 9, 70, 32), "dram", dict(BLOCK_W=32, READ_ALT_NOC_SHARE=Fraction(1, 4))),
 ]
