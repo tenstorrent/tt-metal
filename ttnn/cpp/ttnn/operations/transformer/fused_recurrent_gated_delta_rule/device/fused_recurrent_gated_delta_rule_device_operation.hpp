@@ -39,9 +39,16 @@ std::vector<Tensor> fused_recurrent_gated_delta_rule(
     const Tensor& beta,
     const std::optional<Tensor>& initial_state,
     const std::optional<Tensor>& initial_state_block_idx,
+    const std::optional<Tensor>& output_tensor,
+    uint32_t B,
+    uint32_t H,
+    uint32_t HV,
     uint32_t T,
     bool output_final_state,
     bool output_per_token_state,
+    bool inplace_final_state,
+    bool use_qk_l2norm_in_kernel,
+    float scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 
