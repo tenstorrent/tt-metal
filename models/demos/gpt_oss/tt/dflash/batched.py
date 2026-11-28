@@ -91,6 +91,10 @@ class _TPAllReduce:
     BF8 (the batched decode's all-reduce precision) on 90 cores, so the [rows, 4 x hidden] scratch fits L1."""
 
     CORES, LINKS = 90, 2
+    # all_reduce_async's L1 scratch CB per sender core would hold every shard its link sends: at 512 rows a [512, 32]
+    # BF8 shard on each of 90 cores over 2 links is 45 shards, 783 KB, which does not fit next to the op's L1 buffers.
+    # At most this many bytes in whole shards stream them instead (same result).
+    MAX_SCRATCH_CB_BYTES = 400 * 1024
     # rows per all_reduce_async call (a 1024-row pass runs one call per 512 rows, each part straight from the interleaved
     # input's rows): a 512-row pass in one call instead of two 256-row ones, its link workers' CB capped at ~400 KB of
     # shards (all_reduce_async_program_factory.cpp): batched DFlash 29.73 -> 29.59 ms per round at 128 users, 31.69 ->
@@ -159,6 +163,7 @@ class _TPAllReduce:
                     dtype=ttnn.bfloat16,
                     topology=ttnn.Topology.Ring,
                     num_links=self.LINKS,
+                    max_scratch_cb_bytes=self.MAX_SCRATCH_CB_BYTES,
                 )
             )
             xs.deallocate(True)
