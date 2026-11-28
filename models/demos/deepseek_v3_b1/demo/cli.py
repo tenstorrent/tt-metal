@@ -360,6 +360,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.launch_only and io_socket_descriptor_prefix is None:
         io_socket_descriptor_prefix = "deepseek"
 
+    num_mtp_levels = args.num_mtp_levels if args.enable_speculative_decode else 0
+    if not args.enable_speculative_decode and args.num_mtp_levels:
+        logger.info(
+            "--no-enable-speculative-decode: running base decode (ignoring --num-mtp-levels {})", args.num_mtp_levels
+        )
+
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
@@ -380,7 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
-        num_mtp_levels=args.num_mtp_levels,
+        num_mtp_levels=num_mtp_levels,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
