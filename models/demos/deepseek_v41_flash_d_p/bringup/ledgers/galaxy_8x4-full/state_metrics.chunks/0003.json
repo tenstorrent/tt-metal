@@ -3073,6 +3073,19 @@
   "native_repeat_rot_idx5120": 0.0,
   "native_repeat_wqb160": 0.0
  },
+ "MB.QBL": {
+  "ids_uploads_per_chunk": 0.0,
+  "ids_uploads_per_chunk_tagentic_cc": 0.0,
+  "program_builds_after_warmup_serving": 0,
+  "program_builds_after_warmup_serving_tagentic_cc": 0,
+  "steady_tok_s_p1024000_tagentic_cc": 63288.0,
+  "steady_tok_s_p131072_tagentic_cc": 72011.3,
+  "steady_tok_s_p139264_tagentic_cc": 71012.5,
+  "steady_tok_s_p262144_tagentic_cc": 71508.4,
+  "steady_tok_s_p51200_tagentic_cc": 74310.6,
+  "steady_tok_s_p524288_tagentic_cc": 69754.8,
+  "steady_tok_s_p786432_tagentic_cc": 64810.1
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,

@@ -743,3 +743,5 @@
 - 07:16 OWNER: the machine must not idle on a non-decision. FIX.42 (wq_b / wo_b C++ bank probe) was already owner-agreed (plan step 4, batching supervision 18:35): switching to batching to run it.
 - 10:02 (model_bringup) skill rule cherry-picked (676b43921c8), rebuilt. QUEUED MB.QB (wq_b bank QB.1 / FIX.42 + the single-request fusions of NC.9; op-level) and MB.QBL (5120 ladder + cold no-rebuild assessment); validate: valid.
 - 10:12 heartbeat (model_bringup): MB.QB agent active; RAM used 79 GB; / 94G free.
+- 10:14 MB.QB PASS -> 3b9ca2e3f27: wq_b bank at 160 rows device 177.7 -> 151.7 us (21 calls), host 86 -> 52 us; ids reorder into embedding; replay rotation fused; identical, repeats 0, no cache growth. MB.QBL next.
+- 10:23 OWNER asked where the exposed host time comes from. No breakdown after the C++ ports exists (old: single 5120 layer-2 launches ~4.9, chunk end ~3, engram 2-5 ms; packed 19-22 ms, no breakdown). Decided: after MB.QBL, a measurement-only host profile task on the batching ledger (test_profile.py BRINGUP_PROFILE_HOST=1 at 139264 / 1024000, single 8192 + packed 4x2k).
