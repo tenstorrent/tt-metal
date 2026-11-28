@@ -5,6 +5,7 @@
 #include "group_attn_matmul_device_operation.hpp"
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -17,6 +18,8 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     // input_b: [batch, kv_heads, head_dim, kv_len]
     // intermediate: [q_heads, batch, batch, kv_len]
     // output: [q_len, q_heads, batch, kv_len]
+
+    ttnn::operations::matmul::validate_matmul_output_dtype(operation_attributes.output_dtype);
 
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;

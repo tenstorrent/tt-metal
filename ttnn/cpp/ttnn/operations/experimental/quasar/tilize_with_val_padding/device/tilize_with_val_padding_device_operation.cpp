@@ -8,6 +8,7 @@
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
@@ -100,6 +101,13 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
             input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
+    // Datacopy via unpack/pack cannot convert int<->float or uint16<->{int32,uint32}.
+    TT_FATAL(
+        ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+            input_tensor.dtype(), operation_attributes.output_dtype),
+        "tilize_with_val_padding (quasar): datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+        input_tensor.dtype(),
+        operation_attributes.output_dtype);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     if (input_tensor.dtype() == DataType::FP8_E4M3) {

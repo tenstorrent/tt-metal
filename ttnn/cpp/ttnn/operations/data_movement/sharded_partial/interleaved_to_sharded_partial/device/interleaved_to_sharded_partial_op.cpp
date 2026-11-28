@@ -4,6 +4,7 @@
 
 #include "interleaved_to_sharded_partial_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
@@ -51,6 +52,12 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
             input_tensor.layout() == Layout::TILE,
             "Input tensor layout must be TILE but got {}",
             input_tensor.layout());
+        TT_FATAL(
+            ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(input_tensor.dtype(), output_dtype),
+            "interleaved_to_sharded_partial: datacopy cannot convert {} -> {} (reinterprets bits); use "
+            "ttnn.typecast.",
+            input_tensor.dtype(),
+            output_dtype);
     }
     auto device_grid = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(

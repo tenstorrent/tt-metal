@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/sparse/sparse_matmul_device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation_types.hpp"
@@ -68,6 +69,11 @@ namespace ttnn::prim::qsr {
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace operations::experimental::quasar::matmul::utilities;
+
+    if (operation_attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(operation_attributes.output_dtype.value());
+    }
+
     const auto& input_tensor_a = tensor_args.input_tensors.at(0);
     const auto& input_tensor_b = tensor_args.input_tensors.at(1);
     const auto& sparsity = tensor_args.input_tensors.at(2);
