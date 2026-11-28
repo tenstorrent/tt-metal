@@ -96,3 +96,13 @@ def test_moreh_clip_grad_norm_corner_cases(input_shapes, clip_ratio, error_if_no
         error_if_nonfinite=error_if_nonfinite,
         provide_total_norm=provide_total_norm,
     )
+
+
+@pytest.mark.parametrize("norm_type", [2.0, 1.0], ids=["p2", "p1"])
+def test_moreh_clip_grad_norm_large_gradient(norm_type, device):
+    torch.manual_seed(0)
+    grad = ((torch.rand(1, 1, 32 * 4096, 32) * 2 - 1) * 1e-3).bfloat16()
+    tt_grad = create_ttnn_tilized_tensor(grad, device, ttnn.bfloat16)
+    expected = torch.linalg.vector_norm(grad.double().flatten(), ord=norm_type).reshape(1)
+    actual = ttnn.to_torch(ttnn.moreh_clip_grad_norm([tt_grad], 1e9, norm_type)).reshape(1).double()
+    assert torch.allclose(actual, expected, rtol=0.05, atol=0), (actual, expected)
