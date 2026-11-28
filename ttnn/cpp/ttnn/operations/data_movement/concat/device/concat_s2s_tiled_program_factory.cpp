@@ -57,15 +57,20 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         inputs[1].get().padded_shape()[-1],
         groups);
 
-    // The current implementation relies on not having break up tile faces so if we would
-    // need to split tiles because dim[-1] / groups < 16, we cannot proceed
+    // The reader and writer move each group as one contiguous burst, so a group has to be a whole
+    // number of tile faces. A group width that is at least one face but not a multiple of the face
+    // width (e.g. 96 columns with 4 groups, i.e. 24 per group) used to be accepted and silently
+    // interleaved the groups in the wrong order.
+    constexpr uint32_t face_width = TILE_HEIGHT / 2;
     TT_FATAL(
-        inputs[0].get().padded_shape()[-1] / groups >= TILE_HEIGHT / 2,
-        "Group size must be at least 16 for input0 (was {})",
+        (inputs[0].get().padded_shape()[-1] / groups) % face_width == 0,
+        "Group size must be a multiple of {} for input0 (was {})",
+        face_width,
         inputs[0].get().padded_shape()[-1] / groups);
     TT_FATAL(
-        inputs[1].get().padded_shape()[-1] / groups >= TILE_HEIGHT / 2,
-        "Group size must be at least 16 for input1 (was {})",
+        (inputs[1].get().padded_shape()[-1] / groups) % face_width == 0,
+        "Group size must be a multiple of {} for input1 (was {})",
+        face_width,
         inputs[1].get().padded_shape()[-1] / groups);
 
     // Program-scope resource names. Declared function-local (not at namespace scope) so that the
