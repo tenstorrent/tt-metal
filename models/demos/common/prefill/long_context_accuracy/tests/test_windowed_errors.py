@@ -1,0 +1,187 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Windowed errors on small hand-computed values. CPU only, no device."""
+
+import math
+
+import pytest
+import torch
+
+from models.demos.common.prefill.long_context_accuracy.acceptance_bars import AcceptanceBar, check
+from models.demos.common.prefill.long_context_accuracy.windowed_errors import (
+    WindowedErrors,
+    errors,
+    gain,
+    nrmse,
+    pcc,
+    quantile,
+    ratio_nrmse,
+    rms_err,
+    rms_ref,
+    row_nrmse,
+    row_sums,
+)
+
+# Golden rows of norm 5 (3, 4) or 0; the device is off by (0, 1) on rows 1 and 3, so those rows have error norm 1.
+EXPECTED = torch.tensor([[3.0, 4.0], [3.0, 4.0], [0.0, 0.0], [3.0, 4.0]])
+ACTUAL = torch.tensor([[3.0, 4.0], [3.0, 5.0], [0.0, 0.0], [3.0, 5.0]])
+
+
+def test_row_sums_and_metrics_match_hand_values() -> None:
+    sums = row_sums(EXPECTED, ACTUAL)
+    assert sums.dtype == torch.float64
+    # Row 1 (y 3, 4; x 3, 5): ȳ 3.5, x̄ 4, Σ(y − ȳ)² 0.5, Σ(x − x̄)² 2, Σ(x − x̄)(y − ȳ) 1, Σy² 25, Σe² 1, n 2.
+    assert sums[1].tolist() == [3.5, 4.0, 0.5, 2.0, 1.0, 25.0, 1.0, 2.0]
+    assert nrmse(sums) == pytest.approx(math.sqrt(2 / 75))  # Σe² 2 over Σy² 75
+    assert nrmse(sums[:1]) == 0.0 and nrmse(sums[2:3]) == 0.0  # exact, also on the all-zero row
+    assert nrmse(row_sums(torch.zeros(1, 2), torch.ones(1, 2))) == math.inf
+    assert pcc(row_sums(torch.tensor([[1.0, 2.0, 3.0]]), torch.tensor([[2.0, 4.0, 6.0]]))) == pytest.approx(1.0)
+    assert math.isnan(pcc(row_sums(torch.ones(1, 3), torch.ones(1, 3))))  # constant golden: undefined
+    # Per row: 0, 1/5, 0 (exact zero row), 1/5; a floor of 10 caps the denominator from below.
+    assert row_nrmse(sums, floor=0.5).tolist() == pytest.approx([0.0, 0.2, 0.0, 0.2])
+    assert row_nrmse(sums, floor=10.0).tolist() == pytest.approx([0.0, 0.1, 0.0, 0.1])
+
+
+@pytest.mark.parametrize("offset", [0.0, 1e8])
+def test_pcc_is_exact_on_data_with_a_large_mean(offset: float) -> None:
+    """y = c + (1, 2, 3, 4), x = c + (1, 2, 3, 5): about their means 2.5 and 2.75, Σdy² 5, Σdx² 8.75 and Σdxdy 6.5,
+    so PCC = 6.5 / √43.75 = 13 / (5√7) for any offset c. Split over two rows, so the row merge is exercised too.
+    At c = 1e8 raw sums are ~4e16 and an uncentred formula cancels to noise."""
+    expected = offset + torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float64)
+    actual = offset + torch.tensor([[1.0, 2.0], [3.0, 5.0]], dtype=torch.float64)
+    assert pcc(row_sums(expected, actual)) == pytest.approx(13 / (5 * math.sqrt(7)), rel=1e-12)
+
+
+def test_row_sums_flatten_trailing_dims_and_reject_mismatched_shapes(expect_error) -> None:
+    sums = row_sums(EXPECTED.reshape(4, 1, 2), ACTUAL.reshape(4, 1, 2))
+    assert torch.equal(sums, row_sums(EXPECTED, ACTUAL))
+    with expect_error(ValueError, "matching"):
+        row_sums(EXPECTED, ACTUAL[:3])
+
+
+def test_absolute_error_is_the_rms_over_elements_next_to_the_golden_rms() -> None:
+    """y = (3, 4), x = (3, 5): Σe² 1 and Σy² 25 over 2 elements, so RMS error √0.5, golden RMS √12.5, NRMSE 0.2."""
+    sums = row_sums(EXPECTED[1:2], ACTUAL[1:2])
+    assert rms_err(sums) == pytest.approx(math.sqrt(0.5)) and rms_ref(sums) == pytest.approx(math.sqrt(12.5))
+    assert rms_err(sums) / rms_ref(sums) == pytest.approx(nrmse(sums)) == pytest.approx(0.2)
+    # All four rows: Σe² 2, Σy² 75 over 8 elements; the exact zero row counts in the element total.
+    whole = row_sums(EXPECTED, ACTUAL)
+    assert errors(whole, "out_") == pytest.approx(
+        {"out_nrmse": math.sqrt(2 / 75), "out_rms_err": 0.5, "out_rms_ref": math.sqrt(75 / 8), "out_pcc": pcc(whole)}
+    )
+    # PCC is undefined only when the golden is constant: left out, not NaN
+    assert errors(row_sums(torch.ones(1, 3), torch.ones(1, 3))) == {"nrmse": 0.0, "rms_err": 0.0, "rms_ref": 1.0}
+    assert "pcc" not in errors(row_sums(torch.ones(1, 3), torch.tensor([[1.0, 2.0, 3.0]])))
+
+
+def test_pcc_fails_closed_on_a_constant_or_non_finite_device_side() -> None:
+    """Golden (1, 2, 3) against a device side never written (0, 0, 0): no correlation, PCC 0, so a minimum-PCC bar
+    fails that window; NRMSE 1 (‖e‖ = ‖y‖). A NaN on the device side is reported as NaN and fails too."""
+    golden = torch.tensor([[1.0, 2.0, 3.0]])
+    zero = errors(row_sums(golden, torch.zeros(1, 3)), "kv_")
+    assert zero["kv_pcc"] == 0.0 and zero["kv_nrmse"] == 1.0
+    assert check([{"start": 0, "end": 1, **zero}], [AcceptanceBar("kv_pcc", "min", 0.999)]) == [
+        "kv_pcc 0 < 0.999 in [0, 1)"
+    ]
+    broken = errors(row_sums(golden, torch.tensor([[1.0, float("nan"), 3.0]])), "kv_")
+    assert math.isnan(broken["kv_pcc"])
+    assert check([{"start": 0, "end": 1, **broken}], [AcceptanceBar("kv_pcc", "min", 0.999)]) == [
+        "kv_pcc nan is not finite in [0, 1)"
+    ]
+
+
+def test_quantile_interpolates_and_is_nan_when_empty() -> None:
+    assert quantile(torch.tensor([1.0, 2.0, 3.0, 4.0]), 0.5) == 2.5
+    assert quantile(torch.tensor([[4.0], [1.0]]), 0.0) == 1.0
+    assert math.isnan(quantile(torch.zeros(0), 0.5))
+    assert quantile(torch.tensor([1.0, 2.0, 3.0, 4.0]), 0.1) == pytest.approx(1.3)
+    big = torch.arange(2**24 + 1).flip(0)  # more values than torch.quantile accepts
+    assert quantile(big, 0.5) == 2**23
+
+
+def test_windows_align_to_absolute_rows_whatever_the_chunking() -> None:
+    sums = row_sums(EXPECTED, ACTUAL)
+    one, two = WindowedErrors(), WindowedErrors()
+    one.append(0, sums=sums)
+    for start in range(4):  # one-row chunks
+        two.append(start, sums=sums[start : start + 1])
+    measure = lambda w: {"nrmse": nrmse(w["sums"])}  # noqa: E731
+    assert one.windows(3, measure) == two.windows(3, measure)
+    windows = one.windows(3, measure)
+    assert [(w["start"], w["end"], w["rows"]) for w in windows] == [(0, 3, 3), (3, 4, 1)]  # last window partial
+    assert windows[0]["nrmse"] == pytest.approx(math.sqrt(1 / 50)) and windows[1]["nrmse"] == pytest.approx(0.2)
+    assert one.whole(measure) == {"start": 0, "end": 4, "rows": 4, "nrmse": pytest.approx(math.sqrt(2 / 75))}
+    assert torch.equal(two.column("sums"), sums)
+
+
+def test_windows_slice_every_column_and_event_and_leave_out_undefined_quantities() -> None:
+    """Row columns slice by row; events (any order, fields with one entry per event, here a row-sums field too)
+    fall in the window of their absolute row; a measure's None is left out."""
+    series = WindowedErrors()
+    series.append(0, recall=torch.tensor([1.0, 0.5]))
+    series.append(2, recall=torch.tensor([1.0, 0.75]))
+    series.add_events("misses", row=torch.tensor([3, 1]), rank=torch.tensor([7, 2]))
+    series.add_events("misses", row=torch.tensor([1]), rank=torch.tensor([5]))
+    series.add_events("sampled", row=torch.tensor([2]), sums=row_sums(EXPECTED[1:2], ACTUAL[1:2]))
+
+    def measure(w):
+        rank = w["misses"]["rank"]
+        return {
+            "recall_mean": float(w["recall"].mean()),
+            "miss_rank_min": int(rank.min()) if rank.numel() else None,
+            "first_row": w.start,
+            **(errors(w["sampled"]["sums"], "sampled_") if w["sampled"]["row"].numel() else {}),
+        }
+
+    windows = series.windows(2, measure)
+    assert [{k: v for k, v in w.items() if not k.startswith("sampled_")} for w in windows] == [
+        {"start": 0, "end": 2, "rows": 2, "recall_mean": 0.75, "miss_rank_min": 2, "first_row": 0},
+        {"start": 2, "end": 4, "rows": 2, "recall_mean": 0.875, "miss_rank_min": 7, "first_row": 2},
+    ]
+    assert "sampled_nrmse" not in windows[0] and windows[1]["sampled_nrmse"] == pytest.approx(0.2)
+    assert "miss_rank_min" not in series.windows(1, measure)[0]  # row 0 has no miss: not defined, not NaN
+    assert check(series.windows(1, measure), [AcceptanceBar("miss_rank_min", "min", 0)]) == []
+
+
+def test_series_refuses_a_gap_an_overlap_or_inconsistent_columns(expect_error) -> None:
+    series = WindowedErrors()
+    series.append(0, sums=row_sums(EXPECTED[:2], ACTUAL[:2]))
+    with expect_error(ValueError, "does not continue"):
+        series.append(3, sums=row_sums(EXPECTED[:1], ACTUAL[:1]))
+    with expect_error(ValueError, "does not continue"):
+        series.append(1, sums=row_sums(EXPECTED[:1], ACTUAL[:1]))
+    with expect_error(ValueError, "differ"):
+        series.append(2, other=torch.zeros(1))
+    with expect_error(ValueError, "same leading row count"):
+        WindowedErrors().append(0, sums=row_sums(EXPECTED, ACTUAL), recall=torch.zeros(3))
+    with expect_error(ValueError, "one entry per event"):
+        series.add_events("misses", row=torch.tensor([1, 2]), rank=torch.tensor([3]))
+    with expect_error(ValueError, "no rows accumulated"):
+        WindowedErrors().windows(2, dict)
+
+
+def test_gain_by_hand() -> None:
+    y = torch.tensor([[1.0, 3.0], [2.0, -2.0]], dtype=torch.float64)
+    assert gain(row_sums(y, 2 * y)) == pytest.approx(2.0)
+    # x = y + 1 on row 0: Σxy = 1*2 + 3*4 + 2*2 + (-2)(-2) = 22, Σyy = 1 + 9 + 4 + 4 = 18
+    x = y + torch.tensor([[1.0, 1.0], [0.0, 0.0]], dtype=torch.float64)
+    assert gain(row_sums(y, x)) == pytest.approx(22 / 18)
+
+
+def test_ratio_nrmse_edge_cases() -> None:
+    """Exact on an all-zero golden (0/0) is 0, an error on it (x/0) is inf, NaN stays NaN; 1/4 gives 0.5."""
+    got = ratio_nrmse(
+        torch.tensor([0.0, 0.0, 1.0, 1.0, math.nan], dtype=torch.float64),
+        torch.tensor([0.0, 1.0, 0.0, 4.0, 1.0], dtype=torch.float64),
+    ).tolist()
+    assert got[:4] == [0.0, 0.0, math.inf, 0.5] and math.isnan(got[4])
+
+
+def test_ratio_nrmse_is_correctly_rounded() -> None:
+    """Every value equals Python's correctly rounded ``math.sqrt(e2 / yy)`` (torch's CPU FP64 sqrt is 1 ulp off on
+    about 1% of values, which moved DSA per-window cache NRMSEs at 1M)."""
+    e2 = torch.rand(4096, dtype=torch.float64, generator=torch.Generator().manual_seed(0)) * 1e3
+    yy = torch.rand(4096, dtype=torch.float64, generator=torch.Generator().manual_seed(1)) * 1e6 + 1
+    want = [math.sqrt(a / b) for a, b in zip(e2.tolist(), yy.tolist())]
+    assert ratio_nrmse(e2, yy).tolist() == want
+    assert [nrmse(row_sums(torch.tensor([[0.0, 0.0]]), torch.tensor([[a, 0.0]]))) for a in (3.0, 7.0)] == [math.inf] * 2
