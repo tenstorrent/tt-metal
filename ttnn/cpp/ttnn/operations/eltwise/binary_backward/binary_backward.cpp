@@ -217,6 +217,14 @@ std::vector<std::optional<Tensor>> add_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    // Drop preallocated grads for masked-off slots so the fused op never validates or
+    // threads a spec it won't emit (compute_output_specs returns preallocated->spec() as-is).
+    if (!are_required_outputs.at(0)) {
+        input_grad.reset();
+    }
+    if (!are_required_outputs.at(1)) {
+        other_grad.reset();
+    }
     const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
         operations::binary_backward::BinaryBackwardOpType::ADD_BW,
         grad_tensor_arg,
@@ -230,7 +238,8 @@ std::vector<std::optional<Tensor>> add_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -241,11 +250,14 @@ std::vector<std::optional<Tensor>> add_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -331,6 +343,12 @@ std::vector<std::optional<Tensor>> sub_bw(
     const std::optional<Tensor>& other_grad_in) {
     std::optional<Tensor> input_grad = input_grad_in;
     std::optional<Tensor> other_grad = other_grad_in;
+    if (!are_required_outputs.at(0)) {
+        input_grad.reset();
+    }
+    if (!are_required_outputs.at(1)) {
+        other_grad.reset();
+    }
     const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
         operations::binary_backward::BinaryBackwardOpType::SUB_BW,
         grad_tensor_arg,
@@ -344,7 +362,8 @@ std::vector<std::optional<Tensor>> sub_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -355,11 +374,14 @@ std::vector<std::optional<Tensor>> sub_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -787,6 +809,12 @@ std::vector<std::optional<Tensor>> rsub_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    if (!are_required_outputs.at(0)) {
+        input_grad.reset();
+    }
+    if (!are_required_outputs.at(1)) {
+        other_grad.reset();
+    }
     const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
         operations::binary_backward::BinaryBackwardOpType::RSUB_BW,
         grad_tensor_arg,
@@ -800,7 +828,8 @@ std::vector<std::optional<Tensor>> rsub_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -811,11 +840,14 @@ std::vector<std::optional<Tensor>> rsub_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
@@ -984,6 +1016,12 @@ std::vector<std::optional<Tensor>> div_bw(
     // Only the None rounding-mode branch has non-zero gradients worth fusing. 'trunc'/'floor'
     // return zero grads (see below), so let them keep the trivial existing composite.
     if (rounding_mode == std::nullopt) {
+        if (!are_required_outputs.at(0)) {
+            input_grad.reset();
+        }
+        if (!are_required_outputs.at(1)) {
+            other_grad.reset();
+        }
         const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
             operations::binary_backward::BinaryBackwardOpType::DIV_BW,
             grad_tensor_arg,
@@ -997,7 +1035,8 @@ std::vector<std::optional<Tensor>> div_bw(
             grad_tensor_arg,
             input_tensor_arg,
             other_tensor_arg,
-            output_mem_config,
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
             {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
@@ -1008,11 +1047,14 @@ std::vector<std::optional<Tensor>> div_bw(
                 input_tensor_arg,
                 other_tensor_arg,
                 tt::tt_metal::DataType::INVALID,
-                output_mem_config.value_or(input_tensor_arg.memory_config()),
-                {true, true},
+                {output_mem_config.value_or(input_tensor_arg.memory_config()),
+                 output_mem_config.value_or(other_tensor_arg.memory_config())},
+                {are_required_outputs.at(0), are_required_outputs.at(1)},
                 input_grad,
                 other_grad);
-            return {outs[0], outs[1]};
+            return {
+                are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+                are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
         }
     }
 
@@ -1179,6 +1221,12 @@ std::vector<std::optional<Tensor>> mul_bw(
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
+    if (!are_required_outputs.at(0)) {
+        input_grad.reset();
+    }
+    if (!are_required_outputs.at(1)) {
+        other_grad.reset();
+    }
     // Hard invariants raise (caller errors); soft reasons drop to composite.
     const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
         operations::binary_backward::BinaryBackwardOpType::MUL_BW,
@@ -1193,7 +1241,8 @@ std::vector<std::optional<Tensor>> mul_bw(
         grad_tensor_arg,
         input_tensor_arg,
         other_tensor_arg,
-        output_mem_config,
+        {output_mem_config.value_or(input_tensor_arg.memory_config()),
+         output_mem_config.value_or(other_tensor_arg.memory_config())},
         {are_required_outputs.at(0), are_required_outputs.at(1)},
         input_grad,
         other_grad);
@@ -1204,11 +1253,14 @@ std::vector<std::optional<Tensor>> mul_bw(
             input_tensor_arg,
             other_tensor_arg,
             tt::tt_metal::DataType::INVALID,
-            output_mem_config.value_or(input_tensor_arg.memory_config()),
-            {true, true},
+            {output_mem_config.value_or(input_tensor_arg.memory_config()),
+             output_mem_config.value_or(other_tensor_arg.memory_config())},
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
             input_grad,
             other_grad);
-        return {outs[0], outs[1]};
+        return {
+            are_required_outputs.at(0) ? std::optional<Tensor>{outs[0]} : std::nullopt,
+            are_required_outputs.at(1) ? std::optional<Tensor>{outs[1]} : std::nullopt};
     }
 
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
