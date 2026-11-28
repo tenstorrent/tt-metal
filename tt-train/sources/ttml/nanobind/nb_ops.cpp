@@ -32,6 +32,7 @@
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
+#include "ops/grouped_dynamic_causal_conv_op.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
@@ -186,6 +187,22 @@ void py_module(nb::module_& m) {
             "the tensor they belong to.\n"
             "Constraints (ValueError): stride, dilation >= 1; padded input >= effective kernel on every spatial\n"
             "axis. C_in and C_out are zero padded to the kernel's channel blocks on device and sliced back.");
+        py_conv.def(
+            "grouped_dynamic_causal_conv",
+            &ttml::ops::grouped_dynamic_causal_conv,
+            nb::arg("input"),
+            nb::arg("dynamic_kernel"),
+            nb::arg("base_kernel"),
+            nb::arg("block_size"),
+            nb::arg("group_size"),
+            "DFlash 2 grouped dynamic causal convolution (z-lab `_grouped_dynamic_convolve`) with autograd for all\n"
+            "inputs, causal inside independent blocks of block_size rows.\n"
+            "input:   [B, 1, S, C] TILE, S a multiple of block_size ([1, 1, blocks * block_size, C] avoids tile "
+            "padding).\n"
+            "dynamic_kernel: [B, 1, S, K * G], G = C / group_size a multiple of 32; column o * G + g is offset o, "
+            "group g.\n"
+            "base_kernel: [1, 1, K, C], K <= block_size.\n"
+            "Returns [B, 1, S, C].");
     }
 
     {
