@@ -336,6 +336,7 @@ jobs:
           MATCH_REF: ${{ inputs.stage2-baseline-ref }}
           LLK_PERF_WAREHOUSE_TABLE: ${{ vars.LLK_PERF_WAREHOUSE_TABLE }}
           STAGE2_THRESHOLDS: ${{ inputs.stage2-thresholds }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           COMMITS=$(.github/scripts/llk-perf-baseline-commits.sh "$MATCH_REF" | paste -sd, -) || COMMITS=""
           for ARCH in $(python3 -c 'import json, os; print(*json.loads(os.environ["STAGE2_THRESHOLDS"]))'); do
@@ -344,6 +345,12 @@ jobs:
               --exclude-workflow-run "$GITHUB_RUN_ID" --commits "$COMMITS" --wait-minutes 0 \
               --out "stage2-baseline/${ARCH}/baseline.csv" --metadata "stage2-baseline/${ARCH}/baseline_metadata.json" \
               || echo "::warning::No ${ARCH} merge baseline; its legs skip stage 2."
+          done
+          for ARCH in $(python3 -c 'import json, os; print(*[a for a, t in json.loads(os.environ["STAGE2_THRESHOLDS"]).items() if t.get("code_positions")])'); do
+            RUN=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["run_id"].split("-")[2])' "stage2-baseline/${ARCH}/baseline_metadata.json") || continue
+            gh run download "$RUN" -p "perf-data-${ARCH}-*" -D "stage2-baseline/${ARCH}" \
+              || echo "::warning::No ${ARCH} baseline fingerprints; every ${ARCH} test reads as changed code."
+            find "stage2-baseline/${ARCH}" -mindepth 2 -type f ! -name '*.windowhash' -delete
           done
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -487,6 +494,7 @@ jobs:
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
           LLK_PERF_PHASE: ${{ steps.offload-unpack.outcome == 'success' && 'run' || 'all' }}
           LLK_CODE_SHIFTS: ${{ inputs.code-shifts }}
+          LLK_WINDOW_HASH: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].code_positions && 'code' || '' }}
         run: |
           ${{ matrix.test-group.cmd }}
           mkdir -p perf_data/runs && touch perf_data/runs/leg-complete
@@ -576,6 +584,8 @@ jobs:
           THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
           MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
           MIN_CYCLES: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].min_cycles }}
+          CODE_POSITIONS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].code_positions }}
+          STABLE_MODULES: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].stable_modules }}
         run: |
           # JOB_START_EPOCH is stamped after container init (up to ~3 min on a cold pull); 2 more stay for the uploads.
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 5) * 60 ))

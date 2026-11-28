@@ -122,6 +122,10 @@ on:
         description: "A point must also move more than this many cycles"
         required: true
         type: string
+      code_positions:
+        required: false
+        default: ''
+        type: string
       gate_name:
         description: "Name of the gate in the Slack message"
         required: false
@@ -512,9 +516,10 @@ jobs:
 
       - name: Add stage 2 to the report
         id: stage2
-        if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
+        if: ${{ !cancelled() && (inputs.code_positions != '' || hashFiles('stage2/**/stage2.json') != '') && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
+          CODE_POSITIONS: ${{ inputs.code_positions }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # --jq runs once per page, so count lines rather than taking a length per page.
@@ -528,9 +533,10 @@ jobs:
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
             --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
-            --arch "$ARCH" --report stage2.md --blocking-csv stage2.regressions.csv || STAGE2_EXIT=$?
+            --arch "$ARCH" --report stage2.md --blocking-csv stage2.regressions.csv \
+            --positions "$CODE_POSITIONS" || STAGE2_EXIT=$?
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
-          if [ "$EXIT_CODE" = "1" ]; then
+          if [ "$EXIT_CODE" = "1" ] || [ "${CODE_POSITIONS:+$EXIT_CODE}" = "0" ]; then
             echo "Stage 2 re-measured the candidates, so it decides the verdict (stage 2 exit ${STAGE2_EXIT})."
             EXIT_CODE=$STAGE2_EXIT
             # Slack lists what blocks, not every stage-1 regression.

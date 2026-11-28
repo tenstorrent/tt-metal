@@ -1,0 +1,24 @@
+name: "LLK perf: reset an accepted regression"
+
+# The llk-perf-accept-regression label accepts the code it was given for. A new push changes
+# that code, so the label comes off and has to be given again.
+# pull_request_target, so the token can remove the label on a fork PR too; nothing is checked out.
+on:
+  pull_request_target:
+    types: [synchronize]
+
+jobs:
+  remove-label:
+    if: contains(github.event.pull_request.labels.*.name, 'llk-perf-accept-regression')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/llk-perf-accept-regression"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -f body="New commits (now at ${SHA:0:11}), so the \`llk-perf-accept-regression\` label is removed. It accepts only the code it was given for; add it again to accept the regression of this code."
