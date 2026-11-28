@@ -378,7 +378,17 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
     MetalEnvAccessor(*env_).impl().get_cluster().l1_barrier(this->id());
 }
 
+void Device::release_command_queue_host_state() {
+    // Programs and queues first: each HWCommandQueue holds a reference to the SystemMemoryManager.
+    command_queue_programs_.clear();
+    command_queues_.clear();
+    sysmem_manager_.reset();
+}
+
 void Device::init_command_queue_host() {
+    // Re-initializing a device (the FD transition, or a device left open by a failed mesh open) comes through here
+    // again. Release what was set up before, so no stale command queue references the SystemMemoryManager below.
+    release_command_queue_host_state();
     // SystemMemoryManager now has internal stubs for mock/emulated devices
     sysmem_manager_ =
         std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
@@ -642,9 +652,7 @@ bool Device::close() {
     default_allocator_.reset();
 
     this->ethernet_cores_.clear();
-    this->command_queue_programs_.clear();
-    this->command_queues_.clear();
-    this->sysmem_manager_.reset();
+    this->release_command_queue_host_state();
     {
         std::lock_guard<std::mutex> lock(optimal_dram_bank_to_logical_worker_assignment_mutex_);
         this->optimal_dram_bank_to_logical_worker_assignment_.clear();
