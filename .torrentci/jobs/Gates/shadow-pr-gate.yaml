@@ -22,3 +22,10 @@ dashboards:
         when:
           changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
                     llk-quasar]
+      # llk-smoke-tests' llk_sfpu_ulp_pr_check legs, under its sku-allowlist.
+      - job: llk-sfpu-ulp-p150b
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]
+      - job: llk-sfpu-ulp-n150
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-wormhole, llk-perf, image]
