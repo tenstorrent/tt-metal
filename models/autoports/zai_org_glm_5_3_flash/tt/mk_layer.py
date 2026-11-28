@@ -282,6 +282,13 @@ class MkLayer:
                                                           wait=(SEM_A, nr),
                                                           packed=rm["stacked"], fused_v2=True)  # fmt: skip
         self._same_cbs(post_cbs, post_cbs_f, "mhc_post")
+        if self.kda.vrsplit > 1:  # GLM53_KDA_VERIFY_RSPLIT: the hand-off chain its deferred write-backs rely on
+            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import KDA_O_PHASE, kda_verify_rsplit_order_check
+
+            o_ph, pw = rd.phases[KDA_O_PHASE], dict(proles_a["reader"][2])
+            kda_verify_rsplit_order_check(cons, self.kda.n_active, rec.n_active, o_ph.wait, o_ph.signal,
+                                          (int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])), nr, SEM_ON,
+                                          SEM_A)  # fmt: skip
         for role in list(proles_a.values()) + list(proles_f.values()) if rm["stacked"] else ():
             role[2].append(("MK_POST_PACKED", "1"))
         # P8b swiglu (owner k: m column tiles nt k ..)

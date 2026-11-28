@@ -28,6 +28,7 @@ from typing import Any, Optional, Sequence
 import torch
 
 import ttnn
+from models.autoports.zai_org_glm_5_3_flash.tt import galaxy_defaults
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_DSA, SPARSE_KDA
 from models.autoports.zai_org_glm_5_3_flash.tt.generator import (
     BLOCK_SIZE,
@@ -269,11 +270,8 @@ def set_knobs(sparse, tp: int = 1, t: int = 1):
     if tp > 1 and pre_split == "1" and os.environ.get("GLM53_MHC_PRE_EARLY") == "1":
         os.environ["GLM53_MHC_PRE_SPLIT"] = "1"
     # GLM53_STACK_KNOB_SET="d:K=V;s:K=V;a:K=V" (dense_kda / sparse_kda / sparse_dsa; K=- drops K; ";" or ","
-    # between items when no value holds a comma): overrides (A/B)
-    spec = os.environ.get("GLM53_STACK_KNOB_SET", "")
-    for item in filter(None, spec.split(";") if ";" in spec else spec.split(",")):
-        kind, kv = item.split(":", 1)
-        k, v = kv.split("=", 1)
+    # between items when no value holds a comma): overrides (A/B), parsed by galaxy_defaults.knob_set_items
+    for kind, k, v in galaxy_defaults.knob_set_items():
         if {"d": False, "s": True, "a": "dsa"}[kind] == key:
             if v == "-":
                 os.environ.pop(k, None)

@@ -194,8 +194,8 @@ KNOBS = {
     # KDA_VERIFY_FLAT and DSA_SHARD_RS1_PIPE on in every arm), A / B / A: the 12 KDA programs 13,775 / 12,992 / 13,779 us,
     # full replay 27.50 / 26.77 / 27.53 ms, in-loop 26.48 / 25.93 / 26.71 ms. Spec ids identical where it engages (8 x 1,
     # 4 x 3); the lone 1 x 3 and 16 identical rows (not engaged) unchanged; device byte identity with cross-group
-    # selectors (test_mk_layer_check::test_mk_layer_verify_groups). An explicit PIPE / FLAT =
-    # 0, GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1 (or either in a KDA kind's GLM53_STACK_KNOB_SET entry) drops it
+    # selectors (test_mk_layer_check::test_mk_layer_verify_groups). An explicit PIPE / FLAT = 0, GLM53_KDA_RSPLIT > 1
+    # or GLM53_KDA_PREFETCH=1 (or any of these in a KDA kind's GLM53_STACK_KNOB_SET entry) drops it
     "GLM53_KDA_VERIFY_RSPLIT": "1",
     "GLM53_EP_KEEP_PERMUTED": "1",  # the permuted gate_up copies stay under GLM53_FUSED_EXPERTS_CACHE
     "GLM53_DSA_POOL": "1",  # the sparse_dsa layers' intermediates from one AllocPool (stack_model._dsa_pools)
@@ -234,19 +234,44 @@ def sparse_t(seq: int) -> str:
     return ",".join(str(step * k) for k in range(1, 5) if step * k <= seq)
 
 
-def _kda_kind_values(k: str) -> list:
-    """the values a KDA layer's build can read for the per-kind knob k (stack_model.KNOB_KEYS): the environment's and
-    GLM53_STACK_KNOB_SET's dense_kda / sparse_kda entries ("d:K=V" / "s:K=V", ";" or "," between items; K=- drops K) --
-    stack_model.set_knobs pops k and sets those. Conservative: the top-level environment value counts although
-    set_knobs pops it before a KDA build, and an earlier entry counts even when a later "K=-" drops it"""
-    vals = [os.environ[k]] if k in os.environ else []
-    spec = os.environ.get("GLM53_STACK_KNOB_SET", "")
+def knob_set_items(spec: str | None = None):
+    """GLM53_STACK_KNOB_SET's items in order, one (kind, K, V) at a time -- the one parser of the variable
+    (stack_model.set_knobs applies a kind's items, _kda_kind_values reads the KDA kinds' values). Items "kind:K=V"
+    (kind d = dense_kda, s = sparse_kda, a = sparse_dsa; V "-" drops K) separated by ";", or by "," when the value has
+    no ";" (no value then holds a comma); empty items are skipped; an item without ":" or "=" raises ValueError when it
+    is reached. The kind letter is the caller's to check. spec None: the environment's value"""
+    spec = os.environ.get("GLM53_STACK_KNOB_SET", "") if spec is None else spec
     for item in filter(None, spec.split(";") if ";" in spec else spec.split(",")):
         kind, kv = item.split(":", 1)
-        name, v = kv.split("=", 1)
-        if kind in ("d", "s") and name == k and v != "-":
-            vals.append(v)
+        k, v = kv.split("=", 1)
+        yield kind, k, v
+
+
+def _kda_kind_values(k: str, dropped: str | None = None) -> list:
+    """the values a KDA layer's build can read for the per-kind knob k: the environment's and GLM53_STACK_KNOB_SET's
+    dense_kda / sparse_kda entries (knob_set_items) -- stack_model.set_knobs sets those for the kind (popping k first
+    when it is one of stack_model.KNOB_KEYS). A "K=-" entry drops k for that kind's build, which then reads k's
+    default: `dropped` stands for it (None: the entry adds nothing). Conservative: the top-level environment value
+    counts although set_knobs may pop it before a KDA build, and an earlier entry counts even when a later "K=-" drops
+    it"""
+    vals = [os.environ[k]] if k in os.environ else []
+    for kind, name, v in knob_set_items():
+        if kind in ("d", "s") and name == k:
+            if v != "-":
+                vals.append(v)
+            elif dropped is not None:
+                vals.append(dropped)
     return vals
+
+
+def _kda_kind_on(k: str, want: dict) -> bool:
+    """whether every KDA layer's build reads the 0 / 1 knob k (default 0 in its readers) as 1: the environment's value,
+    or this call's default when the environment has none, and every dense_kda / sparse_kda GLM53_STACK_KNOB_SET entry
+    for k (_kda_kind_values; "K=-" leaves that kind on the readers' default 0)"""
+    vals = _kda_kind_values(k, dropped="0")
+    if k not in os.environ:
+        vals.insert(0, want.get(k, "0"))
+    return all(v == "1" for v in vals)
 
 
 def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
@@ -278,15 +303,18 @@ def apply(mesh_shape, seq: int, isl: int | None = None) -> dict:
         want.pop("GLM53_DSA_SHARD_RS1_PIPE")
     if os.environ.get("GLM53_MLA_ATT_OBF16") == "1":
         want.pop("GLM53_DSA_SHARD_COMB")  # COMB needs fp32 O partials: an explicit OBF16=1 drops the COMB default
-    if os.environ.get("GLM53_KDA_VERIFY_PIPE", want["GLM53_KDA_VERIFY_PIPE"]) != "1":
-        want.pop("GLM53_KDA_VERIFY_FLAT")  # FLAT rides on PIPE: an explicit PIPE=0 drops the FLAT default with it
+    if not _kda_kind_on("GLM53_KDA_VERIFY_PIPE", want):
+        # FLAT rides on PIPE: an explicit PIPE=0 (the environment's, or a KDA kind's GLM53_STACK_KNOB_SET entry) drops
+        # the FLAT default with it
+        want.pop("GLM53_KDA_VERIFY_FLAT")
     if (
-        any(os.environ.get(k, want.get(k, "0")) != "1" for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT"))
+        not all(_kda_kind_on(k, want) for k in ("GLM53_KDA_VERIFY_PIPE", "GLM53_KDA_VERIFY_FLAT"))
         or any(v.strip() != "1" for v in _kda_kind_values("GLM53_KDA_RSPLIT"))
         or "1" in _kda_kind_values("GLM53_KDA_PREFETCH")
     ):
         # RSPLIT rides on PIPE + FLAT and is refused with GLM53_KDA_RSPLIT > 1 or GLM53_KDA_PREFETCH=1
-        # (shard_plan.kda_verify_rsplit_rows): an explicit value that refuses the build drops the RSPLIT default
+        # (shard_plan.kda_verify_rsplit_rows): an explicit value that refuses the build (the environment's, or a KDA
+        # kind's GLM53_STACK_KNOB_SET entry) drops the RSPLIT default
         want.pop("GLM53_KDA_VERIFY_RSPLIT")
     want["GLM53_MODEL_TRACE_MB"] = str(trace_mb(int(seq)))
     ladder = sparse_t(int(seq))

@@ -30,10 +30,10 @@
 // TOPK_SAMPLE. Only ACTIVE rows draw (decode position
 // >= 0 in the positions page, when one is given): an inactive row's RNG stream does not move while other rows decode
 // or prefill (TOPK_SAMPLE_CB: params, RNG, positions = 512 + 512 + 128 bytes).
-// TOPK_SEL_FAST (GLM53_HEAD_SELECT_FAST, opt-in): the same rows with fewer waits and decodes -- each row is staged in
-// its own page of TOPK_OUT_CB (T pages) and every row write is ordered by one barrier after the last row (instead of
-// one per row); TOPK_FAB's cross-chip merge keeps the chips in a heap and decodes a candidate's id only on a key tie or
-// a take. The rows, the sampler's draws and the RNG states are the knob-off ones.
+// TOPK_SEL_FAST (GLM53_HEAD_SELECT_FAST, default 0; on in tt/galaxy_defaults.py): the same rows with fewer waits and
+// decodes -- each row is staged in its own page of TOPK_OUT_CB (T pages) and every row write is ordered by one barrier
+// after the last row (instead of one per row); TOPK_FAB's cross-chip merge keeps the chips in a heap and decodes a
+// candidate's id only on a key tie or a take. The rows, the sampler's draws and the RNG states are the knob-off ones.
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"

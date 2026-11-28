@@ -54,7 +54,8 @@
 // SPEC_PARTIAL (GLM53_SPEC_PARTIAL, SPEC_REV 5; with SPEC_GROUPS): a group whose base position is < 0 (BOOT: the plain
 //   cur_pos row ro; ACCEPT: pos_v row ro) is inactive -- its rows keep positions -1, no token / ring write, record n 0
 //   and c -1; GATHER skips a record with c < 0. Without the define every group is live (batch 2's fixed G).
-// SPEC_ACCEPT_BATCH = B (GLM53_ACCEPT_BATCH, opt-in; ACCEPT and RING only): the same reads and writes, fewer waits.
+// SPEC_ACCEPT_BATCH = B (GLM53_ACCEPT_BATCH, default 0; on in tt/galaxy_defaults.py; ACCEPT and RING only): the same
+//   reads and writes, fewer waits.
 //   ACCEPT reads a user's record page (single user: and the position page), verify rows and draft rows behind one
 //   barrier, and moves its DSA ring rows of all B = R ring tensors in one round trip (every read, one barrier, every
 //   write, one barrier) instead of a read barrier and a write barrier per ring tile (2 x 88 waits per moving user at

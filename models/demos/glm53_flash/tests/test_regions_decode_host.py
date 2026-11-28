@@ -220,7 +220,7 @@ def test_common_args_within_limit():
     assert ca["gate_up"] == 144 and ca["down"] == 72 and max(ca["gate_up"], ca["down"]) <= ca["limit"]
     api = PKG.parents[2] / "tt_metal" / "api" / "tt-metalium"
     if api.is_dir():  # pin the limit to the runtime's constant when the tree is around
-        # kernel_types.hpp lives in workload/legacy/ (tt-metal #63554); tt-metalium/kernel_types.hpp only forwards to it
+        # kernel_types.hpp lives in workload/legacy/; tt-metalium/kernel_types.hpp only forwards to it
         hdr = api / "workload" / "legacy" / "kernel_types.hpp"
         m = re.search(r"max_runtime_args\s*=\s*(\d+)", hdr.read_text())
         assert m and int(m.group(1)) == R.MAX_RUNTIME_ARGS, (m and m.group(1), R.MAX_RUNTIME_ARGS)

@@ -935,7 +935,7 @@ def test_pre_split_galaxy_default(monkeypatch):
 # stack_model / mhc_pre import ttnn at module level: the child stubs it (this process stays ttnn-free); every case starts
 # a new "process": the GLM53_ environment cleared, the launch latch (_PRE_SPLIT_LAUNCH) and the logged kinds reset
 _PRE_SPLIT_CHILD = r"""
-import contextlib, io, os, sys
+import contextlib, inspect, io, os, sys
 from unittest import mock
 
 sys.modules["ttnn"] = mock.MagicMock()
@@ -945,6 +945,15 @@ from models.autoports.zai_org_glm_5_3_flash.tt import stack_model as STM
 from models.autoports.zai_org_glm_5_3_flash.tt.config import DENSE_KDA, SPARSE_DSA, SPARSE_KDA
 
 KINDS, NAMES, SEQ = (False, True, "dsa"), {False: DENSE_KDA, True: SPARSE_KDA, "dsa": SPARSE_DSA}, 1 << 20
+_ITEMS, PARSED = GD.knob_set_items, []  # GLM53_STACK_KNOB_SET parses: the calling function of each
+
+
+def _items(spec=None):
+    PARSED.append(sys._getframe(1).f_code.co_name)
+    return _ITEMS(spec)
+
+
+GD.knob_set_items = _items
 
 
 def launch(env=None, mesh=(8, 4)):
@@ -984,6 +993,21 @@ launch({"GLM53_STACK_KNOB_SET": "s:GLM53_MHC_PRE_SPLIT=0"})  # a per-kind overri
 assert splits((False, True, "dsa", True, False))[0] == [True, False, True, False, True]
 launch({"GLM53_MHC_PRE_SPLIT": "0", "GLM53_STACK_KNOB_SET": "a:GLM53_MHC_PRE_SPLIT=1"})
 assert splits(KINDS)[0] == [False, False, True]
+# one parser: the galaxy defaults' KDA-kind reads and set_knobs' overrides both parse through knob_set_items (neither
+# splits the items itself); "," separates items when no ";" appears, "K=-" drops K for that kind, ";" keeps a value's
+# commas; an unknown kind letter is ignored by the KDA-kind reads and set_knobs' KeyError
+assert {"set_knobs", "_kda_kind_values"} <= set(PARSED), PARSED
+assert all('split(":", 1)' not in inspect.getsource(f) for f in (STM.set_knobs, GD._kda_kind_values))
+launch({"GLM53_STACK_KNOB_SET": "a:GLM53_MHC_PRE_SPLIT=-,d:GLM53_MHC_PRE_SPLIT=0"})
+assert splits(KINDS)[0] == [False, True, False]
+assert list(_ITEMS("d:A=1,,s:B=-")) == [("d", "A", "1"), ("s", "B", "-")]
+assert list(_ITEMS("d:A=1,2;s:B=3;")) == [("d", "A", "1,2"), ("s", "B", "3")]
+launch({"GLM53_STACK_KNOB_SET": "x:GLM53_MK_OPT=O3"})
+try:
+    STM.set_knobs(False, 32, 16)
+    raise RuntimeError("set_knobs took an unknown kind")
+except KeyError:
+    pass
 launch()  # read once per process: a later environment change is ignored
 splits((True,))
 os.environ["GLM53_MHC_PRE_SPLIT"] = "0"
@@ -998,8 +1022,9 @@ print("PRE_SPLIT_OK")
 def test_pre_split_set_knobs():
     """stack_model.set_knobs on the 8x4 launch: GLM53_MHC_PRE_SPLIT on every TP kind (dense_kda, sparse_kda, sparse_dsa)
     at t 1 / 4 / 16 in any kind order, one "active" line per kind; an explicit 0 keeps every kind off; TP8 / one chip
-    off; GLM53_STACK_KNOB_SET overrides it per kind without leaking; the launch value is read once per process; a
-    foreign value warns once and stays off"""
+    off; GLM53_STACK_KNOB_SET overrides it per kind without leaking (set_knobs and the galaxy defaults parse the
+    variable with galaxy_defaults.knob_set_items); the launch value is read once per process; a foreign value warns
+    once and stays off"""
     root = Path(__file__).resolve().parents[4]
     env = {k: v for k, v in os.environ.items() if not k.startswith("GLM53_")}
     env["PYTHONPATH"] = str(root)

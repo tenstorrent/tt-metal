@@ -266,6 +266,16 @@ class TPDenseKDALayer:
             else:
                 kernels.append(_kernel(kd, defines=list(kd.defines) + self.rev_defs) if self.rev_defs else kd)
         assert reader_seen == 1 and post_seen >= 1, (reader_seen, post_seen)
+        own = [k for k in kernels if _src_is(k, "mk/owner_dm0.cpp") and dict(k.defines).get("KDA_VERIFY_RSPLIT") == "1"]
+        if own:  # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_rsplit_lanes_check
+
+            rdr = next(k for k in kernels if _src_is(k, "mk/reader_a.cpp"))
+            for k in own:
+                pw = dict(k.defines)
+                kda_verify_rsplit_lanes_check((int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])), cons_sem,
+                                              len(fab.lanes), self.n_readers, len(_cores_of(rdr.core_ranges)),
+                                              int(dict(rdr.defines)["MK_FAB_MASK"]))  # fmt: skip
         mpd = ttnn.MeshProgramDescriptor()
         for r in range(self.R):
             for c in range(self.C):

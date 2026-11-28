@@ -1453,15 +1453,23 @@ def rs1_pipe_halves(t: int) -> dict | None:
     return {1: list(range(t // 2)), 0: list(range(t // 2, t))}
 
 
+# the (t, lanes) builds RS1_PIPE engages on: t 16 at 8 lanes, the one shape with a device identity run (the served B 16
+# steps at the default lanes of mk_mla att_lanes)
+RS1_PIPE_SHAPES = ((16, 8),)
+
+
 def rs1_pipe_engaged(t: int, lanes: int, on: bool) -> bool:
-    """whether a t-row build (token t on lane t % lanes) takes MLA_DSA_SHARD_RS1_PIPE: the knob on, whole-token halves
-    and >= 2 tokens per lane (t >= 2 lanes: every lane then holds tokens of both halves -- its first < lanes <= t / 2,
-    its last >= t - lanes >= t / 2). One token per lane (t 8 at 8 lanes, t 4 at 4: the CI pins, the lone 1 x 3 verify,
-    the MTP drafter) leaves no half-0 work to run behind half 1: those builds keep the knob-off kernels and streams.
-    With the default lanes (mk_mla att_lanes) the t 16 builds at 8 lanes engage, the t 1 / 4 / 8 ones do not; other
-    lane counts engage other shapes -- GLM53_MLA_DSA_LANES_T4=1: t 4 on 1 lane; GLM53_MLA_DSA_LANES=4: t 8 and t 16 on
-    4 lanes -- host-checked (rs1_pipe_root_waits over every engaged shape), untested on device"""
-    return bool(on) and lanes >= 1 and t >= 2 * lanes and rs1_pipe_halves(t) is not None
+    """whether a t-row build (token t on lane t % lanes) takes MLA_DSA_SHARD_RS1_PIPE: the knob on and (t, lanes) in
+    RS1_PIPE_SHAPES. The protocol needs whole-token halves and >= 2 tokens per lane (t >= 2 lanes: every lane then
+    holds tokens of both halves -- its first < lanes <= t / 2, its last >= t - lanes >= t / 2), asserted for every
+    listed shape. Every other build keeps the knob-off kernels and streams: one token per lane (t 8 at 8 lanes, t 4 at
+    4: the CI pins, the lone 1 x 3 verify, the MTP drafter; no half-0 work to run behind half 1), t 1 and every shape
+    without a device identity run -- t 32 at 8 lanes, GLM53_MLA_DSA_LANES=4 (t 8 / 16 on 4), GLM53_MLA_DSA_LANES_AT
+    (e.g. 16:2), GLM53_MLA_DSA_LANES_T4=1 / 2 (t 4 on 1 / 2 lanes)"""
+    if not on or (int(t), int(lanes)) not in RS1_PIPE_SHAPES:
+        return False
+    assert t >= 2 * lanes and rs1_pipe_halves(t) is not None, ("RS1_PIPE_SHAPES: whole-token halves, >= 2 per lane", t)
+    return True
 
 
 def rs1_pipe_waits(t: int, groups: int = 1) -> dict:
@@ -2839,16 +2847,17 @@ SPEC_RING_SAVE_ROW = 8  # spec_ctl.cpp RING_SAVE_ROW: RING's copy of the canonic
 
 
 def accept_batch() -> bool:
-    """GLM53_ACCEPT_BATCH (default 0): kernels/spec/spec_ctl.cpp SPEC_ACCEPT_BATCH on ACCEPT and RING (tt/spec_mtp.py
-    SpecCtl) -- a user's token reads behind one barrier, its DSA ring move in one round trip, RING's row moves in one.
-    Not a GLM53_SPEC_* name: apply_spec takes any GLM53_SPEC_* variable as an explicit speculation config"""
+    """GLM53_ACCEPT_BATCH (default 0; on in tt/galaxy_defaults.py): kernels/spec/spec_ctl.cpp SPEC_ACCEPT_BATCH on
+    ACCEPT and RING (tt/spec_mtp.py SpecCtl) -- a user's token reads behind one barrier, its DSA ring move in one round
+    trip, RING's row moves in one. Not a GLM53_SPEC_* name: apply_spec takes any GLM53_SPEC_* variable as an explicit
+    speculation config"""
     return _flag("GLM53_ACCEPT_BATCH")
 
 
 def kda_verify_flat() -> bool:
-    """GLM53_KDA_VERIFY_FLAT (default 0; on GLM53_KDA_VERIFY_PIPE): kernels/kda_pre/reader.cpp KDA_VERIFY_FLAT in the
-    speculative verify's kda_pre (KDA_VERIFY_GROUPS) -- every group's pre-conv and slot-history reads behind one barrier,
-    then the same windows, pushes and write-backs group by group"""
+    """GLM53_KDA_VERIFY_FLAT (default 0; on in tt/galaxy_defaults.py; on GLM53_KDA_VERIFY_PIPE):
+    kernels/kda_pre/reader.cpp KDA_VERIFY_FLAT in the speculative verify's kda_pre (KDA_VERIFY_GROUPS) -- every group's
+    pre-conv and slot-history reads behind one barrier, then the same windows, pushes and write-backs group by group"""
     return _flag("GLM53_KDA_VERIFY_FLAT")
 
 
@@ -2881,6 +2890,39 @@ def kda_verify_rsplit_rows(G: int, n_cols: int, n_cores: int, *, rsplit: int = 1
     if G * n_cols > n_cores:
         raise ValueError(f"GLM53_KDA_VERIFY_RSPLIT=1: {G} row groups x {n_cols} column cores > {n_cores} owner cores")
     return G
+
+
+KDA_O_PHASE = 2  # the readers' o_proj phase index (MkLayer / MkSparseLayer / MkStepB) and its MK_FAB_MASK bit
+
+
+def kda_verify_rsplit_order_check(cons: dict, n_pre: int, n_rec: int, o_wait: tuple, o_signal: int, post_wait: tuple,
+                                  readers: int, sem_on: int, sem_a: int) -> None:  # fmt: skip
+    """GLM53_KDA_VERIFY_RSPLIT's hand-off chain on a megakernel build (MkLayer / MkSparseLayer / MkStepB, asserted at
+    build when the knob engages): an owner runs its deferred kda_pre history write-backs after P6's hand-off wait
+    (kernels/mk/owner_dm0.cpp), so that wait must imply every kda_pre core's slot reads on the chip landed. The chain:
+    every active kda_pre core kk < n_pre signals kda_rec cores after its last write (cons = KdaPre.consumers():
+    cons[kk] non-empty, each < n_rec, the kda_rec cores that raise SEM_ON); every o_proj reader waits for all n_rec
+    of them (its MMPhase wait o_wait = (sem_on, n_rec): heads x spread x user groups) before it signals sem_a
+    (o_signal); P6 waits for every reader (post_wait = (sem_a, readers): MK_POST_WAIT_SEM / _COUNT) -- on the TP builds
+    the lanes take that last link (kda_verify_rsplit_lanes_check). Host asserts only; AssertionError names the break"""
+    quiet = [kk for kk in range(n_pre) if not cons.get(kk)]
+    assert not quiet, ("KDA_VERIFY_RSPLIT: active kda_pre cores that signal no kda_rec core", quiet)
+    far = sorted({h for kk in range(n_pre) for h in cons[kk] if not 0 <= h < n_rec})
+    assert not far, ("KDA_VERIFY_RSPLIT: kda_pre consumers outside the kda_rec cores", far, n_rec)
+    assert tuple(o_wait) == (sem_on, n_rec) and o_signal == sem_a, ("KDA_VERIFY_RSPLIT: o_proj", o_wait, o_signal)
+    assert tuple(post_wait) == (sem_a, readers), ("KDA_VERIFY_RSPLIT: P6 waits", post_wait, readers)
+
+
+def kda_verify_rsplit_lanes_check(post_wait: tuple, lane_sem: int, lanes: int, lane_prod: int, readers: int,
+                                  fab_mask: int) -> None:  # fmt: skip
+    """kda_verify_rsplit_order_check's last link on the TP builds (tt/tp8_layer.py, tt/tp8_sparse.py: the o_proj
+    all-reduce): P6 waits for the all-reduce lanes (post_wait = the owner's (MK_POST_WAIT_SEM, MK_POST_WAIT_COUNT) =
+    (lane_sem, lanes): every lane signals lane_sem on every owner), and every lane waits for every o_proj reader of its
+    chip (the o_proj phase in the readers' fab_mask: they hand their partial rows to the lanes; lane_prod = the lanes'
+    producer count = readers). Host asserts only"""
+    assert fab_mask >> KDA_O_PHASE & 1, ("KDA_VERIFY_RSPLIT: o_proj is not on the all-reduce", fab_mask)
+    assert tuple(post_wait) == (lane_sem, lanes), ("KDA_VERIFY_RSPLIT: P6 waits", post_wait, lane_sem, lanes)
+    assert lane_prod == readers, ("KDA_VERIFY_RSPLIT: the lanes' producers", lane_prod, readers)
 
 
 def kda_verify_rsplit_pages(G: int, gp: int, R: int, rg: int) -> dict:
@@ -3023,9 +3065,10 @@ def kda_verify_schedule(G: int, gp: int, selw: list, variant: str, active=None, 
 
 
 def head_select_fast() -> bool:
-    """GLM53_HEAD_SELECT_FAST (default 0): kernels/head/topk_select.cpp TOPK_SEL_FAST on every MkHead select core (the
-    plain head, the verify head, the MTP heads) -- a staging page per row with one write barrier for all rows, and TOPK_FAB's
-    cross-chip merge as a heap with each candidate's id decoded on a key tie or a take; the same rows"""
+    """GLM53_HEAD_SELECT_FAST (default 0; on in tt/galaxy_defaults.py): kernels/head/topk_select.cpp TOPK_SEL_FAST on
+    every MkHead select core (the plain head, the verify head, the MTP heads) -- a staging page per row with one write
+    barrier for all rows, and TOPK_FAB's cross-chip merge as a heap with each candidate's id decoded on a key tie or a
+    take; the same rows"""
     return _flag("GLM53_HEAD_SELECT_FAST")
 
 

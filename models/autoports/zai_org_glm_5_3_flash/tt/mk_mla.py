@@ -98,8 +98,8 @@ MLA_REV_MFAST = 77
 # for the BRISC): with the knob off every define and instruction is rev 77's
 MLA_REV_MSPLIT = 81
 # 82 (GLM53_DSA_SHARD_RS1_PIPE=1, default 0; on in tt/galaxy_defaults.py; rides on RS1_EARLY + RS1_SPLIT + RS1_TSPLIT;
-# the t-row builds of tt/shard_plan.py rs1_pipe_engaged: whole-token TSPLIT halves, >= 2 tokens per lane -- t 16 at 8
-# lanes): the split RS1's lanes each gated by their own token half's root signals, rs1's waiter signalling the roots
+# the builds of tt/shard_plan.py rs1_pipe_engaged: t 16 at 8 lanes, RS1_PIPE_SHAPES, the device-validated shape):
+# the split RS1's lanes each gated by their own token half's root signals, rs1's waiter signalling the roots
 # twice, the roots landing / combining half 0 while rs1a is in flight (kernels/mla/dsa_shard.hpp RS1 PIPE; same pages,
 # order and compute messages). Only the engaged builds carry 82: every other build keeps its define, arguments and
 # instructions
@@ -2162,9 +2162,7 @@ class MkMla(_MlaBase):
                      (list(pct), {xy: [int(v) for v in prt[xy]] for xy in mine})]  # fmt: skip
             ct, rt, bases = concat_args(parts, mine)
             defs = list(mrole["defines"]) + [d for d in pdefs if d not in mrole["defines"]]
-            rev_now = mla_rev(
-                getattr(self, "_shard_now", None)
-            )  # (77 with MFAST, else 76 with RS1_SPLIT, else MLA_REV)
+            rev_now = mla_rev(getattr(self, "_shard_now", None))  # the build's shard knobs' revision (mla_rev)
             defs += [("MK_PA_CT", str(bases[1][0])), ("MK_PA_RT", str(bases[1][1])), ("MK_PP_CT", str(bases[2][0])),
                      ("MK_PP_RT", str(bases[2][1])), ("MLA_REV", str(rev_now)), ("MLA_SRC", "0x" + mla_src()[:8])]  # fmt: skip
             if self.dsa is not None:

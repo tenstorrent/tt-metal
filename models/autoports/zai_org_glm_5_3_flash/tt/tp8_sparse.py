@@ -322,6 +322,18 @@ class TPSparseKDALayer(TPDenseKDALayer):
             else:
                 base.append(_kernel(kd, defines=list(kd.defines) + self.rev_defs) if self.rev_defs else kd)
         assert seen == {"a", "w", "o"}, (seen, [str(k.kernel_source) for k in desc.kernels])
+        own = [k for k in base if _src_is(k, "mk/owner_dm0.cpp") and dict(k.defines).get("KDA_VERIFY_RSPLIT") == "1"]
+        if own:  # GLM53_KDA_VERIFY_RSPLIT: P6 (the deferred kda_pre write-backs before it) waits for the lanes
+            from models.autoports.zai_org_glm_5_3_flash.tt.shard_plan import kda_verify_rsplit_lanes_check
+
+            rdr = [k for k in base if _src_is(k, "mk/reader_moe_a.cpp")]
+            masks = {int(dict(k.defines)["MK_FAB_MASK"]) for k in rdr}
+            assert len(masks) == 1, masks
+            for k in own:
+                pw = dict(k.defines)
+                kda_verify_rsplit_lanes_check((int(pw["MK_POST_WAIT_SEM"]), int(pw["MK_POST_WAIT_COUNT"])), SEM_A,
+                                              len(fab.lanes), nr, sum(len(_rt_dict(r_)) for r_ in rdr),
+                                              next(iter(masks)))  # fmt: skip
         xct = dict(desc.kernels[wkern].defines).get("MK_X_CT") if wkern is not None else None
         assert xct is not None, "reader_moe_w.cpp carries MK_X_CT"
         e_lo_idx = int(xct) + XW_E_LO_CT

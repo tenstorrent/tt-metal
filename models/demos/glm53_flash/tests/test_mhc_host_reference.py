@@ -224,3 +224,15 @@ def test_mhc_pre_ms1_combined_round1_is_bitwise(T):
     # every round-1 writer and reader addresses the message through R1_MSG_ROW (no 32-stride index left)
     assert sync_src.count("msg[R1_MSG_ROW * s + t]") >= 4 and "msg[32 * s + t]" not in sync_src
     assert "s * TILE + t]" not in sync_src
+    # and R1_MSG_ROW / R1_MSG_BYTES are the layout modelled above, as the kernel defines them: MHC_MSG_TRIM rows of T
+    # and 4 T words sent (N_STREAMS = 4), else rows of 32 and the 128-word mailbox
+    assert sync_src.count("#if defined(MHC_MSG_TRIM)\n") == 1
+    trim = sync_src[sync_src.index("#if defined(MHC_MSG_TRIM)\n") :]
+    trim, full = trim[: trim.index("#else\n")], trim[trim.index("#else\n") : trim.index("#endif\n")]
+    assert "    const uint32_t R1_MSG_ROW = T;\n" in trim, trim
+    assert "    const uint32_t R1_MSG_BYTES = N_STREAMS * T * 4;\n" in trim, trim
+    assert "    constexpr uint32_t R1_MSG_ROW = TILE;\n" in full, full
+    assert "    constexpr uint32_t R1_MSG_BYTES = MSG_FLOATS * 4;\n" in full, full
+    with open(repo_root / "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mhc_pre/mhc_pre_common.hpp") as f:
+        common = f.read()
+    assert "constexpr uint32_t N_STREAMS = 4;" in common and "constexpr uint32_t MSG_FLOATS = 128;" in common
