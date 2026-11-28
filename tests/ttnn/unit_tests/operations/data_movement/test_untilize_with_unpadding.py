@@ -1651,6 +1651,20 @@ def test_untilize_with_unpadding_rank_5_zero_volume(device, shape, ends):
     assert output.layout == ttnn.ROW_MAJOR_LAYOUT
 
 
+@pytest.mark.parametrize("width", [2048, 4096])
+def test_untilize_with_unpadding_one_core_sub_core_grids(device, width):
+    """On a one-core sub_core_grids a wide row must not pick the block factory, whose split needs more cores."""
+    torch_input = torch.randn(1, 1, 32, width, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    output = ttnn.untilize_with_unpadding(
+        tt_input, output_tensor_end=[0, 0, 0, width - 1], sub_core_grids=sub_core_grids
+    )
+
+    assert torch.equal(ttnn.to_torch(output), torch_input[:, :, :1, :])
+
+
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.untilize_with_unpadding))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.untilize_with_unpadding))
 @pytest.mark.parametrize(
