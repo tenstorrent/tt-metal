@@ -24,7 +24,8 @@ ALWI void gelu_tile_init() {
  * Performs element-wise computation of gelu  on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
+ * available on the compute engine. Requires gelu_tile_init with the same
+ * fast_and_approx and is_fp32_dest_acc_en.
  *
  * Return value: None
  *
@@ -142,6 +143,8 @@ ALWI void gelu_derivative_tile_init() {
  * When fast_and_approx=true: uses the same piecewise polynomial core but skips
  * the Mills-ratio correction in the negative tail (x < -3), trading ~1% relative
  * accuracy in that region for fewer operations.
+ *
+ * Requires gelu_derivative_tile_init with the same fast_and_approx.
  *
  * Return value: None
  *
