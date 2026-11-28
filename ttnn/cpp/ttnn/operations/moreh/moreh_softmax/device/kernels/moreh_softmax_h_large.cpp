@@ -68,7 +68,7 @@ ALWI void find_shift(
     if constexpr (!UseMinShift) {
         // find max
         if (Ht == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -78,7 +78,7 @@ ALWI void find_shift(
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::in0, dfb::max_scaler, dfb::max>(
                 dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, ckl::ReduceInputBlockShape::col(Ht - 1));
 
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation

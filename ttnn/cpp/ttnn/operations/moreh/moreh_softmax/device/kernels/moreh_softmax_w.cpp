@@ -76,7 +76,7 @@ ALWI void find_shift(
     if constexpr (!UseMinShift) {
         // find max value
         if (Wt == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -90,7 +90,7 @@ ALWI void find_shift(
             for (uint32_t i = 0; i < Wt - 1; ++i) {
                 copy_tile_to_dfb<dfb::in0, dfb::x_minus_max>(dfb_in0_obj, dfb_x_m_max_obj, i, /*pop=*/0);
             }
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(
                 dfb_in0_obj, dfb_mask_obj, dfb_x_m_max_obj, Wt - 1, 0, /*pop=*/0, /*popm=*/0);
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::x_minus_max, dfb::max_scaler, dfb::max>(
                 dfb_x_m_max_obj, dfb_max_scaler_obj, dfb_max_obj, ckl::ReduceInputBlockShape::row(Wt));
@@ -110,7 +110,7 @@ ALWI void find_shift(
             // Phase 2: mask the last tile (index Wt-1, no pop) and continue reducing
             // into dfb::max via Accumulate. The accumulator and output are both dfb::max:
             // the helper waits+pops the previous tile, then packs+pushes the new one.
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, Wt - 1, 0, /*pop=*/0, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 dfb_tmp_obj,
