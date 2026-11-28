@@ -344,7 +344,9 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
             Limitations:
                 * All tensors must be on-device.
                 * For unsharded ROW_MAJOR masks: intermediate dimensions (except last two) must be 1; last dimension must equal TILE_WIDTH; width must align to input tensor.
-                * For sharded inputs: mask must be TILE layout with identical padded shape to input.
+                * For unsharded TILE masks: the last dimension must equal the input's.
+                * For sharded masks: TILE layout, the input's padded shape, and the input's memory layout and shard spec. A sharded mask is added element by element whether or not ``is_causal_mask`` is set.
+                * With SoftmaxShardedMultiCoreProgramConfig: the mask batch must be 1 (shared by every input batch) or equal the input batch, and a causal mask must have TILE layout.
                 * Internal block size constraints may restrict in-place operation for very large width tensors.
     )doc";
 
