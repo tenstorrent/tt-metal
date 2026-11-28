@@ -37,7 +37,14 @@ void kernel_main() {
     constexpr auto d_args = TensorAccessorArgs<ag_args.next_compile_time_args_offset()>();
     constexpr uint32_t a_tile = 1088;       // BFP8_b
     constexpr uint32_t w_tile = 576;        // BFP4_b
-    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units in flight
+    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units buffered (cb_w)
+#ifndef GMOE_INFLIGHT
+#define GMOE_INFLIGHT GMOE_DEPTH
+#endif
+    // units whose reads are in flight at once (<= DEPTH): DEPTH 2 with 1 in flight overlaps a unit's compute with the
+    // next unit's reads without more outstanding DRAM reads (congestion)
+    constexpr uint32_t INFLIGHT = GMOE_INFLIGHT;
+    static_assert(INFLIGHT >= 1 && INFLIGHT <= DEPTH);
     constexpr uint8_t NOC_B = 1;            // the second half of each weight page (dynamic NOC mode)
 
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
@@ -125,7 +132,7 @@ void kernel_main() {
             u = ue1 - 1;
             continue;
         }
-        if (issued - pushed == DEPTH) {
+        if (issued - pushed == INFLIGHT) {
             push_one();
         }
         const uint32_t slot = issued % DEPTH;

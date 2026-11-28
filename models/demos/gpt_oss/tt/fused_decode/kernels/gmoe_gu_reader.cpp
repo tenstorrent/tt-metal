@@ -8,8 +8,12 @@
 // banks, alternating NOCs), and the two column tiles of the 32-row gate / up bias; GMOE_DEPTH units buffered, their
 // reads in flight together (dynamic NOC mode).
 //
+// GMOE_GU_MCAST: a core's first in0 block (a slot group's; expert units: a small expert's) multicast by the first
+// core of the run of cores starting with it (gmoe_mcast.hpp) instead of every core reading it from X_g; later blocks
+// are read as before.
+//
 // common runtime args: [plan table, xg, gate_up (relaid), gate_bias, up_bias, (GMOE_XG_ARG:) X_g's grid NOC x per
-// column, NOC y per row]
+// column, NOC y per row, (GMOE_PHYS_ARG, GMOE_GU_MCAST:) the core grid's NOC x per column (GX), NOC y per row]
 // compile-time args: [cb_scr, cb_meta_c, cb_meta_w, cb_x, cb_w, cb_b, NC, GX, KT, NT, NU, WC, CC,
 //                     accessors (table, xg, gate_up, gate_bias, up_bias)]
 
@@ -17,6 +21,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "gmoe_common.hpp"
+#include "gmoe_mcast.hpp"
 
 void kernel_main() {
     const uint32_t table_addr = get_common_arg_val<uint32_t>(0);
@@ -46,7 +51,14 @@ void kernel_main() {
     constexpr uint32_t w_tile = 576;        // BFP4_b
     constexpr uint32_t b_tile = 2048;       // BF16
     constexpr uint32_t GROUP = 4;           // slots per in0 load
-    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units in flight
+    constexpr uint32_t DEPTH = GMOE_DEPTH;  // units buffered (cb_w)
+#ifndef GMOE_INFLIGHT
+#define GMOE_INFLIGHT GMOE_DEPTH
+#endif
+    // units whose reads are in flight at once (<= DEPTH): DEPTH 2 with 1 in flight overlaps a unit's compute with the
+    // next unit's reads without more outstanding DRAM reads (congestion)
+    constexpr uint32_t INFLIGHT = GMOE_INFLIGHT;
+    static_assert(INFLIGHT >= 1 && INFLIGHT <= DEPTH);
     constexpr uint8_t NOC_B = 1;            // the odd pages of each unit (dynamic NOC mode)
 
     const uint32_t c = static_cast<uint32_t>(get_absolute_logical_y()) * GX + get_absolute_logical_x();
@@ -66,16 +78,60 @@ void kernel_main() {
     gmoe::Plan p;
     gmoe::read_table(table_l1, p);
     uint32_t u0, u1;
+#ifdef GMOE_GU_GMAJOR
+    gmoe::unit_range_fine(p, NU, WC, CC, c, NC, u0, u1);  // (fine units: gmoe_common.hpp)
+#else
     gmoe::unit_range(p, NU, WC, CC, c, NC, u0, u1);
+#endif
     for (uint32_t cb : {cb_meta_c, cb_meta_w}) {
         cb_reserve_back(cb, 1);
         gmoe::put_meta(get_write_ptr(cb), u0, u1, p);
         cb_push_back(cb, 1);
     }
 
+#ifdef GMOE_GU_MCAST
+    // this core's first block by multicast (gmoe_mcast.hpp; mc_key: its key). Fine units: the block of the first unit's
+    // slot group (key e * 64 + g); expert units: the first routed expert's block if it has at most GROUP slots (key e;
+    // a larger expert's blocks are read per unit)
+    uint32_t mc_key = 0xFFFFFFFFu;
+    gmoe::McastRole mc;
+#ifdef GMOE_GU_GMAJOR
+    if (u0 < u1) {
+        uint32_t e, g, j;
+        gmoe::fine_unit(p, NU, u0, e, g, j);
+        const uint32_t ug0 = u0 - j, ug1 = ug0 + NU;  // the group's fine units (j fastest)
+        mc = gmoe::mcast_role(c, NC, [&](uint32_t k) {  // core k's units start in the group
+            uint32_t a, b;
+            gmoe::unit_range_fine(p, NU, WC, CC, k, NC, a, b);
+            return a < b && a >= ug0 && a < ug1;
+        });
+        mc_key = e * 64 + g;
+    }
+#else
+    // core k's first routed unit's expert (E: none)
+    auto first_expert = [&](uint32_t k) {
+        uint32_t a, b;
+        gmoe::unit_range(p, NU, WC, CC, k, NC, a, b);
+        for (uint32_t u = a; u < b; ++u) {
+            if (p.tiles[u / NU]) {
+                return u / NU;
+            }
+        }
+        return gmoe::E;
+    };
+    const uint32_t e0 = first_expert(c);
+    if (e0 < gmoe::E && p.tiles[e0] <= GROUP) {
+        mc = gmoe::mcast_role(c, NC, [&](uint32_t k) { return first_expert(k) == e0; });
+        mc_key = e0;
+    }
+#endif
+    if (!mc.lead && !mc.follow) {
+        mc_key = 0xFFFFFFFFu;
+    }
+#endif
     // one in0 block = GROUP slots' K tiles (fixed size: the CB holds whole blocks, never one straddling its end)
     constexpr uint32_t X_TRID = DEPTH + 1;
-    auto load_x = [&](uint32_t s0, uint32_t n) {
+    auto load_x = [&](uint32_t s0, uint32_t n, bool send = false) {
         cb_reserve_back(cb_x, GROUP * KT);
         const uint32_t l1 = get_write_ptr(cb_x);
         // one slot's KT tiles per transaction-id wait: a transaction id counts at most 255 outstanding requests (8
@@ -88,7 +144,7 @@ void kernel_main() {
         // half on each NOC
         constexpr uint32_t SX = GMOE_XG_SX, CS = KT / SX, RS = GMOE_XG_RS;
         for (uint32_t i = 0; i < n; ++i) {
-            const uint32_t s = s0 + i;
+            const uint32_t s = gmoe::xg_row(s0 + i, GMOE_XG_R * RS, GMOE_XG_R);  // (X_g's row tile of slot s0 + i)
             const uint32_t ny = get_common_arg_val<uint32_t>(GMOE_XG_ARG + SX + s / RS);
             for (uint32_t j = 0; j < SX; ++j) {
                 const uint32_t nx = get_common_arg_val<uint32_t>(GMOE_XG_ARG + j);
@@ -104,6 +160,11 @@ void kernel_main() {
         noc_async_read_barrier_with_trid(X_TRID, 1);
         noc_async_read_set_trid(0, 0);
         noc_async_read_set_trid(0, 1);
+#ifdef GMOE_GU_MCAST
+        if (send) {
+            gmoe::mcast_send<GX>(mc, GMOE_PHYS_ARG, l1, n * KT * x_tile);
+        }
+#endif
         cb_push_back(cb_x, GROUP * KT);
     };
     // weights + bias of up to DEPTH units in flight (transaction id 1 + slot on both NOCs; slot = unit count % DEPTH:
@@ -113,6 +174,35 @@ void kernel_main() {
     const uint32_t wbase = get_write_ptr(cb_w), bbase = get_write_ptr(cb_b);
     uint32_t ring[DEPTH];
     uint32_t issued = 0, pushed = 0, loaded = gmoe::E;
+#ifdef GMOE_GU_GMAJOR
+    // fine units (512 / 1024-row passes): every unit is at most GROUP slots (one in0 block), loaded when its (expert,
+    // group) changes, as a small expert's block below
+    constexpr uint32_t NONE = 0xFFFFFFFFu;
+    uint32_t loaded_key = NONE;
+    auto push_one = [&]() {
+        const uint32_t slot = pushed % DEPTH, u = ring[slot];
+        uint32_t e, g, j;
+        gmoe::fine_unit(p, NU, u, e, g, j);
+        const uint32_t key = e * 64 + g;
+        if (key != loaded_key) {
+#ifdef GMOE_GU_MCAST
+            if (key == mc_key && mc.follow) {
+                gmoe::mcast_receive(cb_x, GROUP * KT);
+            } else {
+                load_x(p.base[e] + g * GROUP, gmoe::group_slots(p.tiles[e], g), key == mc_key);
+            }
+#else
+            load_x(p.base[e] + g * GROUP, gmoe::group_slots(p.tiles[e], g));
+#endif
+            loaded_key = key;
+        }
+        noc_async_read_barrier_with_trid(1 + slot, 0);
+        noc_async_read_barrier_with_trid(1 + slot, NOC_B);
+        cb_push_back(cb_w, PW);
+        cb_push_back(cb_b, 2);
+        ++pushed;
+    };
+#else
     auto push_one = [&]() {
         const uint32_t slot = pushed % DEPTH, u = ring[slot];
         const uint32_t e = u / NU, m = p.tiles[e];
@@ -120,7 +210,15 @@ void kernel_main() {
         // the old block without waiting on this one (a multi-block expert loads after the push: its second block waits
         // for the compute to finish the first, which needs these weights)
         if (m <= GROUP && e != loaded) {
+#ifdef GMOE_GU_MCAST
+            if (e == mc_key && mc.follow) {
+                gmoe::mcast_receive(cb_x, GROUP * KT);
+            } else {
+                load_x(p.base[e], m, e == mc_key);
+            }
+#else
             load_x(p.base[e], m);
+#endif
             loaded = e;
         }
         noc_async_read_barrier_with_trid(1 + slot, 0);
@@ -135,46 +233,18 @@ void kernel_main() {
             }
         }
     };
+#endif
     for (uint32_t u = u0; u < u1; ++u) {
+#ifdef GMOE_GU_GMAJOR
+        uint32_t e, g_, j;
+        gmoe::fine_unit(p, NU, u, e, g_, j);
+#else
         const uint32_t e = u / NU, j = u % NU;
         if (p.tiles[e] == 0) {
             continue;
         }
-#ifdef GMOE_GU_GMAJOR
-        if (p.tiles[e] > GROUP) {
-            // a big expert (512 / 1024-row passes): the pipeline drained, then per group of GROUP slots its rows of X_g
-            // once and this core's units of it (their weights read once per group, not the rows once per unit)
-            while (pushed < issued) {
-                push_one();
-            }
-            const uint32_t m = p.tiles[e];
-            const uint32_t ue1 = u1 < (e + 1) * NU ? u1 : (e + 1) * NU;
-            for (uint32_t g = 0; g < m; g += GROUP) {
-                load_x(p.base[e] + g, m - g < GROUP ? m - g : GROUP);
-                for (uint32_t uu = u; uu < ue1; ++uu) {
-                    const uint32_t slot = issued % DEPTH;
-                    cb_reserve_back(cb_w, PW);
-                    cb_reserve_back(cb_b, 2);
-                    const uint32_t wl1 = wbase + slot * PW * w_tile, bl1 = bbase + slot * 2 * b_tile;
-                    const uint32_t n = gmoe::tile(e, uu % NU);
-                    for (uint32_t q = 0; q < SPLIT; ++q) {
-                        noc_async_read(s_gu.get_noc_addr(uu * SPLIT + q, 0, 0), wl1 + q * sp, sp, 0);
-                    }
-                    noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
-                    noc_async_read(s_ub.get_noc_addr(n, 0, 0), bl1 + b_tile, b_tile, 0);
-                    noc_async_read_barrier(0);
-                    cb_push_back(cb_w, PW);
-                    cb_push_back(cb_b, 2);
-                    ++issued;
-                    ++pushed;
-                }
-            }
-            loaded = gmoe::E;
-            u = ue1 - 1;
-            continue;
-        }
 #endif
-        if (issued - pushed == DEPTH) {
+        if (issued - pushed == INFLIGHT) {
             push_one();
         }
         const uint32_t slot = issued % DEPTH, inflight = issued - pushed + 1;
@@ -184,11 +254,11 @@ void kernel_main() {
         const uint32_t n = gmoe::tile(e, j);  // global column tile
         noc_async_read_set_trid(1 + slot, 0);
         noc_async_read_set_trid(1 + slot, NOC_B);
-        // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights: consecutive DRAM banks),
-        // alternating NOCs
+        // the unit's [k][gate, up] tiles (SPLIT consecutive pages of the relaid weights, unit e * NU + j: consecutive
+        // DRAM banks), alternating NOCs
         for (uint32_t q = 0; q < SPLIT; ++q) {
             const uint8_t nn = q % 2 ? NOC_B : 0;
-            noc_async_read(s_gu.get_noc_addr(u * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
+            noc_async_read(s_gu.get_noc_addr((e * NU + j) * SPLIT + q, 0, nn), wl1 + q * sp, sp, nn);
         }
         noc_async_read(s_gb.get_noc_addr(n, 0, 0), bl1, b_tile, 0);
         noc_async_read(s_ub.get_noc_addr(n, 0, NOC_B), bl1 + b_tile, b_tile, NOC_B);

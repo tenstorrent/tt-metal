@@ -958,7 +958,9 @@
     # Its dense expert weights are not in the shared cache (read-only): run on a job-local cache of links into it, so the
     # cached files are read from there and only the missing ones are written locally.
     GPT_OSS_JOB_CACHE=$(mktemp -d)/cache && cp -rs "${TT_CACHE_PATH:?}" "$GPT_OSS_JOB_CACHE"
-    TT_CACHE_PATH=$GPT_OSS_JOB_CACHE/ pytest models/demos/gpt_oss/tests/test_dflash_batched.py
+    # Only 32 and 128 users here (as on main): the 64 / 256-user cases are Galaxy speed points
+    # (tests/test_dflash_galaxy_dp.py) and would push this job past its time limit.
+    TT_CACHE_PATH=$GPT_OSS_JOB_CACHE/ pytest models/demos/gpt_oss/tests/test_dflash_batched.py -k "users_32 or users_128"
   model: gpt-oss-20b
   model_family: GPT-OSS
   skus:
@@ -971,7 +973,9 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 32 # text_demo 7.2 min + DFlash test 9-12 min + batched DFlash ~3 min plus its model load (the load from the shared cache varies)
+      # text_demo 6-21 min (its weight load from the shared cache takes 2-18 min, by runner) + DFlash test 10-13 min
+      # + batched DFlash 32 and 128 users ~14 min with its model load
+      timeout: 50
       tier: 2
       release_ready: false
   owner_id: U08TJ70UFRT # Harry Andrews
