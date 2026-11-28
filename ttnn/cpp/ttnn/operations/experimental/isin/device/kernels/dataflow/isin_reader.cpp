@@ -17,7 +17,7 @@ namespace {
     is the maximal length of a stick that can fit as much L1 memory as possible - this length
     is shared between rows of `elements`, `test_elements` and `output` tensors.
 */
-template <typename elements_number_type>
+template <DataFormat elements_data_format, typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
     uint32_t elements_l1_read_addr,
     uint32_t test_elements_l1_read_addr,
@@ -33,9 +33,11 @@ FORCE_INLINE void isin_subchunks(
     volatile tt_l1_ptr uint32_t* output_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_l1_write_addr);
     for (uint32_t elements_index = 0; elements_index < elements_subchunk_size; ++elements_index) {
+        const elements_number_type element = elements_subchunk_ptr[elements_index];
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
-            if (elements_subchunk_ptr[elements_index] == test_elements_subchunk_ptr[test_elements_index]) {
+            if (isin_values_equal<elements_data_format, elements_number_type>(
+                    element, test_elements_subchunk_ptr[test_elements_index])) {
                 output_subchunk_ptr[elements_index] = invert ? 0x00000000 : 0xFFFFFFFF;
                 break;
             }
@@ -88,7 +90,8 @@ void kernel_main() {
     const uint32_t subchunks_per_core = get_arg_val<uint32_t>(2);
     const uint32_t subchunks_offset = get_arg_val<uint32_t>(3);
 
-    using elements_number_type = std_type_t<get_dataformat(ctas.elements_cb)>;
+    constexpr DataFormat elements_data_format = get_dataformat(ctas.elements_cb);
+    using elements_number_type = std_type_t<elements_data_format>;
 
     constexpr uint32_t elements_element_size = ctas.elements_tensor_datum_size;
     constexpr uint32_t test_elements_element_size = ctas.elements_tensor_datum_size;
@@ -149,7 +152,7 @@ void kernel_main() {
 
             // exhaustively perform isin on a given elements' subchunks (one elements' subchunk vs all test_elements'
             // subchunks)
-            isin_subchunks<elements_number_type>(
+            isin_subchunks<elements_data_format, elements_number_type>(
                 elements_l1_read_addr,
                 test_elements_l1_read_addr,
                 output_l1_write_addr,
