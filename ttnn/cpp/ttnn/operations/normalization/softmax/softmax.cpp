@@ -18,6 +18,39 @@ constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 
 namespace ttnn {
 
+namespace {
+
+// Rank <= 4 is padded with leading 1s. Rank > 4 keeps dim 0 and the last two dims and folds the dims in between
+// into one, which is exact for softmax over the last dim (the batch, head and tile structure is unchanged).
+Tensor fold_to_4D(const Tensor& tensor) {
+    const auto& logical = tensor.logical_shape();
+    const auto rank = logical.rank();
+    if (rank <= 4) {
+        return ttnn::unsqueeze_to_4D(tensor);
+    }
+    const auto& padded = tensor.padded_shape();
+    uint32_t mid_logical = 1;
+    uint32_t mid_padded = 1;
+    for (size_t i = 1; i + 2 < rank; ++i) {
+        mid_logical *= logical[i];
+        mid_padded *= padded[i];
+    }
+    return ttnn::reshape(
+        tensor,
+        ttnn::Shape({logical[0], mid_logical, logical[rank - 2], logical[rank - 1]}),
+        ttnn::Shape({padded[0], mid_padded, padded[rank - 2], padded[rank - 1]}));
+}
+
+// A mask keeps its own batch dim 0; its dims between batch and height must be 1 and fold to a single 1.
+std::optional<const Tensor> fold_mask_to_4D(const std::optional<const Tensor>& mask) {
+    if (mask.has_value() && mask->logical_shape().rank() > 4) {
+        return fold_to_4D(*mask);
+    }
+    return mask;
+}
+
+}  // namespace
+
 Tensor softmax(
     const Tensor& input_tensor,
     int dim,
@@ -78,11 +111,11 @@ Tensor scale_mask_softmax(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
     auto output_tensor = prim::scale_mask_softmax(
         input_tensor_4D,
         scale,
-        mask,
+        fold_mask_to_4D(mask),
         memory_config.value_or(input_tensor.memory_config()),
         is_causal_mask,
         compute_kernel_config,
@@ -115,9 +148,15 @@ Tensor softmax_in_place(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
+    // The reshape adds leading dims (rank < 4) or folds the middle dims (rank > 4), so the softmax dim moves too.
+    // Only the last two dims survive a fold.
+    if (rank > 4 && dim_calculated < rank - 2) {
+        TT_THROW("softmax_in_place on a rank {} tensor supports only the last two dims, got dim {}", rank, dim);
+    }
+    const int dim_4D = rank > 4 ? dim_calculated - (rank - 4) : dim_calculated + 4 - rank;
     auto output_tensor = prim::softmax_in_place(
-        input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
+        input_tensor_4D, static_cast<int8_t>(dim_4D), program_config, compute_kernel_config, numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
@@ -141,9 +180,15 @@ Tensor scale_mask_softmax_in_place(
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    auto input_tensor_4D = fold_to_4D(input_tensor);
     auto output_tensor = prim::scale_mask_softmax_in_place(
-        input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
+        input_tensor_4D,
+        scale,
+        fold_mask_to_4D(mask),
+        program_config,
+        is_causal_mask,
+        compute_kernel_config,
+        numeric_stable);
 
     return output_tensor.reshape(input_shape);
 }
