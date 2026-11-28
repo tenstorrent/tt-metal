@@ -133,6 +133,21 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
             output_tensor.device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
+    if (tensor_args.optional_intermediate_tensor.has_value()) {
+        const auto& intermediate_tensor = tensor_args.optional_intermediate_tensor.value();
+        if (intermediate_tensor.storage_type() == StorageType::DEVICE &&
+            input_tensor.storage_type() == StorageType::DEVICE) {
+            TT_FATAL(
+                intermediate_tensor.buffer() != input_tensor.buffer(),
+                "Intermediate tensor must not alias input tensor buffer");
+        }
+        if (optional_output_tensor.has_value() && intermediate_tensor.storage_type() == StorageType::DEVICE &&
+            optional_output_tensor->storage_type() == StorageType::DEVICE) {
+            TT_FATAL(
+                intermediate_tensor.buffer() != optional_output_tensor->buffer(),
+                "Intermediate tensor must not alias output tensor buffer");
+        }
+    }
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
 
@@ -270,8 +285,13 @@ ttnn::operations::point_to_point::PointToPointOp::tensor_return_value_t point_to
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::Tensor>& optional_intermediate_tensor) {
     using OperationType = ttnn::operations::point_to_point::PointToPointOp;
+    const bool is_in_place = optional_output_tensor.has_value() &&
+                             input_tensor.storage_type() == ttnn::StorageType::DEVICE &&
+                             optional_output_tensor->storage_type() == ttnn::StorageType::DEVICE &&
+                             optional_output_tensor->buffer() == input_tensor.buffer();
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{receiver_coord, sender_coord, topology, input_tensor.tensor_spec()},
+        OperationType::operation_attributes_t{
+            receiver_coord, sender_coord, topology, input_tensor.tensor_spec(), is_in_place},
         OperationType::tensor_args_t{input_tensor, optional_output_tensor, optional_intermediate_tensor});
 }
 }  // namespace ttnn::prim
