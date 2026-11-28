@@ -217,9 +217,10 @@ class Llama(AbstractModuleBase):
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32 -- i.e. the padded global
             # size must be a multiple of 32 * tp_size. The trailing padded
-            # columns are masked in forward (and can also be masked by passing
-            # ``vocab_size=config.vocab_size`` to ``vocab_parallel_cross_entropy_loss``),
-            # so ``config.vocab_size`` is free to be arbitrary.
+            # columns are masked in forward with a cached -1e4 bias so
+            # downstream vocab_parallel_cross_entropy_loss excludes them from
+            # its softmax normalizer and backward gradient, leaving
+            # ``config.vocab_size`` free to be arbitrary.
             tp_size = ttml.mesh().axis_size("tp")
             align = 32 * tp_size
             self.padded_vocab_size = ((config.vocab_size + align - 1) // align) * align
@@ -370,10 +371,10 @@ class Llama(AbstractModuleBase):
         out = self.ln_fc(out)
         logits = self.fc(out)
         # In TP mode the LM head output stays vocab-sharded; mask any trailing
-        # tile-alignment padding columns (>= config.vocab_size) with -1e4 so
-        # downstream vocab_parallel_cross_entropy_loss excludes them from its
-        # softmax normalizer and backward gradient even when called without an
-        # explicit vocab_size. The non-TP path slices the padding away directly.
+        # tile-alignment padding columns (>= config.vocab_size) with a cached
+        # -1e4 bias so downstream vocab_parallel_cross_entropy_loss excludes
+        # them from its softmax normalizer and backward gradient. The non-TP
+        # path slices the padding away directly.
         if self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
             if self._tp_vocab_padding_mask is None:
                 mask_np = np.zeros((1, 1, 1, self.padded_vocab_size), dtype=np.float32)

@@ -213,3 +213,78 @@ def test_every_rank_reads_its_own_vocab_rows(tp_mesh):
     rows_read = [int(round(got[i, 1])) * 128 + int(round(got[i, 0])) - 1 for i in range(len(probes))]
     shifted = [(p, r) for p, r in zip(probes, rows_read) if p != r]
     assert not shifted, f"(id, row_read) pairs disagree, -1 means the zero padding: {shifted}"
+
+
+# ---------------------------------------------------------------------------
+# 4. TP Llama padded-vocab masking (loss & LM-head gradient)
+# ---------------------------------------------------------------------------
+
+
+def test_llama_tp_padded_vocab_masked_in_loss_and_grad(tp_mesh):
+    """TP Llama's cached -1e4 mask keeps padded vocab columns out of loss and LM-head grad."""
+    import torch.nn.functional as F
+    from ttml.common.utils import build_causal_mask
+
+    cfg = LlamaConfig(
+        hidden_size=HIDDEN,
+        num_hidden_layers=1,
+        num_attention_heads=TP_AXIS_SIZE,
+        num_key_value_heads=TP_AXIS_SIZE,
+        intermediate_size=128,
+        vocab_size=MISALIGNED_VOCAB,
+        max_position_embeddings=32,
+        use_tp=True,
+        embedding_placement=EmbeddingPlacement.VocabParallel,
+    )
+    model = Llama(cfg)
+    assert model.padded_vocab_size > cfg.vocab_size
+
+    seq = 32
+    rng = np.random.default_rng(42)
+    ids_np = rng.integers(0, cfg.vocab_size, (1, 1, 1, seq)).astype(np.uint32)
+    targets_np = rng.integers(0, cfg.vocab_size, (1, seq)).astype(np.uint32)
+    mask_np = build_causal_mask(seq)
+
+    ids_t = ttml.autograd.Tensor.from_numpy(ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+    targets_t = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
+    mask_t = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    try:
+        logits = model(ids_t, mask_t)
+        loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits,
+            targets_t,
+            cluster_axis=tp_mesh.axis_index("tp"),
+            reduce=ttml.ops.ReduceType.MEAN,
+        )
+
+        # 1. Verify padded columns are masked and loss matches unpadded PyTorch reference.
+        logits_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 3)
+        full_logits = ttnn.to_torch(logits.get_value(), mesh_composer=logits_composer).float()
+        assert full_logits.shape[-1] == model.padded_vocab_size
+        assert full_logits[..., cfg.vocab_size :].max().item() < -1e3
+
+        ref_loss = F.cross_entropy(
+            full_logits[..., : cfg.vocab_size].reshape(-1, cfg.vocab_size),
+            torch.from_numpy(targets_np.astype(np.int64)).reshape(-1),
+            reduction="mean",
+        ).item()
+
+        loss_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+        got_loss = ttnn.to_torch(loss.get_value(), mesh_composer=loss_composer).float().mean().item()
+        assert np.isclose(got_loss, ref_loss, rtol=2e-2, atol=5e-2), (
+            f"TP Llama loss {got_loss:.6f} disagrees with unpadded reference {ref_loss:.6f}"
+        )
+
+        # 2. Verify LM-head backward produces zero gradient on all padded vocab rows.
+        loss.backward(False)
+        assert model.fc.weight.tensor.is_grad_initialized(), "LM head received no gradient"
+        grad_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 2)
+        fc_grad = ttnn.to_torch(model.fc.weight.tensor.get_grad(), mesh_composer=grad_composer).float().numpy()
+        assert fc_grad.shape[2] == model.padded_vocab_size
+        assert np.max(np.abs(fc_grad[:, :, : cfg.vocab_size, :])) > 0.0
+        assert np.max(np.abs(fc_grad[:, :, cfg.vocab_size :, :])) == 0.0
+    finally:
+        ttml.autograd.AutoContext.get_instance().reset_graph()
+

@@ -224,8 +224,7 @@ void py_module(nb::module_& m) {
             nb::arg("logits"),
             nb::arg("targets"),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("reduce") = ReduceType::MEAN,
-            nb::arg("vocab_size") = nb::none());
+            nb::arg("reduce") = ReduceType::MEAN);
     }
 
     {
