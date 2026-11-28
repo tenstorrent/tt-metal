@@ -140,6 +140,7 @@ jobs:
       - name: Run tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         shell: bash
+        timeout-minutes: ${{ matrix.test-group.timeout }}
         working-directory: ${{ env.LLK_PATH }}
         env:
           CHIP_ARCH: quasar
