@@ -515,10 +515,10 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("shard_spec") = nb::none(),
             R"doc(
                 Create MemoryConfig class.
-                If interleaved is set to True, tensor data will be interleaved across multiple DRAM banks on TT Accelerator device.
-                Otherwise, tensor data will be stored in a DRAM bank selected by dram_channel (valid values are 0, 1, ..., 7).
+                ``memory_layout`` (default INTERLEAVED) selects interleaved or sharded placement, ``buffer_type``
+                (default DRAM) selects DRAM or L1, and ``shard_spec`` describes the shards of a sharded layout.
 
-                Example of creating MemoryConfig specifying that tensor data should be stored in DRAM bank 3.
+                Example of creating an interleaved DRAM MemoryConfig:
 
                 .. code-block:: python
 
