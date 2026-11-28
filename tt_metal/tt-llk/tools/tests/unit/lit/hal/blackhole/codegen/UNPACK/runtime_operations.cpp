@@ -253,7 +253,7 @@ extern "C" void accept_runtime_engine_boundaries()
 {
     unpack::Unpacker1.transfer({.handoff = unpack::SrcHandoff::FlipAndSetDataValid});
     unpack::Unpacker1.increment_context_counter();
-    unpack::Unpacker1.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep});
+    unpack::experimental::clear(unpack::Unpacker1, {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep});
 }
 
 // ASSERT-LABEL: <accept_runtime_engine_boundaries>:
@@ -292,13 +292,24 @@ extern "C" void reject_unpacker1_explicit_context()
 
 extern "C" void check_runtime_clear_value(const unpack::ClearValue value)
 {
-    unpack::Unpacker0.clear({.value = value, .handoff = unpack::SrcHandoff::Keep});
+    unpack::experimental::clear(unpack::Unpacker0, {.value = value, .handoff = unpack::SrcHandoff::Keep});
 }
 
 // ASSERT-LABEL: <check_runtime_clear_value>:
 // ASSERT: li [[LIMIT:a[0-7]]],2{{$}}
 // ASSERT-NEXT: bltu [[LIMIT]],a0,
 // ASSERT: ebreak
+
+// The non-experimental clear rejects ClearValue::One.
+extern "C" void reject_runtime_one_clear()
+{
+    unpack::Unpacker0.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep});
+}
+
+// ASSERT-LABEL: <reject_runtime_one_clear>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
 
 extern "C" void check_runtime_clear_handoff(const unpack::ClearWait wait)
 {
@@ -311,7 +322,8 @@ extern "C" void check_runtime_clear_handoff(const unpack::ClearWait wait)
 extern "C" void accept_clear_boundaries()
 {
     unpack::Unpacker0.clear({.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::FlipAndSetDataValid});
-    unpack::Unpacker0.clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank});
+    unpack::experimental::clear(
+        unpack::Unpacker0, {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank});
     unpack::experimental::clear_both_banks(unpack::Unpacker1, {.value = unpack::ClearValue::One});
 }
 

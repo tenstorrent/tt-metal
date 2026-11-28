@@ -14,6 +14,8 @@
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-increment-engine.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_ENGINE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/unset-clear-handoff.cpp 2>&1 | FileCheck %s --check-prefix=UNSET_CLEAR_HANDOFF
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/invalid-clear-value.cpp 2>&1 | FileCheck %s --check-prefix=INVALID_CLEAR_VALUE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/one-clear.cpp 2>&1 | FileCheck %s --check-prefix=ONE_CLEAR
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/runtime-one-clear.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_ONE_CLEAR
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/matrix-bank-handoff.cpp 2>&1 | FileCheck %s --check-prefix=MATRIX_BANK_HANDOFF
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/srcb-negative-infinity.cpp 2>&1 | FileCheck %s --check-prefix=SRCB_NEGATIVE_INFINITY
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_unpack_thread} %t/both-banks-srcb-negative-infinity.cpp 2>&1 | FileCheck %s --check-prefix=BOTH_BANKS_SRCB_NEGATIVE_INFINITY
@@ -39,7 +41,11 @@ static_assert(!unpack::is_valid(unpack::Transfer {
     .context = {static_cast<unpack::ContextSource>(3), 0, 0},
     .handoff = unpack::SrcHandoff::Keep,
 }));
-static_assert(unpack::is_valid(unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank}));
+// ClearValue::One is experimental: Unpacker::clear rejects it and experimental::clear issues it.
+static_assert(!unpack::is_valid(unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank}));
+static_assert(
+    unpack::experimental::clear_operation(unpack::Unpacker0, {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep}) ==
+    unpack::experimental::clear_operation<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep}>(unpack::Unpacker0));
 static_assert(!unpack::is_valid(unpack::Clear {}));
 static_assert(!unpack::is_valid(unpack::Clear {.value = static_cast<unpack::ClearValue>(3), .handoff = unpack::SrcHandoff::Keep}));
 static_assert(!unpack::is_valid(unpack::Clear {.handoff = unpack::SrcHandoff::FlipAndSetDataValid, .wait = unpack::ClearWait::MatrixBank}));
@@ -160,6 +166,27 @@ namespace unpack = hal::unpack;
 constexpr auto operation =
     unpack::Unpacker0.operation().clear<unpack::Clear {.value = static_cast<unpack::ClearValue>(3), .handoff = unpack::SrcHandoff::Keep}>();
 // INVALID_CLEAR_VALUE: error: static assertion failed: invalid UNPACR_NOP source-clear options
+
+//--- one-clear.cpp
+#include "hal/unpack.h"
+
+namespace unpack = hal::unpack;
+
+void issue()
+{
+    unpack::Unpacker0.clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep}>();
+}
+
+// ONE_CLEAR: error: static assertion failed: UNPACR_NOP clear to One is experimental: use experimental::clear
+
+//--- runtime-one-clear.cpp
+#include "hal/unpack.h"
+
+namespace unpack = hal::unpack;
+
+constexpr auto operation = unpack::Unpacker0.operation().clear({.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep});
+// RUNTIME_ONE_CLEAR: in 'constexpr' expansion of 'hal::detail::require({{.*}}"UNPACR_NOP clear to One is experimental: use experimental::clear"))'
+// RUNTIME_ONE_CLEAR: error: '__builtin_trap()' is not a constant expression
 
 //--- matrix-bank-handoff.cpp
 #include "hal/unpack.h"

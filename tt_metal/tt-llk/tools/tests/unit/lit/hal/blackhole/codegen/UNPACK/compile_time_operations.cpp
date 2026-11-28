@@ -156,11 +156,12 @@ extern "C" __attribute__((noinline, used)) void clear_zero_handoffs()
 // CHECK-NEXT: ttunpacr_nop 1,0,0,0,0,1,0,0,1{{$}}
 // CHECK-NEXT: ret
 
+// ClearValue::One is issued through the experimental clear.
 extern "C" __attribute__((noinline, used)) void clear_values()
 {
     unpack::Unpacker0.clear<unpack::Clear {.value = unpack::ClearValue::NegativeInfinity, .handoff = unpack::SrcHandoff::FlipAndSetDataValid}>();
-    unpack::Unpacker0.clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep}>();
-    unpack::Unpacker1.clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::FlipAndSetDataValid}>();
+    unpack::experimental::clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep}>(unpack::Unpacker0);
+    unpack::experimental::clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::FlipAndSetDataValid}>(unpack::Unpacker1);
 }
 
 // CHECK-LABEL: <clear_values>:
@@ -173,7 +174,8 @@ extern "C" __attribute__((noinline, used)) void clear_values()
 extern "C" __attribute__((noinline, used)) void clear_after_matrix_bank()
 {
     unpack::Unpacker0.clear<unpack::Clear {.handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank}>();
-    unpack::Unpacker0.clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank}>();
+    unpack::experimental::clear<unpack::Clear {.value = unpack::ClearValue::One, .handoff = unpack::SrcHandoff::Keep, .wait = unpack::ClearWait::MatrixBank}>(
+        unpack::Unpacker0);
 }
 
 // CHECK-LABEL: <clear_after_matrix_bank>:
