@@ -29,12 +29,16 @@ ttnn::device_operation::ProgramArtifacts PlusOneProgramFactory::create_program_a
     uint32_t input_unit_size = input.element_size();
 
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
-    if (operation_attributes.sub_core_grids.has_value()) {
-        all_cores = operation_attributes.sub_core_grids.value();
-    }
-    // Interleaved input is not split across cores, so each extra core would add one more increment
-    // to every value. Run it on one core.
-    if (!input.is_sharded()) {
+    if (input.is_sharded()) {
+        // The working buffer is borrowed from the input shard, so run on every core that holds a shard.
+        // The default core or a smaller sub grid would leave shards unchanged.
+        all_cores = input.shard_spec()->grid;
+    } else {
+        if (operation_attributes.sub_core_grids.has_value()) {
+            all_cores = operation_attributes.sub_core_grids.value();
+        }
+        // Interleaved input is not split across cores, so each extra core would add one more increment
+        // to every value. Run it on one core.
         all_cores = CoreRangeSet(CoreRange(corerange_to_cores(all_cores, 1, true).front()));
     }
 
