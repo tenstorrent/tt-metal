@@ -19,6 +19,7 @@ sys.path.insert(0, str(SUITE_DIR))
 
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.snapshot_checks import fw_bundles  # noqa: E402
+from diag.triage import name_root_ports  # noqa: E402
 from diag.verdict import ROWS, verdict_lines  # noqa: E402
 
 CHIP = "0000:46:00.0 (UBB2/U6)"
@@ -182,6 +183,21 @@ class TestVerdict(unittest.TestCase):
         lines = verdict_lines(report(phase("eth", check("eth_status_heartbeat", details="2 stale", ip="eth"))))
         self.assertEqual(lines[0], "Fault 1: FAIL eth_status_heartbeat: 2 stale | host")
         self.assertIn("reseat or replace the cable", lines[1])
+
+    def test_root_port_findings_name_the_chip_and_its_tray(self):
+        ports = {"0000:40:01.4": "0000:44:00.0", "0000:40:01.1": "0000:41:00.0"}
+        bridge = check("triage_hostside_bridge_aer", WARN, "31/32 clean; bridge 0000:40:01.4: 1 correctable", ip="pcie")
+        clean = check("triage_hostside_bridge_aer", PASS, "32/32 bridge(s) clean 0000:40:01.4")
+        for c in (bridge, clean):
+            name_root_ports(c, ports)
+        named = "31/32 clean; bridge 0000:40:01.4 (root port of 0000:44:00.0 (UBB2/U4)): 1 correctable"
+        self.assertEqual((bridge.details, bridge.parts), (named, ["0000:44:00.0 (UBB2/U4)"]))
+        self.assertEqual(
+            (clean.details, clean.parts), ("32/32 bridge(s) clean 0000:40:01.4", [])
+        )  # a PASS is left as written
+        lines = verdict_lines(report(phase("triage", bridge)))
+        self.assertTrue(lines[0].endswith(" | 0000:44:00.0 (UBB2/U4)"), lines[0])
+        self.assertIn("reseat UBB2's host PCIe cable;", lines[1])
 
     def test_warn_only(self):
         lines = verdict_lines(report(phase("snapshot", check("asic_thermal_precheck", WARN, "hot", ip="thermal"))))
