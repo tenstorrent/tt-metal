@@ -221,6 +221,32 @@ using CBReaderType = CBReaderWithReleasePolicy<
 
 static CBReaderType dispatch_cb_reader;
 
+// WH BRISC's branch predictor is a 16-entry table indexed by four bits of the branch address (bit 2, bit 3 ^ bit 4,
+// bit 5 ^ bit 7, bit 6 ^ bit 8). Every branch that runs owns its entry, and branches that share an entry while both are
+// running cost ~2 cycles per execution each, taken or not. A program's dispatch path runs far more than 16 branches, so
+// with the predictor on, its speed depends on where code placement happens to put them: unrelated changes moved the
+// dispatch benchmarks by up to ~7%. Dispatch therefore runs with the predictor off, where a taken branch costs 2 cycles
+// and a not-taken one nothing, wherever the code lands. The hot paths are laid out to fall through (see
+// dispatch_loop_d), and BranchPredictionScope turns the predictor back on around tight loops whose few branches can't
+// share an entry.
+#if defined(ARCH_WORMHOLE) && defined(COMPILE_FOR_BRISC)
+#define DISPATCH_BRANCH_PREDICTION_CONTROL 1
+static uint32_t branch_prediction_cfg;  // DISABLE_RISC_BP word with BRISC's predictor enabled
+
+FORCE_INLINE void set_branch_prediction(bool enable) {
+    volatile tt_reg_ptr uint32_t* cfg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(TENSIX_CFG_BASE);
+    cfg[DISABLE_RISC_BP_Disable_main_ADDR32] =
+        enable ? branch_prediction_cfg : (branch_prediction_cfg | DISABLE_RISC_BP_Disable_main_MASK);
+}
+
+struct BranchPredictionScope {
+    FORCE_INLINE BranchPredictionScope() { set_branch_prediction(true); }
+    FORCE_INLINE ~BranchPredictionScope() { set_branch_prediction(false); }
+};
+#else
+struct BranchPredictionScope {};
+#endif
+
 constexpr uint32_t packed_write_max_multicast_sub_cmds =
     get_packed_write_max_multicast_sub_cmds(packed_write_max_unicast_sub_cmds);
 constexpr uint32_t max_write_packed_large_cmd =
@@ -655,6 +681,7 @@ __attribute__((noinline)) void process_write_paged() {
 
         if (single_packet_pages && dst_addr_offset == 0 && available_data >= page_size) {
             uint32_t run = available_data < write_length ? available_data : write_length;
+            BranchPredictionScope branch_prediction;
             noc_write_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT, false>(
                 noc_index, 0, 0, page_size);
             do {
@@ -707,6 +734,64 @@ __attribute__((noinline)) void process_write_paged() {
     }
 
     cmd_ptr = data_ptr;
+}
+
+// Rarely needed CB page handling for the packed-write handlers, out of line and cold. Inlined at every call site it
+// spread the handlers' hot code over more of BRISC's 2 KiB, 2-way instruction cache, where hot blocks that land on the
+// same set evict each other. Callers first add the writes they've issued to the NoC counters: moving to a new block
+// releases the old one once those writes have been sent.
+
+// Gets more pages. Returns the new data pointer, plus (high word) the bytes that were left at the end of a block the
+// read pointer wrapped away from.
+static __attribute__((noinline, cold)) uint64_t dispatch_cb_get_page(uintptr_t data_ptr) {
+    uint32_t orphan_size = 0;
+    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+        if (will_wrap) {
+            orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+        }
+    });
+    return (static_cast<uint64_t>(orphan_size) << 32) | data_ptr;
+}
+
+constexpr uintptr_t packed_write_sub_cmd_done = 0x80000000;  // L1 addresses never reach bit 31
+
+// A packed write whose data runs past the available pages: gets more pages, first writing the part that is here if the
+// next pages start a new block, and then the rest. Returns the new data pointer, with packed_write_sub_cmd_done set if
+// it wrote the sub-cmd; otherwise the whole sub-cmd is now available and the caller writes it as usual.
+template <bool mcast>
+static __attribute__((noinline, cold)) uintptr_t write_packed_across_pages(
+    uintptr_t data_ptr, uint64_t dst, uint32_t dst_addr, uint32_t xfer_size, uint32_t stride, uint32_t num_dests) {
+    uint32_t orphan_size = 0;
+    dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+        orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+        if (orphan_size != 0) {
+            if constexpr (mcast) {
+                noc_async_write_barrier();
+            }
+            cq_noc_async_write_with_state<CQ_NOC_SNdL>(static_cast<uint32_t>(data_ptr), dst, orphan_size, num_dests);
+            noc_increment_nonposted_writes_issued(noc_index, 1);
+            noc_increment_nonposted_writes_acked(noc_index, num_dests);
+            if (!will_wrap) {
+                data_ptr += orphan_size;
+            }
+        }
+    });
+    if (orphan_size == 0) {
+        return data_ptr;
+    }
+    // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since the
+    // size of a single transfer is at most the CB page size. This write has a different destination address than the
+    // default, so we restore the destination address to the start immediately afterwards to avoid the overhead in the
+    // common case.
+    if constexpr (mcast) {
+        noc_async_write_barrier();
+    }
+    cq_noc_async_write_with_state<CQ_NOC_SnDL>(
+        static_cast<uint32_t>(data_ptr), dst_addr + orphan_size, xfer_size - orphan_size, num_dests);
+    cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
+    noc_increment_nonposted_writes_issued(noc_index, 1);
+    noc_increment_nonposted_writes_acked(noc_index, num_dests);
+    return (data_ptr + stride - orphan_size) | packed_write_sub_cmd_done;
 }
 
 // Packed write command
@@ -769,71 +854,96 @@ void process_write_packed(uint32_t flags, uint32_t* l1_cache) {
         noc_async_write_barrier();
     };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
-    while (count != 0) {
-        uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-        uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
-        sub_cmd_ptr++;
-        uint64_t dst;
-        if constexpr (mcast) {
-            dst = cq_mcast_noc_addr(dst_noc, dst_addr);
-        } else {
-            dst = get_noc_addr_helper(dst_noc, dst_addr);
-        }
-        // Get a page if needed
-        if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-            // Check for block completion and issue orphan writes for this block
-            // before proceeding to next block
-            uint32_t orphan_size = 0;
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
-                orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                if (orphan_size != 0) {
-                    wait_for_barrier();
-                    cq_noc_async_write_with_state<CQ_NOC_SNdL>(
-                        static_cast<uint32_t>(data_ptr), dst, orphan_size, num_dests);
-                    writes++;
-                    mcasts += num_dests;
-                    if (!will_wrap) {
-                        data_ptr += orphan_size;
-                    }
-                }
+    if constexpr (mcast) {
+        while (count != 0) {
+            uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+            uint32_t num_dests = mcast ? ((CQDispatchWritePackedMulticastSubCmd*)sub_cmd_ptr)->num_mcast_dests : 1;
+            sub_cmd_ptr++;
+            uint64_t dst;
+            if constexpr (mcast) {
+                dst = cq_mcast_noc_addr(dst_noc, dst_addr);
+            } else {
+                dst = get_noc_addr_helper(dst_noc, dst_addr);
+            }
+            // Get a page if needed
+            if (xfer_size > dispatch_cb_reader.available_bytes(data_ptr)) {
                 noc_increment_nonposted_writes_issued(noc_index, writes);
                 noc_increment_nonposted_writes_acked(noc_index, mcasts);
                 writes = 0;
                 mcasts = 0;
-            });
-
-            // Write the remainder of the transfer. All the remaining contents of the transfer is now available, since
-            // the size of a single transfer is at most the CB page size. This write has a different destination address
-            // than the default, so we restore the destination address to the start immediately afterwards to avoid the
-            // overhead in the common case.
-            if (orphan_size != 0) {
-                uint32_t remainder_xfer_size = xfer_size - orphan_size;
-                // Creating full NOC addr not needed as we are not programming the noc coords
-                uint32_t remainder_dst_addr = dst_addr + orphan_size;
-                wait_for_barrier();
-                cq_noc_async_write_with_state<CQ_NOC_SnDL>(
-                    static_cast<uint32_t>(data_ptr), remainder_dst_addr, remainder_xfer_size, num_dests);
-                // Reset values expected below
-                cq_noc_async_write_with_state<CQ_NOC_snDL, CQ_NOC_WAIT, CQ_NOC_send>(0, dst, xfer_size, num_dests);
-                writes++;
-                mcasts += num_dests;
-
-                count--;
-                data_ptr += stride - orphan_size;
-
-                continue;
+                data_ptr = write_packed_across_pages<mcast>(data_ptr, dst, dst_addr, xfer_size, stride, num_dests);
+                if (data_ptr & packed_write_sub_cmd_done) {
+                    data_ptr &= ~packed_write_sub_cmd_done;
+                    count--;
+                    continue;
+                }
             }
+
+            wait_for_barrier();
+            cq_noc_async_write_with_state<CQ_NOC_SNdl>(static_cast<uint32_t>(data_ptr), dst, xfer_size, num_dests);
+            writes++;
+            mcasts += num_dests;
+
+            count--;
+            data_ptr += stride;
         }
 
-        wait_for_barrier();
-        cq_noc_async_write_with_state<CQ_NOC_SNdl>(static_cast<uint32_t>(data_ptr), dst, xfer_size, num_dests);
-        writes++;
-        mcasts += num_dests;
+    } else {
+        // Unicast only: the same run loop for multicast measured 3-4% slower on the crta/cb/sem dispatch benchmarks.
+        constexpr uint32_t num_dests = 1;
+        WritePackedSubCmd* const sub_cmd_end = sub_cmd_ptr + count;
+        auto write_sub_cmd = [&]() {
+            uint64_t dst = get_noc_addr_helper(sub_cmd_ptr->noc_xy_addr, dst_addr);
+            sub_cmd_ptr++;
+            wait_for_barrier();
+            cq_noc_async_write_with_state<CQ_NOC_SNdl>(static_cast<uint32_t>(data_ptr), dst, xfer_size, num_dests);
+        };
+        while (sub_cmd_ptr != sub_cmd_end) {
+            // Sub-cmds whose data is already wholly available are written in a run that checks nothing but the command
+            // buffer. Keeping that loop to two branches (the buffer wait and its own exit) is what makes it fast at any
+            // placement: with the page-boundary check and a count test also inside it, BRISC's branch predictor aliased
+            // them with the back edge at some code addresses, costing ~4-6 cycles per write depending on where
+            // unrelated code changes happened to leave this loop.
+            uint32_t available = dispatch_cb_reader.available_bytes(data_ptr);
+            if (xfer_size <= available) {
+                WritePackedSubCmd* run_start = sub_cmd_ptr;
+                // Two branches an odd number of instructions apart: they can't share a predictor entry wherever the
+                // loop lands, so it runs with prediction on.
+                BranchPredictionScope branch_prediction;
+                if (stride == 0) {
+                    do {
+                        write_sub_cmd();
+                    } while (sub_cmd_ptr != sub_cmd_end);
+                } else {
+                    // The run ends at the last sub-cmd, or at the last one whose data ends within what is available.
+                    uintptr_t last = data_ptr + (sub_cmd_end - sub_cmd_ptr - 1) * stride;
+                    uintptr_t limit = data_ptr + (available - xfer_size);
+                    if (last < limit) {
+                        limit = last;
+                    }
+                    do {
+                        write_sub_cmd();
+                        data_ptr += stride;
+                    } while (data_ptr <= limit);
+                }
+                writes += sub_cmd_ptr - run_start;
+                mcasts += sub_cmd_ptr - run_start;
+                continue;
+            }
 
-        count--;
-        data_ptr += stride;
+            // The next sub-cmd's data runs past the available pages.
+            noc_increment_nonposted_writes_issued(noc_index, writes);
+            noc_increment_nonposted_writes_acked(noc_index, mcasts);
+            writes = 0;
+            mcasts = 0;
+            data_ptr = write_packed_across_pages<false>(
+                data_ptr, get_noc_addr_helper(sub_cmd_ptr->noc_xy_addr, dst_addr), dst_addr, xfer_size, stride, 1);
+            if (data_ptr & packed_write_sub_cmd_done) {
+                data_ptr &= ~packed_write_sub_cmd_done;
+                sub_cmd_ptr++;
+            }
+        }
     }
-
     noc_increment_nonposted_writes_issued(noc_index, writes);
     noc_increment_nonposted_writes_acked(noc_index, mcasts);
 
@@ -917,12 +1027,11 @@ void process_write_packed_large(uint32_t* l1_cache) {
         while (length != 0) {
             // More data needs to be written, but we've exhausted the CB. Acquire more pages.
             if (dispatch_cb_reader.available_bytes(data_ptr) == 0) {
-                dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool /*will_wrap*/) {
-                    // Block completion - account for all writes issued for this block before moving to next
-                    noc_increment_nonposted_writes_issued(noc_index, writes);
-                    mcasts += num_dests * writes;
-                    writes = 0;
-                });
+                // Account for the writes issued so far before moving on, which may release this block.
+                noc_increment_nonposted_writes_issued(noc_index, writes);
+                mcasts += num_dests * writes;
+                writes = 0;
+                data_ptr = static_cast<uint32_t>(dispatch_cb_get_page(data_ptr));
             }
             // Transfer size is min(remaining_length, data_available_in_cb)
             uint32_t available_data = dispatch_cb_reader.available_bytes(data_ptr);
@@ -969,12 +1078,9 @@ void process_write_packed_large(uint32_t* l1_cache) {
 
         // Handle padded size and potential wrap
         if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
-                if (will_wrap) {
-                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                    pad_size -= orphan_size;
-                }
-            });
+            uint64_t page = dispatch_cb_get_page(data_ptr);
+            data_ptr = static_cast<uint32_t>(page);
+            pad_size -= static_cast<uint32_t>(page >> 32);
         }
         data_ptr += pad_size;
 
@@ -1046,12 +1152,9 @@ void process_write_packed_large_unicast(uint32_t* l1_cache) {
 
         // Handle padded size and potential wrap
         if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
-            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
-                if (will_wrap) {
-                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
-                    pad_size -= orphan_size;
-                }
-            });
+            uint64_t page = dispatch_cb_get_page(data_ptr);
+            data_ptr = static_cast<uint32_t>(page);
+            pad_size -= static_cast<uint32_t>(page >> 32);
         }
         data_ptr += pad_size;
 
@@ -1278,6 +1381,44 @@ void process_notify_dispatch_s_go_signal_cmd() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+FORCE_INLINE void process_set_write_offset() {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
+    // DPRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
+    // cmd->set_write_offset.offset1,
+    //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
+    uint16_t program_host_id = load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id);
+    DeviceTimestampedData("runtime_host_id_dispatch", program_host_id);
+    if constexpr (telemetry_enabled) {
+        reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
+            dispatch_telemetry_base)
+            ->program_count = ++program_counter;
+    }
+    if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
+        program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+        while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
+            invalidate_l1_cache();
+        }
+    }
+    uint32_t offset_count = cmd->set_write_offset.offset_count;
+
+    ASSERT(offset_count <= std::size(write_offset));
+    // These offsets fit the window process_cmd_d already invalidated, so unlike the other
+    // variable-length payloads this one needs no invalidate of its own. Raising the max would.
+    static_assert(
+        sizeof(CQDispatchCmd) + sizeof(uint32_t) * CQ_DISPATCH_MAX_WRITE_OFFSETS <= sizeof(CQDispatchCmdLarge),
+        "offsets are read past the header window process_cmd_d invalidates in the worst cmd_ptr alignment");
+    volatile uint32_t tt_l1_ptr* cmd_write_offset =
+        reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd));
+
+    for (uint32_t i = 0; i < offset_count; i++) {
+        write_offset[i] = cmd_write_offset[i];
+    }
+    cmd_ptr += sizeof(CQDispatchCmd) + sizeof(uint32_t) * offset_count;
+}
+
+// with_hot_commands = false leaves out the commands dispatch_loop_d handles itself, so each of their handlers has a
+// single call site and stays inlined.
+template <bool with_hot_commands = true>
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
     bool done = false;
 re_run_command:
@@ -1294,6 +1435,9 @@ re_run_command:
 
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             WAYPOINT("DWB");
             // DPRINT("cmd_write_linear\n");
             process_write();
@@ -1319,6 +1463,9 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PAGED:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_write_paged is_dram: {}\n", cmd->write_paged.is_dram);
             if (cmd->write_paged.is_dram) {
                 process_write_paged<true>();
@@ -1328,6 +1475,9 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_write_packed\n");
             uint32_t flags = cmd->write_packed.flags;
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
@@ -1338,16 +1488,24 @@ re_run_command:
             if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
                 process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(flags, l1_cache);
             } else {
-                process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags, l1_cache);
+                {
+                    process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags, l1_cache);
+                }
             }
         } break;
 
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_notify_dispatch_s_go_signal\n");
             process_notify_dispatch_s_go_signal_cmd();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_write_packed_large\n");
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
@@ -1355,12 +1513,18 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_write_packed_large_unicast\n");
             DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
             process_write_packed_large_unicast(l1_cache);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_wait\n");
             process_wait();
             break;
@@ -1388,6 +1552,9 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+            if constexpr (!with_hot_commands) {
+                break;
+            }
             // DPRINT("cmd_send_go_signal\n");
             process_go_signal_mcast_cmd();
             break;
@@ -1409,40 +1576,11 @@ re_run_command:
                 dispatch_telemetry_base);
             break;
 
-        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
-            // DPRINT("write offset: {} {} {} host id {}\n", cmd->set_write_offset.offset0,
-            // cmd->set_write_offset.offset1,
-            //              cmd->set_write_offset.offset2, cmd->set_write_offset.program_host_id);
-            uint16_t program_host_id = load_aligned<uint16_t>(&cmd->set_write_offset.program_host_id);
-            DeviceTimestampedData("runtime_host_id_dispatch", program_host_id);
-            if constexpr (telemetry_enabled) {
-                reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::dispatch_telemetry_types::DispatchCoreTelemetry*>(
-                    dispatch_telemetry_base)
-                    ->program_count = ++program_counter;
+        case CQ_DISPATCH_CMD_SET_WRITE_OFFSET:
+            if constexpr (with_hot_commands) {
+                process_set_write_offset();
             }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
-                while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
-                    invalidate_l1_cache();
-                }
-            }
-            uint32_t offset_count = cmd->set_write_offset.offset_count;
-
-            ASSERT(offset_count <= std::size(write_offset));
-            // These offsets fit the window process_cmd_d already invalidated, so unlike the other
-            // variable-length payloads this one needs no invalidate of its own. Raising the max would.
-            static_assert(
-                sizeof(CQDispatchCmd) + sizeof(uint32_t) * CQ_DISPATCH_MAX_WRITE_OFFSETS <= sizeof(CQDispatchCmdLarge),
-                "offsets are read past the header window process_cmd_d invalidates in the worst cmd_ptr alignment");
-            volatile uint32_t tt_l1_ptr* cmd_write_offset =
-                reinterpret_cast<volatile uint32_t tt_l1_ptr*>(cmd_ptr + sizeof(CQDispatchCmd));
-
-            for (uint32_t i = 0; i < offset_count; i++) {
-                write_offset[i] = cmd_write_offset[i];
-            }
-            cmd_ptr += sizeof(CQDispatchCmd) + sizeof(uint32_t) * offset_count;
             break;
-        }
 
         case CQ_DISPATCH_CMD_TERMINATE:
             // DPRINT("dispatch terminate\n");
@@ -1539,6 +1677,128 @@ struct NocCounterSnapshot {
     uint32_t nonposted_atomics_acked;
     uint32_t posted_writes_num_issued;
 };
+
+#if defined(DISPATCH_BRANCH_PREDICTION_CONTROL) && !defined(PROFILE_KERNEL) && !defined(WATCHER_ENABLED)
+#define DISPATCH_THREADED 1
+// Slow path of the threaded dispatch below: out of line so each handler's tail stays short.
+static __attribute__((noinline, cold)) void dispatch_wait_for_data() {
+    dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
+}
+
+// Rare commands for dispatch_loop_d, out of line so they don't sit between its hot handlers in the instruction cache.
+static __attribute__((noinline, cold)) bool dispatch_cold_command(uint32_t* l1_cache) {
+    return process_cmd_d<false>(cmd_ptr, l1_cache);
+}
+
+// Command loop of the d variant, threaded: every hot handler ends by fetching the next command and jumping straight to
+// its handler. A switch inside a loop costs three taken branches per command (the jump-table jump, the jump from each
+// case to the shared loop tail and the back edge); this costs one. With the branch predictor off (see
+// set_branch_prediction), each taken branch is 2 cycles. The jump table is mutable so it lives in local memory, a
+// 2-cycle load instead of an L1 one. Rare commands go through process_cmd_d unchanged.
+static __attribute__((noinline)) void dispatch_loop_d(uint32_t* l1_cache) {
+    // Offsets from a label rather than label addresses: the kernel is relocated when it is loaded, which code can
+    // absorb but data can't.
+    static int32_t dispatch_table[] = {
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_ILLEGAL
+        static_cast<int32_t>(static_cast<char*>(&&write_linear) - static_cast<char*>(&&cold)),         // CQ_DISPATCH_CMD_WRITE_LINEAR
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_WRITE_LINEAR_H
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST
+        static_cast<int32_t>(static_cast<char*>(&&write_paged) - static_cast<char*>(&&cold)),          // CQ_DISPATCH_CMD_WRITE_PAGED
+        static_cast<int32_t>(static_cast<char*>(&&write_packed) - static_cast<char*>(&&cold)),         // CQ_DISPATCH_CMD_WRITE_PACKED
+        static_cast<int32_t>(static_cast<char*>(&&packed_large) - static_cast<char*>(&&cold)),         // CQ_DISPATCH_CMD_WRITE_PACKED_LARGE
+        static_cast<int32_t>(static_cast<char*>(&&wait) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_WAIT
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_SINK
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_DEBUG
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_DELAY
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_EXEC_BUF_END
+        static_cast<int32_t>(static_cast<char*>(&&set_write_offset) - static_cast<char*>(&&cold)),     // CQ_DISPATCH_CMD_SET_WRITE_OFFSET
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_CMD_TERMINATE
+        static_cast<int32_t>(static_cast<char*>(&&go_signal) - static_cast<char*>(&&cold)),            // CQ_DISPATCH_CMD_SEND_GO_SIGNAL
+        static_cast<int32_t>(static_cast<char*>(&&notify_go_signal) - static_cast<char*>(&&cold)),     // CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_SET_NUM_WORKER_SEMS
+        static_cast<int32_t>(static_cast<char*>(&&packed_large_ucast) - static_cast<char*>(&&cold)),   // CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST
+        static_cast<int32_t>(static_cast<char*>(&&cold) - static_cast<char*>(&&cold)),                 // CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS
+    };
+    static_assert(CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST == 17 && CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS == 18);
+    constexpr uint32_t dispatch_table_size = sizeof(dispatch_table) / sizeof(dispatch_table[0]);
+    uint32_t dispatch_progress = 0;
+
+#define DISPATCH_FETCH()                                                                              \
+    do {                                                                                              \
+        if (dispatch_cb_reader.available_bytes(cmd_ptr) == 0) [[unlikely]] {                          \
+            dispatch_wait_for_data();                                                                 \
+        }                                                                                             \
+        uint32_t next_cmd_id = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr)->base.cmd_id; \
+        /* A distinct operand per use keeps GCC from merging the handler tails into one. */        \
+        asm volatile("" : : "i"(__LINE__));                                                           \
+        goto* (static_cast<char*>(&&cold) + dispatch_table[next_cmd_id < dispatch_table_size ? next_cmd_id : 0]); \
+    } while (0)
+#define DISPATCH_NEXT()                                                 \
+    do {                                                                \
+        *get_dispatch_progress_ptr() = ++dispatch_progress;             \
+        cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);        \
+        DISPATCH_FETCH();                                               \
+    } while (0)
+
+    DISPATCH_FETCH();
+
+write_linear:
+    process_write();
+    DISPATCH_NEXT();
+
+write_paged:
+    if (reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr)->write_paged.is_dram) {
+        process_write_paged<true>();
+    } else {
+        process_write_paged<false>();
+    }
+    DISPATCH_NEXT();
+
+write_packed: {
+    uint32_t flags = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr)->write_packed.flags;
+    if (flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST) {
+        process_write_packed<true, CQDispatchWritePackedMulticastSubCmd>(flags, l1_cache);
+    } else {
+        process_write_packed<false, CQDispatchWritePackedUnicastSubCmd>(flags, l1_cache);
+    }
+}
+    DISPATCH_NEXT();
+
+packed_large:
+    process_write_packed_large(l1_cache);
+    DISPATCH_NEXT();
+
+packed_large_ucast:
+    process_write_packed_large_unicast(l1_cache);
+    DISPATCH_NEXT();
+
+wait:
+    process_wait();
+    DISPATCH_NEXT();
+
+go_signal:
+    process_go_signal_mcast_cmd();
+    DISPATCH_NEXT();
+
+notify_go_signal:
+    process_notify_dispatch_s_go_signal_cmd();
+    DISPATCH_NEXT();
+
+set_write_offset:
+    process_set_write_offset();
+    DISPATCH_NEXT();
+
+cold:
+    if (dispatch_cold_command(l1_cache)) {
+        *get_dispatch_progress_ptr() = ++dispatch_progress;
+        cmd_ptr = round_up_pow2(cmd_ptr, dispatch_cb_page_size);
+        return;
+    }
+    DISPATCH_NEXT();
+#undef DISPATCH_NEXT
+#undef DISPATCH_FETCH
+}
+#endif
 
 template <uint32_t noc_index>
 FORCE_INLINE NocCounterSnapshot snapshot_dispatch_d_noc_counters() {
@@ -1680,7 +1940,21 @@ void kernel_main() {
     // Initialize progress counter in L1 memory
     *get_dispatch_progress_ptr() = dispatch_progress;
 
-    while (!done) {
+#if defined(DISPATCH_BRANCH_PREDICTION_CONTROL)
+    volatile tt_reg_ptr uint32_t* bp_cfg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(TENSIX_CFG_BASE);
+    const uint32_t bp_cfg_saved = bp_cfg[DISABLE_RISC_BP_Disable_main_ADDR32];
+    branch_prediction_cfg = bp_cfg_saved & ~DISABLE_RISC_BP_Disable_main_MASK;
+    set_branch_prediction(false);
+#endif
+#if defined(DISPATCH_THREADED)
+    constexpr bool threaded_d = is_d_variant;
+    if constexpr (threaded_d) {
+        dispatch_loop_d(l1_cache);
+    }
+#else
+    constexpr bool threaded_d = false;
+#endif
+    while (!threaded_d && !done) {
         dispatch_cb_reader.wait_for_available_data_and_release_old_pages<DispatchTelemetryBlockGuard>(cmd_ptr);
 
         DeviceZoneScopedN("CQ-DISPATCH");
@@ -1726,4 +2000,7 @@ void kernel_main() {
     noc_clear_packet_tags(my_noc_index);
     // DPRINT("dispatch_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
+#if defined(DISPATCH_BRANCH_PREDICTION_CONTROL)
+    bp_cfg[DISABLE_RISC_BP_Disable_main_ADDR32] = bp_cfg_saved;
+#endif
 }
