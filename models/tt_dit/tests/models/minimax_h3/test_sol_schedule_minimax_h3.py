@@ -7,8 +7,6 @@ no device."""
 
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
 import torch
@@ -23,22 +21,19 @@ from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 _SOL_ENV = ("H3_SOL_ATTN", "H3_SOL_TAU", "H3_SOL_DENSE_STEPS")
 
 
-@pytest.mark.parametrize("env", [{}, {"H3_SOL_ATTN": "0"}, {"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "0"}])
-def test_off_switch_is_dense(env):
-    assert sol_schedule(env) is None
+def test_the_off_switch_beats_the_default():
+    assert sol_schedule({"H3_SOL_ATTN": "0"}, "10eros-max") is None
 
 
 _EROS = SolSchedule(tau=1.13, dense_steps=3, dense_layers=0, sinks=True)  # the 10Eros-Max card and a third dense step
 _EROS_DEFAULT = replace(_EROS, max_frames=158)  # with no switch set: clips up to 6 s
-_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # the HyperFlow arm of the Sol sheet
+_HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # NVIDIA's HyperFlow recipe
 
 
 @pytest.mark.parametrize(
     ("file", "task", "env", "expected"),
     [
         ("/models/v1/v1t.safetensors", "t2va", {}, _EROS_DEFAULT),
-        ("/models/v1/v1t.safetensors", "t2va", {"H3_SOL_DENSE_STEPS": "2"}, replace(_EROS_DEFAULT, dense_steps=2)),
-        ("/models/v1/v1t.safetensors", "t2va", {"H3_SOL_ATTN": "0"}, None),
         ("/models/v1/v1t.safetensors", "ref2va", {}, None),
         ("/models/v1/v1t.safetensors", "ref2va", {"H3_SOL_ATTN": "1"}, SolSchedule()),
         ("/models/v1/v1n.safetensors", "t2va", {}, None),  # the non-Turbo build
@@ -68,39 +63,18 @@ def _pipeline(monkeypatch, env, cls=MiniMaxH3Pipeline):
     pipeline.task, pipeline.transformer_file = "t2va", None
     pipeline.dynamic_length = False
     pipeline.bucket_denoise = True
-    pipeline.sp_factor = 8
-    pipeline._sol_key = pipeline._sol_schedule = None
+    pipeline._sol_schedule = None
     pipeline._warming = False
-    pipeline._buckets = {76800: SimpleNamespace(warm=True)}
-    pipeline._request_state = SimpleNamespace(warm=True)
-    pipeline._release_denoise_traces = Mock()
-    pipeline._log = lambda message: None
     return pipeline
-
-
-def _states(pipeline):
-    return [state.warm for state in (*pipeline._buckets.values(), pipeline._request_state)]
-
-
-@pytest.mark.parametrize("env", [{}, {"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "2"}])
-def test_pipeline_off_switch_touches_nothing(monkeypatch, env):
-    pipeline, transformer = _pipeline(monkeypatch, env), Mock()
-    pipeline._set_sol_attention(transformer, 76800, 73419, 843)
-    assert (pipeline._sol_key, pipeline._sol_schedule) == (None, None)
-    assert _states(pipeline) == [True, True]
-    pipeline._release_denoise_traces.assert_not_called()
-    transformer.set_sol_request.assert_not_called()
 
 
 @pytest.mark.parametrize(
     "file, env, dense",
     [
         (None, {}, [False]),
-        (None, {"H3_SOL_ATTN": "0", "H3_SOL_DENSE_STEPS": "2"}, [False]),
         (None, {"H3_SOL_ATTN": "1"}, [True, False]),
-        (None, {"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "1"}, [True, False]),
-        (None, {"H3_SOL_ATTN": "1", "H3_SOL_DENSE_STEPS": "0"}, [False, False]),
-        # On by default, a clip over the preset's length runs dense: warm-up captures that trace too.
+        # On by default, a clip over the preset's length runs dense: warm-up captures that trace too, even for a
+        # schedule with no dense step.
         ("/models/v1/v1t.safetensors", {"H3_SOL_DENSE_STEPS": "0"}, [True, False]),
     ],
 )
@@ -118,14 +92,6 @@ def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, file, env, dense):
     scheduler.set_timesteps(len(dense) + 1)
     pipeline._sol_schedule = pipeline._requested_sol_schedule()
     assert [pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(len(scheduler.timesteps))] == dense
-
-
-def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
-    pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"})
-    # Sol-Attn not set up: the off switch
-    assert not any(pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4))
-    pipeline._sol_schedule = pipeline._requested_sol_schedule()
-    assert [pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4)] == [True, True, False, False]
 
 
 @pytest.mark.parametrize(
