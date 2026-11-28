@@ -390,6 +390,7 @@ FUNCTION_TO_EXAMPLES_MAPPING_DICT = {
     "ttnn.scatter_add": data_movement.test_scatter_add,
     "ttnn.copy": data_movement.test_copy,
     "ttnn.repeat": data_movement.test_repeat,
+    "ttnn.move": data_movement.test_move,
     "ttnn.repeat_interleave": data_movement.test_repeat_interleave,
     "ttnn.slice": data_movement.test_slice,
     "ttnn.tilize": data_movement.test_tilize,
