@@ -22,3 +22,4 @@
 {"event":"test_run","result":"pass","detail":"acceptance 14 passed 3 xfailed (dev + prod); ungated knobs debug 11 passed (all 5 scenarios x lanes 1,2 bit-exact)","ts":"2026-11-27T20:23:40-05:00"}
 {"event":"fix_applied","what":"fresh implementation: op file, descriptor (owner_writes, Knobs{num_write_lanes=1, block caps None}), single writer kernel; no reader/compute per design","ts":"2026-11-27T20:42:22-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 14 passed 3 xfailed (dev + non-dev); impl_debug 29 passed under watcher incl. bf8b/height/L1, two lanes, sub-blocks","ts":"2026-11-27T20:43:40-05:00"}
+{"event":"test_run","kind":"profile","p2_default_ns":[1500,1419],"p2_two_lanes_ns":[1561,1524],"p1_default_ns":[2118,2118],"p1_two_lanes_ns":[1879,1964,1917],"stubbed_floor_ns":{"p1":807,"p2":590},"addr_only_ns":{"p1":919,"p2":641},"stagger_p1_ns":[2282,2360],"ts":"2026-11-27T20:49:05-05:00"}

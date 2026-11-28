@@ -128,3 +128,20 @@ def test_describe_plan_production(device):
     assert plan["num_shards"] == 103 and len(writers) == 103
     assert writers[-1]["core"] == (3, 9) and writers[-1]["block"] == (1020, 0, 4, 1)
     ttnn.deallocate(tt_in)
+
+
+def test_host_memo_hit_on_repeat(device):
+    """BB-07: a repeat call with the same program-shaping inputs reuses the memoized descriptor."""
+    from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved
+    from ttnn.operations.g6_sharded_to_interleaved import g6_sharded_to_interleaved_program_descriptor as pd
+
+    tt_a, _ = _input(device, P2_FLUX)
+    tt_b, _ = _input(device, P2_FLUX)
+    out_a = g6_sharded_to_interleaved(tt_a, P2_FLUX["out"])
+    entries = len(pd._PROGRAMS)
+    cached = pd._PROGRAMS[pd.program_key(tt_b, P2_FLUX["out"])]
+    out_b = g6_sharded_to_interleaved(tt_b, P2_FLUX["out"])
+    assert len(pd._PROGRAMS) == entries
+    assert pd._PROGRAMS[pd.program_key(tt_b, P2_FLUX["out"])] is cached
+    for t in (out_a, out_b, tt_a, tt_b):
+        ttnn.deallocate(t)
