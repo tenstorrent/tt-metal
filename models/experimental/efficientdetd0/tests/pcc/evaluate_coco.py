@@ -263,6 +263,7 @@ def evaluate_coco(
     # Load results and run COCO evaluation
     coco_dt = coco.loadRes(results_file)
     coco_eval = COCOeval(coco, coco_dt, "bbox")
+    coco_eval.params.imgIds = all_image_ids  # only images that were run (missing files are skipped above)
     coco_eval.evaluate()
     coco_eval.accumulate()
     coco_eval.summarize()
