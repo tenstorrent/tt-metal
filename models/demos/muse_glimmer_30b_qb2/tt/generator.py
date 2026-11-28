@@ -438,7 +438,7 @@ class MuseGlimmerGenerator(Generator):
         k, p, temp = values
         if torch.any((k < 1) | (k > 32)) or torch.any((p < 0) | (p > 1)) or torch.any(temp <= 0):
             raise ValueError("Device sampling requires k in1..32, p in0..1 and positive temperature")
-        for value, tensor in zip(values, (self.k, self.p, self.temperature)):
+        for value, tensor in zip((k, p, temp.reciprocal()), (self.k, self.p, self.temperature)):
             self._write(value, tensor)
         if seeds is not None:
             seeds = torch.as_tensor(seeds, dtype=torch.int32).flatten()
