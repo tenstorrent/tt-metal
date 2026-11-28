@@ -1855,7 +1855,13 @@ class TestConfig:
     def _compile_kernel_part(self, name, compile_command, source):
         cache = os.environ.get("LLK_OBJ_CACHE")
         if not cache:
-            run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
+            if (
+                TestConfig.BUILD_MODE == BuildMode.PRODUCE
+                and self.coverage_build == CoverageBuild.No
+            ):
+                self._compile_kernel_part_once(compile_command, source)
+            else:
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR, source)
             return
         head = compile_command[: compile_command.index("-x")]
         root = str(TestConfig.ARTEFACTS_DIR)
@@ -1881,6 +1887,139 @@ class TestConfig:
             head + [str(obj), "-lc", "-lgcc", "-o", compile_command[-1]],
             TestConfig.TESTS_WORKING_DIR,
         )
+
+    @staticmethod
+    def _declared_name(statement):
+        match = re.fullmatch(
+            r"\s*(?:(?:static|inline)\s+)*constexpr\s+[\w:]+(?:\s*<[\w:\s,<>]*>)?"
+            r"[\s*&]+(\w+)\s*(=.*|\{.*\})\s*;\s*",
+            statement,
+            re.S,
+        )
+        if not match or re.search(
+            r"\b(?:struct|class|union|enum|operator)\b|//|/\*|\*/|%:|[\"'\\#]",
+            statement,
+        ):
+            return None
+        depth, value = 0, match[2]
+        for i, char in enumerate(value):
+            depth += (char in "([{") - (char in ")]}")
+            if depth < 0 or depth == 0 and char in ",;":
+                return None
+            if depth == 0 and value[0] == "{" and i < len(value) - 1:
+                return None
+        return match[1] if depth == 0 else None
+
+    def _compile_kernel_part_once(self, compile_command, source):
+        """Compile a TRISC, or copy an identical ELF another variant already built.
+
+        A build.h statement that is exactly one constexpr declaration cannot change the
+        preprocessed unit, so it changes the ELF only if the TRISC reaches its name. The key
+        is the command, the source, the files the compile reads, every other build.h
+        statement in order, and the constexpr statements whose names the TRISC reaches.
+        Reached names come from the `-E -dD` unit outside build.h, followed through macros.
+        Anything the split cannot attribute to one name stays in the key. A failed `-E`
+        falls back to a plain compile.
+        """
+        variant_dir = TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id
+        command = [
+            compile_command[0],
+            f"-ffile-prefix-map={variant_dir}=build",
+            *compile_command[1:],
+        ]
+        cwd = TestConfig.TESTS_WORKING_DIR
+        build_h = variant_dir / "build.h"
+        if not build_h.exists():
+            run_shell_command(command, cwd, source)
+            return
+        header = build_h.read_text()
+        constants, statement, depth = [], "", 0
+        for line in header.replace("\\\n", " ").splitlines():
+            if not re.search("[\"']", line):
+                line = line.split("//")[0]
+            if line.lstrip().startswith(("#", "%:")):
+                constants.append((None, line + "\n"))
+                continue
+            statement += line + "\n"
+            depth += line.count("{") - line.count("}")
+            if depth == 0 and line.rstrip().endswith(";"):
+                constants.append((self._declared_name(statement), statement))
+                statement = ""
+        constants.append((None, statement))
+        fixed = json.dumps(
+            [token.replace(str(variant_dir), "") for token in command[:-1]]
+        )
+        fixed += source + "".join(text for name, text in constants if name is None)
+        for path in sorted(variant_dir.rglob("*")):
+            if path.is_file() and path != build_h:
+                if Path(command[-1]).parent not in path.parents:
+                    fixed += f"{path.relative_to(variant_dir)} {sha256(path.read_bytes()).hexdigest()}"
+        for token in command[1:-1]:
+            for path in (Path(cwd, token), Path(cwd, token[2:])):
+                if path.is_file():
+                    fixed += f"{path} {sha256(path.read_bytes()).hexdigest()}"
+        trisc_dir = TestConfig.ARTEFACTS_DIR / "trisc"
+        trisc_dir.mkdir(exist_ok=True)
+        names_file = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.names"
+        with FileLock(f"{names_file}.lock"):
+            if not names_file.exists():
+                unit = subprocess.run(
+                    command[: command.index("-x")] + ["-E", "-dD", "-x", "c++", "-"],
+                    cwd=cwd,
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                )
+                if unit.returncode:
+                    run_shell_command(command, cwd, source)
+                    return
+                rest, macros, in_build_h, visible = [], {}, False, 0
+                for line in unit.stdout.splitlines():
+                    if line.startswith("# "):
+                        in_build_h = f'"{build_h}"' in line
+                    elif line.startswith("#define "):
+                        name, body = re.match(r"#define (\w+)(.*)", line).groups()
+                        words = re.findall(r"\w+|##", body)
+                        macros[name] = " ".join([macros.get(name, ""), *words])
+                    elif in_build_h:
+                        visible = len(macros)
+                    else:
+                        rest.append(line)
+                names = sorted(set(re.findall(r"\w+", "\n".join(rest))))
+                macros = dict(list(macros.items())[:visible])
+                partial = Path(f"{names_file}.tmp")
+                partial.write_text(json.dumps([names, macros]))
+                os.replace(partial, names_file)
+        names, macros = json.loads(names_file.read_text())
+        names = set(names)
+        words = [set(re.findall(r"\w+", text)) for _, text in constants]
+        todo = [words[i] for i, (name, _) in enumerate(constants) if name is None]
+        kept, seen = set(), set()
+        while todo:
+            for word in todo.pop() - seen:
+                seen.add(word)
+                names.add(word)
+                body = macros.get(word, "").split()
+                if "##" in body:
+                    names.update(name for name, _ in constants if name)
+                todo.append(set(body))
+            for i, (name, _) in enumerate(constants):
+                if name and i not in kept:
+                    if name in names or words[i] & macros.keys():
+                        kept.add(i)
+                        todo.append(words[i])
+        if 'R"' in header or {"__LINE__", "__COUNTER__"} & seen.union(*words):
+            fixed += header
+        fixed += "".join(t for i, (n, t) in enumerate(constants) if not n or i in kept)
+        built = trisc_dir / f"{sha256(fixed.encode()).hexdigest()}.elf"
+        with FileLock(f"{built}.lock"):
+            if built.exists():
+                shutil.copyfile(built, command[-1])
+                return
+            run_shell_command(command, cwd, source)
+            partial = Path(f"{built}.tmp")
+            shutil.copyfile(command[-1], partial)
+            os.replace(partial, built)
 
     def build_elfs(self):
 
