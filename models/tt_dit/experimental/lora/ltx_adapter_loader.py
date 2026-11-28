@@ -212,7 +212,11 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
         if m:
             pairs.setdefault(m.group("base"), {})[_SLOT_MAP[m.group("slot")]] = tensor
         elif key.endswith(".alpha"):
-            alphas[key[: -len(".alpha")]] = float(tensor.item())
+            alpha_base = key[: -len(".alpha")]
+            # Block targets are keyed by the canonical name _alpha_key() builds at lookup time,
+            # so every spelling (blocks.N / transformer_blocks.N, to_out.0, ff.net.*) resolves.
+            parsed = _parse_target(alpha_base)
+            alphas[_alpha_key(*parsed) if parsed is not None else alpha_base] = float(tensor.item())
         elif key.endswith((".diff", ".diff_b")):
             skipped_direct += 1
         else:
@@ -325,7 +329,9 @@ def _register_fused(attn, qkvs, alphas, scale, name, block_idx, attn_name) -> in
     # then head-interleave the tiles into [n*out, n*r] to match the fused weight.
     B_padded = []
     for i, x in enumerate(required):
-        B = qkvs[x]["B"]
+        # Fold each projection's own alpha/rank into its B block so q, k and v may differ.
+        alpha_x = alphas.get(_alpha_key(block_idx, attn_name, f"to_{x}"), float(r))
+        B = qkvs[x]["B"] * (alpha_x / r)
         if x in ("q", "k"):
             B = _permute_qk_rows(B, num_heads, head_dim)
         pad = torch.zeros(out_per, n * r, dtype=B.dtype)
@@ -333,11 +339,9 @@ def _register_fused(attn, qkvs, alphas, scale, name, block_idx, attn_name) -> in
         B_padded.append(pad)
     B_fused = _interleave_heads_rows(B_padded, num_heads, head_dim, n_dev, n_local_heads)
 
-    alpha = alphas.get(_alpha_key(block_idx, attn_name, f"to_{required[0]}"), float(r))
-    eff_scale = scale * (alpha / r)
     # register_lora lives on the fused projection Linear (LoRAMixin), not the attention wrapper.
     fused_linear = attn.to_qkv if attn.is_self else attn.to_kv
-    return fused_linear.register_lora(A_fused, B_fused, scale=eff_scale, name=name)
+    return fused_linear.register_lora(A_fused, B_fused, scale=scale, name=name)
 
 
 def _permute_qk_rows(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
