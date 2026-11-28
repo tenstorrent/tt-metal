@@ -114,7 +114,7 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_typecast,
-            (effective_input_format, effective_output_format, SFPU_ITERATIONS),
+            (effective_input_format, effective_output_format, is_fp32_dest_acc_en, SFPU_ITERATIONS),
             idst,
             VectorMode::RC));
     }
