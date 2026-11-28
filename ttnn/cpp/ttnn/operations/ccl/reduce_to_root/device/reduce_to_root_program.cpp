@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include "reduce_to_root_op.hpp"
@@ -202,7 +203,8 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
     const uint32_t input_num_tiles = input_l_num_pages;
 
     const uint32_t input_page_size_bytes = input_tensor_l.tensor_spec().compute_page_size_bytes();
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
 
     uint32_t packet_size_bytes = input_num_tiles * input_page_size_bytes;
 

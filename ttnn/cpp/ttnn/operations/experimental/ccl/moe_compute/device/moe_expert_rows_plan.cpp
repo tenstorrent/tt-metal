@@ -9,6 +9,7 @@
 #include <set>
 
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include "kernels/moe_ring_common.h"
@@ -38,26 +39,31 @@ constexpr uint32_t kChunkIntermediateSlots = 1;
 constexpr uint32_t kActivatedSlots = 2;  // cb_activated: the activated tiles of two jobs
 constexpr uint32_t kRowsSlots = 2;       // cb_rows: two output groups of one row tile
 
-uint32_t align_to_part(uint32_t bytes) { return tt::align(bytes, tt::tt_metal::hal::get_dram_alignment()); }
+uint32_t align_to_part(uint32_t bytes, uint32_t dram_alignment) { return tt::align(bytes, dram_alignment); }
 
 // Consecutive parts of a layout, each at a multiple of the DRAM alignment.
 struct LayoutCursor {
+    uint32_t dram_alignment = 0;
     uint32_t end = 0;
     uint32_t take(uint32_t bytes) {
         const uint32_t offset = end;
-        end = align_to_part(end + bytes);
+        end = align_to_part(end + bytes, dram_alignment);
         return offset;
     }
 };
 
 RoutingLayout routing_layout(
-    const MoEExpertRowsShape& shape, uint32_t program_cores, uint32_t sources_per_core, uint32_t expert_groups) {
+    const MoEExpertRowsShape& shape,
+    uint32_t program_cores,
+    uint32_t sources_per_core,
+    uint32_t expert_groups,
+    uint32_t l1_alignment,
+    uint32_t dram_alignment) {
     const uint32_t tokens_per_core = tt::div_up(shape.tokens, program_cores);
     const uint32_t area_bytes = expert_rows::entry_area_bytes(
-        expert_rows::entry_capacity(shape.tokens, shape.top_k, program_cores), tt::tt_metal::hal::get_l1_alignment());
-    const auto block = expert_rows::table_layout(
-        shape.tokens, shape.top_k, shape.local_experts, tt::tt_metal::hal::get_dram_alignment());
-    LayoutCursor cursor;
+        expert_rows::entry_capacity(shape.tokens, shape.top_k, program_cores), l1_alignment);
+    const auto block = expert_rows::table_layout(shape.tokens, shape.top_k, shape.local_experts, dram_alignment);
+    LayoutCursor cursor{.dram_alignment = dram_alignment};
     RoutingLayout layout;
     layout.own_mapping = cursor.take(shape.global_experts * kBf16Bytes);
     layout.source_mappings = cursor.take(sources_per_core * shape.mapping_page_bytes);
@@ -89,7 +95,9 @@ uint32_t weight_cb_blocks(uint32_t chunk_blocks, uint32_t block_slots) {
 }
 
 // cb_ctl: u32 job count, then with several row tiles per job the row tiles of each of the group's jobs
-uint32_t ctl_cb_bytes(uint32_t words) { return align_to_part(kWordBytes * words); }
+uint32_t ctl_cb_bytes(uint32_t words, uint32_t dram_alignment) {
+    return align_to_part(kWordBytes * words, dram_alignment);
+}
 
 // The CBs of a buffering choice, when they fit cb_budget bytes per core.
 std::optional<CbSizes> cb_sizes(
@@ -239,6 +247,8 @@ struct Planner {
     uint32_t partial_tile_bytes = 0;
     const std::vector<ShardLayout>& layouts;
     const PreparedLayout& prepared;
+    uint32_t l1_alignment = 0;
+    uint32_t dram_alignment = 0;
 
     uint32_t grid_cores() const { return grid.x * grid.y; }
 
@@ -365,8 +375,13 @@ struct Planner {
             for (const auto& [x_slots, intermediate_slots] : kBuffering) {
                 for (uint32_t expert_groups = grid_cores() / group_cores; expert_groups >= 1; --expert_groups) {
                     const uint32_t program_cores = expert_groups * group_cores;
-                    const RoutingLayout routing =
-                        routing_layout(shape, program_cores, sources_per_core(program_cores), expert_groups);
+                    const RoutingLayout routing = routing_layout(
+                        shape,
+                        program_cores,
+                        sources_per_core(program_cores),
+                        expert_groups,
+                        l1_alignment,
+                        dram_alignment);
                     const Buffering buffering{
                         .row_tiles = 1,
                         .x_slots = x_slots,
@@ -377,7 +392,7 @@ struct Planner {
                         .chunk_blocks =
                             expert_rows::run_blocks(kGroupTiles, hidden_tiles + shape.bias_rows(), split.block_tiles),
                         .w2_chunk_rows = shape.intermediate_tiles(),
-                        .ctl_bytes = ctl_cb_bytes(1)};
+                        .ctl_bytes = ctl_cb_bytes(1, dram_alignment)};
                     auto plan = make_plan(split, buffering, expert_groups, routing);
                     if (plan.has_value()) {
                         return plan;
@@ -404,9 +419,9 @@ struct Planner {
         for (const uint32_t block_slots : kBlockSlots) {
             for (uint32_t expert_groups = grid_cores() / group_cores; expert_groups >= 1; --expert_groups) {
                 const uint32_t program_cores = expert_groups * group_cores;
-                const RoutingLayout routing =
-                    routing_layout(shape, program_cores, sources_per_core(program_cores), expert_groups);
-                const uint32_t ctl_bytes = ctl_cb_bytes(1 + tt::div_up(jobs_max, expert_groups));
+                const RoutingLayout routing = routing_layout(
+                    shape, program_cores, sources_per_core(program_cores), expert_groups, l1_alignment, dram_alignment);
+                const uint32_t ctl_bytes = ctl_cb_bytes(1 + tt::div_up(jobs_max, expert_groups), dram_alignment);
                 for (const uint32_t chunk : chunks) {
                     const uint32_t chunk_blocks =
                         expert_rows::run_blocks(kGroupTiles, chunk + shape.bias_rows(), split.block_tiles);
@@ -491,6 +506,7 @@ PlanOrRefusal plan_expert_rows(
     const uint32_t intermediate_tiles = shape.intermediate_tiles();
     const std::vector<CoreCoord> optimal =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::NOC_0);
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*mesh_device);
     const uint32_t num_shards = shard_banks.size();
     if (num_shards != optimal.size()) {
         return "the prepared weights have " + std::to_string(num_shards) + " shards for " +
@@ -561,7 +577,9 @@ PlanOrRefusal plan_expert_rows(
         .cb_budget = cb_budget,
         .partial_tile_bytes = tt::tile_size(partials),
         .layouts = layouts,
-        .prepared = prepared};
+        .prepared = prepared,
+        .l1_alignment = device_properties.node_local_mem_alignment(),
+        .dram_alignment = device_properties.dram_alignment()};
     for (const uint32_t block_packets : packet_counts) {
         for (const uint32_t readers : readers_options) {
             const uint32_t block_tiles =
@@ -625,15 +643,15 @@ std::vector<uint32_t> core_mask(const std::vector<CoreCoord>& cores, CoreCoord g
     return words;
 }
 
-PlaceLayout place_layout(uint32_t tokens, uint32_t top_k, uint32_t local_experts) {
-    const uint32_t l1_align = tt::tt_metal::hal::get_l1_alignment();
+PlaceLayout place_layout(
+    uint32_t tokens, uint32_t top_k, uint32_t local_experts, uint32_t l1_alignment, uint32_t dram_alignment) {
     PlaceLayout layout;
-    layout.table = expert_rows::table_layout(tokens, top_k, local_experts, tt::tt_metal::hal::get_dram_alignment());
-    layout.count_words = tt::align(local_experts * kWordBytes, l1_align) / kWordBytes;
-    layout.e_t_entry_words = tt::align(2 * kWordBytes, l1_align) / kWordBytes;  // token, k (the ring's e_t entry)
+    layout.table = expert_rows::table_layout(tokens, top_k, local_experts, dram_alignment);
+    layout.count_words = tt::align(local_experts * kWordBytes, l1_alignment) / kWordBytes;
+    layout.e_t_entry_words = tt::align(2 * kWordBytes, l1_alignment) / kWordBytes;  // token, k (the ring's e_t entry)
     layout.e_t_page_bytes = (tokens + 1) * layout.e_t_entry_words * kWordBytes;
-    layout.activation_row_bytes = tt::align((2 * local_experts + 1) * kWordBytes, l1_align);
-    LayoutCursor cursor;
+    layout.activation_row_bytes = tt::align((2 * local_experts + 1) * kWordBytes, l1_alignment);
+    LayoutCursor cursor{.dram_alignment = dram_alignment};
     layout.scratch_e_t = cursor.take(layout.e_t_page_bytes);
     layout.scratch_activation = cursor.take(expert_rows::activation_buffers * layout.activation_row_bytes);
     layout.scratch_count_row = cursor.take(layout.count_words * kWordBytes);
@@ -650,16 +668,17 @@ uint32_t double_buffer_half_rows(const tt::tt_metal::TensorSpec& dense, uint32_t
         .rows_per_buffer;
 }
 
-CombineLayout combine_layout(uint32_t tokens, uint32_t top_k, uint32_t hidden_size, uint32_t senders) {
+CombineLayout combine_layout(
+    uint32_t tokens, uint32_t top_k, uint32_t hidden_size, uint32_t senders, uint32_t dram_alignment) {
     constexpr uint32_t kStageBytes = 16 * 1024;  // per staging buffer
     constexpr uint32_t kMaxBatchRows = 8;
     CombineLayout layout;
     layout.sender_rows_max = tt::div_up(tokens * top_k, senders);
-    layout.row_stride = align_to_part(hidden_size * kBf16Bytes);
+    layout.row_stride = align_to_part(hidden_size * kBf16Bytes, dram_alignment);
     layout.batch_rows = std::clamp(kStageBytes / layout.row_stride, 1u, kMaxBatchRows);
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    const uint32_t slice_bytes = align_to_part(layout.sender_rows_max * expert_rows::u16_bytes) + dram_alignment;
-    LayoutCursor cursor;
+    const uint32_t slice_bytes =
+        align_to_part(layout.sender_rows_max * expert_rows::u16_bytes, dram_alignment) + dram_alignment;
+    LayoutCursor cursor{.dram_alignment = dram_alignment};
     layout.scratch_head = cursor.take(dram_alignment);
     layout.scratch_tokens = cursor.take(slice_bytes);
     layout.scratch_k = cursor.take(slice_bytes);

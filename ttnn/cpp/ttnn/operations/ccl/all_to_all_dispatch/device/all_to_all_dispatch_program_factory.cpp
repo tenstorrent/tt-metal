@@ -16,7 +16,7 @@
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <limits>
@@ -317,7 +317,8 @@ tt::tt_metal::ProgramDescriptor build_dispatch_program_descriptor(
     log_debug(tt::LogOp, "directions: {}", common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_id,

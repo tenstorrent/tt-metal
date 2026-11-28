@@ -25,7 +25,7 @@
 #include <tt-metalium/execution/distributed.hpp>
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include <tt-metalium/experimental/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
@@ -272,8 +272,10 @@ tt::tt_metal::ProgramDescriptor build_moe_compute_program_descriptor(
     tt::tt_metal::ProgramDescriptor desc;
 
     // Alignment
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const auto device_properties =
+        tt::tt_metal::experimental::get_device_properties(*tensor_args.tilize_input_tensor.device());
+    const auto l1_alignment = device_properties.node_local_mem_alignment();
+    const auto dram_alignment = device_properties.dram_alignment();
 
     // Input tensors
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;

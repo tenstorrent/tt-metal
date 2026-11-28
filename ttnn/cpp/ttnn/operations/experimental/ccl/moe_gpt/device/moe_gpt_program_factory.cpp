@@ -7,7 +7,7 @@
 
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -440,8 +440,9 @@ tt::tt_metal::ProgramDescriptor create_program_descriptor_at(
     // Tilize cores
     // =========================================================================
     {
-        const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-        const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const auto device_properties = tt::tt_metal::experimental::get_device_properties(*device);
+        const auto l1_alignment = device_properties.node_local_mem_alignment();
+        const auto dram_alignment = device_properties.dram_alignment();
 
         // --- Tilize input tensors ---
         const auto& sparse_buffer = tensor_args.input_tensor;

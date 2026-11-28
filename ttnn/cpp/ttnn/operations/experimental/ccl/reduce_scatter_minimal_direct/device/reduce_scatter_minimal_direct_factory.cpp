@@ -5,7 +5,7 @@
 #include "reduce_scatter_minimal_direct_factory.hpp"
 
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -279,7 +279,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const uint32_t interm_tiles_per_packet = geom.interm_tiles_per_packet;  // tiles per fabric packet
     const uint32_t chunks_per_slice = geom.chunks_per_slice;
     TT_FATAL(interm_tiles_per_packet >= 1, "a tile must fit in a fabric packet");
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*mesh_device).dram_alignment();
     TT_FATAL(
         geom.page_bytes % dram_alignment == 0,
         "staging page_bytes {} must be a multiple of DRAM alignment {}",

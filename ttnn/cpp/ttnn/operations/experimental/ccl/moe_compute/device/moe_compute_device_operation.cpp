@@ -14,7 +14,7 @@
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/kernel_types.hpp>
 #include <tt-metalium/utils/math.hpp>
 
@@ -338,11 +338,11 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
     const auto& tilize_input_shape = tilize_input_tensor.tensor_spec().logical_shape();
     auto* mesh_device = tilize_input_tensor.device();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
 
     uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     uint32_t total_tokens =

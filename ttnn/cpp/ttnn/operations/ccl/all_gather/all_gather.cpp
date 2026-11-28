@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include <algorithm>
@@ -104,8 +104,10 @@ std::pair<bool, std::string> use_composite_all_gather(
     }
     // matched and concat write a whole *aligned* input page into each output page slot, so the slot
     // must be at least that large. They differ only across memories with unequal alignments.
-    const uint32_t output_alignment = output_spec.memory_config().is_dram() ? tt::tt_metal::hal::get_dram_alignment()
-                                                                            : tt::tt_metal::hal::get_l1_alignment();
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
+    const uint32_t output_alignment = output_spec.memory_config().is_dram()
+                                          ? device_properties.dram_alignment()
+                                          : device_properties.node_local_mem_alignment();
     const uint32_t output_aligned_page_size = tt::align(output_page_size, output_alignment);
     if (input_page_size <= output_page_size && output_aligned_page_size < input_aligned_page_size) {
         return {

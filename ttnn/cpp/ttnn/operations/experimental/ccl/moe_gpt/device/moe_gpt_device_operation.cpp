@@ -5,7 +5,7 @@
 #include "moe_gpt_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 namespace ttnn::operations::experimental::moe_gpt {
@@ -108,7 +108,8 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
 
 MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto l1_alignment = tt::tt_metal::experimental::get_device_properties(*tensor_args.input_tensor.device())
+                                  .node_local_mem_alignment();
 
     const auto& w0_w1_shape = tensor_args.w0_w1_tensor.logical_shape();
     uint32_t experts_per_device = w0_w1_shape[2];

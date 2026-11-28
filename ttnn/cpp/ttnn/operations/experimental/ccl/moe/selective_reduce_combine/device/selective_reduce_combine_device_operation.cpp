@@ -10,7 +10,7 @@
 #include "selective_reduce_combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 
@@ -96,9 +96,11 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const auto datum_size =
         tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
 
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
+    const uint32_t l1_alignment = device_properties.node_local_mem_alignment();
     const auto alignment = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
-                               ? tt::tt_metal::hal::get_l1_alignment()
-                               : tt::tt_metal::hal::get_dram_alignment();
+                               ? l1_alignment
+                               : device_properties.dram_alignment();
     const uint32_t expected_activations_stride_elm =
         tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
 
@@ -126,11 +128,11 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
 
     const auto maps_row_bytes = maps_row_elms * maps_datum_size;
     TT_FATAL(
-        tt::align(maps_row_bytes, tt::tt_metal::hal::get_l1_alignment()) == maps_row_bytes,
+        tt::align(maps_row_bytes, l1_alignment) == maps_row_bytes,
         "The dense token maps tensor row ({} bytes) must already be L1 aligned ({} bytes); otherwise the per-expert "
         "page padding breaks the kernels' maps indexing",
         maps_row_bytes,
-        tt::tt_metal::hal::get_l1_alignment());
+        l1_alignment);
 
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     const auto& output_shape = output_spec.logical_shape();

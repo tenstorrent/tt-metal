@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/memory/tensor/spec/layout/tensor_layout.hpp>
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -79,7 +80,8 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
         input_l.is_sharded() && input_s.is_sharded() && input_m.is_sharded(),
         "ReduceToRoot requires all three input tensors to be sharded");
 
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
     const uint32_t input_page_size_bytes = input_l.tensor_spec().compute_page_size_bytes();
 
     TT_FATAL(

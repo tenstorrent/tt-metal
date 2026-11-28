@@ -4,6 +4,7 @@
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
 
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/work_split.hpp>
@@ -22,7 +23,8 @@ tt::tt_metal::ProgramDescriptor local_copy_program_factory(
 
     const uint32_t num_pages = data_movement::get_num_pages(input_tensor);
     const uint32_t page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
     const uint32_t aligned_page_size_bytes = tt::round_up(page_size_bytes, l1_alignment);
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensor.dtype());
 

@@ -8,6 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include "point_to_point_device_op.hpp"
@@ -133,7 +134,8 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
             output_tensor.device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
     const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
 
     TT_FATAL(
@@ -166,7 +168,7 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
             input_tensor.dtype(),
             final_output_spec.compute_page_size_bytes(),
             input_num_pages,
-            ::hal::get_l1_alignment());
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment());
 
     const uint32_t packet_page_dim =
         packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.dtype()));

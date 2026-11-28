@@ -23,6 +23,7 @@
 #include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -390,7 +391,7 @@ CombineFabric plan_combine_fabric(
              {"fabric_max_packet_size_bytes", max_packet_size_bytes},
              {"linearized_mesh_coord", operations::ccl::common::get_linearized_index(mesh_coordinate, mesh_view)},
              {"topology", static_cast<uint32_t>(topology)},
-             {"alignment", static_cast<uint32_t>(hal::get_l1_alignment())}},
+             {"alignment", tt::tt_metal::experimental::get_device_properties(mesh_device).node_local_mem_alignment()}},
         .defines =
             {{"DEST_CHIP_ID", operations::ccl::common::stringify(dest_chip_ids)},
              {"DEST_MESH_ID", operations::ccl::common::stringify(dest_mesh_ids)},
@@ -522,7 +523,8 @@ uint32_t append_selective_reduce_combine_to_descriptor(
     const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
     const uint32_t dense_token_maps_page_size_bytes = dense_token_maps_tensor_spec.compute_page_size_bytes();
 
-    const auto l1_alignment = hal::get_l1_alignment();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mesh_device).node_local_mem_alignment();
     const auto aligned_dense_token_maps_page_size_bytes = tt::align(dense_token_maps_page_size_bytes, l1_alignment);
 
     // in validate, assert that worker_core_range_set.size() == num_token_parallel_cores*num_data_parallel_cores;

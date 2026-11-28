@@ -14,7 +14,7 @@
 #include <tt-metalium/vocabulary/core_coord.hpp>
 #include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_program_utils.hpp"
@@ -755,7 +755,8 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
             "contiguous-interm tile_granularity mismatch: {} vs {}",
             staging.tile_granularity,
             tile_granularity);
-        const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+        const uint32_t dram_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).dram_alignment();
         TT_FATAL(
             staging.page_bytes % dram_alignment == 0,
             "contiguous-interm page bytes ({}) must be a multiple of DRAM alignment ({}); otherwise the "

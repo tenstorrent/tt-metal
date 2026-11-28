@@ -212,14 +212,15 @@ std::array<uint32_t, 9> source_addresses(const std::array<Buffer*, 9>& sources) 
 }
 
 // The cached workload of the one program, with what a cache hit writes into it.
-TailEngineFactory::cached_mesh_workload_t to_cached(const ChipWorkload& descriptors, ProgramAddresses addresses) {
+TailEngineFactory::cached_mesh_workload_t to_cached(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, const ChipWorkload& descriptors, ProgramAddresses addresses) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, TailEngineFactory::shared_variables_t> shared;
     for (size_t i = 0; i < descriptors.workload.programs.size(); ++i) {
         const auto& [range, program_descriptor] = descriptors.workload.programs[i];
         // (no arena: every CB is the program's own)
         addresses.arena_cbs = arena_backed_cbs(program_descriptor, nullptr);
-        add_chip_program(workload, descriptors, i, tt::tt_metal::Program(program_descriptor));
+        add_chip_program(workload, descriptors, i, tt::tt_metal::Program(mesh_device, program_descriptor));
         shared.emplace(range, TailEngineFactory::shared_variables_t{.addresses = addresses});
     }
     return {std::move(workload), std::move(shared)};
@@ -376,7 +377,7 @@ TailEngineFactory::cached_mesh_workload_t TailEngineFactory::create_mesh_workloa
         {{0, 1, plan.engine_cores}, {3, 4, plan.port_cores}},
         sources_of(tensor_args, output),
         "engine");
-    return to_cached(workload, std::move(addresses));
+    return to_cached(*tensor_args.y_own.device(), workload, std::move(addresses));
 }
 
 void TailEngineFactory::override_runtime_arguments(
@@ -403,7 +404,7 @@ TailAllToAllFactory::cached_mesh_workload_t TailAllToAllFactory::create_mesh_wor
         {{0, 2, core_ranges_of(plan.workers)}, {3, 4, plan.port_union}},
         sources_of(tensor_args, output),
         "all-to-all");
-    return to_cached(workload, std::move(addresses));
+    return to_cached(*tensor_args.y_own.device(), workload, std::move(addresses));
 }
 
 void TailAllToAllFactory::override_runtime_arguments(

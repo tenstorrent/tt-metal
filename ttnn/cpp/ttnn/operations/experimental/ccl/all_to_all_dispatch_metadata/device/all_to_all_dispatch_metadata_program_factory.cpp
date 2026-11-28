@@ -22,7 +22,7 @@
 #include <tt-metalium/mesh/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <limits>
@@ -459,8 +459,9 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_dispatch_metadata_program_descr
     log_debug(tt::LogOp, "directions: {}", ttnn::operations::ccl::common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const auto device_properties = tt::tt_metal::experimental::get_device_properties(*mesh_device);
+    const auto l1_alignment = device_properties.node_local_mem_alignment();
+    const auto dram_alignment = device_properties.dram_alignment();
     const uint32_t payload_alignment = std::max(l1_alignment, dram_alignment);
 
     // New mapping format: [devices, experts]
