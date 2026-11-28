@@ -98,8 +98,9 @@ class TestCauseAndPart(unittest.TestCase):
 
 
 class TestMaxAsicTemp(unittest.TestCase):
-    def test_from_the_thermal_check(self):
+    def test_from_the_thermal_check_or_none(self):
         snap = Phase(name="snapshot")
+        self.assertEqual(_analyze(snap)[1]["max_asic_temp_c"], "")
         snap.add(
             Check(
                 name="asic_thermal_precheck",
@@ -109,9 +110,6 @@ class TestMaxAsicTemp(unittest.TestCase):
             )
         )
         self.assertEqual(_analyze(snap)[1]["max_asic_temp_c"], 58.0)
-
-    def test_none_when_no_reading(self):
-        self.assertEqual(_analyze(Phase(name="snapshot"))[1]["max_asic_temp_c"], "")
 
 
 if __name__ == "__main__":

@@ -69,33 +69,32 @@ class TestCaptureEvents(unittest.TestCase):
         checks = self.capture({"ipmitool": (0, ""), "journalctl": (0, "")})
         self.assertEqual({c.status for c in checks.values()}, {PASS})
 
-    def test_unreadable_skips_with_one_line(self):
-        checks = self.capture(
-            {"ipmitool": (1, "Could not open device\nmore"), "journalctl": (1, "sudo: a password is required")}
-        )
-        self.assertEqual(checks["bmc_sel_events"].status, SKIP)
-        self.assertTrue(checks["bmc_sel_events"].details.endswith("rc=1: Could not open device"))
-        self.assertIn("password is required", checks["kernel_events"].details)
-        self.assertEqual(self.logs, [])
+    def test_a_read_that_cannot_run_skips(self):
+        def raising(cmd, dry_run=False, **kw):
+            raise FileNotFoundError(cmd[0])
 
-    def test_no_journal_skips(self):
-        def run(cmd, dry_run=False, **kw):
+        def no_journal(cmd, dry_run=False, **kw):
             err = "No journal files were found." if "journalctl" in cmd else ""
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=err)
 
-        phase = Phase(name="captures", gates=False)
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(captures, "run", run):
-            captures.capture_events(phase, False, Path(d), datetime.now(timezone.utc))
-        self.assertEqual([c.status for c in phase.checks], [PASS, SKIP])
-
-    def test_missing_tool_skips(self):
-        def run(cmd, dry_run=False, **kw):
-            raise FileNotFoundError(cmd[0])
-
-        phase = Phase(name="captures", gates=False)
-        with mock.patch.object(captures, "run", run):
-            captures.capture_events(phase, False, Path("unused"), datetime.now(timezone.utc))
-        self.assertEqual([c.status for c in phase.checks], [SKIP, SKIP])
+        unreadable = fake_run(
+            {"ipmitool": (1, "Could not open device\nmore"), "journalctl": (1, "sudo: a password is required")}
+        )
+        for name, run, want in (
+            ("unreadable", unreadable, [SKIP, SKIP]),
+            ("no journal", no_journal, [PASS, SKIP]),
+            ("missing tool", raising, [SKIP, SKIP]),
+        ):
+            with self.subTest(name):
+                phase = Phase(name="captures", gates=False)
+                with tempfile.TemporaryDirectory() as d, mock.patch.object(captures, "run", run):
+                    captures.capture_events(phase, False, Path(d), datetime.now(timezone.utc))
+                    logs = sorted(p.name for p in Path(d).iterdir())
+                self.assertEqual([c.status for c in phase.checks], want)
+                if name == "unreadable":
+                    self.assertTrue(phase.checks[0].details.endswith("rc=1: Could not open device"))
+                    self.assertIn("password is required", phase.checks[1].details)
+                    self.assertEqual(logs, [])
 
 
 if __name__ == "__main__":

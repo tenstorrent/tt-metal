@@ -8,6 +8,8 @@ and when it is withheld, the AER diff on a fake sysfs, and a lost tray's cause."
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import subprocess
 import sys
@@ -182,48 +184,34 @@ class TestTrayPower(SensorCase):
         self.assertEqual((tp.status, tp.cause), (FAIL, "POWER-DOWNSTREAM"))
         self.assertIn("VR power-good 0xf7", causes[1][1])
 
-    def test_sudo_refused_is_one_skipped_line(self):
-        self.fake.refuse = "sudo: a password is required\n"
-        bmc = sensors.Bmc()
-        self.assertIsNone(sensors.read_power(bmc))
-        self.assertEqual(len(self.fake.calls), 1, "a refusal ends the route")
-        phase, _, causes = self.judge(None)
-        (tp,) = phase.checks
-        self.assertEqual(tp.status, SKIP)
-        self.assertTrue(tp.details.startswith("skipped: no root, and sudo -n ipmitool was refused"))
-        self.assertEqual(causes, {})
-
-    def test_no_bmc_device_is_one_skipped_line(self):
-        self.fake.refuse = "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0\n"
-        self.assertIsNone(sensors.read_power(sensors.Bmc()))
-        self.assertEqual(len(self.fake.calls), 1)
-        phase, _, _ = self.judge(None)
-        self.assertTrue(phase.checks[0].details.startswith("skipped: no BMC device"))
-
-    def test_unopenable_lock_is_one_skipped_line(self):
-        with mock.patch.dict(os.environ, {"HSC_I2C_LOCK": "/nonexistent-dir/i2c.lock"}):
-            bmc = sensors.Bmc()
-            self.assertIsNone(sensors.read_power(bmc))
-        self.assertEqual(self.fake.calls, [])
-        self.assertTrue(bmc.why.startswith("cannot open the I2C lock /nonexistent-dir/i2c.lock"))
-
-    def test_lock_held_elsewhere_skips_the_read(self):
-        import fcntl
-
-        with open(os.environ["HSC_I2C_LOCK"], "a") as f, mock.patch.object(sensors, "LOCK_WAIT_S", 0.1):
-            fcntl.flock(f, fcntl.LOCK_EX)
-            self.assertIsNone(sensors.Bmc().read(0x11, 0x40, sensors.STATUS_WORD))
-        self.assertEqual(self.fake.calls, [])
-
-    def test_lock_held_elsewhere_says_why_in_the_skipped_row(self):
-        import fcntl
-
-        before = sensors.read_power(sensors.Bmc())
-        with open(os.environ["HSC_I2C_LOCK"], "a") as f, mock.patch.object(sensors, "LOCK_WAIT_S", 0.1):
-            fcntl.flock(f, fcntl.LOCK_EX)
-            phase, _, _ = self.judge(before)
-        check = phase.checks[0]
-        self.assertEqual((check.status, check.details), (SKIP, "skipped: I2C lock busy after 0.1 s"))
+    def test_no_route_is_one_skipped_row(self):
+        real = os.environ["HSC_I2C_LOCK"]
+        cases = [  # stderr of the failing call, lock path (None: the real one), hold the lock, SKIP details, calls sent
+            ("sudo: a password is required\n", None, False, "skipped: no root, and sudo -n ipmitool was refused", 1),
+            (
+                "Could not open device at /dev/ipmi0 or /dev/ipmi/0 or /dev/ipmidev/0\n",
+                None,
+                False,
+                "skipped: no BMC device",
+                1,
+            ),
+            ("", "/nonexistent-dir/i2c.lock", False, "skipped: cannot open the I2C lock /nonexistent-dir/i2c.lock", 0),
+            ("", None, True, "skipped: I2C lock busy after 0.1 s", 0),
+        ]
+        for refuse, lock, hold, details, calls in cases:
+            with self.subTest(details), contextlib.ExitStack() as stack:
+                self.fake.refuse = refuse
+                before = sensors.read_power(sensors.Bmc()) if hold else None  # a good first read, then the lock goes
+                self.fake.calls = []
+                stack.enter_context(mock.patch.object(sensors, "LOCK_WAIT_S", 0.1))
+                stack.enter_context(mock.patch.dict(os.environ, {"HSC_I2C_LOCK": lock or real}))
+                if hold:
+                    fcntl.flock(stack.enter_context(open(real, "a")), fcntl.LOCK_EX)
+                phase, _, causes = self.judge(before)
+                (tp,) = phase.checks
+                self.assertEqual(tp.status, SKIP)
+                self.assertTrue(tp.details.startswith(details), tp.details)
+                self.assertEqual((len(self.fake.calls), causes), (calls, {}))
 
 
 class TestLostTrayCause(SensorCase):

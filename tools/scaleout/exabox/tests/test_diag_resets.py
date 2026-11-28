@@ -24,7 +24,6 @@ sys.path.insert(0, str(SUITE_DIR))
 
 from diag import resets  # noqa: E402
 from diag.model import FAIL, PASS, Phase  # noqa: E402
-from tiers import TIERS  # noqa: E402
 
 
 def root_port(bdf: str) -> str:
@@ -91,7 +90,7 @@ class TestResetLoop(unittest.TestCase):
         # The lost tray's root ports were read before the reset, so they are rescanned too.
         self.assertEqual((self.root / "devices" / "pci0000:c0" / "0000:c0:01.1" / "rescan").read_text(), "1")
 
-    def test_a_rescan_that_cannot_be_written_is_noted(self):
+    def test_a_rescan_that_cannot_run_is_noted_in_one_line(self):
         port = self.root / "devices" / "pci0000:40" / "0000:40:01.1"
         (port / "rescan").unlink()
         (port / "rescan").mkdir()
@@ -99,8 +98,6 @@ class TestResetLoop(unittest.TestCase):
         self.assertEqual(check.status, PASS)
         self.assertIn("rescan failed", check.details)
         self.assertIn("0000:40:01.1", check.details)
-
-    def test_a_rescan_without_root_is_one_line(self):
         with mock.patch.object(Path, "write_text", side_effect=PermissionError(13, "Permission denied")):
             (check,) = self._loop(("-glx_reset",)).checks
         self.assertEqual(check.status, PASS)
@@ -112,10 +109,9 @@ class TestResetLoop(unittest.TestCase):
         self.assertEqual(len(ports), 32)
         self.assertEqual(ports["0000:44:00.0"], "0000:40:04.1")
 
-    def test_no_tier_resets_with_tt_smi_r(self):
+    def test_the_only_reset_is_glx_reset(self):
+        # tiers.py checks every tier's resets against these flags when it loads.
         self.assertEqual(resets.RESET_FLAGS, ("-glx_reset",))
-        for name, tier in TIERS.items():
-            self.assertNotIn("-r", tier.resets + tier.post_test_resets, name)
 
 
 if __name__ == "__main__":

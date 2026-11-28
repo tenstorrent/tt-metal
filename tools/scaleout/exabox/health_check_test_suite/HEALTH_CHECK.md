@@ -1,7 +1,5 @@
 # Health check Blackhole Galaxy diagnostic tool
 
-In works
-
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
@@ -124,8 +122,7 @@ added to the tier lists in `run_diag.sh`, `run_diag_docker.sh` and
 Every reset is `tt-smi -glx_reset`; `tt-smi -r` is not used on Galaxy units. After
 each one the chips' PCIe root ports are rescanned (that needs root; a failed
 rescan is noted on the reset check) and the chips are recounted by BDF. A reset
-that leaves a chip missing FAILs and names it by tray and ASIC, e.g.
-`0000:46:00.0 (UBB2/U6)`, and ends the reset loop.
+that leaves a chip missing FAILs, names it by tray and ASIC and ends the reset loop.
 
 `pre_bmc_reboot` collects data; it does not check the unit. It runs on a unit
 that is about to be power cycled through the BMC, so it records the state first
@@ -618,19 +615,11 @@ set). No clear is sent when any HSC reads OFF, when the run had no load, or with
 ## Verdict
 
 The run ends with one line per WARN/FAIL check of a gating phase, then the
-final line, also stored in the report as `verdict`:
-
-```
-Fault 1: FAIL pcie_enum_count: 31/32 ... | 0000:46:00.0 (UBB2/U6) | tt-smi -glx_reset and recount; ...
-Fault 2: FAIL CAUSE POWER: reset_1_ok: UBB2 12 V: HSC 0x40 OFF ... — ... | ... | fix UBB2's 12 V feed ...
-Evidence: kernel_events: ... pciehp: Slot(3): Link Down ...
-Final verdict: FAIL: 1 fault(s)
-```
-
-Each fault says what failed, where (the chips by BDF, tray and ASIC, or `host`)
-and what to do. The same check naming the same chips in several snapshots is
-one fault. `Final verdict` is `PASS`, `WARN: n warning(s)`, `FAIL: n fault(s)`,
-or `INCOMPLETE (not a fault)` when a gating phase errored and nothing failed.
+final line, also stored in the report as `verdict`. Each fault says what failed,
+where (the chips by BDF, tray and ASIC, or `host`) and what to do. The same check
+naming the same chips in several snapshots is one fault. `Final verdict` is `PASS`,
+`WARN: n warning(s)`, `FAIL: n fault(s)`, or `INCOMPLETE (not a fault)` when a
+gating phase errored and nothing failed.
 
 ## sys-triage phase
 
