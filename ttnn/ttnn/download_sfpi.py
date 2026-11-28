@@ -62,7 +62,7 @@ def download_sfpi(sfpi_json_path, sfpi_target_dir):
 
 def main():
     # Default path (update as needed)
-    sfpi_json_path = os.path.join(os.path.dirname(__file__), "build", "sfpi-version.json")
+    sfpi_json_path = os.path.join(os.path.dirname(__file__), "build", "lib", "sfpi-version.json")
     sfpi_target_dir = os.path.join(os.path.dirname(__file__), "runtime")
     download_sfpi(sfpi_json_path, sfpi_target_dir)
 
