@@ -15,7 +15,9 @@ import re
 import sys
 import argparse
 from pathlib import Path
-from typing import List, Dict, Set, Tuple, Optional
+from typing import List, Dict, Optional
+
+import yaml
 
 
 def find_operation_path(operation_name: str, repo_root: Path) -> Optional[str]:
@@ -41,19 +43,33 @@ def find_operation_path(operation_name: str, repo_root: Path) -> Optional[str]:
     return None
 
 
+TEST_ROOTS = (
+    Path("tests") / "ttnn" / "unit_tests" / "operations",
+    Path("tests") / "ttnn" / "nightly" / "unit_tests" / "operations",
+)
+
+# CI test matrix -> (impl workflow, calling workflows)
+TEST_MATRICES = {
+    "ttnn_sanity_tests.yaml": ("ttnn-sanity-tests-impl.yaml", "sanity-tests.yaml"),
+    "ttnn_merge_gate_tests.yaml": ("ttnn-smoke-tests-impl.yaml", "merge-gate.yaml"),
+    "ops_unit_tests.yaml": ("ops-unit-tests-impl.yaml", "tt-metal-l2-nightly.yaml"),
+    "blackhole_multi_card_sanity_tests.yaml": ("blackhole-multi-card-sanity-tests-impl.yaml", "sanity-tests.yaml"),
+}
+
+
 def find_test_files(operation_name: str, repo_root: Path) -> List[Path]:
     """Find test files that test the given operation"""
-    tests_dir = repo_root / "tests" / "ttnn" / "unit_tests" / "operations"
-    if not tests_dir.exists():
-        return []
-
     test_files = []
     operation_lower = operation_name.lower()
 
-    # Search for test files
-    for root, dirs, files in os.walk(tests_dir):
-        for file_name in files:
-            if file_name.startswith("test_") and file_name.endswith(".py"):
+    for test_root in TEST_ROOTS:
+        tests_dir = repo_root / test_root
+        if not tests_dir.exists():
+            continue
+        for root, dirs, files in os.walk(tests_dir):
+            for file_name in files:
+                if not (file_name.startswith("test_") and file_name.endswith(".py")):
+                    continue
                 file_path = Path(root) / file_name
 
                 # Check if operation name appears in filename
@@ -64,14 +80,7 @@ def find_test_files(operation_name: str, repo_root: Path) -> List[Path]:
                 # Check if operation name appears in file content
                 try:
                     with open(file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                        # Look for operation name in imports, function calls, etc.
-                        if (
-                            operation_lower in content.lower()
-                            or f"ttnn.{operation_name}" in content
-                            or f"ttnn.experimental.{operation_name}" in content
-                            or f"{operation_name}(" in content
-                        ):
+                        if operation_lower in f.read().lower():
                             test_files.append(file_path)
                 except Exception:
                     pass
@@ -80,109 +89,51 @@ def find_test_files(operation_name: str, repo_root: Path) -> List[Path]:
 
 
 def get_test_directory(test_file: Path, repo_root: Path) -> str:
-    """Get the test directory category from a test file path"""
-    tests_dir = repo_root / "tests" / "ttnn" / "unit_tests" / "operations"
-    try:
-        rel_path = test_file.relative_to(tests_dir)
-        # Get the first directory component
+    """Get the test directory category (e.g. tests/ttnn/unit_tests/operations/pool) from a test file path"""
+    for test_root in TEST_ROOTS:
+        try:
+            rel_path = test_file.relative_to(repo_root / test_root)
+        except ValueError:
+            continue
         if len(rel_path.parts) > 1:
-            return rel_path.parts[0]
-    except ValueError:
-        pass
+            return str(test_root / rel_path.parts[0])
     return "unknown"
 
 
-def find_pipelines_for_test_directory(test_dir: str, repo_root: Path) -> List[Dict]:
-    """Find CI/CD pipelines that run tests in the given directory"""
-    workflows_dir = repo_root / ".github" / "workflows"
-    if not workflows_dir.exists():
-        return []
+def _cmd_runs_path(cmd: str, path: str) -> bool:
+    """True if cmd passes path itself (a file, file::test or a whole directory) to pytest"""
+    return re.search(rf"(^|[\s'\"]){re.escape(path)}(::|/?($|[\s'\"]))", cmd) is not None
+
+
+def find_pipelines_for_test_file(test_file: Path, repo_root: Path) -> List[Dict]:
+    """Find CI test matrix entries whose cmd runs the test file or one of its parent directories"""
+    rel_file = test_file.relative_to(repo_root)
+    candidates = [str(rel_file)] + [str(parent) for parent in rel_file.parents if len(parent.parts) >= 4]
 
     pipelines = []
-    test_path = f"tests/ttnn/unit_tests/operations/{test_dir}"
-
-    # Key workflow files to check
-    workflow_files = [
-        "ttnn-post-commit.yaml",
-        "tt-metal-l2-nightly-impl.yaml",
-        "blackhole-multi-card-unit-tests-impl.yaml",
-        "sanity-tests.yaml",
-    ]
-
-    for workflow_file in workflow_files:
-        workflow_path = workflows_dir / workflow_file
-        if not workflow_path.exists():
+    for matrix_file, (impl_workflow, caller_workflow) in TEST_MATRICES.items():
+        matrix_path = repo_root / "tests" / "pipeline_reorg" / matrix_file
+        if not matrix_path.exists():
+            continue
+        try:
+            with open(matrix_path, "r", encoding="utf-8") as f:
+                entries = yaml.safe_load(f) or []
+        except Exception as e:
+            print(f"Error reading {matrix_path}: {e}", file=sys.stderr)
             continue
 
-        try:
-            with open(workflow_path, "r", encoding="utf-8") as f:
-                content = f.read()
-
-            # Find all cmd patterns in the entire file that contain our test directory
-            cmd_pattern = r'cmd:\s*(["\'])((?:[^\\]|\\.)*?)\1'
-            all_cmd_matches = list(re.finditer(cmd_pattern, content))
-
-            # Find all name patterns in the entire file
-            name_pattern = r'name:\s*(["\'])((?:[^\\]|\\.)*?)\1'
-            all_name_matches = list(re.finditer(name_pattern, content))
-
-            # For each cmd that contains our test directory, find its corresponding name
-            for cmd_match in all_cmd_matches:
-                cmd_content = cmd_match.group(2)
-
-                # Only process cmds that contain our test directory
-                if test_dir not in cmd_content:
-                    continue
-
-                # Find the name that's closest before this cmd
-                cmd_start = cmd_match.start()
-                test_group_name = "Unknown"
-                for name_match in reversed(all_name_matches):
-                    if name_match.end() < cmd_start:
-                        test_group_name = name_match.group(2)
-                        break
-
-                # Only add if we found a valid name (not "Unknown")
-                if test_group_name != "Unknown":
-                    pipelines.append(
-                        {
-                            "workflow": workflow_file,
-                            "test_group": test_group_name,
-                            "command": cmd_content,
-                            "test_directory": test_dir,
-                        }
-                    )
-        except Exception as e:
-            print(f"Error reading {workflow_file}: {e}", file=sys.stderr)
-
-    # Also check for patterns that might include this test directory
-    # e.g., "data_movement/ccl" groups include data_movement tests
-    if test_dir == "data_movement":
-        # Check for data_movement/ccl groups
-        try:
-            with open(workflows_dir / "ttnn-post-commit.yaml", "r") as f:
-                content = f.read()
-            if "data_movement/ccl" in content:
-                # Find all data_movement/ccl groups
-                pattern = r'name:\s*["\']([^"\']*data_movement/ccl[^"\']*)["\']'
-                for match in re.finditer(pattern, content):
-                    test_group_name = match.group(1)
-                    # Find corresponding command
-                    start = match.start()
-                    end = min(len(content), match.end() + 1000)
-                    context = content[start:end]
-                    cmd_match = re.search(r'cmd:\s*(["\'])((?:[^\\]|\\.)*?)\1', context)
-                    if cmd_match:
-                        pipelines.append(
-                            {
-                                "workflow": "ttnn-post-commit.yaml",
-                                "test_group": test_group_name,
-                                "command": cmd_match.group(2),  # group(2) is the content inside quotes
-                                "test_directory": test_dir,
-                            }
-                        )
-        except Exception:
-            pass
+        for entry in entries:
+            cmd = str(entry.get("cmd", ""))
+            if any(_cmd_runs_path(cmd, path) for path in candidates):
+                pipelines.append(
+                    {
+                        "matrix": f"tests/pipeline_reorg/{matrix_file}",
+                        "workflow": f"{impl_workflow} (from {caller_workflow})",
+                        "test_group": entry.get("name", "Unknown"),
+                        "command": cmd,
+                        "test_file": str(rel_file),
+                    }
+                )
 
     return pipelines
 
@@ -212,20 +163,6 @@ def main():
     # Find test files
     print(f"\nSearching for tests for operation: {args.operation_name}")
     test_files = find_test_files(args.operation_name, repo_root)
-
-    if not test_files:
-        print(f"No test files found for operation '{args.operation_name}'")
-        print("\nTrying to find tests in common directories...")
-        # Try common test directories
-        common_dirs = ["data_movement", "eltwise", "conv", "matmul", "pool", "fused", "reduce"]
-        for test_dir in common_dirs:
-            test_path = repo_root / "tests" / "ttnn" / "unit_tests" / "operations" / test_dir
-            if test_path.exists():
-                for test_file in test_path.glob(f"test_*{args.operation_name}*.py"):
-                    test_files.append(test_file)
-                for test_file in test_path.glob(f"*{args.operation_name}*.py"):
-                    if test_file not in test_files:
-                        test_files.append(test_file)
 
     if not test_files:
         print(f"\n❌ No test files found for operation '{args.operation_name}'")
@@ -262,32 +199,28 @@ def main():
     print("Pipelines That Run These Tests:")
     print(f"{'='*80}\n")
 
-    all_pipelines = []
-    for test_dir in test_directories.keys():
-        pipelines = find_pipelines_for_test_directory(test_dir, repo_root)
-        all_pipelines.extend(pipelines)
-
-    # Remove duplicates
-    seen = set()
-    unique_pipelines = []
-    for pipeline in all_pipelines:
-        key = (pipeline["workflow"], pipeline["test_group"])
-        if key not in seen:
-            seen.add(key)
-            unique_pipelines.append(pipeline)
+    unique_pipelines = {}
+    for test_file in test_files:
+        for pipeline in find_pipelines_for_test_file(test_file, repo_root):
+            key = (pipeline["matrix"], pipeline["test_group"])
+            if key in unique_pipelines:
+                unique_pipelines[key]["test_files"].append(pipeline["test_file"])
+            else:
+                unique_pipelines[key] = {**pipeline, "test_files": [pipeline["test_file"]]}
+    unique_pipelines = list(unique_pipelines.values())
 
     if not unique_pipelines:
         print("❌ No pipelines found that run these tests")
         print("\nThis could mean:")
         print("1. Tests are run manually or in custom workflows")
-        print("2. Tests are in nightly-only pipelines")
-        print("3. Test directory mapping needs to be updated")
+        print("2. Tests are only run from a test matrix other than " + ", ".join(TEST_MATRICES))
     else:
         for i, pipeline in enumerate(unique_pipelines, 1):
             print(f"{i}. Pipeline: {pipeline['test_group']}")
+            print(f"   Matrix: {pipeline['matrix']}")
             print(f"   Workflow: .github/workflows/{pipeline['workflow']}")
+            print(f"   Test Files: {', '.join(pipeline['test_files'])}")
             print(f"   Command: {pipeline['command']}")
-            print(f"   Test Directory: {pipeline['test_directory']}/")
             print()
 
     return 0
