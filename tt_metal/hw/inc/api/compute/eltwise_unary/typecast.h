@@ -6,6 +6,9 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifndef ARCH_QUASAR
+#include "ckernel_sfpu_round_to_bfp.h"
+#endif
 #include "ckernel_sfpu_typecast.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -313,11 +316,23 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::Float16_b) {
         // no SFPU kernel needed, handled by unpacker
     } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::Bfp8_b) {
-        // no SFPU kernel needed, handled by packer
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_round_to_bfp,
+            (APPROX, 8 /* ITERATIONS */, 7 /* MANT_BITS */),
+            idst,
+            VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::Float32) {
         // no SFPU kernel needed, handled by unpacker/packer
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Bfp8_b) {
-        // no SFPU kernel needed, handled by packer
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_round_to_bfp,
+            (APPROX, 8 /* ITERATIONS */, 7 /* MANT_BITS */),
+            idst,
+            VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
@@ -369,15 +384,33 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::Float16_b) {
         // no SFPU kernel needed, handled by unpacker
     } else if constexpr (in_format == DataFormat::Float16_b && out_format == DataFormat::Bfp4_b) {
-        // no SFPU kernel needed, handled by packer
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_round_to_bfp,
+            (APPROX, 8 /* ITERATIONS */, 3 /* MANT_BITS */),
+            idst,
+            VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::Bfp8_b) {
         // no SFPU kernel needed, handled by unpacker
     } else if constexpr (in_format == DataFormat::Bfp8_b && out_format == DataFormat::Bfp4_b) {
-        // no SFPU kernel needed, handled by packer
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_round_to_bfp,
+            (APPROX, 8 /* ITERATIONS */, 3 /* MANT_BITS */),
+            idst,
+            VectorMode::RC));
     } else if constexpr (in_format == DataFormat::Bfp4_b && out_format == DataFormat::Float32) {
         // no SFPU kernel needed, handled by unpacker/packer
     } else if constexpr (in_format == DataFormat::Float32 && out_format == DataFormat::Bfp4_b) {
-        // no SFPU kernel needed, handled by packer
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_round_to_bfp,
+            (APPROX, 8 /* ITERATIONS */, 3 /* MANT_BITS */),
+            idst,
+            VectorMode::RC));
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
