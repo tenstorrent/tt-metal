@@ -28,11 +28,25 @@ so a chunk is never re-run in place).
         WOA_OFFON_LAYERS=all it runs under DECODER_SKIP=decode (layers 0-20; WA.4), the comparison over all 40.
     woa_host_us_<off|on>_<case>: host us a wo_a call (perf_counter around ttnn.bringup.grouped_matmul, warm, no
         profiler; OV-78).
+    woa_attn_ms_<case>_<off|on>: the attention section of the same profiled runs (test_skip_positions' phase
+        "attention" + wo_a's "woa" signposts, i.e. the ladders' attention section with wo_a in it), the median.
     woa_load_delta_s: load-time cost of the bank copy over the interleaved one for the executed layers (each copy built
         from the checkpoint read: host prep + conversion + upload, synchronized), woa_load_delta_s_40 (x 40 / layers).
 
     PYTHONPATH=$PWD BRINGUP_CHUNK=8192 DS41_PACKED=on ... DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh \\
         --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
+
+FIX.43 (overseer): far histories in the same one load. WOA_OFFON_POS past CAP - 8192 - 2048 (e.g. 1024000) runs the
+FAR layout: the slots' capacity and the load's tables are H + 8192 (BATCH_POS_VARS: the batch planner loads the model
+for WOA_OFFON_POS + chunk, never past deploy.seq), so no chunk may reach past H + 8192:
+    single8192  request 4's chunk [H, H + 8192) in slot 8 (set A) / 9 (set B)
+    4x2k        requests 0-3's [H, H + 2048), 8 chips each, slots 0-3 / 4-7
+(single5120 is not run). Every history is a real prefill [0, H) of the text (10 slots, set A again for the repeat).
+Metric names carry the history: "_1m" at H >= 1,000,000 (woa_offon_max_abs_diff_single8192_1m, ...), "_p<H>" at any
+other H but the default.
+
+    PYTHONPATH=$PWD WOA_OFFON_POS=1024000 BRINGUP_CHUNK=8192 ... scripts/run_safe_pytest.sh --run-all \\
+        --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
 """
 
 from __future__ import annotations
@@ -70,6 +84,7 @@ CHUNK = _pc.CHUNK
 S = spec()
 BATCH_SHARED = True
 BATCH_ITEM_VARS = ("WOA_OFFON_LAYERS", "WOA_OFFON_POS", "WOA_OFFON_PROF_RUNS")
+BATCH_POS_VARS = ("WOA_OFFON_POS",)  # F288 (FIX.43): a far history's load reaches WOA_OFFON_POS + chunk
 BATCH_LAYERS = "executed"  # F285: layers 0-20 under DECODER_SKIP=decode (all 40: WOA_OFFON_LAYERS=all)
 CAP = 155648  # the runtime's max_seq: H + 8192 + 2048 rounded up to a chunk (19 x 8192)
 BATCH_MAX_SEQ = CAP
@@ -79,12 +94,29 @@ SEG = 2048
 SHORT = 5120
 OUT = pathlib.Path("generated/ds41_woa")
 CASES = ("single8192", "4x2k", "single5120")
+FAR_CASES = ("single8192", "4x2k")  # FIX.43: the far layout's cases (module docstring)
+DEFAULT_POS = 139264
 
 
 def _pos() -> int:
-    h = int(os.environ.get("WOA_OFFON_POS", "139264"))  # diagnostic
-    assert h % CHUNK == 0 and h + CHUNK + SEG <= CAP, h
+    h = int(os.environ.get("WOA_OFFON_POS", str(DEFAULT_POS)))  # diagnostic
+    assert h % CHUNK == 0 and h >= CHUNK, h
     return h
+
+
+def _far(h: int) -> bool:
+    """FIX.43: the far layout (no chunk past h + CHUNK) where the near one's request-0 2048 tail passes CAP."""
+    return h + CHUNK + SEG > CAP
+
+
+def _cap(h: int) -> int:
+    """The slots' capacity and the load's max_seq: CAP (the near layout), else h + CHUNK (the far one)."""
+    return h + CHUNK if _far(h) else CAP
+
+
+def _tag(h: int) -> str:
+    """The metric names' history suffix: none at the default, "_1m" at >= 1,000,000, else "_p<h>"."""
+    return "" if h == DEFAULT_POS else ("_1m" if h >= 1_000_000 else f"_p{h}")
 
 
 class WoaCalls:
@@ -164,9 +196,9 @@ def _load_delta(mesh, model) -> dict:
     return dict(layers=len(atts), host_s=host, interleaved_s=inter, bank_s=bank, added=added)
 
 
-def _prof(mesh, fn) -> tuple[float, float]:
-    """(the slowest chip's device ms of the run, wo_a's ms: the "woa" sections, each call's slowest chip) of one
-    real-time profiled run."""
+def _prof(mesh, fn) -> tuple[float, float, float]:
+    """(the slowest chip's device ms of the run, wo_a's ms: the "woa" sections, each call's slowest chip, the attention
+    section with wo_a in it: phase "attention" + wo_a's ms) of one real-time profiled run."""
     from models.demos.common.bringup.testing import profiler
     from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as L
 
@@ -180,7 +212,8 @@ def _prof(mesh, fn) -> tuple[float, float]:
     finally:
         profiler.disable()
     woa = sum(v for k, v in (pr.get("kernel_ns") or {}).items() if k == "woa" or str(k).endswith(".woa"))
-    return L._device(pr), woa / 1e6
+    att = L._phases(pr).get("attention", 0.0)
+    return L._device(pr), woa / 1e6, att + woa / 1e6
 
 
 def _real160(mesh, inputs) -> tuple[float, int]:
@@ -244,30 +277,35 @@ def test_woa_offon(mesh_device, monkeypatch):
     full = list(S.layers())
     with _pc.switch("DECODER_SKIP", skip):  # (DS41-314: a held model reads its frozen snapshot)
         layers = full if every else batch.run_layers(S, full, last_chunk=False)
-    monkeypatch.setitem(S.data["target"], "seq", max(CAP, int(S.data["target"]["seq"])))
+    H = _pos()
+    far, tag, cap = _far(H), _tag(H), _cap(H)
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))
+    assert cap <= -(-deploy // CHUNK) * CHUNK, f"WOA_OFFON_POS {H}: slots of {cap} pass the deployment ({deploy})"
+    cases = FAR_CASES if far else CASES
+    monkeypatch.setitem(S.data["target"], "seq", max(cap, int(S.data["target"]["seq"])))
     monkeypatch.setenv("WALLS_FRESH_SLOTS", str(SLOTS))  # (the runtime's KV cache)
-    runtime, adapter, hf, params = SP._runtime(mesh, layers, CHUNK, CAP)
+    runtime, adapter, hf, params = SP._runtime(mesh, layers, CHUNK, cap)
     model = runtime.model
     loaded = model.skip_mode
     if loaded != skip:
         model.use_decoder_skip(skip)
-    res = {"layers": [layers[0], layers[-1]]}
+    res = {"layers": [layers[0], layers[-1]], "H": H, "far": far, "cap": cap, "max_seq": model.max_seq}
+    assert model.max_seq >= cap, f"the held model's tables reach {model.max_seq} < {cap} (WOA_OFFON_POS {H})"
     # both wo_a copies on the held model (OV-77: a test load holds both; the load's own copy kept), timed (load delta)
     ld = _load_delta(mesh, model)
     n = ld["layers"]
     delta = ld["bank_s"] - ld["interleaved_s"]
     res["load"] = {k: v for k, v in ld.items() if k != "added"}
-    metrics.record("woa_load_delta_s", round(delta, 3), layers=n, bank_s=round(ld["bank_s"], 3))
-    metrics.record("woa_load_delta_s_40", round(delta * 40 / max(1, n), 3), estimate="x 40 / layers")
-    metrics.record("woa_load_host_s", round(ld["host_s"], 3), layers=n)
-    metrics.record("woa_load_interleaved_s", round(ld["interleaved_s"], 3), layers=n)
-    metrics.record("woa_load_bank_s", round(ld["bank_s"], 3), layers=n)
+    metrics.record(f"woa_load_delta_s{tag}", round(delta, 3), layers=n, bank_s=round(ld["bank_s"], 3))
+    metrics.record(f"woa_load_delta_s_40{tag}", round(delta * 40 / max(1, n), 3), estimate="x 40 / layers")
+    metrics.record(f"woa_load_host_s{tag}", round(ld["host_s"], 3), layers=n)
+    metrics.record(f"woa_load_interleaved_s{tag}", round(ld["interleaved_s"], 3), layers=n)
+    metrics.record(f"woa_load_bank_s{tag}", round(ld["bank_s"], 3), layers=n)
     print(f"WOA: layers {layers[0]}-{layers[-1]} ({n} wo_a), load: {res['load']}", flush=True)
     _real160.atts = _atts(model)
     kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)
-    H = _pos()
     text, info = texts.tokens(S, 4 * SHIFT + H + CHUNK + SEG, "agentic_cc")
-    print(f"WOA: H {H}, text {info}", flush=True)
+    print(f"WOA: H {H} ({'far' if far else 'near'} layout, slots of {cap}, cases {cases}), text {info}", flush=True)
 
     def ids(r, s, e):
         return text[r * SHIFT + s : r * SHIFT + e]
@@ -279,13 +317,17 @@ def test_woa_offon(mesh_device, monkeypatch):
 
     def run_single(side, base):
         with _pc.switch("WOA_BANK", side):
-            inp = single(base, 0, H, H + CHUNK)
+            if far:  # (FIX.43: request 4 in slot 8 / 9, nothing past H + CHUNK)
+                inp = single(8 + base // 4, 4, H, H + CHUNK)
+            else:
+                inp = single(base, 0, H, H + CHUNK)
             model.sync()
         ttnn.deallocate(inp)
 
     def run_packed(side, base):
-        segs = [Segment(base + 0, H + CHUNK, H + CHUNK + SEG)] + [Segment(base + r, H, H + SEG) for r in (1, 2, 3)]
-        lane = [ids(0, H + CHUNK, H + CHUNK + SEG)] + [ids(r, H, H + SEG) for r in (1, 2, 3)]
+        s0 = H if far else H + CHUNK  # (request 0's segment: after its single chunk in the near layout)
+        segs = [Segment(base + 0, s0, s0 + SEG)] + [Segment(base + r, H, H + SEG) for r in (1, 2, 3)]
+        lane = [ids(0, s0, s0 + SEG)] + [ids(r, H, H + SEG) for r in (1, 2, 3)]
         desc = ChunkDescriptor.packed(CHUNK, segs)
         with _pc.switch("WOA_BANK", side), _pc.packed("on"):
             inp = runtime.make_packed_input(desc, [t.long() for t in lane])
@@ -299,7 +341,9 @@ def test_woa_offon(mesh_device, monkeypatch):
             model.sync()
         ttnn.deallocate(inp)
 
-    fns = {"single8192": run_single, "4x2k": run_packed, "single5120": run_short}
+    fns = {
+        k: v for k, v in {"single8192": run_single, "4x2k": run_packed, "single5120": run_short}.items() if k in cases
+    }
 
     def history(slots_reqs):
         with _pc.switch("WOA_BANK", "off"):
@@ -310,7 +354,10 @@ def test_woa_offon(mesh_device, monkeypatch):
 
     set_a = [(r, r) for r in range(4)] + [(8, 4)]
     set_b = [(4 + r, r) for r in range(4)] + [(9, 4)]
-    pairs_ab = [(0, 4, H + CHUNK + SEG)] + [(r, 4 + r, H + SEG) for r in (1, 2, 3)] + [(8, 9, H + SHORT)]
+    if far:
+        pairs_ab = [(r, 4 + r, H + SEG) for r in range(4)] + [(8, 9, H + CHUNK)]
+    else:
+        pairs_ab = [(0, 4, H + CHUNK + SEG)] + [(r, 4 + r, H + SEG) for r in (1, 2, 3)] + [(8, 9, H + SHORT)]
     try:
         t0 = time.time()
         history(set_a + set_b)
@@ -343,7 +390,7 @@ def test_woa_offon(mesh_device, monkeypatch):
             finally:
                 _mm.Outs.unwrap(model)
         srv_rep, bad_rep = _mm._served_diff(runtime, kv, model, pairs_ab)
-        for case in CASES:
+        for case in cases:
             off, on, on2 = (o[(case, s)].cap for s in ("off", "on", "on2"))
             keys = sorted(set(on.dig) | set(off.dig) | set(on2.dig))
             assert len(keys) >= len(layers) - 1, (case, keys)
@@ -359,9 +406,9 @@ def test_woa_offon(mesh_device, monkeypatch):
                 "repeat_bad_layers": [k for k in keys if on.dig.get(k) != on2.dig.get(k)],
                 "layers_compared": len(keys),
             }
-            metrics.record(f"woa_offon_max_abs_diff_{case}", d_offon, layers=len(keys), served_bad=len(bad_offon))
-            metrics.record(f"woa_repeat_max_abs_diff_{case}", d_rep, layers=len(keys), served_bad=len(bad_rep))
-            print(f"WOA {case}: off vs on {d_offon} (outputs {out_offon}, served {srv_offon}: {bad_offon[:4]}); "
+            metrics.record(f"woa_offon_max_abs_diff_{case}{tag}", d_offon, layers=len(keys), served_bad=len(bad_offon))
+            metrics.record(f"woa_repeat_max_abs_diff_{case}{tag}", d_rep, layers=len(keys), served_bad=len(bad_rep))
+            print(f"WOA {case}{tag}: off vs on {d_offon} (outputs {out_offon}, served {srv_offon}: {bad_offon[:4]}); "
                   f"on repeat {d_rep} (outputs {out_rep}, served {srv_rep}: {bad_rep[:4]}); {len(keys)} layers",
                   flush=True)  # fmt: skip
         res["served_bad_offon"] = [list(map(str, b)) for b in bad_offon[:20]]
@@ -388,7 +435,11 @@ def test_woa_offon(mesh_device, monkeypatch):
                 res[case][f"host_us_{side}"] = us
                 res[case]["woa_calls"] = wc.calls
                 metrics.record(
-                    f"woa_host_us_{side}_{case}", us, calls=wc.calls, runs=[round(v, 1) for v in got], skip=timing_skip
+                    f"woa_host_us_{side}_{case}{tag}",
+                    us,
+                    calls=wc.calls,
+                    runs=[round(v, 1) for v in got],
+                    skip=timing_skip,
                 )
         # device ms (whole chunk; wo_a's own programs signposted), the median of runs a side, alternating
         runs = int(os.environ.get("WOA_OFFON_PROF_RUNS", "3"))  # diagnostic
@@ -404,21 +455,27 @@ def test_woa_offon(mesh_device, monkeypatch):
                     got[side].append(_prof(mesh, go))
             for side in ("off", "on"):
                 rs = sorted(got[side])
-                dev, woa = rs[len(rs) // 2]
-                woa_med = statistics.median(w for _, w in got[side])
+                dev = rs[len(rs) // 2][0]
+                woa_med = statistics.median(t[1] for t in got[side])
+                att_med = statistics.median(t[2] for t in got[side])
                 res[case][f"device_ms_{side}"] = round(dev, 3)
                 res[case][f"woa_ms_{side}"] = round(woa_med, 3)
                 res[case][f"device_ms_runs_{side}"] = [round(t[0], 3) for t in got[side]]
                 res[case][f"woa_ms_runs_{side}"] = [round(t[1], 3) for t in got[side]]
-                metrics.record(f"woa_device_ms_{case}_{side}", round(dev, 3), skip=timing_skip)
-                metrics.record(f"woa_sec_ms_{case}_{side}", round(woa_med, 3), skip=timing_skip)
-            print(f"WOA {case}: device ms off {res[case]['device_ms_off']} on {res[case]['device_ms_on']}; wo_a ms "
+                res[case][f"attn_ms_{side}"] = round(att_med, 3)
+                res[case][f"attn_ms_runs_{side}"] = [round(t[2], 3) for t in got[side]]
+                metrics.record(f"woa_device_ms_{case}{tag}_{side}", round(dev, 3), skip=timing_skip)
+                metrics.record(f"woa_sec_ms_{case}{tag}_{side}", round(woa_med, 3), skip=timing_skip)
+                metrics.record(f"woa_attn_ms_{case}{tag}_{side}", round(att_med, 3), skip=timing_skip)
+            print(f"WOA {case}{tag}: device ms off {res[case]['device_ms_off']} on {res[case]['device_ms_on']} (runs "
+                  f"{res[case]['device_ms_runs_off']} / {res[case]['device_ms_runs_on']}); attention ms off "
+                  f"{res[case]['attn_ms_off']} on {res[case]['attn_ms_on']}; wo_a ms "
                   f"off {res[case]['woa_ms_off']} on {res[case]['woa_ms_on']}; host us a call off "
                   f"{res[case]['host_us_off']} on {res[case]['host_us_on']}", flush=True)  # fmt: skip
         # 160 rows on real inputs (op level)
         r160, n160 = _real160(mesh, cap160.inputs if cap160 is not None else [])
         res["real160"] = {"max_abs_diff": r160, "calls": n160}
-        metrics.record("woa_offon_max_abs_diff_real160", r160, calls=n160)
+        metrics.record(f"woa_offon_max_abs_diff_real160{tag}", r160, calls=n160)
         print(f"WOA real160: {n160} calls, off vs on {r160}", flush=True)
     finally:
         for key in [k for k in runtime._states if k[0] == id(kv)]:
@@ -435,8 +492,8 @@ def test_woa_offon(mesh_device, monkeypatch):
         if model.skip_mode != loaded:
             model.use_decoder_skip(loaded)
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "offon.json").write_text(json.dumps(res, indent=1, default=str))
-    bad = {c: (res[c]["offon_max_abs_diff"], res[c]["repeat_max_abs_diff"]) for c in CASES}
+    (OUT / f"offon{tag}.json").write_text(json.dumps(res, indent=1, default=str))
+    bad = {c: (res[c]["offon_max_abs_diff"], res[c]["repeat_max_abs_diff"]) for c in cases}
     assert all(v == (0, 0) for v in bad.values()) and res["real160"]["max_abs_diff"] == 0, (
         f"WOA_BANK off != on or not repeatable: {bad}, real160 {res['real160']}"
     )  # fmt: skip

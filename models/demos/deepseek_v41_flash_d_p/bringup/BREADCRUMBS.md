@@ -2161,3 +2161,20 @@
 - Not run: `orchestrator measure` (ab_mode none), any model load (owner: op-level only; NC.8 is the ladder).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.7 --spec $BRINGUP_SPEC --check`; build:
   `cmake --build build --target install`.
+
+## FIX.43 (overseer fix, attempt 1): wo_a bank layout off vs on at 1M history in one load
+
+- What: tests/woa/test_woa_offon.py takes WOA_OFFON_POS past CAP (BATCH_POS_VARS = ("WOA_OFFON_POS",): the planner's
+  load reaches H + chunk). Past CAP - 8192 - 2048 it runs the "far" layout: slots / max_seq H + 8192; single 8192 =
+  request 4 in slot 8 / 9, 4 x 2k = requests 0-3 at [H, H + 2048) (no chunk past H + 8192); single5120 not run. Metric
+  names carry the history ("_1m"; "" at the default 139264, so the gate unit's names are unchanged). New metric
+  woa_attn_ms_<case><tag>_<side> (phase attention + wo_a's woa signposts) in every mode. No model code changed.
+- Why: NC.8 vs WA.4R (separate loads) showed on 121.0 / 122.8 vs off 119.95 ms at 1M 4 x 2k.
+- Measured (one load, real 1M histories, median of 3 alternating): single 8192 111.64 -> 111.34 ms, 4 x 2k 127.35 ->
+  126.55 ms; attention 29.27 -> 28.87 / 32.22 -> 32.19 ms; off == on and on repeat 0.0. The WA.4 gap was load-to-load
+  spread. Table: results/WA.3_offon.md "FIX.43". Run: 1214 s in the resident (history 187 s, re-prefill 72 s).
+- Gotcha: the old _pos() asserted H + 8192 + 2048 <= CAP, which made NC.8's WOA_OFFON_POS=1024000 run fail in 8 s.
+- Rule 20: test only; no per-chunk value of the model touched.
+- Re-run (1M): `WOA_OFFON_POS=1024000 <the WA.3#test_woa_offon unit's env> scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py` via `resident submit`; gate:
+  `gate FIX.43 --spec $BRINGUP_SPEC --check`.

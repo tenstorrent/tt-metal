@@ -1,0 +1,54 @@
+{
+ "used": [
+  {
+   "id": "DS41-381",
+   "how": "the far layout keeps every slot of the packed 4 x 2k chunk at one capacity (the KV contract's one max_seq, H + 8192), never a 1M state next to smaller ones",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "test_woa_offon's history cap (H + 8192 + 2048 <= CAP) was not written down anywhere; NC.8's 1M run of it failed in 8 s on that assert"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.43",
+   "answer": "done",
+   "evidence": "test_woa_offon WOA_OFFON_POS=1024000 in one load: off == on 0.0 and repeat 0.0 for single8192_1m / 4x2k_1m; device ms off/on 111.64/111.34 and 127.35/126.55, attention 29.27/28.87 and 32.22/32.19 (resident log 20261128-052446.run0.log; results/WA.3_offon.md FIX.43)"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "test-only change; no padding or inflated work added"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run on the 8x4; only the model-level off/on test and the gate"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.43",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T06:01:41",
+  "head": "618f27a61ea",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.43.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.3_offon.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.43.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py"
+  ]
+ }
+}

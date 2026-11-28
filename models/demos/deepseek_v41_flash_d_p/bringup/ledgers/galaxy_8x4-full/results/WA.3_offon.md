@@ -93,3 +93,30 @@ launches (one grouped_matmul program a wo_a call either way).
     # the op probe alone (resident runner, mesh only):
     python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "scripts/run_safe_pytest.sh \
         --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_layout_probe.py"
+
+## FIX.43 (overseer): off vs on at H = 1,024,000 in one load (2026-11-28)
+
+**Verdict: at 1M the bank layout is bit-identical (off == on and on repeat 0.0 in both cases) and not slower in the
+same load: whole chunk -0.30 ms (single 8192) / -0.79 ms (4 x 2k), attention section -0.40 / -0.04 ms, wo_a -0.42 /
+-0.30 ms. The +1.0 / +2.9 ms "on" of WA.4 (NC.8 vs WA.4R) was load-to-load spread, not the bank layout.**
+
+(The brief named results/FIX_woa_1m.md; that path is outside this step's allowed paths, so the report is this section.)
+
+tests/woa/test_woa_offon.py with WOA_OFFON_POS=1024000 (the FIX.43 "far" layout: slots and the load's tables at
+H + 8192 = 1,032,192; single 8192 = request 4's [H, H + 8192) in slot 8 / 9; 4 x 2k = requests 0-3's [H, H + 2048),
+slots 0-3 / 4-7; single5120 not run). Every history a real prefill [0, H) of agentic_cc (10 slots, 187 s; set A again
+for the repeat, 72 s). One load (fresh resident process, layers 0-20, DECODER_SKIP=decode), the gate unit's switches.
+Device ms: real-time profiler, slowest chip, 3 runs a side alternating, median. Attention = phase "attention" + wo_a's
+"woa" signposts (the ladders' attention section with wo_a in it). Log: resident/logs/20261128-052446.run0.log;
+generated/ds41_woa/offon_1m.json.
+
+| case at H = 1,024,000 | off == on | on repeat | device ms off / on (runs) | attention ms off / on | wo_a ms off / on | host us a wo_a call off / on |
+|---|---|---|---|---|---|---|
+| single 8192 | 0.0 (20 layers, 0 served records differ) | 0.0 | 111.64 / 111.34 (111.60, 111.96, 111.64 / 111.34, 111.33, 111.55) | 29.27 / 28.87 | 3.064 / 2.647 | 31.5 / 38.1 |
+| packed 4 x 2k | 0.0 | 0.0 | 127.35 / 126.55 (127.35, 129.07, 126.48 / 126.55, 126.79, 125.15) | 32.22 / 32.19 | 3.147 / 2.845 | 38.6 / 42.7 |
+| real160 (op level, 20 calls) | 0.0 | | | | | |
+
+Metrics (results of FIX.43): woa_offon_max_abs_diff_{single8192,4x2k}_1m = 0, woa_repeat_max_abs_diff_*_1m = 0,
+woa_device_ms_*_1m_{off,on}, woa_attn_ms_*_1m_{off,on}, woa_sec_ms_*_1m_{off,on}. The chunks here are not the ladder's
+(timed in place after a real 1M history, wo_a signposted, no warm-up / 10-run median), so their absolute ms are not
+comparable with WA.4 / NC.8's 119.95-122.8; only the off - on difference in one load is the answer.

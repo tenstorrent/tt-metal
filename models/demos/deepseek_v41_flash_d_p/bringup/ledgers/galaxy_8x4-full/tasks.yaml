@@ -1676,6 +1676,48 @@ tasks:
       (== 0 for the shipped defaults). DECODER_SKIP=decode. One model load.'
     gate_tasks:
     - X.4
+- id: FIX.43
+  title: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - WA.3
+  gate:
+    cmd: BRINGUP_TASK=WA.3 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+      DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on
+      DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_offon.py
+      && BRINGUP_TASK=WA.3 NO_REBUILD_PACKED_STRICT=1 BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on
+      DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on
+      DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc
+      DS41_DECODER_SKIP=decode DS41_WOA_BANK=on scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      woa_offon_max_abs_diff_*: == 0
+      woa_repeat_max_abs_diff_*: == 0
+      no_rebuild_pass_*: == 1
+      program_builds_after_warmup_*: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.3_offon.md
+  - ttnn/ttnn/bringup/grouped_matmul_ttnn
+  - ttnn/ttnn/bringup/INDEX.md
+  brief:
+    details: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max_seq),
+      so the same-load off / on cannot run at 1M. Extend it (a variant or a WOA_OFFON_POS-driven max_seq, BATCH_MAX_SEQ) to
+      run off vs on at H = 1024000 for packed 4x2k and single 8192 in one executed-layers load; record woa_offon_max_abs_diff_*_1m
+      (must be 0) and the device ms of the whole chunk and of the attention section off vs on (median of 3, alternating).
+      Evidence for the question: device ms with the bank layout on is 121.0 / 122.8 vs 119.95 off at 1M packed 4x2k (WA.4,
+      NC.8 vs WA.4R, separate loads). Report results/FIX_woa_1m.md with a one-line verdict. Op / layer-level only: no ladder,
+      no 40-layer load.'
+    gate_tasks:
+    - WA.3
 - id: FIX.13
   title: 'DS41-141: is P.9''s window-KV rise rounding or a bug (device allowed)'
   step: overseer_fix
@@ -1694,6 +1736,7 @@ tasks:
   - FIX.36
   - FIX.38
   - FIX.39
+  - FIX.43
   gate:
     cmd: BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
       && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py

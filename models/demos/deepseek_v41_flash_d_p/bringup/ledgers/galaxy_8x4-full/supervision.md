@@ -1622,3 +1622,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   +4.7 / +0.7 %; single 8192 +2.7 / +1.2 / -1.1 / +0.5 %; device ms flat except 1M (+1.6 single, +1.8 4x2k). No-rebuild PASS
   everywhere, determinism 0. Open: bank layout at 1M packed (device on 121.0 / 122.8 vs off 119.95, separate loads):
   queued a fix job (same-load off / on at 1M, test extended).
+- 05:20 heartbeat: FIX.43 running; RAM used 79 GB; / 100G free.
+- 05:50 heartbeat: FIX.43 agent active (a large load for 1M history); RAM used 268 GB; / 99G free.
