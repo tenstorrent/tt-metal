@@ -103,3 +103,14 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_runtime_encod
 {
     return TT_OP_SETADC(0b001 /*UNP0*/, 0 /*ChannelIndex*/, 0 /*SET_X*/, x);
 }
+
+// A lone runtime Z/W field encodes as SETADC, as set() issues it.
+extern "C" __attribute__((noinline, used)) std::uint32_t runtime_encoded_set_z(std::uint32_t z)
+{
+    return adc::AddrCounter {.channel0 = {.z = z}}.for_clients<adc::Client::Unpacker1>().operation();
+}
+
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_runtime_encoded_set_z(std::uint32_t z)
+{
+    return TT_OP_SETADC(0b010 /*UNP1*/, 0 /*ChannelIndex*/, 2 /*SET_Z*/, z);
+}
