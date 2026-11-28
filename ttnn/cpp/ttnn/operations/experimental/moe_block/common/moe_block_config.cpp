@@ -130,8 +130,9 @@ uint32_t routed_activation_code(const ExpertActivation& act) {
                 act.alpha.value_or(0.0f));
             break;
         case ExpertActivationKind::Situ:
+            // (bit-exact: the Blackhole kernel is fitted for these betas, and rejects others at compile time)
             TT_FATAL(
-                is(act.beta, 4.0f) && is(act.linear_beta, 25.0f),
+                act.beta == 4.0f && act.linear_beta == 25.0f,
                 "moe_block: the routed experts' SiTU is built for beta 4, linear_beta 25 (got {}, {})",
                 act.beta.value_or(0.0f),
                 act.linear_beta.value_or(0.0f));

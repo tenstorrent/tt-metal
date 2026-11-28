@@ -244,6 +244,9 @@ void kernel_main() {
     matmul_block_init(x_cb, weight_cb, false, row_width, row_tiles, x_block_k_tiles);
     if constexpr (half_width) {  // (every face-wise activation uses SiTU's sigmoid: its init)
         PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+        if constexpr (activation == expert_activation::Kind::Situ) {  // (glu_faces' softcap reads tanh's constants)
+            PACK((sfpu::tanh_init<false, false>()));
+        }
     } else {
         expert_activation::init<activation>();
     }
