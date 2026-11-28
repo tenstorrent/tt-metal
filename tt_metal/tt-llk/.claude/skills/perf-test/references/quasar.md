@@ -126,7 +126,14 @@ from `max_dest_tiles(dest_acc, dest_sync)`, which halves when `dest_acc=Yes`, so
   before the `INIT` zone, but not the wait for math. With no math producer, pack posts
   MATH_PACK itself before each section done (a stand-in for math's post), so
   the `SEMGET` never underflows.
-- `MATH_ISOLATE` runs math without any Dest hand-over. `UNPACK_ISOLATE`
+- `MATH_ISOLATE` runs production's per-section math release,
+  `_llk_math_dest_section_done_` (`SEMPOST` on MATH_PACK, then in `SyncHalf`
+  the Dest bank flip), with `_llk_math_pack_sync_init_` before the `INIT`
+  zone, but not the wait for Dest. With no pack consumer, math gets MATH_PACK itself after
+  each section done (a stand-in for pack's release), so the semaphore never
+  fills up. Unpack-to-dest kernels whose math has no other work run only the
+  section done per section.
+- `MATH_ISOLATE` runs math without any other Dest hand-over. `UNPACK_ISOLATE`
   unpacks to Dest without a loan, and `MATH_ISOLATE` must not emit source
   dvalids with no math consumer. When math is compiled out, `MATH_ISOLATE`
   measures an empty run: its metric is missing or is only zone overhead.

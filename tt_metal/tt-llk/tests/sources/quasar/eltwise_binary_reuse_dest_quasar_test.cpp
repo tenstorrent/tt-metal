@@ -131,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
@@ -200,9 +200,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         }
                     }
                 }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                 {
                     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                {
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
         }

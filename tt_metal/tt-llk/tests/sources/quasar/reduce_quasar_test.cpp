@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_per_section = IS_REDUCE_TO_ONE ? TILE_CNT : max_tiles_dest;
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
     {
         _llk_math_pack_sync_init_<dest_sync>();
     }
@@ -160,9 +160,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         const std::uint32_t dst_tile_idx = IS_REDUCE_TO_ONE ? 0 : block_tile;
                         _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(dst_tile_idx, tensor_shape_A);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                     {
                         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                    {
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }
