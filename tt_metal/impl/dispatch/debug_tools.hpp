@@ -9,7 +9,6 @@
 
 namespace tt::tt_metal {
 class IDevice;
-class SystemMemoryManager;
 }  // namespace tt::tt_metal
 
 namespace internal {
@@ -20,9 +19,6 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
 
 // Dumps host-side CQ data into files.
 void dump_cqs(
-    std::ofstream& cq_file,
-    std::ofstream& iq_file,
-    tt::tt_metal::SystemMemoryManager& sysmem_manager,
-    bool dump_raw_data = false);
+    std::ofstream& cq_file, std::ofstream& iq_file, tt::tt_metal::IDevice& device, bool dump_raw_data = false);
 
 }  // end namespace internal

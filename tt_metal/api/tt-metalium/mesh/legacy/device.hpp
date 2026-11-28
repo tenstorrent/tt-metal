@@ -138,6 +138,9 @@ public:
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
+    [[deprecated(
+        "SystemMemoryManager was removed (tt-metal#64081); host command queues are internal to tt_metal and have no "
+        "public replacement. sysmem_manager() throws and will be removed four weeks after tt-metal#65577 merges.")]]
     virtual SystemMemoryManager& sysmem_manager() = 0;
 
     virtual uint32_t get_trace_buffers_size() const = 0;
