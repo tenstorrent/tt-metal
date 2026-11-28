@@ -67,7 +67,7 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
-    constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    constexpr auto windowed_mode = static_cast<WindowedMode>(get_compile_time_arg_val(25));
     constexpr bool use_runtime_lengths = get_compile_time_arg_val(26) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
@@ -144,7 +144,7 @@ void kernel_main() {
 
     // Windowed: load cu_window_seqlens into L1 once; the writer synthesizes the block-diagonal mask per
     // Q chunk from it (so the reader streams Q/K/V only).
-    if constexpr (use_windowed_mask) {
+    if constexpr (is_windowed_mode(windowed_mode)) {
         const auto cu_window_reader = TensorAccessor(cu_window_args, cu_window_seqlens_addr);
         constexpr uint32_t cu_tile_bytes = get_tile_size(cb_cu_window_in);
         CircularBuffer cb_cu(cb_cu_window_in);
@@ -205,12 +205,12 @@ void kernel_main() {
             }
 
             // Windowed: synthesize this Q chunk's block-diagonal mask (all K chunks) before draining its
-            // output. The call is a template wrapper that only instantiates the generator when
-            // use_windowed_mask is true (kernel_main is not a template, so a bare `if constexpr` here
+            // output. The call resolves to a no-op overload for WindowedMode::None, so the generator is only
+            // instantiated in a windowed mode (kernel_main is not a template, so a bare `if constexpr` here
             // would still compile the discarded body). valid_Skt derived from the unpadded K length.
             constexpr uint32_t windowed_valid_Skt =
                 (unpadded_Sk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
-            windowed_generate_if_enabled<use_windowed_mask, cb_mask_in, cb_cu_window_in>(
+            windowed_generate_if_enabled<windowed_mode, cb_mask_in, cb_cu_window_in>(
                 noc,
                 q_chunk,
                 Sq_chunk_t,
@@ -221,7 +221,7 @@ void kernel_main() {
                 cu_window_seqlens_eles,
                 // q_tok_offset. Upstream added this for chunked prefill, where a q
                 // chunk starts partway into the sequence. This op always starts at
-                // token 0, and use_windowed_mask is 0, so the generator is discarded.
+                // token 0, and windowed_mode is None, so the generator is discarded.
                 0);
 
             // Determine how many rows of OUT will be written. Both start and end rows are
