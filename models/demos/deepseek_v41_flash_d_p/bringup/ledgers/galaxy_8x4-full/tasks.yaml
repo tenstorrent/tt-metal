@@ -7887,3 +7887,41 @@ tasks:
       ladder_lanes4x1792s_tok_s_p*: '> 0'
       no_rebuild_pass_*: == 1
       program_builds_after_warmup_*: == 0
+- id: HP.1
+  title: 'OWNER 2026-11-28: where the exposed host time comes from now (after the C++ ports): host idle map of a steady chunk,
+    single 8192 and packed 4x2k, at 139264 and 1024000; measurement + tooling only'
+  step: perf
+  role: perf
+  device: true
+  ab_mode: none
+  deps:
+  - NC.10
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tests/perf
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/HP.1_host.md
+  brief:
+    prior_work: 'P.78 tests/perf/test_host_idle_map.py (single request; clean host timestamps + one rt-profiler run placing
+      every program in the host segment that launched it; prints only). NC.10 (results/NC.10.json): exposed host (wall - device)
+      single 8192 ~11-14 ms, packed 15-17 ms at short history.'
+    details: 'No model code changes. Extend tests/perf/test_host_idle_map.py (or a sibling test in tests/perf) to (a) run
+      a packed 4x2k chunk as well as a single 8192 one (the packed ladder''s settings: PACKED*, tests/packed/ladder_common.py
+      for the chunk set-up), (b) take the history from IDLE_POS, (c) RECORD metrics via models.demos.common.bringup.core.metrics.record:
+      host_wall_ms_<case>_<pos>, host_device_ms_<case>_<pos>, host_idle_ms_<segment>_<case>_<pos> (device idle charged to
+      each host segment: begin_chunk, embed, layer k, engram waits, chunk end / readback, the packed table prep), host_python_ms_<segment>_<case>_<pos>
+      where measurable. Mark BATCH_SHARED = True, BATCH_LAYERS = "executed". Run it at 139264 and 1024000. Write results/HP.1_host.md:
+      per case and history, the table of host segments sorted by device idle ms (top 10), what each segment does, and the
+      3 largest levers with an estimate in ms a chunk. Measurement only: no fixes in this task.'
+  gate:
+    cmd: BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode IDLE_POS=139264
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py
+      && BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_HOST_FAST=on
+      DS41_PACKED_LANE_BALANCE=on DS41_PACKED_LONG_HIDE=on DS41_PACKED_GLUED=on DS41_PACKED_GLUED_ONECALL=on DS41_PACKED_GLUED_DYNAMIC=on
+      DS41_POS_DYNAMIC=on DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode IDLE_POS=1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/perf/test_host_idle_map.py
+    metrics:
+      host_wall_ms_*: '> 0'
+      host_device_ms_*: '> 0'
