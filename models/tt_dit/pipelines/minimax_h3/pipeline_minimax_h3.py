@@ -92,7 +92,7 @@ from ...models.transformers.minimax_h3.adaln_schedule_minimax_h3 import (
     adaln_precompute_enabled,
 )
 from ...models.transformers.minimax_h3.adaln_tilerow import DEFAULT_MAX_MIXED_TILES, tilerow_remap
-from ...models.transformers.minimax_h3.agmm_config import AgmmMode, resolve_agmm_mode
+from ...models.transformers.minimax_h3.agmm_config import AgmmMode
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
 from ...models.transformers.minimax_h3.length_classes import uncovered_class_lengths
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
@@ -811,9 +811,10 @@ class MiniMaxH3Pipeline:
         """`dynamic_length` serves every packed length up to `max_sequence_length` with one program set per
         length class (eager only). It is the 4x8 presets' default on both architectures; `_resolve_denoise_path` has
         the precedence (kwarg > MINIMAX_H3_DYNAMIC_LENGTH > preset) and how the bucketed kwargs keep that path.
-        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks that path's
-        all-gather matmul pins. `precompute_adaln_modulation` projects every step's adaLN tables once at the start of a
-        denoise instead of once a step; `trace_denoise` configs always project once a step.
+        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > the checkpoint's default, see
+        `resolve_agmm_mode`) picks the all-gather matmul pins. `precompute_adaln_modulation` projects every step's
+        adaLN tables once at the start of a denoise instead of once a step; `trace_denoise` configs always project
+        once a step.
 
         `encoder_dynamic_length` does the same for the prompt encoder; None turns it on with `dynamic_length` where
         the mesh preset enables it (the Blackhole 4x8 and 4x32), for t2va/fl2va only.
@@ -852,7 +853,8 @@ class MiniMaxH3Pipeline:
         self.trace_denoise = path.trace_denoise
         self.bucket_denoise = path.bucket_denoise
         self.dynamic_length = path.dynamic_length
-        self.agmm_mode = resolve_agmm_mode(agmm_mode)
+        # None leaves the mode to MINIMAX_H3_AGMM_MODE, then to the checkpoint's default (resolved per block).
+        self.agmm_mode = None if agmm_mode is None else AgmmMode(agmm_mode)
         self.precompute_adaln_modulation = precompute_adaln_modulation
         self.dit_fsdp, fsdp_source = _resolve_dit_fsdp(
             preset, dit_fsdp=dit_fsdp, task=task, dynamic_length=self.dynamic_length
@@ -1169,9 +1171,9 @@ class MiniMaxH3Pipeline:
         presets' default; kwarg > MINIMAX_H3_DYNAMIC_LENGTH=0|1 > preset) replaces the bucket ladder by the live
         padded length up to `max_sequence_length`; passing any bucketed kwarg instead keeps that path. `dit_fsdp`
         (MINIMAX_H3_DIT_FSDP=0|1 > kwarg > preset) is on by default for dynamic-length ref2va, see `_resolve_dit_fsdp`.
-        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > `balanced`) picks the dynamic-length
-        path's all-gather matmul pins. `precompute_adaln_modulation` (default on) projects the adaLN tables once a
-        denoise instead of once a step; `trace_denoise` configs always project once a step.
+        `agmm_mode` (`accurate` / `balanced`; kwarg > MINIMAX_H3_AGMM_MODE > the checkpoint's default, see
+        `resolve_agmm_mode`) picks the all-gather matmul pins. `precompute_adaln_modulation` (default on) projects
+        the adaLN tables once a denoise instead of once a step; `trace_denoise` configs always project once a step.
         """
         transformer_subfolder = "transformer_ref" if task == "ref2va" else "transformer"
         weights_dir = resolve_weights_dir(

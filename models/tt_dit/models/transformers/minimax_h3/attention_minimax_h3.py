@@ -129,7 +129,7 @@ class MiniMaxH3Attention(Module):
     ) -> None:
         """`dynamic_length` freezes every length-keyed choice at construction (one program per op for every
         length); `norm_row_capacity` (per-device rows) sizes the fused QK norms' program on that path, and
-        `agmm_mode` picks its all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -221,7 +221,9 @@ class MiniMaxH3Attention(Module):
         # op's HiFi2). Only the ring joint SDPA path honours it: the exp ring path does not pass it.
         self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY", sdpa_matmul_fidelity)
 
-        # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
+        # Pins per length class, resolved once: no table scan and no orientation flip per call. The bucketed path
+        # has them only where the mode pins it too (`agmm_pins`), and never for a replicated sequence (the token
+        # refiner): those pins are swept at the DiT blocks' row counts.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -230,12 +232,13 @@ class MiniMaxH3Attention(Module):
             packer_l1_acc=True,
         )
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
-        if dynamic_length and self.use_fused_agmm:
+        if self.use_fused_agmm and (dynamic_length or is_sequence_parallel):
             pin_kwargs = dict(
                 full_grid=full_grid,
                 num_links=ccl_manager.num_links,
                 compute_kernel_config=self.mm_compute_kernel_config,
                 mode=agmm_mode,
+                dynamic_length=dynamic_length,
             )
             self._qkv_pins = agmm_pins(hidden_size, 3 * self.inner_dim // tp_factor, **pin_kwargs)
             self._out_pins = agmm_pins(self.inner_dim, hidden_size // tp_factor, **pin_kwargs)

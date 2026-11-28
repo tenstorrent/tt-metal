@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_core_grid
 from ....utils.substate import rename_substate
 from ....utils.tensor import bf16_tensor
-from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins
+from .agmm_config import AgmmMode, agmm_kwargs, agmm_pins, resolve_agmm_mode
 from .attention_minimax_h3 import MiniMaxH3Attention
 from .mmrs_config import has_mmrs_config, pinned_mmrs_config, register_mmrs_config
 
@@ -89,8 +89,12 @@ class MiniMaxH3TransformerBlock(Module):
     ) -> None:
         """`dynamic_length` freezes the ff1 / ff2 blockings and the one-hot gathers' blocking at construction, so
         no per-block program depends on the length; `norm_row_capacity` (per-device rows) sizes the fused norms, and
-        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`)."""
+        `agmm_mode` picks the all-gather matmul pins (`resolve_agmm_mode`, with a pruned checkpoint's default
+        under `adaln_curve`)."""
         super().__init__()
+
+        grid = mesh_device.compute_with_storage_grid_size()
+        agmm_mode = resolve_agmm_mode(agmm_mode, full_grid=grid, pruned=adaln_curve)
 
         self.use_persistent_ccl_buffers = use_persistent_ccl_buffers
         self.dynamic_length = dynamic_length
@@ -168,20 +172,20 @@ class MiniMaxH3TransformerBlock(Module):
         self.use_fused_agmm = ccl_manager.topology == ttnn.Topology.Ring and self.tp_factor > 1
         # ff1 packs gate and up together for the fused SwiGLU, so its per-device N is 2 * ffn_dim / tp.
         self._ff1_kn = (hidden_size, 2 * ffn_dim // self.tp_factor)
-        # Dynamic-length pins (ff1 per length class), resolved once per layer: no table scan per call.
+        # Pins (ff1 per length class), resolved once per layer: no table scan per call. The bucketed path has them
+        # only where the mode pins it too (`agmm_pins`).
         self._ff1_pins = self._mmrs_pin = None
-        if dynamic_length:
-            grid = mesh_device.compute_with_storage_grid_size()
-            if self.use_fused_agmm:
-                self._ff1_pins = agmm_pins(
-                    *self._ff1_kn,
-                    full_grid=grid,
-                    num_links=ccl_manager.num_links,
-                    compute_kernel_config=self.mm_compute_kernel_config,
-                    mode=agmm_mode,
-                )
-            if self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
-                self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
+        if self.use_fused_agmm:
+            self._ff1_pins = agmm_pins(
+                *self._ff1_kn,
+                full_grid=grid,
+                num_links=ccl_manager.num_links,
+                compute_kernel_config=self.mm_compute_kernel_config,
+                mode=agmm_mode,
+                dynamic_length=dynamic_length,
+            )
+        if dynamic_length and self.tp_factor > 1 and ccl_manager.topology == ttnn.Topology.Ring:
+            self._mmrs_pin = pinned_mmrs_config(ffn_dim // self.tp_factor, hidden_size, grid)
         # ff1 runs its pins' compute config (the same in every length class), ff2 the block's.
         ff1_compute_kernel_config = self.mm_compute_kernel_config
         if self._ff1_pins is not None:
