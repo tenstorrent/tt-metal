@@ -11,39 +11,63 @@
 
 namespace ckernel::sfpu {
 
+#ifndef DISABLE_SFPLOADMACRO
+// t = 2..21 of the schedule in mul_int32; b2 (top, then the result) is LREG5 or LREG7.
+template <int b2, int b2_next>
+inline void mul_int32_row(const uint offset0, const uint offset1, const uint offset_out, const bool load_next) {
+    constexpr int a0 = p_sfpu::LREG0;
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int a1 = p_sfpu::LREG2;
+    constexpr int b1 = p_sfpu::LREG3;  // becomes mid
+    constexpr int a2 = p_sfpu::LREG4;
+    constexpr int low = p_sfpu::LREG6;
+
+    TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a0 >> 2));
+    TTI_SFPAND(0, p_sfpu::LREG12, a0, 0);
+    TT_SFPLOADMACRO((3 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a1 >> 2));
+    TTI_SFPMAD(a0, b2, p_sfpu::LREG13, b2, 0);
+    TTI_SFPAND(0, p_sfpu::LREG12, a1, 0);
+    TT_SFPLOADMACRO((0 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b0 >> 2));
+    TTI_SFPAND(0, p_sfpu::LREG12, b0, 0);
+    TT_SFPLOADMACRO((1 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b1 >> 2));
+    TTI_SFPMAD(a0, b0, p_sfpu::LREG14, low, 0);
+    TTI_SFPAND(0, p_sfpu::LREG12, b1, 0);
+    TT_SFPLOADMACRO((2 << 2) | (a2 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a2 >> 2));
+    TTI_SFPMAD(a1, b1, b2, b2, 0);
+    if (load_next) {
+        TT_SFPLOADMACRO((2 << 2) | (b2_next & 3), InstrModLoadStore::INT32, ADDR_MOD_3, (offset1 + 2) | (b2_next >> 2));
+    } else {
+        TTI_SFPNOP;
+    }
+    TTI_SFPMAD(a2, b0, b2, b2, 0);
+    TTI_SFPMAD(a1, b0, b1, b1, 0);
+    TTI_SFPSHFT(22, 0, b2, 1);
+    TTI_SFPSHFT(11, 0, b1, 1);
+    TTI_SFPIADD(0, low, b2, sfpi::SFPIADD_MOD1_CC_NONE);
+    TTI_SFPIADD(0, b1, b2, sfpi::SFPIADD_MOD1_CC_NONE);
+    TT_SFPSTORE(b2, InstrModLoadStore::INT32, ADDR_MOD_2, offset_out);
+}
+#endif
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    constexpr uint dst_tile_size = 64;
+    const uint offset0 = dst_index_in0 * dst_tile_size;
+    const uint offset1 = dst_index_in1 * dst_tile_size;
+    const uint offset_out = dst_index_out * dst_tile_size;
+
+#ifdef DISABLE_SFPLOADMACRO
+    // Same 11-bit chunk decomposition and 2**23 / 2**23 + 724 biases as below, with
+    // plain loads; LREG7 holds the SFPSHFT2 shift amount.
+    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_SHORT, -11 & 0xffff);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        constexpr uint dst_tile_size = 64;
-
-        // Split the 32-bit input values into 11-bit chunks:
-        //
-        //   a = (a2 << 22) | (a1 << 11) | a0
-        //   b = (b2 << 22) | (b1 << 11) | b0
-        //
-        // This allows us to cast these values to fp32 without loss of
-        // precision, and furthermore, we can compute:
-        //
-        //   a * b = (top << 22) + (mid << 11) + low
-        //
-        // Where:
-        //
-        //   top = a0*b2 + a1*b1 + a2*b0 (maximum 23 bits)
-        //   mid = a0*b1 + a1*b0         (maximum 23 bits)
-        //   low = a0*b0                 (maximum 22 bits)
-        //
-        // We cannot use SFPSTOCHRND to convert FP32 to INT32, as the values
-        // are larger than 16 bits; instead we use the trick:
-        //   fp32_to_u23(x) = mantissa_bits(x + 2**23)
-        // This is exact for 23-bit integers.
-
         // a0
-        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, offset0);
         // a1
-        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG7, p_sfpu::LREG2, 5);
         // a2
-        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG13, p_sfpu::LREG4, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG7, p_sfpu::LREG4, 5);
 
         // a1 = (a1 & 0x7ff) as fp32
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG2, 0);
@@ -57,17 +81,17 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
 
         // b0
-        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_3, offset1);
         // b1
-        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG7, p_sfpu::LREG3, 5);
         // b2
-        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG13, p_sfpu::LREG5, 5);
+        TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG7, p_sfpu::LREG5, 5);
 
         // b2 = b2 as fp32
         TTI_SFPCAST(p_sfpu::LREG5, p_sfpu::LREG5, 0);
 
-        // top = a0*b2 + 2**23
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG14, p_sfpu::LREG5, 0);
+        // top = a0*b2 + (2**23 + 724)
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG5, p_sfpu::LREG13, p_sfpu::LREG5, 0);
 
         // b1 = (b1 & 0x7ff) as fp32
         TTI_SFPAND(0, p_sfpu::LREG12, p_sfpu::LREG3, 0);
@@ -92,26 +116,96 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
         // mid += a1*b0
         TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG1, p_sfpu::LREG6, p_sfpu::LREG6, 0);
 
-        // extract integers from mantissas
-        TTI_SFPEXMAN(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPEXMAN_MOD1_PAD9);
-        TTI_SFPEXMAN(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPEXMAN_MOD1_PAD9);
-
         TTI_SFPSHFT(22, 0, p_sfpu::LREG5, 1);  // top <<= 22
         TTI_SFPSHFT(11, 0, p_sfpu::LREG6, 1);  // mid <<= 11
 
         TTI_SFPIADD(0, p_sfpu::LREG6, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
         TTI_SFPIADD(0, p_sfpu::LREG5, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
 
-        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, offset_out);
     }
+#else
+    // Split the 32-bit input values into 11-bit chunks:
+    //
+    //   a = (a2 << 22) | (a1 << 11) | a0
+    //   b = (b2 << 22) | (b1 << 11) | b0
+    //
+    // This allows us to cast these values to fp32 without loss of
+    // precision, and furthermore, we can compute:
+    //
+    //   a * b = (top << 22) + (mid << 11) + low   (mod 2**32)
+    //
+    // Where:
+    //
+    //   top = a0*b2 + a1*b1 + a2*b0 (maximum 8,378,371 < 2**23)
+    //   mid = a0*b1 + a1*b0         (maximum 23 bits)
+    //   low = a0*b0                 (maximum 22 bits)
+    //
+    // Adding the magic constant 2**23 to each fp32 sum makes its raw bit pattern
+    // 0x4B000000 + sum, so the integer can be read straight from the bit pattern:
+    //   * mid and top are shifted left by 11 and 22, and 0x4B000000's lowest set bit
+    //     is bit 24, so the constant term vanishes mod 2**32;
+    //   * low is not shifted, so its 0x4B000000 would survive; the top chain starts
+    //     from 2**23 + 724 instead: (724 << 22) == -0x4B000000 mod 2**32 cancels it
+    //     in the final integer add. top + 724 stays below 2**23, so the fp32 sums
+    //     remain exact.
+    //
+    // Each SFPLOADMACRO loads one operand and runs its shift / cast (and for b1 the
+    // mid MAD) on the Round / Simple / MAD sub-units, so a row issues only loads, four
+    // masks, five MADs and the integer tail: 20 slots. The row's slot after the
+    // a2 load loads the next row's b2 (Dst + 2, reached through the store's
+    // ADDR_MOD_2) into the other of LREG5 / LREG7; the first row has a two-slot b2
+    // prologue and the last row a nop in that slot. Sub-unit rules: one op per
+    // sub-unit per cycle, no Simple and Round op in the same cycle, and a MAD result
+    // is read no earlier than two instructions after the MAD.
+    TT_SFPLOADMACRO(
+        (2 << 2) | (p_sfpu::LREG5 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (p_sfpu::LREG5 >> 2));
+    TTI_SFPNOP;
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d += 2) {
+        mul_int32_row<p_sfpu::LREG5, p_sfpu::LREG7>(offset0, offset1, offset_out, d + 1 < ITERATIONS);
+        if (d + 1 < ITERATIONS) {
+            mul_int32_row<p_sfpu::LREG7, p_sfpu::LREG5>(offset0, offset1, offset_out, d + 2 < ITERATIONS);
+        }
+    }
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
 inline void mul_int32_init() {
-    sfpi::vConstIntPrgm0 = 0x7ff;
-    sfpi::vConstIntPrgm1 = -11;
-    sfpi::vConstFloatPrgm2 = 8388608.0f;  // 2**23
+    sfpi::vConstIntPrgm0 = 0x7ff;                  // LREG12: 11-bit chunk mask
+    sfpi::vConstFloatPrgm1 = 8388608.0f + 724.0f;  // LREG13: 2**23 + 724, start of the top chain
+    sfpi::vConstFloatPrgm2 = 8388608.0f;           // LREG14: 2**23
+#ifndef DISABLE_SFPLOADMACRO
+    // SFPLOADMACRO instruction templates; an instruction with VD = 12 + i writes
+    // template i. The macro sequence overrides VD (and VB, with the 0x80 flag) with
+    // the loaded register, so the shifts and the cast act in place on it and the
+    // MAD computes LREG0 * reg + LREG14 into it.
+    TTI_SFPSHFT2(-11 & 0xfff, 0, 12, 6);                  // template 0: SFPSHFT2_MOD1_SHFT_IMM, >> 11
+    TTI_SFPCAST(0, 13, 0);                                // template 1: int32 -> fp32
+    TTI_SFPSHFT2(-22 & 0xfff, 0, 14, 6);                  // template 2: SFPSHFT2_MOD1_SHFT_IMM, >> 22
+    TTI_SFPMAD(p_sfpu::LREG0, 0, p_sfpu::LREG14, 15, 0);  // template 3: reg = LREG0 * reg + 2**23
+
+    // Sequence bits per sub-unit: 0x80 = VB is the loaded register, bits 5:3 = delay
+    // (fires delay + 1 instructions after the load), bits 2:0 = 4 + template index.
+    // Word layout: simple | mad << 8 | round << 16 | store << 24.
+    // Macro 0 (a0, b0): cast at +2.
+    TTI_SFPCONFIG((1 << 3) | (4 + 1), 4 + 0, 1);
+    // Macro 1 (b1): >> 11 at +1, cast at +3, mid = a0 * b1 + 2**23 at +5.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, ((0x80 | (4 << 3) | (4 + 3)) << 8) | ((2 << 3) | (4 + 1)));
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x80 | (0 << 3) | (4 + 0));
+    TTI_SFPCONFIG(0, 4 + 1, 0);
+    // Macro 2 (a2, b2): >> 22 at +1, cast at +2.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (1 << 3) | (4 + 1));
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x80 | (0 << 3) | (4 + 2));
+    TTI_SFPCONFIG(0, 4 + 2, 0);
+    // Macro 3 (a1): >> 11 at +1, cast at +3.
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (2 << 3) | (4 + 1));
+    TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, 0x80 | (0 << 3) | (4 + 0));
+    TTI_SFPCONFIG(0, 4 + 3, 0);
+    // Misc: delays count issued instructions (UnitDelayKind = all 1s); no macro store.
+    TTI_SFPCONFIG(0xff0, 8, 1);
+#endif
 }
 
 }  // namespace ckernel::sfpu
