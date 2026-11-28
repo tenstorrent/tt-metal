@@ -309,3 +309,85 @@ def test_prepare_conv_weights_rejects_zero_params(device, override, field, expec
             input_dtype=ttnn.bfloat16,
             **_conv_zero_param_kwargs(device, override),
         )
+
+
+_DIRTY_MARKER = 777.0
+
+
+def _dirty_dram(device, num_elements):
+    # Leave a recognisable value in freed DRAM so rows the op never writes cannot pass by reading back as zero.
+    rows = max(1, num_elements // 32)
+    for layout in (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT):
+        dirty = ttnn.from_torch(
+            torch.full((1, 1, rows, 32), _DIRTY_MARKER, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(dirty)
+
+
+# (id, H, W, kernel, padding, slice_type, num_slices): output lines that receive no input (rows lying entirely in
+# padding) must still be computed, so that every later slice is written too.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["rm", "tile"])
+@pytest.mark.parametrize(
+    "height, width, kernel, padding, slice_type, num_slices",
+    [
+        (8, 8, (1, 1), (1, 1), ttnn.Conv2dDRAMSliceHeight, 10),
+        (8, 8, (3, 3), (3, 3), ttnn.Conv2dDRAMSliceHeight, 12),
+        (8, 8, (1, 1), (1, 1), ttnn.Conv2dDRAMSliceWidth, 10),
+        (8, 8, (3, 3), (3, 3), ttnn.Conv2dDRAMSliceWidth, 12),
+        # controls: no slice is empty
+        (8, 8, (3, 3), (3, 3), ttnn.Conv2dDRAMSliceHeight, 2),
+        (8, 8, (3, 3), (1, 1), ttnn.Conv2dDRAMSliceHeight, 8),
+    ],
+    ids=["1x1p1_h10", "3x3p3_h12", "1x1p1_w10", "3x3p3_w12", "ctrl_3x3p3_h2", "ctrl_3x3p1_h8"],
+)
+def test_conv2d_dram_slice_rows_without_input(
+    device, height, width, kernel, padding, slice_type, num_slices, output_layout
+):
+    if slice_type == ttnn.Conv2dDRAMSliceWidth and output_layout == ttnn.TILE_LAYOUT:
+        pytest.skip("width slicing a TILE output allows only one slice")
+    cin = cout = 32
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, cin, height, width).bfloat16().float()
+    torch_weight = torch.randn(cout, cin, *kernel).bfloat16().float()
+    torch_bias = torch.randn(1, 1, 1, cout).bfloat16().float()
+    torch_out = torch.nn.functional.conv2d(torch_input, torch_weight, torch_bias.reshape(-1), padding=padding)
+    out_h, out_w = torch_out.shape[2], torch_out.shape[3]
+
+    _dirty_dram(device, 4 * out_h * out_w * cout * 2)
+    tt_input = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).contiguous(),
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_out, (got_h, got_w) = ttnn.conv2d(
+        input_tensor=tt_input,
+        weight_tensor=ttnn.from_torch(torch_weight, ttnn.bfloat16),
+        bias_tensor=ttnn.from_torch(torch_bias, ttnn.bfloat16),
+        in_channels=cin,
+        out_channels=cout,
+        device=device,
+        kernel_size=kernel,
+        stride=(1, 1),
+        padding=padding,
+        dilation=(1, 1),
+        batch_size=1,
+        input_height=height,
+        input_width=width,
+        conv_config=ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, output_layout=output_layout),
+        compute_config=ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4),
+        slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type, num_slices=num_slices),
+        groups=1,
+        return_output_dim=True,
+        dtype=ttnn.bfloat16,
+    )
+    assert (got_h, got_w) == (out_h, out_w)
+    result = ttnn.to_torch(tt_out.cpu()).float().reshape(1, got_h, got_w, -1)[..., :cout].permute(0, 3, 1, 2)
+    assert not (result == _DIRTY_MARKER).any(), "output holds values the op never wrote"
+    torch.testing.assert_close(result, torch_out, atol=0.1 + 0.05 * torch_out.abs().max().item(), rtol=0.05)
