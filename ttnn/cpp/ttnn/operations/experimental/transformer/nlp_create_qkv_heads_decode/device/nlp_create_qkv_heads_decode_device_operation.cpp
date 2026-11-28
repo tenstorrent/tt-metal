@@ -65,6 +65,19 @@ void NLPCreateQKVHeadsDecodeDeviceOperation::validate_on_program_cache_miss(
             input_tensor.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
             "Shard orientation must be ROW_MAJOR");
 
+        {
+            const auto& in_shard_spec = input_tensor.shard_spec().value();
+            const uint32_t fused_width = input_tensor.padded_shape()[-1];
+            const uint32_t covered_width = in_shard_spec.shape[1] * in_shard_spec.grid.num_cores();
+            TT_FATAL(
+                in_shard_spec.shape[1] > 0 && fused_width % in_shard_spec.shape[1] == 0 && covered_width == fused_width,
+                "Width sharded input must be covered exactly by its shards (no partial or empty shards): fused width "
+                "is {}, shard width is {}, number of shard cores is {}",
+                fused_width,
+                in_shard_spec.shape[1],
+                in_shard_spec.grid.num_cores());
+        }
+
         if (!operation_attributes.overlap_qk_coregrid) {
             // Validate if each shard is a multiple of head_dim and doesn't contain partial heads
             TT_FATAL(
