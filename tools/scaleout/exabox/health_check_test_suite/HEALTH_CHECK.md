@@ -589,6 +589,32 @@ SKIPs with one line. The phase does not gate: these lines say where to look,
 and the verdict lists them as evidence. lspci, CPLD DIAG and the firmware stack
 come from the sys-triage bundle, firmware versions from the snapshot.
 
+## Tray power phase
+
+Every tier reads each tray's power before the run's first reset and again after
+the post-test reset (`diag/sensors.py`), in-band through the BMC
+(`ipmitool raw 0x06 0x52`, as root or with `sudo -n`): both hot-swap controllers'
+VIN, IOUT, STATUS_WORD and STATUS_INPUT, the CPLD's VR power-good byte and, where
+present, the power bricks' VOUT and IOUT (the brick mux is restored after each
+read). Every access takes one lock, `$HSC_I2C_LOCK` (default
+`/tmp/tray-bmc-<uid>.lock`), the same one tray-test uses, so two readers never
+interleave on the bus. Without ipmitool, root or a sudo route the phase prints one
+`skipped: <why>` line and the run goes on.
+
+One `tray_power` check per tray with a finding, else one PASS:
+
+- **FAIL** `POWER`: an HSC reads OFF or over-current, or VIN is under 11 V.
+- **FAIL** `POWER-DOWNSTREAM`: 12 V is good but a VR's power-good is low.
+- **WARN**: VIN_UV_WARN or VIN_UV_FAULT latched during the run, or already set
+  before it; or an HSC did not answer.
+
+A chip lost from the bus on a tray with a `POWER` or `POWER-DOWNSTREAM` reading
+gets that cause in place of `UNKNOWN`. After a run that loaded the chips, the
+phase clears the latches once per HSC with PMBus CLEAR_FAULTS and reads them
+back, so the next run starts clean (`hsc_latch_clear`: WARN if a latch stays
+set). No clear is sent when any HSC reads OFF, when the run had no load, or with
+`--no-hsc-clear`.
+
 ## Verdict
 
 The run ends with one line per WARN/FAIL check of a gating phase, then the
@@ -596,6 +622,7 @@ final line, also stored in the report as `verdict`:
 
 ```
 Fault 1: FAIL pcie_enum_count: 31/32 ... | 0000:46:00.0 (UBB2/U6) | tt-smi -glx_reset and recount; ...
+Fault 2: FAIL CAUSE POWER: reset_1_ok: UBB2 12 V: HSC 0x40 OFF ... — ... | ... | fix UBB2's 12 V feed ...
 Evidence: kernel_events: ... pciehp: Slot(3): Link Down ...
 Final verdict: FAIL: 1 fault(s)
 ```
@@ -689,6 +716,7 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root. The deployment-test binary is looked up under `build_Release/`, `build/`, `build_Debug/` and `build_RelWithDebInfo/`, in that order (`DEPLOYMENT_BIN_CANDIDATES`). |
+| `--no-hsc-clear` | off | Leave the trays' HSC fault latches as found: no PMBus CLEAR_FAULTS after the run |
 | `--output PATH` | `./diag_report.json` | Where to write the JSON report. Gtest logs go to `<output_dir>/logs/`. |
 | `--snapshot-out PATH` | `/tmp/diag_snapshot.json` | Where `tt-smi -f` writes the raw snapshot |
 
@@ -701,7 +729,9 @@ tray with all 8 listed is named once as `UBBn (all 8 chips)`) and `cause`:
 thermal and board checks, and `UNKNOWN` for a chip missing from the bus, a reset
 and a stress test. A missing chip is `POWER` (12 V lost), `POWER-DOWNSTREAM`
 (12 V present, VR power-good low) or `PCIE/LINK` only once the tray's power is
-read, which this suite does not do yet; until then it is never guessed.
+read: the [tray power phase](#tray-power-phase) sets it from the tray's HSC and
+VR reads, with that reading first in the check's details. Without those reads it
+is never guessed.
 
 ### Board
 | Check | Rule | On fail |
@@ -727,6 +757,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
+| `pcie_aer_diff` | `weekly` and `full`: each chip's and its root port's AER counters (sysfs, no root needed), read after the pre-test resets and before the post-test reset | **FAIL** if an uncorrectable count rose, **WARN** if a correctable one did, naming the chip by BDF, tray and ASIC. **SKIP** with no counters in sysfs |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 
 ### GDDR

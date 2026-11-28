@@ -36,6 +36,7 @@ _SUITE_DIR = str(Path(__file__).resolve().parent)
 if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
+from diag.aer import check_aer, read_aer  # noqa: E402
 from diag.captures import capture_events  # noqa: E402
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
@@ -45,6 +46,7 @@ from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.qsfp import QSFP_TOOL_BIN, run_qsfp_tests  # noqa: E402
 from diag.resets import fold_post_reset_snapshots, reset_loop, run_post_test_reset  # noqa: E402
 from diag.retest import run_retest  # noqa: E402
+from diag.sensors import Bmc, check_tray_power, read_power  # noqa: E402
 from diag.snapshot import (  # noqa: E402
     DEFAULT_TT_SMI_PROVISIONED,
     collect_fru_info,
@@ -55,7 +57,7 @@ from diag.snapshot import (  # noqa: E402
 from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
-from diag.verdict import verdict_lines  # noqa: E402
+from diag.verdict import attribute_power, verdict_lines  # noqa: E402
 from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
 
 
@@ -150,6 +152,12 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
+    )
+    ap.add_argument(
+        "--no-hsc-clear",
+        action="store_true",
+        help="Keep the tray HSCs' under-voltage latches after a run that loaded the chips "
+        "(default: read and report them, then clear them once with PMBus CLEAR_FAULTS).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -259,6 +267,7 @@ def run_diag(
     bmc_ip: str | None = None,
     bmc_user: str | None = None,
     bmc_password: str | None = None,
+    hsc_clear: bool = True,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
@@ -321,6 +330,11 @@ def run_diag(
     output_dir.mkdir(parents=True, exist_ok=True)
     logs_dir = output_dir / "logs"
 
+    # The trays' power before anything loads or resets them: an under-voltage
+    # latch already set is told apart from one this run set.
+    bmc = Bmc(dry_run)
+    power_before = read_power(bmc, bricks=False)  # the bricks matter after the load
+
     # Phase 2: reset loop + per-reset snapshot revalidations
     reset_phase = Phase(name="reset_loop")
     post_reset_phases: list = []
@@ -348,6 +362,8 @@ def run_diag(
     # reset_loop prints its own per-reset lines as they run; rollup line only.
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
+    # Taken after the resets, which re-enumerate the chips and so restart their counters.
+    aer_before = read_aer() if plan.aer_diff and not dry_run else {}
 
     # Phase 3: gtest
     test_phase = Phase(name="tests")
@@ -389,6 +405,17 @@ def run_diag(
             _guarded(retest_phase, "retest", FAIL, _retest)
         _finish(report, retest_phase, t0, summary=False, all_skip_stays_skip=True)
 
+    # Phase 3c: the PCIe AER counts the load added, before the post-test reset
+    # re-enumerates the chips.
+    if plan.aer_diff:
+        aer_phase = Phase(name="pcie_aer")
+        t0 = time.time()
+        if dry_run:
+            aer_phase.add(Check(name="pcie_aer_diff", status=SKIP, details="(dry) sysfs AER counters", ip="pcie"))
+        else:
+            _guarded(aer_phase, "pcie_aer_diff", WARN, lambda: check_aer(aer_phase, aer_before, read_aer()))
+        _finish(report, aer_phase, t0, summary=True, all_skip_stays_skip=True)
+
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
     # never run concurrently with the tests.
@@ -398,6 +425,22 @@ def run_diag(
         t0 = time.time()
         run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run)
         _finish(report, post_reset_phase, t0, summary=False)
+
+    # Phase 4b: the trays' power after the load and the resets, judged against the
+    # reads before them; its causes name why a chip went missing. The latches are
+    # cleared only after a run that loaded the chips, so the next run starts clean;
+    # a run without load leaves them as found.
+    power_phase = Phase(name="tray_power")
+    t0 = time.time()
+    loaded = bool(plan.tests) and not skip_tests
+    keep = "--no-hsc-clear" if not hsc_clear else "" if loaded else "no load in this run; latches kept as found"
+    power_causes: dict = {}
+
+    def _power() -> None:
+        power_causes.update(check_tray_power(power_phase, bmc, power_before, keep))
+
+    _guarded(power_phase, "tray_power", WARN, _power)
+    _finish(report, power_phase, t0, summary=True, all_skip_stays_skip=True)
 
     # Phase 5: triage tools, from tools/scaleout/kmd_triage in this repo.
     triage_phase = Phase(name="triage")
@@ -527,6 +570,7 @@ def run_diag(
     else:
         report["overall_status"] = PASS
 
+    attribute_power(report, power_causes)
     report["verdict"] = verdict_lines(report)
 
     # Only the phases that write logs create this directory, and any of them can
@@ -569,6 +613,7 @@ def main() -> int:
         bmc_ip=args.bmc_ip,
         bmc_user=args.bmc_user,
         bmc_password=args.bmc_password,
+        hsc_clear=not args.no_hsc_clear,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

@@ -58,8 +58,9 @@ STRESS_PHASES = {"tests", "retest"}
 
 # Cause class of a WARN/FAIL row, by category. A chip gone from the bus is
 # POWER (12 V lost), POWER-DOWNSTREAM (12 V present, VR power-good low) or
-# PCIE/LINK, and only the tray's power reads tell which; the suite does not read
-# them, so a lost chip is UNKNOWN rather than a guess.
+# PCIE/LINK, and only the tray's power reads tell which: the run sets the row's
+# own cause from them (diag/sensors.py); without one a lost chip is UNKNOWN
+# rather than a guess.
 CAUSE_BY_CATEGORY = {
     "pcie": "PCIE/LINK",
     "eth": "PCIE/LINK",
@@ -404,7 +405,7 @@ def checks_rows(report: dict, meta: dict):
                 "testcases_failed": tf,
                 "executed": executed,
                 "details_short": (c.get("details", "") or "").replace("\n", " | ")[:cap],
-                "cause": cause_for(cat, name) if st in ("WARN", "FAIL") else "",
+                "cause": (c.get("cause") or cause_for(cat, name)) if st in ("WARN", "FAIL") else "",
                 "part": part_cell(c.get("parts") or []) if st in ("WARN", "FAIL") else "",
             }
         )

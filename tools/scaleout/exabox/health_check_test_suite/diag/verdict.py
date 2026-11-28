@@ -27,10 +27,40 @@ DO_BY_IP = {
 }
 DEFAULT_DO = "see the check's details and its log"
 
+# What to do once the tray's power reads (diag/sensors.py) give the cause.
+DO_BY_CAUSE = {
+    "POWER": "fix that tray's 12 V feed (bus bar, power cable, HSC), then tt-smi -glx_reset and recount",
+    "POWER-DOWNSTREAM": (
+        "that tray's 12 V is good but a VR's power-good is low: the tray board or a chip on it; "
+        "swap the tray to see if the fault follows"
+    ),
+}
+
+
+def _lost(check: dict) -> bool:
+    """A check that found chips gone from the bus."""
+    return check["name"] in DO_BY_CHECK or check["name"].startswith("reset_")
+
+
+def attribute_power(report: dict, causes: dict[int, tuple[str, str]]) -> None:
+    """Give each WARN/FAIL lost-chip check the cause its tray's power reads show
+    (tray -> (cause, why), from sensors.check_tray_power), with that reading first in
+    its details so the one-line verdict keeps it."""
+    for phase in report["phases"].values():
+        for c in phase["checks"]:
+            if c["status"] not in (FAIL, WARN) or c.get("cause") or not _lost(c):
+                continue
+            trays = sorted({pos[0] for pos in map(parse_bdf_physical, c.get("parts") or []) if pos} & set(causes))
+            if trays:
+                c["cause"] = causes[trays[0]][0]
+                c["details"] = "; ".join(causes[t][1] for t in trays) + " — " + c["details"]
+
 
 def _do(check: dict) -> str:
     """What to do, with 'that tray' made the tray when every chip at fault is on one."""
-    if check["name"].startswith("reset_"):
+    if check.get("cause") in DO_BY_CAUSE:
+        do = DO_BY_CAUSE[check["cause"]]
+    elif check["name"].startswith("reset_"):
         do = _LOST
     else:
         do = DO_BY_CHECK.get(check["name"]) or DO_BY_IP.get(check.get("ip", "other"), DEFAULT_DO)
@@ -62,7 +92,7 @@ def verdict_lines(report: dict) -> list[str]:
                 faults.append(c)
 
     lines = [
-        f"Fault {i}: {c['status']} {_one_line(c, 200)} | {'; '.join(c.get('parts') or []) or 'host'} | {_do(c)}"
+        f"Fault {i}: {c['status']} {'CAUSE ' + c['cause'] + ': ' if c.get('cause') else ''}{_one_line(c, 200)} | {'; '.join(c.get('parts') or []) or 'host'} | {_do(c)}"
         for i, c in enumerate(faults, 1)
     ]
     captures = report["phases"].get("captures", {}).get("checks", [])

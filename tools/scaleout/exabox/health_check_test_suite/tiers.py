@@ -7,7 +7,7 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> retest -> post_test_resets -> triage -> eth_status -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> retest -> pcie_aer -> post_test_resets -> tray_power -> triage -> eth_status -> qsfp_tests -> sys_triage
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
@@ -90,6 +90,10 @@ class Tier:
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
+    # Diff each chip's and its root port's PCIe AER counters across the run: a
+    # link that replays under load counts errors here long before it drops.
+    aer_diff: bool = False
+
 
 _WEEKLY = Tier(
     resets=("-glx_reset", "-glx_reset", "-glx_reset"),
@@ -98,6 +102,7 @@ _WEEKLY = Tier(
     post_test_resets=("-glx_reset",),
     triage=("host_side", "device_side"),
     qsfp_tests=True,
+    aer_diff=True,
 )
 
 TIERS: dict[str, Tier] = {
