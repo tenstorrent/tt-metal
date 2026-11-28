@@ -3,8 +3,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-only gate for the low-res first steps (`MINIMAX_H3_LOWRES_STEPS`): the schedule split, the noise and
-hand-off maths, and what each of the two denoise stages is given."""
+hand-off maths, what each of the two denoise stages is given, and which requests run them by default."""
 
+import hashlib
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,11 +20,13 @@ from ....pipelines.minimax_h3.packing import (
     unpatchify_video_tokens,
 )
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import (
+    EROS_MAX_BETA7_FIX1,
     LOWRES_STEPS_ENV,
     MiniMaxH3Pipeline,
     lowres_handoff_rows,
     lowres_noise_rows,
 )
+from ....pipelines.minimax_h3.pipeline_minimax_h3_turbo import MiniMaxH3TurboPipeline
 from ....pipelines.minimax_h3.scheduler import MiniMaxH3Scheduler
 
 PATCH = (1, 2, 2)
@@ -37,8 +41,8 @@ def _scheduler(shift=12.0, grid_points=9):
     return scheduler
 
 
-def _layout(height=HEIGHT, width=WIDTH, anchors=()):
-    return build_packed_sequence(torch.ones(7, dtype=torch.long), FRAMES, height, width, AUDIO_LATENTS, PATCH, anchors)
+def _layout(height=HEIGHT, width=WIDTH, anchors=(), frames=FRAMES):
+    return build_packed_sequence(torch.ones(7, dtype=torch.long), frames, height, width, AUDIO_LATENTS, PATCH, anchors)
 
 
 @pytest.mark.parametrize("steps", [1, 2, 7])
@@ -95,10 +99,10 @@ def _stage_pipeline(calls, pdd=None):
     return pipeline
 
 
-def _run_lowres(pipeline, scheduler, audio_scheduler, layout=None, width=WIDTH):
-    layout = layout or _layout(width=width)
+def _run_lowres(pipeline, scheduler, audio_scheduler, layout=None, width=WIDTH, frames=FRAMES, height=HEIGHT):
+    layout = layout or _layout(height, width, frames=frames)
     noise = torch.randn(
-        (FRAMES * (HEIGHT // 2) * (width // 2), CHANNELS * 4), generator=torch.Generator().manual_seed(2)
+        (frames * (height // 2) * (width // 2), CHANNELS * 4), generator=torch.Generator().manual_seed(2)
     )
     audio = torch.zeros((AUDIO_LATENTS * MINIMAX_H3_AUDIO_CHANNELS, 3))
     result = pipeline._denoise_lowres(
@@ -109,8 +113,8 @@ def _run_lowres(pipeline, scheduler, audio_scheduler, layout=None, width=WIDTH):
         audio,
         scheduler,
         audio_scheduler,
-        FRAMES,
-        HEIGHT,
+        frames,
+        height,
         width,
         AUDIO_LATENTS,
         None,
@@ -199,3 +203,66 @@ def test_lowres_stage_never_runs_sol(monkeypatch):
     pipeline._sol_key, pipeline._request_state.warm = (9600, 76000, 500), True
     pipeline._set_sol_attention(transformer, 20224, 19000, 500, first_stage=True)
     assert requests == [None] and pipeline._sol_key == (9600, 76000, 500) and pipeline._request_state.warm
+
+
+LIGHTX2V_V13 = "97b775707bb5732e01dba0cf3833d3fe2947c953859d4d05ea3bd74894c43d2b"
+
+
+def _lowres_stages(weights, frames, forwards, height=48, width=84):
+    """The low-res stages a request runs, each as (forwards, video rows); 48x84 is the latent of 1344x768."""
+    calls = []
+    pipeline = _stage_pipeline(calls)
+    pipeline._lowres_weights = lambda: weights
+    _run_lowres(pipeline, _scheduler(12.0, forwards + 1), _scheduler(3.0, forwards + 1), None, width, frames, height)
+    return [(call[3].num_inference_steps, call[2].shape[0]) for call in calls]
+
+
+@pytest.mark.parametrize("weights, frames, forwards", [(EROS_MAX_BETA7_FIX1, 47, 4)])  # 47 latent frames: 6 s
+def test_cells_that_passed_run_their_setting_by_default(monkeypatch, weights, frames, forwards):
+    monkeypatch.delenv(LOWRES_STEPS_ENV, raising=False)
+    # the first two forwards at 896x512: a 32x56 latent, 16x28 rows a frame
+    assert _lowres_stages(weights, frames, forwards) == [(2, frames * 16 * 28)]
+
+    # the switch wins: 0 turns the stage off, any other count runs as it did before there was a default (at 1/2)
+    monkeypatch.setenv(LOWRES_STEPS_ENV, "0")
+    assert _lowres_stages(weights, frames, forwards) == []
+    monkeypatch.setenv(LOWRES_STEPS_ENV, "3")
+    assert _lowres_stages(weights, frames, forwards) == [(3, frames * 12 * 21)]
+
+
+@pytest.mark.parametrize(
+    "weights, frames, forwards, size",
+    [
+        (None, 47, 4, (48, 84)),  # standard H3
+        (LIGHTX2V_V13, 47, 4, (48, 84)),  # failed the look
+        (EROS_MAX_BETA7_FIX1, 72, 8, (48, 84)),  # 10 s at 8 forwards failed the look
+        (EROS_MAX_BETA7_FIX1, 72, 4, (48, 84)),  # 10 s at 4 forwards: not judged on enough seeds yet
+        (EROS_MAX_BETA7_FIX1, 47, 8, (48, 84)),  # a forward count nobody judged
+        (EROS_MAX_BETA7_FIX1, 47, 4, (36, 64)),  # a resolution nobody judged
+    ],
+)
+def test_other_requests_stay_at_full_resolution_by_default(monkeypatch, weights, frames, forwards, size):
+    monkeypatch.delenv(LOWRES_STEPS_ENV, raising=False)
+    assert _lowres_stages(weights, frames, forwards, *size) == []
+
+
+def test_a_transformer_file_is_named_by_its_header_not_its_file_name(tmp_path):
+    header = b'{"__metadata__":{"merge":"beta7 fix1"}}'
+    pipeline = MiniMaxH3Pipeline.__new__(MiniMaxH3Pipeline)
+    assert pipeline._lowres_weights() is None  # the plain weights
+
+    pipeline.transformer_file = tmp_path / "10Eros_Max.safetensors"
+    pipeline.transformer_file.write_bytes(len(header).to_bytes(8, "little") + header + bytes(64))
+    assert pipeline._lowres_weights() == hashlib.sha256(header).hexdigest()
+    pipeline.transformer_file = pipeline.transformer_file.rename(tmp_path / "q7a.safetensors")
+    assert pipeline._lowres_weights() == hashlib.sha256(header).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "strength, transformer_file, weights",
+    [(1.0, None, "adapter"), (0.8, None, None), (1.0, Path("10Eros_Max.safetensors"), None)],
+)
+def test_an_adapter_names_the_weights_only_as_its_clips_were_judged(strength, transformer_file, weights):
+    pipeline = MiniMaxH3TurboPipeline.__new__(MiniMaxH3TurboPipeline)
+    pipeline.lora_strength, pipeline.transformer_file, pipeline._lora_digest = strength, transformer_file, "adapter"
+    assert pipeline._lowres_weights() == weights
