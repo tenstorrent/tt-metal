@@ -28,6 +28,13 @@ void MoeRoutingRemapDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_routing_weights_shape.rank() == 2 && input_routing_weights_shape[0] == 1, "expected input shape [1,E]");
     const auto num_cluster_experts = input_routing_weights_shape[1];
+    // The kernels index experts with uint16_t, so more experts would wrap onto the wrong ones.
+    TT_FATAL(num_cluster_experts <= 65536, "Number of experts ({}) must be at most 65536", num_cluster_experts);
+    // The writer writes the whole row as one page, which holds only for interleaved tensors.
+    TT_FATAL(!input_routing_weights.memory_config().is_sharded(), "routing_weights_tensor must be interleaved");
+    TT_FATAL(
+        !operation_attributes.output_mem_config.value_or(input_routing_weights.memory_config()).is_sharded(),
+        "The output memory configuration must be interleaved");
 
     // A zero count reaches the factory as non_zero_per_device == 0, which builds the c_1 index CB
     // with a zero page size and total size instead of failing here.
