@@ -71,6 +71,11 @@ _HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # the Hy
             None,
             SolSchedule(1.97, 3, 0, False),
         ),
+        (
+            {"H3_SOL_PRESET": "10eros-max", "H3_SOL_DENSE_STEPS": "2"},
+            None,
+            replace(_EROS, dense_steps=2),
+        ),  # the card's own
         ({"H3_SOL_DENSE_LAYERS": "0", "H3_SOL_SINKS": "1"}, "hyperflow", replace(_HF, dense_layers=0, sinks=True)),
     ],
 )
@@ -273,8 +278,8 @@ def test_route_factors_compose_to_the_route_constants(shards, rows, logical_n, s
 def test_no_score_drops_a_pair_with_a_prefix_token(rows, logical_n):
     """The text, condition and audio rows are the sink prefix: only video-to-video pairs can go sparse."""
     geo, sink_tokens = SolGeometry(shards=8, rows=rows, logical_n=logical_n), 843
-    (miss, _), _ = _reference_masks(geo, sink_tokens)
-    valid = build_route_constants(geo, sink_tokens=sink_tokens, scale=0.125, **_RULE)["valid_blocks"][0, 0]
+    c = build_route_constants(geo, sink_tokens=sink_tokens, scale=0.125, **_RULE)
+    miss, valid = _mask(0.0, c["const_or"], c["valid_blocks"]), c["valid_blocks"][0, 0]
     prefix = [(s, b) for s in range(geo.shards) for b in range(geo.nb) if s * geo.rows + b * geo.block < sink_tokens]
     assert len(prefix) == -(-sink_tokens // geo.block)
     for s, b in prefix:
