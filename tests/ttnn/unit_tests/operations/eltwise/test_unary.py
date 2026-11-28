@@ -993,7 +993,9 @@ def test_remainder(device, h, w, scalar):
 
 @pytest.mark.parametrize("input_shapes", [torch.Size([1, 2, 32, 128])])
 @pytest.mark.parametrize("value_ranges", [UINT32_BANDED_RANGES])
-@pytest.mark.parametrize("scalar", [1, 2, 7, 255, 65536, 2147483647, 2147483648, 4294967295])
+@pytest.mark.parametrize(
+    "scalar", [1, 2, 7, 255, 2047, 2049, 3000, 65536, 123456, 2147483647, 2147483648, 2147483649, 4294967295]
+)
 def test_remainder_uint32_full_range(device, input_shapes, value_ranges, scalar):
     torch_input_tensor = create_banded_range_tensor(input_shapes, value_ranges, dtype=torch.uint32)
 
@@ -1013,7 +1015,9 @@ def test_remainder_uint32_full_range(device, input_shapes, value_ranges, scalar)
 
 
 @pytest.mark.parametrize("values", [[0, 1, 35, 41, 600, 2147483647, 2147483648, 4294967295]])
-@pytest.mark.parametrize("scalar", [1, 3, 41, 256, 2147483647, 2147483648, 4294967295])
+@pytest.mark.parametrize(
+    "scalar", [1, 3, 41, 256, 2047, 2049, 3000, 123456, 2147483647, 2147483648, 2147483649, 4294967295]
+)
 def test_remainder_uint32_scalar_edge_cases(device, values, scalar):
     torch_input_tensor = torch.tensor([values], dtype=torch.int64).to(torch.uint32)
 
