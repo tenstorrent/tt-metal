@@ -36,7 +36,7 @@
 - **Device baseline** (kernel ns, 1 lane): p2 1494.5, p1 2110. Trace replay ns/op: p2 2845, p1 5952.
   Numbers and method are in `verification_report.md`.
 
-### [ ] Refinement 1 — Claim the Panoptic production contract: bfloat8_b, height_sharded, L1 output
+### [x] Refinement 1 — Claim the Panoptic production contract: bfloat8_b, height_sharded, L1 output
 
 **Goal**: add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, `"height_sharded"` to `SUPPORTED["in_scheme"]`
 and `"l1"` to `SUPPORTED["buffer"]`. After this, every TARGET value is in SUPPORTED. The op then runs

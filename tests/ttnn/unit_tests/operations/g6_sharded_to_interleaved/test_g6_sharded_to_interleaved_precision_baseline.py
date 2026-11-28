@@ -7,9 +7,14 @@ The op is an exact copy, so the baseline is a bit-exactness record: PCC, abs err
 max ULP distance and the got/true ratio spread over the two production shapes, each on its
 production shard spec and on the other spec the contract requires (BB-22: no other shapes).
 
-Cells inside SUPPORTED go through the public entry point. Cells outside it (the bfloat8_b,
-height-sharded, L1-output production case) are measured through `_dispatch`, which skips only the
-support gate, so the refinement that claims them starts from a measured baseline.
+Cells inside SUPPORTED go through the public entry point. A cell outside it is measured through
+`_dispatch`, which skips only the support gate, so a refinement that claims it starts from a measured
+baseline.
+
+`test_g6_sharded_to_interleaved_precision_matrix` crosses every SUPPORTED dtype with the same four
+geometries and both input distributions. The golden suite pairs bfloat8_b only with height -> L1 and
+bfloat16 only with width -> DRAM; the matrix covers the other pairings SUPPORTED claims. There is no
+compute configuration axis: the op does no arithmetic and its signature takes none.
 """
 
 from __future__ import annotations
@@ -77,7 +82,7 @@ def _in_supported(case):
     return all(value in SUPPORTED[axis] for axis, value in cell.items())
 
 
-def _make_input(device, case):
+def _make_input(device, case, distribution="randn"):
     size = device.compute_with_storage_grid_size()
     for _, (x1, y1) in case["grid"]:
         if x1 >= size.x or y1 >= size.y:
@@ -92,7 +97,8 @@ def _make_input(device, case):
     rows, cols = math.prod(shape[:-1]), shape[-1]
     # Per-tile power-of-two scale: neighbouring tiles differ, so a misplaced tile cannot hide.
     tile_index = (torch.arange(rows) // TILE)[:, None] * math.ceil(cols / TILE) + (torch.arange(cols) // TILE)[None, :]
-    x = torch.randn(rows, cols) * torch.pow(2.0, (tile_index % 16 - 8).float())
+    sample = torch.randn if distribution == "randn" else torch.rand
+    x = sample(rows, cols) * torch.pow(2.0, (tile_index % 16 - 8).float())
     x = x.reshape(shape).to(torch.bfloat16)
     tt_input = ttnn.from_torch(
         x, dtype=case["dtype"], layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
@@ -143,9 +149,19 @@ def _metrics(actual, expected):
 
 @pytest.mark.parametrize("name", list(CASES), ids=list(CASES))
 def test_precision_baseline(device, name):
-    case = CASES[name]
+    _run_case(device, name, CASES[name], "randn")
+
+
+@pytest.mark.parametrize("distribution", ["rand", "randn"], ids=["uniform", "normal"])
+@pytest.mark.parametrize("dtype", SUPPORTED["dtype"], ids=lambda d: str(d).split(".")[-1].lower())
+@pytest.mark.parametrize("name", list(CASES), ids=list(CASES))
+def test_g6_sharded_to_interleaved_precision_matrix(device, name, dtype, distribution):
+    _run_case(device, f"{name}-{dtype}-{distribution}", {**CASES[name], "dtype": dtype}, distribution)
+
+
+def _run_case(device, name, case, distribution):
     torch.manual_seed(0)
-    tt_input, expected = _make_input(device, case)
+    tt_input, expected = _make_input(device, case, distribution)
     supported = _in_supported(case)
     try:
         if supported:

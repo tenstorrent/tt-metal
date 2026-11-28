@@ -23,3 +23,8 @@
 {"event":"fix_applied","what":"fresh implementation: op file, descriptor (owner_writes, Knobs{num_write_lanes=1, block caps None}), single writer kernel; no reader/compute per design","ts":"2026-11-27T20:42:22-05:00"}
 {"event":"test_run","result":"pass","detail":"acceptance 14 passed 3 xfailed (dev + non-dev); impl_debug 29 passed under watcher incl. bf8b/height/L1, two lanes, sub-blocks","ts":"2026-11-27T20:43:40-05:00"}
 {"event":"test_run","kind":"profile","p2_default_ns":[1500,1419],"p2_two_lanes_ns":[1561,1524],"p1_default_ns":[2118,2118],"p1_two_lanes_ns":[1879,1964,1917],"stubbed_floor_ns":{"p1":807,"p2":590},"addr_only_ns":{"p1":919,"p2":641},"stagger_p1_ns":[2282,2360],"ts":"2026-11-27T20:49:05-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T23:57:45-05:00"}
+{"event":"test_run","status":"pass","tests":"test_g6_sharded_to_interleaved.py + precision_baseline","result":"21 passed, 0 xfailed; p1 bf8b height->L1 bit-exact via entry point","ts":"2026-11-27T23:58:36-05:00"}
+{"event":"test_run","status":"pass","tests":"golden test_golden.py -k 1x128x256x32 or l1","result":"4 passed: p1 production, p1 loose, p1 other spec, p2 to L1","ts":"2026-11-27T23:59:23-05:00"}
+{"event":"test_run","status":"pass","tests":"precision_baseline.py (baseline + precision_matrix dtype x 4 geometries x 2 distributions)","result":"20 passed, all bit-exact","ts":"2026-11-27T23:59:42-05:00"}
+{"event":"test_run","status":"pass","tests":"impl_debug.py + trace_replay.py","result":"31 passed","ts":"2026-11-28T00:00:08-05:00"}

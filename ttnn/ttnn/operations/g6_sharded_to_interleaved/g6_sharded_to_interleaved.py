@@ -57,11 +57,14 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED
 # ---------------------------------------------------------------------------
 
+# The writer moves whole pages and never looks inside one: page size is a CT arg read off the dtype
+# (a bfloat8_b page carries its shared exponents), the block comes from the shard spec, and the bank
+# set from the output's TensorAccessorArgs. So no axis value below has a kernel branch of its own.
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "in_scheme": ["width_sharded"],
-    "buffer": ["dram"],
+    "in_scheme": ["width_sharded", "height_sharded"],
+    "buffer": ["dram", "l1"],
 }
 
 
