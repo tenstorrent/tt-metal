@@ -3021,3 +3021,10 @@ a test rewrote is the test's. Selftest: test_waste_fixes.py::test_an_agents_repo
   runner's held mesh only, no model; new value of the mark) or whose gate has no shared-model run gets no injected
   determinism. A model test in the gate keeps it. Selftests: test_cpu_perf_task.py::test_an_op_level_port_task_gets_no_model_determinism,
   ::test_a_mesh_only_shared_test_is_op_level.
+
+## F311 (2026-11-28, DeepSeek-V4.1 MB.NC): renames in `git status --porcelain -z` keep their paths
+- Seen: MB.NC's gate passed and committed, then the run STOPPED on "changed files outside the allowed paths":
+  'n/ttnn/bringup/...'. The agent's kernel moves were staged as renames; -z prints 'R  new\0old\0', and dirty() /
+  _dirty_under() cut the old path's first three characters as if it were an entry.
+- Fix: core/gate.porcelain_paths parses the -z fields, skipping the old path after an R / C status; both callers use it.
+  Selftest: test_cpu_perf_task.py::test_porcelain_renames_keep_their_paths.
