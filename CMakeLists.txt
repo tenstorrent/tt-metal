@@ -196,6 +196,23 @@ endif()
 
 set(TT_X86_MARCH "x86-64-v3" CACHE STRING "x86_64 architecture passed to -march")
 
+# Opt-in visibility of in-repo callers of deprecated interfaces. ON reports them as warnings that never
+# become errors, so the full project still builds with CMAKE_COMPILE_WARNING_AS_ERROR on.
+option(
+    TT_METAL_DEPRECATION_WARNINGS
+    "Report uses of deprecated declarations as warnings (never errors) instead of suppressing them"
+    OFF
+)
+if(TT_METAL_DEPRECATION_WARNINGS)
+    # The same pair tt-train uses for its own target.
+    set(_deprecated_declarations_flags
+        -Wdeprecated-declarations
+        -Wno-error=deprecated-declarations
+    )
+else()
+    set(_deprecated_declarations_flags -Wno-deprecated-declarations)
+endif()
+
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=${TT_X86_MARCH}>"
     -fPIC
@@ -204,7 +221,8 @@ add_compile_options(
     -Wall
     "$<$<CXX_COMPILER_ID:Clang>:-Wconditional-uninitialized>"
     # The following list is not indicative of what we _desire_ only the status quo to build.
-    -Wno-deprecated-declarations
+    # Deprecated-declaration diagnostics are suppressed unless TT_METAL_DEPRECATION_WARNINGS is ON.
+    ${_deprecated_declarations_flags}
     "$<$<CXX_COMPILER_ID:Clang>:SHELL:-Xclang -fno-pch-timestamp>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-fpch-preprocess>" # ccache-friendly PCH flag
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>"

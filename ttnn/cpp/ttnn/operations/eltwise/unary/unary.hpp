@@ -343,6 +343,9 @@ Tensor sigmoid(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
+[[deprecated(
+    "ttnn::sigmoid_accurate is deprecated and will be removed. Replace with ttnn::sigmoid; for "
+    "fast_and_approximate_mode=true pass SigmoidMode::ACCURATE_FAST_EXP.")]]
 Tensor sigmoid_accurate(
     const Tensor& input,
     bool fast_and_approximate_mode = false,

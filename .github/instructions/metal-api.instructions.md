@@ -29,11 +29,12 @@ All new experimental ("FAFO") work must reside in the `tt::tt_metal::experimenta
 - **Design alignment**: significant changes to existing stable APIs require an associated design document and documented pre-alignment before the PR is submitted.
 - **Deprecation process**: for minor changes or deletions of stable APIs (outside `experimental/`), enforce the two-step deprecation process:
   1. In the **same PR**, add the replacement, migrate every in-repository production caller, and annotate the old function with `[[deprecated("<message>")]]`. Only compatibility tests and necessary shim implementation may retain narrowly scoped exceptions. Do not introduce new usages of already-deprecated APIs.
-  2. Remove the old function in a **separate PR** only after the deprecation has been on `main` for at least 4 weeks.
+  2. Remove the old function in a **separate PR** only after its removal window opens: four weeks after the PyPI upload of the first final release that contains the deprecation, or later if the message promises a later date. See "Removal window" in `scripts/validate_api/README.md`.
 - **Required deprecation message details**: the `[[deprecated]]` message must explicitly include:
   - An expiration notice (e.g., "This is deprecated and will be removed.").
   - Specific instructions for the end user on how to refactor (e.g., "Replace with...").
-- Flag any PR that removes a stable API symbol without a prior deprecation commit on `main` that is at least 4 weeks old.
+- Flag any PR that removes a stable API symbol without a prior deprecation.
+- Flag any PR that removes a `[[deprecated]]` symbol before its removal window opens. This applies in every directory, also in `experimental/` and `internal/`, because a deprecation is a promise to users.
 
 ### Graduation to Stable
 
@@ -62,7 +63,7 @@ Promoting experimental functionality to the stable API requires consultation wit
 - [ ] Stable API removals/changes follow the two-step deprecation process
 - [ ] The deprecation PR migrates all in-repository production callers; no new deprecated API usages are introduced
 - [ ] Deprecation messages include expiration notice + refactor instruction
-- [ ] Deprecated code has been on `main` ≥4 weeks before removal
+- [ ] A removal comes after the removal window opens: four weeks after the PyPI upload of the first final release with the deprecation
 - [ ] Graduation from experimental to stable has Runtime team consultation and formal design review
 - [ ] New internal APIs go in `api/internal/`, not `api/tt-metalium/internal/`
 - [ ] `api/internal/` contains only non-productizable, Tenstorrent-internal functionality (productizable work goes in `experimental/`)

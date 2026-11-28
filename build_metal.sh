@@ -60,6 +60,7 @@ show_help() {
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
     echo "  --disable-warnings-as-errors     Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
+    echo "  --enable-deprecation-warnings    Report uses of deprecated declarations as warnings, never errors (TT_METAL_DEPRECATION_WARNINGS=ON)."
 }
 
 clean() {
@@ -106,6 +107,7 @@ with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
 warnings_as_errors="ON"
+deprecation_warnings="OFF"
 
 declare -a cmake_args
 
@@ -150,6 +152,7 @@ without-python-bindings
 enable-fake-kernels-target
 enable-lto
 disable-warnings-as-errors
+enable-deprecation-warnings
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -219,6 +222,8 @@ while true; do
             enable_lto="ON";;
         --disable-warnings-as-errors)
             warnings_as_errors="OFF";;
+        --enable-deprecation-warnings)
+            deprecation_warnings="ON";;
         --disable-pch)
 	    pch="OFF";;
         --disable-unity-builds)
@@ -477,6 +482,8 @@ fi
 if [ "$warnings_as_errors" = "OFF" ]; then
     cmake_args+=("-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF")
 fi
+
+cmake_args+=("-DTT_METAL_DEPRECATION_WARNINGS=$deprecation_warnings")
 
 # toolchain and cxx_compiler settings would conflict with each other
 # only use toolchain if not setting cxx compiler directly

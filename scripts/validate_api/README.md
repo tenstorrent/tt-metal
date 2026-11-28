@@ -98,11 +98,30 @@ compatibility-shim implementation may have narrowly scoped exceptions and
 warning suppressions. Broad suppression of deprecation warnings is not a
 substitute for migrating callers.
 
-Preserve the old interface for downstream consumers for at least four weeks
-after the deprecation PR merges to `main`, and honor any longer promised
-deadline. Remove it in a separate PR. Extend `.github/deprecations.json` and its
-reaper as automated symbol-level validation is added. The lexical hygiene check
-does **not** yet enforce deprecation requirements.
+Preserve the old interface for downstream consumers until its
+[removal window](#removal-window) opens, and honor any longer promised deadline.
+Remove it in a separate PR. Extend `.github/deprecations.json` and its reaper as
+automated symbol-level validation is added. The lexical hygiene check does
+**not** yet enforce deprecation requirements.
+
+## Removal window
+
+A PR can remove a deprecated interface when its removal window opens. The
+window opens four weeks after the PyPI upload of the first final release that
+contains the deprecation. A later promised date moves the window later. A final
+release is a `ttnn` version on PyPI with no `rc` or `dev` suffix. Its content is
+the git tag with the same name.
+
+Reasons:
+
+- Wheel users see a warning only in a final release. Releases come from the
+  `stable` branch at irregular intervals: 7 to 27 days between minor releases
+  from March to November 2026, and up to 63 days in the winter before. A window
+  of four weeks from the merge can close before any release has the warning.
+- Users who build from `main` see the warning at the merge. A release always
+  comes after the merge, so this window is always longer than four weeks from
+  the merge.
+
 
 ## Next automation increments
 
@@ -115,7 +134,8 @@ does **not** yet enforce deprecation requirements.
    Preserve deprecated global aliases until their compatibility window expires.
 2. **Compatibility and deprecation:** compare compiler-derived API inventories
    for the base and proposed merge result; compile unchanged consumer fixtures;
-   resolve usages of exact deprecated symbols/overloads; verify the introducing
+   resolve usages of exact deprecated symbols/overloads (see
+   [Removal window](#removal-window) for the removal check); verify the introducing
    PR and merge time; and enforce same-PR migration and separate-PR removal.
    Report unsupported configurations explicitly. Define the ABI and supported
    release contract before adding binary-compatibility enforcement.

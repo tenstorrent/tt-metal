@@ -18,6 +18,7 @@
 #include <nanobind/stl/filesystem.h>
 #include <nlohmann/json.hpp>
 
+#include "ttnn-nanobind/deprecation.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_consts.hpp"
@@ -267,11 +268,9 @@ void py_graph_module(nb::module_& m) {
         "extract_resource_usage_per_core",
         [](const nb::object& py_trace, std::optional<size_t> interleaved_storage_cores) {
             if (interleaved_storage_cores.has_value()) {
-                PyErr_WarnEx(
-                    PyExc_DeprecationWarning,
-                    "interleaved_storage_cores is no longer used; call "
-                    "extract_resource_usage_per_core(trace) instead. Removal by 2026-06-07.",
-                    1);
+                ttnn::warn_deprecated(
+                    "the interleaved_storage_cores argument of ttnn.graph.extract_resource_usage_per_core",
+                    "a call without interleaved_storage_cores");
             }
             auto json_module = nb::module_::import_("json");
             auto trace_str = std::string{nb::str(json_module.attr("dumps")(py_trace)).c_str()};

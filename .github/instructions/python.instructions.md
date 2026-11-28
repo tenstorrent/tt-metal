@@ -10,7 +10,7 @@ excludeAgent: "cloud-agent"
 
 ### 🔴 CRITICAL — must fix before merge
 
-- **Public API breakage**: changing `ttnn.*` function signatures, removing parameters, or altering return types without deprecation
+- **Public API breakage**: changing `ttnn.*` function signatures, removing parameters, or altering return types without deprecation (see [`ttnn-python-deprecation.instructions.md`](ttnn-python-deprecation.instructions.md))
 - **Incorrect tensor shape/dtype assumptions**: operations that will silently produce wrong results on device
 - **Missing device resource cleanup**: tensors or meshes allocated but never freed in test teardown
 - **Hardcoded paths or environment assumptions**: absolute paths, missing `os.environ` guards for CI-only variables
