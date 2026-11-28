@@ -81,6 +81,69 @@ inline void unit_range(
                      : find_unit(p, NU, wc, cc, static_cast<uint32_t>((static_cast<uint64_t>(total) * (c + 1)) / NC));
 }
 
+// Fine units (the gate|up of 512 / 1024-row passes, GMOE_GU_GMAJOR): unit (e, g, j) = expert e's slot group g (GROUP
+// slots, the last one partial) x column tile j, numbered expert-major, then group, then column (a core's consecutive
+// units share a group's rows of X_g). A unit costs wc + its group's slots x cc: a big expert spreads over cores group by
+// group instead of in units of all its slots (busiest core 23-30 slots vs 20-21 with the routing of a real 512-row pass).
+constexpr uint32_t GROUP = 4;
+inline uint32_t groups(uint32_t m) { return (m + GROUP - 1) / GROUP; }
+inline uint32_t group_slots(uint32_t m, uint32_t g) { return m - g * GROUP < GROUP ? m - g * GROUP : GROUP; }
+
+// the first fine unit whose start cost is >= T (the number of fine units when none)
+inline uint32_t find_unit_fine(const Plan& p, uint32_t NU, uint32_t wc, uint32_t cc, uint32_t T) {
+    uint32_t P = 0, U = 0;
+    for (uint32_t e = 0; e < E; ++e) {
+        for (uint32_t g = 0; g < groups(p.tiles[e]); ++g) {
+            const uint32_t uc = wc + group_slots(p.tiles[e], g) * cc;
+            if (T <= P) {
+                return U;
+            }
+            const uint32_t j = (T - P + uc - 1) / uc;
+            if (j < NU) {
+                return U + j;
+            }
+            P += NU * uc;
+            U += NU;
+        }
+    }
+    return U;
+}
+
+// core c's fine unit range [u0, u1) of NC cores
+inline void unit_range_fine(
+    const Plan& p, uint32_t NU, uint32_t wc, uint32_t cc, uint32_t c, uint32_t NC, uint32_t& u0, uint32_t& u1) {
+    uint32_t total = 0, units = 0;
+    for (uint32_t e = 0; e < E; ++e) {
+        for (uint32_t g = 0; g < groups(p.tiles[e]); ++g) {
+            total += NU * (wc + group_slots(p.tiles[e], g) * cc);
+            units += NU;
+        }
+    }
+    u0 = find_unit_fine(p, NU, wc, cc, static_cast<uint32_t>((static_cast<uint64_t>(total) * c) / NC));
+    u1 = c + 1 == NC ? units
+                     : find_unit_fine(p, NU, wc, cc, static_cast<uint32_t>((static_cast<uint64_t>(total) * (c + 1)) / NC));
+}
+
+// fine unit u -> (e, g, j)
+inline void fine_unit(const Plan& p, uint32_t NU, uint32_t u, uint32_t& e, uint32_t& g, uint32_t& j) {
+    uint32_t U = 0;
+    for (e = 0; e < E; ++e) {
+        const uint32_t n = groups(p.tiles[e]) * NU;
+        if (u < U + n) {
+            g = (u - U) / NU;
+            j = (u - U) % NU;
+            return;
+        }
+        U += n;
+    }
+}
+
+// X_g's row tile of slot s of S (the route op's P1T row tiles, so the gather's output): the slots dealt round robin
+// over X_g's R core rows (slot s in core row s % R), so a slot group's GROUP slots are in GROUP different core rows and
+// the gate|up readers loading a group read from 4 x 10 cores, not one core row's 10 (its NOC links the hot spot: X_g
+// gate|up 202 -> 183 us at 256 rows, 237 -> 233 at 512). S is a multiple of R (8, or 10: grouped_moe.py xg_rows).
+inline uint32_t xg_row(uint32_t s, uint32_t S, uint32_t R = 8) { return (s % R) * (S / R) + s / R; }
+
 // the meta page a reader passes to its compute / writer: [u0, u1, tiles[E], base[E]]
 constexpr uint32_t META_WORDS = 2 + 2 * E;
 inline void put_meta(uint32_t l1, uint32_t u0, uint32_t u1, const Plan& p) {
@@ -90,6 +153,14 @@ inline void put_meta(uint32_t l1, uint32_t u0, uint32_t u1, const Plan& p) {
     for (uint32_t e = 0; e < E; ++e) {
         m[2 + e] = p.tiles[e];
         m[2 + E + e] = p.base[e];
+    }
+}
+
+// the plan from a meta page (put_meta)
+inline void meta_plan(volatile tt_l1_ptr uint32_t* m, Plan& p) {
+    for (uint32_t e = 0; e < E; ++e) {
+        p.tiles[e] = m[2 + e];
+        p.base[e] = m[2 + E + e];
     }
 }
 }  // namespace gmoe

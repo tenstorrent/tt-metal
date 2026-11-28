@@ -129,12 +129,12 @@ void kernel_main() {
 #endif
     for (uint32_t mi = 0; mi < RN_MPC; ++mi) {
         const uint32_t rt = m * RN_MPC + mi;
-        // the all-reduce output's NB tiles of row tile rt (RN_YPARTS: the output in parts of 8 row tiles, part p > 0's
-        // address at common arg RN_YPART_ARG + p - 1)
+        // the all-reduce output's NB tiles of row tile rt (RN_YPARTS: the output in parts of RN_YPART_RT row tiles, part
+        // p > 0's address at common arg RN_YPART_ARG + p - 1)
 #ifdef RN_YPARTS
-        const uint32_t yp = rt / 8;
-        const uint32_t y_row =
-            (yp == 0 ? y_addr : get_common_arg_val<uint32_t>(RN_YPART_ARG + yp - 1)) + (rt % 8) * tile;
+        const uint32_t yp = rt / RN_YPART_RT;
+        const uint32_t y_row = (yp == 0 ? y_addr : get_common_arg_val<uint32_t>(RN_YPART_ARG + yp - 1)) +
+                               (rt % RN_YPART_RT) * tile;
 #else
         const uint32_t y_row = y_addr + rt * tile;
 #endif
