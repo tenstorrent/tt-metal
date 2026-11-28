@@ -295,8 +295,9 @@ static ttnn::Tensor bound_matmul(
             };
             const bool move_a = lacks_2d_shard_spec(input_tensor_a);
             const Tensor a = move_a ? to_dram(input_tensor_a) : input_tensor_a;
-            const bool move_b = lacks_2d_shard_spec(input_tensor_b) &&
-                                !auto_config_reads_nd_dram_b(a, input_tensor_b, bias, parameters, optional_output_tensor);
+            const bool move_b =
+                lacks_2d_shard_spec(input_tensor_b) &&
+                !auto_config_reads_nd_dram_b(a, input_tensor_b, bias, parameters, optional_output_tensor);
             if (move_a || move_b) {
                 return bound_matmul(
                     a, move_b ? to_dram(input_tensor_b) : input_tensor_b, bias, parameters, optional_output_tensor);
@@ -396,12 +397,29 @@ static ttnn::Tensor bound_matmul(
         }
     }
 
-    // With a user core grid the activation is fused into the kernel, which would apply it before a
-    // post-processed bias. In that case keep it out of the kernel and apply it after the bias instead.
-    std::optional<UnaryWithParam> trailing_activation;
+    // A fused activation runs in the kernel, before a post-processed bias. With a post-processed bias, take
+    // the program config's fused_activation out of the kernel and apply it after the bias, followed by the
+    // activation argument, which a user core grid would also fuse.
+    std::vector<unary::EltwiseUnaryWithParam> trailing_activations;
+    if (post_process_bias && parameters.program_config.has_value()) {
+        MatmulProgramConfig program_config = parameters.program_config.value();
+        std::visit(
+            [&](auto& config) {
+                if constexpr (requires { config.fused_activation; }) {
+                    if (config.fused_activation.has_value()) {
+                        trailing_activations.push_back(
+                            utilities::with_fused_activation_defaults(config.fused_activation.value()));
+                        config.fused_activation = std::nullopt;
+                    }
+                }
+            },
+            program_config);
+        parameters.program_config = program_config;
+    }
     if (parameters.user_fused_activation.has_value() &&
         (!parameters.user_core_coord.has_value() || post_process_bias)) {
-        trailing_activation = parameters.user_fused_activation;
+        trailing_activations.push_back(
+            utilities::with_fused_activation_defaults(parameters.user_fused_activation.value()));
         parameters.user_fused_activation = std::nullopt;
     }
 
@@ -496,9 +514,10 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(output_tensor, result_shape);
     }
 
-    if (trailing_activation.has_value()) {
-        output_tensor = ttnn::unary_chain(
-            output_tensor, {trailing_activation.value()}, output_tensor.memory_config(), optional_output_tensor);
+    // One op each: some activations run in a dedicated kernel and cannot share a unary chain.
+    for (const auto& activation : trailing_activations) {
+        output_tensor =
+            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;

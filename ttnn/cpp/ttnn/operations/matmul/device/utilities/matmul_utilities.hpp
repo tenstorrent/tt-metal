@@ -280,6 +280,29 @@ struct ActivationParams {
     uint32_t param2 = 0;
 };
 
+// The parameters get_activation_params defaults for HARDTANH, SELU and SOFTPLUS when they are left out, filled in so
+// the same activation can run as a unary op instead of in the matmul kernel. Parameters given are kept.
+inline ttnn::operations::unary::UnaryWithParam with_fused_activation_defaults(
+    ttnn::operations::unary::UnaryWithParam activation) {
+    using ttnn::operations::unary::UnaryOpType;
+    const auto fill = [&activation](std::initializer_list<float> defaults) {
+        std::size_t index = 0;
+        for (const float value : defaults) {
+            if (activation.params.size() <= index) {
+                activation.params.push_back(value);
+            }
+            ++index;
+        }
+    };
+    switch (activation.op_type) {
+        case UnaryOpType::HARDTANH: fill({-1.0f, 1.0f}); break;
+        case UnaryOpType::SELU: fill({std::bit_cast<float>(0x3f867d5fu), std::bit_cast<float>(0x3fd62d7du)}); break;
+        case UnaryOpType::SOFTPLUS: fill({1.0f, 20.0f}); break;
+        default: break;
+    }
+    return activation;
+}
+
 /**
  * @brief Extract activation parameters
  *
