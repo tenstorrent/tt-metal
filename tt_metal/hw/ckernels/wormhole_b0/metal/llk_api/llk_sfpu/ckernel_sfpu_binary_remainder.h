@@ -289,46 +289,33 @@ sfpi_inline void calculate_remainder_uint32_body(
 }
 
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat in1) {
-    // remainder(a, b) = a - floor(a/b) * b
-
-    sfpi::vFloat a = in0;
-    sfpi::vFloat b = in1;
-
-    // Compute a/b = a * (1/b)
+sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat a, sfpi::vFloat b) {
+    // remainder(a, b) = a - floor(a/b) * b, sign of b
     sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
-
-    // Compute floor(a/b)
     sfpi::vFloat floor_div = _floor_body_(div_result);
 
-    // Compute remainder = a - floor(a/b) * b
-    sfpi::vFloat result = a - floor_div * b;
+    // q = (a - floor_div * b) * sign(b); SFPMAD/SFPMUL flush -0 to +0 (WH SFPMAD.md), so the q < 0
+    // sign correction never fires on a zero remainder.
+    sfpi::vFloat sign_b = sfpi::copysgn(sfpi::vFloat(1.0f), b);
+    sfpi::vFloat b_abs = sfpi::abs(b);
+    sfpi::vFloat a_rel = a * sign_b;
+    sfpi::vFloat q = a_rel - floor_div * b_abs;
+    // Taken before the sign correction: where that correction fires (q < 0),
+    // diff is negative either way and the magnitude correction doesn't apply.
+    sfpi::vFloat diff = q - b_abs;
 
-    // Sign correction: remainder must match the sign of b (or be zero).
-    // XOR of the float bit-patterns detects sign mismatch via the MSB,
-    // avoiding a compound conditional with four comparisons and an OR.
-    // SFPSETCC compares the raw bits, so -0.0 (0x80000000) counts as nonzero and a bare compare
-    // adds b to an answer that is already correct. SFPABS clears the sign bit.
-    v_if(sfpi::abs(result) != sfpi::vFloat(0.0f)) {
-        sfpi::vInt signs = sfpi::as<sfpi::vInt>(result) ^ sfpi::as<sfpi::vInt>(b);
-        v_and(signs < 0);
-        result += b;
-    }
+    // Sign correction: a result of the wrong sign (or a floor one too high) gets +b.
+    v_if(q < sfpi::vFloat(0.0f)) { q += b_abs; }
     v_endif;
 
-    // Magnitude correction: reciprocal imprecision can cause floor() to be greater than the true floor value.
-    v_if(b > sfpi::vFloat(0.0f) && a > sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff >= sfpi::vFloat(0.0f)) { result = diff; }
+    // Same-sign operands only: a floor one too low leaves q >= |b|.
+    v_if(a_rel >= sfpi::vFloat(0.0f)) {
+        v_if(diff >= sfpi::vFloat(0.0f)) { q = diff; }
         v_endif;
     }
     v_endif;
-    v_if(b < sfpi::vFloat(0.0f) && a < sfpi::vFloat(0.0f)) {
-        sfpi::vFloat diff = result - b;
-        v_if(diff <= sfpi::vFloat(0.0f)) { result = diff; }
-        v_endif;
-    }
-    v_endif;
+
+    sfpi::vFloat result = q * sign_b;
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
