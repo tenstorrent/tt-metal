@@ -86,6 +86,7 @@ The core count is not an axis knob. `writers_per_bank` is set once in the host p
 - Phase 0 rule: `writers_per_bank = max(1, min(floor(grid_cores / N), ceil(num_pages / N)))`.
 - On this Blackhole: `floor(110 / 8) = 13`, giving **104 writer cores** for every production shape.
 - The cores used are this blocking choice. No shape axis limits them.
+- Refinement 2 (measured) turned the grid-sync and placement lamps: `WRITERS_PER_BANK = 1`, `CORE_PLACEMENT = "bank_affine"` (bank `b`'s writer on its NoC1-optimal worker from `get_optimal_dram_bank_to_logical_worker_assignment(NOC_1)`, 8 single-core ranges), and `ZERO_SOURCE_BYTES = 2048`. One plan wins on every production shape, so no shape-gated regime exists. The Phase 0 values stay reachable through the same knobs.
 
 ### Buffer-depth knobs
 

@@ -17,3 +17,6 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T23:57:52-05:00"}
 {"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros.py + test_g6_zeros_precision_baseline.py","result":"26 passed, 0 xfail; p4 bf16 + p1 bf8b max_ulp=0 negative_zeros=0","ts":"2026-11-28T00:00:23-05:00"}
 {"event":"test_run","status":"pass","tests":"eval/golden_tests/g6_zeros/test_golden.py -k bfloat","result":"6/6 passed (p1 bf8b x3, p4 bf16 x3)","ts":"2026-11-28T00:00:23-05:00"}
+{"event":"perf_measure","shape":"p1-p4","method":"perf_zero_source_probe --profile, 2 repeats","ba1_z2k_ns":{"p1":559449,"p2":25424,"p3":13085,"p4":1388},"ba1_z16k_p4":1768,"ba1_z1k_p1":750322,"phase0_ns":{"p1":1099559,"p2":48188,"p3":24338,"p4":1621},"ts":"2026-11-28T01:02:23-05:00"}
+{"event":"fix_applied","what":"ZERO_SOURCE_BYTES 16384->2048 on top of WRITERS_PER_BANK=1 + bank_affine placement; one plan wins every shape, no regime gate","ts":"2026-11-28T01:02:23-05:00"}
+{"event":"test_run","result":"pass","detail":"unit 26/26; golden slice 8/8 (loose0 p1 perf exact, p4, dirty p1/p4/p2, cache order, repeat); shipped vs phase0 ns p1 559040/1111852 p2 25370/49573 p3 13083/24241 p4 1379/1634","ts":"2026-11-28T01:02:23-05:00"}

@@ -21,9 +21,10 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # --- Blocking knobs: each defined once here; everything else derives from them. ---
 
-# Capacity of the zero source and the largest single NoC write. 16 KiB = one Blackhole
-# NOC_MAX_BURST_SIZE packet.
-ZERO_SOURCE_BYTES = 16384
+# Capacity of the zero source and the largest single NoC write. The fill runs before the first
+# write, so it is fixed cost on short runs; 2 KiB packets still keep one BRISC's issue ahead of a
+# bank's write rate, 1 KiB packets do not.
+ZERO_SOURCE_BYTES = 2048
 # Depth of cb_zero_source. The source never changes, so a second region has nothing to overlap.
 ZERO_SOURCE_REGIONS = 1
 # Writers per DRAM bank. None selects the grid-filling rule in grid_fill_writers_per_bank().

@@ -51,7 +51,7 @@
 
 **Done when**: the golden run shows 19/19 `supported_pass`, 0 `xfail_expected`, and the loud categories at 0. The acceptance suite's p4/p1 cases pass, including both dirty-destination cases. The precision baseline's p4/p1 cases pass exactly: max ULP 0, no -0.0.
 
-### [ ] Refinement 2 — Speed up the perf-flagged p1 profile
+### [x] Refinement 2 — Speed up the perf-flagged p1 profile
 
 **Type**: perf
 
@@ -86,3 +86,5 @@ Both levers are knob-turns on the surface the planner exposed: the host plan's `
 - Measured device kernel time on p1 bfloat8_b is ≤ 837,190 ns and the exact gate holds.
 - The golden suite is green.
 - No regression beyond noise (~2–3 %, `perf_rules.txt`) across the guard set: p2 fp32, p3 fp32, p4 bf16. That is one representative per page size of the single kernel path, TILE, DRAM interleaved.
+
+**Outcome**: shipped `WRITERS_PER_BANK = 1`, `CORE_PLACEMENT = "bank_affine"` (each bank's writer on its NoC1-optimal worker) and `ZERO_SOURCE_BYTES = 2048`, one plan for every shape. Device kernel ns, Phase 0 → shipped, same session: p1 bf8b 1,111,852 → **559,040 (511.2 GB/s)**, p2 49,573 → 25,370, p3 24,241 → 13,083, p4 1,634 → 1,379. Golden slice exact. The bank-affine placement alone regressed p4 (1,768 ns), because the 16 KiB fill runs before the first write. The 2 KiB source makes p4 faster than Phase 0, with no change on p1–p3; a 1 KiB source makes p1 issue-bound (750 µs). Bottleneck now: p1/p2/p3 are bound by DRAM bank write bandwidth (512 GB/s nominal). p4 is latency-bound: the empty-launch floor is ~715 ns on 8 or 104 cores, so the 8 single-core ranges cost nothing extra to launch (BB-17), and 32 KiB per bank at 64 GB/s adds ~512 ns. Next for p4 would be overlapping the fill with the first writes, or stateful write issue. Not tried: they can recover at most ~150 ns on p4 and nothing on the DRAM-bound shapes.

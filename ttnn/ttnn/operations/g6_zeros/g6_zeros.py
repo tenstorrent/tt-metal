@@ -4,9 +4,9 @@
 
 """g6_zeros: a new DRAM-interleaved TILE tensor whose every element is +0.0.
 
-One device program per call: every writer core zero-fills a 16 KiB L1 region, then streams a
-contiguous same-bank run of output pages from it. Nothing is read from DRAM, and each page is
-written once.
+One device program per call: each writer core sits next to its DRAM bank's NoC1-optimal worker,
+zero-fills a small L1 region, then streams a contiguous same-bank run of output pages from it.
+Nothing is read from DRAM, and each page is written once.
 """
 
 from __future__ import annotations

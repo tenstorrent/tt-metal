@@ -167,3 +167,30 @@ core↔bank placement lamp are the next things to measure. Both are knob turns w
 - Golden test progress: the 6 previously `xfail_expected` cells (p1 bf8b ×3, p4 bf16 ×3: plain, model profile, dirty destination) now pass, 6/6 in the `-k bfloat` slice; with the 13 float32 cells unchanged this is 19/19 expected. Unit suite: 26/26 pass, 0 xfail (`test_g6_zeros.py`, `test_g6_zeros_precision_baseline.py`), including both dirty-destination cases.
 - Issues encountered: None.
 - Tests added: none. The existing acceptance and precision-baseline tests already parametrize p4 bf16 and p1 bf8b and gate on SUPPORTED, so they switched from xfail to run. The skill's `test_<op>_precision_matrix` (math_fidelity × fp32_dest_acc_en) does not apply: there is no compute kernel and no compute config; `test_g6_zeros_precision_baseline.py` is the op's precision characterization.
+
+## Refinement 2 — Speed up the perf-flagged p1 profile
+- Date: 2026-11-28
+- What was done: turned the plan's knobs; the kernel, CB and block schedule are unchanged. `WRITERS_PER_BANK` 13 → 1 and `CORE_PLACEMENT = "bank_affine"`: each bank's writer is the core nearest its NoC1-optimal worker (`get_optimal_dram_bank_to_logical_worker_assignment(NOC_1)`), giving 8 single-core ranges. `ZERO_SOURCE_BYTES` 16384 → 2048. One plan wins on every production shape, so no shape-gated regime is needed. `describe_plan` reports `placement`, and every knob is in the plan-cache key. Reused: `plan_bank_runs`, writer kernel, `cb_zero_source`. Added: the placement knob and its seed plumbing. That came from an interrupted earlier attempt, measured and finished here.
+- Measured device kernel ns, Blackhole (8 banks, 11×10 grid), `test_g6_zeros_perf.py`, Phase 0 plan vs shipped plan in one session:
+
+  | case | Phase 0 (104 cores, row-wise, 16 KiB) | shipped (8 cores, bank-affine, 2 KiB) |
+  |------|------|------|
+  | p1 (32831,1,32,256) bf8b | 1,111,852 (257 GB/s) | **559,040 (511.2 GB/s)**, target ≤ 837,190 |
+  | p2 (16,12,128,128) fp32 | 49,573 | 25,370 |
+  | p3 (8,12,128,128) fp32 | 24,241 | 13,083 |
+  | p4 (1,4,256,128) bf16 | 1,634 | 1,379 |
+
+  Sweep with bank-affine and 1 writer per bank (`probes/perf_zero_source_probe.py`), p1 / p4 ns:
+  - 16 KiB source: 559,896 / 1,768. Bank-affine alone regresses p4, because the fill runs before the first write.
+  - 8 KiB: 559,643 / 1,528.
+  - 4 KiB: 559,261 / 1,441.
+  - 2 KiB: 559,449 / 1,388.
+  - 1 KiB: 750,322 / 1,556. 1 KiB packets make p1 issue-bound.
+  - 2 writers per bank at 2 KiB: 992,704 / 1,856.
+
+  p4 empty-launch floor (`probes/perf_p4_floor_probe.py`): ~715 ns on both 8 and 104 cores, so the 8 single-core ranges have no launch cost (BB-17).
+- Accuracy achieved: exact (max ULP 0, no -0.0) on p1 bf8b, p2/p3 fp32 and p4 bf16. PCC and relative RMS are degenerate against an all-zero reference.
+- Golden test progress: targeted slice 8/8 pass: loose0 (p1 perf case, exact), loose3 (p4), the p1/p4/p2 dirty-destination cases, cache order and repeat. The full 19-cell run is the harness's. Unit suite: `test_g6_zeros.py` + `test_g6_zeros_precision_baseline.py` 26/26.
+- Remaining headroom: p1/p2/p3 are at the DRAM write bound. p4 is latency-bound: about 660 ns above the empty launch, ~512 ns of which is 32 KiB per bank at 64 GB/s. Overlapping the fill with the first writes, or stateful write issue, could recover at most ~150 ns on p4 and nothing elsewhere, so neither was built.
+- Issues encountered: the interrupted attempt had emptied `test_g6_zeros_perf.py`. It is rewritten against the current knobs.
+- Tests added: `test_g6_zeros_perf.py` (shipped vs Phase 0 device-time harness, public entry point). `probes/perf_zero_source_probe.py` is the zero-source × placement sweep.
