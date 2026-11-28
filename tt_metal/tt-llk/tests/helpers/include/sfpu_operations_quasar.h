@@ -295,6 +295,16 @@ inline constexpr bool is_isinf_isnan_op(SfpuType op)
 }
 
 /**
+ * @brief Whether a unary op runs no SFPU code: typecast_tile and typecast_tile_init skip Float16_b <-> Float32, since
+ * the 32-bit DEST and the packer do that conversion.
+ */
+inline constexpr bool is_unary_sfpu_no_op(SfpuType op, DataFormat in_format, DataFormat out_format)
+{
+    return op == SfpuType::typecast && ((in_format == DataFormat::Float16_b && out_format == DataFormat::Float32) ||
+                                        (in_format == DataFormat::Float32 && out_format == DataFormat::Float16_b));
+}
+
+/**
  * @brief Run the per-operation init step for a Quasar unary SFPU op.
  *
  * @tparam OPERATION The SFPU operation type (compile-time `SfpuType` constant).
