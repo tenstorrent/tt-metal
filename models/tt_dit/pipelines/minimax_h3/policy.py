@@ -103,8 +103,8 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
     `H3_SOL_ATTN=1` turns it on for every clip length and any other value is the off switch; unset, it is on only for
     a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule is the `SOL_PRESETS`
     entry of `preset`, the model the pipeline reads from its files; `H3_SOL_TAU` and `H3_SOL_DENSE_STEPS` override
-    their field and `H3_SOL_POOLED=0` drops the pooled term. One dense step costs 4-step models their picture and
-    sound against dense.
+    their field and `H3_SOL_POOLED=0` drops the pooled term. A 4-step model keeps 2 dense steps: with 1 its clip is
+    6 to 9 dB PSNR further from dense.
     """
     by_default = "H3_SOL_ATTN" not in env and preset in SOL_DEFAULT_ON
     if not by_default and env.get("H3_SOL_ATTN") != "1":
