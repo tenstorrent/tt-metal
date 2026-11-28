@@ -1,0 +1,14 @@
+# Reference venv for the golden scripts in this folder (CPU fp32), pinned to the versions the goldens were made with.
+# Not for python_env: Kairos pins numpy 2.2.5 and transformers ~= 4.56, which would replace python_env's numpy 1.26 and
+# transformers 4.53. Install it next to a clone of foundation-model-research/Kairos at 16eb4b98 (README.md):
+#   uv pip install -r requirements.txt ./Kairos
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+transformers==4.56.2
+huggingface-hub==0.36.2
+numpy==2.2.5
+pandas==2.2.3
+safetensors==0.8.0
+einops==0.8.2
+jaxtyping==0.3.11
+matplotlib==3.11.2
