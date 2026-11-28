@@ -206,7 +206,10 @@ def get_padded_hidden_dim(hidden_dim: int, num_devices: int, tile_size: int = 32
 
     We pad the global tensor first, then shard evenly so only the last shard has padding.
     """
-    shard_dim = hidden_dim // num_devices
+    # Ceil, not floor: a floor shard can come out already tile-aligned while still leaving
+    # `hidden_dim % num_devices` columns uncovered, which makes this return less than
+    # `hidden_dim` (e.g. 32001 across 8 devices -> 32000) and the caller pad downwards.
+    shard_dim = -(-hidden_dim // num_devices)
     padded_shard = ((shard_dim + tile_size - 1) // tile_size) * tile_size
     return padded_shard * num_devices
 

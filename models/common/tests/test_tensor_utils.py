@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.tensor_utils import (
+    get_padded_hidden_dim,
     get_rot_transformation_mat,
     pad_dim_to_size,
     pad_to_shape,
@@ -17,6 +18,34 @@ from models.common.tensor_utils import (
     zeros_like_kv_cache,
     zeros_like_paged_cache,
 )
+
+
+def test_get_padded_hidden_dim():
+    """Padded shape must cover the hidden dim and give every shard a tile-aligned width."""
+
+    def check(hidden_dim, num_devices, expected):
+        padded = get_padded_hidden_dim(hidden_dim, num_devices)
+        assert padded == expected
+        assert padded >= hidden_dim, f"{padded} < hidden_dim {hidden_dim}"
+        assert padded % num_devices == 0
+        assert (padded // num_devices) % 32 == 0
+
+    # Already tile-aligned: unchanged
+    check(4096, 8, 4096)
+    check(32000, 8, 32000)
+
+    # Rounding up to the next tile
+    check(100, 8, 256)
+    check(97, 4, 128)
+
+    # A floor shard can be tile-aligned and still leave columns uncovered; the padded
+    # shape must not shrink below the input.
+    check(32001, 8, 32256)
+    check(32001, 2, 32064)
+    check(65, 2, 128)
+
+    # Single device
+    check(33, 1, 64)
 
 
 def test_pad_dim_to_size(expect_error):
@@ -310,6 +339,9 @@ def test_program_config_to_str():
 
 
 if __name__ == "__main__":
+    test_get_padded_hidden_dim()
+    print("  ✓ test_get_padded_hidden_dim")
+
     test_pad_dim_to_size()
     print("  ✓ test_pad_dim_to_size")
 
