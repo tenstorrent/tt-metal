@@ -228,16 +228,10 @@ Tensor normalize_hw(const Tensor& y, const std::optional<MemoryConfig>& output_m
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp
 Tensor clip(
     const Tensor& input_a,
-    std::optional<float> min,
-    std::optional<float> max,
+    std::optional<std::variant<float, std::int32_t>> min,
+    std::optional<std::variant<float, std::int32_t>> max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    // Convert float optionals to variant optionals
-    std::optional<std::variant<float, std::int32_t>> min_variant =
-        min ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *min) : std::nullopt;
-    std::optional<std::variant<float, std::int32_t>> max_variant =
-        max ? std::make_optional<std::variant<float, std::int32_t>>(std::in_place_type<float>, *max) : std::nullopt;
-
-    return clamp(input_a, min_variant, max_variant, output_mem_config);
+    return clamp(input_a, min, max, output_mem_config);
 }
 
 Tensor clip(
