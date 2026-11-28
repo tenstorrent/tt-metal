@@ -245,6 +245,14 @@ void directed_ideal_test(
     CoreCoord sub_start_coord,
     CoreCoord mst_grid_size,
     CoreCoord sub_grid_size) {
+    const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    const uint32_t required_x = std::max(mst_start_coord.x + mst_grid_size.x, sub_start_coord.x + sub_grid_size.x);
+    const uint32_t required_y = std::max(mst_start_coord.y + mst_grid_size.y, sub_start_coord.y + sub_grid_size.y);
+    if (grid.x < required_x || grid.y < required_y) {
+        GTEST_SKIP() << "Skipping: grid " << grid.x << "x" << grid.y << " too small (need " << required_x << "x"
+                     << required_y << ").";
+    }
+
     NOC noc_id = NOC::NOC_0;
 
     // Physical Constraints
@@ -669,44 +677,24 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAllDirectedIdeal_2_0)
     EXPECT_TRUE(unit_tests::dm::all_to_all::run_dm(this->device(), test_config));
 }
 
-namespace {
-void all_to_all_grid_directed_ideal_2_0(
-    distributed::MeshDevice& mesh_device,
-    uint32_t test_id,
-    CoreCoord mst_start_coord,
-    CoreCoord sub_start_coord,
-    CoreCoord mst_grid_size,
-    CoreCoord sub_grid_size) {
-    auto grid = mesh_device.compute_with_storage_grid_size();
-    uint32_t required_x = std::max(mst_start_coord.x + mst_grid_size.x, sub_start_coord.x + sub_grid_size.x);
-    uint32_t required_y = std::max(mst_start_coord.y + mst_grid_size.y, sub_start_coord.y + sub_grid_size.y);
-    if (grid.x < required_x || grid.y < required_y) {
-        GTEST_SKIP() << "Skipping: grid " << grid.x << "x" << grid.y << " too small (need " << required_x << "x"
-                     << required_y << ").";
-    }
-    unit_tests::dm::all_to_all::directed_ideal_test(
-        mesh_device, test_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
-}
-}  // namespace
-
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal_2_0) {
-    all_to_all_grid_directed_ideal_2_0(this->device(), 311, {0, 0}, {4, 4}, {2, 2}, {1, 1});
+    unit_tests::dm::all_to_all::directed_ideal_test(this->device(), 311, {0, 0}, {4, 4}, {2, 2}, {1, 1});
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal_2_0) {
-    all_to_all_grid_directed_ideal_2_0(this->device(), 312, {0, 0}, {0, 0}, {4, 4}, {1, 1});
+    unit_tests::dm::all_to_all::directed_ideal_test(this->device(), 312, {0, 0}, {0, 0}, {4, 4}, {1, 1});
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal_2_0) {
-    all_to_all_grid_directed_ideal_2_0(this->device(), 313, {0, 0}, {4, 4}, {1, 1}, {2, 2});
+    unit_tests::dm::all_to_all::directed_ideal_test(this->device(), 313, {0, 0}, {4, 4}, {1, 1}, {2, 2});
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal_2_0) {
-    all_to_all_grid_directed_ideal_2_0(this->device(), 314, {0, 0}, {0, 0}, {1, 1}, {4, 4});
+    unit_tests::dm::all_to_all::directed_ideal_test(this->device(), 314, {0, 0}, {0, 0}, {1, 1}, {4, 4});
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal_2_0) {
-    all_to_all_grid_directed_ideal_2_0(this->device(), 315, {0, 0}, {0, 0}, {2, 2}, {2, 2});
+    unit_tests::dm::all_to_all::directed_ideal_test(this->device(), 315, {0, 0}, {0, 0}, {2, 2}, {2, 2});
 }
 
 /* ======== GRID + PACKET SIZE SWEEP ======== */

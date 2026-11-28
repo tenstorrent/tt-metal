@@ -461,6 +461,14 @@ void packet_sizes_test(
 
     bool use_semaphore = false,
     uint32_t max_pages_override_factor = 1) {
+    const CoreCoord grid = mesh_device.compute_with_storage_grid_size();
+    const uint32_t required_x = sub_start_core_coord.x + sub_grid_size.x;
+    const uint32_t required_y = sub_start_core_coord.y + sub_grid_size.y;
+    if (grid.x < required_x || grid.y < required_y) {
+        GTEST_SKIP() << "Skipping: grid " << grid.x << "x" << grid.y << " too small (need " << required_x << "x"
+                     << required_y << ").";
+    }
+
     // Parameters
     NOC noc_id = NOC::NOC_0;
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
