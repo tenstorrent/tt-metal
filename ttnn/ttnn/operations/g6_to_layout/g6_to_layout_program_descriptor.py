@@ -101,12 +101,15 @@ SHORT_IMAGE_BLOCK_COLS = 8
 L1_ROW_READ_GRID_BYTES_PER_CYCLE = 780
 # Reader / writer NoCs swapped on every other core (checkerboard on logical x + y), so the grid's
 # all-to-all row and tile traffic is spread over both NoCs instead of every write on NoC1 (Perf 1, us:
-# c37 6.50 -> 4.77, c29 3.66 -> 3.23, c272 16.2 -> 10.0, c296 58.0 -> 38.3, c301 102 -> 90; c49 15.5 ->
-# 17.4). Carved out where measured slower:
-#   staged_reorder: DRAM-bound bf16 reads/writes run best on reader NoC0 / writer NoC1 (c283 362 ->
-#     412, c295 11.7 -> 12.4, c304 2691 -> 2789, c2036 26.4 -> 27.3);
+# c37 6.50 -> 4.77, c29 3.66 -> 3.23, c272 16.2 -> 10.0, c296 58.0 -> 38.3, c301 102 -> 90, c2006 3.45
+# -> 3.13, c2040 4.79 -> 4.45; c49 15.5 -> 17.4). Carved out where measured slower:
+#   staged_reorder with more than STAGED_CHECKERBOARD_MAX_CORE_TILES tiles on a core: its DRAM-bound
+#     bf16 reads/writes run best on reader NoC0 / writer NoC1 (c1998 at 6 tiles per core 7.54 -> 7.82,
+#     c295 11.7 -> 12.4, c283 362 -> 412, c304 2691 -> 2789, c2036 26.4 -> 27.3; c2017 at 4: flat);
 #   the face regimes: their DRAM-bound run writes measured 1497 vs 866 us on NoC0 (Refinement 3).
+# Column or row parity instead of x + y measured slower on the L1 RM->TILE cells (c38 28.9 -> 36.6).
 NOC_CHECKERBOARD = True
+STAGED_CHECKERBOARD_MAX_CORE_TILES = 4
 
 # L1 per core the model leaves to the op (BB-05); an L1 output's pages on a core count inside it.
 L1_BUDGET_BYTES = 1347776
@@ -126,8 +129,6 @@ ROW_MAJOR_TO_TILE = "row_major_to_tile"
 PACKER_TILIZE = "packer_tilize"
 SAME_BANK_SLOT_WRITES = "same_bank_slot_writes"
 _FACE_REGIMES = (FACE_DIRECT, SAME_BANK_SLOT_WRITES)
-# Regimes that keep reader NoC0 / writer NoC1 on every core (see NOC_CHECKERBOARD).
-_DEFAULT_NOC_REGIMES = _FACE_REGIMES + (STAGED_REORDER,)
 # The bfloat8_b input regimes, which carry NaN marks from the reader to the writer.
 _BFP8_UNTILIZE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
 _UNTILIZE_REGIMES = (STAGED_REORDER,) + _BFP8_UNTILIZE_REGIMES
@@ -551,6 +552,15 @@ def _cb(index, total_bytes, page_bytes, core_ranges, data_format=ttnn.bfloat16):
     )
 
 
+def _checkerboard_nocs(plan):
+    """Whether every other core swaps its reader and writer NoCs (see NOC_CHECKERBOARD)."""
+    if plan.regime in _FACE_REGIMES:
+        return False
+    if plan.regime == STAGED_REORDER:
+        return max(count for _, (_, count) in plan.core_args) <= STAGED_CHECKERBOARD_MAX_CORE_TILES
+    return True
+
+
 class G6ToLayoutProgram:
     """Program descriptor of one plan, built once. A later call with the same cache key only
     rebinds the two buffer addresses (common runtime arg 0 of the reader and of the writer) and,
@@ -651,7 +661,7 @@ class G6ToLayoutProgram:
 
         # (core ranges, runtime args, reader config, writer config) per NoC assignment.
         noc_groups = [(all_cores, core_rt_args, ttnn.ReaderConfigDescriptor(), ttnn.WriterConfigDescriptor())]
-        if NOC_CHECKERBOARD and plan.regime not in _DEFAULT_NOC_REGIMES:
+        if NOC_CHECKERBOARD and _checkerboard_nocs(plan):
             noc_groups = []
             for parity, reader_noc, writer_noc in (
                 (0, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1),
