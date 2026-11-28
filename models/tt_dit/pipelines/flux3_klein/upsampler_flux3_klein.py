@@ -19,6 +19,8 @@ from PIL import Image, ImageOps
 
 import ttnn
 
+from . import bbox
+
 REPO_ID = "black-forest-labs/flux-3-image-klein-pup"
 MAX_NEW_TOKENS = 3584
 MAX_SEQ_LEN = 8192
@@ -26,11 +28,18 @@ BLOCK_SIZE = 64
 PREFILL_CHUNK = 2048
 PRESENCE_PENALTY = {"t2i": 1.5, "i2i": 0.0}
 STOP_TOKENS = ("<|im_end|>", "<|endoftext|>")
-I2I_SCAFFOLD = (
-    "Reference images follow in order (the first image, the second image, ...).\n"
-    "User request: {instruction}\n"
-    "Output the caption."
-)
+I2I_SCAFFOLD = {
+    False: (
+        "Reference images follow in order (the first image, the second image, ...).\n"
+        "User request: {instruction}\n"
+        "Output the caption."
+    ),
+    True: (
+        "Reference images follow in attachment order: ref_image_0, ref_image_1, ...\n"
+        "User editing instruction: {instruction}\n"
+        "Decide the edit, imagine the target image, and output the annotation record."
+    ),
+}
 REFERENCE_MULTIPLE = 32
 REFERENCE_MAX_PIXELS = 1024 * 1024
 JPEG_QUALITY = 92
@@ -122,18 +131,23 @@ class Flux3KleinUpsampler:
 
     def _inputs(self, prompt: str, image: Image.Image | None):
         task = "i2i" if image is not None else "t2i"
+        system_key, prompt, locked = bbox.plan(prompt, task)
         if image is None:
             messages = [
-                {"role": "system", "content": self.system_prompts[task]},
+                {"role": "system", "content": self.system_prompts[system_key]},
                 {"role": "user", "content": prompt},
             ]
             text = self.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
             )
             input_ids = torch.tensor([self.tokenizer.encode(text, add_special_tokens=False)], dtype=torch.int64)
-            return input_ids, None, None, task
-        content = [{"type": "image"}, {"type": "text", "text": I2I_SCAFFOLD.format(instruction=prompt)}]
-        messages = [{"role": "system", "content": self.system_prompts[task]}, {"role": "user", "content": content}]
+            return input_ids, None, None, task, locked
+        scaffold = I2I_SCAFFOLD[locked is not None].format(instruction=prompt)
+        content = [{"type": "image"}, {"type": "text", "text": scaffold}]
+        messages = [
+            {"role": "system", "content": self.system_prompts[system_key]},
+            {"role": "user", "content": content},
+        ]
         text = self.processor.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
         )
@@ -143,12 +157,13 @@ class Flux3KleinUpsampler:
             encoded["pixel_values"],
             encoded["image_grid_thw"].to(torch.int64),
             task,
+            locked,
         )
 
     def __call__(self, prompt: str, image: Image.Image | None = None) -> str:
         from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, prime_decode_trace
 
-        input_ids, pixel_values, grid, task = self._inputs(prompt, image)
+        input_ids, pixel_values, grid, task, locked = self._inputs(prompt, image)
         if input_ids.shape[1] >= MAX_SEQ_LEN:
             raise ValueError(f"the prompt is {input_ids.shape[1]} tokens, the upsampler's limit is {MAX_SEQ_LEN - 1}")
         penalty = PRESENCE_PENALTY[task]
@@ -185,7 +200,9 @@ class Flux3KleinUpsampler:
             token = presence_greedy(logits.reshape(-1).float(), generated, penalty)
             position += 1
         caption = self.tokenizer.decode(generated, skip_special_tokens=True).strip()
-        return caption or prompt
+        if not caption:
+            return prompt
+        return bbox.reconcile(caption, locked) if locked else caption
 
     def close(self) -> None:
         self.generator.release_persistent_capture()

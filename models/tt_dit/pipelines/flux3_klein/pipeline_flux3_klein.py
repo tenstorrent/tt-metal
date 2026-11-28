@@ -33,6 +33,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from ...utils.dbcache import DBCacheConfig
 from ...utils.dbcache_runner import DBCache
+from . import bbox
 from .dbcache_flux3_klein import Flux3KleinCachedSample, content_mask
 from .packing import DOWNSAMPLING_RATIO, MAX_TEXT_LENGTH, image_ids, latent_shape, pad_rows, reference_ids
 from .policy import (
@@ -269,7 +270,9 @@ class Flux3KleinPipeline:
         timings = {}
 
         t0 = time.time()
-        prompt = request.prompt if self._upsampler is None else self._upsampler(request.prompt, reference)
+        # A finished upsampler answer (its box table fully cited as <id>s) goes to the DiT as it is.
+        upsample = self._upsampler is not None and not bbox.is_finished(request.prompt)
+        prompt = self._upsampler(request.prompt, reference) if upsample else request.prompt
         timings["upsample"] = time.time() - t0
         seed = caption_seed(prompt) if request.seed is None else request.seed
 
