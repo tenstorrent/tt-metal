@@ -1933,6 +1933,10 @@ void sdpa_standard_v2(
                     target_active_Sk = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
                 }
             }
+            // The window cut can end before the boundary tile; then it is past the active columns.
+            if (apply_partial_mask && target_active_Sk < Sk_chunk_t - lw_mask.global_n_padded_tiles) {
+                apply_partial_mask = false;
+            }
             if (target_active_Sk < chunk_active_Sk) {
                 chunk_active_Sk = target_active_Sk;
                 chunk_sbw = largest_factor_le(chunk_active_Sk, qkt_subblock_w);
