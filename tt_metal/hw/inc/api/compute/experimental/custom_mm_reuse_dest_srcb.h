@@ -114,7 +114,7 @@ ALWI void custom_mm_reuse_dest_srcb_block_init_short(
  * | kt_dim           | Inner dimension in tiles. All kt_dim in0 tiles must be DEST-resident at once: kt_dim * src_tile_stride + nt_dim * 16 <= CUSTOM_MM_MAX_DEST_ROWS, and the producing custom_mm's ct_dim caps it at 16 | uint32_t | 1 to 256; see bound            | True     |
  * | nt_dim           | Output width in tiles                                           | uint32_t | 1 to 16                        | True     |
  * | in1_k_stride     | Weight tiles between consecutive K rows (nt_dim if contiguous)  | uint32_t | >= nt_dim                      | True     |
- * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for a Dense custom_mm, 64 for Default   | True     |
+ * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for a Dense custom_mm, 64 for Default   | False    |
  */
 // clang-format on
 template <std::uint32_t in0_tile_r_dim>

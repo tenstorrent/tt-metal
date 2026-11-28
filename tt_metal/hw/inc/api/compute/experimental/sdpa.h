@@ -626,6 +626,7 @@ ALWI void sdpa_tail_ms_reduce(
  * @param cb_l2 Second L input CB
  * @param cb_l_out Output L CB
  * @param tile_index Starting tile index within the CB (for current block)
+ * @param block_index Block index passed to pack_untilize for this block's output
  * @param acquire_regs Whether to acquire tile_regs (false if regs already held from MS phase)
  */
 template <

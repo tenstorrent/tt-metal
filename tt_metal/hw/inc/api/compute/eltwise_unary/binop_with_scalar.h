@@ -20,9 +20,8 @@ namespace ckernel {
  *
  * | Argument       | Description                                                                | Type     | Valid Range                                                 | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform requested operation| uint32_t | Must be less than the size of the DST register buffer       | True     |
- * | mode           | 0, 1, 2, 3, and 4                                                          | uint32_t | 0, 1, 2, 3, 4 corresponding to add, mul, sub, div, and rsub | True     |
- * | param1         | fp32 value scalar encoded as uint32                                        | uint32_t | Must be less than the size of the DST register buffer       | True     |
+ * | idst           | The index of the tile in DST register buffer to perform requested operation| uint32_t | Must be less than the size of the DST register buffer       | True     |
+ * | param1         | fp32 value scalar encoded as uint32                                        | uint32_t | Any uint32 value (fp32 bit pattern of the scalar)           | True     |
  * | vector_mode    | The faces to compute (default: VectorMode::RC)                             | VectorMode | Subject to specific hardware/kernel limits                  | False    |
  */
 // clang-format on

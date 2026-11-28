@@ -82,7 +82,6 @@ public:
      * Checks state internally and only calls hardware if state changed and enabled.
      * @tparam operand Operand to reconfigure (SRCA, SRCB, or PACK)
      * @param cb New circular buffer index
-     * @param call_line Line number where reconfiguration was requested
      */
     template <Operand operand>
     void inject_single_operand(uint32_t cb);

@@ -314,7 +314,7 @@ constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
  *
  * CB total size must be an even multiple of this call.
  *
- * Return value: None
+ * Return value: byte address of the reserved block (uint32_t)
  *
  * | Argument  | Description                           | Type     | Valid Range | Required |
  * |-----------|---------------------------------------|----------|-------------|----------|
@@ -335,7 +335,7 @@ uint32_t get_write_ptr(uint32_t operand) {
  * to cb_wait_front and cb_pop_front. The amount of valid memory
  * is equal to the number of tiles requested in a prior cb_wait_front call.
  *
- * Return value: None
+ * Return value: byte address of the received block (uint32_t)
  *
  * | Argument  | Description                           | Type     | Valid Range | Required |
  * |-----------|---------------------------------------|----------|-------------|----------|
@@ -509,6 +509,7 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
  * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | read_req_vc                       | Virtual channel for the read request               | uint32_t  | 0-3 (Unicast VCs)                | False    |
  */
 // clang-format on
 template <bool enable_noc_tracing = true>
@@ -540,6 +541,7 @@ FORCE_INLINE void noc_async_read_one_packet(
  * | dst_local_l1_addr                 | Address in local L1 memory                         | uint32_t  | 0..1MB                           | True     |
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                           | True     |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                           | False    |
+ * | read_req_vc                       | Virtual channel for the read request               | uint32_t  | 0-3 (Unicast VCs)                | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number              | False    |
  */
 // clang-format on
@@ -567,7 +569,6 @@ inline void noc_async_read(
  * | size                              | Size of data transfer in bytes                     | uint32_t  | 0..1MB                                   | True     |
  * | vc                                | Which VC to use for the transaction                | uint32_t  | 0-3 (Unicast VCs)                        | False    |
  * | noc                               | Which NOC to use for the transaction               | uint8_t   | 0 or 1                                   | False    |
- * | max_page_size (template argument) | Maximum size of a single transaction in bytes      | uint32_t  | Any uint32_t number                      | False    |
  * | use_vc (template argument)        | Enable custom VC usage                             | bool      | True or False                            | False    |
  */
 // clang-format on
@@ -867,6 +868,7 @@ FORCE_INLINE void noc_async_write_one_packet(
  * | dst_noc_addr                           | Encoding of the destination NOC location (x,y)+address  | uint64_t | Results of \a get_noc_addr calls | True     |
  * | size                                   | Size of data transfer in bytes                          | uint32_t | 0..1MB                           | True     |
  * | noc                                    | Which NOC to use for the transaction                    | uint8_t  | 0 or 1                           | False    |
+ * | vc                                     | Which VC to use for the transaction                     | uint32_t | 0-3 (Unicast VCs)                | False    |
  * | max_page_size (template argument)      | Maximum size of a single transaction in bytes           | uint32_t | Any uint32_t number              | False    |
  * | enable_noc_tracing (template argument) | NOC tracing enable                                      | bool     | true or false                    | False    |
  * | posted (template argument)             | Whether the write is posted (i.e. no ack required)      | bool     | true or false                    | False    |
@@ -939,6 +941,7 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
  * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
  * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | vc                                | Which VC to use for the transaction                                      | uint8_t  | 0-3 (Multicast VCs)                        | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
  */
 // clang-format on
@@ -1768,6 +1771,7 @@ inline void noc_semaphore_set_remote(
  * | num_dests              | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | vc                     | Which VC to use for the transaction                                      | uint8_t  | 0-3 (Multicast VCs)                        | False    |
  */
 // clang-format on
 inline void noc_semaphore_set_multicast(
@@ -2475,6 +2479,7 @@ FORCE_INLINE void noc_semaphore_inc(
  * | incr                       | The value to increment by                                                | uint32_t | Any uint32_t value                         | True     |
  * | num_dests                  | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | noc_id                     | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
+ * | vc                         | Which VC to use for the transaction                                      | uint8_t  | 0-3 (Multicast VCs)                        | False    |
  * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked)         | bool     | true or false                              | False    |
  */
 // clang-format on
