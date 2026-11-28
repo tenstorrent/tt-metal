@@ -42,11 +42,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(NUM_TILES_IN_BLOCK);
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-    }
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     {
         START_PERF_MEASURE("INIT")
         const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
@@ -65,11 +62,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<unp_res>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = unp_res;
-
-        if constexpr (!is_fp32_dest_acc_en)
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        }
 
         _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, 1 /*num_tiles*/);
         PROFILER_SYNC();

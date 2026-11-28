@@ -50,12 +50,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     LLK_ASSERT(TILE_CNT == 3, "Where stages three Dest tiles (cond, true, false)");
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-    {
-        // If Dst is 32b and MATH uses FPU datacopy (MOVA2D → ELWADD fallback), we need both SrcA and SrcB formats configured.
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-    }
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     if constexpr (unpack_to_dest)
     {
         // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
@@ -67,11 +63,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
             ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
-
-        if constexpr (!(is_fp32_dest_acc_en && !unpack_to_dest))
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        }
 
         if constexpr (unpack_to_dest)
         {
