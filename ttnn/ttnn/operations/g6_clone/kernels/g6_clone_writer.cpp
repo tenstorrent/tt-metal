@@ -8,7 +8,7 @@
 // flush per block (op_design.md, "Helpers considered and rejected").
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_clone_zones.hpp"
 #include "g6_clone_page_pieces.hpp"
 
 namespace {
@@ -41,11 +41,11 @@ FORCE_INLINE void store_block(
     uint32_t other_noc_pages) {
     constexpr uint8_t other_noc = 1 - noc_index;
     {
-        DeviceZoneScopedN("g6c_wr_wait");
+        G6C_ZONE("g6c_wr_wait");
         cb_wait_front(cb_page_staging, block_pages);
     }
     {
-        DeviceZoneScopedN("g6c_wr_issue");
+        G6C_ZONE("g6c_wr_issue");
         const uint32_t page_bytes = out_accessor.get_aligned_page_size();
         uint32_t l1_read_addr = get_read_ptr(cb_page_staging);
         if constexpr (page_stride != 1) {
@@ -101,7 +101,7 @@ FORCE_INLINE void store_block(
         }
     }
     {
-        DeviceZoneScopedN("g6c_wr_flush");
+        G6C_ZONE("g6c_wr_flush");
         noc_async_writes_flushed();
         if constexpr (noc_split) {
             noc_async_writes_flushed(other_noc);
@@ -165,7 +165,7 @@ void kernel_main() {
 
     // The next program starts right after this one returns: every write must be acked.
     {
-        DeviceZoneScopedN("g6c_wr_drain");
+        G6C_ZONE("g6c_wr_drain");
         noc_async_write_barrier();
         if constexpr (noc_split) {
             noc_async_write_barrier(1 - noc_index);

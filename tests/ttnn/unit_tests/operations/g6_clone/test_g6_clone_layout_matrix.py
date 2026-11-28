@@ -312,3 +312,18 @@ def test_g6_clone_cache_key_partial_vs_full(device, monkeypatch):
         ttnn_output = g6_clone(ttnn_input)
         _assert_clone(ttnn_output, ttnn_input, torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT)
     assert len(op_module._DESCRIPTOR_CACHE) == 2
+
+
+def test_g6_clone_zone_build(device, monkeypatch):
+    """The zone build (G6_CLONE_ZONES) compiles the stage zones and stays bit-exact; plain and zone
+    builds are separate descriptors, so toggling the variable never replays the other build."""
+    monkeypatch.setattr(op_module, "_DESCRIPTOR_CACHE", {})
+    torch.manual_seed(42)
+    shape = (1, 1, 256, 128)
+    torch_input = _random_bits(shape, torch.bfloat16)
+    ttnn_input = _upload(torch_input, device, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    for value, expected in [("", False), ("1", True), ("0", False)]:
+        monkeypatch.setenv(descriptor_module.ZONE_BUILD_ENV, value)
+        assert op_module.g6_clone_plan(ttnn_input)["zone_build"] is expected
+        _assert_clone(g6_clone(ttnn_input), ttnn_input, torch_input, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    assert len(op_module._DESCRIPTOR_CACHE) == 2

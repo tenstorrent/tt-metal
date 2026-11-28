@@ -9,7 +9,7 @@
 // reach an unpacker, so every bit pattern of every dtype survives.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/kernel_profiler.hpp"
+#include "g6_clone_zones.hpp"
 #include "g6_clone_page_pieces.hpp"
 
 namespace {
@@ -43,11 +43,11 @@ FORCE_INLINE void load_block(
     uint32_t other_noc_pages) {
     constexpr uint8_t other_noc = 1 - noc_index;
     {
-        DeviceZoneScopedN("g6c_rd_reserve");
+        G6C_ZONE("g6c_rd_reserve");
         cb_reserve_back(cb_page_staging, block_pages);
     }
     {
-        DeviceZoneScopedN("g6c_rd_issue");
+        G6C_ZONE("g6c_rd_issue");
         const uint32_t page_bytes = x_accessor.get_aligned_page_size();
         uint32_t l1_write_addr = get_write_ptr(cb_page_staging);
         if constexpr (page_stride != 1) {
@@ -103,7 +103,7 @@ FORCE_INLINE void load_block(
         }
     }
     {
-        DeviceZoneScopedN("g6c_rd_barrier");
+        G6C_ZONE("g6c_rd_barrier");
         noc_async_read_barrier();
         if constexpr (noc_split) {
             noc_async_read_barrier(other_noc);

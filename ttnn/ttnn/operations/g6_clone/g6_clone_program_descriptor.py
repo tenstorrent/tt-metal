@@ -24,6 +24,7 @@ per-core block count the kernels derive from `num_pages_this_core`.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 
 import ttnn
@@ -109,6 +110,12 @@ BANK_AFFINE_VC_CYCLE = (1, 2, 3)
 BANK_AFFINE_NOC_SPLIT = "none"
 DEFAULT_UNICAST_VC = 1
 
+# The zone build (BB-21): with this environment variable set to anything but "" or "0", the kernels
+# compile their stage zones (kernels/g6_clone_zones.hpp). Unset, no user zone is built in, profiled or
+# not, so a profiled plain run times the op's own kernels.
+ZONE_BUILD_ENV = "G6_CLONE_ZONES"
+ZONE_BUILD_DEFINE = "G6_CLONE_ZONES"
+
 # L1 the model environment leaves to the op on every core (BB-05).
 L1_BUDGET_BYTES = 1347776
 
@@ -117,6 +124,11 @@ CB_PAGE_STAGING = 0
 # Order of the kernels in the descriptor; patch_addresses indexes by it.
 READER_KERNEL_IDX = 0
 WRITER_KERNEL_IDX = 1
+
+
+def zone_build() -> bool:
+    """Whether the caller asked for the zone build (ZONE_BUILD_ENV)."""
+    return os.environ.get(ZONE_BUILD_ENV, "") not in ("", "0")
 
 
 def tile_geometry(input_tensor: ttnn.Tensor):
@@ -423,6 +435,7 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
         "roles": roles,
         "tensor_pages": tensor_pages,
         "aligned_page_bytes": aligned_page_bytes,
+        "zone_build": zone_build(),
     }
 
 
@@ -483,6 +496,8 @@ def create_program_descriptor(
         + list(output_accessor_args.get_compile_time_args())
     )
 
+    defines = [(ZONE_BUILD_DEFINE, "1")] if plan["zone_build"] else []
+
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
     for idx, ((core, _, start_page, num_pages), (read_vc, write_vc, other_noc_pages)) in enumerate(
@@ -509,6 +524,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_reader.cpp"),
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
+        defines=defines,
         runtime_args=reader_rt_args,
         common_runtime_args=[input_tensor.buffer_address()],
         config=reader_config,
@@ -517,6 +533,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "g6_clone_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
+        defines=defines,
         runtime_args=writer_rt_args,
         common_runtime_args=[output_tensor.buffer_address()],
         config=writer_config,

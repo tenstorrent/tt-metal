@@ -15,7 +15,13 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
-from .g6_clone_program_descriptor import compute_plan, create_program_descriptor, patch_addresses, tile_geometry
+from .g6_clone_program_descriptor import (
+    compute_plan,
+    create_program_descriptor,
+    patch_addresses,
+    tile_geometry,
+    zone_build,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +125,7 @@ def _cache_key(input_tensor):
         input_tensor.buffer_num_pages(),
         input_tensor.buffer_aligned_page_size(),
         tile_geometry(input_tensor),
+        zone_build(),
     )
 
 
