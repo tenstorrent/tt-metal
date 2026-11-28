@@ -561,6 +561,33 @@ def test_softmax_bfloat8_b_intermediates(shape, dim, strategy, device):
     assert passing, out
 
 
+@pytest.mark.parametrize(
+    "op", [ttnn.operations.moreh.softmax, ttnn.operations.moreh.softmin, ttnn.operations.moreh.logsoftmax]
+)
+@pytest.mark.parametrize(
+    "out_dtype, out_shape",
+    [(ttnn.float32, (1, 1, 64, 64)), (ttnn.bfloat8_b, (1, 1, 64, 64)), (ttnn.bfloat16, (1, 1, 32, 32))],
+    ids=["fp32_output", "bfp8_output", "small_output"],
+)
+def test_moreh_softmax_rejects_mismatched_output(op, out_dtype, out_shape, device, expect_error):
+    # The output buffer is written in the input's format, one input-sized page per output page.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(out_shape), dtype=out_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must match the input"):
+        op(x, 3, output_tensor=out)
+
+
+@pytest.mark.parametrize(
+    "op", [ttnn.operations.moreh.softmax, ttnn.operations.moreh.softmin, ttnn.operations.moreh.logsoftmax]
+)
+def test_moreh_softmax_rejects_row_major_output(op, device, expect_error):
+    # The output page size comes from the input's tile layout, so a row-major output would be written as tiled data.
+    x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = ttnn.from_torch(torch.zeros(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "output must be tilized"):
+        op(x, 3, output_tensor=out)
+
+
 def test_moreh_softmax_backward_rejects_mismatched_input_grad(device, expect_error):
     # Every buffer format comes from input_grad, so a different dtype would misread the bf16 gradients.
     tt = lambda t, d=ttnn.bfloat16: ttnn.from_torch(t, dtype=d, layout=ttnn.TILE_LAYOUT, device=device)
