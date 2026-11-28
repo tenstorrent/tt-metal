@@ -52,12 +52,58 @@ _LOCK = threading.Lock()
 app = FastAPI()
 STATE = {}
 
+# Forced-language names the model was trained with (same table as transformers' Qwen3-ASR processor).
+LANGUAGE_CODE_TO_NAME = {
+    "ar": "Arabic",
+    "yue": "Cantonese",
+    "zh": "Chinese",
+    "cs": "Czech",
+    "da": "Danish",
+    "nl": "Dutch",
+    "en": "English",
+    "fil": "Filipino",
+    "fi": "Finnish",
+    "fr": "French",
+    "de": "German",
+    "el": "Greek",
+    "hi": "Hindi",
+    "hu": "Hungarian",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "mk": "Macedonian",
+    "ms": "Malay",
+    "fa": "Persian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ro": "Romanian",
+    "ru": "Russian",
+    "es": "Spanish",
+    "sv": "Swedish",
+    "th": "Thai",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+}
+
+
+_LANGUAGE_NAMES = {**{name.lower(): name for name in LANGUAGE_CODE_TO_NAME.values()}, **LANGUAGE_CODE_TO_NAME}
+
+
+def _language_name(language):
+    """Code or name in any case -> the model's language name. Unknown values pass through unchanged, with a warning."""
+    name = _LANGUAGE_NAMES.get(language.strip().lower())
+    if name is None:
+        print(f"[server] language {language!r} is not in the model's table; passing it through unchanged", flush=True)
+        return language
+    return name
+
 
 def _build_prompt(processor, force_language):
     msgs = [{"role": "system", "content": ""}, {"role": "user", "content": [{"type": "audio", "audio": ""}]}]
     base = processor.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
     if force_language:
-        base = base + f"language {force_language}<asr_text>"
+        base = base + f"language {_language_name(force_language)}<asr_text>"
     return base
 
 
@@ -237,15 +283,14 @@ def _segment(w):
 
 
 def _hallucinated(text):
-    """Repetition hallucination (e.g. '厉害厉害…' on non-speech): one char dominating."""
-    import re
-
+    """Repetition hallucination (e.g. '厉害厉害…' on non-speech). Upstream Qwen3-ASR's detect_and_fix_repetitions
+    thresholds (a character repeated more than 20 times; in 40 or more characters, a unit of 1-20 characters repeated
+    20 times in a row), plus short segments that are almost all one 1-3 letter unit repeated 4 or more times."""
     s = re.sub(r"[\s\W_]+", "", text)
-    if len(s) < 10:
-        return False
-    from collections import Counter
-
-    return Counter(s).most_common(1)[0][1] / len(s) > 0.35
+    if re.search(r"(.)\1{20}", s) or (len(s) >= 40 and re.search(r"(.{1,20}?)\1{19}", s)):
+        return True
+    runs = [m.group(0) for m in re.finditer(r"(\D{1,3}?)\1{3,}", s)]
+    return bool(runs) and len(max(runs, key=len)) >= 0.8 * len(s)
 
 
 @app.get("/health")
