@@ -7,6 +7,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "autograd/tensor.hpp"
+#include "core/distributed/cp_sharding.hpp"
 #include "llama.hpp"
 #include "models/common/transformer_common.hpp"
 #include "models/llama.hpp"
@@ -54,6 +55,7 @@ private:
 };
 
 [[nodiscard]] PipelineParallelConfig read_config(const YAML::Node& config);
+void reject_unsupported_cp_sharding(core::distributed::CpSharding sharding);
 [[nodiscard]] std::shared_ptr<PipelineParallelLlama> create(
     const LlamaConfig& config, const PipelineParallelConfig& pipeline_parallel_config, bool is_tensor_parallel = false);
 

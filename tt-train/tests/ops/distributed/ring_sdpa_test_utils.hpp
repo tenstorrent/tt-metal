@@ -7,9 +7,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <vector>
 
+#include "autograd/auto_context.hpp"
+#include "core/distributed/cp_sharding.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "xtensor/containers/xarray.hpp"
 #include "xtensor/generators/xbuilder.hpp"
 
@@ -109,6 +113,58 @@ inline SdpaGrads sdpa_backward(
         }
     }
     return grads;
+}
+
+// Moves the sequence axis of a (B, H, S, D) tensor between sample order and the order the CP devices hold it in.
+inline xt::xarray<float> permute_cp_order(
+    const xt::xarray<float>& x, core::distributed::CpSharding sharding, uint32_t cp_size, bool to_device) {
+    const size_t B = x.shape()[0], H = x.shape()[1], S = x.shape()[2], D = x.shape()[3];
+    xt::xarray<float> out = xt::empty<float>(x.shape());
+    for (size_t bh = 0; bh < B * H; ++bh) {
+        for (size_t pos = 0; pos < S; ++pos) {
+            const size_t global = core::distributed::cp_global_position(sharding, pos, S, cp_size);
+            const size_t from = to_device ? global : pos;
+            const size_t to = to_device ? pos : global;
+            std::copy_n(x.data() + (bh * S + from) * D, D, out.data() + (bh * S + to) * D);
+        }
+    }
+    return out;
+}
+
+// CP on the first non-trivial axis of the open mesh, and TP on the second when there are two.
+inline void initialize_cp_parallelism_context() {
+    const auto shape = autograd::ctx().get_device().shape();
+    uint32_t non_trivial_axes = 0U;
+    for (uint32_t i = 0; i < shape.dims(); ++i) {
+        non_trivial_axes += shape[i] > 1U ? 1U : 0U;
+    }
+    autograd::ctx().initialize_parallelism_context(
+        {.enable_ddp = false, .enable_tp = non_trivial_axes > 1U, .cp = autograd::ContextParallelConfig{}});
+}
+
+// Joins the per-device CP shards of a (B, H, S_local, D) tensor and returns the sequence in sample order.
+inline xt::xarray<float> gather_cp_sequence(
+    const ttnn::Tensor& tensor, uint32_t cp_axis, core::distributed::CpSharding sharding) {
+    const auto shards = core::to_xtensor<float>(tensor, core::IdentityComposer{});
+    const auto mesh_shape = tensor.device()->shape();
+    const uint32_t ring_size = mesh_shape[cp_axis];
+    uint32_t stride = 1U;
+    for (uint32_t i = mesh_shape.dims(); i-- > cp_axis + 1U;) {
+        stride *= mesh_shape[i];
+    }
+    const auto& first = shards[0];
+    const size_t B = first.shape()[0], H = first.shape()[1], S_local = first.shape()[2], D = first.shape()[3];
+    xt::xarray<float> out = xt::empty<float>({B, H, S_local * ring_size, D});
+    for (uint32_t r = 0; r < ring_size; ++r) {
+        const auto& shard = shards[r * stride];
+        for (size_t bh = 0; bh < B * H; ++bh) {
+            std::copy_n(
+                shard.data() + bh * S_local * D,
+                S_local * D,
+                out.data() + (bh * S_local * ring_size + r * S_local) * D);
+        }
+    }
+    return permute_cp_order(out, sharding, ring_size, /*to_device=*/false);
 }
 
 }  // namespace ttml::test_utils::ring_sdpa

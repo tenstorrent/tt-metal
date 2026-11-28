@@ -57,6 +57,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp

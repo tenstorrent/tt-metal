@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Single-device tests for the online-softmax merge that ring attention runs after every ring
-// step (ttml::ops::distributed::detail::online_softmax_merge), against a float64 host reference.
+// step (ttml::ops::distributed::online_softmax_merge), against a float64 host reference.
 // Covers the "no contribution" lse of -inf on either side, lse values large enough that a naive
 // log(exp(a) + exp(b)) overflows FP32, large gaps between the two lse values, and a full ring of
 // merges compared with the direct softmax-weighted combination.
@@ -22,7 +22,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ops/distributed/ring_attention_sdpa.hpp"
+#include "ops/distributed/ring_attention_utils.hpp"
 #include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -274,8 +274,7 @@ TEST_P(RingAttentionMergeTest, SingleMergeMatchesReference) {
     DeviceMergeInputs dev = upload(in);
     const MergeResult ref = reference_merge(in);
 
-    ttml::ops::distributed::detail::online_softmax_merge(
-        dev.accum, dev.running_lse, dev.step_output, dev.intermediates);
+    ttml::ops::distributed::online_softmax_merge(dev.accum, dev.running_lse, dev.step_output, dev.intermediates);
     ASSERT_EQ(dev.accum.dtype(), ttnn::DataType::FLOAT32);
     ASSERT_EQ(dev.running_lse.dtype(), ttnn::DataType::FLOAT32);
     ASSERT_EQ(dev.accum.logical_shape(), ttnn::Shape({B, H, S, D}));
@@ -338,8 +337,7 @@ TEST_P(RingAttentionMergeTest, RingOfMergesMatchesDirectCombination) {
         const RingStepInputs in = make_ring_step_inputs(step_lse, D, /*seed=*/102U + 10U * step);
         step_outputs.push_back(in.step_output);
         step_lses.push_back(step_lse);
-        ttml::ops::distributed::detail::online_softmax_merge(
-            accum, running_lse, in.dev_step_output, in.dev_intermediates);
+        ttml::ops::distributed::online_softmax_merge(accum, running_lse, in.dev_step_output, in.dev_intermediates);
     }
 
     xt::xarray<double> ref_accum = xt::zeros<double>(full_shape);

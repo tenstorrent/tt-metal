@@ -13,6 +13,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "models/distributed/pipeline_parallel_llama.hpp"
 #include "ops/rope_op.hpp"
 #include "test_utils/mesh_utils.hpp"
 
@@ -60,6 +61,22 @@ TEST(CpShardingTest, ZigZagMatchesHandWrittenLayout) {
     };
     EXPECT_EQ(layout(8U, 2U), (std::vector<uint32_t>{0, 1, 6, 7, 2, 3, 4, 5}));
     EXPECT_EQ(layout(16U, 4U), (std::vector<uint32_t>{0, 1, 14, 15, 2, 3, 12, 13, 4, 5, 10, 11, 6, 7, 8, 9}));
+}
+
+TEST(CpShardingTest, ReadCpShardingAcceptsOnlyKnownNames) {
+    EXPECT_EQ(ttml::core::distributed::read_cp_sharding("contiguous"), CpSharding::Contiguous);
+    EXPECT_EQ(ttml::core::distributed::read_cp_sharding("zigzag"), CpSharding::ZigZag);
+    EXPECT_THAT(
+        [] { ttml::core::distributed::read_cp_sharding("zig-zag"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("Supported: contiguous, zigzag")));
+}
+
+TEST(CpShardingTest, PipelineParallelRejectsZigZag) {
+    using ttml::models::distributed::pipeline_parallel_llama::reject_unsupported_cp_sharding;
+    EXPECT_NO_THROW(reject_unsupported_cp_sharding(CpSharding::Contiguous));
+    EXPECT_THAT(
+        [] { reject_unsupported_cp_sharding(CpSharding::ZigZag); },
+        ThrowsMessage<std::logic_error>(HasSubstr("not supported with pipeline parallelism")));
 }
 
 TEST(CpShardingTest, ZigZagRejectsSequenceNotSplitIntoWholeBlocks) {

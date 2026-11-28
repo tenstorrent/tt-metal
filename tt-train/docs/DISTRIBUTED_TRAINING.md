@@ -481,6 +481,7 @@ In the device config, you can specify which parallelism strategies to use:
 - **`enable_pp`**: Enable pipeline parallelism (shard layers sequentially)
 - **`enable_cp`**: Enable context parallelism (shard input along sequence dimension)
 - **`cp_reuse_forward_kv`**: With CP, ring attention keeps the forward's K/V for backward instead of shifting them again (default off; costs 2 × (cp_size − 2) K-sized tensors per device per layer that holds them)
+- **`cp_sharding`**: How CP splits the sequence: `contiguous` (default) gives device d block d of N; `zigzag` gives it blocks d and 2N−1−d of 2N, which balances causal ring attention. Needs `enable_cp: true`, a sequence length divisible by 2 × cp_size with a tile-aligned half per device (local sequence a multiple of 64), and no pipeline parallelism. Design and results: [CONTEXT_PARALLEL_ZIGZAG.md](CONTEXT_PARALLEL_ZIGZAG.md)
 
 ### Mesh Shape Determination
 

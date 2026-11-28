@@ -6,6 +6,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/discovery/cluster.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/observability/memory_reporter.hpp>
@@ -247,6 +248,7 @@ struct DeviceConfig {
     bool enable_tp = false;
     bool enable_cp = false;
     bool cp_reuse_forward_kv = false;
+    ttml::core::distributed::CpSharding cp_sharding = ttml::core::distributed::CpSharding::Contiguous;
 };
 
 DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
@@ -260,6 +262,11 @@ DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
     config.enable_tp = device_node["enable_tp"].as<bool>(false);
     config.enable_cp = device_node["enable_cp"].as<bool>(false);
     config.cp_reuse_forward_kv = device_node["cp_reuse_forward_kv"].as<bool>(false);
+    const auto cp_sharding_name = device_node["cp_sharding"].as<std::string>("contiguous");
+    config.cp_sharding = ttml::core::distributed::read_cp_sharding(cp_sharding_name);
+    if (!config.enable_cp && config.cp_sharding != ttml::core::distributed::CpSharding::Contiguous) {
+        throw std::runtime_error(fmt::format("cp_sharding: {} needs enable_cp: true", cp_sharding_name));
+    }
 
     auto mesh_shape_node = device_node["mesh_shape"];
     bool multidevice = config.enable_ddp || config.enable_tp || config.enable_cp;
@@ -445,6 +452,7 @@ int main(int argc, char **argv) {
         fmt::println("  Tensor parallel enabled: {}", device_config.enable_tp);
         fmt::println("  Context parallel enabled: {}", device_config.enable_cp);
         fmt::println("  CP reuse forward K/V: {}", device_config.cp_reuse_forward_kv);
+        fmt::println("  CP sharding: {}", enchantum::to_string(device_config.cp_sharding));
         fmt::println("  Distributed data-parallel enabled: {}", device_config.enable_ddp);
         fmt::println("  Mesh shape: {}", device_config.mesh_shape);
         fmt::println("  Device IDs: {}", device_config.device_ids);
@@ -453,7 +461,8 @@ int main(int argc, char **argv) {
             {.enable_ddp = device_config.enable_ddp,
              .enable_tp = device_config.enable_tp,
              .cp = device_config.enable_cp ? std::make_optional(ttml::autograd::ContextParallelConfig{
-                                                 .reuse_forward_kv = device_config.cp_reuse_forward_kv})
+                                                 .reuse_forward_kv = device_config.cp_reuse_forward_kv,
+                                                 .sharding = device_config.cp_sharding})
                                            : std::nullopt});
     }
 
@@ -571,8 +580,27 @@ int main(int argc, char **argv) {
     };
     CachedHostData cached_data;
 
+    // Sample position of each token in device order; empty when the device order is the sample order.
+    std::vector<uint32_t> cp_token_order;
+    if (is_pctx_initialized()) {
+        const auto &pctx = ttml::autograd::ctx().get_parallelism_context();
+        switch (pctx.get_cp_config().sharding) {
+            case ttml::core::distributed::CpSharding::Contiguous: break;
+            case ttml::core::distributed::CpSharding::ZigZag:
+                ttml::core::distributed::validate_cp_sequence_length(
+                    ttml::core::distributed::CpSharding::ZigZag, sequence_length, pctx.get_cp_size());
+                cp_token_order.resize(sequence_length);
+                for (uint32_t pos = 0; pos < sequence_length; ++pos) {
+                    cp_token_order[pos] = ttml::core::distributed::cp_global_position(
+                        ttml::core::distributed::CpSharding::ZigZag, pos, sequence_length, pctx.get_cp_size());
+                }
+                break;
+        }
+    }
+
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, device, &cached_data](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, cp_token_order = std::move(cp_token_order)](
+            std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
@@ -584,6 +612,13 @@ int main(int argc, char **argv) {
             data.reserve((size_t)batch_size * sequence_length);
             targets.reserve((size_t)batch_size * sequence_length);
             for (auto &[features, target_span] : samples) {
+                if (!cp_token_order.empty()) {
+                    for (const uint32_t pos : cp_token_order) {
+                        data.push_back(features[pos]);
+                        targets.push_back(target_span[pos]);
+                    }
+                    continue;
+                }
                 std::copy(features.begin(), features.end(), std::back_inserter(data));
                 std::copy(target_span.begin(), target_span.end(), std::back_inserter(targets));
             }
