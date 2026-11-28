@@ -1,0 +1,20 @@
+name: DiT review
+
+# Hands PR and review events to dit-review-impl.yaml, which re-reads everything it
+# needs from the API. No secrets and no write access; nothing here is trusted (a PR
+# runs its own copy of this file).
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, converted_to_draft, synchronize, edited, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions: {}
+
+jobs:
+  handoff:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Hand over to dit-review-impl.yaml
+        run: echo "dit-review-impl.yaml handles this event"
