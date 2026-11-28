@@ -11,8 +11,8 @@
 // tiles) never leave L1.
 // A bfloat8_b input (patch_bfp8_nans) also waits the block's cb_nan_marks page and stores the host's
 // NaN rendering over the marked datums before any row is written (g6_to_layout_bfp8_nan_marks.hpp).
-// Rows are addressed through get_noc_addr(page, offset): the RM page stride is the aligned
-// page size, not 2 * W.
+// Rows are issued per tile-row by row_issue::write_rows (g6_to_layout_row_issue.hpp): consecutive
+// pages, the RM page stride being the aligned page size, not 2 * W.
 // Zones (profiler builds only): per block, the wait and the block's work each have a zone; the
 // flush inside the work is a sum zone (TT_METAL_PROFILER_SUM).
 
@@ -20,6 +20,7 @@
 #include "api/debug/kernel_profiler.hpp"
 #include "g6_to_layout_block_walk.hpp"
 #include "g6_to_layout_bfp8_nan_marks.hpp"
+#include "g6_to_layout_row_issue.hpp"
 
 using namespace g6_to_layout;
 
@@ -60,13 +61,14 @@ void kernel_main() {
             uint32_t tile_row_src = get_read_ptr(cb_row_block);
             for (uint32_t i = 0; i < block.rows; ++i) {
                 const uint32_t g = block.tile_row + i;
-                const uint32_t live_rows = live_rows_of(g);
-                const uint32_t first_page = first_row_page_of(g);
-                uint32_t src = tile_row_src;
-                for (uint32_t r = 0; r < live_rows; ++r) {
-                    noc_async_write(src, output.get_noc_addr(first_page + r, segment_offset), segment_bytes);
-                    src += Geometry::stage_row_bytes;
-                }
+                row_issue::write_rows(
+                    output,
+                    first_row_page_of(g),
+                    live_rows_of(g),
+                    segment_offset,
+                    segment_bytes,
+                    tile_row_src,
+                    Geometry::stage_row_bytes);
                 tile_row_src += Geometry::stage_tile_row_bytes;
             }
             {

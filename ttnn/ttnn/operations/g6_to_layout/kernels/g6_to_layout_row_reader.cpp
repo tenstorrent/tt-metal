@@ -16,6 +16,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/kernel_profiler.hpp"
 #include "g6_to_layout_block_walk.hpp"
+#include "g6_to_layout_row_issue.hpp"
 
 using namespace g6_to_layout;
 
@@ -23,25 +24,30 @@ namespace {
 
 constexpr uint32_t cb_row_stage = get_compile_time_arg_val(Geometry::next_ct_arg + 0);
 constexpr bool condition_for_bfp8 = get_compile_time_arg_val(Geometry::next_ct_arg + 1) != 0;
-constexpr uint32_t input_args_offset = Geometry::next_ct_arg + 2;
+// Minimum cycles between two row reads (row_issue::ReadPacer); the host sets it for an L1 source.
+constexpr uint32_t row_read_gap = get_compile_time_arg_val(Geometry::next_ct_arg + 2);
+constexpr uint32_t input_args_offset = Geometry::next_ct_arg + 3;
+// One tile-row of reads may go out unpaced.
+using Pacer = row_issue::ReadPacer<row_read_gap, TILE_HW>;
 
 constexpr uint32_t block_tiles = Geometry::block_rows_tiles * Geometry::block_cols_tiles;
 // A bfp8 exponent group: the 16 values of one face row.
 constexpr uint32_t GROUP_BYTES = FACE_ROW_BYTES;
 constexpr bool zero_group_tails = condition_for_bfp8 && Geometry::width % FACE_HW != 0;
 
-// Live rows of block tile-row i -> stage rows 0.., one read each.
+// Live rows of block tile-row i -> stage rows 0.., one read each (g6_to_layout_row_issue.hpp).
 template <typename Accessor>
-FORCE_INLINE void load_tile_row(const Block& block, uint32_t i, uint32_t stage, const Accessor& input) {
+FORCE_INLINE void load_tile_row(const Block& block, uint32_t i, uint32_t stage, const Accessor& input, Pacer& pacer) {
     const uint32_t g = block.tile_row + i;
-    const uint32_t first_page = first_row_page_of(g);
-    const uint32_t live_rows = live_rows_of(g);
-    const uint32_t segment_offset = block.col * TILE_ROW_BYTES;
-    const uint32_t segment_bytes = row_segment_bytes(block);
-    for (uint32_t r = 0; r < live_rows; ++r) {
-        noc_async_read(input.get_noc_addr(first_page + r, segment_offset), stage, segment_bytes);
-        stage += Geometry::stage_row_bytes;
-    }
+    row_issue::read_rows(
+        input,
+        first_row_page_of(g),
+        live_rows_of(g),
+        block.col * TILE_ROW_BYTES,
+        row_segment_bytes(block),
+        stage,
+        Geometry::stage_row_bytes,
+        pacer);
 }
 
 // Bit 7 of each half of a bf16 pair set where that datum's 7 mantissa bits are all ones; XOR-ing
@@ -108,6 +114,7 @@ template <typename Accessor>
 FORCE_INLINE void load_for_tilize(uint32_t tile_begin, uint32_t num_tiles, const Accessor& input) {
     BlockWalk blocks{tile_begin, tile_begin + num_tiles};
     Block block;
+    Pacer pacer;
     while (blocks.next(block)) {
         {
             DeviceZoneScopedN("reserve_row_stage");
@@ -117,7 +124,7 @@ FORCE_INLINE void load_for_tilize(uint32_t tile_begin, uint32_t num_tiles, const
         {
             DeviceZoneScopedN("load_rows_block");
             for (uint32_t i = 0; i < block.rows; ++i) {
-                load_tile_row(block, i, stage + i * Geometry::stage_tile_row_bytes, input);
+                load_tile_row(block, i, stage + i * Geometry::stage_tile_row_bytes, input, pacer);
             }
             {
                 DeviceZoneScopedSumN1("row_stage_read_barrier");

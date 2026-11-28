@@ -94,6 +94,10 @@ SLOT_PIPELINE_BLOCKS_PER_CORE = 128
 # whatever the block's width, so narrower blocks cost the writer nothing and let the untilize of one
 # block overlap the reads of the next. c294 [1,131072]: 20.7 us at the core's whole span, 18.8 at 8.
 SHORT_IMAGE_BLOCK_COLS = 8
+# Grid-wide bytes per cycle of row reads from L1 banks above which the reads congest and collapse
+# (measured: 256-B rows on 110 cores gain from a ~30-cycle issue, 512-B rows lose 30% at that rate);
+# an L1 source spaces each core's row reads to stay under it (kernels/g6_to_layout_row_issue.hpp).
+L1_ROW_READ_GRID_BYTES_PER_CYCLE = 780
 
 # L1 per core the model leaves to the op (BB-05); an L1 output's pages on a core count inside it.
 L1_BUDGET_BYTES = 1347776
@@ -592,7 +596,11 @@ class G6ToLayoutProgram:
                 _cb(CB_TILE_BLOCK, plan.cb_bytes[CB_TILE_BLOCK], plan.out_tile_bytes, all_cores, out_format),
             ]
             reader_source, writer_source = "g6_to_layout_row_reader.cpp", "g6_to_layout_tile_writer.cpp"
-            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, int(bfp8_out)]
+            row_read_gap = 0
+            if input_tensor.memory_config().buffer_type == ttnn.BufferType.L1:
+                row_bytes = min(g.width * DATUM_BYTES, plan.block_cols_tiles * TILE_ROW_BYTES)
+                row_read_gap = _div_up(row_bytes * plan.num_cores, L1_ROW_READ_GRID_BYTES_PER_CYCLE)
+            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, int(bfp8_out), row_read_gap]
             writer_ct_args = geometry_ct_args + [CB_TILE_BLOCK]
             compute_source = "g6_to_layout_tilize_compute.cpp"
             compute_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK]
