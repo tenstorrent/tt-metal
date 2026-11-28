@@ -8,51 +8,52 @@
 #include "ckernel_defs.h"
 #include "cmath_common.h"
 #include "ckernel_sfpu_log.h"
-#include "ckernel_sfpu_sqrt_custom.h"
 
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
+// Sets p (central, u >= -7: every bf16/fp16 input) and t (fp32 tail, u down to -16) to erfinv(x) / x,
+// u = ln(1 - x^2) (Giles 2010); the caller multiplies by x, selects t where u_plus_7 < 0, copies x's sign.
 template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
-    // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
-    // This approximation defines erfinv(x) as:
-    // erfinv(x) = sqrt( - 2/(pi*a) - log(1 - x^2)/2 + sqrt( ( 2/(pi*a) + log(1 - x^2)) ^2 - 1/a log(1 - x^2)) )
-    // Where a is a polynomial coefficient used in the approximation of the error function (and reused in inverse error
-    // function)
+sfpi_inline void calculate_erfinv_body(sfpi::vFloat x, sfpi::vFloat& p, sfpi::vFloat& t, sfpi::vFloat& u_plus_7) {
+    sfpi::vFloat u = calculate_log_body<false, false, true, false, true>(1.0f - x * x, 0);
 
-    // Compute log(1 - x^2)
-    sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
+    // Central polynomial, u in [-7, 0], degree 7.
+    p = -0x1.3p-22f;
+    p = p * u + -0x1.0ap-17f;
+    p = p * u + -0x1.47cp-14f;
+    p = p * u + -0x1.6b4p-13f;
+    p = p * u + 0x1.3p-9f;
+    p = p * u + 0x1.7b4fap-7f;
+    p = p * u + -0x1.db1b3ap-3f;
+    p = p * u + 0x1.c5c02p-1f;
 
-    // Paper sets a constant a = 0.147.
-    // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = -4.330746750799873f;  // -2 / (pi * a)
-    constexpr float OneDivA = 6.802721088435375f;  // 1/a
+    // Computed ahead of the tail polynomial so the caller's SFPSETCC doesn't wait on this SFPMAD.
+    u_plus_7 = u + 7.0f;
 
-    // tmp = -2 / (pi * a) - log(1 - x^2)/2
-    sfpi::vFloat tmp = TwoPiA + -0.5f * log_value;
-
-    // calculated_value = temp + sqrt( temp^2 - log_value / a)
-    sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
-    calculated_value = tmp + intermediate_result;
-
-    // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false, 2>(calculated_value);
-
-    return result;
+    // Tail polynomial, u in [-16, -7], degree 4.
+    t = -0x1.aep-18f;
+    t = t * u + -0x1.c24p-12f;
+    t = t * u + -0x1.a58p-7f;
+    t = t * u + -0x1.405c58p-2f;
+    t = t * u + 0x1.93939cp-1f;
 }
 
 template <bool APPROXIMATION_MODE>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_erfinv_body<false>(in);
-        in = sfpi::dst_reg[0];  // reload due to register pressure
-        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
+        sfpi::vFloat p, t, u_plus_7;
+        calculate_erfinv_body<false>(sfpi::dst_reg[0], p, t, u_plus_7);
+        // x is reloaded rather than kept live across the log, which needs every LREG.
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        // Selecting after the multiply puts the SFPSETCC in the SFPMUL's result-latency slot.
+        sfpi::vFloat r = p * x;
+        v_if(u_plus_7 < 0.0f) { r = t * x; }
+        v_endif;
+        sfpi::dst_reg[0] = sfpi::copysgn(r, x);
         sfpi::dst_reg++;
     }
 }
@@ -60,7 +61,7 @@ inline void calculate_erfinv() {
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    log_init<false, false, false>();
+    log_init<false, false, true>();
 }
 
 }  // namespace sfpu

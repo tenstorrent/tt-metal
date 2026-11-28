@@ -444,8 +444,9 @@ def test_angle_conversion_ops(device, ttnn_op, low, high):
 
 
 def test_erfinv(device):
-    # Includes ±1 (signed inf). largest err finite x=±0.99609375 (2.037 vs 2.040):
-    # max |err|=3.37e-3, max |err|/|device|=1.65e-3.
+    # Includes ±1 (signed inf).
+    # Blackhole: max |err|=3.37e-3 at x=±0.99609375 (2.037 vs 2.040), max |err|/|device|=1.65e-3.
+    # Wormhole: max |err|=1.02e-5, max relative err 5.7e-6, max |err| 4.5e-9 for |x| < 1e-3.
     input_tensor = generate_float32_bits_in_range(-1.0, 1.0)
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
@@ -454,7 +455,23 @@ def test_erfinv(device):
     golden = golden_function(input_tensor, device=device)
 
     result = ttnn.to_torch(ttnn.erfinv(tt_in))
-    assert_allclose(expected_result=golden, actual_result=result, atol=3.4e-3, rtol=1.7e-3)
+    if is_blackhole():
+        assert_allclose(expected_result=golden, actual_result=result, atol=3.4e-3, rtol=1.7e-3)
+    else:
+        assert_allclose(expected_result=golden, actual_result=result, atol=1e-7, rtol=1e-5)
+
+
+@pytest.mark.skipif(is_blackhole(), reason="tail accuracy measured on wormhole only")
+def test_erfinv_fp32_tail(device):
+    # fp32 inputs 1 - k * 2^-24 (k = 1..8192), both signs: |x| in [0.99951, 1), where no bf16 value
+    # lies. Max relative err 1.47e-5 against the float64 reference.
+    k = torch.arange(1, 2**13 + 1, dtype=torch.float64)
+    x = (1.0 - k * 2.0**-24).to(torch.float32)
+    input_tensor = torch.cat([x, -x]).reshape(-1, 32)
+
+    result = ttnn.to_torch(ttnn.erfinv(to_float32_tt_tensor(input_tensor, device)))
+    golden = torch.erfinv(input_tensor.to(torch.float64)).to(torch.float32)
+    assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=2e-5)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
