@@ -20,6 +20,7 @@ void kernel_main() {
     constexpr uint32_t scores_page_size = get_named_compile_time_arg_val("scores_page_size");
     constexpr uint32_t weights_page_size = get_named_compile_time_arg_val("weights_page_size");
     constexpr uint32_t indices_page_size = get_named_compile_time_arg_val("indices_page_size");
+    constexpr uint32_t padding_config_page_size = get_named_compile_time_arg_val("padding_config_page_size");
     constexpr uint32_t experts = get_named_compile_time_arg_val("experts");
     constexpr uint32_t width_tiles = get_named_compile_time_arg_val("width_tiles");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("tile_height");
@@ -44,7 +45,8 @@ void kernel_main() {
 
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
-    const auto padding_config_accessor = TensorAccessor(padding_config_args, padding_config_addr);
+    const auto padding_config_accessor =
+        TensorAccessor(padding_config_args, padding_config_addr, padding_config_page_size);
 
     // Optional padding awareness: when a per-device [num_real_tokens, pad_side] row is supplied
     // (addr != 0), padded token rows have their output expert indices overwritten with the sentinel
@@ -57,11 +59,7 @@ void kernel_main() {
         padding_config_cb.reserve_back(1);
         const uint32_t padding_config_l1_addr = padding_config_cb.get_write_ptr();
         noc.async_read(
-            padding_config_accessor,
-            padding_config_cb,
-            padding_config_cb.get_tile_size(),
-            {.page_id = 0},
-            {.offset_bytes = 0});
+            padding_config_accessor, padding_config_cb, padding_config_page_size, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
 
         volatile tt_l1_ptr uint32_t* padding_config_ptr =
