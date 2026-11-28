@@ -65,6 +65,7 @@ struct BufferStressTestConfig {
 
     // Used for wrap test
     uint32_t num_iterations;
+    uint32_t num_issue_queue_wraps;  // stop early once the writes fill the issue queue this many times
     uint32_t num_unique_vectors;
 };
 
@@ -629,8 +630,13 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
 
     vector<std::shared_ptr<distributed::MeshBuffer>> bufs;
     uint32_t start = 0;
+    const uint32_t issue_queue_size =
+        mesh_device->impl().get_devices()[0]->sysmem_manager().get_issue_queue_size(static_cast<uint8_t>(cq.id()));
+    const uint64_t bytes_to_wrap = uint64_t{config.num_issue_queue_wraps} * issue_queue_size;
+    uint64_t bytes_written = 0;
+    uint32_t num_writes = 0;
 
-    for (uint32_t i = 0; i < config.num_iterations; i++) {
+    for (uint32_t i = 0; i < config.num_iterations && bytes_written < bytes_to_wrap; i++) {
         size_t buf_size = unique_vectors[i % unique_vectors.size()].size() * sizeof(uint32_t);
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = config.page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
@@ -649,7 +655,16 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             unique_vectors[i % unique_vectors.size()],
             distributed::MeshCoordinate(0, 0),
             false);
+        bytes_written += buf_size;
+        num_writes++;
     }
+    log_info(
+        tt::LogTest,
+        "Wrote {} B in {} writes, {:.1f}x the {} B issue queue",
+        bytes_written,
+        num_writes,
+        static_cast<double>(bytes_written) / issue_queue_size,
+        issue_queue_size);
 
     log_info(tt::LogTest, "Comparing {} buffers", bufs.size());
     bool pass = true;
@@ -2642,8 +2657,14 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, StressWrapTest) {
         return;  // skip for WH B0
     }
 
+    // 10000 writes of ~4 MB wrap a 768 MB hugepage issue queue ~50 times; a smaller issue queue (e.g. a 12 MB
+    // DRAM-backed one) stops at 64 wraps instead of thousands.
     BufferStressTestConfig config = {
-        .page_size = 4096, .max_num_pages_per_buffer = 2000, .num_iterations = 10000, .num_unique_vectors = 20};
+        .page_size = 4096,
+        .max_num_pages_per_buffer = 2000,
+        .num_iterations = 10000,
+        .num_issue_queue_wraps = 64,
+        .num_unique_vectors = 20};
     for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             mesh_device, mesh_device->mesh_command_queue(), config));
