@@ -10,13 +10,19 @@
 #include <array>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <string>
 #include <utility>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/mesh_workload.hpp>
 
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
+#include "jit_build/build_env_manager.hpp"
+#include "llrt/hal.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
@@ -31,12 +37,30 @@ using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
-TEST_F(ProgramSpecTestQuasar, DFBCustomTileCompiles) {
+// MeshWorkload construction runs the full compile, including binary finalization. The checks
+// confirm the build really happened: every kernel has its binaries, and finalization placed them
+// in the kernel config buffer. Kernels link against the firmware ELFs, so this also shows the
+// firmware was built.
+TEST_F(ProgramSpecTestQuasar, CPU_DFBCustomTileCompiles) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.dataflow_buffers[0].tile_format_metadata = Tile{{8, 32}};
 
-    Program program(*mesh_device_, spec);
-    EXPECT_NO_THROW(program.impl().compile(mesh_device_.get()));
+    distributed::MeshWorkload workload(*mesh_device_, spec);
+    const Program& program = workload.get_programs().begin()->second;
+    MetalContext& metal_context = mesh_device_->impl().metal_context();
+    const uint64_t build_key =
+        metal_context.build_env_manager().get_device_build_env(mesh_device_->build_id()).build_key();
+
+    for (const std::string kernel_name : {"dm_kernel", "compute_kernel"}) {
+        SCOPED_TRACE(kernel_name);
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel_by_spec_name(kernel_name);
+        for (const ll_api::memory* binary : kernel->binaries(build_key)) {
+            EXPECT_GT(binary->get_packed_size(), 0u);
+        }
+    }
+
+    const uint32_t tensix_index = metal_context.hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
+    EXPECT_GT(program.impl().get_program_config(tensix_index).kernel_text_size, 0u);
 }
 
 // LLKOperandFrom pulls experimental/2_0/llk_operand.h (Blackhole-only). Fold checks that name the

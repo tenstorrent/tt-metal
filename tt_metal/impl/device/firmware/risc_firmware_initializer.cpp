@@ -47,20 +47,6 @@ namespace tt::tt_metal {
 
 namespace {
 
-// Mock devices reuse the on-disk firmware sources of a real arch's package.
-// We only ship sources for Wormhole and Blackhole today; Quasar mock has
-// no `tt-2xx/trisc.cc` etc. installed at the expected path, so calling
-// build_firmware() against a Quasar mock blows up in cc1plus with
-// "No such file or directory". Real silicon devices always have sources
-// available and bypass this check.
-bool mock_firmware_sources_available_for(tt::ARCH arch) {
-    switch (arch) {
-        case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::BLACKHOLE: return true;
-        default: return false;
-    }
-}
-
 int firmware_wait_timeout_ms(const llrt::RunTimeOptions& rtoptions) {
     // Default timeout for real silicon.
     constexpr int kDefaultTimeoutMs = 10'000;
@@ -200,16 +186,9 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
             // "non constant or forward reference address expression". So we run it for mock as
-            // well as real devices, with two exceptions:
-            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
-            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
-            //      yet supported and would require a separate sources fix.
-            //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
-            //      riscv firmware ELFs are never linked or consumed.
-            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
-                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
-                                        !mock_firmware_sources_available_for(cluster_.arch()));
-            if (!skip_fw_build) {
+            // well as real devices. Emule is the exception: its kernel JIT uses an x86 toolchain, so
+            // the riscv firmware ELFs are never linked or consumed.
+            if (cluster_.get_target_device_type() != tt::TargetDevice::Emule) {
                 build_env_manager.build_firmware(device_id);
             }
             if (!cluster_.is_mock_or_emulated()) {

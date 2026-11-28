@@ -25,17 +25,17 @@
 namespace tt::tt_metal {
 
 // ============================================================================
-// MockAllocatorTest — single mock device fixture
+// MockAllocatorTest — single mock device fixture, one instance per arch
 // ============================================================================
 
-class MockAllocatorTest : public ::testing::Test {
+class MockAllocatorTest : public ::testing::TestWithParam<tt::ARCH> {
 protected:
     std::unique_ptr<MetalEnv> mock_env_;
     std::shared_ptr<distributed::MeshDevice> mock_device_;
 
     void SetUp() override {
-        mock_env_ = std::make_unique<MetalEnv>(MetalEnvDescriptor{
-            .mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
+        mock_env_ = std::make_unique<MetalEnv>(
+            MetalEnvDescriptor{.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(GetParam(), 1)});
         auto mesh_shape = mock_env_->get_system_mesh().shape();
         mock_device_ = distributed::MeshDevice::open_mesh_device(*mock_env_, distributed::MeshDeviceConfig(mesh_shape));
         ASSERT_GT(mock_device_->num_devices(), 0u);
@@ -47,16 +47,16 @@ protected:
     }
 };
 
-TEST_F(MockAllocatorTest, CPU_MockDeviceCreationAndQueries) {
+TEST_P(MockAllocatorTest, CPU_MockDeviceCreationAndQueries) {
     const auto props = mock_env_->get_device_properties();
-    EXPECT_EQ(props.arch(), tt::ARCH::WORMHOLE_B0);
+    EXPECT_EQ(props.arch(), GetParam());
     EXPECT_GT(props.node_local_mem_size(), 0u);
     EXPECT_GT(props.dram_alignment(), 0u);
     EXPECT_GT(props.node_local_mem_alignment(), 0u);
     EXPECT_EQ(mock_device_->num_devices(), 1u);
 }
 
-TEST_F(MockAllocatorTest, CPU_BufferAllocationOnMockDevice) {
+TEST_P(MockAllocatorTest, CPU_BufferAllocationOnMockDevice) {
     constexpr size_t page_size = 4096;
     constexpr size_t buffer_size = page_size * 12;
     distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
@@ -68,12 +68,12 @@ TEST_F(MockAllocatorTest, CPU_BufferAllocationOnMockDevice) {
     EXPECT_FALSE(buffer->is_allocated());
 }
 
-TEST_F(MockAllocatorTest, CPU_GetMockAllocatorReturnsNonNull) {
+TEST_P(MockAllocatorTest, CPU_GetMockAllocatorReturnsNonNull) {
     auto* mock_alloc = experimental::get_mock_allocator(*mock_device_);
     ASSERT_NE(mock_alloc, nullptr);
 }
 
-TEST_F(MockAllocatorTest, CPU_ExtractAndOverrideRoundtrip) {
+TEST_P(MockAllocatorTest, CPU_ExtractAndOverrideRoundtrip) {
     // Fresh mock device — extracted state should be empty.
     auto empty_state = experimental::extract_mock_allocator_state(*mock_device_);
     EXPECT_TRUE(empty_state.is_empty(BufferType::L1));
@@ -107,7 +107,7 @@ TEST_F(MockAllocatorTest, CPU_ExtractAndOverrideRoundtrip) {
     EXPECT_EQ(stats_empty.total_allocated_bytes, 0u);
 }
 
-TEST_F(MockAllocatorTest, CPU_CheckpointRestoreViaMeshBuffer) {
+TEST_P(MockAllocatorTest, CPU_CheckpointRestoreViaMeshBuffer) {
     constexpr size_t small_size = 4096 * 4;
     constexpr size_t large_size = 4096 * 16;
 
@@ -143,5 +143,11 @@ TEST_F(MockAllocatorTest, CPU_CheckpointRestoreViaMeshBuffer) {
     // Branch A allocated more bytes than branch B.
     EXPECT_GT(state_a.total_allocated_size(BufferType::L1), state_b.total_allocated_size(BufferType::L1));
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    MockArch,
+    MockAllocatorTest,
+    ::testing::Values(tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR),
+    ::testing::PrintToStringParamName());
 
 }  // namespace tt::tt_metal

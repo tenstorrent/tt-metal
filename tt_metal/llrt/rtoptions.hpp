@@ -885,6 +885,8 @@ public:
         return std::filesystem::path(simulator).filename().string();
     }
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
+    // UMD picks ttsim over RTL emulation by the .so extension.
+    bool is_ttsim_simulator() const { return get_simulator_enabled() && simulator_path.extension() == ".so"; }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size

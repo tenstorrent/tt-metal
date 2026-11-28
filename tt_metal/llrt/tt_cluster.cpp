@@ -832,8 +832,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
 int Cluster::get_device_aiclk(const ChipId& chip_id) const {
     // Functional ttsim (.so) clock queries are unreliable; RTL sim uses a directory path and
     // metal/umd unit tests expect a non-zero AICLK (see test_dram_kernels, watcher tests).
-    if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled() &&
-        rtoptions_.get_simulator_path().extension() == ".so") {
+    if (this->target_type_ == TargetDevice::Simulator && rtoptions_.is_ttsim_simulator()) {
         return 0;
     }
     return this->driver_->get_chip(chip_id)->get_clock();

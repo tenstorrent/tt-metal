@@ -515,6 +515,7 @@ set_target_properties(
 # We may need to revisit later.
 file(GLOB_RECURSE blackhole_kernels ckernels/blackhole/*.h)
 file(GLOB_RECURSE wormhole_kernels ckernels/wormhole_b0/*.h)
+file(GLOB_RECURSE quasar_kernels ckernels/quasar/*.h)
 # Kernels split into .inc fragments are globbed like the .h above, so a new kernel needs no sources.cmake line.
 file(GLOB_RECURSE blackhole_kernel_fragments ckernels/blackhole/*.inc)
 file(GLOB_RECURSE wormhole_kernel_fragments ckernels/wormhole_b0/*.inc)
@@ -528,6 +529,17 @@ file(
     inc/api/compute/eltwise_unary/*.h
 )
 list(APPEND HW_JIT_API_HEADERS ${compute_api_headers})
+# Quasar device headers are globbed, so a new one needs no sources.cmake line.
+file(
+    GLOB_RECURSE tt_2xx_headers
+    CONFIGURE_DEPENDS
+    RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}
+    inc/internal/tt-2xx/*.h
+    inc/internal/tt-2xx/*.hpp
+    inc/internal/tt-2xx/*.inl
+    inc/internal/tt-2xx/*.def
+)
+list(APPEND HW_JIT_API_HEADERS ${tt_2xx_headers})
 list(REMOVE_DUPLICATES HW_JIT_API_HEADERS)
 
 target_sources(
@@ -538,6 +550,7 @@ target_sources(
         FILES
             ${blackhole_kernels}
             ${wormhole_kernels}
+            ${quasar_kernels}
             ${blackhole_kernel_fragments}
             ${wormhole_kernel_fragments}
             ${HW_JIT_API_HEADERS}
