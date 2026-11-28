@@ -1,0 +1,13 @@
+# Reference environment for tests/golden/ (make_goldens.py, test_dataflow.py): CPU only, Python 3.12.
+# Keep it separate from the tt-metal python_env: tfc-t0 needs huggingface-hub >= 1, which python_env's transformers
+# does not accept. These are the versions the committed MANIFEST.json goldens were generated with.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+tfc-t0[torch] @ git+https://github.com/theforecastingcompany/tfc-t0@4871c643c37d9bd8e7ade2500b9c3a5ba8519903
+rotary-embedding-torch==0.9.1
+einops==0.8.2
+huggingface-hub==2.3.0
+jaxtyping==0.3.11
+numpy==2.5.4
+safetensors==0.8.0
+pytest==8.4.2
