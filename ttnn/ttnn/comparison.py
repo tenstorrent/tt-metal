@@ -118,6 +118,12 @@ def comp_pcc(golden, calculated, pcc=0.99, rtol=1e-05, atol=1e-04):
         # present; on the common all-finite path the tensors stay as views and no copy is
         # made (this short-circuit is what keeps peak memory near 1x of one input).
         if not bool((torch.isfinite(golden) & torch.isfinite(calculated)).all()):
+            # A NaN or Inf in one tensor and a finite value at the same position in the other is
+            # a difference the caller must see, not something to mask away: zeroing both and
+            # correlating the rest turned a partially-NaN output into a passing PCC.
+            if not _comp_nonfinite(golden, calculated):
+                logger.error("Tensors do not have nan/inf values at the same positions.")
+                return False, 0.0
             golden = torch.nan_to_num(golden, nan=0.0, posinf=0.0, neginf=0.0)
             calculated = torch.nan_to_num(calculated, nan=0.0, posinf=0.0, neginf=0.0)
 
