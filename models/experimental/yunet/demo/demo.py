@@ -129,7 +129,12 @@ def draw_detections(image, detections):
 
 
 def run_yunet_demo(
-    device, image_path: str, output_path: str = None, input_size: int = YUNET_INPUT_SIZE, num_iterations: int = 1
+    device,
+    image_path: str,
+    output_path: str = None,
+    input_size: int = YUNET_INPUT_SIZE,
+    num_iterations: int = 1,
+    threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
 ):
     """
     Run YUNet face detection demo on an image.
@@ -140,6 +145,7 @@ def run_yunet_demo(
         output_path: Optional path to save output image
         input_size: Model input size (320 or 640, default: 640)
         num_iterations: Number of iterations for timing (default: 1)
+        threshold: Confidence threshold for face detection (default: 0.35)
 
     Returns:
         Tuple of (detections, timing_info)
@@ -220,7 +226,9 @@ def run_yunet_demo(
     logger.info(f"")
 
     # Decode detections
-    detections = decode_detections(cls_out, box_out, obj_out, kpt_out, orig_w, orig_h, input_size=input_size)
+    detections = decode_detections(
+        cls_out, box_out, obj_out, kpt_out, orig_w, orig_h, input_size=input_size, threshold=threshold
+    )
     logger.info(f"Detected {len(detections)} faces")
 
     # Visualize
@@ -305,7 +313,12 @@ Examples:
 
     try:
         detections, timing = run_yunet_demo(
-            device, args.input, args.output, input_size=args.input_size, num_iterations=args.iterations
+            device,
+            args.input,
+            args.output,
+            input_size=args.input_size,
+            num_iterations=args.iterations,
+            threshold=args.threshold,
         )
 
         logger.info("=" * 50)
