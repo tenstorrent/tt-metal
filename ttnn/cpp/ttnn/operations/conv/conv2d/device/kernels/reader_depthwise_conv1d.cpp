@@ -7,21 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/compile_time_args.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-
-template <uint32_t read_bytes>
-FORCE_INLINE void read_activation_stick(Noc noc, uint32_t l1_write_addr, uint32_t l1_read_addr) {
-    if constexpr (read_bytes <= NOC_MAX_BURST_SIZE) {
-        experimental::read_with_state<read_bytes>(noc, l1_write_addr, l1_read_addr);
-    } else {
-        UnicastEndpoint self_ep;
-        noc.async_read(
-            self_ep,
-            CoreLocalMem<uint32_t>(l1_write_addr),
-            read_bytes,
-            experimental::local_addr(l1_read_addr, noc.get_noc_id()),
-            {});
-    }
-}
+#include "conv_reader_common.hpp"
 
 // conv1D reader kernel
 void kernel_main() {
@@ -84,9 +70,7 @@ void kernel_main() {
     uint32_t act_l1_offset = 0;
     uint32_t act_l1_read_addr = sharded_act_dfb.get_read_ptr();
 
-    if constexpr (coalesced_read_bytes <= NOC_MAX_BURST_SIZE) {
-        experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
-    }
+    set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
     uint32_t start_reader_idx = 0;
     for (uint32_t bh = 0; bh < act_num_blocks_h; bh++) {
         for (uint32_t outer = 0; outer < window_outer; outer++) {

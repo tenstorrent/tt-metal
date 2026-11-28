@@ -76,8 +76,7 @@ void kernel_main() {
     // coalesce reads along weight_size_w
     uint32_t act_l1_read_addr = dfb_sharded_act.get_read_ptr();
 
-    static_assert(coalesced_read_bytes <= NOC_MAX_BURST_SIZE);
-    experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+    set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
 
     constexpr uint32_t stride_w_bytes = dilation_w * conv_act_c_read_bytes;
     uint32_t start_reader_idx = 0;
