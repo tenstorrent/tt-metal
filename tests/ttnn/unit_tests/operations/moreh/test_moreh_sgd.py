@@ -128,3 +128,28 @@ def test_moreh_sgd_corner_cases(shape, provide_outputs, fp32_dest_acc_en, device
     run_moreh_sgd_test(
         shape, 0.9, 0.0, 0.5, True, device, provide_outputs=provide_outputs, fp32_dest_acc_en=fp32_dest_acc_en
     )
+
+
+@pytest.mark.parametrize("mismatched", ["grad", "param_out"])
+def test_moreh_sgd_rejects_shape_other_than_param(mismatched, device, expect_error):
+    # The program walks param_in's tiles in every buffer, so a smaller grad is read past its end and a smaller
+    # param_out is written past its end, into whatever DRAM follows it.
+    shape, small = (1, 1, 64, 64), (1, 1, 32, 32)
+    tt = lambda s: ttnn.from_torch(torch.randn(s), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    param = tt(shape)
+    grad = tt(small if mismatched == "grad" else shape)
+    param_out = tt(small) if mismatched == "param_out" else None
+    with expect_error(RuntimeError, f"{mismatched} shape .* must match the param shape"):
+        ttnn.moreh_sgd(
+            param,
+            grad,
+            None,
+            param_out=param_out,
+            momentum_buffer_out=None,
+            lr=0.1,
+            momentum=0.0,
+            dampening=0.0,
+            weight_decay=0.0,
+            nesterov=False,
+            momentum_initialized=False,
+        )

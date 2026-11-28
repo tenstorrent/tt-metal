@@ -5,6 +5,7 @@
 import pytest
 import torch
 
+import ttnn
 from tests.ttnn.nightly.unit_tests.operations.moreh.test_moreh_adam import run_moreh_adam
 
 pytestmark = pytest.mark.use_module_device
@@ -35,3 +36,18 @@ def test_moreh_adam_corner_cases(lr, betas, weight_decay, amsgrad, fp32_dest_acc
     run_moreh_adam(
         [32, 32], lr, betas, 1e-8, weight_decay, amsgrad, fp32_dest_acc_en, device, step=step, param_atol=param_atol
     )
+
+
+@pytest.mark.parametrize("mismatched", ["grad", "exp_avg_in", "param_out"])
+def test_moreh_adam_rejects_shape_other_than_param(mismatched, device, expect_error):
+    # The program walks param_in's tiles in every buffer, so a smaller input is read past its end and a smaller
+    # output is written past its end, into whatever DRAM follows it.
+    shape, small = (1, 1, 64, 64), (1, 1, 32, 32)
+    tt = lambda s: ttnn.from_torch(torch.randn(s), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    param = tt(shape)
+    grad = tt(small if mismatched == "grad" else shape)
+    exp_avg = tt(small if mismatched == "exp_avg_in" else shape)
+    exp_avg_sq = tt(shape)
+    param_out = tt(small) if mismatched == "param_out" else None
+    with expect_error(RuntimeError, f"{mismatched} shape .* must match the param shape"):
+        ttnn.moreh_adam(param, grad, exp_avg, exp_avg_sq, lr=0.1, step=1, param_out=param_out)
