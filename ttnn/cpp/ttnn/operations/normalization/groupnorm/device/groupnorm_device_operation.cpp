@@ -232,6 +232,11 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
         ttnn::operations::normalization::detail::validate_sharded_input(
             a, program_grid, /*require_shard_width_tile_aligned=*/false);
     }
+    // Row-major gamma/beta: each channel shard (the whole C if interleaved) reads its width rounded up to tile rows.
+    const uint32_t num_channels = a.padded_shape()[3];
+    const uint32_t channels_per_core = a.is_sharded() ? a.shard_spec().value().shape[1] : num_channels;
+    const uint32_t gamma_beta_num_rows =
+        (num_channels / channels_per_core) * ((channels_per_core + tile_width - 1) / tile_width);
     if (gamma.has_value()) {
         if (gamma.value().layout() == Layout::TILE) {
             TT_FATAL(
@@ -256,6 +261,13 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Gamma tensor inner dimension must equal tile width ({}), got: {}",
                 tile_width,
                 gamma.value().padded_shape()[3]);
+            TT_FATAL(
+                gamma.value().physical_volume() / tile_width == gamma_beta_num_rows,
+                "Gamma tensor has {} rows but the input's {} channels need {} rows ({} channels per row)",
+                gamma.value().physical_volume() / tile_width,
+                num_channels,
+                gamma_beta_num_rows,
+                tile_width);
             TT_FATAL(a.device() == gamma.value().device(), "Input and gamma tensors must be on same device");
             TT_FATAL(gamma.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(
@@ -302,6 +314,13 @@ void GroupNormDeviceOperation::validate_on_program_cache_miss(
                 "Beta tensor inner dimension must equal tile width ({}), got: {}",
                 tile_width,
                 beta.value().padded_shape()[3]);
+            TT_FATAL(
+                beta.value().physical_volume() / tile_width == gamma_beta_num_rows,
+                "Beta tensor has {} rows but the input's {} channels need {} rows ({} channels per row)",
+                beta.value().physical_volume() / tile_width,
+                num_channels,
+                gamma_beta_num_rows,
+                tile_width);
             TT_FATAL(a.device() == beta.value().device(), "Input and beta tensors must be on same device");
             TT_FATAL(beta.value().is_allocated(), "Operands to groupnorm need to be allocated in buffers on device!");
             TT_FATAL(

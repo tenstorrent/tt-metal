@@ -2767,3 +2767,36 @@ def test_group_norm_output_defaults_to_input_memory_config(device, input_memory)
     assert_numeric_metrics(
         ref, ttnn.to_torch(tt_output).float(), pcc_threshold=0.999, rtol=0.02, atol=0.05, frobenius_threshold=0.01
     )
+
+
+# Row-major gamma/beta must have one row per 32 channels; any other row count is rejected.
+@pytest.mark.parametrize("affine", ["gamma", "beta"])
+@pytest.mark.parametrize("num_rows", [2, 6], ids=["narrower", "wider"])
+@pytest.mark.parametrize(
+    "shard_strategy",
+    [None, ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK],
+    ids=["interleaved", "height_sharded", "block_sharded"],
+)
+def test_group_norm_rejects_gamma_beta_row_count_mismatch(device, shard_strategy, num_rows, affine, expect_error):
+    HW, C = 1024, 128  # C=128 needs 4 rows
+    skip_if_grid_too_small(device, SMALL_DEVICE_GRID)
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+    if shard_strategy is not None:
+        memory_config = ttnn.create_sharded_memory_config((1, 1, HW, C), SMALL_DEVICE_GRID, shard_strategy)
+    tt_input = ttnn.from_torch(
+        torch.rand(1, 1, HW, C),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
+    rows = {"gamma": C // 32, "beta": C // 32, affine: num_rows}
+    weight, bias = (
+        ttnn.from_torch(
+            torch.rand(1, 1, rows[name], 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        for name in ("gamma", "beta")
+    )
+
+    with expect_error(RuntimeError, f"{affine.capitalize()} tensor has {num_rows} rows"):
+        ttnn.group_norm(tt_input, num_groups=4, weight=weight, bias=bias, memory_config=memory_config, inplace=False)
