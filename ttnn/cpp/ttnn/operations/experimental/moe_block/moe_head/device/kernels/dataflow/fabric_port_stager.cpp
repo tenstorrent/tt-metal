@@ -86,6 +86,11 @@ void process_row_block(uint32_t block, const FabricPortStagerArgs& args) {
     const auto x = TensorAccessor(x_accessor_args, args.x_address, moe_block_tiles::kBf16TileBytes);
     volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.arrival_counter_address);
     uint32_t batch_packets = 0, write_address = 0;
+    uint32_t packets_pushed = 0;  // (the phases after the gather; the gather adds whole groups - CB 0 stays aligned)
+    // (a word a matmul core of my link: kMaxPortCores at most - head_shared_words.hpp, the host checks it)
+    uint32_t reduce_scatter_handoffs_seen[moe_head_reduce_scatter_words::kMaxPortCores],
+        latent_handoffs_seen[moe_head_reduce_scatter_words::kMaxPortCores];
+    uint32_t reduce_scatter_chunks = 0;  // (reduce-scatter chunks staged)
     for (uint32_t chunk = 0; chunk < x_gather_num_live_chunks; ++chunk) {
         for (uint32_t entry = 0; entry < args.num_entries; ++entry) {
             const uint32_t upstream_base = args.entries.upstream_base(entry),
@@ -146,17 +151,28 @@ void process_row_block(uint32_t block, const FabricPortStagerArgs& args) {
                     }
                 });
         }
-    }
-    noc_semaphore_wait_min(x_loaded, args.x_loaded_count);  // (re-arm: every engine core counted itself on every port)
-    noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(x_loaded)), 0u - args.x_loaded_count);
-    noc_async_atomic_barrier();
-    uint32_t packets_pushed = 0;  // (the gather left CB 0 batch-aligned; the phases after it share one count)
-    // (a word a matmul core of my link: kMaxPortCores at most - head_shared_words.hpp, the host checks it)
-    uint32_t reduce_scatter_handoffs_seen[moe_head_reduce_scatter_words::kMaxPortCores],
-        latent_handoffs_seen[moe_head_reduce_scatter_words::kMaxPortCores];
-    for (uint32_t chunk = 0; chunk < x_gather_num_live_chunks; ++chunk) {
-        latent_all_to_all_gather(args.latent_all_to_all, packets_pushed, chunk, latent_handoffs_seen);
-        reduce_scatter_gather(args.reduce_scatter, packets_pushed, chunk, reduce_scatter_handoffs_seen);
+        if (chunk + 1 == x_gather_num_live_chunks) {
+            // (re-arm: every engine core counted itself on every port)
+            noc_semaphore_wait_min(x_loaded, args.x_loaded_count);
+            noc_semaphore_inc(get_noc_addr(reinterpret_cast<uint32_t>(x_loaded)), 0u - args.x_loaded_count);
+            noc_async_atomic_barrier();
+        }
+        const uint32_t reduce_scatter_target = reduce_scatter_chunks_after_gather(chunk);
+        if (reduce_scatter_chunks < reduce_scatter_target) {
+            for (; reduce_scatter_chunks < reduce_scatter_target; ++reduce_scatter_chunks) {
+                latent_all_to_all_gather(
+                    args.latent_all_to_all, packets_pushed, reduce_scatter_chunks, latent_handoffs_seen);
+                reduce_scatter_gather(
+                    args.reduce_scatter, packets_pushed, reduce_scatter_chunks, reduce_scatter_handoffs_seen);
+            }
+            if (chunk + 1 < x_gather_num_live_chunks && packets_pushed % packets_per_group) {
+                // (more gather follows: pad to a whole group - the gather writes whole groups; the sender pops it)
+                const uint32_t pad = packets_per_group - packets_pushed % packets_per_group;
+                cb_reserve_back(0, pad * tiles_per_packet);
+                cb_push_back(0, pad * tiles_per_packet);
+                packets_pushed += pad;
+            }
+        }
     }
     if constexpr (row_block::BLOCKS > 1) {
         if (packets_pushed % packets_per_group) {  // (row blocks: the last group padded - the next block's gather

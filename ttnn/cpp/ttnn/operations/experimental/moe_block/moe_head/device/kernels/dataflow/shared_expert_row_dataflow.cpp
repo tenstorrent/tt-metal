@@ -39,6 +39,9 @@ constexpr uint32_t max_column_pairs = get_named_compile_time_arg_val(names::kMax
 constexpr uint32_t family_0_columns = get_named_compile_time_arg_val(names::kFamily0Columns);
 constexpr uint32_t family_1_columns = get_named_compile_time_arg_val(names::kFamily1Columns);
 constexpr uint32_t x_ready_semaphore_id = get_named_compile_time_arg_val(names::kXReadySemaphoreId);
+// a shard's segments: the first x_segments_per_shard of the order are my own shard's, each later one is counted in on
+// XREADY (x_gather_watcher) as it lands
+constexpr uint32_t x_segments_per_shard = get_named_compile_time_arg_val(names::kXSegmentsPerShard);
 // the router phase (router_iterations of it, 1: one) and the router's x rounds over the row
 constexpr uint32_t router_iterations = get_named_compile_time_arg_val(names::kRouterIterations);
 constexpr uint32_t router_k_tiles = get_named_compile_time_arg_val(names::kRouterKTiles);
@@ -96,7 +99,9 @@ struct RowDataflowArgs {
     // [15 ..] family 0's columns [family_0_columns], family 1's [family_1_columns]; per column (its owned steps, its
     // family-1 base slot); then the row's NoC x [engine_columns]
     ArgTable family_table;
-    uint32_t steps_per_shard;  // then: K steps a shard, the shards, the shard order (own, then arrival) [shards]
+    // then: K steps a segment, the segments, the segment order (K segment ids: my own shard's, then each arrival
+    // wave's shards a segment at a time - HeadModel::segment_order) [segments]
+    uint32_t steps_per_shard;
     uint32_t shards;
     ArgTable shard_order_table;
     // then the gather's ports: their count, their "x loaded" word, (NoC x, y) a port, my x-loaded semaphore id
@@ -187,7 +192,7 @@ RowDataflowArgs read_row_dataflow_args() {
 void process_row_block(const RowDataflowArgs& args, uint32_t block, uint32_t& chunks_before_block) {
     const uint32_t x_address = args.x_address + block * row_block::kXStrideBytes;  // (block b's x)
     const uint32_t steps_per_shard = args.steps_per_shard, shards = args.shards;
-    // (position j's K step: its shard's rank in the shard order, its step there)
+    // (position j's K step: its segment's K segment id in the order, its step there)
     auto step_of = [&](uint32_t position) {
         return args.shard_order(position / steps_per_shard) * steps_per_shard + position % steps_per_shard;
     };
@@ -379,7 +384,7 @@ void process_row_block(const RowDataflowArgs& args, uint32_t block, uint32_t& ch
     for (uint32_t chunk = 0; chunk < live_chunks; ++chunk) {
         {
             DeviceZoneScopedN("SE-XROUNDS");
-            // shard-major: each shard (own first, then as it lands) through every pass before the next shard
+            // segment-major: each segment (own first, then as each lands) through every pass before the next
             for (uint32_t shard = 0; shard < shards; ++shard) {
                 for (uint32_t pass = 0; pass < gate_up_passes; ++pass) {
                     for (uint32_t step = 0; step < steps_per_shard; ++step) {
@@ -392,16 +397,13 @@ void process_row_block(const RowDataflowArgs& args, uint32_t block, uint32_t& ch
                         const uint32_t x_destination = args.x_in_address + (position & 1) * row_tiles_per_core *
                                                                                k_step_tiles *
                                                                                moe_block_tiles::kBf16TileBytes;
-                        if (is_mine(position)) {  // (position: the shard of rank position / steps_per_shard must be
-                                                  // in - the own shard always is)
-                            if (position >= steps_per_shard) {
-                                // TODO(#64986 review): a finer all-gather <-> gate/up sync. XREADY counts whole shards
-                                // (x_gather_watcher), and x_gather_walk sends a shard row tile by row tile, so no K
-                                // step is complete before the shard's last row lands. A K-step-major walk with a ready
-                                // count per K step (or per x0 / x1 step pair) would let the owners multicast a peer
-                                // shard's early steps while its later ones are still on the wire, shrinking both
-                                // waits (ranks 1 + 2, then rank 3).
-                                noc_semaphore_wait_min(x_ready, chunk * (shards - 1) + position / steps_per_shard);
+                        if (is_mine(position)) {  // (position: segment position / steps_per_shard must be in - my
+                                                  // own shard's always are)
+                            if (shard >= x_segments_per_shard) {
+                                // (XREADY counts the peer segments in this order, a chunk's after the last's)
+                                noc_semaphore_wait_min(
+                                    x_ready,
+                                    chunk * (shards - x_segments_per_shard) + shard - x_segments_per_shard + 1);
                             }
                             constexpr uint32_t x_step_bytes =
                                 row_tiles_per_core * k_step_tiles * moe_block_tiles::kBf16TileBytes;

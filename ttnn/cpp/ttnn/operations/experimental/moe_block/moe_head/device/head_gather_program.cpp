@@ -299,6 +299,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         {names::kKStepTiles, sizing.k_step_tiles},
         {names::kRowTilesPerCore, sizing.row_tiles_per_core},
         {names::kKStepsPerShard, model.k_steps_per_shard},
+        {names::kXSegmentsPerShard, model.x_segments_per_shard},
         {names::kTilesPerPacket, model.tiles_per_packet},
         {names::kChunkRowTiles, sizing.chunk_row_tiles},
         {names::kRowChunks, sizing.row_chunks},
@@ -396,14 +397,23 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
             engine_virtual_cores.push_back(model.engine_virtual_core(core_x, core_y));
         }
     }
-    const auto [shards, carry] = model.shard_order(coord);
+    // (per peer segment, in the engine's order: the streams that carry its shard; a stream counts each segment of each
+    // shard it sends - entry e's segment s is its count e S + s of a chunk, S segments a shard)
+    const auto carry = model.shard_order(coord).second;
+    const std::vector<uint32_t> segment_order = model.segment_order(coord);
+    const uint32_t segments_per_shard = model.x_segments_per_shard;
     Args rank_stream_args;
     std::vector<std::pair<Arg, uint32_t>> finals;
-    for (size_t k = 1; k < shards.size(); ++k) {
-        const auto& carries = carry.at(shards[k]);
+    for (size_t k = segments_per_shard; k < segment_order.size(); ++k) {
+        const uint32_t shard = segment_order[k] / segments_per_shard, segment = segment_order[k] % segments_per_shard;
+        const auto& carries = carry.at(shard);
         rank_stream_args.push_back(u32(carries.size()));
         for (const auto& [carry_direction, carry_link, entry_index, num_entries] : carries) {
-            add(rank_stream_args, Args{watch.at({carry_direction, carry_link}), entry_index, num_entries});
+            add(rank_stream_args,
+                Args{
+                    watch.at({carry_direction, carry_link}),
+                    entry_index * segments_per_shard + segment,
+                    num_entries * segments_per_shard});
         }
     }
     for (XDirection direction : {XDirection::Forward, XDirection::Backward}) {
@@ -412,7 +422,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
             for (uint32_t link = 0; link < model.gather_links; ++link) {
                 finals.emplace_back(
                     watch.at({direction, link}),
-                    sizing.row_chunks *
+                    sizing.row_chunks * segments_per_shard *
                         u32(model.chip(*upstream).gather_ring.schedule[static_cast<int>(direction)].size()));
             }
         }
@@ -420,7 +430,7 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
     Args watcher_args = {
         sizing.row_chunks,
         kXReadySemaphore,
-        u32(shards.size() - 1),
+        u32(segment_order.size() - segments_per_shard),
         u32(engine_virtual_cores.size()),
         u32(finals.size())};
     for (const auto& [counter, count] : finals) {

@@ -123,13 +123,45 @@ HeadModel::shard_order(const Coord& coord) const {
     return {out, carry};
 }
 
-std::vector<uint32_t> HeadModel::ranks(const Coord& coord) const {
-    const auto shards = shard_order(coord).first;
-    std::vector<uint32_t> shard_ranks(tp_size, 0);
-    for (uint32_t k = 0; k < shards.size(); ++k) {
-        shard_ranks[shards[k]] = k;
+std::vector<uint32_t> HeadModel::segment_order(const Coord& coord) const {
+    const auto [shards, carry] = shard_order(coord);
+    const uint32_t segments = x_segments_per_shard;
+    std::vector<uint32_t> out;
+    out.reserve(shards.size() * segments);
+    for (uint32_t segment = 0; segment < segments; ++segment) {  // (my own shard's, in K order)
+        out.push_back(shards[0] * segments + segment);
     }
-    return shard_ranks;
+    // (the peer shards in arrival order: a wave is the shards whose last carrying upstream entry is the same - they
+    // land at the same time over different links)
+    auto wave = [&](uint32_t shard) {
+        uint32_t last_index = 0;
+        for (const auto& [direction, link, j, count] : carry.at(shard)) {
+            last_index = std::max(last_index, j);
+        }
+        return last_index;
+    };
+    for (size_t first = 1; first < shards.size();) {
+        size_t end = first;
+        while (end < shards.size() && wave(shards[end]) == wave(shards[first])) {
+            ++end;
+        }
+        for (uint32_t segment = 0; segment < segments; ++segment) {
+            for (size_t k = first; k < end; ++k) {
+                out.push_back(shards[k] * segments + segment);
+            }
+        }
+        first = end;
+    }
+    return out;
+}
+
+std::vector<uint32_t> HeadModel::ranks(const Coord& coord) const {
+    const auto order = segment_order(coord);
+    std::vector<uint32_t> segment_ranks(order.size(), 0);
+    for (uint32_t k = 0; k < order.size(); ++k) {
+        segment_ranks[order[k]] = k;
+    }
+    return segment_ranks;
 }
 
 std::vector<uint32_t> HeadModel::tables(const Coord& coord) const {
@@ -376,6 +408,21 @@ std::shared_ptr<const HeadModel> make_head_model(
     // the gather: the TP rings, simple placement in the mover column
     model.k_shard_tiles = sizing.hidden_tiles / tp_size;
     model.k_steps_per_shard = model.k_shard_tiles / sizing.k_step_tiles;
+    // (the smallest segment of whole x0 / x1 step pairs that divides the shard. With several gate / up passes the x
+    // families' multicast rounds run (segment, pass, step pair) and each round's sender rotates over the family's
+    // owner columns, so a segment's step pairs must be a multiple of both families' columns - as a shard's are - or a
+    // round's sender is not its step's owner; with one pass any pair count keeps them together. No such segment:
+    // the shard is one segment)
+    model.x_segment_steps = model.k_steps_per_shard;
+    for (uint32_t steps = 2; steps < model.k_steps_per_shard; steps += 2) {
+        const uint32_t pairs = steps / 2;
+        if (model.k_steps_per_shard % steps == 0 &&
+            (sizing.gate_up_passes == 1 || (pairs % sizing.family0_size == 0 && pairs % sizing.family1_size == 0))) {
+            model.x_segment_steps = steps;
+            break;
+        }
+    }
+    model.x_segments_per_shard = model.k_steps_per_shard / model.x_segment_steps;
     model.tiles_per_packet =
         std::max<uint32_t>(1, std::min<uint32_t>(sizing.k_step_tiles, model.payload / kBf16TileBytes));
     for (uint32_t row = 0; row < model.mesh_rows; ++row) {
