@@ -1,0 +1,45 @@
+#U 300
+models/tt_dit/tests/models/minimax_h3/test_rgb_to_yuv_wide_minimax_h3.py::test_wide_rows_match_planes[blackhole-single_device-small]
+models/tt_dit/tests/models/minimax_h3/test_rgb_to_yuv_wide_minimax_h3.py::test_wide_rows_match_planes[blackhole-single_device-strips_shard]
+#U 300
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[1, 1, 32, 4], [1, 1, 32, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[1, 1, 32, 7], [1, 1, 32, 7]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_rm_interleaved_concat_unaligned_int[shapes=[[2, 3, 32, 4], [2, 3, 32, 4]]-dim=-1-dtype=DataType.UINT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[1, 1, 4, 4], [1, 1, 4, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[1, 1, 8, 4], [1, 1, 8, 4]]-dim=-1-dtype=DataType.INT32]
+tests/ttnn/nightly/unit_tests/operations/data_movement/test_concat.py::test_tiled_interleaved_concat_int[shapes=[[2, 3, 4, 4], [2, 3, 4, 4]]-dim=-1-dtype=DataType.UINT32]
+#U 300
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_chunked_ssm_prefix_scan[L=128-E=2560-N=32-chunk_size=32-num_cores=32-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_chunked_ssm_prefix_scan[L=32-E=32-N=32-chunk_size=32-num_cores=1-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_chunked_ssm_prefix_scan[L=64-E=32-N=32-chunk_size=32-num_cores=1-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_chunked_ssm_prefix_scan[L=96-E=32-N=32-chunk_size=64-num_cores=1-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=128-E=5120-N=16-num_cores=32-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=128-E=5120-N=16-num_cores=64-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=256-E=5120-N=16-num_cores=64-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=32-E=2560-N=32-num_cores=32-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=32-E=32-N=16-num_cores=1-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=32-E=32-N=32-num_cores=1-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=32-E=5120-N=16-num_cores=16-dtype=DataType.BFLOAT8_B]
+tests/ttnn/nightly/unit_tests/operations/ssm/test_ssm_prefix_scan.py::test_ssm_prefix_scan[L=32-E=5120-N=32-num_cores=40-dtype=DataType.BFLOAT8_B]
+#U 300
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_fp32_wide_index_correctness[n=151936-descending=False-fill=-inf]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_pad_value_ties_index_range_every_factory[n=100-fp32-asc_pos_inf]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[1, 2048, 1, 64]-dim=-1-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[1, 64, 64]-dim=0-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_standard[torch_dtype=torch.float32-ttnn_dtype=DataType.FLOAT32-shape=[64, 64]-dim=-1-descending=False]
+tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_unstable_tall_tie_heavy[h320_tile-descending=True]
+#U 300
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_all_blocks_causal_equals_dense_causal[gqa]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_all_blocks_selected_equals_dense[gqa]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_golden_sentinel_tail_is_truncation
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_gqa_kv_len_no_recompile
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_block_cyclic_sp1_bit_exact[kv_cache]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_block_cyclic_sp1_identity
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_causal_multiband_pcc
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_causal_vs_noncausal_differs
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_gqa_pcc_random_selection
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_byte_identical[evicting-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_byte_identical[resident-kv_bfp8]
+tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py::test_msa_native_kv_cache_gqa_group_boundary
+#U 300
+tests/ttnn/unit_tests/operations/data_movement/test_reshape_codegen.py::test_reshape_codegen_lcm_edge_shapes[chunk_spans_batches-float32]
