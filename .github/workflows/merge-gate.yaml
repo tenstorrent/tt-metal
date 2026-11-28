@@ -680,9 +680,192 @@ jobs:
             toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).wormhole)) }}
     secrets: inherit
 
+  # Stage 2 re-measures this entry's stage-1 regressions at 5 code positions, on the entry and on the
+  # queue base, in jobs of their own. It used to run in the measuring legs' spare time, but stage 1
+  # grew until no time was left in them.
+  llk-perf-merge-gate-stage2-plan:
+    name: "LLK perf merge gate (stage 2: pick the tests)"
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
+    if: ${{ !cancelled() && needs.llk-perf-merge-gate-measure.result == 'success' }}
+    runs-on: ubuntu-slim
+    outputs:
+      arches: ${{ steps.plan.outputs.arches }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pandas
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          name: llk-perf-stage2-baseline
+          path: baseline
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: perf-data-blackhole-?
+          merge-multiple: true
+          path: current/blackhole
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: perf-data-wormhole-?
+          merge-multiple: true
+          path: current/wormhole
+      - name: Pick the tests
+        id: plan
+        env:
+          THRESHOLDS: ${{ needs.llk-perf-merge-gate-changes.outputs.thresholds }}
+          # As in the PR gate: one placement leg measures about 1,000 tests in 5 minutes after a 3-minute start.
+          CAP: "8000"
+        run: |
+          ARCHES=()
+          for ARCH in blackhole wormhole; do
+            [ -f "baseline/${ARCH}/baseline.csv" ] || continue
+            policy() { python3 -c 'import json, os, sys; print(json.loads(os.environ["THRESHOLDS"])[sys.argv[1]][sys.argv[2]])' "$ARCH" "$1"; }
+            mkdir -p "nodes/${ARCH}"
+            # The same comparison as the gate job's, so stage 2 judges exactly the gate's stage-1 regressions.
+            python3 tt_metal/tt-llk/perf/regression_compare.py \
+              --threshold "$(policy threshold)" --min-cycles "$(policy min_cycles)" \
+              --module-threshold "$(policy module_thresholds)" \
+              --current "current/${ARCH}/**/*.csv" --baseline "baseline/${ARCH}/**/*.csv" \
+              --run-types L1_TO_L1 --arch "$ARCH" --report "nodes/${ARCH}/stage1.md" > /dev/null || true
+            [ -s "nodes/${ARCH}/stage1.regressions.csv" ] || continue
+            python3 tt_metal/tt-llk/perf/placement_check.py nodes \
+              --candidates "nodes/${ARCH}/stage1.regressions.csv" \
+              --map "current/${ARCH}/**/*.windowhash" --cap "$CAP" --out "nodes/${ARCH}/nodes.txt"
+            [ -s "nodes/${ARCH}/nodes.txt" ] && ARCHES+=("\"${ARCH}\"")
+          done
+          echo "arches=[$(IFS=,; echo "${ARCHES[*]}")]" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: hashFiles('nodes/blackhole/nodes.txt') != ''
+        with:
+          name: placement-nodes-blackhole
+          path: nodes/blackhole/
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        if: hashFiles('nodes/wormhole/nodes.txt') != ''
+        with:
+          name: placement-nodes-wormhole
+          path: nodes/wormhole/
+
+  llk-perf-merge-gate-stage2-head:
+    name: "LLK perf merge gate (stage 2: the entry on ${{ matrix.arch }})"
+    needs: llk-perf-merge-gate-stage2-plan
+    if: ${{ !cancelled() && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '[]' && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.llk-perf-merge-gate-stage2-plan.outputs.arches) }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      ref: ${{ github.sha }}
+      artifact-suffix: "-head-placement"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
+      node-list-artifact: placement-nodes-${{ matrix.arch }}
+      compile-quasar: false
+      upload-to-warehouse: false
+      pipeline: merge_baseline
+    secrets: inherit
+
+  llk-perf-merge-gate-stage2-base:
+    name: "LLK perf merge gate (stage 2: the queue base on ${{ matrix.arch }})"
+    needs: llk-perf-merge-gate-stage2-plan
+    if: ${{ !cancelled() && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '[]' && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.llk-perf-merge-gate-stage2-plan.outputs.arches) }}
+    uses: ./.github/workflows/llk-perf-impl.yaml
+    with:
+      architecture: ${{ matrix.arch }}
+      ref: ${{ github.event.merge_group.base_sha || github.sha }}
+      artifact-suffix: "-base-placement"
+      speed-of-light: false
+      perf-run-types: L1_TO_L1
+      tests-yaml: ./tests/pipeline_reorg/llk_perf_placement_tests.yaml
+      node-list-artifact: placement-nodes-${{ matrix.arch }}
+      compile-quasar: false
+      upload-to-warehouse: false
+      pipeline: merge_baseline
+    secrets: inherit
+
+  # Writes the result in the form the gate job reads: stage2.json, and stage2.base naming the baseline it judged against.
+  llk-perf-merge-gate-stage2-decide:
+    name: "LLK perf merge gate (stage 2: decide on ${{ matrix.arch }})"
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-stage2-plan, llk-perf-merge-gate-stage2-head, llk-perf-merge-gate-stage2-base]
+    if: ${{ !cancelled() && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '[]' && needs.llk-perf-merge-gate-stage2-plan.outputs.arches != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.llk-perf-merge-gate-stage2-plan.outputs.arches) }}
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        timeout-minutes: 20
+        with:
+          sparse-checkout: |
+            tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.10'
+      - run: pip install pandas
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: placement-nodes-${{ matrix.arch }}
+          path: nodes
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: llk-perf-stage2-baseline
+          path: gate-baseline
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: perf-data-${{ matrix.arch }}-*-head-placement
+          merge-multiple: true
+          path: current
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: perf-data-${{ matrix.arch }}-*-base-placement
+          merge-multiple: true
+          path: baseline
+      - name: Decide
+        env:
+          ARCH: ${{ matrix.arch }}
+          THRESHOLD: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].threshold }}
+          MIN_CYCLES: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].min_cycles }}
+          MODULE_THRESHOLDS: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].module_thresholds }}
+        run: |
+          mkdir -p current baseline out
+          python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("commit_sha", ""))' \
+            "gate-baseline/${ARCH}/baseline_metadata.json" > out/stage2.base
+          # The positions both sides measured at: the one list, in run_llk_perf_placement.sh.
+          SHIFTS=$(git show HEAD:tt_metal/tt-llk/tests/run_llk_perf_placement.sh | sed -n 's/.*LLK_CODE_SHIFTS:-\([0-9 ]*\).*/\1/p')
+          # A side that measured nothing leaves its rows "not re-measured", which the gate job counts as blocking.
+          python3 tt_metal/tt-llk/perf/placement_check.py decide \
+            --candidates nodes/stage1.regressions.csv --baseline baseline --current current \
+            --threshold "$THRESHOLD" --min-cycles "$MIN_CYCLES" --module-threshold "$MODULE_THRESHOLDS" \
+            --over-cap nodes/nodes.over --positions "$SHIFTS" --arch "$ARCH" --report out/stage2.md || true
+          cat out/stage2.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+        with:
+          name: llk-perf-stage2-${{ matrix.arch }}-1
+          path: out/stage2.*
+          if-no-files-found: ignore
+
   llk-perf-merge-gate:
     name: LLK perf merge gate (${{ matrix.arch }})
-    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
+    needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate-stage2-decide]
     if: always() && !cancelled() && needs.llk-perf-merge-gate-changes.outputs.changed == 'true'
     strategy:
       fail-fast: false
@@ -703,6 +886,8 @@ jobs:
       module_thresholds: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].module_thresholds }}
       min_cycles: ${{ fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds)[matrix.arch].min_cycles }}
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
+      # The measuring legs only: stage 2's placement data in this run must not count as stage 1.
+      current_artifact_pattern: perf-data-${{ matrix.arch }}-?
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
       # A measurement that did not complete, a missing baseline or a comparison that did not finish

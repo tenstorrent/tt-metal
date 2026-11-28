@@ -66,6 +66,16 @@ def _config_key(module, run_type, pairs):
     return module, run_type, frozenset((c, _value(v)) for c, v in pairs if pd.notna(v))
 
 
+def _find(table, key):
+    """table[key], or the one entry whose configuration holds key's: a configuration column added after the
+    baseline was taken is missing from the stage-1 rows, as in a stale merge baseline.
+    """
+    if key in table:
+        return table[key]
+    found = [v for k, v in table.items() if k[:-1] == key[:-1] and key[-1] <= k[-1]]
+    return found[0] if len(found) == 1 else None
+
+
 def read_window_map(paths):
     """{(module, run type, config): {"nodeid": ..., thread: hash}} from the stage runs' .windowhash files."""
     out = {}
@@ -122,7 +132,7 @@ def nodes(candidates, window_map, cap):
     """
     queues = collections.defaultdict(list)
     for i, c in sorted(enumerate(candidates), key=lambda ic: -ic[1]["delta_pct"]):
-        entry = window_map.get(_config_key(c["module"], c["run_type"], c["config"]))
+        entry = _find(window_map, _config_key(c["module"], c["run_type"], c["config"]))
         if entry:
             queues[c["module"]].append((i, entry["nodeid"]))
     selected, chosen = [], {}
@@ -192,13 +202,14 @@ def decide(
         ] = key
     for i, c in enumerate(candidates):
         limit = module_thresholds.get(c["module"], threshold)
-        lookup = index.get(
+        lookup = _find(
+            index,
             (
                 c["marker"],
                 c["module"],
                 c["run_type"],
                 frozenset((k, _value(v)) for k, v in c["config"]),
-            )
+            ),
         )
         row = dict(c, deltas=[], threads=[], slower=0)
         if i in over_cap:
@@ -220,7 +231,7 @@ def decide(
             deltas.append(round((hv - bv) / bv * 100, 2))
             slower.append((hv - bv) / bv > limit and hv - bv > min_cycles)
         wkey = _config_key(c["module"], c["run_type"], c["config"])
-        bw, cw = base_windows.get(wkey), cur_windows.get(wkey)
+        bw, cw = _find(base_windows, wkey), _find(cur_windows, wkey)
         # The loop fingerprint only labels TILE_LOOP rows; the positions decide. Other markers, and TILE_LOOP rows
         # with no fingerprint, get the outcomes that say nothing about the loop code: regression or placement.
         labelled = (

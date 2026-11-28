@@ -515,18 +515,13 @@ jobs:
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         env:
           ARCH: ${{ inputs.arch }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # --jq runs once per page, so count lines rather than taking a length per page.
-          LEGS=$(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" \
-            --jq ".jobs[] | select(.name | test(\"_${ARCH} group [0-9]+/[0-9]+\")) | .name" | wc -l) || LEGS=0
           GATE_BASE=$(python3 -c "import json; print(json.load(open('baseline_metadata.json')).get('commit_sha', ''))")
           # Stage 2 decides a stage-1 regression: it exits non-zero when a candidate is a confirmed
           # regression, needs review, or was not re-measured. A clean stage 1 has nothing to re-measure.
           STAGE2_EXIT=0
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py gate \
-            --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs "$LEGS" \
+            --results 'stage2/**/stage2.json' --bases 'stage2/**/stage2.base' --legs 1 \
             --stage1 perf_gate_report.regressions.csv --gate-base "$GATE_BASE" \
             --arch "$ARCH" --report stage2.md --blocking-csv stage2.regressions.csv || STAGE2_EXIT=$?
           EXIT_CODE=${{ steps.compare.outputs.gate_exit_code }}
