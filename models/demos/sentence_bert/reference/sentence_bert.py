@@ -11,6 +11,10 @@ import torch.nn as nn
 from models.experimental.functional_common.attention_mask_functions import get_extended_attention_mask
 
 
+def cls_pooling_normalize(token_embeddings):
+    return torch.nn.functional.normalize(token_embeddings[:, 0].float(), p=2, dim=-1)
+
+
 def mean_pooling(token_embeddings, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
@@ -517,6 +521,7 @@ class BertModel(nn.Module):
         return_dict: Optional[bool] = None,
         attention_mask: Optional[torch.Tensor] = None,
         apply_post_process=True,
+        pooling="mean",
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -589,7 +594,10 @@ class BertModel(nn.Module):
             return (sequence_output, pooled_output) + encoder_outputs[1:]
 
         if apply_post_process:
-            post_processed_output = mean_pooling(sequence_output, attention_mask)
+            if pooling == "cls":
+                post_processed_output = cls_pooling_normalize(sequence_output)
+            else:
+                post_processed_output = mean_pooling(sequence_output, attention_mask)
 
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,

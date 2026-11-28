@@ -95,6 +95,7 @@ class BGEPerformanceRunnerInfra:
             attention_mask=self.attention_mask,
             token_type_ids=self.token_type_ids,
             position_ids=self.position_ids,
+            pooling="cls",
         )
 
         self.ttnn_bge_model = load_ttnn_model(self.device, self.torch_model, config)

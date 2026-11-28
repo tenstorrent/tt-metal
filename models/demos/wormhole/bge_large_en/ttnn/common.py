@@ -210,3 +210,16 @@ def ttnn_mean_pooling(ttnn_token_embeddings, ttnn_attention_mask, device=None):
     sum2 = ttnn.clamp(sum2, min=1e-9)
     result = ttnn.div(sum1, sum2)
     return result
+
+
+def ttnn_cls_pooling_normalize(ttnn_token_embeddings):
+    """CLS pooling followed by L2 normalisation, the pooling BAAI/bge-large-en-v1.5 is trained and published with."""
+    x = ttnn.sharded_to_interleaved(ttnn_token_embeddings, ttnn.L1_MEMORY_CONFIG)
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    batch, _, seq_len, hidden = x.shape
+    x = ttnn.reshape(x, (batch, seq_len, hidden))
+    cls = ttnn.slice(x, [0, 0, 0], [batch, 1, hidden])
+    cls = ttnn.typecast(cls, ttnn.bfloat16)
+    sum_sq = ttnn.sum(ttnn.multiply(cls, cls), -1, keepdim=True)
+    cls = ttnn.multiply(cls, ttnn.rsqrt(sum_sq))
+    return ttnn.reshape(cls, (batch, hidden))

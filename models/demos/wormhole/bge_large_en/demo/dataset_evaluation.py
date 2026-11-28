@@ -364,6 +364,7 @@ def evaluate_retrieval_task(
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
+                pooling="cls",
             ).post_processed_output
             ref_query_embeddings.append(embeddings.cpu())
 
@@ -394,6 +395,7 @@ def evaluate_retrieval_task(
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
+                pooling="cls",
             ).post_processed_output
             ref_doc_embeddings.append(embeddings.cpu())
 
@@ -682,6 +684,7 @@ def evaluate_semantic_similarity_task(
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
+                pooling="cls",
             ).post_processed_output
             ref_emb1.append(embeddings.cpu())
 
@@ -708,6 +711,7 @@ def evaluate_semantic_similarity_task(
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
                 attention_mask=attention_mask,
+                pooling="cls",
             ).post_processed_output
             ref_emb2.append(embeddings.cpu())
 

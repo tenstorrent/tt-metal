@@ -59,6 +59,7 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
         token_type_ids=token_type_ids,
         position_ids=position_ids,
         attention_mask=attention_mask,
+        pooling="cls",
     ).post_processed_output
 
     # Load and run TTNN model
