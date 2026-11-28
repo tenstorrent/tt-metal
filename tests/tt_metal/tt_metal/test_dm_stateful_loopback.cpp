@@ -24,13 +24,7 @@ using namespace tt::tt_metal;
 // Device coverage for the stateful NoC APIs (set_state / with_state pairs):
 // one read state reused across chunked DRAM->L1 reads (one-packet flavor) and
 // one write state reused across chunked L1->DRAM writes (any-len flavor).
-// This test requires a simulator environment.
 TEST_F(QuasarMeshDeviceSingleCardFixture, DmStatefulLoopback) {
-    char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
-    }
-
     const NodeCoord node{0, 0};
 
     constexpr uint32_t chunk_bytes = 64;

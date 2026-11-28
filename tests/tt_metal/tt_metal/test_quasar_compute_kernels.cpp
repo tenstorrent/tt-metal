@@ -20,14 +20,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
 
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -96,14 +89,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     ASSERT_EQ(actual_values, expected_values);
 }
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
 
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -172,14 +158,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     ASSERT_EQ(actual_values, expected_values);
 }
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSingleCluster) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const KernelSpecName COMPUTE_KERNEL_1{"risc_math_1"};
     const KernelSpecName COMPUTE_KERNEL_2{"risc_math_2"};
 

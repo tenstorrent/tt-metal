@@ -29,11 +29,6 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const NodeCoord node{0, 0};
 
@@ -91,11 +86,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const NodeCoord node{0, 0};
 
@@ -161,11 +151,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
 // Each trace must replay the DFB config that was current at its own capture. Change the DFB's
 // entry size between two captures and check each replay reports its own entry size.
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const NodeCoord node{0, 0};
     constexpr uint32_t capture_a_entry_size = 1024;
@@ -287,11 +272,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceDFBSizeOverride) {
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcrossCQs) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const NodeCoord node{0, 0};
 

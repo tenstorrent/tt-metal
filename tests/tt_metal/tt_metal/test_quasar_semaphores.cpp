@@ -24,14 +24,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
@@ -177,14 +170,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     ASSERT_EQ(actual_data, expected_data);
 }
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
 
     if (mesh_device->compute_with_storage_grid_size().x < 2) {
@@ -610,9 +596,6 @@ static void run_snake_chain(
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -634,9 +617,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
 
 // Longest single cross-node hop: opposite corners {0,0} <-> {7,3}.
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -646,9 +626,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
 
 // Sweep a few payload sizes across the full 32-node snake.
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -673,9 +650,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
 
 // Fan-out: all 32 nodes read the same DRAM value at once (broadcast through shared DRAM).
 TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -743,9 +717,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
 // own slot with a value unique to its coordinates. Reader loads a per-node DRAM seed, writer
 // stages it back out.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -837,9 +808,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
 
 // Run each of the 4 rows as its own independent chain.
 TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -859,9 +827,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
 // Each run_snake_chain call blocks, so the 8 columns run one after another, each finishes its
 // enqueue, readback, and check before the next starts.
 TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -881,9 +846,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
 // barrier semaphore once over the NoC. The target waits for all N-1 increments, then records
 // completion in L1. Exercises maximum semaphore fan-in onto a single counter.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x != 8 || g.y != 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
@@ -967,9 +929,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChain3) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     // Uses logical nodes {0,0},{1,0},{2,0}; skip (don't fault) on grids narrower than 3 (e.g. 1x3 CI).
     if (this->device().compute_with_storage_grid_size().x < 3) {
         GTEST_SKIP() << "need a >=3-wide grid";
@@ -979,9 +938,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChain3) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainRow) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     if (this->device().compute_with_storage_grid_size().x < 8) {
         GTEST_SKIP() << "need an 8-wide grid";
     }
@@ -994,9 +950,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainRow) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainFull) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "simulator/emulator only";
-    }
     const auto g = this->device().compute_with_storage_grid_size();
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";

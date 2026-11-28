@@ -98,11 +98,6 @@ void run_cross_cq_handoff(distributed::MeshDevice& mesh_device, uint8_t producer
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
@@ -126,11 +121,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventSynchronize) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, EventQuery) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
 
     distributed::MeshEvent event = cq.enqueue_record_event_to_host();
@@ -142,11 +132,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventQuery) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t address_1 = MetalContext::instance().hal().get_dev_addr(
@@ -184,29 +169,16 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, EventBetweenWorkloads) {
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, CrossCQEventHandoffCQ0ToCQ1) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
     run_cross_cq_handoff(this->device(), /*producer_cq=*/0, /*consumer_cq=*/1);
 }
 
 // Reverse direction: issue_record_event_commands / issue_wait_for_event_commands branch on
 // cq_id == 0, so CQ1-produces-CQ0-consumes is a distinct code path worth its own case.
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, CrossCQEventHandoffCQ1ToCQ0) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
     run_cross_cq_handoff(this->device(), /*producer_cq=*/1, /*consumer_cq=*/0);
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t address_0 = MetalContext::instance().hal().get_dev_addr(
@@ -246,11 +218,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, RecordEventToHostFromBothCQs) {
 // An event marks the recording queue's work up to the point it was recorded, so waiting on it must not wait for work
 // that queue takes on afterwards: here a workload that only finishes once the host releases it.
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, WaitOnEventIgnoresLaterWork) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     const NodeCoord node{0, 0};
 
     const uint32_t written_address = MetalContext::instance().hal().get_dev_addr(
