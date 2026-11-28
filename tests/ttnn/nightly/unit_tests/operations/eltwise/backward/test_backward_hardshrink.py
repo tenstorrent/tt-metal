@@ -212,10 +212,7 @@ HARDSHRINK_BW_FUSED_CALLS = (
 
 # Calls whose composite differs from torch on main itself, on silicon: expected to fail until main
 # fixes them, and a pass fails, so the entry is dropped then.
-HARDSHRINK_BW_COMPOSITE_DIVERGES = {
-    "blackhole": ("mixed_layouts",),
-    "wormhole_b0": ("mixed_layouts",),
-}
+HARDSHRINK_BW_COMPOSITE_DIVERGES = {}
 
 
 def _hardshrink_bw_torch_gradient(grad, x, lambd=HARDSHRINK_BW_LAMBD):

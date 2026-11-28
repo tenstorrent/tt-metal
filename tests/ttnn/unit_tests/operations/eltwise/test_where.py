@@ -1350,3 +1350,28 @@ def test_where_rejects_scalar_not_representable_in_int_tensor(device, expect_err
             ttnn.where(tt_c, tt_t, scalar)
         else:
             ttnn.where(tt_c, scalar, tt_t)
+
+
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+@pytest.mark.parametrize(
+    "condition_layout, tensor_layout",
+    [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)],
+)
+@pytest.mark.parametrize(
+    "condition_shape, tensor_shape",
+    [((1, 2, 64, 128), (1, 2, 64, 128)), ((1, 2, 50, 70), (1, 2, 50, 70)), ((1, 1, 64, 128), (1, 2, 64, 128))],
+)
+def test_where_scalar_mixed_layouts(device, variant, condition_layout, tensor_layout, condition_shape, tensor_shape):
+    """A row-major condition with a tiled tensor, or the reverse, selects the same elements as torch."""
+    torch.manual_seed(0)
+    condition = (torch.randn(condition_shape) > 0).to(torch.bfloat16)
+    values = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    tt_c = ttnn.from_torch(condition, dtype=ttnn.bfloat16, layout=condition_layout, device=device)
+    tt_v = ttnn.from_torch(values, dtype=ttnn.bfloat16, layout=tensor_layout, device=device)
+    if variant == "TTS":
+        expected = torch.where(condition.bool(), values, 2.0)
+        result = ttnn.where(tt_c, tt_v, 2.0)
+    else:
+        expected = torch.where(condition.bool(), 2.0, values)
+        result = ttnn.where(tt_c, 2.0, tt_v)
+    assert torch.equal(ttnn.to_torch(result).reshape(expected.shape), expected)

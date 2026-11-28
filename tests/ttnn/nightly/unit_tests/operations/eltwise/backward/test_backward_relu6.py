@@ -243,10 +243,7 @@ RELU6_BW_FUSED_CALLS = (
 
 # Calls whose composite differs from torch on main itself, on silicon: expected to fail until main
 # fixes them, and a pass fails, so the entry is dropped then.
-RELU6_BW_COMPOSITE_DIVERGES = {
-    "blackhole": ("mixed_layouts",),
-    "wormhole_b0": ("mixed_layouts",),
-}
+RELU6_BW_COMPOSITE_DIVERGES = {}
 
 
 def _relu6_bw_torch_gradient(grad, x):
