@@ -110,7 +110,7 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
             cluster_axis (int, optional): the cluster axis to dispatch along. Defaults to `None` though we assert out when it is not specified.
             num_links (number, optional): the number of cross-device links to use for dispatching the tokens. Defaults to `None`, for which the number of links is determined automatically.
             output_tensors (Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor], optional): the optional output tensors to use for the dispatched tokens, indices, and scores. Defaults to `None`.
-            drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `(0, 0)`.
+            drain_sync_tilizer_core (Tuple[int, int], optional): the core coordinate where indices and scores are L1 sharded for selective_tilize. Defaults to `None`: it is then taken from the shard spec of the indices tensor in `output_tensors`.
             worker_mode (ttnn.WorkerMode, optional): the worker mode for distributing workers across links. Defaults to `ttnn.WorkerMode.DIRECT`.
             dispatch_algorithm (ttnn.DispatchAlgorithm, optional): the algorithm for routing tokens to destination devices. Defaults to `ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH`.
             worker_core_range_set (ttnn.CoreRangeSet, optional): the cores to use for dispatch workers. Defaults to cores (0,0) to (0,7) - 8 cores for 4 links.

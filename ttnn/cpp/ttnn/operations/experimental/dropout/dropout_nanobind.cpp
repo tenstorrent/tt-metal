@@ -27,11 +27,12 @@ void bind_experimental_dropout_operation(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-
-        Keyword Args:
-            seed (uint32_t): seed used for RNG.
             probability (float): Dropout probability. In average total_elems * probability elements will be zeroed out.
             scale (float): Scales output tensor. In general scale = 1.0/(1.0-probability).
+            seed (uint32_t): seed used for RNG.
+
+        Keyword Args:
+            use_per_device_seed (bool, optional): offset the seed by the device ID on each device of a mesh. Defaults to `True`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 

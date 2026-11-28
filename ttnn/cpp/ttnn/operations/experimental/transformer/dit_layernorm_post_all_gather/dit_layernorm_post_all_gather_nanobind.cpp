@@ -22,9 +22,9 @@ void bind_dit_layernorm_post_all_gather(nb::module_& mod) {
 
             Limitations:
               - Inputs and stats must be TILE layout, on device, non-sharded.
-              - Supported input dtypes: BF16, BF8_B, FP32. Stats must be BF16.
+              - Supported input dtypes: BF16, BF8_B, FP32. Stats must be BF16, BF8_B or FP32.
               - Stats last padded dim must be a multiple of 64 (2 tiles).
-              - If gamma is provided, beta must also be provided; both must match input hidden dim.
+              - If weight is provided, bias must also be provided; both must match input hidden dim.
             )doc",
         &ttnn::experimental::dit_layernorm_post_allgather,
         nb::arg("input_tensor"),

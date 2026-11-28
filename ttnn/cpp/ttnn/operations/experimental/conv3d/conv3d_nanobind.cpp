@@ -28,17 +28,27 @@ void bind_conv3d(nb::module_& mod) {
         R"doc(
         Applies a 3D convolution over an input signal composed of several input planes. \
         Expects Input Tensor in [N, D, H, W, C] format.  \
-        Expects Weight Tensor in [1, 1, kD * kH * kW * C_in, C_out] format. \
-        Expects Bias Tensor in [1, 1, 1, 32, C_out] format. \
+        Expects the Weight Tensor either unprepared as a rank-5 host tensor (prepared inside the call, needs device) \
+        or prepared as a rank-2 [kD * kH * kW * C_in, C_out] tensor. \
+        Expects the Bias Tensor as a rank-2 [1, C_out] tensor. \
         Input must be in row major interleaved format. \
         Output will be in row major interleaved format.
 
-        Args:
-            input_tensor (ttnn.Tensor): Input tensor.
-            weight_tensor (ttnn.Tensor): Weight tensor.
-            config (ttnn.Conv3dConfig, optional): Configuration for the Conv3D operation. If not provided, conservative default blocking is used.
+        All arguments are keyword-only.
 
         Keyword Args:
+            input_tensor (ttnn.Tensor): Input tensor.
+            weight_tensor (ttnn.Tensor): Weight tensor.
+            dtype (ttnn.DataType): Output data type. Required.
+            output_channels (int): Number of output channels. Required.
+            kernel_size (tuple[int, int, int]): Kernel size (kD, kH, kW). Required.
+            device (ttnn.MeshDevice, optional): Device used to prepare a rank-5 weight tensor. Defaults to `None`.
+            config (ttnn.Conv3dConfig, optional): Configuration for the Conv3D operation. If not provided, conservative default blocking is used.
+            stride (tuple[int, int, int], optional): Defaults to `(1, 1, 1)`.
+            padding (tuple[int, int, int], optional): Defaults to `(0, 0, 0)`.
+            dilation (tuple[int, int, int], optional): Defaults to `(1, 1, 1)`.
+            padding_mode (str, optional): Defaults to `"zeros"`.
+            groups (int, optional): Defaults to `1`.
             bias_tensor (ttnn.Tensor, optional): Bias tensor.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output of the Conv3D operation.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the Conv3D operation.

@@ -19,7 +19,7 @@ void bind_typecast(nb::module_& mod) {
 
         Input tensors must be on device, in ROW MAJOR or TILE layout, and have matching data type.
 
-        Datatype must be one of the following types BFLOAT16, BFLOAT8_B, BFLOAT4_B, UINT32, INT32, UINT16 and UINT8.
+        Datatype must be one of the following types BFLOAT16, FLOAT32, BFLOAT8_B, BFLOAT4_B, FP8_E4M3, UINT32, INT32, UINT16 and UINT8.
 
         Output tensor will be on device, in same layout, and have the given data type.
 
@@ -29,6 +29,7 @@ void bind_typecast(nb::module_& mod) {
             "input_tensor", "Input tensor to typecast", "Tensor", "Yes"
             "dtype", "datatype of typecast", "Datatype", "Yes"
             "memory_config", "Layout of tensor in TT Accelerator device memory banks", "MemoryConfig", "No"
+            "optional_output_tensor", "Preallocated output tensor to write the result into", "Tensor", "No"
     )doc";
 
     ttnn::bind_function<"typecast", "ttnn.experimental.">(
