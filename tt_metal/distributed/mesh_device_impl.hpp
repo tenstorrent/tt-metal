@@ -68,6 +68,7 @@ class ThreadPool;
 struct TraceDescriptor;
 class DriscL1Arena;
 enum class DramSenderPlacement : uint8_t;
+class RealtimeProfilerReceiver;
 namespace streaming_profiler {
 class Receiver;
 }
@@ -79,7 +80,6 @@ class MeshDeviceView;
 struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
-class RealtimeProfilerManager;
 class TensorPrefetcherManager;
 
 namespace multihost {
@@ -197,10 +197,10 @@ private:
     std::shared_ptr<ThreadPool> reader_thread_pool_;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
-    // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
-    // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
-    // before the rest of the mesh shutdown so its receiver thread observes a live device.
-    std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+    // Owns this MeshDevice's real-time profiler producer (per-device sockets, receiver thread, record ring).
+    // Constructed by init_realtime_profiler() and torn down in close_impl() before the rest of the mesh
+    // shutdown so its receiver thread observes a live device.
+    std::unique_ptr<RealtimeProfilerReceiver> realtime_profiler_;
 
     // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
     // close_impl().
@@ -392,10 +392,9 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
-    void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
+    void init_realtime_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
-    void trigger_realtime_profiler_sync_check();
-    RealtimeProfilerManager* get_realtime_profiler() const;
+    RealtimeProfilerReceiver* get_realtime_profiler() const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender PrefetcherPipe factory for its
     // sender config pages. Constructed eagerly in initialize_impl() when the

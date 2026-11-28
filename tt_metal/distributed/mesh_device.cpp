@@ -52,7 +52,7 @@
 #include <experimental/fabric/topology_mapper.hpp>
 #include <experimental/fabric/fabric_types.hpp>
 #include "distributed/fd_mesh_command_queue.hpp"
-#include "distributed/realtime_profiler_manager.hpp"
+#include "tt_metal/impl/realtime_profiler/realtime_profiler_receiver.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
@@ -543,7 +543,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create(
     ctx.device_manager()->initialize_profiler();
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
-    mesh_device->pimpl_->init_realtime_profiler_socket(mesh_device);
+    mesh_device->pimpl_->init_realtime_profiler(mesh_device);
     mesh_device->pimpl_->init_streaming_profiler(mesh_device);
 
     return mesh_device;
@@ -657,7 +657,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDeviceImpl::create_unit_meshes(
     ctx.device_manager()->initialize_fabric_and_dispatch_fw();
 
     for (auto& [device_id, submesh] : result) {
-        submesh->pimpl_->init_realtime_profiler_socket(submesh);
+        submesh->pimpl_->init_realtime_profiler(submesh);
         submesh->pimpl_->init_streaming_profiler(submesh);
     }
 
@@ -1221,10 +1221,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
     // the final TERMINATE) but before the rest of the device teardown.
-    if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
-        realtime_profiler_.reset();
-    }
+    realtime_profiler_.reset();
     streaming_profiler_.reset();
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
@@ -1933,11 +1930,11 @@ bool MeshDeviceImpl::initialize_impl(
     return true;
 }
 
-void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
+void MeshDeviceImpl::init_realtime_profiler(const std::shared_ptr<MeshDevice>& mesh_device) {
     if (realtime_profiler_) {
         return;
     }
-    realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+    realtime_profiler_ = RealtimeProfilerReceiver::create(mesh_device);
 }
 
 void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -1957,13 +1954,7 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
     streaming_profiler_ = streaming_profiler::Receiver::create(mesh_device);
 }
 
-void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
-    if (realtime_profiler_) {
-        realtime_profiler_->trigger_sync_check();
-    }
-}
-
-RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
+RealtimeProfilerReceiver* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() const {
     TT_FATAL(

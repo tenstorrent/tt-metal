@@ -25,12 +25,6 @@ and can be selected individually with pytest ``-k``:
                                        and verify 1:1 correspondence between
                                        host ``EnqueueProgram`` TracyMessages
                                        and device real-time records.
-* ``test_sync_accuracy``             — Launch a workload under Tracy capture
-                                       and verify every host/device
-                                       ``SYNC_CHECK``/``FINISH_SYNC`` pair is
-                                       aligned to within ±20µs on the Tracy
-                                       timeline (host anchor versus Tracy
-                                       message stamp plus CI variance on WH).
 """
 
 from __future__ import annotations
@@ -66,9 +60,9 @@ ARTIFACTS_ROOT = PROFILER_ARTIFACTS_DIR / "realtime_profiler_tests"
 # scripts because Tracy capture must see a fresh process.
 WORKLOAD_DIR = Path(__file__).parent
 CORRELATION_WORKLOAD = WORKLOAD_DIR / "host_device_correlation_workload.py"
-SYNC_WORKLOAD = WORKLOAD_DIR / "realtime_profiler_sync_workload.py"
 CROSS_REFERENCE_WORKLOAD = WORKLOAD_DIR / "cross_reference_workload.py"
 MATMUL_WORKLOAD = WORKLOAD_DIR / "matmul_workload.py"
+ALIGNMENT_WORKLOAD = WORKLOAD_DIR / "tracy_alignment_workload.py"
 
 # Every test in this module runs its device-touching work in a subprocess.
 # The UMD ``CHIP_IN_USE_*_PCIe`` lock is held for the lifetime of the first
@@ -166,6 +160,22 @@ def _export_zones_unwrapped(tracy_file: Path, out_csv: Path):
             stderr=subprocess.DEVNULL,
             check=True,
         )
+
+
+# The csvexport modes the zone alignment test uses, by name: the flags come from this table, never from a caller.
+_CSVEXPORT_MODES = {
+    "host_zones": ("-u",),
+    "device_zones": ("-g",),
+}
+
+
+def _export_zones_csv(mode: str, tracy_file: Path, out_csv: Path):
+    """Export a capture's zones, comma separated, with one of the fixed csvexport modes in _CSVEXPORT_MODES."""
+    flags = _CSVEXPORT_MODES[mode]
+    capture = tracy_file.resolve(strict=True)
+    assert capture.suffix == ".tracy", f"Not a Tracy capture: {capture}"
+    with open(out_csv, "w") as f:
+        subprocess.run([str(CSVEXPORT_TOOL), *flags, str(capture)], stdout=f, stderr=subprocess.DEVNULL, check=True)
 
 
 def _save_artifacts(test_name: str, **files: Path):
@@ -650,17 +660,9 @@ def test_host_device_correlation(tmp_path):
         matched_host_count >= len(host_op_ids) - allowed_missing
     ), f"Not all host messages matched: {matched_host_count}/{len(host_op_ids)}"
 
-    # Sanity: kernel record timestamps.  Allow a small negative delta for the
-    # deterministic startup race where the compute kernel detects dispatch_d's
-    # stream-register clearing before dispatch_s records the first start.
-    startup_race_threshold = 100_000
+    # Sanity: kernel record timestamps.
     for rec in device_records:
-        if rec["runtime_id"] in matched_ids:
-            delta = int(rec["end_timestamp"]) - int(rec["start_timestamp"])
-            assert delta >= -startup_race_threshold, (
-                f"Invalid timestamps for runtime_id={rec['runtime_id']}: "
-                f"end={rec['end_timestamp']} < start={rec['start_timestamp']} (delta={delta})"
-            )
+        assert rec["end_timestamp"] >= rec["start_timestamp"], f"end < start for runtime_id={rec['runtime_id']}"
         assert rec["frequency_ghz"] > 0, f"Invalid frequency for runtime_id={rec['runtime_id']}"
 
     print(f"\n  Matched user programs: {len(matched_ids)}")
@@ -679,147 +681,131 @@ def test_host_device_correlation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Host/device sync accuracy (runs workload under Tracy capture)
+# 6. Tracy zone placement across clock re-anchors (runs workload under Tracy capture)
 # ---------------------------------------------------------------------------
 
-# ±20 µs: host sync anchor is sampled immediately before TracyMessageL while the
-# message records GetTime() inside Tracy — small systematic skew plus N300/CI
-# scheduling can exceed ±10 µs without indicating broken calibration.
-SYNC_DIFF_THRESHOLD_NS = 20_000
-SYNC_PAIRING_WINDOW_NS = 100_000  # ±100 µs — gross-error safety window
-
-HOST_SYNC_MESSAGES = {"SYNC_CHECK", "FINISH_SYNC"}
-
-
-def _parse_host_sync_messages(csv_path: Path) -> list[tuple[str, int]]:
-    out = []
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.reader(f, delimiter=";")
-        next(reader, None)  # header
-        for row in reader:
-            if len(row) < 2:
-                continue
-            name, ns = row[0], row[1]
-            if name in HOST_SYNC_MESSAGES:
-                out.append((name, int(ns)))
-    return out
+# The device clock's rate changes with load, and the profiler re-anchors its host/device clock mapping many times a
+# second. Zones must still be placed one for one, without overlapping, close to when the host enqueued them, and the
+# last ones must not be lost when the device is removed.
+ALIGNMENT_RUN_SECONDS = 8
+ALIGNMENT_WINDOW_NS = 100_000_000
+ALIGNMENT_SETTLE_NS = 1_000_000_000  # the clock rate is still moving in the first second
+# The offset is measured against when the host enqueued each program, so it also moves with how deep the queue is. A BH
+# box stays under 0.1 ms; a WH n150 CI runner showed 0.67 ms rms and 2.6 ms max. Constant 1 s anchors reached 5.7 ms in the
+# first seconds and the original zone loss stepped the mapping by up to 15 ms, so these limits still catch those.
+ALIGNMENT_MAX_RMS_MS = 1.5
+ALIGNMENT_MAX_ABS_MS = 5.0
+ALIGNMENT_MAX_MISSING_ZONES = 3
+ALIGNMENT_MAX_TAIL_GAP_MS = 100.0
+RUNTIME_ID_WRAP = 65535
 
 
-def _parse_device_sync_zones(csv_path: Path) -> list[int]:
-    out = []
-    with open(csv_path, "r", newline="") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            if row.get("name") == "SYNC_CHECK" and row.get("src_file") == "sync_check":
-                try:
-                    out.append(int(row["ns_since_start"]))
-                except (KeyError, ValueError):
-                    continue
-    out.sort()
-    return out
+def _enqueue_program_start_ns(unwrapped_csv: Path) -> list[int]:
+    """Start time in ns of every host EnqueueProgram zone, from csvexport -u output (comma separated)."""
+    with open(unwrapped_csv, "r", newline="") as f:
+        return sorted(int(row["ns_since_start"]) for row in csv.DictReader(f) if row["name"] == "EnqueueProgram")
 
 
-def _pair_sync(host_msgs, device_zones):
+def _device_zones(gpu_csv: Path) -> list[tuple[int, int, int]]:
+    """(start ns, duration ns, runtime id with the 16-bit wrap undone) for each device zone, in start order.
+
+    Zone names can span lines, so rows are matched by their trailing fields instead of parsed as CSV.
     """
-    Pair host messages with device zones in strict timeline order.
-
-    Each device timestamp is consumed at most once (1:1 pairing), preventing
-    duplicate matches that can happen with independent nearest-neighbor picks.
-    """
-    pairs = []
-    next_device_idx = 0
-    total_devices = len(device_zones)
-    total_hosts = len(host_msgs)
-
-    for host_idx, (name, h_ns) in enumerate(host_msgs):
-        if next_device_idx >= total_devices:
-            pairs.append((name, h_ns, None, None))
-            continue
-
-        # Keep enough device points for remaining host points.
-        remaining_hosts_after = total_hosts - host_idx - 1
-        last_allowed_idx = total_devices - remaining_hosts_after - 1
-        if next_device_idx > last_allowed_idx:
-            pairs.append((name, h_ns, None, None))
-            continue
-
-        best_idx = min(
-            range(next_device_idx, last_allowed_idx + 1),
-            key=lambda idx: abs(device_zones[idx] - h_ns),
-        )
-        best = device_zones[best_idx]
-        pairs.append((name, h_ns, best, best - h_ns))
-        next_device_idx = best_idx + 1
-    return pairs
+    pattern = re.compile(r',(\d+),(\d+),"Runtime ID: (\d+)"\s*$')
+    zones = []
+    for line in open(gpu_csv, "r"):
+        m = pattern.search(line)
+        if m:
+            zones.append((int(m[1]), int(m[2]), int(m[3])))
+    zones.sort()
+    unwrapped, wraps, previous = [], 0, None
+    for start, duration, runtime_id in zones:
+        if previous is not None and runtime_id < previous - RUNTIME_ID_WRAP // 2:
+            wraps += 1
+        unwrapped.append((start, duration, runtime_id + wraps * RUNTIME_ID_WRAP))
+        previous = runtime_id
+    return unwrapped
 
 
 @pytest.mark.timeout(600)
-def test_sync_accuracy(tmp_path):
+def test_tracy_zone_alignment(tmp_path):
     """
-    Run a short workload under Tracy capture, pair each host
-    ``SYNC_CHECK``/``FINISH_SYNC`` Tracy message with the nearest
-    device-side ``SYNC_CHECK`` GPU zone on the timeline, and verify each
-    pair is within ±20µs (tight bound on host/device timeline alignment).
+    Run a matmul load long enough for the device clock rate to change and for the clock mapping to be re-anchored
+    dozens of times, capture it under Tracy, and check that the Tracy device zones:
+      * are one for one with the host's EnqueueProgram zones (none lost to a step in the mapping),
+      * never overlap and are never zero length (Tracy drops those),
+      * start where the host enqueued them, within ALIGNMENT_MAX_RMS_MS / ALIGNMENT_MAX_ABS_MS once the clock settles,
+      * include the last zones, which the profiler places when the device is removed.
     """
     assert CAPTURE_TOOL.exists(), f"Tracy capture tool not found: {CAPTURE_TOOL}"
     assert CSVEXPORT_TOOL.exists(), f"Tracy csvexport tool not found: {CSVEXPORT_TOOL}"
-    assert SYNC_WORKLOAD.exists(), f"Workload script not found: {SYNC_WORKLOAD}"
+    assert ALIGNMENT_WORKLOAD.exists(), f"Workload script not found: {ALIGNMENT_WORKLOAD}"
 
     tracy_file = tmp_path / "trace.tracy"
-    messages_csv = tmp_path / "messages.csv"
-    zones_csv = tmp_path / "zones.csv"
     workload_log = tmp_path / "workload_output.log"
+    host_csv = tmp_path / "host_zones.csv"
+    device_csv = tmp_path / "device_zones.csv"
 
-    rc, stdout = _run_under_tracy(SYNC_WORKLOAD, tracy_file, log_path=workload_log, timeout_s=300)
-    print(f"\n--- Workload output (tail) ---\n{stdout[-4000:]}\n--- End workload output ---")
+    rc, stdout = _run_under_tracy(
+        ALIGNMENT_WORKLOAD,
+        tracy_file,
+        log_path=workload_log,
+        extra_env={"SECONDS": str(ALIGNMENT_RUN_SECONDS)},
+        timeout_s=300,
+    )
+    print(f"\n--- Workload output (tail) ---\n{stdout[-2000:]}\n--- End workload output ---")
+    if rc == 2:
+        pytest.skip("Workload reported no devices available")
+    if rc == 5:
+        pytest.skip("Real-time profiler not active on this dispatch config (workload exit code 5)")
     assert rc == 0, f"Workload failed (rc={rc})"
     assert tracy_file.exists(), f"Tracy trace file not generated: {tracy_file}"
 
-    _export_messages(tracy_file, messages_csv)
-    _export_zones_unwrapped(tracy_file, zones_csv)
+    _export_zones_csv("host_zones", tracy_file, host_csv)
+    _export_zones_csv("device_zones", tracy_file, device_csv)
 
-    host_msgs = _parse_host_sync_messages(messages_csv)
-    device_zones = _parse_device_sync_zones(zones_csv)
-    assert host_msgs, "No host SYNC_CHECK/FINISH_SYNC messages in trace"
-    assert device_zones, (
-        "No device SYNC_CHECK GPU zones found. If csvexport was built without the "
-        "GPU-zone fix the zones won't be emitted — rebuild tracy-csvexport."
-    )
+    enqueues = _enqueue_program_start_ns(host_csv)
+    zones = _device_zones(device_csv)
+    assert enqueues, "No host EnqueueProgram zones captured"
+    assert zones, "No Tracy device zones captured: the real-time profiler placed nothing"
 
-    pairs = _pair_sync(host_msgs, device_zones)
-    print(f"\nMatched {len(pairs)} host sync message(s) against {len(device_zones)} device SYNC_CHECK zone(s).")
-    for name, h_ns, d_ns, diff in pairs:
-        if d_ns is None:
-            print(f"  {name:>12} @ {h_ns:>14,}ns  -> NO MATCH")
-        else:
-            print(f"  {name:>12} @ {h_ns:>14,}ns  -> {d_ns:>14,}ns  diff={diff:+.0f}ns")
+    overlaps = sum(1 for a, b in zip(zones, zones[1:]) if b[0] < a[0] + a[1])
+    zero_length = sum(1 for _, duration, _ in zones if duration <= 0)
+    missing = len(enqueues) - len(zones)
 
-    _save_artifacts(
-        "test_sync_accuracy",
-        **{
-            "trace.tracy": tracy_file,
-            "messages.csv": messages_csv,
-            "zones.csv": zones_csv,
-            "workload_output.log": workload_log,
-        },
-    )
+    # The smallest (device start - host enqueue start) in each 100 ms window: the host runs ahead of the device by a
+    # roughly constant amount, so what matters is how that offset moves, not its value.
+    window_min: dict[int, int] = {}
+    for start, _, runtime_id in zones:
+        index = runtime_id - 1
+        if 0 <= index < len(enqueues):
+            window = start // ALIGNMENT_WINDOW_NS
+            window_min[window] = min(window_min.get(window, 1 << 62), start - enqueues[index])
+    settled = {w: v for w, v in window_min.items() if w * ALIGNMENT_WINDOW_NS >= ALIGNMENT_SETTLE_NS}
+    assert len(settled) > 20, f"Too few settled windows to judge alignment: {len(settled)}"
+    ordered = sorted(settled.values())
+    median = ordered[len(ordered) // 2]
+    drift_ms = [(v - median) / 1e6 for v in settled.values()]
+    rms_ms = (sum(x * x for x in drift_ms) / len(drift_ms)) ** 0.5
+    max_ms = max(abs(x) for x in drift_ms)
+    tail_gap_ms = abs(zones[-1][0] - enqueues[-1]) / 1e6
 
-    missing = [(n, h) for (n, h, d, _diff) in pairs if d is None]
-    assert not missing, f"{len(missing)} host messages had no matching device zone: {missing[:5]}"
-
-    far = [(n, h, d, diff) for (n, h, d, diff) in pairs if abs(diff) > SYNC_PAIRING_WINDOW_NS]
-    assert not far, (
-        f"{len(far)} pair(s) outside ±{SYNC_PAIRING_WINDOW_NS}ns window "
-        f"(dropped message or gross mis-calibration): {far[:5]}"
-    )
-
-    bad = [(n, h, d, diff) for (n, h, d, diff) in pairs if abs(diff) > SYNC_DIFF_THRESHOLD_NS]
-    assert not bad, f"{len(bad)}/{len(pairs)} sync pair(s) exceeded ±{SYNC_DIFF_THRESHOLD_NS}ns:\n" + "\n".join(
-        f"  {n} host={h}ns device={d}ns diff={diff:+.0f}ns" for (n, h, d, diff) in bad
-    )
-
-    diffs = [diff for (_n, _h, _d, diff) in pairs]
     print(
-        f"\nAll {len(pairs)} sync pairs within ±{SYNC_DIFF_THRESHOLD_NS}ns "
-        f"(min={min(diffs):+.0f}ns, max={max(diffs):+.0f}ns, mean={sum(diffs)/len(diffs):+.0f}ns)."
+        f"\n  host EnqueueProgram zones: {len(enqueues)}, Tracy device zones: {len(zones)} (missing {missing})"
+        f"\n  overlaps: {overlaps}, zero-length: {zero_length}"
+        f"\n  offset to host enqueue after {ALIGNMENT_SETTLE_NS / 1e9:.0f} s: rms {rms_ms:.3f} ms, max {max_ms:.3f} ms"
+        f"\n  last zone vs last enqueue: {tail_gap_ms:.1f} ms"
     )
+
+    _save_artifacts("test_tracy_zone_alignment", **{"trace.tracy": tracy_file, "workload_output.log": workload_log})
+
+    assert overlaps == 0, f"{overlaps} Tracy device zones overlap an earlier one"
+    assert zero_length == 0, f"{zero_length} Tracy device zones have no length"
+    assert (
+        0 <= missing <= ALIGNMENT_MAX_MISSING_ZONES
+    ), f"{missing} of {len(enqueues)} programs have no Tracy device zone (allowed {ALIGNMENT_MAX_MISSING_ZONES})"
+    assert rms_ms < ALIGNMENT_MAX_RMS_MS, f"Zones drift {rms_ms:.3f} ms rms from where the host enqueued them"
+    assert max_ms < ALIGNMENT_MAX_ABS_MS, f"A zone is {max_ms:.3f} ms off from where the host enqueued it"
+    assert (
+        tail_gap_ms < ALIGNMENT_MAX_TAIL_GAP_MS
+    ), f"The last Tracy zone is {tail_gap_ms:.1f} ms from the last enqueue: trailing zones were lost or misplaced"

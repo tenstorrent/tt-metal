@@ -58,8 +58,6 @@ struct realtime_profiler_msg_t {
     volatile uint32_t record_rd_idx;
     // Times dispatch_s found the record ring full and waited for the BRISC (dispatch core; dispatch_s only).
     volatile uint32_t record_full_wait_count;
-    volatile uint32_t sync_request;
-    volatile uint32_t sync_host_timestamp;
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;

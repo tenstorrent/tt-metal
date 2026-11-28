@@ -18,7 +18,6 @@ This document describes how the **dispatch core** (dispatch_s), **real-time prof
 | BRISC  (profiler core)                                       |
 | Copies each ready record into a big ring in its own L1,      |
 | then tells dispatch_s the slot is free.                      |
-| Also answers the host's clock-sync requests.                 |
 +--------------------------------------------------------------+
             |  records
             v
@@ -94,24 +93,13 @@ writer, and a full queue makes its producer wait, so a slow host slows dispatch 
 
 Host and device timestamps are aligned so that Tracy (or other consumers) can relate device cycles to host time.
 
-```
-  Host                                        BRISC  (profiler core)
+The host reads the profiler core's wall clock itself, through a mapped PCIe window onto the core's debug registers
+(`DeviceWallClock`). Each reading is the best of four reads: the one whose round trip on the host was shortest. The
+device takes no part.
 
-   |                                           |
-   | 1. Start sync                             |
-   | ---------------- sync on ---------------->|
-   | 2. Send host time T                       |
-   | ------------------- T ------------------->|
-   |                                           | 3. Stamp device time D
-   | <-------- D and T, via the NCRISC --------|
-   | 4. Repeat 2-3 N times                     |
-   | 5. Stop sync                              |
-   | --------------- sync off ---------------->|
-   | 6. Fit a line through                     |
-   |    the (T, D) pairs:                      |
-   |    device clock rate                      |
-   |    and offset                             |
-```
+- At device open: one reading, with the device's nominal clock frequency.
+- Every second, on the receiver thread: a new reading. The clock's advance since the previous reading gives the
+  frequency, and the reading becomes the new offset.
 
 ---
 
@@ -135,18 +123,17 @@ carry id 0, and the BRISC drops them before they reach the host.
 | 24 | `kernel_end.id` | Same program runtime id |
 | 28 | `kernel_end.header` | Cycles dispatch_s waited for a free slot before publishing; 0 = no wait. The BRISC turns it into a stall marker and zeroes it |
 
-The BRISC never lets an end time go backwards: a slot that saw no completion while open is given the previous
-record's end time.
+Two cores on the dispatch tile stamp records, so around a wrap of the clock's low word a stamp's high word can come
+out off by one (2^32 cycles). The BRISC moves such a stamp back between the record's start and the clock.
 
 ### 4.2 Ring entries and markers
 
 The BRISC-to-NCRISC ring and the host FIFO hold 64-byte entries, because 64 bytes is the D2H socket page size: the
-32-byte record followed by 32 bytes of padding. The BRISC also writes two kinds of marker entry, told apart by word 3:
+32-byte record followed by 32 bytes of padding. The BRISC also writes a marker entry, told apart from a record by word 3:
 
 | Entry | Word 3 | Words 0-1 | Word 2 |
 |-------|--------|-----------|--------|
 | Program record | 0 | Start time | Program runtime id |
-| Sync marker | `0xFFFFFFFF` | Device time of the sample | Host time it answers |
 | Dispatch-stall marker | `0xFFFFFFFE` | Time the stall ended (the next record's start) | Stall length in cycles |
 
 On the host, each program record becomes a `ProgramRealtimeRecord` (runtime id, chip id, 64-bit start and end
@@ -170,14 +157,14 @@ address range is ordinary allocatable L1.
 
 ### 4.4 Mailbox fields by core
 
-The dispatch memory map gives every core it lays out the same 684-byte `realtime_profiler_msg_t` at the same L1
+The dispatch memory map gives every core it lays out the same 676-byte `realtime_profiler_msg_t` at the same L1
 address, but each core uses different fields:
 
 | Core | Mailbox size | Used | Unused |
 |------|--------------|------|--------|
-| Dispatch core | 684 B | 672 B | 12 B: `config_buffer_addr`, `sync_request`, `sync_host_timestamp` |
-| Profiler core | 684 B | 16 B | 668 B: the record slots, the program-id FIFO and the dispatch-side indices |
-| Prefetch core | 684 B | 0 B | 684 B: reserved only because the layout is shared |
+| Dispatch core | 676 B | 672 B | 4 B: `config_buffer_addr` |
+| Profiler core | 676 B | 8 B | 668 B: the record slots, the program-id FIFO and the dispatch-side indices |
+| Prefetch core | 676 B | 0 B | 676 B: reserved only because the layout is shared |
 
 Each line below gives the field, what it is for, and who writes it.
 
@@ -198,8 +185,6 @@ Each line below gives the field, what it is for, and who writes it.
 - `config_buffer_addr`: where the D2H socket config is, so the NCRISC can find the socket (host)
 - `record_wr_idx`: how many records dispatch_s has published; bit 31 means dispatch_s has terminated
   (dispatch_s, NoC write)
-- `sync_request`: turns clock sync on and off (host)
-- `sync_host_timestamp`: the host time for each sync sample (host)
 
 The host writes `realtime_profiler_remote_wr_idx_addr` and then `realtime_profiler_core_noc_xy` only after the
 profiler core's kernels are running, so dispatch_s never publishes to a reader that is not there yet.
@@ -214,6 +199,6 @@ Layout: `tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h`. HAL: `tt::tt_metal::
 |-----------|--------|
 | Dispatch_s (timestamp record + signal) | `tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp`, `realtime_profiler.hpp` |
 | Real-time profiler kernel | `tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp` |
-| Host init, sync, receiver thread | `mesh_device.cpp`, `realtime_profiler_manager.cpp` |
+| Host init, sync, receiver thread | `mesh_device.cpp`, `tt_metal/impl/realtime_profiler/` (`realtime_profiler_device.cpp`, `realtime_profiler_receiver.cpp`) |
 | Shared struct + HAL accessors | `realtime_profiler_msgs.h` → `realtime_profiler_msgs` (generated) |
-| Callbacks (Tracy, user) | `tt_metal/impl/dispatch/data_collector.cpp`, `realtime_profiler_tracy_handler.cpp` |
+| Callbacks (Tracy, user) | `tt_metal/impl/realtime_profiler/realtime_profiler_service.cpp`, `realtime_profiler_tracy_consumer.cpp` |

@@ -17,6 +17,7 @@
 #include <optional>
 #include <span>
 #include <type_traits>
+#include <thread>
 #include <utility>
 #include <sys/mman.h>
 
@@ -88,8 +89,11 @@ public:
         writer_(&shared_state_, view()) {}
 
     ~BroadcastRing() {
+        while (releasing_.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
         TT_FATAL(
-            active_readers_.load(std::memory_order_relaxed) == 0,
+            active_readers_.load(std::memory_order_acquire) == 0,
             "BroadcastRing readers must be destroyed before the ring");
     }
 
@@ -307,7 +311,8 @@ public:
             cursor_(other.cursor_),
             dropped_(other.dropped_),
             writer_advance_estimate_(other.writer_advance_estimate_),
-            active_readers_(std::exchange(other.active_readers_, nullptr)) {}
+            active_readers_(std::exchange(other.active_readers_, nullptr)),
+            releasing_(std::exchange(other.releasing_, nullptr)) {}
         Reader& operator=(Reader&& other) noexcept {
             if (this != &other) {
                 release();
@@ -317,6 +322,7 @@ public:
                 dropped_ = other.dropped_;
                 writer_advance_estimate_ = other.writer_advance_estimate_;
                 active_readers_ = std::exchange(other.active_readers_, nullptr);
+                releasing_ = std::exchange(other.releasing_, nullptr);
             }
             return *this;
         }
@@ -328,15 +334,29 @@ public:
             const SharedState* shared_state,
             SlotsView view,
             uint64_t start,
-            std::atomic<uint32_t>* active_readers) noexcept :
-            shared_state_(shared_state), view_(view), cursor_(start), active_readers_(active_readers) {
+            std::atomic<uint32_t>* active_readers,
+            std::atomic<uint32_t>* releasing) noexcept :
+            shared_state_(shared_state),
+            view_(view),
+            cursor_(start),
+            active_readers_(active_readers),
+            releasing_(releasing) {
             active_readers_->fetch_add(1, std::memory_order_relaxed);
         }
 
         void release() noexcept {
             if (active_readers_ != nullptr) {
-                active_readers_->fetch_sub(1, std::memory_order_relaxed);
+                // The last release wakes the thread waiting for the readers to go, and that thread may free the ring
+                // as soon as it sees none left. Counting this release first keeps the ring alive through the wake:
+                // wait_until_no_readers() also waits for the releases in flight, and the final decrement below is the
+                // last access.
+                releasing_->fetch_add(1, std::memory_order_relaxed);
+                if (active_readers_->fetch_sub(1, std::memory_order_release) == 1) {
+                    active_readers_->notify_all();
+                }
+                releasing_->fetch_sub(1, std::memory_order_release);
                 active_readers_ = nullptr;
+                releasing_ = nullptr;
             }
         }
 
@@ -357,11 +377,31 @@ public:
         // decays so it tracks recent advances rather than pinning to the highest ever seen
         uint64_t writer_advance_estimate_ = 0;
         std::atomic<uint32_t>* active_readers_;
+        std::atomic<uint32_t>* releasing_;
     };
 
     /** @brief Creates a reader at the current end of the stream; it sees only items published after this call. */
     [[nodiscard]] Reader make_reader() const noexcept {
-        return Reader(&shared_state_, view(), shared_state_.head.load(std::memory_order_acquire), &active_readers_);
+        return Reader(
+            &shared_state_, view(), shared_state_.head.load(std::memory_order_acquire), &active_readers_, &releasing_);
+    }
+
+    /**
+     * @brief Blocks until every reader has been destroyed.
+     *
+     * The caller must prevent new readers from being created before calling this method.
+     */
+    void wait_until_no_readers() const noexcept {
+        uint32_t count = active_readers_.load(std::memory_order_acquire);
+        while (count != 0) {
+            active_readers_.wait(count, std::memory_order_acquire);
+            count = active_readers_.load(std::memory_order_acquire);
+        }
+        // A reader that dropped the count to zero may still be waking the waiters; the ring can only go once it is
+        // done. It is a few instructions, so spin.
+        while (releasing_.load(std::memory_order_acquire) != 0) {
+            std::this_thread::yield();
+        }
     }
 
 private:
@@ -475,6 +515,8 @@ private:
     const Slots slots_;
     SharedState shared_state_;
     mutable std::atomic<uint32_t> active_readers_{0};
+    // Reader releases in progress; see Reader::release().
+    mutable std::atomic<uint32_t> releasing_{0};
     Writer writer_;
 };
 

@@ -11,7 +11,7 @@ scatter itself. The largest case is the shape gpt-oss-20b's routed prefill scatt
 row of 4 x 8192 pair slots plus padding, 32768 indices).
 
 Needs a host-IOMMU runner, hence requires_host_iommu: on Blackhole the profiler's D2H socket uses 64-bit PCIe
-addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_manager.cpp).
+addressing, which requires IOMMU with no hugepage fallback (realtime_profiler_device.cpp).
 """
 
 import pytest

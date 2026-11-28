@@ -64,6 +64,7 @@ class EnqueueProgramCommand;
 
 class Kernel;
 struct ScratchpadBindingHandle;
+struct ProgramMetadata;
 
 namespace distributed {
 class MeshDevice;
@@ -254,6 +255,9 @@ public:
     void set_runtime_id(ProgramId id);
     ProgramId get_runtime_id() const;
     ProgramId get_id() const;
+    // Null until the program is first dispatched.
+    const ProgramMetadata* metadata() const { return metadata_; }
+    void set_metadata(const ProgramMetadata* metadata) { metadata_ = metadata; }
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
     void check_circular_buffers_bound();
@@ -939,6 +943,7 @@ private:
     uint32_t max_dfbs_;  // Architecture-specific max DFBs
     uint64_t id;         // Need to make non-const due to move constructor
     uint64_t runtime_id{0};
+    const ProgramMetadata* metadata_ = nullptr;
     static std::atomic<uint64_t> program_counter;
     // Programmable core type index -> KernelHandle -> Kernel
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;

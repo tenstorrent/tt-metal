@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -41,6 +42,13 @@ private:
     data_collector_t type;
 };
 
+// What the collector records about a program when it is dispatched, for a profiler to attach to the program's
+// records.
+struct ProgramMetadata {
+    std::vector<std::string_view> kernel_sources;
+    auto operator<=>(const ProgramMetadata&) const = default;
+};
+
 // Class to manage & dump dispatch data for each program
 class DataCollector {
 public:
@@ -65,46 +73,29 @@ public:
         SubDeviceId sub_device_id,
         uint32_t num_available_worker_cores = 0);
     std::optional<tt::ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id) const;
-    // Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
-    // The returned span is valid until MetalContext teardown or reinitialization.
-    std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id) const noexcept {
-        const auto* sources = runtime_id_to_kernel_sources_[runtime_id].load(std::memory_order_acquire);
-        return sources != nullptr ? std::span<const std::string_view>(*sources) : std::span<const std::string_view>{};
+    // The metadata of the program last dispatched with this runtime id; empty if there was none.
+    const ProgramMetadata& GetProgramMetadata(uint16_t runtime_id) const noexcept {
+        static const ProgramMetadata none;
+        const ProgramMetadata* metadata = runtime_id_to_metadata_[runtime_id].load(std::memory_order_acquire);
+        return metadata != nullptr ? *metadata : none;
     }
-    // Register a callback to be invoked when real-time profiler data arrives.
-    // Returns a handle that can be used to unregister the callback.
-    tt::ProgramRealtimeProfilerCallbackHandle RegisterProgramRealtimeProfilerCallback(
-        tt::ProgramRealtimeProfilerCallback callback);
-    // Unregister a previously registered callback by its handle.
-    void UnregisterProgramRealtimeProfilerCallback(tt::ProgramRealtimeProfilerCallbackHandle handle);
-    void AttachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
-    void DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerCallbackListener* listener);
+    // A reader of the per-program metadata recorded during dispatch (RecordProgramMetadata /
+    // RecordProgramSubDevice) holds a count here for as long as it reads. The device profiler holds one
+    // whenever it is enabled.
+    void AddProgramMetadataReader() noexcept { program_metadata_readers_.fetch_add(1, std::memory_order_relaxed); }
+    void RemoveProgramMetadataReader() noexcept { program_metadata_readers_.fetch_sub(1, std::memory_order_relaxed); }
 
-    // Real-time profiler liveness tracking. MeshDevice notifies activation after a
-    // successful init+sync handshake and deactivation at close; IsRealtimeProfilerActive()
-    // returns true while at least one chip is active.
-    void NotifyRealtimeProfilerActivated(uint32_t chip_id);
-    void NotifyRealtimeProfilerDeactivated(uint32_t chip_id);
-    bool IsRealtimeProfilerActive() const;
-
-    // True while a profiler can still consume the per-program metadata recorded during dispatch
-    // (RecordProgramMetadata / RecordProgramSubDevice). Callers on the dispatch path check this
+    // True while something reads the per-program metadata. Callers on the dispatch path check this
     // instead of recording unconditionally: the recording costs a mutex and a keyed insert per
-    // program per device, and nothing outside the profiler reads the result. Lock-free so the
-    // check itself stays off the critical path.
+    // program per device. Lock-free so the check itself stays off the critical path.
     bool IsProgramMetadataRecordingEnabled() const noexcept {
-        return program_metadata_recording_enabled_.load(std::memory_order_relaxed);
+        return program_metadata_readers_.load(std::memory_order_relaxed) != 0;
     }
 
     void DumpData();
 
 private:
     static constexpr size_t kRuntimeIdSlots = 1u << 16;
-
-    struct RealtimeCallbackRegistration {
-        tt::ProgramRealtimeProfilerCallbackHandle handle;
-        tt::ProgramRealtimeProfilerCallback callback;
-    };
 
     struct KernelData {
         int watcher_kernel_id;
@@ -119,24 +110,20 @@ private:
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
     std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
-    // Kernel source bookkeeping for the real-time profiler. Guarded because the dispatch thread writes and
-    // the real-time profiler receiver thread reads.
-    mutable std::mutex kernel_source_mutex_;
-    std::unordered_set<std::string> unique_kernel_sources_;
-    std::unordered_map<uint64_t, std::vector<std::string_view>> program_id_to_kernel_sources_;
-    std::array<std::atomic<const std::vector<std::string_view>*>, kRuntimeIdSlots> runtime_id_to_kernel_sources_{};
+    // Lives for the whole process, so the spans handed to RT-profiler callbacks carry no lifetime caveat.
+    struct ProgramMetadataStore {
+        // Taken only the first time a program is recorded. Profiler threads read lock-free through
+        // runtime_id_to_metadata_.
+        std::mutex mutex;
+        std::unordered_set<std::string> kernel_source_paths;
+        // One entry per distinct list of kernel sources; programs with the same kernels share it.
+        std::set<ProgramMetadata> metadata;
+    };
+    static ProgramMetadataStore& program_metadata_store();
+    std::array<std::atomic<const ProgramMetadata*>, kRuntimeIdSlots> runtime_id_to_metadata_{};
     std::map<std::pair<tt::ChipId, uint64_t>, tt::ProgramSubDeviceInfo> runtime_id_to_sub_device;
     mutable std::mutex runtime_id_to_sub_device_mutex_;
-    mutable std::mutex program_realtime_profiler_callbacks_mutex_;
-    std::vector<RealtimeCallbackRegistration> program_realtime_profiler_callbacks_;
-    std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
-    tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
-
-    mutable std::mutex realtime_profiler_active_chips_mutex_;
-    std::unordered_set<uint32_t> realtime_profiler_active_chips_;
-    // Cached "the device profiler is enabled, or a real-time profiler chip is live" predicate.
-    // Written under realtime_profiler_active_chips_mutex_, read lock-free from the dispatch path.
-    std::atomic<bool> program_metadata_recording_enabled_{false};
+    std::atomic<uint32_t> program_metadata_readers_;
 };
 
 }  // namespace tt::tt_metal

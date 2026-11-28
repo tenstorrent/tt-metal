@@ -1420,8 +1420,8 @@ re_run_command:
                     dispatch_telemetry_base)
                     ->program_count = ++program_counter;
             }
-            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0 &&
-                program_host_id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
+            // One entry per program, unprofiled ones included: dispatch_s pops one per go signal.
+            if (rt_profiler_msg->realtime_profiler_core_noc_xy != 0) {
                 while (!program_id_fifo_append(rt_profiler_msg, program_host_id)) {
                     invalidate_l1_cache();
                 }
