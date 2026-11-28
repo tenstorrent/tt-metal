@@ -300,21 +300,10 @@ ProgramDescriptor build_halo_program(
 
     if (config_tensors_in_dram) {
         reader_defines.emplace_back("CONFIG_TENSOR_IN_DRAM", "1");
-        // NOTE: the config-buffer addresses are baked into compile-time args
-        // here.  The buffers themselves are parked on the WorkloadDescriptor,
-        // so their device allocations stay valid for the cached workload's
-        // lifetime — the address embedded below remains correct on cache hit
-        // because the buffers are not re-allocated.
-        core_0_reader_ct_args.push_back(padding_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
         core_0_reader_ct_args.push_back(padding_config_buffer0->page_size());
-
-        core_0_reader_ct_args.push_back(gather_config_buffer0->address());  // smuggled-rta-ok: see NOTE above
         core_0_reader_ct_args.push_back(gather_config_buffer0->page_size());
 
-        core_1_reader_ct_args.push_back(padding_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
         core_1_reader_ct_args.push_back(padding_config_buffer1->page_size());
-
-        core_1_reader_ct_args.push_back(gather_config_buffer1->address());  // smuggled-rta-ok: see NOTE above
         core_1_reader_ct_args.push_back(gather_config_buffer1->page_size());
 
         tt::tt_metal::TensorAccessorArgs(padding_config_buffer0).append_to(core_0_reader_ct_args);
@@ -361,6 +350,8 @@ ProgramDescriptor build_halo_program(
     };
 
     if (config_tensors_in_dram) {
+        reader_0_desc.emplace_common_runtime_args({padding_config_buffer0, gather_config_buffer0});
+        reader_1_desc.emplace_common_runtime_args({padding_config_buffer1, gather_config_buffer1});
         uint32_t core_index = 0;
         for (const auto& core : cores) {
             if (is_height_sharded) {
