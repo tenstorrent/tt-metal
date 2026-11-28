@@ -134,8 +134,12 @@ class OpenVDNPipeline(MiniMaxH3Pipeline):
 
     # ------------------------------------------------------------------ transformer
 
+    #: Bumped whenever the transformer's device parameters change (names or layout), so a weight cache written by
+    #: earlier code is not loaded. 2: row-broadcast conv taps for the fused feature kernels (stage 4).
+    PARAMETERS_VERSION = 2
+
     def _dit_weight_mode(self) -> str:
-        return f"{super()._dit_weight_mode()}_openvdn_{self.checkpoint_dir.name}"
+        return f"{super()._dit_weight_mode()}_openvdn_{self.checkpoint_dir.name}_p{self.PARAMETERS_VERSION}"
 
     def _build_transformer(self) -> OpenVDNTransformer3DModel:
         config = {k: v for k, v in self.transformer_config.items() if k not in ("rope_freq_dim", "rope_theta")}

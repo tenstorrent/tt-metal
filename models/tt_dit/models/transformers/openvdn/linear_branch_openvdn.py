@@ -33,6 +33,7 @@ import ttnn
 from ....layers.linear import ColParallelLinear, Linear
 from ....layers.module import Module, Parameter
 from ....utils import tensor
+from . import kernels_openvdn as kernels
 from . import linear_ops_openvdn as ops
 
 Range = tuple[int, int]
@@ -158,10 +159,13 @@ class OpenVDNLinearBranch(Module):
         def fp32(shape, mesh_axes=None):
             return Parameter(total_shape=shape, device=mesh_device, dtype=ttnn.float32, mesh_axes=mesh_axes)
 
-        # Spatial taps as columns [C, 1] (they scale the transposed [C, S] frames), temporal taps as rows [1, C].
+        # Spatial taps as columns [C, 1] (they scale the transposed [C, S] frames), temporal taps as rows [1, C]; for
+        # the fused feature kernels the same taps as tiles whose 32 rows all hold the channel weights.
         for proj in self.short_conv:
             setattr(self, f"{proj}_sp", fp32([taps, 1, channels, 1], [None, None, tp, None]))
             setattr(self, f"{proj}_tm", fp32([self.KERNEL, 1, 1, channels], [None, None, None, tp]))
+            setattr(self, f"{proj}_sp_rows", fp32([taps, 1, ttnn.TILE_SIZE, channels], [None, None, None, tp]))
+            setattr(self, f"{proj}_tm_rows", fp32([self.KERNEL, 1, ttnn.TILE_SIZE, channels], [None, None, None, tp]))
 
         linear = dict(mesh_device=mesh_device, compute_kernel_config=self.config)
         col = dict(mesh_device=mesh_device, compute_kernel_config=self.config, mesh_axis=tp)
@@ -189,13 +193,20 @@ class OpenVDNLinearBranch(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         taps = self.KERNEL * self.KERNEL
+        rows = ttnn.TILE_SIZE
         for proj in self.short_conv:
             sp = state.pop(f"short_conv.{proj}_sp.weight", None)  # [C, 1, k, k]
             if sp is not None:
                 state[f"{proj}_sp"] = sp.reshape(-1, taps).T.reshape(taps, 1, -1, 1)
+                state[f"{proj}_sp_rows"] = (
+                    sp.reshape(-1, taps).T.reshape(taps, 1, 1, -1).expand(-1, -1, rows, -1).contiguous()
+                )
             tm = state.pop(f"short_conv.{proj}_tm.weight", None)  # [C, 1, k]
             if tm is not None:
                 state[f"{proj}_tm"] = tm.reshape(-1, self.KERNEL).T.reshape(self.KERNEL, 1, 1, -1)
+                state[f"{proj}_tm_rows"] = (
+                    tm.reshape(-1, self.KERNEL).T.reshape(self.KERNEL, 1, 1, -1).expand(-1, -1, rows, -1).contiguous()
+                )
 
         for name, key in (("alpha_down", "alpha.down.weight"), ("alpha_up", "alpha.up.weight")):
             if key in state:
@@ -233,6 +244,39 @@ class OpenVDNLinearBranch(Module):
                 ttnn.mesh_partition(_pad_dim(tm, 3, width), dim=3, cluster_axis=axis),
             )
         return self._local_weights[key]
+
+    def _local_conv_rows(self, proj: str) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """`proj`'s spatial and temporal row-broadcast tap tiles for this device's channels under the head split
+        (cached), for the fused feature kernels."""
+        key = f"{proj}_rows_local"
+        if key not in self._local_weights:
+            axis, factor, _ = self.frame_split
+            width = (self.num_local_heads + (-self.num_local_heads % factor)) * self.head_dim
+            sp, tm = getattr(self, f"{proj}_sp_rows").data, getattr(self, f"{proj}_tm_rows").data
+            self._local_weights[key] = (
+                ttnn.mesh_partition(_pad_dim(sp, 3, width), dim=3, cluster_axis=axis),
+                ttnn.mesh_partition(_pad_dim(tm, 3, width), dim=3, cluster_axis=axis),
+            )
+        return self._local_weights[key]
+
+    def fused_features(
+        self, tokens: ttnn.Tensor, proj: str, num_frames: int, frame_size: tuple[int, int], use_conv: bool = True
+    ) -> ttnn.Tensor:
+        """`features` for this device's channels of the head split as the fused kernels: depthwise spatial conv (a
+        unit 1x1 tap for q, which has no conv, and without `use_conv`, e.g. the text chunk as one 1 x T frame)
+        straight into the head layout, then the temporal conv, SiLU and L2 norm. `[1, 1, F*S, C]` bf16 ->
+        `[F, C / d, S, d]` bf16, no layout ops in between."""
+        if use_conv and proj in self.short_conv:
+            sp, tm = self._local_conv_rows(proj)
+            kernel = self.KERNEL
+        else:
+            channels = tokens.shape[-1]
+            sp = ops._constant(
+                self.mesh_device, ("unit_tap", channels), lambda: torch.ones(1, 1, ttnn.TILE_SIZE, channels), ttnn.float32
+            )
+            tm, kernel = None, 1
+        y = kernels.conv_spatial(tokens, sp, frames=num_frames, frame_size=frame_size, kernel=kernel)
+        return kernels.conv_temporal_features(y, tm, l2=proj != "v")
 
     def conv(
         self,
@@ -311,6 +355,14 @@ class OpenVDNLinearBranch(Module):
         conv (the text chunk). `partition` (frames on dim 0 -> this device's share) is applied in the tiled head
         layout (a row-major split measured ~70 ms slower), giving `[f, H, S, d]` for the local frames.
         `channel_split`: `tokens` are this device's channels of the head split, `H = C / d` of them."""
+        if (
+            channel_split
+            and frame_size is not None
+            and partition is None
+            and kernels.enabled("conv")
+            and kernels.conv_fits(self.mesh_device, tokens.shape[-1])
+        ):
+            return self.fused_features(tokens, proj, num_frames, frame_size)
         if frame_size is not None and proj in self.short_conv:
             x = self.conv(tokens, proj, num_frames, frame_size, channel_split=channel_split)
         else:
@@ -343,6 +395,23 @@ class OpenVDNLinearBranch(Module):
         delta = ttnn.add(delta, self.alpha_dt_bias.data)
         return ttnn.exp(ttnn.neg(ttnn.multiply(softplus(delta), self.alpha_scale.data)))
 
+    def factor_apply(
+        self, alpha: ttnn.Tensor | None, a: ttnn.Tensor, b: ttnn.Tensor, *, max_eig: float
+    ) -> tuple[ttnn.Tensor | None, ttnn.Tensor]:
+        """`ops.vdn_factor_apply`, as the fused `delta_solve` kernel unless OPENVDN_KERNELS leaves out "solve"."""
+        if kernels.enabled("solve"):
+            return kernels.delta_solve(a, b, alpha, max_eig=max_eig)
+        return ops.vdn_factor_apply(alpha, a, b, max_eig=max_eig, config=self.config)
+
+    def scan(
+        self, transition: ttnn.Tensor, injection: ttnn.Tensor, text_state: ttnn.Tensor | None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """The bidirectional scan, as the fused `frame_scan` kernel unless OPENVDN_KERNELS leaves out "scan"."""
+        if kernels.enabled("scan"):
+            return kernels.frame_scan(transition, injection, text_state=text_state)
+        scan = ops.parallel_bidirectional_scan if self.parallel_scan else ops.bidirectional_scan
+        return scan(transition, injection, text_state=text_state, config=self.config)
+
     def output_gate(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`sigmoid(output_gate(x))` `[1, 1, N, H*d]` for the readout."""
         return ttnn.sigmoid(self.gate_up(self.gate_down(x)))
@@ -362,11 +431,17 @@ class OpenVDNLinearBranch(Module):
         local = local_channels = lambda t: t  # noqa: E731
         if head_split:
             local, local_channels, _ = self._head_split()
-        key = self.features(local_channels(text_k_raw), "k", 1, None)
-        value = self.features(local_channels(text_v_raw), "v", 1, None)
+        if head_split and kernels.enabled("conv") and kernels.conv_fits(self.mesh_device, text_k_raw.shape[-1]):
+            key, value = (
+                self.fused_features(local_channels(raw), proj, 1, (1, length), use_conv=False)
+                for raw, proj in ((text_k_raw, "k"), (text_v_raw, "v"))
+            )
+        else:
+            key = self.features(local_channels(text_k_raw), "k", 1, None)
+            value = self.features(local_channels(text_v_raw), "v", 1, None)
         beta = self.beta(text_x, 1) if text_beta is None else heads_column(text_beta, 1)
         a, b = ops.frame_statistics(key, value, local(beta), config=self.config)
-        _, injection = ops.vdn_factor_apply(None, a, b, max_eig=1.0 + length, config=self.config)
+        _, injection = self.factor_apply(None, a, b, max_eig=1.0 + length)
         return ttnn.multiply(injection, self.TEXT_STATE_SCALE)
 
     def readout(
@@ -426,12 +501,11 @@ class OpenVDNLinearBranch(Module):
         alpha_rows = self.alpha(xv, num_frames)
         alpha = local(ops.rows_to_heads(alpha_rows, num_frames, self.num_local_heads, self.head_dim))
         mark("frame statistics and alpha")
-        transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
+        transition, injection = self.factor_apply(alpha, a, b, max_eig=1.0 + per_frame)
         if gather is not None:
             transition, injection = gather(transition), gather(injection)
         mark("inverse")
-        scan = ops.parallel_bidirectional_scan if self.parallel_scan else ops.bidirectional_scan
-        prefix, suffix = scan(transition, injection, text_state=text_state, config=self.config)
+        prefix, suffix = self.scan(transition, injection, text_state)
         mark("scans")
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
         mark("state gather")
@@ -505,10 +579,9 @@ class OpenVDNLinearBranch(Module):
         alpha_rows = local_channels(alpha_rows)
         alpha = ops.rows_to_heads(alpha_rows, num_frames, local_heads, self.head_dim)
         mark("frame statistics and alpha")
-        transition, injection = ops.vdn_factor_apply(alpha, a, b, max_eig=1.0 + per_frame, config=self.config)
+        transition, injection = self.factor_apply(alpha, a, b, max_eig=1.0 + per_frame)
         mark("inverse")
-        scan = ops.parallel_bidirectional_scan if self.parallel_scan else ops.bidirectional_scan
-        prefix, suffix = scan(transition, injection, text_state=text_state, config=self.config)
+        prefix, suffix = self.scan(transition, injection, text_state)
         mark("scans")
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
         mark("state gather")
