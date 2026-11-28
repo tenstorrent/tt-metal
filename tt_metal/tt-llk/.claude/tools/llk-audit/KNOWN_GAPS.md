@@ -107,8 +107,8 @@ raw `facts.<arch>.jsonl` inspection (L4's writes ARE emitted, just unrouted).
 
 ### L7 — QSR `AUTOTTSYNC_ORDERED` blanket tag ignores TTSync's RQ *consumer* exceptions
 `mmio_race.py` converts every unguarded QSR write `NO_LOCAL_ORDERING → AUTOTTSYNC_ORDERED` (pre-cleared,
-"not a race candidate"). QSR genuinely enables Auto TTSync (`set_ttsync_enables<TRACK_ALL>`,
-`llk_math_common.h:32`), so this is CORRECT for a tracked CFG/GPR write with an RQ-tracked consumer. But
+"not a race candidate"). QSR genuinely enables Auto TTSync (on at HW reset; LLK never disables it
+via `set_ttsync_enables`), so this is CORRECT for a tracked CFG/GPR write with an RQ-tracked consumer. But
 per Confluence "Every Conceivable TTSync Detail" 1340276980, the RQ EXCEPTS `RESOURCEDECL`, `MOP_CFG`,
 `REPLAY(load=1)`, and post-load-replay instructions — a write CONSUMED by one of those is NOT
 auto-ordered, yet the blanket tag pre-clears it anyway.

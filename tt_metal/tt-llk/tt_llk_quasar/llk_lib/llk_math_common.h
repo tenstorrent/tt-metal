@@ -192,10 +192,6 @@ inline void _llk_math_srcAB_hw_configure_(DataFormat srcA_format, DataFormat src
 {
     alu_cfg.programmed.type = AluCfgType::UNCONFIGURED;
 
-    // Turn on automatic Tensix-TRISC synchronization
-    // RT: This is turned on by default by HW, this should be removed
-    set_ttsync_enables<TRACK_ALL>(TRISC_ID);
-
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
     cfg[DISABLE_IMPLIED_SRCA_FMT_SEC0_Base_ADDR32 + TRISC_ID] = 1;

@@ -281,7 +281,8 @@ constexpr std::uint32_t TRACK_TDMA                   = 1 << 3;
 constexpr std::uint32_t TRACK_TENSIX_INSTRUCTIONS    = 1 << 4;
 constexpr std::uint32_t TRACK_ALL                    = 0x1F;
 
-// HACK: I inverted this signal in RTL, should probably clean this up at some point
+// TTSync tracking is enabled by default in HW, so LLK does not need to call this.
+// Kept for code that wants to change or disable tracking.
 template <std::uint32_t bitmask>
 inline void set_ttsync_enables(std::uint32_t thread_id = 0xdeadface)
 {
