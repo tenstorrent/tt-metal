@@ -21,6 +21,9 @@
 #include "llk_unpack_common.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -36,18 +39,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    const std::uint32_t tiles_in_block      = INPUT_NUM_TILES_IN_BLOCK;
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
     {
         START_PERF_MEASURE("INIT")
-        set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
+        {
+            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+        }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP1;
-        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
-        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, INPUT_NUM_TILES_IN_BLOCK);
+        _llk_unpack_binary_broadcast_operands_init_<BROADCAST_TYPE>(bfd_a, bfd_b, tensor_shape, 1 /*num_tiles*/);
         PROFILER_SYNC();
     }
     {
@@ -76,13 +84,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
-                    const std::uint32_t start_l1_tile_idx = block * INPUT_NUM_TILES_IN_BLOCK;
-                    _llk_unpack_binary_broadcast_operands_(start_l1_tile_idx /*start_l1_tile_idx_0*/, start_l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    // The *_tiles_bcast calls unpack one tile per call.
+                    for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
+                    {
+                        const std::uint32_t l1_tile_idx = block * tiles_in_block + tile;
+                        _llk_unpack_binary_broadcast_operands_(l1_tile_idx /*start_l1_tile_idx_0*/, l1_tile_idx /*start_l1_tile_idx_1*/, tensor_shape);
+                    }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
@@ -94,6 +113,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "params.h"
 
 using namespace ckernel;
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -109,17 +131,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
     const std::uint32_t num_faces           = tensor_shape.total_num_faces();
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
-        // End-to-end and math-isolate runs require FPU destination ownership.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // Math isolate requires FPU destination ownership.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
-
+        // the bcast init's ALU config, before the broadcast init.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape, ACC_TO_DEST);
         PROFILER_SYNC();
@@ -152,6 +180,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_();
+                    }
                     for (std::uint32_t dest_idx = 0; dest_idx < OUTPUT_NUM_TILES_IN_BLOCK; ++dest_idx)
                     {
                         for (std::uint32_t tile = 0; tile < num_tiles_per_accum; ++tile)
@@ -159,15 +191,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             _llk_math_eltwise_binary_broadcast_(dest_idx);
                         }
                     }
-                    if constexpr (PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE)
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                    {
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -178,6 +221,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -192,6 +238,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, tensor_shape, OUTPUT_NUM_TILES_IN_BLOCK);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE: no math↔pack dest-dvalid handshake.
@@ -200,15 +255,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-        }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, tensor_shape, OUTPUT_NUM_TILES_IN_BLOCK);
         PROFILER_SYNC();
     }
     {
@@ -219,12 +266,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
                     _llk_pack_(0 /*start_math_dest_tile_idx*/, block * OUTPUT_NUM_TILES_IN_BLOCK /*start_l1_tile_idx*/, tensor_shape);
+                    // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                    ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -234,14 +283,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < NUM_BLOCKS; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_(0 /*start_math_dest_tile_idx*/, block * OUTPUT_NUM_TILES_IN_BLOCK /*start_l1_tile_idx*/, tensor_shape);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
 
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif

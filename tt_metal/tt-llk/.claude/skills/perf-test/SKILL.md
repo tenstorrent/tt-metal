@@ -216,8 +216,8 @@ block and production calls it once, separately from the tile call, move it to
 |---|---|---|---|
 | `L1_TO_L1` | real loop | wait for Dest → block helper → section done | wait for math → block helper → section done |
 | `UNPACK_ISOLATE` | real loop | stand-in: clear the source dvalids unpack posts | empty |
-| `MATH_ISOLATE` | stand-in: post the source dvalids math consumes | block helper, no Dest sync | empty |
-| `PACK_ISOLATE` | empty | empty | block helper, no math wait, no section done |
+| `MATH_ISOLATE` | stand-in: post the source dvalids math consumes | block helper, no Dest wait; section done on Quasar only | empty |
+| `PACK_ISOLATE` | empty | empty | block helper, no math wait; section done on Quasar only |
 
 Adapt the table to the real pipeline: an unpack-to-dest kernel may bypass
 math, and a 4-TRISC Quasar kernel adds an SFPU column.
@@ -226,7 +226,13 @@ On Wormhole and Blackhole, `_llk_pack_dest_section_done_` is more than the
 math semaphore: it also stalls on pack, clears the packed Dest half
 (`ZEROACC`) and flips the packer's Dest bank. Without it, `PACK_ISOLATE`
 skips the Dest clear and always packs bank 0, so part of the gap to
-`L1_TO_L1` is that bookkeeping, not handshake cost.
+`L1_TO_L1` is that bookkeeping, not handshake cost. On Quasar,
+`PACK_ISOLATE` keeps the section done (`_llk_pack_dest_semaphore_section_done_`),
+so the pack-only number includes the stall, the clear and the bank flip that
+production's pack pays every section; only the wait for math is dropped (see
+the Quasar reference). Math's Quasar section done
+(`_llk_math_dest_section_done_`) flips math's Dest bank in `SyncHalf`, so
+`MATH_ISOLATE` keeps it the same way.
 
 - Idle branches are empty and fall through to `PROFILER_SYNC()`; no early
   `return` inside the zone. Keep the same `if constexpr` chain shape in every
@@ -265,10 +271,12 @@ stand-in count =
 Signal completion only to an active consumer:
 
 - `L1_TO_L1`: keep the real producer-to-pack setup and section-done calls.
-- `UNPACK_ISOLATE` and `MATH_ISOLATE`: do not signal the idle pack.
-- `PACK_ISOLATE`: pack without waiting for math and without Dest section
-  done, which also drops its Dest clear and bank flip (see the run-type
-  table).
+- `UNPACK_ISOLATE` and `MATH_ISOLATE`: do not signal the idle pack. On
+  Quasar, `MATH_ISOLATE` still runs math's section done (see the run-type
+  table), with a stand-in for pack's release.
+- `PACK_ISOLATE`: pack without waiting for math. On Wormhole and Blackhole
+  also without Dest section done, which drops its Dest clear and bank flip;
+  on Quasar keep the section done (see the run-type table).
 
 Architecture-specific state (Quasar wait masks, `set_up_dest_dvalid_per_thread`)
 is in the references.

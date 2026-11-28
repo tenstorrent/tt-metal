@@ -254,6 +254,77 @@ def test_l1_to_l1_three_trisc_keeps_unpack_to_pack_duration():
     assert stat_column(f"{prefix}[FPU]", MEAN) not in result.columns
 
 
+def test_l1_to_l1_three_trisc_window_ends_at_the_last_thread():
+    # INIT on hardware: math can close the zone after pack, and the phase lasts until it does.
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 140),
+                ("math", 102, 190),
+                ("pack", 104, 160),
+            ]
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    assert result.loc[0, stat_column(PerfRunType.L1_TO_L1.name, MEAN)] == 90
+
+
+def test_l1_to_l1_stub_sfpu_zones_stay_out_of_the_window():
+    # sfpu_stub.h opens the zone too (4-TRISC path), but its thread does no work.
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("math", 101, 150),
+                ("pack", 155, 160),
+                ("sfpu", 90, 170),
+            ]
+        ).assign(file=["perf.cpp"] * 6 + ["helpers/include/sfpu_stub.h"] * 2)
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    assert result.loc[0, stat_column(prefix, MEAN)] == 60
+    assert result.loc[0, stat_column(f"{prefix}[SFPU]", MEAN)] == 80
+
+
+def test_l1_to_l1_four_trisc_window_spans_every_thread():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("math", 95, 150),
+                ("pack", 155, 160),
+                ("sfpu", 110, 170),
+            ]
+        )
+    )
+
+    result = _stats_l1_to_l1(data)
+    prefix = PerfRunType.L1_TO_L1.name
+    assert result.loc[0, stat_column(f"{prefix}[FPU]", MEAN)] == 60
+    assert result.loc[0, stat_column(prefix, MEAN)] == 75
+
+
+def test_l1_to_l1_rejects_a_thread_with_unpaired_zones():
+    data = ProfilerData(
+        _parallel_events(
+            [
+                ("unpack", 100, 105),
+                ("math", 101, 150),
+                ("math", 151, 152),
+                ("pack", 155, 160),
+            ]
+        )
+    )
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        ValueError, match="as often as unpack"
+    ):
+        _stats_l1_to_l1(data)
+
+
 def test_l1_to_l1_four_trisc_rejects_mismatched_zone_counts():
     data = ProfilerData(
         _parallel_events(

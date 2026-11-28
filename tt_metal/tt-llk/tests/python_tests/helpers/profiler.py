@@ -207,14 +207,46 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
-    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU; sfpu_stub.h does not
-    # (trisc.cpp still emits KERNEL, which must not switch aggregation).
+    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU, and so does sfpu_stub.h, which opens every zone the
+    # kernel does (trisc.cpp still emits KERNEL, which alone must not switch aggregation).
     return bool(
         (
             (raw_data["thread"] == "sfpu")
             & raw_data[MARKER].isin(("INIT", "TILE_LOOP"))
         ).any()
     )
+
+
+FPU_THREADS = ("unpack", "math", "pack")
+SFPU_STUB_FILE = "sfpu_stub.h"
+
+
+def _sfpu_is_stub(raw_data: pd.DataFrame) -> bool:
+    # sfpu_stub.h only mirrors the other threads' zones; its thread does none of the op's work.
+    return bool(
+        (
+            (raw_data["thread"] == "sfpu")
+            & raw_data["file"].astype(str).str.endswith(SFPU_STUB_FILE)
+        ).any()
+    )
+
+
+def _work_window(begin, finish, others, marker, run_index):
+    """Widen per-zone [begin, finish] to every work thread that opened the zone. ``others`` maps a
+    thread to its (starts, ends) timestamps; a thread with the zone must have one per zone.
+    """
+    for thread, (starts, ends) in others.items():
+        if len(starts) == 0 and len(ends) == 0:
+            continue
+        if len(starts) != len(begin) or len(ends) != len(begin):
+            raise ValueError(
+                f"Every thread that opens a zone must open it as often as unpack for L1_TO_L1 "
+                f"(marker={marker}, run_index={run_index}, thread={thread}, "
+                f"starts={len(starts)}, ends={len(ends)}, unpack_count={len(begin)})"
+            )
+        begin = np.minimum(begin, starts)
+        finish = np.maximum(finish, ends)
+    return finish - begin
 
 
 def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
@@ -240,6 +272,8 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
     stamps = raw_data["timestamp"].to_numpy()
     is_start = (threads == "unpack") & (types == "ZONE_START")
     is_end = (threads == "pack") & (types == "ZONE_END")
+    starts = {t: (threads == t) & (types == "ZONE_START") for t in FPU_THREADS}
+    ends = {t: (threads == t) & (types == "ZONE_END") for t in FPU_THREADS}
 
     timing_markers, timing_values = [], []
     for marker, run_index in sorted(set(zip(markers, runs))):
@@ -260,8 +294,20 @@ def _stats_l1_to_l1(data: ProfilerData) -> pd.DataFrame:
                 f"unpack_count={len(unpack_start)}, pack_count={len(pack_end)})"
             )
 
+        # The zone lasts until its last thread closes it: math or unpack can close after pack.
+        others = {
+            t: (
+                stamps[np.flatnonzero(group & starts[t])],
+                stamps[np.flatnonzero(group & ends[t])],
+            )
+            for t in FPU_THREADS
+        }
         timing_markers += [marker] * len(unpack_start)
-        timing_values.append(stamps[pack_end] - stamps[unpack_start])
+        timing_values.append(
+            _work_window(
+                stamps[unpack_start], stamps[pack_end], others, marker, run_index
+            )
+        )
 
     return _stats_timings(
         pd.DataFrame(
@@ -283,6 +329,7 @@ def _parallel_zone_entries(
 
 def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
     prefix = PerfRunType.L1_TO_L1.name
+    work_threads = FPU_THREADS if _sfpu_is_stub(raw_data) else FPU_THREADS + ("sfpu",)
     timings = []
     for (marker, run_index), group in raw_data.groupby([MARKER, "run_index"]):
         fpu_start = _parallel_zone_entries(group, "unpack", "ZONE_START")
@@ -305,12 +352,20 @@ def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
 
         fpu_duration = fpu_end["timestamp"] - fpu_start["timestamp"]
         sfpu_duration = sfpu_end["timestamp"] - sfpu_start["timestamp"]
-        overall_start = pd.concat(
-            [fpu_start["timestamp"], sfpu_start["timestamp"]], axis=1
-        ).min(axis=1)
-        overall_end = pd.concat(
-            [fpu_end["timestamp"], sfpu_end["timestamp"]], axis=1
-        ).max(axis=1)
+        others = {
+            t: (
+                _parallel_zone_entries(group, t, "ZONE_START")["timestamp"].to_numpy(),
+                _parallel_zone_entries(group, t, "ZONE_END")["timestamp"].to_numpy(),
+            )
+            for t in work_threads
+        }
+        overall = _work_window(
+            fpu_start["timestamp"].to_numpy(),
+            fpu_end["timestamp"].to_numpy(),
+            others,
+            marker,
+            run_index,
+        )
 
         timings.append(
             pd.DataFrame(
@@ -318,7 +373,7 @@ def _stats_l1_to_l1_four_trisc(raw_data: pd.DataFrame) -> pd.DataFrame:
                     MARKER: marker,
                     f"{prefix}[FPU]": fpu_duration,
                     f"{prefix}[SFPU]": sfpu_duration,
-                    prefix: overall_end - overall_start,
+                    prefix: overall,
                 }
             )
         )

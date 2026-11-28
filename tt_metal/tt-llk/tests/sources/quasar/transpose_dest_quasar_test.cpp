@@ -18,11 +18,15 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -39,60 +43,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
+    const std::uint32_t l1_addr_16B           = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? L1_ADDRESS(buffer_B[0]) : L1_ADDRESS(buffer_A[0]);
+    const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
+    constexpr std::uint8_t bfd_unpack         = ckernel::trisc::BFD_ID_UNP0;
+
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    // compute_kernel_hw_startup configures both unpackers; the 32-bit forms run transpose_init / copy_init once,
+    // the 16-bit form re-runs copy_init per DEST section.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    if constexpr (unpack_to_dest)
+    {
+        // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
+        // sets the section base, so every section starts at DEST tile 0.
+        _llk_unpack_dest_init_();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            if constexpr (unpack_to_dest)
             {
-                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+                // Isolate run types have no unpack-to-dest consumer pulse.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
             else
             {
-                // L1_TO_L1 leaves UNPACK waiting for DEST ownership. Other run
-                // types have no unpack-to-dest consumer pulse.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
-        }
-        else
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-        }
-
-        unsigned l1_addr_16B;
-        if constexpr (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B)
-        {
-            l1_addr_16B = L1_ADDRESS(buffer_B[0]);
-        }
-        else
-        {
-            l1_addr_16B = L1_ADDRESS(buffer_A[0]);
-        }
-
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(TENSOR_SHAPE_FROM_PARAMS(params), l1_addr_16B, formats.unpack_A_src);
-        constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            // If Dest is in 32bit mode and operation is Mov2D, we need both SrcA/B fmts to be configured since Mov2D will be implemented via ELWADD
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
 
         if constexpr (unpack_to_dest)
         {
-            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
-            // bank offset reset to 0 keeps every section at DEST tile 0.
-            _llk_unpack_dest_init_();
+            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
             _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
-        }
-        else
-        {
-            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block);
         }
         PROFILER_SYNC();
     }
@@ -126,36 +110,71 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (unpack_to_dest)
+                    if constexpr (
+                        unpack_to_dest && MATH_TRANSPOSE_FACES && (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE))
                     {
-                        _llk_unpack_unary_operand_to_dest_block_(block * tiles_in_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_in_block);
-                        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                        // transpose_tile: one DEST loan per tile, holding that tile's unpack and dummy SrcB valid.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
                         {
-                            _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                            _llk_unpack_unary_operand_to_dest_tile_(block * tiles_in_block + i /*l1_tile_idx*/, i /*dst_tile_idx*/);
+                            _llk_unpack_set_srcB_dummy_valid_();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                         }
+                    }
+                    else if constexpr (unpack_to_dest)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_unary_operand_to_dest_tile_(block * tiles_in_block + i /*l1_tile_idx*/, i /*dst_tile_idx*/);
+                            // transpose_tile posts each tile's dummy SrcB valid right after its unpack.
+                            if constexpr (MATH_TRANSPOSE_FACES)
+                            {
+                                _llk_unpack_set_srcB_dummy_valid_();
+                            }
+                        }
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                     else
                     {
-                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
+                        _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
+                            bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles*/);
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_in_block + i /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                        }
                     }
 
-                    // After datacopy consumes SrcA and clears its dvalid, provide
-                    // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
-                    for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                    if constexpr (!(unpack_to_dest && MATH_TRANSPOSE_FACES))
                     {
-                        _llk_unpack_set_srcB_dummy_valid_();
+                        // After datacopy consumes SrcA and clears its dvalid, provide
+                        // dummy SrcA+SrcB dvalid so transpose dest can use srcA/B.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_unpack_set_srcB_dummy_valid_();
+                        }
                     }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_transpose_dest.h"
@@ -163,7 +182,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-template <bool set_dvalid>
+template <bool sync_dest>
 inline void run_datacopy_transpose_loop(
     const DataFormat math_format,
     const std::uint32_t loop_factor,
@@ -177,6 +196,10 @@ inline void run_datacopy_transpose_loop(
     {
         for (std::uint32_t block = 0; block < num_blocks; block++)
         {
+            if constexpr (sync_dest)
+            {
+                _llk_math_wait_for_dest_available_();
+            }
             if constexpr (!unpack_to_dest)
             {
                 // Datacopy and transpose both use bank0's instruction buffer, so
@@ -189,22 +212,43 @@ inline void run_datacopy_transpose_loop(
                     _llk_math_eltwise_unary_datacopy_(dst_index + i);
                 }
             }
+            else if constexpr (sync_dest && !MATH_TRANSPOSE_FACES)
+            {
+                _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+            }
 
-            // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
-            _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
-            _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            // transpose_tile (32-bit, faces on) inits once in INIT; topk_large_indices and copy + transpose_dest
+            // re-init per section.
+            if constexpr (!(unpack_to_dest && MATH_TRANSPOSE_FACES))
+            {
+                // Int32/Float32 transpose dest requires non-default SrcA/SrcB format settings
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            }
             for (std::uint32_t i = 0; i < tiles_in_block; ++i)
             {
+                if constexpr (sync_dest && unpack_to_dest && MATH_TRANSPOSE_FACES)
+                {
+                    // transpose_tile lends DEST to unpack for each tile.
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                }
                 _llk_math_transpose_dest_(dst_index + i);
             }
 
-            if constexpr (set_dvalid)
+            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+            if constexpr (!sync_dest)
             {
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
             }
         }
     }
 }
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -222,27 +266,33 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
     const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
     const DataFormat math_format       = static_cast<DataFormat>(formats.math);
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (
+        PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE ||
+        (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest))
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            if constexpr (!unpack_to_dest)
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-            }
-            else
-            {
-                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-            }
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             // Math isolate has no destination producer before FPU, so make FPU
             // the producer and restore immediate ownership of the destination.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        if constexpr (unpack_to_dest)
+        {
+            // The unpack-to-dest datacopy init of transpose_init / copy_init.
+            _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
+            if constexpr (MATH_TRANSPOSE_FACES)
+            {
+                _configure_alu_cfg_<AluCfgType::MOV_OPS_EXPLICIT_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+                _llk_math_transpose_dest_init_<MATH_TRANSPOSE_FACES, is_fp32_dest_acc_en>();
+            }
+        }
         PROFILER_SYNC();
     }
     {
@@ -259,26 +309,60 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // cannot produce until the preceding SrcB block is consumed.
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    if constexpr (!unpack_to_dest)
+                    if constexpr (unpack_to_dest && MATH_TRANSPOSE_FACES)
                     {
-                        // Match real 32-bit unpack: datacopy consumes and clears
-                        // paired SrcA/SrcB before transpose consumes dummy SrcB.
-                        _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en /*clear_b*/>(tiles_in_block);
+                        // transpose_tile: math lends DEST for each tile's unpack, then consumes its dummy SrcB valid.
+                        for (std::uint32_t i = 0; i < tiles_in_block; ++i)
+                        {
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                            _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1);
+                        }
+                        // The lender moves to the other DEST bank per section; pack is idle, so math takes MATH_PACK back.
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
-                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
+                    else
+                    {
+                        if constexpr (!unpack_to_dest)
+                        {
+                            // Match real 32-bit unpack: datacopy consumes and clears
+                            // paired SrcA/SrcB before transpose consumes dummy SrcB.
+                            _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en /*clear_b*/>(tiles_in_block);
+                        }
+                        else
+                        {
+                            // Stand-in lender: unpack takes each section's DEST bank through the loan, as in production.
+                            _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                            _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                        }
+                        _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
+                        if constexpr (unpack_to_dest)
+                        {
+                            // Pack is idle, so math takes MATH_PACK back.
+                            _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                            ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                        }
+                    }
                 }
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            run_datacopy_transpose_loop<false /*set_dvalid*/>(math_format, LOOP_FACTOR, num_blocks, tiles_in_block, num_faces, TEST_FACE_R_DIM, DST_INDEX);
+            run_datacopy_transpose_loop<false /*sync_dest*/>(math_format, LOOP_FACTOR, num_blocks, tiles_in_block, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         else
         {
-            run_datacopy_transpose_loop<true /*set_dvalid*/>(math_format, LOOP_FACTOR, num_blocks, tiles_in_block, num_faces, TEST_FACE_R_DIM, DST_INDEX);
+            run_datacopy_transpose_loop<true /*sync_dest*/>(math_format, LOOP_FACTOR, num_blocks, tiles_in_block, num_faces, TEST_FACE_R_DIM, DST_INDEX);
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -289,6 +373,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -305,6 +392,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
     const std::uint32_t output_tiles_in_block = static_cast<std::uint32_t>(OUTPUT_NUM_TILES_IN_BLOCK);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, output_tiles_in_block);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math↔pack handshake.
@@ -313,22 +409,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-        }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(TENSOR_SHAPE_FROM_PARAMS(params), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, output_tiles_in_block);
         PROFILER_SYNC();
     }
     {
@@ -338,12 +419,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
                 {
                     _llk_pack_(DST_INDEX, block * output_tiles_in_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                    // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                    ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -353,12 +436,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < output_num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_(DST_INDEX, block * output_tiles_in_block /*start_l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 #endif

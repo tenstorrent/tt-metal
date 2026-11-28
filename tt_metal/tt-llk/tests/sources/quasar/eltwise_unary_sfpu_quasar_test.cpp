@@ -17,11 +17,15 @@
 
 #include "cfg_defines.h"
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -35,54 +39,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_faces       = params.num_faces;
     const Operand& buffer_A             = params.buffer_A;
 #endif
-    const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
-    const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
+    const std::uint32_t section_tiles       = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
+    const std::uint32_t num_sections        = dest_section_count(TILE_CNT, section_tiles);
+    const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    // compute_kernel_hw_startup configures both unpackers; copy_init then inits a one-tile unpack.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    if constexpr (unpack_to_dest)
+    {
+        // The to-dest placers carry no synchronization: in L1_TO_L1 a Dest loan from math brackets them and
+        // sets the section base, so every section starts at DEST tile 0.
+        _llk_unpack_dest_init_();
+    }
     {
         START_PERF_MEASURE("INIT")
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
-
-        if constexpr (is_fp32_dest_acc_en && !unpack_to_dest)
-        {
-            _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-        }
-        else
-        {
-            _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-        }
 
         if constexpr (unpack_to_dest)
         {
-            // The to-dest placers carry no synchronization: the dest-dvalid handshake brackets them, and the DEST
-            // bank offset reset to 0 keeps every section at DEST tile 0.
-            _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape);
         }
         else
         {
-            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-                bfd_unpack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
+            _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape, 1 /*num_tiles*/);
         }
 
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP. UNPACK is only a dest client on UNP_DEST.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
-            }
-            else
-            {
-                // SrcA unpack is not a dest-dvalid client; do not inherit an
-                // UNP_DEST wait mask from a prior kernel on this device.
-                set_up_zero_dest_dvalid_handshake_for_unpack();
-            }
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types on the same device.
             // Isolated/congested UNPACK must not inherit the L1_TO_L1 chain.
@@ -110,21 +95,36 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const std::uint32_t l1_tile_idx = section * section_tiles;
                     if constexpr (unpack_to_dest)
                     {
-                        _llk_unpack_unary_operand_to_dest_block_(l1_tile_idx, 0 /*dst_tile_idx*/, section_tiles);
+                        _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
                     }
-                    else
+                    // copy_tile unpacks one tile per call.
+                    for (std::uint32_t tile = 0; tile < section_tiles; ++tile)
                     {
-                        _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(l1_tile_idx, ckernel::DEFAULT_TENSOR_SHAPE);
+                        if constexpr (unpack_to_dest)
+                        {
+                            _llk_unpack_unary_operand_to_dest_tile_(l1_tile_idx + tile, tile /*dst_tile_idx*/, tensor_shape);
+                        }
+                        else
+                        {
+                            _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(l1_tile_idx + tile, tensor_shape);
+                        }
                     }
-                    if constexpr (unpack_to_dest && PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    if constexpr (unpack_to_dest)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                     }
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
@@ -133,6 +133,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
@@ -142,6 +143,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -162,11 +166,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const DataFormat src_format     = static_cast<DataFormat>(formats.math);
     const DataFormat sfpu_in_format = static_cast<DataFormat>(formats.sfpu_src);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (
+        PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE ||
+        (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest))
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
     {
         START_PERF_MEASURE("INIT")
 
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
-
+        // copy_init's datacopy init: the ALU config, then (except for unpack to dest) the datacopy MOP.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(src_format, src_format);
         if constexpr (!unpack_to_dest)
         {
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
@@ -174,26 +186,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SFPU uses ADDR_MOD_7 and does not overwrite the datacopy MOP's
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
-        _llk_math_eltwise_sfpu_init_();
-        test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
-
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (!test_utils::is_unary_sfpu_no_op(SFPU_UNARY_OPERATION, TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT))
         {
-            // The dvalid chain must match UNPACK exactly. On the FPU path T1 is
-            // both the datacopy producer and the SFPU producer.
-            if constexpr (unpack_to_dest)
+            if constexpr (!test_utils::unary_sfpu_init_runs_sfpu_init(SFPU_UNARY_OPERATION))
             {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
+                _llk_math_eltwise_sfpu_init_();
             }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
-            }
+            test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
         }
-        else
+
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // CFG wait masks persist across run types. MATH_ISOLATE runs without
             // a pack consumer; UNPACK_ISOLATE only mocks Src
@@ -211,52 +213,77 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en>(LOOP_FACTOR * TILE_CNT);
             }
+            else
+            {
+                // Stand-in lender: unpack takes each section's DEST bank through the loan, as in production.
+                for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Pack is idle, so math takes MATH_PACK back.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                }
+            }
         }
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                {
+                    _llk_math_wait_for_dest_available_();
+                }
                 if constexpr (!unpack_to_dest)
                 {
                     for (std::uint32_t i = 0; i < section_tiles; ++i)
                     {
                         _llk_math_eltwise_unary_datacopy_(DST_INDEX + i);
                     }
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-                    {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
-                    }
                 }
-                for (std::uint32_t i = 0; i < section_tiles; ++i)
+                else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                }
+                if constexpr (!test_utils::is_unary_sfpu_no_op(SFPU_UNARY_OPERATION, TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT))
+                {
+                    for (std::uint32_t i = 0; i < section_tiles; ++i)
                     {
-                        // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
-                        if (i % 2 == 0)
+                        if constexpr (SFPU_UNARY_OPERATION == SfpuType::reshuffle_rows)
                         {
-                            test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
-                                DST_INDEX + i /*dst_index*/,
-                                sfpu_in_format,
-                                true /*first*/,
-                                5.0f /*fill_const_value*/,
-                                buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
+                            // (input, accumulator) tile pairs; the kernel skips a 16-byte header before the mask.
+                            if (i % 2 == 0)
+                            {
+                                test_utils::call_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, APPROX_MODE>(
+                                    DST_INDEX + i /*dst_index*/,
+                                    sfpu_in_format,
+                                    true /*first*/,
+                                    5.0f /*fill_const_value*/,
+                                    buffer_B[0] - RESHUFFLE_MASK_HEADER_BYTES /*idx_addr*/);
+                            }
+                        }
+                        else
+                        {
+                            test_utils::call_unary_sfpu_operation_quasar<
+                                SFPU_UNARY_OPERATION,
+                                dest_sync,
+                                is_fp32_dest_acc_en,
+                                APPROX_MODE,
+                                SFPU_ITERATIONS,
+                                TYPECAST_IN_FORMAT,
+                                TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
                         }
                     }
-                    else
-                    {
-                        test_utils::call_unary_sfpu_operation_quasar<
-                            SFPU_UNARY_OPERATION,
-                            dest_sync,
-                            is_fp32_dest_acc_en,
-                            APPROX_MODE,
-                            SFPU_ITERATIONS,
-                            TYPECAST_IN_FORMAT,
-                            TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_in_format);
-                    }
                 }
-                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
                 {
-                    _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+                {
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
             // Drain every execution unit driven by T1 before PACK takes over.
@@ -266,6 +293,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -277,6 +310,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -294,30 +330,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t section_tiles = tiles_per_dest_section<dest_sync, is_fp32_dest_acc_en>(TILE_CNT);
     const std::uint32_t num_sections  = dest_section_count(TILE_CNT, section_tiles);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
+        ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
     {
         START_PERF_MEASURE("INIT")
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
-            ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-        _llk_pack_init_(bfd_pack, ckernel::DEFAULT_TENSOR_SHAPE, section_tiles);
-
-        // Program dest-dvalid CFG after HW configure so wait masks are the last
-        // writes before TILE_LOOP.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            // Declare the same dvalid client chain that UNPACK and MATH use.
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-        }
-        else
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             // PACK_ISOLATE packs independently. UNPACK_ISOLATE /
             // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
@@ -331,18 +357,29 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t pass = 0; pass < LOOP_FACTOR * num_sections; ++pass)
             {
-                _llk_pack_(DST_INDEX, (pass % num_sections) * section_tiles /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-                    // Drain this bank's dest-waited pack before issuing the next.
-                    // Queuing all LOOP_FACTOR packs into one tensix_sync makes the
-                    // TILE_LOOP ZONE_END wall-clock read return 0 on long SFPU ops.
-                    ckernel::wait_pack_idle();
+                    _llk_packer_wait_for_math_done_();
+                }
+                _llk_pack_(DST_INDEX, (pass % num_sections) * section_tiles /*tile index*/, ckernel::DEFAULT_TENSOR_SHAPE);
+                if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                {
+                    // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                    ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                }
+                if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                {
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 #endif

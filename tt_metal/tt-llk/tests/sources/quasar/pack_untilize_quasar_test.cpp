@@ -18,11 +18,15 @@
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
 #include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -38,25 +42,27 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     const ckernel::TensorShape tensor_shape_A = TENSOR_SHAPE_FROM_PARAMS(params);
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    // compute_kernel_hw_startup configures both unpackers; pack_untilize_init then inits a one-tile unpack.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
+    if constexpr (unpack_to_dest)
+    {
+        _llk_unpack_dest_init_();
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (unpack_to_dest)
+        if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
-            // Only the end-to-end path uses the unpack→pack dest-dvalid
-            // handshake. Isolates deliberately have no consumer, so clear the
-            // persisted wait mask rather than leaving UNP_DEST blocked.
-            if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+            if constexpr (unpack_to_dest)
             {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
+                // Isolates have no consumer, so clear the persisted wait mask rather than leaving UNP_DEST blocked.
+                set_up_zero_dest_dvalid_handshake_for_unpack();
             }
             else
             {
-                set_up_zero_dest_dvalid_handshake_for_unpack();
+                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
-        }
-        else
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
         unsigned l1_addr_16B;
@@ -74,22 +80,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
-            _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
         else
         {
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                    static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-            }
-            else
-            {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
-            }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, TILE_CNT);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, 1 /*num_tiles*/);
         }
         PROFILER_SYNC();
     }
@@ -123,13 +118,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                 {
                     // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
-                    // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
-                    // ZEROACC to wipe subsequent tile rows after packing the first one.
-                    _llk_unpack_unary_operand_to_dest_block_(block_rt * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
-                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    // Writing all tiles at once would cause pack's section done ZEROACC to wipe
+                    // subsequent tile rows after packing the first one.
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                     {
-                        _llk_unpack_dest_dvalid_section_done_<dest_sync>();
+                        _llk_unpack_unary_operand_to_dest_tile_(block_rt * BLOCK_CT_DIM + block_ct /*l1_tile_idx*/, block_ct /*dst_tile_idx*/, tensor_shape_A);
                     }
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
                 }
             }
         }
@@ -137,22 +133,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0 /*l1_tile_idx*/, tensor_shape_A);
+                // pack_untilize_block unpacks one tile at a time, row by row.
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+                    {
+                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM + block_ct /*l1_tile_idx*/, tensor_shape_A);
+                    }
+                }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No-op on Quasar: pack_untilize_uninit does no work.
 }
 
 #endif
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
 
 using namespace ckernel;
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -165,19 +179,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
 #endif
     // Every thread opens both zones even when it has no work here: the rendezvous waits for all four.
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (
+        PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE ||
+        (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && unpack_to_dest))
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
+    // compute_kernel_hw_startup, then pack_untilize_init's datacopy init (only its ALU config for unpack to dest).
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     {
         START_PERF_MEASURE("INIT")
         if constexpr (!unpack_to_dest)
         {
             // PACK_ISOLATE measures pack without the
             // FPU→PACK dest-dvalid handshake (WH/BH style).
-            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
+            if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
             {
                 set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
             }
+        }
 
-            _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
-
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+        if constexpr (!unpack_to_dest)
+        {
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
                 num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         }
@@ -212,6 +237,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             _llk_math_eltwise_unary_datacopy_(block_ct);
                         }
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                        ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                     }
                 }
             }
@@ -221,17 +249,65 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                     {
+                        _llk_math_wait_for_dest_available_();
                         for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
                         {
                             _llk_math_eltwise_unary_datacopy_(block_ct);
                         }
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                     }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            // Math owns each Dest section and lends it to the unpack-to-dest copy.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    _llk_math_wait_for_dest_available_();
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            // Stand-in lender: unpack takes each section's DEST bank through the loan, as in production.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    _llk_tile_regs_borrow_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_tile_regs_return_<DstClient::MATH, DstClient::UNPACK>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Pack is idle, so math takes MATH_PACK back.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -244,6 +320,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_untilize.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -254,6 +333,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_Res       = params.buffer_Res;
 #endif
     const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
+    _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
     {
         START_PERF_MEASURE("INIT")
         // Match WH/BH PACK_ISOLATE: no math↔pack handshake;
@@ -262,17 +347,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            if constexpr (unpack_to_dest)
-            {
-                set_up_unpack_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
-            else
-            {
-                set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-            }
         }
 
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
@@ -288,7 +362,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 tensor_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         }
 
-        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_untilize_init_<FULL_CT_DIM, BLOCK_CT_DIM>(bfd_pack, tensor_shape);
         PROFILER_SYNC();
     }
@@ -302,15 +375,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            // No dest-dvalid section_done: WH/BH isolate packs without math handshake.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                 {
                     // Each tile row is produced in alternating banks (SyncHalf).
-                    // Read from dest_idx 0; section_done zeroes the current bank
+                    // Read from dest_idx 0; section done zeroes the current bank
                     // and switches the packer to the other bank.
                     _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external /*l1_tile_idx*/, tensor_shape);
+                    // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                    ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
@@ -320,13 +395,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external /*l1_tile_idx*/, tensor_shape);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif

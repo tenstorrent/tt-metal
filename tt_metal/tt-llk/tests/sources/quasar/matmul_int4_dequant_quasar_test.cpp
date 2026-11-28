@@ -4,6 +4,8 @@
 //
 // wint4_aint8 linear: FPU int8 x int4 matmul per K group, SFPU scales each group's Int32 partial by s_w in Dest,
 // PACK0 sums the groups in L1, then a TRISC3 epilogue multiplies by s_a through SrcS and PACK1.
+// In L1_TO_L1 math hands each group's section to pack through MATH_PACK, and pack lends it to the SFPU
+// before packing it, so the FPU runs group g+1 while the SFPU scales group g.
 
 #include <cstdint>
 
@@ -20,8 +22,7 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
-// TRISC2 <-> TRISC3 handshake around the s_a epilogue (both indices are unused by this kernel's
-// dest-dvalid pipeline).
+// TRISC2 <-> TRISC3 handshake around the s_a epilogue (neither index is a Dest semaphore).
 constexpr std::uint8_t ACC_READY_SEM     = ckernel::trisc::semaphore::PACK_UNPACK_L1;
 constexpr std::uint8_t EPILOGUE_DONE_SEM = 0;
 
@@ -30,6 +31,9 @@ constexpr std::uint8_t EPILOGUE_DONE_SEM = 0;
 #include "ckernel_buf_desc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -52,16 +56,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    // Matmul's hw startup takes the operands reversed: in0 (A) feeds SrcB and in1 (B) feeds SrcA.
+    _llk_unpack_configure_binary_<ckernel::p_unpacr::UNP_A, ckernel::p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_B_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     {
         START_PERF_MEASURE("INIT")
-        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: operand A drives UNPACR1/SrcB, operand B drives UNPACR0/SrcA.
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
         constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
-        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_B>(static_cast<DataFormat>(formats.unpack_A_dst));
-        _llk_unpack_hw_configure_<ckernel::p_unpacr::UNP_A>(static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, RT_DIM, KT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
     }
@@ -86,6 +91,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    // From L1, so run_kernel keeps nothing live for this call.
+    extern const volatile struct RuntimeParams __runtime_args_start[];
+    const std::uint32_t unpack_A_src = __runtime_args_start[0].formats.unpack_A_src;
+    const std::uint32_t unpack_B_src = __runtime_args_start[0].formats.unpack_B_src;
+#else
+    const std::uint32_t unpack_A_src = formats.unpack_A_src;
+    const std::uint32_t unpack_B_src = formats.unpack_B_src;
+#endif
+    // As llk_unpack_AB_matmul_uninit: an MxFp4 operand's unpacker goes back to the Float16_b table format.
+    if (static_cast<DataFormat>(unpack_B_src) == DataFormat::MxFp4)
+    {
+        _llk_unpack_reconfig_data_format_src_<ckernel::p_unpacr::UNP_A, false>(unpack_B_src, static_cast<std::uint32_t>(DataFormat::Float16_b));
+    }
+    if (static_cast<DataFormat>(unpack_A_src) == DataFormat::MxFp4)
+    {
+        _llk_unpack_reconfig_data_format_src_<ckernel::p_unpacr::UNP_B, false>(unpack_A_src, static_cast<std::uint32_t>(DataFormat::Float16_b));
+    }
 }
 
 #endif
@@ -95,6 +124,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -116,17 +148,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr ckernel::TensorShape tensor_shape_B = ckernel::make_tensor_shape(in1_face_r_dim, in1_face_c_dim, num_faces_r_dim_B, num_faces_c_dim_B);
 #endif
 
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
+    const DataFormat math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
     {
         START_PERF_MEASURE("INIT")
         // A partial last group would stay in a Dest section that is never handed to the SFPU.
         LLK_ASSERT(GROUP_KT_DIM > 0 && KT_DIM % GROUP_KT_DIM == 0, "KT_DIM must be a whole number of quantization groups");
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        const DataFormat math_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
+        // matmul_block_init's ALU config, before the matmul init.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, ENABLE_DIRECT_INDEXING, ENABLE_2X_FORMAT>(
             math_format, math_format, CT_DIM, RT_DIM, tensor_shape_A, tensor_shape_B);
         PROFILER_SYNC();
@@ -142,32 +181,47 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // FPU alone: no Dest handoff, so the inactive SFPU never blocks it.
+            // FPU alone: no Dest handoff, so the inactive SFPU never blocks it. Each group still ends its section.
+            const std::uint32_t num_groups = KT_DIM / GROUP_KT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                for (std::uint32_t group = 0; group < num_groups; group++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    for (std::uint32_t i = 0; i < GROUP_KT_DIM; i++)
+                    {
+                        _llk_math_matmul_block_(CT_DIM, RT_DIM);
+                    }
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    // Stands in for the idle pack's release, so MATH_PACK never fills up.
+                    ckernel::trisc::t6_semaphore_get(ckernel::trisc::semaphore::MATH_PACK);
                 }
             }
         }
         else
         {
             // One Dest section per quantization group: the SFPU scales group g while the FPU runs g+1.
+            const std::uint32_t num_groups = KT_DIM / GROUP_KT_DIM;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < KT_DIM; i++)
+                for (std::uint32_t group = 0; group < num_groups; group++)
                 {
-                    _llk_math_matmul_block_(CT_DIM, RT_DIM);
-                    if ((i + 1) % GROUP_KT_DIM == 0)
+                    _llk_math_wait_for_dest_available_();
+                    for (std::uint32_t i = 0; i < GROUP_KT_DIM; i++)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                        _llk_math_matmul_block_(CT_DIM, RT_DIM);
                     }
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -177,6 +231,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cfg_defines.h"
 #include "ckernel_buf_desc.h"
 #include "cmath_common.h"
+#include "llk_dest_borrow.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_pack_common.h"
@@ -236,6 +291,9 @@ inline void record_face_seq()
         });
 }
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifndef SPEED_OF_LIGHT
@@ -286,7 +344,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         if constexpr (full)
         {
-            set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
             _llk_sync_init_(ACC_READY_SEM, 2 /*max*/, 0 /*init*/);
             _llk_sync_init_(EPILOGUE_DONE_SEM, 2 /*max*/, 0 /*init*/);
         }
@@ -335,6 +392,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 // ---- Per group: Dest partial -> float(partial) * s_w[g, n], in place ----
                 for (std::uint32_t group = 0; group < num_groups; ++group)
                 {
+                    if constexpr (full)
+                    {
+                        _llk_tile_regs_borrow_<DstClient::PACK, DstClient::SFPU>();
+                    }
                     for (std::uint32_t col_tile = 0; col_tile < CT_DIM; ++col_tile)
                     {
                         // One SrcS fill brings both 16-column halves' scales; LREG4-7 then hold them
@@ -368,7 +429,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     }
                     if constexpr (full)
                     {
-                        _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
+                        _llk_tile_regs_return_<DstClient::PACK, DstClient::SFPU>();
                     }
                 }
 
@@ -418,6 +479,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         wait_pack_idle();
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -425,11 +492,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "ckernel_buf_desc.h"
+#include "llk_dest_borrow.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#include "llk_pack_matmul.h"
 #include "llk_sync.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -450,24 +520,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     constexpr bool active = PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE;
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+    {
+        _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
+    }
+    if constexpr (active)
+    {
+        // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+        _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
+        _llk_pack_init_(ckernel::trisc::BFD_ID_PACK0, output_shape);
+    }
     {
         START_PERF_MEASURE("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-        }
-        else if constexpr (active)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-        }
-
-        if constexpr (active)
-        {
-            // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
-            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-            constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-            _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
-            _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         }
         PROFILER_SYNC();
     }
@@ -489,13 +558,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 for (std::uint32_t group = 0; group < num_groups; ++group)
                 {
-                    // Group 0 writes the result tiles; later groups accumulate onto them in L1 (fp32).
-                    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-                    _llk_pack_set_l1_acc_<p_pacr::PACK0>(group > 0 /*l1_acc_en*/);
-                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
-                        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                        _llk_packer_wait_for_math_done_();
+                        _llk_tile_regs_borrow_<DstClient::PACK, DstClient::SFPU>();
+                        _llk_tile_regs_return_<DstClient::PACK, DstClient::SFPU>();
+                    }
+                    // pack_reconfig_l1_acc, then pack_block: group 0 writes the result tiles, later groups
+                    // accumulate onto them in L1 (fp32).
+                    _llk_pack_set_l1_acc_<p_pacr::PACK0>(group > 0 /*l1_acc_en*/);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape, RT_DIM * CT_DIM);
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                    {
+                        // Stands in for the idle math's post, so the section done's SEMGET never underflows.
+                        ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+                    {
+                        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                     }
                 }
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
@@ -503,11 +583,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     t6_semaphore_post<p_stall::PACK0>(ACC_READY_SEM);
                 }
             }
-            TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-            _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
         }
         PROFILER_SYNC();
     }
+    // Outside the zones: later tests must not inherit L1 accumulation.
+    if constexpr (active)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+        _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
+    }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
