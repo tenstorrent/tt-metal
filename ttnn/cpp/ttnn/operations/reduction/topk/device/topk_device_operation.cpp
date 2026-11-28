@@ -170,6 +170,16 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
 void TopKDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args.input, "TopK", "the input");
+    if (tensor_args.indices.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(*tensor_args.indices, "TopK", "the indices");
+    }
+    if (tensor_args.preallocated_outputs.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(
+            std::get<0>(*tensor_args.preallocated_outputs), "TopK", "the output values");
+        ttnn::prim::validate_reduce_op_default_tile(
+            std::get<1>(*tensor_args.preallocated_outputs), "TopK", "the output indices");
+    }
     const auto& input_tensor = tensor_args.input;
     const auto& indices_tensor = tensor_args.indices;
     const auto& preallocated_outputs = tensor_args.preallocated_outputs;

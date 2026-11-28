@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "device/argmax_nc_device_operation.hpp"
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
@@ -186,6 +187,10 @@ Tensor argmax(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     TT_FATAL(is_device_tensor(input_tensor), "Input tensor must be on device");
+    ttnn::prim::validate_reduce_op_default_tile(input_tensor, "ttnn.argmax", "the input");
+    if (optional_output_tensor.has_value()) {
+        ttnn::prim::validate_reduce_op_default_tile(*optional_output_tensor, "ttnn.argmax", "the output");
+    }
     TT_FATAL(
         !optional_output_tensor.has_value() || is_device_tensor(optional_output_tensor.value()),
         "Preallocated output tensor must be on device");

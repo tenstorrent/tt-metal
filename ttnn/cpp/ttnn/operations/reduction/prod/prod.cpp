@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "prod.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "device/prod_nc_op.hpp"
 #include "device/prod_op_all.hpp"
 
@@ -67,6 +68,7 @@ Tensor prod_impl(
     const std::optional<int64_t> dim,
     const bool keepdim,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::prim::validate_reduce_op_default_tile(input_a, "ttnn.prod", "the input");
     auto output_mem_config = memory_config.value_or(input_a.memory_config());
     const Tensor input_a_padded =
         input_a.layout() == Layout::TILE ? ttnn::fill_implicit_tile_padding(input_a, 1.0f) : input_a;
@@ -214,6 +216,10 @@ Tensor prod_nc_impl(
     const Tensor& output,
     ttsl::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config) {
+    ttnn::prim::validate_reduce_op_default_tile(input, "ttnn.prod", "the input");
+    if (!dims.empty()) {
+        ttnn::prim::validate_reduce_op_default_tile(output, "ttnn.prod", "the output");
+    }
     auto mem_cfg = memory_config.value_or(input.memory_config());
     const Tensor input_padded = input.layout() == Layout::TILE ? ttnn::fill_implicit_tile_padding(input, 1.0f) : input;
 

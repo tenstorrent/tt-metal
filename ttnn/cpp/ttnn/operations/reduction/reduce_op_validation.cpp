@@ -9,6 +9,7 @@
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 namespace ttnn::prim {
 
@@ -211,6 +212,23 @@ void validate_reduce_op_tensor(
     if (core_grids_within_device_grid != nullptr) {
         validate_core_grids_within_device_grid(tensor_ref, op_name, *core_grids_within_device_grid);
     }
+}
+
+void validate_reduce_op_default_tile(
+    const ttnn::Tensor& tensor, std::string_view op_name, std::string_view tensor_label) {
+    if (tensor.layout() != Layout::TILE) {
+        return;
+    }
+    const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+        "{} supports only {}x{} tiles, but {} has a {}x{} tile",
+        op_name,
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tensor_label,
+        tile_shape[0],
+        tile_shape[1]);
 }
 
 }  // namespace ttnn::prim

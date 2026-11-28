@@ -8,6 +8,8 @@
 namespace ttnn::prim {
 void ProdNcDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args.input, "Prod", "the input");
+    ttnn::prim::validate_reduce_op_default_tile(tensor_args.output, "Prod", "the output");
     TT_FATAL((args.dim >= 0 && args.dim <= 3), "dim should be 0 - 3");
     const auto& input = tensor_args.input;
     const auto& output = tensor_args.output;
