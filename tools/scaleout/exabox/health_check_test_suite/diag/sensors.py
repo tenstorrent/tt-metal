@@ -2,11 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tray power through the in-band BMC (``ipmitool raw 0x06 0x52``, root or ``sudo -n``): each tray's two HSCs,
-its CPLD's VR power-good byte and the power bricks. The HSCs' under-voltage latches are read before and after the
-load, judged, then cleared once (CLEAR_FAULTS); they also tell a lost chip's cause (POWER, POWER-DOWNSTREAM).
-Every call takes ``$HSC_I2C_LOCK``, the lock tray-test uses: overlapping I2C write-reads latch a comm fault.
-The only writes are CLEAR_FAULTS and the brick mux select, restored after."""
+"""Tray power through the in-band BMC (``ipmitool raw 0x06 0x52``, root or ``sudo -n``): each tray's two HSCs, its
+CPLD's VR power-good byte and the bricks, under ``$HSC_I2C_LOCK`` (tray-test's lock: overlapping I2C write-reads latch a
+comm fault). The only writes are CLEAR_FAULTS, once after the load, and the brick mux select, restored after."""
 from __future__ import annotations
 
 import fcntl
@@ -267,7 +265,7 @@ def poll_hsc(bmc: Bmc, poll: Poll, stop: threading.Event, period: float = POLL_S
         stop.wait(period)
 
 
-def _tray_parts(tray: int) -> list[str]:
+def tray_parts(tray: int) -> list[str]:
     return [format_bdf(expected_bdf(tray, asic)) for asic in range(1, 9)]
 
 
@@ -348,7 +346,7 @@ def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str
                 details=f"UBB{t}: {'; '.join(notes + unread + ([why] if cause == 'POWER-DOWNSTREAM' else []))}",
                 data={"before": _as_data(before, t), "after": _as_data(after, t)},
                 ip="board",
-                parts=_tray_parts(t),
+                parts=tray_parts(t),
                 cause=cause,
             )
         )

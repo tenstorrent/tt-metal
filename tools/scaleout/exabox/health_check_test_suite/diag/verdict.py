@@ -161,6 +161,7 @@ ROWS: dict[str, Row] = {
         "reseat, then replace, the QSFP-DD cable on those ports",
         _says("QSFP-DD"),
     ),
+    # F19 also covers numeric errors at Vmin (F17): same compare, same vdd_min repair.
     "F19": Row(
         "bf16/bf8 DIDT numeric errors",
         _tests(DIDT_MATMUL_GALAXY) + (BUSBAR_NUMERIC,),

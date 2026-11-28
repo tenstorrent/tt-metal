@@ -2,17 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The bus-bar stage: the tier's BUSBAR_STEPS (tiers.py), each a clock-checked quiet then one of metal's
-loads, with the trays' HSCs polled throughout.
-
-A weak bus bar or 12 V feed shows as an HSC trip, a chip gone from PCIe, a link that trains down, or a
-chip whose matmul output differs from the other 31 (the diag.xchip plugin). After every step the chips
-are recounted and the links and SEL re-read; a lost chip ends the loads, since each needs all 32.
-
-A load that outlives its step plus bring-up is a hang: the logs are captured, then its process group is
-stopped. Each leg writes its name and boot_id to LEG_FILE, which a reboot keeps, so the next run can say
-the host rebooted during that leg. The power_virus step calls the --hook script; with no hook, SKIP.
-"""
+"""The bus-bar stage: the tier's BUSBAR_STEPS (tiers.py), each a clock-checked quiet then one of metal's loads,
+with the trays' HSCs polled throughout (HEALTH_CHECK.md, "Bus-bar stage"). A lost chip ends the loads; each leg
+writes its name and boot_id to LEG_FILE, which a reboot keeps, so the next run can say the host rebooted during it."""
 from __future__ import annotations
 
 import json
@@ -53,6 +45,7 @@ BRINGUP_S = 600  # a load's bring-up and compile, on top of its step length
 HANG_GRACE_S = 60  # past the load's own --timeout: only a chip that never answers is a hang
 VOUT_LOW_V = 12.1  # a brick still at its 12.00 V default
 LEG_FILE = Path(f"/var/tmp/health-check-{os.getuid()}/busbar_leg.json")
+BOOT_S = 1800  # power loss to the next boot, on top of the leg's own end
 STOP_GRACE_S = 5  # TERM then KILL, inside the wrapper's 10 s TERM-to-KILL
 PCC_RE = re.compile(r"Device (\d+) PCC: (?!1\.0\b)(\S+)")
 XCHIP_RE = re.compile(r"Device (\d+) output differs from the other chips")
@@ -168,13 +161,18 @@ def sel_power_lines(dry_run: bool) -> list[str] | None:
     return None if out is None else [ln.strip() for ln in out.splitlines() if SEL_POWER_RE.search(ln)]
 
 
+def boot_time() -> float:
+    return time.time() - float(Path("/proc/uptime").read_text().split()[0])
+
+
 def check_last_boot(phase: Phase) -> None:
-    """A leg file left by another boot: the host rebooted during that leg."""
+    """A leg file left by another boot that started before the leg's end: the host rebooted during that leg.
+    A later boot means a killed run left the file, and the host rebooted after it."""
     try:
         leg = json.loads(LEG_FILE.read_text())
     except (OSError, ValueError):
         return
-    if leg.get("boot_id") and leg["boot_id"] != boot_id():
+    if leg.get("boot_id") and leg["boot_id"] != boot_id() and boot_time() <= leg.get("until", float("inf")):
         why = f"host rebooted during {leg.get('leg', '?')} -> POWER: PSU/feed, see SEL"
         _add(phase, BUSBAR_REBOOT, FAIL, why, data=leg, ip="other", cause="POWER")
     LEG_FILE.unlink(missing_ok=True)
@@ -234,6 +232,8 @@ def run_busbar(
         if low:
             why = f"bricks {', '.join(low)} at idle -> POWER: set brick VOUT to 12.24/12.35 V"
             _add(phase, BUSBAR_BRICK_VOUT, WARN, why, ip="other")
+        tp = sensors.read_power(bmc, bricks=False)  # trips already latched before the stage are not new
+        pre = {k: set(h.flags) for k, h in tp.hsc.items() if h} if tp else {}
         poller.start()
         _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root)
     finally:
@@ -243,7 +243,7 @@ def run_busbar(
         if old is not None:
             signal.signal(signal.SIGTERM, old)
         LEG_FILE.unlink(missing_ok=True)
-    _judge_poll(phase, poll, bmc)
+    _judge_poll(phase, poll, bmc, pre)
     if stop.is_set() and old is not None:
         os.kill(os.getpid(), signal.SIGTERM)  # the run was asked to end: pass it on, no later stage starts
 
@@ -264,15 +264,18 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
         if stop.is_set():
             break
         poll.step = st.name
-        LEG_FILE.write_text(json.dumps({"leg": st.name, "boot_id": boot0, "t": time.time()}))
         t0 = time.time()
+        until = t0 + st.load_s + BRINGUP_S + HANG_GRACE_S + BOOT_S
+        LEG_FILE.write_text(json.dumps({"leg": st.name, "boot_id": boot0, "t": t0, "until": until}))
         log_path = logs_dir / f"busbar_{st.name}.log"
         if st.load == "power_virus":
             if not hook:
                 _add(phase, BUSBAR + st.name, SKIP, "no --hook: the power virus slot is empty")
                 continue
             # The hook runs to its end (call_hook's own timeout); a SIGTERM stops the steps after it.
-            status = "ok" if call_hook(hook, "load", st.name, str(st.load_s), logs_dir, False) == 0 else "fail"
+            status = (
+                "ok" if call_hook(hook, "load", st.name, str(st.load_s), logs_dir, False, tt_metal) == 0 else "fail"
+            )
         else:
             cmd, env = LOADS[st.load](tt_metal, st.load_s)
             log(f"busbar {st.name}: {st.load} {st.load_s} s")
@@ -325,18 +328,18 @@ def _after_step(phase, step, missing0, links0, sel0, sys_root) -> tuple[bool, li
     return bool(lost), (sel0 if sel is None else sel)
 
 
-def _judge_poll(phase: Phase, poll: sensors.Poll, bmc: sensors.Bmc) -> None:
-    """An HSC trip in any step is a FAIL on its tray; poll gaps are a WARN; no reads is a SKIP."""
+def _judge_poll(phase: Phase, poll: sensors.Poll, bmc: sensors.Bmc, pre: dict) -> None:
+    """An HSC trip in any step, not set before the stage, is a FAIL on its tray; poll gaps are a WARN; no reads is a SKIP."""
     if not any(rec.flags for rec in poll.steps.values()):
         _add(phase, BUSBAR_HSC_POLL, SKIP, f"no HSC reads: {bmc.why or 'none answered'}")
         return
     for step, rec in poll.steps.items():
         for (t, a), flags in sorted(rec.flags.items()):
-            trips = sorted(flags & sensors.TRIPS)
+            trips = sorted((flags - pre.get((t, a), set())) & sensors.TRIPS)
             if trips:
                 amps = rec.peak_a.get((t, a))
                 at = "" if amps is None else f" at {amps:.0f} A"
                 why = f"tray {t} 12 V feed (HSC {a:#04x}) tripped{at} in {step} ({', '.join(trips)}) -> POWER"
-                _add(phase, BUSBAR_HSC_TRIP, FAIL, why, parts=sensors._tray_parts(t), ip="other", cause="POWER")
+                _add(phase, BUSBAR_HSC_TRIP, FAIL, why, parts=sensors.tray_parts(t), ip="other", cause="POWER")
     if poll.gaps:
         _add(phase, BUSBAR_HSC_POLL, WARN, f"{len(poll.gaps)} poll gap(s); {poll.gaps[-1]}", data={"gaps": poll.gaps})

@@ -169,7 +169,11 @@ class TestStage(BusbarCase):
 
     def test_hsc_trip_fails_on_its_tray(self):
         self.fake.set(2, sensors.HSC_ADDRS[0], 0x79, 0x0040)
-        phase, by = self.run_stage(STEPS)
+        self.assertNotIn("busbar_hsc_trip", self.run_stage(STEPS)[1])  # latched before the stage: not a new trip
+        self.fake.set(2, sensors.HSC_ADDRS[0], 0x79, 0)
+        poll = sensors.poll_hsc
+        with mock.patch.object(sensors, "poll_hsc", lambda *a: (self.fake.set(2, 0x40, 0x79, 0x0040), poll(*a))):
+            phase, by = self.run_stage(STEPS)
         self.assertEqual(by["busbar_hsc_trip"].status, FAIL)
         self.assertIn("tray 2", by["busbar_hsc_trip"].details)
         report = {"phases": {"busbar": asdict(phase)}}
@@ -200,6 +204,8 @@ class TestStage(BusbarCase):
         (self.dir / "leg.json").write_text(json.dumps({"leg": "chunk25m", "boot_id": "boot-old"}))
         _, by = self.run_stage(STEPS)
         self.assertEqual(by["busbar_reboot"].details, "host rebooted during chunk25m -> POWER: PSU/feed, see SEL")
+        (self.dir / "leg.json").write_text(json.dumps({"leg": "chunk25m", "boot_id": "boot-old", "until": 1}))
+        self.assertNotIn("busbar_reboot", self.run_stage(STEPS)[1])  # a killed run's file, booted after its end
 
     def test_new_sel_power_line_is_a_power_fail(self):
         orig = busbar._after_step
@@ -230,11 +236,13 @@ class TestStage(BusbarCase):
         _, by = self.run_stage(pv)
         self.assertEqual(by["busbar_power_virus"].status, SKIP)
         hook = self.dir / "hook.sh"
-        hook.write_text(f'#!/bin/sh\necho "$@" > {self.dir}/hook.args\n')
+        hook.write_text(f'#!/bin/sh\necho "$@" "$(pwd)" > {self.dir}/hook.args\n')
         hook.chmod(0o755)
-        _, by = self.run_stage(pv, hook=str(hook))
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.dir.parent)  # a relative --hook still runs once the loads' cwd is the tt-metal root
+        _, by = self.run_stage(pv, hook=f"{self.dir.name}/hook.sh")
         self.assertEqual(by["busbar_power_virus"].status, PASS)
-        self.assertEqual((self.dir / "hook.args").read_text().split()[:3], ["load", "power_virus", "5"])
+        self.assertEqual((self.dir / "hook.args").read_text().split()[::4], ["load", str(self.dir)])
 
     def test_sigterm_stops_the_load_cleanly(self):
         self.loads["didt"] = "import time; time.sleep(60)"

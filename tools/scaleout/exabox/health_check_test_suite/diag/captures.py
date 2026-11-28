@@ -2,11 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host event captures: the BMC SEL and the kernel log since the run began.
-
-Reads only, and evidence rather than findings: the phase never votes; the verdict cites these under the faults they
-explain.
-"""
+"""Host event captures: the BMC SEL and the kernel log since the run began. Reads only, and evidence rather than
+findings: the phase never votes; the verdict cites these under the faults they explain."""
 from __future__ import annotations
 
 import os

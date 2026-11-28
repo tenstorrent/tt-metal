@@ -64,13 +64,20 @@ CASES = {
 }
 
 
-def _emitted(paths: list[Path]) -> set[str]:
-    """Strings the stages use and the str constants they read; a definition alone does not count."""
+def _emitted(sources: list[str]) -> set[str]:
+    """Strings the stages use and the str constants they read; a module-level definition alone does not count."""
     consts, found, read = {}, set(), set()
-    for tree in (ast.parse(p.read_text()) for p in paths):
-        defs = [a for a in tree.body if isinstance(a, ast.Assign) and type(getattr(a.value, "value", 0)) is str]
-        consts.update((t.id, a.value.value) for a in defs for t in a.targets if isinstance(t, ast.Name))
-        skip = {id(a.value) for a in defs}
+    for tree in map(ast.parse, sources):
+        skip = set()
+        for a in tree.body:  # A = "x", A = B = "x", A, B = "x", "y" and A: str = "x"
+            if not isinstance(a, (ast.Assign, ast.AnnAssign)) or a.value is None:
+                continue
+            for t in a.targets if isinstance(a, ast.Assign) else [a.target]:
+                tuples = isinstance(t, ast.Tuple) and isinstance(a.value, ast.Tuple)
+                for n, v in zip(t.elts, a.value.elts) if tuples else [(t, a.value)]:
+                    if isinstance(n, ast.Name) and isinstance(v, ast.Constant) and type(v.value) is str:
+                        consts[n.id] = v.value
+                        skip.add(id(v))
         for n in ast.walk(tree):
             if type(getattr(n, "value", 0)) is str and isinstance(n, ast.Constant) and id(n) not in skip:
                 found.add(n.value)
@@ -95,7 +102,7 @@ class TestRows(unittest.TestCase):
     def test_every_row_check_has_an_emitter(self):
         """A row's check must be emitted: an exact name, or for "x*" a name starting with x."""
         mods = [*sorted((SUITE_DIR / "diag").glob("*.py")), SUITE_DIR / "diag_runner.py"]
-        found = _emitted([m for m in mods if m.name != "verdict.py"])
+        found = _emitted([m.read_text() for m in mods if m.name != "verdict.py"])
         for rid, row in ROWS.items():
             for name in row.checks:
                 with self.subTest(rid=rid, check=name):
@@ -103,6 +110,15 @@ class TestRows(unittest.TestCase):
                         self.assertTrue(any(s.startswith(name[:-1]) for s in found))
                     else:
                         self.assertIn(name, found)
+
+    def test_a_definition_alone_is_not_an_emit(self):
+        for src, want in {
+            'A = "x"\nB = C = "y"\nD, E = "z", "w"\nF: str = "v"': set(),
+            'A = "x"\nD, E = "z", "w"\nF: str = "v"\nf(A, E, name=F)': {"x", "w", "v"},
+            'f("x")': {"x"},
+        }.items():
+            with self.subTest(src):
+                self.assertEqual(_emitted([src]), want)
 
 
 class TestVerdict(unittest.TestCase):

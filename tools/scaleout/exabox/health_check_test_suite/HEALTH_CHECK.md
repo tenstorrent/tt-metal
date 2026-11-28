@@ -188,17 +188,14 @@ pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Bus-bar stage
 
-After the tests, `daily`, `weekly` and `full` run `diag/busbar.py`, the steps of
-`BUSBAR_STEPS[load_mode]` in `tiers.py` (smoke ~0.5 min, plain ~22 min, full ~46
-min; same loads, different lengths): metal's didt max-util and didt matmul (the
-`diag.xchip` plugin names a chip whose output differs from the rest), the
-all-gather matmul, PCIe bandwidth, and the power virus through `--hook` (else a
-SKIP). The bricks are read once at idle (under 12.1 V is a WARN); a thread polls
-the tray HSCs every 2 s under the shared I2C lock (an HSC trip is a FAIL). Before
-each step AICLK must fall to 800 MHz within 5 min; after it the chips are
-recounted (a loss FAILs and ends the stage), PCIe links, wrong output and the SEL
-re-read; a reboot or new SEL power line is a FAIL. A load past its length is a
-hang: SEL and kernel log captured, the chip named, its process group stopped.
+After the tests, `daily`, `weekly` and `full` run `diag/busbar.py`, the steps of `BUSBAR_STEPS[load_mode]` in
+`tiers.py` (smoke ~0.5 min, plain ~22 min, full ~46 min; same loads, different lengths): metal's didt max-util and
+didt matmul (the `diag.xchip` plugin names a chip whose output differs from the rest), the all-gather matmul, PCIe
+bandwidth, and the power virus through `--hook` (else a SKIP). The bricks are read once at idle (under 12.1 V is a
+WARN); a thread polls the tray HSCs every 2 s under the shared I2C lock (a trip not set before the stage is a FAIL).
+Before each step AICLK must fall to 800 MHz within 5 min; after it the chips are recounted (a loss FAILs and ends the
+stage), PCIe links, wrong output and the SEL re-read; a reboot or new SEL power line is a FAIL. A load past its length
+is a hang: SEL and kernel log captured, the chip named, its process group stopped.
 
 ## Triage phase
 
@@ -590,36 +587,25 @@ any tier on a host that has the package.
 
 ## Captures phase
 
-Every tier saves the BMC SEL and the kernel log since the run began
-(`logs/sel.log`, `logs/kernel_events.log`, `sudo -n` when not root). Power, FRB,
-watchdog, AER, pciehp and link-down lines WARN as evidence; the phase does not
-gate, and a read that cannot run SKIPs with one line.
+Every tier saves the BMC SEL and the kernel log since the run began (`logs/sel.log`, `logs/kernel_events.log`, `sudo
+-n` when not root). Power, FRB, watchdog, AER, pciehp and link-down lines WARN as evidence; the phase does not gate,
+and a read that cannot run SKIPs with one line.
 
 ## Tray power phase
 
-Every tier reads each tray's two HSCs (VIN, IOUT, STATUS_WORD, STATUS_INPUT), the
-CPLD's VR power-good byte and the power bricks through `ipmitool raw 0x06 0x52`
-(root or `sudo -n`) before the first reset and after the post-test reset, under
-`$HSC_I2C_LOCK`, the lock tray-test uses. `tray_power` FAILs `POWER` for an HSC
-OFF, over-current or VIN under 11 V, FAILs `POWER-DOWNSTREAM` for 12 V good with
-a VR's power-good low, and WARNs for an under-voltage latch or an HSC that did not
-answer; a lost chip on such a tray takes that cause. After a loaded run each HSC
-gets CLEAR_FAULTS once (`hsc_latch_clear`), never when one reads OFF or with
-`--no-hsc-clear`. With no route the phase is one `skipped: <why>` line.
+Every tier reads each tray's two HSCs (VIN, IOUT, STATUS_WORD, STATUS_INPUT), the CPLD's VR power-good byte and the
+power bricks through `ipmitool raw 0x06 0x52` (root or `sudo -n`) before the first `tt-smi -glx_reset` and after the
+post-test one, under `$HSC_I2C_LOCK`, the lock tray-test uses. `tray_power` FAILs `POWER` for an HSC OFF, over-current or VIN
+under 11 V, FAILs `POWER-DOWNSTREAM` for 12 V good with a VR's power-good low, and WARNs for an under-voltage latch or
+an HSC that did not answer; a lost chip on such a tray takes that cause. After a loaded run each HSC gets CLEAR_FAULTS
+once (`hsc_latch_clear`), never when one reads OFF or with `--no-hsc-clear`. With no route the phase is one `skipped:
+<why>` line.
 
 ## Verdict
 
-The run ends with one fault per WARN/FAIL check of a gating phase, its cause and
-repair from `verdict.ROWS` (a check no row names gets one by its IP block), the
-WARN captures as `Evidence`, `Final verdict: PASS | WARN | FAIL | INCOMPLETE` and
-one `Repair recommendation:` line, FAIL repairs first:
-
-```
-Fault 1: FAIL F08 chip missing: PCIe link never trains: pcie_enum_count: 31/32 | 0000:46:00.0 (UBB2/U6)
-  Cause: PCIE/LINK
-  Repair: tt-smi -glx_reset and recount; if still missing, swap UBB2's host PCIe cable with a neighbour tray's
-Final verdict: FAIL: 1 fault(s)
-```
+The run ends with one fault per WARN/FAIL check of a gating phase, its cause and repair from `verdict.ROWS` (a check
+no row names gets one by its IP block), the WARN captures as `Evidence`, `Final verdict: PASS | WARN | FAIL |
+INCOMPLETE` and one `Repair recommendation:` line, FAIL repairs first.
 
 ## sys-triage phase
 
