@@ -726,3 +726,12 @@
   corrected by the agent. Both branches re-swept (owner): 8192 PB.MM256 (batching d6bc91514d5) device -1.0..-1.5 ms a chunk,
   5120 MB.9 (model_bringup 35d79c6720f) -0.3..-1.0 ms. MoE block fork matmuls (~23 ms + ~7 ms at 8192) not sweepable at
   call time (blocking fixed at load). Nothing pushed. Queue empty; idle until the owner's next direction.
+
+### 2026-11-28 ~06:20 (overseer session cd10a047) on dnijemcevic/model_bringup: the batch from the batching branch
+- Switched from dnijemcevic/model_bringup_batching (tip 1c0416426ec + history state; its dashboards stashed 'batching
+  dashboards (2026-11-28, after NC.8 / FIX.43)'); popped this branch's dashboards. Framework parity: F304-F310 cherry-picked
+  (6fae4aab961 .. 9de4868472c; selftests 27 passed). Rebuilt (39 s).
+- OWNER 2026-11-27 (batching supervision 15:33, 18:35, 21:20, 21:40): the same gains on model_bringup as ONE batch, op-level
+  checks per op, ONE end check. QUEUED MB.NC (agent: cherry-pick the wo_a bank layout WA.2-WA.4 / FIX.43 and the C++ ports
+  NC.1-NC.3, NC.5-NC.7, not the packed-only programs; op-level gate) and MB.NCL (measurement only: the 5120 ladder +
+  cold no-rebuild). validate: valid. (The batching ledger's held FIX.41 is the placeholder these replace.)

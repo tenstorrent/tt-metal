@@ -6348,3 +6348,74 @@ tasks:
       steady_tok_s_p*: '> 0'
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
+- id: MB.NC
+  title: 'OWNER 2026-11-27: bring the batching branch''s wo_a bank layout and its C++ ports (no prepared programs) to model_bringup
+    as ONE batch; op-level checks only'
+  step: perf
+  role: perf
+  device: true
+  ab_mode: none
+  deps:
+  - MB.9
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/WOA_BANK_DESIGN.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/NATIVE_PORT_RULES.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  - ttnn/cpp/ttnn/operations
+  - ttnn/cpp/ttnn-nanobind
+  - tests/ttnn/unit_tests/operations
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.NC_layer.md
+  brief:
+    prior_work: 'dnijemcevic/model_bringup_batching commits: WA.2 5cdc234a34d, WA.3 f39977aa64b, WA.4 628fc2263bc (default
+      on), FIX.43 ad677db52bb (test_woa_offon 1M), NC.1 b10e845af78, NC.2 8c26d3280e0, NC.3 b947498334e, NC.5 d9d05d50b5c,
+      NC.6 660deda0edd, NC.7 8e8a55a77fc. Reports there: results/WA.4_ladder.md, WA.5_report.md, NC.1..NC.7_layer.md (git
+      show dnijemcevic/model_bringup_batching:<path>).'
+    details: 'Take the batching branch''s changes AS IS where model_bringup has the same code (git cherry-pick -x the commits
+      above in order, or git show / checkout per file; resolve conflicts; change nothing else): the wo_a bank layout (ttnn.bringup.grouped_matmul
+      bank option, DS41_WOA_BANK default on, WOA_BANK_COPIES=selected), and the C++ device ops: ttnn.grouped_matmul, ttnn.fabric_reduce_scatter,
+      ttnn.layer_send (WindowSend fused / plain, SnapshotSend dyn / static: the single-request programs), ttnn.pair_pool,
+      ttnn.pack_fp8_rows / unpack_fp8_rows, ttnn.ckv_bfp4_rows, ttnn.block_max_bf16 / block_keys / block_gather, ttnn.chunk_program
+      (PageCopy, GluedRows with cos + sin fused, IdsReorder). NOT the packed-only programs (GluedSend, SnapshotSend.multi,
+      Derive, GluedIdsReorder, OwnedSend): model_bringup has no packed path. Keep model_bringup''s own differences (MB.9''s
+      GALAXY160 / GMM160 configs and MM_TUNED160, its tt/ code). Rebuild (cmake --build build --target install). OWNER rules:
+      op-level checks only, no model load, no ladder (task MB.NCL is the one end check). Gate: the batching op tests at this
+      branch''s shapes (5120 chunk: 160 rows a chip; keep 8192 cases only if this branch runs them), marked BATCH_SHARED =
+      True and BATCH_LAYERS = "none" (F309): exact vs the Python prepared route, repeats 0, no program-cache growth; host
+      us before / after. Report results/MB.NC_layer.md (one row per program, host ms a 5120 chunk saved). Read models/demos/deepseek_v41_flash_d_p/bringup/NATIVE_PORT_RULES.md
+      from the batching branch first (git show dnijemcevic/model_bringup_batching:models/demos/deepseek_v41_flash_d_p/bringup/NATIVE_PORT_RULES.md)
+      and bring it along.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_reduce_scatter.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_sends.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_lowbit.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_block_select.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_chunk_programs.py
+    metrics:
+      gmm_native_mismatch_*: == 0
+      native_mismatch_*: == 0
+      native_repeat_*: == 0
+      native_cache_growth_*: == 0
+- id: MB.NCL
+  title: 'OWNER 2026-11-27: the ONE end check on model_bringup after MB.NC: the 5120 ladder (layers 0-20, 51200 .. 1024000)
+    + cold no-rebuild'
+  step: perf
+  device: true
+  deps:
+  - MB.NC
+  brief:
+    details: Measurement only (no agent). Compare with MB.9's ladder (results/MB.9_ladder.md) in the owner report.
+  gate:
+    cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000
+      scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+      && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      steady_tok_s_p*: '> 0'
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
