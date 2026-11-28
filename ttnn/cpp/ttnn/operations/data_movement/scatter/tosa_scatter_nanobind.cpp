@@ -37,9 +37,10 @@ void bind_tosa_scatter(nb::module_& mod) {
                 import ttnn
                 import torch
 
-                input_torch = torch.randn([10,20,30,20,10], dtype=torch.float32)
-                index_torch = torch.randint(0, 10, [10,20,30,20,5], dtype=torch.int64)
-                source_torch = torch.randn([10,20,30,20,10], dtype=input_torch.dtype)
+                # input [N, K, C], index [N, W] with values in [0, K), source [N, W, C]
+                input_torch = torch.randn([2, 10, 32], dtype=torch.float32)
+                index_torch = torch.randint(0, 10, [2, 4], dtype=torch.int64)
+                source_torch = torch.randn([2, 4, 32], dtype=input_torch.dtype)
 
                 device = ttnn.open_device(device_id=0)
                 # input tensors must be interleaved and on device

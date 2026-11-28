@@ -36,7 +36,9 @@ void bind_expand(nb::module_& mod) {
         Args:
             * :attr:`input_tensor`: The tensor to be expanded.
             * :attr:`output_shape`: The desired output shape.
-            * :attr:`memory_config`: The memory configuration for the expanded tensor.
+
+        Keyword Args:
+            * :attr:`memory_config`: The memory configuration for the expanded tensor. Defaults to `None`.
 
         Requirements:
             like torch.expand:
