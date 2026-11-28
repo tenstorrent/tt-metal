@@ -196,11 +196,13 @@ class Qwen36MLP:
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
-    def forward(self, x, mode=None):
+    def forward(self, x, mode=None, decode_ar=None):
         # mode is unused (accepted only for a uniform signature with Qwen36MoE, which needs an
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
+        # decode_ar: a decode_allreduce.ResidualAllReduce (TP decode on the replicated residual) that sums the
+        # down-projection partials and adds the residual, instead of the reduce-scatter.
         if self.num_devices > 1:
-            return self._forward_tp(x)
+            return self._forward_tp(x, decode_ar)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
@@ -221,8 +223,9 @@ class Qwen36MLP:
         ttnn.deallocate(hidden)
         return output
 
-    def _forward_tp(self, x):
-        """TP forward: replicated input; reduce-scatter output fractured on hidden dim."""
+    def _forward_tp(self, x, decode_ar=None):
+        """TP forward: replicated input; reduce-scatter output fractured on hidden dim (with decode_ar: the
+        replicated residual plus the all-reduced output)."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
@@ -404,6 +407,8 @@ class Qwen36MLP:
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 
+        if decode_ar is not None:
+            return decode_ar.all_reduce(partial)
         if x.shape[-2] > ttnn.TILE_SIZE:  # prefill
             return tpc.tp_reduce_scatter(
                 partial, self.device, self.tt_ccl, args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
