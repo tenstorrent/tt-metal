@@ -305,14 +305,14 @@ Erfinv:
 - {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 0.0004596710205078125, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
 - {input: Float16, output: Float32, dest: 'Yes', near_zero_atol: 0.00045892834896221757, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 26944}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', near_zero_atol: 0.0004563331604003906, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 3}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 0.00045639282325282693, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 22583}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float16, dest: 'Yes', near_zero_atol: 0.0004570484161376953, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 3}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 0.000457763671875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 1}, {low: 1.0, high: .inf}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 0.0004558563232421875, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 65536}, {low: 1.0, high: .inf}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 0.00045700036571361125, domains: [{low: -.inf, high: -1.0}, {low: -1.0, high: 1.0, ulp: 27093}, {low: 1.0, high: .inf}]}
 Exp:
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: 16.0, ulp: 1}, {low: 16.0, high: .inf}]}
