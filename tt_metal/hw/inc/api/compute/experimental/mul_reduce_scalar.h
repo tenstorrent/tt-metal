@@ -20,6 +20,12 @@
 
 namespace ckernel {
 
+#ifdef ARCH_QUASAR
+// Quasar keeps these in ckernel::trisc, and not every TRISC build has them in scope.
+using trisc::DstTileShape;
+using trisc::get_dest_max_tiles;
+#endif
+
 // clang-format off
 /**
  * Initializes the fused multiply-reduce-scalar operation.
@@ -39,7 +45,12 @@ namespace ckernel {
 // clang-format on
 ALWI void mul_reduce_scalar_init(uint32_t icb0, uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+#ifdef ARCH_QUASAR
+    // Quasar's binary init reads both operand formats.
+    MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/, icb1)));
+#else
     MATH((llk_math_eltwise_mul_reduce_scalar_init<MATH_FIDELITY>(icb0, false /*acc_to_dest*/)));
+#endif
 }
 
 namespace detail {
@@ -76,11 +87,20 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
+#ifdef ARCH_QUASAR
+    // Quasar picks the pool fidelity from the SrcA and SrcB formats, and every reduce call takes both inputs.
+    MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>(icb0, icb1)));
+#else
     MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, reduce_f>()));
+#endif
 
     // Step 4: Prepare data for first tile's scalar reduction
     // Move dest[0] (first multiply result) to srcA
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0, icb0)));
+#else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
+#endif
 
     // Populate srcB with the scaler value
     MATH(SFPU_UNARY_CALL(
@@ -91,7 +111,11 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
         0 /*dst_index*/,
         VectorMode::RC_custom,
         scaler));
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0, icb0)));
+#else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
+#endif
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
     MATH(SFPU_UNARY_CALL(
@@ -108,17 +132,30 @@ ALWI void mul_reduce_scalar_tile_impl(uint32_t icb0, uint32_t icb1, uint32_t ocb
 
     // Step 6: Perform column reduction for each product tile, accumulating into dest[0]
     // First iteration (i=0) - no move needed
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0, icb1)));
+#else
     MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
+#endif
 
     // Remaining iterations - always move
     const uint32_t product_tiles = accumulate_in_one_tile ? 1 : num_tiles;
     for (uint32_t i = 1; i < product_tiles; i++) {
+#ifdef ARCH_QUASAR
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i, icb0)));
+        MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0, icb1)));
+#else
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<reduce_f>(0, icb0)));
+#endif
     }
 
     // Step 7: Perform final scalar reduction
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar<reduce_f, is_fp32_dest_acc_en>(icb0, icb1)));
+#else
     MATH((llk_math_mul_reduce_scalar<reduce_f>()));
+#endif
 
     // Step 8: Clear data valid flags
     MATH((llk_math_mul_reduce_scalar_clear_dvalid()));

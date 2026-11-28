@@ -578,6 +578,13 @@ unit_tests_llk:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
+  # Scalar reduce. The tiny tile mul suite skips on Quasar and the one tile suites are Blackhole only.
+  - filter: "MulReduceScalarTests/*:SumReduceScalar*"
+    config: 1x3
+    back2back: true
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+
   # Eltwise binary on LLKMeshDeviceFixtureSlowDispatchOnly. Single-tile,
   # multi-tile, dest-acc, and with-dest-reuse. Skipped on Quasar: dest-reuse
   # directions, col broadcast, and tiny-tile row broadcast.

@@ -29,6 +29,7 @@
 #include <tt-umd/types/arch.hpp>
 
 #include "llk_device_fixture.hpp"
+#include "single_node_dfb_program.hpp"
 #include "test_golden_impls.hpp"
 #include "tt_metal/impl/data_format/bfloat16_utils.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
@@ -52,7 +53,87 @@ struct MulReduceScalarConfig {
     float rel_tol = 0.01f;
 };
 
+using InputPair = std::pair<std::vector<uint32_t>, std::vector<uint32_t>>;
+
+// in0 is random in [0, 1) and in1 is all ones, so the result is the sum of in0.
+InputPair make_inputs(const MulReduceScalarConfig& config, uint32_t byte_size) {
+    auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
+
+    bfloat16 one_bf16 = bfloat16(1.0f);
+    uint16_t one_u16 = std::bit_cast<uint16_t>(one_bf16);
+    std::vector<uint32_t> packed_input1(byte_size / sizeof(uint32_t));
+    for (uint32_t& val : packed_input1) {
+        val = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
+    }
+    return {std::move(packed_input0), std::move(packed_input1)};
+}
+
+bool check_result(
+    const MulReduceScalarConfig& config,
+    const std::vector<uint32_t>& packed_input0,
+    const std::vector<uint32_t>& packed_input1,
+    const std::vector<uint32_t>& result_vec) {
+    auto u16_src0_vec = u16_from_u32_vector(packed_input0);
+    auto u16_src1_vec = u16_from_u32_vector(packed_input1);
+
+    float golden_scalar = 0.0f;
+    for (size_t i = 0; i < u16_src0_vec.size(); ++i) {
+        float val0 = static_cast<float>(std::bit_cast<bfloat16>(u16_src0_vec[i]));
+        float val1 = static_cast<float>(std::bit_cast<bfloat16>(u16_src1_vec[i]));
+        golden_scalar += val0 * val1;
+    }
+
+    auto u16_result_vec = u16_from_u32_vector(result_vec);
+    float device_scalar = static_cast<float>(std::bit_cast<bfloat16>(u16_result_vec[0]));
+
+    log_info(
+        LogTest,
+        "num_tiles={}: Golden={}, Device={}, Diff={}",
+        config.num_tiles,
+        golden_scalar,
+        device_scalar,
+        std::abs(device_scalar - golden_scalar));
+
+    float abs_tol = 0.01f;
+    float tolerance = std::max(config.rel_tol * std::abs(golden_scalar), abs_tol);
+    bool pass = std::abs(device_scalar - golden_scalar) < tolerance;
+
+    return pass;
+}
+
+// Quasar only accepts the 2.0 host API.
+bool run_mul_reduce_scalar_test_quasar(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
+    namespace sn = tt::tt_metal::unit_tests::llk::single_node_dfb;
+    // The stimulus and golden are bf16, so every DFB and the tile size use it.
+    constexpr tt::DataFormat format = tt::DataFormat::Float16_b;
+    const uint32_t tile_byte_size = tt::tile_size(format);
+    auto [packed_input0, packed_input1] = make_inputs(config, config.num_tiles * tile_byte_size);
+    const std::vector<uint32_t> result_vec = sn::run(
+        mesh_device,
+        {.name = "mul_reduce_scalar_quasar",
+         .inputs =
+             {{.data = packed_input0,
+               .format = format,
+               .num_tiles = config.num_tiles,
+               .accessor = "in0",
+               .num_entries = config.num_tiles},
+              {.data = packed_input1,
+               .format = format,
+               .num_tiles = config.num_tiles,
+               .accessor = "in1",
+               .num_entries = config.num_tiles}},
+         .output = {.format = format, .num_tiles = 1, .accessor = "out", .num_entries = 1},
+         .compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/mul_reduce_scalar_2_0.cpp",
+         .compile_time_args = {{"num_tiles", config.num_tiles}},
+         .hw_config = ComputeHardwareConfig{.fpu_math_fidelity = config.math_fidelity}});
+    return check_result(config, packed_input0, packed_input1, result_vec);
+}
+
 bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulReduceScalarConfig& config) {
+    if (mesh_device.arch() == tt::ARCH::QUASAR) {
+        return run_mul_reduce_scalar_test_quasar(mesh_device, config);
+    }
     tt_metal::Program program = tt_metal::CreateProgram(mesh_device);
     CoreCoord core = {0, 0};
 
@@ -133,16 +214,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
 
     SetRuntimeArgs(program, mul_reduce_kernel, core, {config.num_tiles});
 
-    uint32_t byte_size = config.num_tiles * tile_byte_size;
-    auto packed_input0 = test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        0, 1.0f, byte_size / sizeof(bfloat16), config.seed);
-
-    bfloat16 one_bf16 = bfloat16(1.0f);
-    uint16_t one_u16 = std::bit_cast<uint16_t>(one_bf16);
-    std::vector<uint32_t> packed_input1(byte_size / sizeof(uint32_t));
-    for (uint32_t& val : packed_input1) {
-        val = (static_cast<uint32_t>(one_u16) << 16) | one_u16;
-    }
+    auto [packed_input0, packed_input1] = make_inputs(config, config.num_tiles * tile_byte_size);
 
     auto& cq = mesh_device.mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, packed_input0, /*blocking=*/true);
@@ -153,32 +225,7 @@ bool run_mul_reduce_scalar_test(distributed::MeshDevice& mesh_device, const MulR
     std::vector<uint32_t> result_vec;
     distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
 
-    auto u16_src0_vec = u16_from_u32_vector(packed_input0);
-    auto u16_src1_vec = u16_from_u32_vector(packed_input1);
-
-    float golden_scalar = 0.0f;
-    for (size_t i = 0; i < u16_src0_vec.size(); ++i) {
-        float val0 = static_cast<float>(std::bit_cast<bfloat16>(u16_src0_vec[i]));
-        float val1 = static_cast<float>(std::bit_cast<bfloat16>(u16_src1_vec[i]));
-        golden_scalar += val0 * val1;
-    }
-
-    auto u16_result_vec = u16_from_u32_vector(result_vec);
-    float device_scalar = static_cast<float>(std::bit_cast<bfloat16>(u16_result_vec[0]));
-
-    log_info(
-        LogTest,
-        "num_tiles={}: Golden={}, Device={}, Diff={}",
-        config.num_tiles,
-        golden_scalar,
-        device_scalar,
-        std::abs(device_scalar - golden_scalar));
-
-    float abs_tol = 0.01f;
-    float tolerance = std::max(config.rel_tol * std::abs(golden_scalar), abs_tol);
-    bool pass = std::abs(device_scalar - golden_scalar) < tolerance;
-
-    return pass;
+    return check_result(config, packed_input0, packed_input1, result_vec);
 }
 
 // A bf16 DEST rounds each element's running sum at every one-tile accumulate, so the bound widens with the tile
@@ -189,15 +236,11 @@ float one_tile_rel_tol(int num_tiles) { return 0.01f + 0.001f * static_cast<floa
 
 using namespace tt::tt_metal::unit_tests::compute::mul_reduce_scalar;
 
-// Wormhole and Blackhole. Quasar skips: the reader and writer are still
-// DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923).
+// Runs on all architectures.
 class MulReduceScalarTest : public LLKMeshDeviceSingleCardFixture, public testing::WithParamInterface<int> {};
 
 // Standard 32x32-tile suite parametrized by tile count.
 TEST_P(MulReduceScalarTest, MulReduceScalar) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
-    }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 32}));
 }
@@ -214,7 +257,7 @@ class MulReduceScalarTinyTileTest : public LLKMeshDeviceSingleCardFixture, publi
 
 TEST_P(MulReduceScalarTinyTileTest, MulReduceScalarTinyTile) {
     if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "reader and writer still use DataMovementKernel, which Quasar rejects (tenstorrent/tt-metal#59923)";
+        GTEST_SKIP() << "the Quasar binary unpack supports full 32x32 tiles only (tenstorrent/tt-metal#47597)";
     }
     int num_tiles = GetParam();
     ASSERT_TRUE(run_mul_reduce_scalar_test(this->device(), {.num_tiles = num_tiles, .tile_height = 16}));

@@ -71,6 +71,10 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     constexpr uint32_t dest_capacity = get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
     constexpr uint32_t max_tiles = dest_capacity < 8 ? dest_capacity : 8;
     LLK_ASSERT(num_tiles <= max_tiles, "sum_reduce_scalar_tile: num_tiles exceeds min(8, DEST capacity)");
+#ifdef ARCH_QUASAR
+    // An unpack to DEST copy skips the math datacopy init, which programs the DEST tile stride the reduce moves use.
+    static_assert(!UnpackToDestEn, "Quasar sum_reduce_scalar_tile does not support unpack to DEST inputs");
+#endif
 
     // Step 1: Copy each input tile into its own DEST slot
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -81,10 +85,19 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
 
     // Step 3: Initialize reduce operation
+#ifdef ARCH_QUASAR
+    // Quasar picks the pool fidelity from the SrcA and SrcB formats. Both hold the input's format here.
+    MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb)));
+#else
     MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
+#endif
 
     // Step 4: Move dest[0] (first copied tile) to srcA
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0, icb)));
+#else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
+#endif
 
     // Populate srcB with the scaler value
     MATH(SFPU_UNARY_CALL(
@@ -95,7 +108,11 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
         0 /*dst_index*/,
         VectorMode::RC_custom,
         scaler));
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0, icb)));
+#else
     MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
+#endif
 
     // Clear dest[0] - this will accumulate scalar reduction results from all tiles
     MATH(SFPU_UNARY_CALL(
@@ -111,14 +128,26 @@ ALWI void sum_reduce_scalar_tile(uint32_t icb, uint32_t ocb, uint32_t num_tiles,
     PACK((llk_pack_reduce_mask_config<ReduceDim::REDUCE_SCALAR, PackMode::Default>(ocb)));
 
     // Step 6: Column-reduce each tile, accumulating into dest[0]
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb, icb)));
+    for (uint32_t i = 1; i < num_tiles; i++) {
+        MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i, icb)));
+        MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb, icb)));
+    }
+#else
     MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb)));
     for (uint32_t i = 1; i < num_tiles; i++) {
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(i)));
         MATH((llk_math_mul_reduce_column<MATH_FIDELITY>(0, icb)));
     }
+#endif
 
     // Step 7: Perform final scalar reduction
+#ifdef ARCH_QUASAR
+    MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>(icb, icb)));
+#else
     MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
+#endif
 
     // Step 8: Clear data valid flags
     MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
