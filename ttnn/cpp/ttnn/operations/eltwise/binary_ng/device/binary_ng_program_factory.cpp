@@ -1619,14 +1619,23 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // fp32_dest_acc_en is true.  COL broadcast is unaffected because it uses ELWADD
     // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
     // broadcast types on Blackhole when FP32 dest accumulation is active.
+    // Wormhole's ROW broadcast also corrupts results in that mode when a source is not 32-bit
+    // (e.g. bfloat16 inputs into a float32 output), so it falls back too.
     if (use_llk_bcast && fp32_dest_acc_en) {
+        auto sbt = operation_attributes.subtile_broadcast_type;
+        const bool row_bcast = sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
+                               sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A;
         if (arch == tt::ARCH::BLACKHOLE) {
-            auto sbt = operation_attributes.subtile_broadcast_type;
             bool uses_movb2d =
-                (sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B ||
-                 sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
-                 sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
+                row_bcast || sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B;
             if (uses_movb2d) {
+                use_llk_bcast = false;
+            }
+        } else if (arch == tt::ARCH::WORMHOLE_B0 && row_bcast) {
+            const auto is_32_bit = [](tt::DataFormat df) {
+                return df == tt::DataFormat::Float32 || df == tt::DataFormat::Int32 || df == tt::DataFormat::UInt32;
+            };
+            if (!is_32_bit(a_data_format) || !is_32_bit(b_data_format)) {
                 use_llk_bcast = false;
             }
         }
@@ -1654,15 +1663,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         if (fill_with_value_int && compute_kernel != CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
             compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         }
-        // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
-        // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
-        // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
-        // Match DEST: with fp32 DEST (e.g. a float32 output), bf16 inputs are held as Float32.
+        // where_tile<DataFormat::X> selector, used by the eltwise_chain `Where` element (WHERE_DATA_FORMAT)
+        // and by the BINARY_SFPU_OP kernels. It must match DEST: with fp32 DEST (e.g. a float32 output),
+        // bf16 inputs are held as Float32.
         const char* where_df = (a_dtype == DataType::INT32)                         ? "Int32"
                                : (a_dtype == DataType::UINT32)                      ? "UInt32"
                                : (a_dtype == DataType::FLOAT32 || fp32_dest_acc_en) ? "Float32"
                                                                                     : "Float16_b";
         compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
+        compute_kernel_defines["BINARY_SFPU_OP"] = fmt::format("where_tile<DataFormat::{}>", where_df);
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
