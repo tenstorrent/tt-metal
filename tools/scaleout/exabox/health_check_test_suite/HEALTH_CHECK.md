@@ -186,6 +186,40 @@ Output, per hit:
 The reset cadence and test set per tier are in `tiers.py`; the gtest filters and
 pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
+## Bus-bar stage
+
+After the tests, `daily`, `weekly` and `full` run `diag/busbar.py`: a weak bus
+bar or 12 V feed shows only under load after a quiet. Each tier runs
+`BUSBAR_STEPS[load_mode]` from `tiers.py` (daily `smoke`, weekly `plain`, full
+`full`); the modes share the load kinds and differ only in length (smoke ~0.5
+min; plain ~22 min: two didt bursts, max_util chunks of 1-4 min, a didt step, the
+all-gather matmul, PCIe bandwidth, the power virus; full ~46 min, with a 25 min
+chunk).
+
+The loads are metal's own: `unit_tests_didt_max_util`, the didt matmul with the
+`diag.xchip` pytest plugin (a chip whose output differs from the largest group of
+identical outputs is named), the all-gather matmul and the PCIe bandwidth gtests.
+The power virus step calls `--hook` as `SCRIPT load power_virus <seconds>
+<outdir>`; with no hook it is a SKIP.
+
+The bricks are read once at idle in `run_busbar`: one under 12.1 V is a WARN.
+Throughout the steps a thread polls only the tray HSCs, every 2 s
+(`sensors.poll_hsc`), under the shared I2C lock; a poll that misses more than two
+periods logs the gap and the lock's holder. An HSC trip (OFF, over-current) is a
+FAIL on its tray. Each step's check carries its load line (per HSC: peak A and
+lowest VIN). Before each step the chips' AICLK must fall to 800 MHz or less
+within 5 min (else a WARN naming them). After each step the chips are recounted
+(a lost chip is a FAIL and ends the stage), the PCIe links re-read (a change is a
+WARN), the log parsed for wrong output (a FAIL naming the chip), and the SEL
+re-read. A reboot during a step, seen from the boot_id kept in
+`/var/tmp/health-check-<uid>/busbar_leg.json`, or a new SEL power line is a FAIL
+`host rebooted during <step> -> POWER: PSU/feed, see SEL`. A load past its length
+plus bring-up is a hang: the SEL and kernel log are captured, the chip named from
+the last device sync that never ended, then the load's process group stopped,
+which ends all access to it; the post-test `-glx_reset` clears it. SIGTERM stops
+the running load and ends the stage. `--skip-tests` skips it; `--stage-order`
+runs it when `busbar` is named.
+
 ## Triage phase
 
 `daily`, `weekly` and `full` end with a post-test `tt-smi -glx_reset` followed by
@@ -570,7 +604,7 @@ wiring.
 **Budget.** The cage sweep is the dominant cost and the tool self-bounds it at
 its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
 timeout is 1200 s as a backstop. That has to stay well inside
-`run_health_check.py`'s whole-run `--timeout-minutes` (30, or 75 weekly and 120 full, by default), which
+`run_health_check.py`'s whole-run `--timeout-minutes` (30, or 105 weekly and 175 full, by default), which
 kills the process group and takes the report with it — so raise it when running
 any tier on a host that has the package.
 

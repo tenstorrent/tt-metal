@@ -7,7 +7,7 @@ add, move or drop a step in one.
 
 The phases always run in the same order, fixed in diag_runner.run_diag():
 
-    snapshot -> resets -> tests -> retest -> pcie_aer -> post_test_resets -> tray_power -> triage -> eth_status -> qsfp_tests -> sys_triage
+    snapshot -> resets -> tests -> retest -> busbar -> pcie_aer -> post_test_resets -> tray_power -> triage -> eth_status -> qsfp_tests -> sys_triage
 
 The order is load-bearing (the triage probes, the ETH status read, the QSFP
 collector and sys-triage all open every chip, so they must not overlap the tests,
@@ -37,6 +37,7 @@ TIERS.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 
 from diag.device_tests import PYTESTS, TESTS
 from diag.resets import RESET_FLAGS
@@ -94,6 +95,46 @@ class Tier:
     # link that replays under load counts errors here long before it drops.
     aer_diff: bool = False
 
+    # The bus-bar stage (diag/busbar.py): BUSBAR_STEPS[load_mode], after the
+    # tests and before the post-test reset; "" runs none.
+    load_mode: str = ""
+
+
+class Step(NamedTuple):
+    """One bus-bar step: a clock-checked quiet, then one load for load_s."""
+
+    name: str
+    quiet_s: int
+    load: str  # a key of busbar.LOADS
+    load_s: int  # 0: the load's own length (pcie_bw)
+
+
+def _chunks(*mins: int) -> tuple[Step, ...]:
+    return tuple(Step(f"chunk{m}m", 10, "max_util", 60 * m) for m in mins)
+
+
+# Two bursts, max load in growing chunks, a step load, the CCL mix, the PCIe
+# bandwidth reads, then the heavy chunk (the --hook power virus). Plain is under
+# 1800 s of quiet + load; full is plain, longer; smoke runs each load for seconds.
+_BURSTS = (Step("burst1", 60, "didt", 30), Step("burst2", 60, "didt", 30))
+_TAIL = (
+    Step("step", 10, "didt", 90),
+    Step("ccl", 10, "allgather", 120),
+    Step("pcie_bw", 10, "pcie_bw", 0),
+    Step("power_virus", 10, "power_virus", 240),
+)
+BUSBAR_STEPS: dict[str, tuple[Step, ...]] = {
+    "smoke": tuple(Step(s.name, 1, s.load, 5 if s.load_s else 0) for s in (_BURSTS[0], *_chunks(1), *_TAIL)),
+    "plain": (*_BURSTS, *_chunks(1, 2, 3, 4), *_TAIL),
+    "full": (
+        *_BURSTS,
+        *_chunks(1, 2, 3),
+        Step("chunk25m", 60, "max_util", 1500),
+        Step("chunk1m_after", 60, "max_util", 60),
+        *_TAIL,
+    ),
+}
+
 
 _WEEKLY = Tier(
     resets=("-glx_reset", "-glx_reset", "-glx_reset"),
@@ -103,6 +144,7 @@ _WEEKLY = Tier(
     triage=("host_side", "device_side"),
     qsfp_tests=True,
     aer_diff=True,
+    load_mode="plain",
 )
 
 TIERS: dict[str, Tier] = {
@@ -124,6 +166,7 @@ TIERS: dict[str, Tier] = {
         post_test_resets=("-glx_reset",),
         triage=("host_side", "device_side"),
         qsfp_tests=True,
+        load_mode="smoke",
     ),
     # daily, with every test and the full GDDR pattern set.
     "weekly": _WEEKLY,
@@ -134,6 +177,7 @@ TIERS: dict[str, Tier] = {
         tests=tuple("gddr_act_all" if t == "gddr_act_c3" else t for t in _WEEKLY.tests),
         retest=("gddr_act_all",),
         sys_triage=True,
+        load_mode="full",
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
@@ -164,19 +208,19 @@ DEPRECATED_TIER_ALIASES: dict[str, str] = {
 }
 
 
-STAGES = ("reset", "end", "eth")
+STAGES = ("reset", "busbar", "end", "eth")
 
 
 def select_stages(tier: Tier, order: str) -> Tier:
     """*tier* cut down to the stages named in *order* (comma-separated; --stage-order): "reset" (its pre-test
-    resets), its tests by name, "end" (its post-test reset) and "eth" (the ETH status read). A stage not named does
-    not run. They must be named in run order; any other order, or a name that is neither a stage nor one of the
+    resets), its tests by name, "busbar" (its bus-bar stage), "end" (its post-test reset) and "eth" (the ETH status
+    read). A stage not named does not run. They must be named in run order; any other order, or a name that is neither a stage nor one of the
     tier's tests, is a ValueError that names it."""
     names = [n for n in order.replace(" ", "").split(",") if n]
     unknown = [n for n in names if n not in STAGES and n not in tier.tests]
     if unknown:
         raise ValueError(f"--stage-order {order!r}: {', '.join(unknown)} is neither a stage nor a test of the tier")
-    rank = {n: i for i, n in enumerate(("reset", *tier.tests, "end", "eth"))}
+    rank = {n: i for i, n in enumerate((STAGES[0], *tier.tests, *STAGES[1:]))}  # the tests run after the resets
     if names != sorted(names, key=rank.get):
         raise ValueError(
             f"--stage-order {order!r}: the stages run in the order {','.join(sorted(names, key=rank.get))}"
@@ -190,6 +234,7 @@ def select_stages(tier: Tier, order: str) -> Tier:
         post_test_resets=(tier.post_test_resets or RESET_FLAGS) if "end" in names else (),
         eth_status="eth" in names,
         eth_summary=tier.eth_summary and "eth" in names,
+        load_mode=tier.load_mode if "busbar" in names else "",
     )
 
 
@@ -207,6 +252,8 @@ def _validate() -> None:
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
             problems.append(f"{name}: eth_summary needs eth_status")
+        if tier.load_mode and tier.load_mode not in BUSBAR_STEPS:
+            problems.append(f"{name}: unknown load_mode {tier.load_mode!r}")
     problems += [
         f"{old}: alias for unknown tier {new!r}" for old, new in DEPRECATED_TIER_ALIASES.items() if new not in TIERS
     ]

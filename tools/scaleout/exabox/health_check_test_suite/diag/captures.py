@@ -26,7 +26,9 @@ from .model import PASS, SKIP, WARN, Check, Phase
 
 # SEL records that bear on a lost chip, tray or host: CPU/BIOS boot failures
 # (FRB), power and voltage events, AC loss and watchdog resets.
-SEL_EVENT_RE = re.compile(r"FRB|Power Supply|Power Unit|Voltage|Critical|AC lost|Watchdog", re.IGNORECASE)
+SEL_POWER = "AC lost|Power Supply|Power Unit"
+SEL_POWER_RE = re.compile(SEL_POWER, re.IGNORECASE)
+SEL_EVENT_RE = re.compile(rf"FRB|{SEL_POWER}|Voltage|Critical|Watchdog", re.IGNORECASE)
 
 # Kernel lines that mean a chip's PCIe link or driver misbehaved during the run.
 KERNEL_EVENT_RE = re.compile(r"AER|pciehp|Link Down|tenstorrent.*(error|fail|timeout)", re.IGNORECASE)

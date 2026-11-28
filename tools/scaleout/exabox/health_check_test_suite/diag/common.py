@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections import defaultdict
@@ -27,6 +28,24 @@ def default_tt_metal_path() -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 # Subprocesses
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def kill_process_group(proc: subprocess.Popen, grace_s: float) -> None:
+    """SIGTERM then SIGKILL the child's process group (gtest / tt-smi / load children)."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=grace_s)
+            return
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def run(cmd: list[str], dry_run: bool = False, **kw) -> subprocess.CompletedProcess:

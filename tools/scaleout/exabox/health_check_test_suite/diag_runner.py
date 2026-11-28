@@ -37,6 +37,7 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.aer import check_aer, read_aer  # noqa: E402
+from diag.busbar import run_busbar  # noqa: E402
 from diag.captures import capture_events  # noqa: E402
 from diag.common import call_hook, default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
@@ -58,7 +59,7 @@ from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
 from diag.verdict import attribute_power, verdict_lines  # noqa: E402
-from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_stages  # noqa: E402
+from tiers import BUSBAR_STEPS, DEPRECATED_TIER_ALIASES, TIERS, select_stages  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
@@ -161,15 +162,16 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     )
     ap.add_argument(
         "--stage-order",
-        help="Run only these stages, named in run order: reset, the tier's tests by name, end (the post-test "
-        "reset), eth.",
+        help="Run only these stages, named in run order: reset, the tier's tests by name, busbar, end (the "
+        "post-test reset), eth.",
     )
     ap.add_argument("--reset-gate", metavar="CMD", help="Run before each reset; a non-zero exit skips that reset.")
     ap.add_argument(
         "--hook",
         metavar="SCRIPT",
-        help="Called as SCRIPT <event> <step> <status> <outdir>, synchronously: stage-start at the reset and end "
-        "stages, after at a reset that leaves chips missing (then the chips are recounted).",
+        help="Called as SCRIPT <event> <step> <status> <outdir>, synchronously: stage-start at the reset, busbar "
+        "and end stages, after at a reset that leaves chips missing (then the chips are recounted), and "
+        "load power_virus <seconds> for the bus-bar stage's power-virus step (no hook: that step is a SKIP).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -286,7 +288,7 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
-    """Run the full pipeline (snapshot → resets → gtests → retest → triage → ETH status → QSFP tests → sys-triage).
+    """Run the full pipeline (snapshot → resets → gtests → retest → bus-bar → triage → ETH status → QSFP tests → sys-triage).
 
     Programmatic entry point equivalent to the CLI: writes the JSON report to
     *output* (gtest logs to ``<output_dir>/logs/``) and returns
@@ -434,6 +436,23 @@ def run_diag(
             _guarded(retest_phase, "retest", FAIL, _retest)
         _finish(report, retest_phase, t0, summary=False, all_skip_stays_skip=True)
 
+    # Phase 3b': the bus-bar stage (diag/busbar.py): the tier's load steps with the trays' HSCs polled.
+    if plan.load_mode:
+        busbar_phase = Phase(name="busbar")
+        t0 = time.time()
+        if skip_tests:
+            busbar_phase.add(Check(name="busbar", status=SKIP, details="--skip-tests"))
+        else:
+            call_hook(hook, "stage-start", "busbar", "-", logs_dir, dry_run)
+            steps = BUSBAR_STEPS[plan.load_mode]
+            _guarded(
+                busbar_phase,
+                "busbar",
+                FAIL,
+                lambda: run_busbar(tt_metal_path, steps, busbar_phase, bmc, hook, dry_run, logs_dir),
+            )
+        _finish(report, busbar_phase, t0, summary=True, all_skip_stays_skip=True)
+
     # Phase 3c: the PCIe AER counts the load added, before the post-test reset
     # re-enumerates the chips.
     if plan.aer_diff:
@@ -462,7 +481,7 @@ def run_diag(
     # a run without load leaves them as found.
     power_phase = Phase(name="tray_power")
     t0 = time.time()
-    loaded = bool(plan.tests) and not skip_tests
+    loaded = bool(plan.tests or plan.load_mode) and not skip_tests
     keep = "--no-hsc-clear" if not hsc_clear else "" if loaded else "no load in this run; latches kept as found"
     power_causes: dict = {}
 

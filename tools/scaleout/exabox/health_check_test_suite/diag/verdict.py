@@ -16,6 +16,16 @@ from collections import Counter
 from typing import TYPE_CHECKING, Callable, NamedTuple
 
 from .aer import PCIE_AER_DIFF
+from .busbar import (
+    BUSBAR_BRICK_VOUT,
+    BUSBAR_CHIP_LOST,
+    BUSBAR_HANG,
+    BUSBAR_HSC_TRIP,
+    BUSBAR_NUMERIC,
+    BUSBAR_PCIE_LINK,
+    BUSBAR_QUIET_CLOCK,
+    BUSBAR_REBOOT,
+)
 from .device_tests import DIDT_MATMUL_GALAXY, GDDR_ACT_ALL, GDDR_ACT_C3, GDDR_FAST, GDDR_FULL
 from .eth_status import ETH_STATUS
 from .eth_summary import _one_line
@@ -69,7 +79,7 @@ def _tests(*names: str) -> tuple[str, ...]:
 
 
 # Checks that find chips gone from the bus.
-LOST = (PCIE_ENUM_COUNT, ASIC_LOCATION_PER_UBB)
+LOST = (PCIE_ENUM_COUNT, ASIC_LOCATION_PER_UBB, BUSBAR_CHIP_LOST)
 RESET_LOST = (RESET + "*", RECOUNT + "*", POST_TEST_RESET_OK, RETEST_RESET_OK, POST_RESET_STATE_STABLE)
 GDDR = _tests(GDDR_ACT_C3, GDDR_ACT_ALL, GDDR_FAST, GDDR_FULL) + (
     GDDR_BIST_PER_CHANNEL,
@@ -84,7 +94,7 @@ _BOARD = "re-run; if it repeats on the same chip, replace that tray's board"
 ROWS: dict[str, Row] = {
     "F01": Row(
         "tray loses 12 V under load",
-        (TRAY_POWER,),
+        (TRAY_POWER, BUSBAR_HSC_TRIP),
         "POWER",
         "replace that tray's bus bar set, then that tray if it still drops",
         lambda c: c["status"] == FAIL and c.get("cause") == "POWER",
@@ -95,6 +105,12 @@ ROWS: dict[str, Row] = {
         "POWER",
         "watch that tray's 12 V feed; if its under-voltage latch sets again, replace its bus bar set",
         lambda c: c["status"] == WARN and c.get("cause") == "POWER",
+    ),
+    "F03": Row(
+        "power brick output left at 12.00 V",
+        (BUSBAR_BRICK_VOUT,),
+        "POWER",
+        "set every brick's output voltage to 12.24 V or 12.35 V, then re-run",
     ),
     "F04": Row(
         "bad bus bar",
@@ -136,7 +152,7 @@ ROWS: dict[str, Row] = {
         "reseat that tray's host PCIe cable; swap it with a neighbour tray's: if the errors follow the tray, "
         "replace that tray's board",
     ),
-    "F10": Row("PCIe width or speed low", (PCIE_GEN, PCIE_LANE_WIDTH), "PCIE/LINK", _PCIE),
+    "F10": Row("PCIe width or speed low", (PCIE_GEN, PCIE_LANE_WIDTH, BUSBAR_PCIE_LINK), "PCIE/LINK", _PCIE),
     "F13": Row(
         "Ethernet trace ports down",
         (ETH_STATUS + "*",),
@@ -153,11 +169,26 @@ ROWS: dict[str, Row] = {
     ),
     "F19": Row(
         "bf16/bf8 DIDT numeric errors",
-        _tests(DIDT_MATMUL_GALAXY),
+        _tests(DIDT_MATMUL_GALAXY) + (BUSBAR_NUMERIC,),
         "CHIP/BOARD",
         "raise that chip's vdd_min to 760 mV and retest",
     ),
     "F21": Row("GDDR fault", GDDR, "CHIP/BOARD", _BOARD),
+    "F24": Row(
+        "chip hangs under load",
+        (BUSBAR_HANG,),
+        "CHIP/BOARD",
+        "tt-smi -glx_reset and re-run; if that chip hangs again, replace that tray's board",
+    ),
+    "F25": Row(
+        "host rebooted under load", (BUSBAR_REBOOT,), "POWER", "check the host's PSUs and power feed against the SEL"
+    ),
+    "F26": Row(
+        "chip clock stays high at idle",
+        (BUSBAR_QUIET_CLOCK,),
+        "",
+        "flash the same firmware bundle to every chip and re-run; if it repeats, replace that tray's board",
+    ),
     "F27": Row("overheating", (ASIC_THERMAL_PRECHECK,), "", "check that tray's fans and airflow"),
 }
 

@@ -24,9 +24,11 @@ import fcntl
 import os
 import shutil
 import subprocess
+import threading
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import NamedTuple
 
 from .common import log
@@ -105,31 +107,44 @@ class Bmc:
         self.why = "dry run" if dry_run else "" if shutil.which("ipmitool") else "ipmitool not found"
 
     @contextmanager
-    def locked(self):
-        """Hold the box-wide I2C lock; yields False when another holder kept it past LOCK_WAIT_S
-        or when the lock file cannot be opened (either ends the route)."""
+    def locked(self, wait: float | None = None, who: str = "health check", fatal: bool = True):
+        """Hold the box-wide I2C lock, writing ``who`` into it so a waiting poll can name the holder.
+        Yields False when another holder kept it past ``wait`` (``fatal`` then ends the route) or
+        the lock file cannot be opened (that always ends the route)."""
+        wait = LOCK_WAIT_S if wait is None else wait
         try:
-            f = open(self.lock, "a")
+            f = open(self.lock, "a+")
         except OSError as e:
             self.why = f"cannot open the I2C lock {self.lock} ({e.strerror})"
             yield False
             return
         with f:
-            deadline = time.monotonic() + LOCK_WAIT_S
+            deadline = time.monotonic() + wait
             while True:
                 try:
                     fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
                     if time.monotonic() > deadline:
-                        self.why = f"I2C lock busy after {LOCK_WAIT_S:g} s"
+                        if fatal:
+                            self.why = f"I2C lock busy after {wait:g} s"
                         yield False
                         return
-                    time.sleep(0.1)
+                    time.sleep(0.005)
             try:
+                f.truncate(0)
+                f.write(f"{who} pid {os.getpid()}\n")
+                f.flush()
                 yield True
             finally:
                 fcntl.flock(f, fcntl.LOCK_UN)
+
+    def holder(self) -> str:
+        """Who last took the lock, as it wrote itself in; "unknown" for a reader that does not."""
+        try:
+            return Path(self.lock).read_text().strip() or "unknown"
+        except OSError:
+            return "unknown"
 
     def raw(self, *args: int, lock: bool = True) -> list[int] | None:
         """One ``ipmitool raw`` call, under the lock unless the caller holds it: the bytes
@@ -170,14 +185,14 @@ class Bmc:
         return self.raw(0x06, 0x52, HSC_BUS[tray], addr, 0x00, CLEAR_FAULTS) is not None
 
 
-def read_hsc(bmc: Bmc, tray: int, addr: int) -> Hsc | None:
+def read_hsc(bmc: Bmc, tray: int, addr: int, lock: bool = True) -> Hsc | None:
     """One HSC's status and input; None when STATUS_WORD or STATUS_INPUT did not answer."""
     bus = HSC_BUS[tray]
-    word = bmc.read(bus, addr, STATUS_WORD)
-    inp = None if word is None else bmc.read(bus, addr, STATUS_INPUT)
+    word = bmc.read(bus, addr, STATUS_WORD, lock)
+    inp = None if word is None else bmc.read(bus, addr, STATUS_INPUT, lock)
     if inp is None:
         return None
-    vin, iout = bmc.read(bus, addr, READ_VIN), bmc.read(bus, addr, READ_IOUT)
+    vin, iout = bmc.read(bus, addr, READ_VIN, lock), bmc.read(bus, addr, READ_IOUT, lock)
     return Hsc(word, inp, None if vin is None else vin * VIN_LSB, None if iout is None else iout * IOUT_LSB)
 
 
@@ -222,6 +237,56 @@ def read_power(bmc: Bmc, bricks: bool = True) -> TrayPower | None:
         tp.vr_pg[t] = bmc.read(bus, TRAY_CPLD, (CPLD_VR_PG, 1))
     tp.bricks = read_bricks(bmc) if bricks else {}
     return None if bmc.why else tp
+
+
+POLL_S = 2.0
+
+
+@dataclass
+class PollStep:
+    """What the HSC poll saw during one bus-bar step, per (tray, HSC address)."""
+
+    peak_a: dict[tuple[int, int], float] = field(default_factory=dict)
+    vin_min: dict[tuple[int, int], float] = field(default_factory=dict)
+    flags: dict[tuple[int, int], set[str]] = field(default_factory=dict)
+
+
+@dataclass
+class Poll:
+    """The poll's record: the step the caller is in, what each step saw, and the read gaps."""
+
+    step: str = "start"
+    steps: dict[str, PollStep] = field(default_factory=dict)
+    gaps: list[str] = field(default_factory=list)
+
+
+def poll_hsc(bmc: Bmc, poll: Poll, stop: threading.Event, period: float = POLL_S) -> None:
+    """Every ``period`` s until ``stop``: each HSC under its own short hold of the lock, into
+    ``poll.steps[poll.step]``. A hold not got within a period misses that read; a gap over two
+    periods between reads is logged with the lock's holder."""
+    last, blocker = time.monotonic(), ""
+    while not stop.is_set() and not bmc.why:
+        rec = poll.steps.setdefault(poll.step, PollStep())
+        for key in ((t, a) for t in HSC_BUS for a in HSC_ADDRS):
+            with bmc.locked(wait=period, who="health check poll", fatal=False) as held:
+                h = read_hsc(bmc, *key, lock=False) if held else None
+            if not held:
+                blocker = bmc.holder()
+            if h is None:
+                continue
+            now = time.monotonic()
+            if now - last > 2 * period:
+                poll.gaps.append(
+                    f"HSC poll gap {now - last:.1f} s in {poll.step} (lock held by {blocker or 'unknown'})"
+                )
+                log(poll.gaps[-1])
+            last, blocker = now, ""
+            rec.flags.setdefault(key, set()).update(h.flags)
+            if h.iout is not None:
+                rec.peak_a[key] = max(rec.peak_a.get(key, 0.0), h.iout)
+            if h.vin is not None:
+                rec.vin_min[key] = min(rec.vin_min.get(key, h.vin), h.vin)
+        stop.wait(period)
 
 
 def _tray_parts(tray: int) -> list[str]:

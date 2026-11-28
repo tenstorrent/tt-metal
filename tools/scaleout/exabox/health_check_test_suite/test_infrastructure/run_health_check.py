@@ -77,9 +77,10 @@ LAUNCH_MODES = ("slurm", "orchestration")
 
 # Expiry kills the suite before it writes diag_report.json, so these sit well
 # above a clean run: weekly runs the GDDR ACT screen twice (~21 min), and a
-# clean full run measured 66 min.
+# clean full run measured 66 min. The bus-bar stage adds about 30 min weekly and
+# 55 min full (its steps plus each load's bring-up).
 DEFAULT_TIMEOUT_MINUTES = 30
-TIER_TIMEOUT_MINUTES = {"weekly": 75, "deploy": 75, "full": 120}
+TIER_TIMEOUT_MINUTES = {"daily": 45, "weekly": 105, "deploy": 105, "full": 175}
 
 
 # ---------------------------------------------------------------------------

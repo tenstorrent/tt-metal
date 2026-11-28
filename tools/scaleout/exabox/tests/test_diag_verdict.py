@@ -48,6 +48,7 @@ def check(name: str, status: str = FAIL, details: str = "bad", **kw) -> Check:
 CASES = {
     "F01": (check("tray_power", cause="POWER", parts=TRAY2), "replace UBB2's bus bar set"),
     "F02": (check("tray_power", WARN, cause="POWER", parts=TRAY2), "watch UBB2's 12 V feed"),
+    "F03": (check("busbar_brick_vout", WARN, "PSU1 12.00 V"), "12.24 V or 12.35 V"),
     "F04": (check("pcie_enum_count", cause="POWER", parts=[CHIP]), "fix UBB2's 12 V feed"),
     "F05": (check("pcie_enum_count", parts=TRAY2), "reseat UBB2, then replace it"),
     "F06": (check("reset_1_glx_reset", parts=[CHIP]), "lost on reset again, replace UBB2's board"),
@@ -59,6 +60,9 @@ CASES = {
     "F14": (check("eth_status_links_down", details=f"{CHIP} ch8, QSFP-DD port 5 down"), "QSFP-DD cable on those"),
     "F19": (check("didt_matmul_galaxy_after_reset", parts=[CHIP]), "vdd_min to 760 mV"),
     "F21": (check("gddr_act_c3", parts=[CHIP]), "replace UBB2's board"),
+    "F24": (check("busbar_hang", parts=[CHIP]), "if that chip hangs again, replace UBB2's board"),
+    "F25": (check("busbar_reboot", cause="POWER"), "PSUs and power feed"),
+    "F26": (check("busbar_quiet_clock", WARN, parts=[CHIP]), "same firmware bundle"),
     "F27": (check("asic_thermal_precheck", WARN, "hot", parts=[CHIP]), "UBB2's fans and airflow"),
 }
 

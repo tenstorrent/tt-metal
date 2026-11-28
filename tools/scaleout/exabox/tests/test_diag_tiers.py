@@ -160,7 +160,7 @@ class TestStageOrder(unittest.TestCase):
         self.assertEqual((t.resets, t.tests, t.post_test_resets), ((), ("gddr_full", "eth_link_up"), ("-glx_reset",)))
 
     def test_unknown_or_out_of_order_is_refused(self):
-        for order in ("busbar", "end,reset", "eth_link_up,gddr_full"):
+        for order in ("bogus", "end,reset", "eth_link_up,gddr_full"):
             with self.subTest(order), self.assertRaises(ValueError):
                 select_stages(TIERS["weekly"], order)
 

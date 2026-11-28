@@ -24,11 +24,13 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # health_check_test_suite/, for diag
+from diag.common import kill_process_group  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -45,24 +47,6 @@ def default_diag_runner() -> Path:
 def default_run_diag_script() -> Path:
     """Locate run_diag.sh (the bash wrapper used in orchestration mode)."""
     return Path(__file__).resolve().parents[2] / "run_diag.sh"
-
-
-def _kill_process_group(proc: subprocess.Popen) -> None:
-    """SIGTERM then SIGKILL the child's process group (gtest / tt-smi children)."""
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=_TERM_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            continue
 
 
 def _diag_env(tt_metal_path: Path | None) -> dict:
@@ -160,7 +144,7 @@ def _execute(cmd: list[str], env: dict, timeout_seconds: int, results_dir: Path)
             elapsed,
             timeout_seconds,
         )
-        _kill_process_group(proc)
+        kill_process_group(proc, _TERM_GRACE_SECONDS)
         # Keep whatever the suite emitted before it hung.
         try:
             output, _ = proc.communicate(timeout=_TERM_GRACE_SECONDS)
