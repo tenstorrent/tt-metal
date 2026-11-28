@@ -23,6 +23,23 @@ namespace hal::cfg::detail
 // Hardware emission: runtime values, MMIO arrays, and constant Tensix instructions.
 
 /**
+ * @brief Reject the thread's CFG state ID as a SETC16 destination at compile time.
+ *
+ * @tparam Addr: Thread-CFG word address.
+ * @note Use ckernel::flip_cfg_state_id for bank flips. It pads the SETC16 as SETC16.md
+ *       requires for CFG_STATE_ID_StateID_ADDR32 and keeps ckernel::cfg_state_id, which
+ *       state_cfg_bank() reads, in step with the hardware.
+ */
+template <std::uint32_t Addr>
+inline constexpr void setc16_check_address()
+{
+    static_assert(
+        Addr != CFG_STATE_ID_StateID_ADDR32,
+        "SETC16 writes to the CFG state ID must go through ckernel::flip_cfg_state_id, which pads the write as the ISA requires and keeps "
+        "ckernel::cfg_state_id in sync");
+}
+
+/**
  * @brief Replace a complete thread-CFG word with an immediate SETC16 instruction.
  *
  * @tparam F: Thread-CFG field identifying the destination word; must start at bit zero.
@@ -33,6 +50,7 @@ namespace hal::cfg::detail
 template <const Field& F>
 inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t section, const std::uint32_t value)
 {
+    setc16_check_address<F.addr32(Sec::S0)>();
     LLK_ASSERT(section < F.count, "section index out of range for this register");
     LLK_ASSERT(value <= ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
     TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
@@ -186,6 +204,7 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
     }
     else if constexpr (Scope == RegisterScope::Thread)
     {
+        setc16_check_address<Addr>();
         // SETC16 replaces the complete thread word. Bits absent from Mask are
         // written as zero, matching the existing single-field API.
         TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
@@ -211,6 +230,7 @@ inline __attribute__((always_inline)) void write_word()
 {
     if constexpr (Scope == RegisterScope::Thread)
     {
+        setc16_check_address<Addr>();
         TTI_SETC16(Addr, Data & ThreadCfgWordMask);
     }
     else
