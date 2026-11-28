@@ -15,6 +15,63 @@ from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 from models.tt_transformers.tt.common import Mode
 
+_DECODE_NORM_CORES = 40
+_decode_norm_cfgs = {}
+
+
+def sharded_decode_rms_norm(norm, x, dim, out_memory_config=ttnn.L1_MEMORY_CONFIG):
+    """RMSNorm of a one-tile-row decode activation on one chip, width-sharded over 40 cores.
+
+    The interleaved rms_norm runs a single tile row on one core (81 us at dim 5120). 40 cores x 4 tiles: the
+    32-core act_shard_hidden layout (5 tiles each) computes the same norm to 4e-5 in mean logits correlation
+    but flipped top-1 at 4 of the accuracy gate's 100 positions (79 vs 84). Returns `out_memory_config`
+    (interleaved) so the consumers' layouts are unchanged."""
+    if dim not in _decode_norm_cfgs:
+        shard = ttnn.create_sharded_memory_config(
+            shape=(ttnn.TILE_SIZE, dim // _DECODE_NORM_CORES),
+            core_grid=ttnn.CoreGrid(x=8, y=_DECODE_NORM_CORES // 8),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        block_w = dim // _DECODE_NORM_CORES // ttnn.TILE_SIZE
+        program = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=(8, _DECODE_NORM_CORES // 8),
+            subblock_w=next(w for w in (4, 3, 2, 1) if block_w % w == 0),
+            block_h=1,
+            block_w=block_w,
+            inplace=False,
+        )
+        _decode_norm_cfgs[dim] = (shard, program)
+    shard, program = _decode_norm_cfgs[dim]
+    xs = ttnn.to_memory_config(x, shard)
+    out = norm(
+        xs,
+        mode=Mode.DECODE,
+        in_sharded=True,
+        out_sharded=True,
+        norm_config={"sharded_program_config": program, "sharded_output_config": shard},
+    )
+    if xs is not x:
+        ttnn.deallocate(xs)
+    inter = ttnn.sharded_to_interleaved(out, out_memory_config)
+    ttnn.deallocate(out)
+    return inter
+
+
+def _bonsai_norm_fuse():
+    """Bonsai: the decode MLP norm + rotation inside the gate/up op (BONSAI_NORM_FUSE=0: its own op)."""
+    import os
+
+    return os.environ.get("BONSAI_NORM_FUSE", "1") == "1"
+
+
+def _bonsai_resid_added():
+    """Bonsai: whether a ternary output projection took the layer's registered residual (bonsai2/tt/ternary/prerot.py)."""
+    from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+    return prerot.residual_added()
+
 
 class _FusedDistRMSNorm(RMSNorm):
     """RMSNorm whose PREFILL distributed path is the single fused dit_fused_distributed_rmsnorm op
@@ -281,7 +338,35 @@ class Qwen36DecoderLayer:
             _attn_norm_config = _ff_norm_config = (
                 {"output_mem_config": ttnn.L1_MEMORY_CONFIG} if mode == "decode" else None
             )
-        attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
+        single_decode = self.num_devices == 1 and mode == "decode" and x.shape[-2] <= ttnn.TILE_SIZE
+        # Bonsai exact-ternary prefill: residual add + norm + rotation in one op per norm
+        # (models/demos/blackhole/bonsai2/tt/tprefill/norm_rot.py); the ternary modules take the rotated copy.
+        single_prefill = self.num_devices == 1 and mode == "prefill" and not decode_cfg
+        pre_attn = getattr(self, "_bonsai_pre_attn_nrot", None) if single_prefill else None
+        pre_ff = getattr(self, "_bonsai_pre_ff_nrot", None) if single_prefill else None
+        if single_decode and getattr(self, "_bonsai_attn_nrot", None) is not None:
+            # Bonsai: norm + rotation in one op; the ternary attention / GDN takes the rotated copies
+            # (models/demos/blackhole/bonsai2/tt/ternary/rotate.py NormRotation, prerot.py).
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            _tgdn = getattr(self.attention, "ternary", None)
+            if _tgdn is not None and _tgdn.takes_norm():
+                # Bonsai: the norm + rotation runs inside the GDN's qkvz op / the attention's q op (they get x itself)
+                attn_input = x
+                prerot.put_norm(x, self._bonsai_attn_nrot)
+            else:
+                attn_input, _xr = self._bonsai_attn_nrot(x)
+                prerot.put(attn_input, _xr)
+            prerot.put_residual(x)  # Bonsai: the output projection adds x in its output stage (residual_added below)
+        elif single_decode:
+            attn_input = sharded_decode_rms_norm(self.attention_norm, x, self.args.dim)
+        elif pre_attn is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            _, attn_input, _xr = pre_attn(x, want_n=True)  # n: GDN's a/b projection reads it
+            prerot.put(attn_input, _xr)
+        else:
+            attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
         if self.num_devices > 1:
             # TP modules: input is the gathered (full-dim) norm output [1,1,B/S,dim];
@@ -375,16 +460,56 @@ class Qwen36DecoderLayer:
             attn_output = self.attention.forward(
                 attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
             )
-        ttnn.deallocate(attn_input)
+        if attn_input is not x:  # else the GDN took the residual x itself (its norm inside the qkvz op)
+            ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
-        ttnn.deallocate(attn_output)
+        if pre_ff is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
 
-        ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+            h, _, ff_input = pre_ff(x, attn_output)  # h = x + attn_output; ff_input: the rotated norm output
+            prerot.put(ff_input, ff_input)
+        elif mode == "prefill":
+            # Prefill residual stays DRAM interleaved even when attn_output arrives L1-sharded
+            # (GDN o_proj), so the L1 shard is freed before ffn_norm's CBs are allocated.
+            h = ttnn.add(x, attn_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        elif single_decode and getattr(self, "_bonsai_attn_nrot", None) is not None and _bonsai_resid_added():
+            h = attn_output  # Bonsai: the output projection added x
+        else:
+            h = ttnn.add(x, attn_output)
+        if h is not attn_output:
+            ttnn.deallocate(attn_output)
 
+        if pre_ff is not None:
+            pass  # ff_input from the fused op above
+        elif single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None:
+            from models.demos.blackhole.bonsai2.tt.ternary import prerot
+
+            if _bonsai_norm_fuse():
+                # Bonsai: the norm + rotation runs inside the MLP's gate/up op (the MLP gets h itself)
+                ff_input = h
+                prerot.put_norm(h, self._bonsai_ff_nrot)
+            else:
+                ff_input, _xr = self._bonsai_ff_nrot(h)
+                prerot.put(ff_input, _xr)
+            prerot.put_residual(h)  # Bonsai: the down projection adds h (residual_added below)
+        elif single_decode:
+            # Interleaved L1: the single-device MLP's decode matmuls mcast an interleaved in0.
+            ff_input = sharded_decode_rms_norm(self.ffn_norm, h, self.args.dim)
+        else:
+            ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
+
+        if pre_ff is not None and getattr(getattr(self.feed_forward, "ternary", None), "pre_down", None) is not None:
+            # Bonsai: the down projection adds the residual in its output stage: the layer output in one op
+            output = self.feed_forward.ternary.forward_prefill(ff_input, residual=h)
+            ttnn.deallocate(h)
+            return output
         ff_output = self.feed_forward.forward(ff_input, mode=mode)
-        ttnn.deallocate(ff_input)
+        if pre_ff is None and ff_input is not h:  # else the ternary MLP took ff_input / ff_input is the residual h
+            ttnn.deallocate(ff_input)
 
+        if single_decode and getattr(self, "_bonsai_ff_nrot", None) is not None and _bonsai_resid_added():
+            ttnn.deallocate(h)  # Bonsai: the down projection added h
+            return ff_output
         output = ttnn.add(h, ff_output)
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)

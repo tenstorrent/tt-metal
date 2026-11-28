@@ -71,6 +71,17 @@ def unpack_rope(packed):
     """Split a pack_rope_host() tensor back into (cos, sin). Works on a
     device tensor (slicing dim 0); called inside ttnn_decode_forward."""
     n = packed.shape[0] // 2
+    from models.demos.blackhole.bonsai2.tt.stream import decode as stream_decode
+
+    if stream_decode.active():  # Bonsai weight stream: the slices on the decode cores (its receivers)
+        grids = stream_decode.STATE.receiver_crs()
+        shape = list(packed.shape)
+        lo, hi = [0] * len(shape), list(shape)
+        hi[0] = n
+        l1 = ttnn.L1_MEMORY_CONFIG  # the norm + RoPE ops read them; a DRAM read waits behind the stream's
+        cos = ttnn.slice(packed, lo, hi, sub_core_grids=grids, memory_config=l1)
+        lo[0], hi[0] = n, 2 * n
+        return cos, ttnn.slice(packed, lo, hi, sub_core_grids=grids, memory_config=l1)
     return packed[0:n], packed[n : 2 * n]
 
 

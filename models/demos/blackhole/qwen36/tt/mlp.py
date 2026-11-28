@@ -201,13 +201,74 @@ class Qwen36MLP:
         # explicit decode/prefill mode); the dense MLP still infers its path from the input shape.
         if self.num_devices > 1:
             return self._forward_tp(x)
+        if getattr(self, "ternary", None) is not None and x.shape[-2] <= ttnn.TILE_SIZE:
+            # One-token decode in Bonsai's own ternary weights (models/demos/blackhole/bonsai2/tt/ternary/mlp.py).
+            return self.ternary.forward_decode(x)
+        if getattr(getattr(self, "ternary", None), "pre_down", None) is not None:
+            # Prefill in the exact ternary weights of Bonsai (bonsai2/tt/tprefill, BONSAI_TERNARY_PREFILL=1).
+            return self.ternary.forward_prefill(x)
         w = self.weights
         T = x.shape[1] if len(x.shape) >= 3 else 1
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
         mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
-        hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
+        # decode (T<=1): gate/up outputs one step down to bfloat8_b; prefill keeps the default bfloat16
+        gu_dtype = ttnn.bfloat8_b if T <= 1 else None
+        silu_in_mul = False
+        if T > 512 and x.shape[-2] == 2048 and x.shape[-1] == 5120 and w.w1.shape[-1] == 17408:
+            # prefill 2048 tokens: auto config picks 2D 13x10 with in0_block_w=1 (160 K-steps);
+            # same geometry with in0_block_w=10 (sweep on Blackhole: 1508.8 vs 2447.5 us/call at in0_block_w=4;
+            # 16/20/32 fail circular-buffer allocation) cuts the per-block sync overhead.
+            def _gu_pc(act):
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                    in0_block_w=10,
+                    out_subblock_h=1,
+                    out_subblock_w=7,
+                    out_block_h=7,
+                    out_block_w=21,
+                    per_core_M=7,
+                    per_core_N=42,
+                    transpose_mcast=False,
+                    fused_activation=act,
+                )
+
+            # prefill 2048 gate/up: bf16 dest (allows 1x7 subblock) + packer L1 accumulation across the 16 K-blocks
+            gu_ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+            w1_out = ttnn.linear(
+                x,
+                w.w1,
+                program_config=_gu_pc(None),
+                compute_kernel_config=gu_ckc,
+                memory_config=mc,
+                dtype=ttnn.bfloat8_b,
+            )
+            w3_out = ttnn.linear(
+                x,
+                w.w3,
+                program_config=_gu_pc(None),
+                compute_kernel_config=gu_ckc,
+                memory_config=mc,
+                dtype=ttnn.bfloat8_b,
+            )
+            # prefill 2048: SiLU moved from the gate matmul epilogue (~227 us/call extra on Blackhole) into the
+            # memory-bound SwiGLU mul as an lhs activation
+            silu_in_mul = True
+        else:
+            w1_out = ttnn.linear(
+                x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype
+            )
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc, dtype=gu_dtype)
+        if T <= 1:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc, dtype=ttnn.bfloat16)
+        elif silu_in_mul:
+            hidden = ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=mc)
+        else:
+            hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
         down_pc = None
@@ -217,6 +278,45 @@ class Qwen36MLP:
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
             down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
+        elif T <= 1 and hidden.shape[-2] <= 32 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
+            # decode (one 32-row tile): sweep on Blackhole measured in0_block_w=4 at 243.7 vs 349.6 us/call for the
+            # default (in0_block_w=2) on the same 13x10 1D-mcast geometry
+            down_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                in0_block_w=4,
+                out_subblock_h=1,
+                out_subblock_w=2,
+                out_block_h=1,
+                out_block_w=2,
+                per_core_M=1,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+        elif down_pc is None and hidden.shape[-2] == 2048 and hidden.shape[-1] == 17408 and w.w2.shape[-1] == 5120:
+            # prefill 2048 rows: Blackhole sweep measured 2D mcast 13x10 in0_block_w=17 at 1507 vs 2176 us/call for in0_block_w=8
+            down_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(13, 10),
+                in0_block_w=17,
+                out_subblock_h=7,
+                out_subblock_w=1,
+                out_block_h=7,
+                out_block_w=13,
+                per_core_M=7,
+                per_core_N=13,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
+            # bf16 dest (8 tiles) allows the 7x1 subblock; packer L1 accumulation: sweep 688 vs 1499 us/call, pcc 0.99985
+            ckc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+                dst_full_sync_en=False,
+            )
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
