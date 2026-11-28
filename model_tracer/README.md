@@ -289,7 +289,7 @@ python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_nam
 
 **Note:** After tracing, if the summary shows operations that don't have corresponding `*_model_traced.py` test files in `tests/sweep_framework/sweeps/model_traced/`, you'll need to create test files for those operations to use the traced configurations in sweep tests.
 
-**Note:** Some operations may require custom parameter extraction code in `model_tracer/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
+**Note:** Some operations may require custom parameter extraction code in `tests/sweep_framework/operation_parameter_extractors.py` if the default extraction doesn't properly parse operation-specific parameters (e.g., `output_dtype` for `typecast`, `dims` for `permute`). Check existing extractors in that file for examples.
 
 
 ### 2. View Configurations

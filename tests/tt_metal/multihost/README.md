@@ -66,7 +66,7 @@ Scripts in `fault_tolerance_tests/run_all.sh` automate the sequence and consolid
 ## Adding a new test
 
 1. Pick the right sub‑folder based on the topology you need.
-2. Create a `*_test.cpp` file; include `<gtest/gtest.h>` **and** `common/sync_helpers.hpp`.
+2. Create a `*_test.cpp` file; include `<gtest/gtest.h>` **and** `common/multihost_test_tools.hpp`.
 3. If it belongs to *fault\_tolerance\_tests*, add a new executable in the local `CMakeLists.txt` – one binary per disruption scenario.
 4. Ensure any device allocation is wrapped in `ASSERT_EQ_ALL_RANKS` so missing devices cause a collective fail.
 

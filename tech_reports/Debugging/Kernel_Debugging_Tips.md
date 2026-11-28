@@ -21,8 +21,8 @@ https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/device_print.html
 ### Printing data from CBs
 
 * useful for deterministic hang debug and pcc issues
-* if debugging compute kernel, use print_full_tile  from `tt_metal/hw/inc/debug/dprint_pages.h `
-* if debugging reader/writer kernel print_bf16_pages /print_f32_pages from `tt_metal/hw/inc/debug/dprint_pages.h`, or you can use the following function (DPRINT_DATA0 / DPRINT_DATA1 depends if you debug reader/writer kernel):
+* if debugging compute kernel, use print_full_tile  from `tt_metal/hw/inc/api/debug/dprint_pages.h `
+* if debugging reader/writer kernel print_bf16_pages /print_f32_pages from `tt_metal/hw/inc/api/debug/dprint_pages.h`, or you can use the following function (DPRINT_DATA0 / DPRINT_DATA1 depends if you debug reader/writer kernel):
 ```cpp
 inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
     DPRINT("======\n");
