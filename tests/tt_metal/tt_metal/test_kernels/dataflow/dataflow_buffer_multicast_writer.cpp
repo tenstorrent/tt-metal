@@ -40,5 +40,5 @@ void kernel_main() {
         multicast(target);
     }
     noc.async_write_barrier();
-    target.push_back(1);
+    // No push_back: the bound consumer never pops, and on Quasar a kernel exits only once its pushes are popped.
 }
