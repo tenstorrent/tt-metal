@@ -34,6 +34,27 @@ void ShardedToInterleavedPartialDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1]) % args.num_slices == 0,
         "Total height of a tensor must be divisible by num_slices!");
+    // The slice is written at a multiple of its row count, so it must be whole tile rows and exactly one slice of
+    // the cache tensor: a slice of partial tile rows starts mid-tile, and a larger slice writes past the cache.
+    {
+        const uint32_t cache_rows = cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1];
+        const uint32_t slice_rows = cache_rows / args.num_slices;
+        TT_FATAL(
+            slice_rows % tt::constants::TILE_HEIGHT == 0,
+            "Each slice must have a multiple of {} rows, but {} rows in {} slices give {} rows per slice",
+            tt::constants::TILE_HEIGHT,
+            cache_rows,
+            args.num_slices,
+            slice_rows);
+        TT_FATAL(
+            input_tensor.physical_volume() / input_tensor.padded_shape()[-1] == slice_rows &&
+                input_tensor.padded_shape()[-1] == cache_tensor.padded_shape()[-1],
+            "The slice must have the {} rows and the width {} of one slice of the cache tensor, but its padded shape "
+            "is {}",
+            slice_rows,
+            cache_tensor.padded_shape()[-1],
+            input_tensor.padded_shape());
+    }
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to shard need to be on device!");
     TT_FATAL(input_tensor.is_allocated(), "Operands to shard need to be allocated in buffers on device!");
