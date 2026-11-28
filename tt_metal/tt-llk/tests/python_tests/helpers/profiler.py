@@ -207,8 +207,8 @@ def _stats_timings(perf_data: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
-    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU; sfpu_stub.h does not
-    # (trisc.cpp still emits KERNEL, which must not switch aggregation).
+    # Real 4-TRISC kernels emit INIT/TILE_LOOP on SFPU, and so does sfpu_stub.h, which opens every zone the
+    # kernel does (trisc.cpp still emits KERNEL, which alone must not switch aggregation).
     return bool(
         (
             (raw_data["thread"] == "sfpu")

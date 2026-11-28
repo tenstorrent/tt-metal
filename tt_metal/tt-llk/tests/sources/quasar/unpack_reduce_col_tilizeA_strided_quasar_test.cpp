@@ -22,6 +22,9 @@
 #include "llk_unpack_reduce_col_tilizeA_strided.h"
 #include "params.h"
 
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -92,6 +95,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // No uninit: the production op has none on Quasar.
 }
 
 #endif
@@ -104,6 +114,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "tensor_shape.h"
 
 using namespace ckernel;
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -171,6 +184,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
 }
 
 #endif
@@ -181,6 +200,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
+
+// Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
+__attribute__((noipa, section(".text.uninit_zone"))) void uninit_zone();
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -239,6 +261,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_reduce_mask_clear_();
         PROFILER_SYNC();
     }
+    uninit_zone();
+}
+
+void uninit_zone()
+{
+    ZONE_SCOPED("UNINIT")
+    // The pack reduce mask clear stays at the end of TILE_LOOP above.
 }
 
 #endif
