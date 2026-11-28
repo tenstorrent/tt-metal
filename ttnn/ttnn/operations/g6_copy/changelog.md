@@ -71,3 +71,39 @@
   forced streamed test sets it to None so `MAX_BLOCK_PAGES` alone sets the extent.
 - Tests added: `tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy_overlap.py` (BLOCK_BYTES × depth sweep over
   the guard set, 5-repeat samples on the flagged shapes).
+
+## Refinement 3 — Speed up the perf-flagged profile: transaction shape toward the roofline
+- Date: 2026-11-28
+- What was done: built both levers the heading named as live knobs in `g6_copy_program_descriptor.py`, measured
+  them on device, and parked both at byte-identical defaults because neither wins.
+  - `READ_TRIDS` (trid read pipeline, catalog `trid_double_issue`). In the reader's streamed path block k gets id
+    (k % T) + 1 via `dataflow_kernel_lib::set_read_trid`. Once T blocks are outstanding the oldest is retired with
+    `async_read_barrier_with_trid` and pushed. A block lands at `write_ptr + in_flight` slots, wrapped by hand, and
+    the reserve covers `(in_flight + 1)` blocks. The ring grows to `STREAM_DEPTH_BLOCKS + T − 1` blocks. `T = 1` is
+    the Refinement 2 loop, unchanged. The writer twin needs nothing: it already only flushes per block and acks
+    once at the end, so its writes already stay on the wire across hand-offs.
+  - `BANK_AFFINITY` (design candidate B, catalog `read_coalescing` bank affinity). A new shared
+    `walk_block` → `transfer_block_bank_major` in `g6_copy_page_walk.hpp`, called identically by the reader and
+    the writer: per-core ranges index a bank-major enumeration, so a block is one long run per bank. On the host,
+    consecutive ranges are handed to cores `ceil(cores / banks)` apart (`num_banks` from `dram_grid_size()`).
+  - New common RT args: read_trids, cb_depth_blocks, bank_major, tensor_pages. Both knobs are in the cache key and
+    in `describe_plan`.
+  - Reused: `_plan()`, the streamed path, both kernels, and the block walk. Added: two knobs, one walk variant, the
+    reader's trid branch, and one test file.
+- Measured (device kernel ns, Blackhole 11x10, flagged (16, 12, 128, 128) fp32):
+  - Default (unchanged): 10-sample median 61.5 µs.
+  - Trids: 2 ids 61.2 µs, 3 ids 61.8 µs (tie). At 4 / 8 KiB blocks trids help (70.6 → 65.5 µs) but never beat the
+    16 KiB block.
+  - Bank affinity: 86–94 µs unspread, 67–72 µs spread (regression). Guard set at 16 KiB: trids are within noise
+    everywhere. Affinity regresses (8, 12, 128, 128), bf16 (1, 1, 32, 62080) and (1, 1, 8448, 128), and is flat on
+    the rest.
+  - Ablation: reads alone 32.9 µs, writes alone 43.6 µs, both 61.5 µs (409 GB/s = 89% of the 460.8 GB/s roofline),
+    scaffold 1.7 µs. The op is DRAM-bound and the write stream is the weaker half. Remaining headroom is a writer
+    DRAM-efficiency question, outside this heading's transaction-shape levers.
+- Accuracy achieved: bit-exact (fp32 / bf16 / int / uint), bfp8 one-step gate, on every guard row, every trid /
+  affinity variant, and forced 1–3 page blocks (ring wrap, ragged tails, 15 ids).
+- Golden test progress: loose slice 10/10. Unit directory 355/355.
+- Issues encountered: Tracy capture crashed intermittently (exit 3, capture-side); re-runs succeeded.
+- Tests added: `tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy_transaction_shape.py`. It covers the forced
+  trid ring × affinity correctness, affinity on one-block shapes, the guard-set sweep, the block × trid co-tune,
+  and 5-repeat samples.

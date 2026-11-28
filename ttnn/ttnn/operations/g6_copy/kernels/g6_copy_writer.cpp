@@ -17,6 +17,8 @@ void kernel_main() {
 
     const uint32_t dst_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t block_pages = get_common_arg_val<uint32_t>(1);
+    const uint32_t bank_major = get_common_arg_val<uint32_t>(4);
+    const uint32_t tensor_pages = get_common_arg_val<uint32_t>(5);
 
     const uint32_t core_first_page = get_arg_val<uint32_t>(0);
     const uint32_t core_pages = get_arg_val<uint32_t>(1);
@@ -35,7 +37,8 @@ void kernel_main() {
         }
         {
             DeviceZoneScopedN("G6C-WR-ISSUE");
-            g6_copy::transfer_block<false>(dst, block_first, block_len, walk_rotation, get_read_ptr(cb_page_staging));
+            g6_copy::walk_block<false>(
+                dst, block_first, block_len, walk_rotation, bank_major, tensor_pages, get_read_ptr(cb_page_staging));
         }
         // The slot may be refilled by the reader once popped, so its bytes must have left L1 first.
         {

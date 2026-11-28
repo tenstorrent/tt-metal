@@ -30,6 +30,18 @@ BLOCK_BYTES = 16384
 MAX_BLOCK_PAGES = None
 # Blocks the staging CB holds on the streamed plan.
 STREAM_DEPTH_BLOCKS = 2
+# Read-pipeline depth on the streamed plan: blocks of reads kept on the wire, each tagged with its own
+# transaction id and retired by a per-id wait instead of a drain-everything read barrier (catalog
+# trid_double_issue). 1 is the plain issue -> barrier -> push loop, byte-identical to Refinement 2.
+# The staging ring grows by READ_TRIDS - 1 blocks so the writer keeps STREAM_DEPTH_BLOCKS - 1 slots.
+READ_TRIDS = 1
+# Transaction ids 1..15 are usable (0 means untagged).
+_MAX_READ_TRIDS = 15
+# Bank-affine work split (design traffic-ranking candidate B, catalog read_coalescing "bank_affinity"):
+# the per-core page ranges index a bank-major enumeration of the pages, so a core's pages sit in one
+# DRAM bank (two at a boundary) and a block moves as one long bank run instead of up to num_banks
+# short ones. Same split, same block schedule; only the page each position names changes.
+BANK_AFFINITY = False
 # Rotate each core's bank-run walk by its linear index so cores start on different banks. Without it
 # every core of a 28-page assignment opens on bank 0 or 4 (16x12x128x128 fp32: 73.9 -> 67.9 us).
 BANK_STAGGER = True
@@ -42,6 +54,10 @@ WRITER_KERNEL = "g6_copy_writer.cpp"
 # Common RT arg slots, identical in both kernels. DRAM-interleaved accessors add no common RT args.
 _CRTA_BUFFER_ADDRESS = 0
 _CRTA_BLOCK_PAGES = 1
+_CRTA_READ_TRIDS = 2
+_CRTA_CB_DEPTH_BLOCKS = 3
+_CRTA_BANK_MAJOR = 4
+_CRTA_TENSOR_PAGES = 5
 
 
 @dataclass(frozen=True)
@@ -62,13 +78,14 @@ class _Plan:
     page_bytes: int
     block_pages: int
     cb_depth_blocks: int
+    read_trids: int
 
     @property
     def cb_pages(self):
         return self.cb_depth_blocks * self.block_pages
 
 
-def _plan(grid, tensor_pages, page_bytes):
+def _plan(grid, tensor_pages, page_bytes, num_banks=8):
     """Regime selection: the single source for the dispatch and for describe_plan()."""
     if page_bytes > L1_BUDGET_BYTES:
         raise RuntimeError(
@@ -92,6 +109,15 @@ def _plan(grid, tensor_pages, page_bytes):
             work.append(_CoreWork(core, first_page, group_pages, rotation))
             first_page += group_pages
     assert len(work) == num_cores and first_page == tensor_pages
+    if BANK_AFFINITY and num_cores > 1:
+        # Consecutive bank-major ranges share a bank; hand them to cores S = ceil(cores / banks) apart in
+        # grid order, so neighbouring cores (which share NoC links) target different banks.
+        stride = -(-num_cores // max(1, num_banks))
+        order = sorted(range(num_cores), key=lambda r: (r % stride, r // stride))
+        work = [
+            _CoreWork(work[i].core, work[r].first_page, work[r].num_pages, work[i].walk_rotation)
+            for i, r in enumerate(order)
+        ]
 
     core_pages_max = max(w.num_pages for w in work)
     # The block extent the knobs ask for; None means "no cap" (the whole assignment).
@@ -101,13 +127,17 @@ def _plan(grid, tensor_pages, page_bytes):
     if MAX_BLOCK_PAGES is not None:
         block_target = MAX_BLOCK_PAGES if block_target is None else min(block_target, MAX_BLOCK_PAGES)
     if core_pages_max * page_bytes <= L1_BUDGET_BYTES and (block_target is None or core_pages_max <= block_target):
-        plan, block_pages, cb_depth_blocks = "one_block", core_pages_max, 1
+        plan, block_pages, cb_depth_blocks, read_trids = "one_block", core_pages_max, 1, 1
     else:
-        block_cap = L1_BUDGET_BYTES // (STREAM_DEPTH_BLOCKS * page_bytes)
+        read_trids = max(1, min(READ_TRIDS, _MAX_READ_TRIDS))
+        want_depth = STREAM_DEPTH_BLOCKS + read_trids - 1
+        block_cap = L1_BUDGET_BYTES // (want_depth * page_bytes)
         if block_target is not None:
             block_cap = min(block_cap, block_target)
         block_pages = max(1, block_cap)
-        cb_depth_blocks = min(STREAM_DEPTH_BLOCKS, L1_BUDGET_BYTES // (block_pages * page_bytes))
+        cb_depth_blocks = min(want_depth, L1_BUDGET_BYTES // (block_pages * page_bytes))
+        # The reader holds read_trids slots at its peak; the writer needs at least one more.
+        read_trids = max(1, min(read_trids, cb_depth_blocks - 1))
         plan = "streamed"
 
     return _Plan(
@@ -119,12 +149,18 @@ def _plan(grid, tensor_pages, page_bytes):
         page_bytes=page_bytes,
         block_pages=block_pages,
         cb_depth_blocks=cb_depth_blocks,
+        read_trids=read_trids,
     )
+
+
+def _num_dram_banks(device):
+    dram = device.dram_grid_size()
+    return dram.x * dram.y
 
 
 def _plan_for(tensor):
     grid = tensor.device().compute_with_storage_grid_size()
-    return _plan(grid, tensor.buffer_num_pages(), tensor.buffer_aligned_page_size())
+    return _plan(grid, tensor.buffer_num_pages(), tensor.buffer_aligned_page_size(), _num_dram_banks(tensor.device()))
 
 
 def describe_plan(input_tensor):
@@ -146,9 +182,11 @@ def describe_plan(input_tensor):
         "block_pages": p.block_pages,
         "cb_depth_blocks": p.cb_depth_blocks,
         "cb_pages": p.cb_pages,
+        "read_trids": p.read_trids,
         "block_bytes_knob": BLOCK_BYTES,
         "l1_bytes_per_core": p.cb_pages * p.page_bytes,
         "bank_stagger": BANK_STAGGER,
+        "bank_affinity": BANK_AFFINITY,
         "roles": roles,
     }
 
@@ -160,9 +198,13 @@ def _kernel(source, tensor, plan, config):
     runtime_args = ttnn.RuntimeArgs()
     for w in plan.work:
         runtime_args[w.core.x][w.core.y] = [w.first_page, w.num_pages, w.walk_rotation]
-    common_runtime_args = [0] * 2
+    common_runtime_args = [0] * 6
     common_runtime_args[_CRTA_BUFFER_ADDRESS] = tensor.buffer_address()
     common_runtime_args[_CRTA_BLOCK_PAGES] = plan.block_pages
+    common_runtime_args[_CRTA_READ_TRIDS] = plan.read_trids
+    common_runtime_args[_CRTA_CB_DEPTH_BLOCKS] = plan.cb_depth_blocks
+    common_runtime_args[_CRTA_BANK_MAJOR] = int(BANK_AFFINITY)
+    common_runtime_args[_CRTA_TENSOR_PAGES] = plan.tensor_pages
     return ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / source),
         core_ranges=plan.all_cores,
@@ -212,11 +254,15 @@ def get_program_descriptor(input_tensor, output_tensor):
         BLOCK_BYTES,
         MAX_BLOCK_PAGES,
         STREAM_DEPTH_BLOCKS,
+        READ_TRIDS,
+        BANK_AFFINITY,
         BANK_STAGGER,
     )
     descriptor = _DESCRIPTOR_CACHE.get(key)
     if descriptor is None:
-        plan = _plan(grid, input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size())
+        plan = _plan(
+            grid, input_tensor.buffer_num_pages(), input_tensor.buffer_aligned_page_size(), _num_dram_banks(device)
+        )
         descriptor = _build(input_tensor, output_tensor, plan)
         _DESCRIPTOR_CACHE[key] = descriptor
     else:

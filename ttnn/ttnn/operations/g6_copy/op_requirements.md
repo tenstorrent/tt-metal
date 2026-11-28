@@ -152,7 +152,7 @@ the per-block drain-everything read barrier and the short (4 KB) bank runs — R
 levers, not done here because they are that refinement's scope. Depth 3 (60.7 µs flagged) and 32 KiB (61.4 µs)
 are within noise of the default and regress (8, 12, 128, 128), so not taken.
 
-### [ ] Refinement 3 — Speed up the perf-flagged profile: transaction shape toward the roofline
+### [x] Refinement 3 — Speed up the perf-flagged profile: transaction shape toward the roofline
 
 **Type**: perf
 
@@ -184,3 +184,15 @@ No SUPPORTED change.
 - **Improved**: the flagged shape's measured device-ns improves on Refinement 2's result beyond noise,
   `bit_exact` holds, the golden suite is green, and the Refinement 2 guard set shows no regression.
 - **No headroom**: the headroom-gate closure above is recorded with its measurement.
+
+**Outcome**: both levers built, measured, and parked as live knobs at their byte-identical defaults. `READ_TRIDS`
+(per-block trids, ring + `READ_TRIDS − 1` blocks): flagged (16, 12, 128, 128) fp32, 10 fresh samples, median 61.5 µs
+default vs 61.2 (×2) / 61.8 (×3), a tie. At 4 / 8 KiB blocks trids do help (70.6 → 65.5, 64.7 → 63.7 µs) but never
+beat the tuned 16 KiB non-trid block, which matches the catalog (trids save L1, not peak bandwidth). `BANK_AFFINITY`
+(bank-major ranges): regresses, flagged 61 → 86–94 µs. Spreading neighbouring cores over different banks brings it
+to 67–72 µs, still worse; (8, 12, 128, 128) 31 → 34–36, bf16 (1, 1, 32, 62080) 19 → 22. Bottleneck, from an
+ablation: DRAM. Reads alone take 32.9 µs (382 GB/s), writes alone 43.6 µs (289 GB/s), the full copy 61.5 µs
+(409 GB/s, 89% of 460.8, above what reads alone reach), and the sync scaffold 1.7 µs. The headroom gate is not met
+(61.5 > 57.3 µs), but what is left is the DRAM write stream, not the transaction shape. Next to try: writer-side
+DRAM efficiency (NoC1 write-run size / write-ack batching, read vs write bank phase ordering); not done because
+neither lever in scope touched the binding write half.
