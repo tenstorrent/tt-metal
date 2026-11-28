@@ -63,6 +63,39 @@ void RotateDeviceOperation::validate_inputs(
             mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
             "Only height sharding is supported for rotate operation. Got memory layout {}",
             static_cast<int>(mem_layout));
+        if (input.shard_spec().has_value()) {
+            TT_FATAL(
+                input.shard_spec().value().shape[1] == input.padded_shape()[-1],
+                "Input shard width ({}) must match input padded channels ({})",
+                input.shard_spec().value().shape[1],
+                input.padded_shape()[-1]);
+        }
+        if (operation_attributes.interpolation_mode == "bilinear") {
+            TT_FATAL(input.shard_spec().has_value(), "ND sharding is not supported for bilinear rotate operation");
+        }
+    }
+
+    if (operation_attributes.memory_config.is_sharded()) {
+        auto out_mem_layout = operation_attributes.memory_config.memory_layout();
+        TT_FATAL(
+            out_mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Only height sharding is supported for rotate operation. Got output memory layout {}",
+            static_cast<int>(out_mem_layout));
+        TT_FATAL(
+            operation_attributes.memory_config.buffer_type() == tt::tt_metal::BufferType::L1,
+            "Sharded output tensor for rotate operation must be in L1");
+        if (operation_attributes.memory_config.shard_spec().has_value()) {
+            TT_FATAL(
+                operation_attributes.memory_config.shard_spec().value().shape[1] == input.padded_shape()[-1],
+                "Output shard width ({}) must match input padded channels ({})",
+                operation_attributes.memory_config.shard_spec().value().shape[1],
+                input.padded_shape()[-1]);
+        }
+        if (operation_attributes.interpolation_mode == "bilinear") {
+            TT_FATAL(
+                operation_attributes.memory_config.shard_spec().has_value(),
+                "ND sharding is not supported for bilinear rotate operation");
+        }
     }
 
     // Wide reduction validation for bilinear mode

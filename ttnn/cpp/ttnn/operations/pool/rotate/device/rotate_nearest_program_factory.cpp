@@ -83,7 +83,6 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     uint32_t num_sticks_per_core_group_1 = 0, num_sticks_per_core_group_2 = 0;
     std::vector<CoreCoord> logical_cores;
     uint32_t input_nsticks_per_core = 0;
-    uint32_t output_nsticks_per_core = 0;
     bool is_block_sharded = false;
     bool is_width_sharded = false;
     uint32_t num_cores_x = 0;
@@ -96,7 +95,6 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         all_cores = input_shard_spec.grid;
         num_cores = input_shard_spec.num_cores();
         input_nsticks_per_core = input_shard_spec.shape[0];
-        output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
         logical_cores = corerange_to_cores(
             all_cores, num_cores, input_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
         is_block_sharded =
@@ -112,7 +110,6 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
         num_cores = nd_shard_spec.grid.num_cores();
         const auto& shard_shape = nd_shard_spec.shard_shape;
         input_nsticks_per_core = shard_shape[-3] * shard_shape[-2];
-        output_nsticks_per_core = input_nsticks_per_core;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, nd_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
         shard_width = shard_shape[-1];
@@ -128,10 +125,11 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     }
 
     const bool any_sharded = is_sharded || is_nd_sharded;
+    const bool out_sharded = output_tensor.is_sharded() || output_tensor.memory_config().nd_shard_spec().has_value();
     const uint32_t effective_channels = any_sharded ? shard_width : input_channels;
     const uint32_t aligned_input_stick_nbytes = any_sharded ? effective_channels * input_tensor.element_size()
                                                             : pool::get_aligned_stick_size(input_shape, input_tensor);
-    const uint32_t aligned_output_stick_nbytes = any_sharded ? effective_channels * output_tensor.element_size()
+    const uint32_t aligned_output_stick_nbytes = out_sharded ? input_channels * output_tensor.element_size()
                                                              : pool::get_aligned_stick_size(input_shape, output_tensor);
 
     // DRAM and L1 align sticks differently: size the shared CB page for the larger, and stride both kernels by it.
@@ -182,8 +180,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
     }
 
     const uint32_t output_cb_index = next_cb_index++;
-    const uint32_t output_cb_num_pages =
-        any_sharded ? output_nsticks_per_core : num_cb_pages * NEAREST_BUFFERING_FACTOR;
+    const uint32_t output_cb_num_pages = num_cb_pages * NEAREST_BUFFERING_FACTOR;
     desc.cbs.push_back(CBDescriptor{
         .total_size = output_cb_num_pages * output_cb_page_size,
         .core_ranges = all_cores,
@@ -192,7 +189,7 @@ ProgramDescriptor RotateDeviceOperation::NearestProgramFactory::create_descripto
             .data_format = output_cb_data_format,
             .page_size = output_cb_page_size,
         }}},
-        .buffer = any_sharded ? output_tensor.buffer() : nullptr,
+        .buffer = nullptr,
     });
 
     const bool fill_is_zero = (fill_value_bits == 0);
