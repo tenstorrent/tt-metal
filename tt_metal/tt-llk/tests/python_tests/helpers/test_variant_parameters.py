@@ -548,8 +548,9 @@ class SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE(TemplateParameter):
 
 @dataclass
 class SFPU_COMPUTE_API_KERNELS(TemplateParameter):
-    """Quasar: run exp / float ADD through ``calculate_exponential`` / ``calculate_sfpu_binary``, the
-    kernels ``exp_tile`` / ``add_binary_tile`` call (HW-implied Dest format), not the op types.
+    """Quasar: run exp / square / float ADD through ``calculate_exponential`` / ``calculate_square`` /
+    ``calculate_sfpu_binary``, the kernels ``exp_tile`` / ``square_tile`` / ``add_binary_tile`` call
+    (HW-implied Dest format), not the op types. Every perf id sets it.
 
     A macro because sfpu_operations_quasar.h selects on ``#ifdef``, like SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE.
     """

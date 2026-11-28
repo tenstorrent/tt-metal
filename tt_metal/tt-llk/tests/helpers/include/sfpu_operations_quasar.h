@@ -193,9 +193,10 @@ inline void dispatch_dest_float_layout(const DataFormat family, Fn&& fn)
     }
 }
 
-// SFPU_COMPUTE_API_KERNELS (set by the test) sends exp and float ADD through calculate_exponential /
-// calculate_sfpu_binary, the kernels exp_tile / add_binary_tile call, which take the HW-implied (Default) Dest
-// format. Without it they go through the op types with an explicit layout.
+// SFPU_COMPUTE_API_KERNELS (set by the test, and by every perf id) sends exp, square and float ADD through
+// calculate_exponential / calculate_square / calculate_sfpu_binary, the kernels exp_tile / square_tile /
+// add_binary_tile call, which take the HW-implied (Default) Dest format. Without it they go through the op types
+// with an explicit layout.
 #ifdef SFPU_COMPUTE_API_KERNELS
 inline constexpr bool kComputeApiKernels = true;
 #else
@@ -921,10 +922,20 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        dispatch_dest_float_layout<is_fp32_dest_acc_en>(
-            sfpu_format,
-            [&](auto l)
-            { ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(dst_index, vector_mode); });
+        if constexpr (kComputeApiKernels)
+        {
+            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_square, (ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            dispatch_dest_float_layout<is_fp32_dest_acc_en>(
+                sfpu_format,
+                [&](auto l)
+                {
+                    ckernel::sfpu::SquareDest<decltype(l)::value, ITERATIONS>::template run<DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE>(
+                        dst_index, vector_mode);
+                });
+        }
     }
     else if constexpr (is_trig_op(OPERATION))
     {

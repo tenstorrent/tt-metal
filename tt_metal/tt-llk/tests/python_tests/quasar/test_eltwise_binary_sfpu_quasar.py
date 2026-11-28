@@ -34,6 +34,7 @@ from helpers.param_config import (
     resolve_quasar_sfpu_variant,
     runtime,
 )
+from helpers.perf.blaze import compile_only
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -255,10 +256,13 @@ def _run_sfpu_binary_llk_golden(
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
     }
-    if compute_api_kernels:
-        # Appended, not listed above: a functional-only switch that adds no perf column, and the perf
-        # column gate (test_perf_header_gate.py) cannot read a conditional entry in that list.
-        test_config_kwargs["templates"].append(SFPU_COMPUTE_API_KERNELS(True))
+    if compute_api_kernels or is_perf:
+        # Appended, not listed above: compile-only, so it adds no perf column, and the perf column gate
+        # (test_perf_header_gate.py) cannot read a conditional entry in that list. Perf ids time the
+        # kernels the compute API calls.
+        test_config_kwargs["templates"].append(
+            compile_only(SFPU_COMPUTE_API_KERNELS(True))
+        )
 
     configuration = create_test_or_perf_config(
         is_perf=is_perf,

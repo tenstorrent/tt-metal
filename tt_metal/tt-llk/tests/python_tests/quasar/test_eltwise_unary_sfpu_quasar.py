@@ -40,6 +40,7 @@ from helpers.param_config import (
     runtime,
     unique_quasar_sfpu_formats,
 )
+from helpers.perf.blaze import compile_only
 from helpers.perf.core import create_test_or_perf_config
 from helpers.sfpu_dispatch_constants import (
     DROPOUT_PROBABILITY_MAX,
@@ -1893,7 +1894,8 @@ def run_eltwise_unary_sfpu_quasar(
     """Shared unary SFPU runner for the functional and perf tests.
 
     *format_variant* overrides the resolved route, for routes the resolver never picks.
-    *compute_api_kernels* runs exp through ``calculate_exponential`` instead of the op type.
+    *compute_api_kernels* runs exp and square through ``calculate_exponential`` / ``calculate_square`` instead of
+    the op types; perf ids always do.
     *inverse_trig_edges* swaps the stimulus for prepare_inverse_trig_edge_inputs.
     *power_iterative_exponent* sets the exponent and swaps in the power_iterative stimulus and model;
     *power_iterative_runtime* has the kernel see it as a runtime value.
@@ -2061,7 +2063,12 @@ def run_eltwise_unary_sfpu_quasar(
                 if is_max_min and max_min_sign_magnitude
                 else []
             ),
-            *([SFPU_COMPUTE_API_KERNELS(True)] if compute_api_kernels else []),
+            # Perf ids time the kernels the compute API calls.
+            *(
+                [compile_only(SFPU_COMPUTE_API_KERNELS(True))]
+                if compute_api_kernels or is_perf
+                else []
+            ),
             *(
                 [
                     SFPU_POWER_ITERATIVE_EXPONENT(
