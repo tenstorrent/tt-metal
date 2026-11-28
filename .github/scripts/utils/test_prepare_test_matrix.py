@@ -584,7 +584,7 @@ def test_llk_merge_gate_allowlist_bh_routes_prio():
         "bh_p150b_civ2_viommu",
     )
     assert concrete_skus(matrix) == {"bh_p150b_civ2_viommu_prio"}
-    assert len(matrix) == 3  # 2 FD shards + 1 SD
+    assert len(matrix) == 6  # 5 FD shards + 1 SD
     assert all(e["logical_sku"] == "bh_p150b_civ2_viommu" for e in matrix)
 
 

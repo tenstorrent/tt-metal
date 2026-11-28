@@ -76,13 +76,13 @@
     authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 15
+      timeout: 7
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
-  gtest_shard_total: 2
+  gtest_shard_total: 5
   gtest_shard_index: 0
 
 - name: LLK FD blackhole
@@ -92,14 +92,62 @@
     authoritative_job_status: true
   skus:
     bh_p150b_civ2_viommu:
-      timeout: 15
+      timeout: 7
   team: llk
   budget_type: merge_gate
   owner_id: U09UC143684 # Nemanja Divnic
   arch: blackhole
   dispatch_mode: fd
-  gtest_shard_total: 2
+  gtest_shard_total: 5
   gtest_shard_index: 1
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 7
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+  arch: blackhole
+  dispatch_mode: fd
+  gtest_shard_total: 5
+  gtest_shard_index: 2
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 7
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+  arch: blackhole
+  dispatch_mode: fd
+  gtest_shard_total: 5
+  gtest_shard_index: 3
+
+- name: LLK FD blackhole
+  cmd: ./build/test/tt_metal/unit_tests_llk --gtest_filter='*'
+  # gtest has no EXPECTED_ERROR markers, so the TT_FATAL/TT_THROW its negative tests provoke stays in the log.
+  ai_summary:
+    authoritative_job_status: true
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 7
+  team: llk
+  budget_type: merge_gate
+  owner_id: U09UC143684 # Nemanja Divnic
+  arch: blackhole
+  dispatch_mode: fd
+  gtest_shard_total: 5
+  gtest_shard_index: 4
 
 # --- SD-only / Quasar slice ---
 - name: LLK SD wormhole (Quasar slice)

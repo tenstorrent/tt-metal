@@ -4,13 +4,24 @@
 # For max allowed timeout refer to .github/time_budget.yaml (ttnn -> merge_gate; budget is shared with validation merge gate).
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
-- name: ttnn validation basic
-  cmd: /usr/bin/tt-nn-validation-basic
+- name: ttnn validation basic (shard 0 of 2)
+  cmd: GTEST_TOTAL_SHARDS=2 GTEST_SHARD_INDEX=0 /usr/bin/tt-nn-validation-basic
   skus:
     wh_n150_civ2:
-      timeout: 15
+      timeout: 8
     bh_p150b_civ2_viommu:
-      timeout: 15
+      timeout: 7
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
+
+- name: ttnn validation basic (shard 1 of 2)
+  cmd: GTEST_TOTAL_SHARDS=2 GTEST_SHARD_INDEX=1 /usr/bin/tt-nn-validation-basic
+  skus:
+    wh_n150_civ2:
+      timeout: 8
+    bh_p150b_civ2_viommu:
+      timeout: 7
   team: ttnn
   budget_type: merge_gate
   owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
