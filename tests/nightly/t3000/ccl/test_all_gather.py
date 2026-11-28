@@ -1792,3 +1792,56 @@ def test_all_gather_async_broadcast(
         allowed_pcc=pcc_threshold,
         use_broadcast=True,
     )
+
+
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+        (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+    ],
+    ids=["dram_to_l1", "l1_to_dram"],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=["device_params"],
+)
+def test_composite_all_gather_interleaved_memory_config(
+    mesh_device,
+    mem_config_input,
+    mem_config_ag,
+):
+    """composite_all_gather (used for ROW_MAJOR tensors) must honor a caller-requested interleaved memory_config."""
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip("Requires at least 2 devices")
+
+    torch.manual_seed(0)
+    full = torch.randn((1, 1, 4, 32 * num_devices), dtype=torch.bfloat16)
+    tt_in = ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=mem_config_input,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=3),
+    )
+    cores = mesh_device.compute_with_storage_grid_size()
+    core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores.x - 1, cores.y - 1))})
+    sem = ttnn.create_global_semaphore(mesh_device, core_range, 0)
+
+    tt_out = ttnn.experimental.all_gather_async(
+        tt_in,
+        dim=3,
+        multi_device_global_semaphore=sem,
+        num_links=1,
+        memory_config=mem_config_ag,
+        topology=ttnn.Topology.Linear,
+    )
+    assert tt_out.memory_config() == mem_config_ag
+
+    out_per_dev = ttnn.to_torch(tt_out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
+    for i in range(num_devices):
+        eq, msg = comp_equal(full[0], out_per_dev[i])
+        assert eq, msg
