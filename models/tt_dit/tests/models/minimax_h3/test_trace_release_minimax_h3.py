@@ -77,7 +77,15 @@ def _denoise_until_metadata(fake, monkeypatch, expect_error):
     scheduler = SimpleNamespace(timesteps=torch.zeros(8))
     with expect_error(_ReachedMetadata, "reached _device_metadata"):
         pm.MiniMaxH3Pipeline._denoise(
-            fake, fake._transformer, layout, None, torch.zeros(4, 1), torch.zeros(4, 1), scheduler, scheduler
+            fake,
+            fake._transformer,
+            layout,
+            None,
+            torch.zeros(4, 1),
+            torch.zeros(4, 1),
+            scheduler,
+            scheduler,
+            num_latent_frames=1,
         )
 
 

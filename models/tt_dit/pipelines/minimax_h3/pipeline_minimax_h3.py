@@ -3502,17 +3502,17 @@ class MiniMaxH3Pipeline:
         """The Sol-Attn schedule the environment asks for; a dynamic-length pipeline stays dense."""
         return None if self.dynamic_length else sol_schedule(os.environ, self._sol_preset())
 
-    def _is_sol_dense_step(self, step: int, first_stage: bool = False, num_latent_frames: int = 0) -> bool:
+    def _is_sol_dense_step(self, step: int, first_stage: bool = False, *, num_latent_frames: int) -> bool:
         """Whether step `step` of a denoise stage runs dense under the Sol-Attn schedule in force: all of a low-res
-        first stage does, and all of a clip over the schedule's `max_frames`. Warm-up keeps only its first step
-        dense, whatever the schedule's count and its clip's length, so that its second one is a sparse step."""
+        first stage does, and all of a clip over the schedule's `max_frames`. Warm-up runs its first step
+        dense if a clip can run one (a dense step count, or a `max_frames` to exceed) and its second one sparse."""
         schedule = self._sol_schedule
         if schedule is None:
             return False
         if first_stage:
             return True
         if self._warming:
-            return step == 0 and schedule.is_dense_step(step)
+            return step == 0 and (schedule.dense_steps > 0 or schedule.max_frames is not None)
         # The Sol-Attn request and both traces stay as for a short clip: a length change recaptures nothing.
         long = schedule.max_frames is not None and num_latent_frames > video_latent_num_frames(schedule.max_frames)
         return long or schedule.is_dense_step(step)
@@ -3534,9 +3534,9 @@ class MiniMaxH3Pipeline:
     ) -> None:
         """Switch the ring attention between dense and Sol-Attn for this request (see `policy.sol_schedule`).
 
-        The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
+        The schedule (`policy.sol_schedule`: the model's preset, `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
-        rows, everything in front of the target video (`H3_SOL_SINKS=0` drops it). The packed length and the sink
+        rows, everything in front of the target video (`sinks=False` drops it). The packed length and the sink
         reach the Sol programs as data and each rung keeps its own Sol state, so a new prompt length costs an
         in-place update of the route constants: no compile, and the denoise traces stay. Only a change of schedule
         releases them and marks every bucket cold, so the gen runs eager and recaptures.
@@ -3641,6 +3641,7 @@ class MiniMaxH3Pipeline:
             audio_scheduler.window(0, steps),
             on_event=on_event,
             first_stage=True,
+            num_latent_frames=num_latent_frames,
         )
         if pdd is not None:
             self._pdd_active = ({modality: nodes[steps:] for modality, nodes in indices.items()}, weights)
@@ -3659,7 +3660,8 @@ class MiniMaxH3Pipeline:
         condition_spec: Sequence[tuple[str, int]] | None = None,
         on_event: PipelineEventCallback = null_callback,
         first_stage: bool = False,
-        num_latent_frames: int = 0,
+        *,
+        num_latent_frames: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Denoise in place. `video_rows` is `[condition rows | target rows]`, cond first, as the
         reference's `latents` is; `num_condition_video_rows` is 0 for `t2va`. `audio_rows` is the same
@@ -3968,7 +3970,9 @@ class MiniMaxH3Pipeline:
                         for dst, (weight, bias) in pdd_steps[i].items():
                             linear = getattr(transformer, dst)
                             linear.weight.data, linear.bias.data = weight, bias
-                    transformer.set_sol_dense_step(self._is_sol_dense_step(i, first_stage, num_latent_frames))
+                    transformer.set_sol_dense_step(
+                        self._is_sol_dense_step(i, first_stage, num_latent_frames=num_latent_frames)
+                    )
                     try:
                         video_velocity, audio_velocity = transformer(
                             video_1BVC=self._tt_video.value,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 from PIL import Image
@@ -58,8 +58,6 @@ def get_num_frames(duration_s: float) -> int:
 
 
 MINIMAX_H3_DURATIONS_S = tuple(range(4, 16))
-
-
 MINIMAX_H3_DEFAULT_DURATION_S = 5
 # Frame counts the shortest and longest served durations resolve to: 107 and 362.
 MINIMAX_H3_MIN_NUM_FRAMES = get_num_frames(MINIMAX_H3_DURATIONS_S[0])
@@ -85,10 +83,9 @@ class SolSchedule:
 
 #: Sol-Attn settings per model. A model with no entry runs `SolSchedule()` behind `H3_SOL_ATTN=1`.
 SOL_PRESETS = {
-    # The 10Eros-Max card ("13% SLA sparsity on all blocks, start at 0.2": 2 of the 8 forwards dense) with a third
-    # dense forward. With two, sound events left the served 6 s export up to 7 LU under dense; with three, within 1 LU.
+    # The 10Eros-Max card's setting (13% sparsity on all blocks, 2 of the 8 forwards dense) with a third dense forward.
     "10eros-max": SolSchedule(tau=1.13, dense_steps=3, dense_layers=0),
-    # The recipe NVIDIA ships for HyperFlow, as its side-by-side sheet ran it: no sinks.
+    # NVIDIA's HyperFlow recipe: no sinks.
     "hyperflow": SolSchedule(sinks=False),
 }
 
@@ -101,29 +98,20 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
     `H3_SOL_ATTN=1` turns it on for every clip length and any other value is the off switch; unset, it is on only for
-    a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule starts from the
-    model's `SOL_PRESETS` entry: `preset` is the one the pipeline reads from its files, and `H3_SOL_PRESET` names it
-    for a model the files do not tell apart (a 10Eros-Max build under another file name). `H3_SOL_TAU`,
-    `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and `H3_SOL_SINKS` (`0` drops the dense prefix) each override their
-    field. One dense step costs 4-step models their picture and sound against dense.
+    a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule is the `SOL_PRESETS`
+    entry of `preset`, the model the pipeline reads from its files; `H3_SOL_TAU` and `H3_SOL_DENSE_STEPS` override
+    their field. One dense step costs 4-step models their picture and sound against dense.
     """
     by_default = "H3_SOL_ATTN" not in env and preset in SOL_DEFAULT_ON
     if not by_default and env.get("H3_SOL_ATTN") != "1":
         return None
-    name = env.get("H3_SOL_PRESET") or preset
-    if name is not None and name not in SOL_PRESETS:
-        raise ValueError(f"H3_SOL_PRESET must be one of {sorted(SOL_PRESETS)}, got {name!r}")
-    base = SOL_PRESETS[name] if name else SolSchedule()
-    schedule = SolSchedule(
+    base = SOL_PRESETS[preset] if preset else SolSchedule()
+    return replace(
+        base,
         tau=float(env.get("H3_SOL_TAU", base.tau)),
         dense_steps=int(env.get("H3_SOL_DENSE_STEPS", base.dense_steps)),
-        dense_layers=int(env.get("H3_SOL_DENSE_LAYERS", base.dense_layers)),
-        sinks=env["H3_SOL_SINKS"] != "0" if "H3_SOL_SINKS" in env else base.sinks,
         max_frames=SOL_DEFAULT_ON[preset] if by_default else None,
     )
-    if schedule.dense_steps < 0 or schedule.dense_layers < 0:
-        raise ValueError(f"H3_SOL_DENSE_STEPS and H3_SOL_DENSE_LAYERS must be 0 or more, got {schedule}")
-    return schedule
 
 
 # Served denoising step count.
