@@ -138,9 +138,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("TILE_LOOP")
 
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>()) // Wormhole: one MOP stream (perf.h)
         {
-            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+            if (unpack_to_dest && is_32bit_input(formats.math, formats.math)) // only the Dest handshake the datacopy does
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    {
+                        math_unpack_to_dest_math_ready();
+                        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(i % MAX_TILES_DEST);
+                        math::math_unpack_to_dest_tile_ready();
+                    }
+                }
+            }
+            else
+            {
+                _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

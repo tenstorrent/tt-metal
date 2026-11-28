@@ -133,10 +133,25 @@ void run_kernel(RUNTIME_PARAMETERS)
         {
             return;
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>()) // Wormhole: one MOP stream
         {
-            // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
-            _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+            if (unpack_to_dest && is_32bit_input(formats.math, formats.math)) // only the Dest handshake the datacopy does
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+                {
+                    for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                    {
+                        math_unpack_to_dest_math_ready();
+                        math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(EMA_INPUT_DST_INDEX);
+                        math::math_unpack_to_dest_tile_ready();
+                    }
+                }
+            }
+            else
+            {
+                // unpack_A publishes a SrcB valid with every SrcA valid, so both are retired here.
+                _perf_math_stream_clear_valid</* clear A */ true, /* clear B */ true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
