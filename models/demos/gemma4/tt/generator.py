@@ -1845,8 +1845,11 @@ class ChunkedPrefillPageTableGuardMixin:
         # lm_head on the [padded_batch, H] tile instead of a slice + lm_head + readback per slot.
         hidden_dim = int(hidden.shape[-1])
         hidden4 = ttnn.reshape(hidden, [padded_batch, 1, padded, hidden_dim])
+        # Mark pad slots -1 for the extraction: a real 1-token prompt also has last index 0.
+        real_slots = set(slots)
+        extract_idx = [last_idx[s] if s in real_slots else -1 for s in range(padded_batch)]
         rows = model.extract_last_tokens_batched_prefill(
-            hidden4, last_idx, padded_batch, padded, target_batch=max(padded_batch, 32)
+            hidden4, extract_idx, padded_batch, padded, target_batch=max(padded_batch, 32)
         )
         for t in (hidden4, hidden):
             try:
