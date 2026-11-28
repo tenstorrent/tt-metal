@@ -4,7 +4,7 @@
 
 // Reader for conv_spatial_compute.cpp: depthwise K x K conv per frame (zero padding K / 2), K = 1 for a plain copy.
 //
-// x is `[1, 1, rows, C]` bf16 tiled, frame f's tokens are rows row0 + f S .. + S - 1 (row-major over a gh x gw grid),
+// x is `[1, 1, rows, C]` bf16 tiled, frame f's tokens are rows row0 + f stride .. + S - 1 (row-major over a gh x gw grid),
 // not tile-aligned. This core handles one 32-channel group g and a range of units u = f RT + rt (output rows
 // 32 rt .. 32 rt + 31 of frame f, RT = ceil(S / 32)). Per unit it reads the input tiles of group g that any tap can
 // touch into a window, then builds one tile per tap: row r holds the input token at (y + i - K/2, x + j - K/2) for the
@@ -12,7 +12,8 @@
 // (fp32 tiles, each row the group's 32 channel weights) are read once.
 //
 // Compile-time args: K, gh, gw, channel tiles of x, then the tensor accessor args of x, w.
-// Runtime args: x, w addresses, group, first unit, number of units, row0.
+// Runtime args: x, w addresses, group, first unit, number of units, row0, frame stride (rows from one frame's start to
+// the next: S, or the frame slot of the frame-aligned layout).
 
 #include <stdint.h>
 
@@ -38,6 +39,7 @@ void kernel_main() {
     const uint32_t first = get_arg_val<uint32_t>(3);
     const uint32_t count = get_arg_val<uint32_t>(4);
     const uint32_t row0 = get_arg_val<uint32_t>(5);
+    const uint32_t stride = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t K = get_compile_time_arg_val(0);
     constexpr uint32_t gh = get_compile_time_arg_val(1);
@@ -72,7 +74,7 @@ void kernel_main() {
     for (uint32_t u = first; u < first + count; ++u) {
         const uint32_t f = u / RT;
         const uint32_t p0 = (u % RT) * TILE_ROWS;
-        const uint32_t frame_row = row0 + f * S;
+        const uint32_t frame_row = row0 + f * stride;
         // Input rows any tap can reach, clipped to the frame.
         const uint32_t reach = pad * (gw + 1);
         const uint32_t lo = frame_row + (p0 > reach ? p0 - reach : 0);

@@ -28,6 +28,9 @@ The heavy work is then split over the SP devices (stage 4): the window's video r
 the linear branch by head, from its raw projections to the readout (`OpenVDNLinearBranch`, `_head_split`), each
 reassembled with one all-gather; the per-row tail (softmax gate, `to_out`, `to_out_linear`) runs on each device's own
 rows. Still repeated on every SP device: the gathers of the projections and the small beta/alpha/gate projections.
+
+With `HybridLayout.aligned` (the pipeline's default since stage 4) the block's rows come frame-aligned instead and none
+of those whole-sequence gathers happen: see `_forward_aligned`.
 """
 
 from __future__ import annotations
@@ -45,14 +48,25 @@ from ..minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, rope_channel_p
 from . import linear_ops_openvdn as ops
 from .linear_branch_openvdn import OpenVDNLinearBranch, RowInputs, rows_slice
 from .reference_openvdn import window_bounds
-from .window_softmax_openvdn import SparseWindowSoftmax, WindowLayout, WindowSoftmax
+from .window_softmax_openvdn import (
+    LocalSparseWindow,
+    SparseWindowSoftmax,
+    WindowLayout,
+    WindowSoftmax,
+    aligned_geometry,
+)
 
 
 @dataclasses.dataclass(frozen=True)
 class HybridLayout:
     """The packed sequence as the hybrid attention sees it (`SequenceLayout` in the model repo): video rows
     contiguous and frame-major from `video_start`, the prompt rows at `[text_start, text_start + text_len)`.
-    `seq_len` is the logical length; rows past it (the SP pad tail) take no part."""
+    `seq_len` is the logical length; rows past it (the SP pad tail) take no part.
+
+    `aligned`: the block's rows come in the frame-aligned order instead (`aligned_geometry`, stage 4): the head
+    globals padded to a multiple of 64 rows, each frame to its own multiple-of-64 slot, then the tail globals and pad
+    rows up to a multiple of 64 * SP, so the window and the linear branch work on each device's own rows. The fields
+    still describe the logical sequence; `aligned_rows` maps it."""
 
     seq_len: int
     video_start: int
@@ -61,6 +75,7 @@ class HybridLayout:
     frame_width: int
     text_start: int = 0
     text_len: int = 0
+    aligned: bool = False
 
     @property
     def tokens_per_frame(self) -> int:
@@ -69,6 +84,14 @@ class HybridLayout:
     @property
     def video_end(self) -> int:
         return self.video_start + self.num_frames * self.tokens_per_frame
+
+    def window_layout(self) -> WindowLayout:
+        return WindowLayout(self.seq_len, self.video_start, self.num_frames, self.tokens_per_frame)
+
+    def aligned_rows(self, sp_factor: int) -> tuple[torch.Tensor, int]:
+        """`(row of each logical row in the aligned order, aligned length)`."""
+        geo = aligned_geometry(self.window_layout(), sp_factor)
+        return geo.valid.nonzero().flatten(), geo.total
 
 
 class OpenVDNHybridAttention(MiniMaxH3Attention):
@@ -165,6 +188,21 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         return window_bounds(layout.num_frames, self.radius, self.chunk)
 
     def _window(self, layout: HybridLayout) -> WindowSoftmax:
+        if layout not in self._windows and layout.aligned:
+            # The whole block in the frame-aligned order: the sparse window on each device's own rows (stage 4).
+            self._windows[layout] = LocalSparseWindow(
+                self.mesh_device,
+                layout.window_layout(),
+                self.bounds(layout),
+                anchor_frames=self.anchor_frames,
+                sp_axis=self.sp_mesh_axis,
+                sp_factor=self.sp_factor,
+                ring_sdpa=self._ring_sdpa,
+                num_heads=self.n_local_heads,
+                scale=self.head_dim**-0.5,
+                dense_globals=os.environ.get("OPENVDN_SPARSE_DENSE_GLOBALS", "1") == "1",
+                compute_config=self.dense_window_compute_config,
+            )
         if layout not in self._windows:
             # Each group's queries are split over the SP devices and the groups run on the frame-padded, tile-aligned
             # layout (stage 4). Env switches, for A/B runs: OPENVDN_WINDOW_SP=0, OPENVDN_WINDOW_ALIGNED=0 turn them
@@ -241,6 +279,8 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         `cu_window_seqlens` are not used: `.layout` (with its logical `seq_len`) fixes the mask."""
         assert (addcmul_residual is None) == (addcmul_gate is None), "addcmul residual/gate come as a pair"
         layout = self.layout
+        if layout is not None and layout.aligned:
+            return self._forward_aligned(spatial_1BND, rope_cos, rope_sin, addcmul_residual, addcmul_gate)
         padded_len = spatial_1BND.shape[2] * self.sp_factor
         assert layout is not None and layout.seq_len <= padded_len, "set .layout to the packed sequence"
         self._mark("attention start")
@@ -394,6 +434,127 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         self._mark("attention end")
         return out
 
+    def _forward_aligned(
+        self,
+        spatial_1BND: ttnn.Tensor,
+        rope_cos: ttnn.Tensor | None,
+        rope_sin: ttnn.Tensor | None,
+        addcmul_residual: ttnn.Tensor | None,
+        addcmul_gate: ttnn.Tensor | None,
+    ) -> ttnn.Tensor:
+        """`forward` on the frame-aligned packed layout (`HybridLayout.aligned`, stage 4), with no whole-sequence
+        gathers. Everything runs on this device's rows except the linear branch's per-head math, which gets its
+        heads' channels of the raw q/k/v for all rows through one all-to-all per projection (rows -> heads, 1/SP of
+        a gather's traffic) and returns its readout the same way (heads -> rows). The window is `LocalSparseWindow`.
+        Pad rows come out zero."""
+        layout = self.layout
+        geo = aligned_geometry(layout.window_layout(), self.sp_factor)
+        padded_len = spatial_1BND.shape[2] * self.sp_factor
+        assert self.sp_factor > 1 and padded_len == geo.total, f"aligned layout: {geo.total} rows, got {padded_len}"
+        assert self.linear_attention.frame_split is not None, "the aligned layout needs the head-split linear branch"
+        self._mark("attention start")
+
+        x_local = self._gather(spatial_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
+        q_1BNF, k_1BNF, v_1BNF = self.to_qkv(
+            x_local, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config
+        )
+        norm_kwargs = dict(
+            num_heads_per_device=self.n_local_heads,
+            per_head_norm=True,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=self.rope_trans_mat if rope_cos is not None else None,
+        )
+        q_BHNE = self.norm_q(q_1BNF, **norm_kwargs)
+        k_BHNE = self.norm_k(k_1BNF, **norm_kwargs)
+        v_BHNE, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            v_1BNF, num_heads=self.n_local_heads, num_kv_heads=0, transpose_k_heads=False
+        )
+        rows, branch_gate = self._row_inputs(x_local, layout, padded_len)
+        q_heads, k_heads, v_heads = (self._rows_to_heads(t) for t in (q_1BNF, k_1BNF, v_1BNF))
+        self._mark("projections and all-to-all")
+
+        softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
+        for t in (q_BHNE, k_BHNE, v_BHNE):
+            ttnn.deallocate(t)
+        self._mark("window softmax")
+        softmax_1BND = ttnn.unsqueeze(ttnn.transformer.concatenate_heads(softmax_BHNE), 0)
+        ttnn.deallocate(softmax_BHNE)
+        gate = ttnn.sigmoid(self.softmax_gate(x_local))
+        gate = ttnn.matmul(gate, self.gate_expand, compute_kernel_config=self.gate_config)
+        softmax_1BND = ttnn.multiply(softmax_1BND, gate)
+        softmax_1BND = self._gather(softmax_1BND, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
+        out = self.to_out(softmax_1BND, force_transpose=False, compute_kernel_config=self.mm_compute_kernel_config)
+        self._mark("softmax gate, TP gather and to_out")
+
+        text = None
+        if self.enable_text_state and layout.text_len:
+            text = (layout.text_start, layout.text_start + layout.text_len)
+        readout = self.linear_attention.forward_aligned(
+            q_heads,
+            k_heads,
+            v_heads,
+            video_row=geo.head,
+            frame_stride=geo.slot,
+            num_frames=layout.num_frames,
+            frame_size=(layout.frame_height, layout.frame_width),
+            bounds=self.bounds(layout),
+            skip_ends=self.anchor_frames == "both",
+            text=text,
+            rows=rows,
+        )
+        self._mark("linear branch")
+        readout = self._heads_to_rows(readout, self.n_local_heads * self.head_dim)
+        readout = ttnn.multiply(readout, ttnn.typecast(branch_gate, ttnn.float32))
+        readout = ttnn.typecast(readout, ttnn.bfloat16)
+        readout = self._gather(readout, dim=3, mesh_axis=self.tp_mesh_axis, factor=self.tp_factor)
+        out = ttnn.add(out, self.to_out_linear(readout))
+        out = ttnn.multiply(out, self._aligned_valid(geo))  # pad rows zero
+        self._mark("output rows assembled")
+        if addcmul_residual is not None:
+            out = ttnn.addcmul(addcmul_residual, out, addcmul_gate)
+        self._mark("attention end")
+        return out
+
+    def _rows_to_heads(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """`[1, 1, N / SP, H*d]` (this device's rows, this TP device's heads) -> `[1, 1, N, h*d]`: every row for the
+        `h` heads of the linear branch's head split on this SP device (heads padded to a multiple of SP)."""
+        branch = self.linear_attention
+        width = -(-branch.num_local_heads // self.sp_factor) * self.sp_factor * self.head_dim
+        if t.shape[-1] < width:
+            t = ttnn.pad(t, [(0, 0), (0, 0), (0, 0), (0, width - t.shape[-1])], 0.0)
+        return self._all_to_all(t, in_dim=2, out_dim=3)
+
+    def _heads_to_rows(self, t: ttnn.Tensor, width: int) -> ttnn.Tensor:
+        """Inverse of `_rows_to_heads`: `[1, 1, N, h*d]` -> `[1, 1, N / SP, width]` (the real heads' channels)."""
+        t = self._all_to_all(t, in_dim=3, out_dim=2)
+        if t.shape[-1] > width:
+            t = ttnn.slice(t, [0, 0, 0, 0], [1, 1, t.shape[2], width])
+        return t
+
+    def _all_to_all(self, t: ttnn.Tensor, *, in_dim: int, out_dim: int) -> ttnn.Tensor:
+        """Over the SP devices: split `out_dim` into SP pieces, piece i to device i, concatenated along `in_dim` in
+        device order."""
+        return ttnn.experimental.all_to_all_async_generic(
+            t,
+            in_dim=in_dim,
+            out_dim=out_dim,
+            num_links=self.ccl_manager.num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.sp_mesh_axis,
+        )
+
+    def _aligned_valid(self, geo) -> ttnn.Tensor:
+        """`[1, 1, padded / SP, 1]` per device: 1 on the aligned layout's real rows, 0 on its pad rows."""
+        key = ("aligned_valid", geo.key)
+        if key not in self._cache:
+            valid = geo.valid.to(torch.float32).reshape(1, 1, geo.total, 1)
+            self._cache[key] = tensor.from_torch(
+                valid, device=self.mesh_device, dtype=ttnn.bfloat16, mesh_axes=[None, None, self.sp_mesh_axis, None]
+            )
+        return self._cache[key]
+
     def _ring_sdpa(
         self,
         q: ttnn.Tensor,
@@ -401,23 +562,26 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         v: ttnn.Tensor,
         block_mask: ttnn.Tensor,
         block_counts: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """`sparse_ring_sdpa` (kept blocks only) on SP-split `[1, H, N / SP, d]` q, k, v, with H3's ring setup. The op
         needs fp32 accumulation off (streaming compute), so this path is lossy against the HiFi4 / fp32 dense
-        window: H3's HiFi2 by default, OPENVDN_WINDOW_FIDELITY=hifi4 (still no fp32 accumulation) or lofi."""
+        window: H3's HiFi2 by default, OPENVDN_WINDOW_FIDELITY=hifi4 (still no fp32 accumulation) or lofi. Returns
+        the output and the op's K and V gather buffers (every shard but this device's own)."""
         rows = q.shape[2]
         compute = self._window_lowered_config("hifi2") or self.window_compute_config
-        return ttnn.transformer.sparse_ring_sdpa(
+        buffer_k = self.ccl_manager.get_ag_ping_pong_buffer(
+            k.shape, 2, self.sp_mesh_axis, dtype=k.dtype, capacity=self.kv_gather_capacity
+        )
+        buffer_v = self.ccl_manager.get_ag_ping_pong_buffer(
+            v.shape, 2, self.sp_mesh_axis, dtype=v.dtype, capacity=self.kv_gather_capacity
+        )
+        out = ttnn.transformer.sparse_ring_sdpa(
             q,
             k,
             v,
             block_mask,
-            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                k.shape, 2, self.sp_mesh_axis, dtype=k.dtype, capacity=self.kv_gather_capacity
-            ),
-            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                v.shape, 2, self.sp_mesh_axis, dtype=v.dtype, capacity=self.kv_gather_capacity
-            ),
+            persistent_output_buffer_k=buffer_k,
+            persistent_output_buffer_v=buffer_v,
             logical_n=rows * self.sp_factor,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
@@ -438,6 +602,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             use_column_major_ccl=True,
             block_counts=block_counts,
         )
+        return out, buffer_k, buffer_v
 
     def _mark(self, name: str) -> None:
         ops.mark(self.mesh_device, name)
@@ -451,6 +616,9 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         for the local rows."""
         branch = self.linear_attention
         vs, ve = layout.video_start, layout.video_end
+        if layout.aligned:  # the video's frame slots, pad rows included
+            geo = aligned_geometry(layout.window_layout(), self.sp_factor)
+            vs, ve = geo.head, geo.tail_start
         beta = self._gather(
             ttnn.sigmoid(branch.beta_proj(x_local)), dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor
         )
@@ -476,8 +644,12 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         if key not in self._cache:
             frames = layout.num_frames + (-layout.num_frames % ttnn.TILE_SIZE)
             sel = torch.zeros(1, 1, frames, padded_len)
+            first, stride = layout.video_start, layout.tokens_per_frame
+            if layout.aligned:
+                geo = aligned_geometry(layout.window_layout(), self.sp_factor)
+                first, stride = geo.head, geo.slot
             for f in range(layout.num_frames):
-                start = layout.video_start + f * layout.tokens_per_frame
+                start = first + f * stride
                 sel[0, 0, f, start : start + layout.tokens_per_frame] = 1.0
             self._cache[key] = tensor.from_torch(
                 sel, device=self.mesh_device, dtype=ttnn.bfloat16, mesh_axes=[None, None, None, self.sp_mesh_axis]

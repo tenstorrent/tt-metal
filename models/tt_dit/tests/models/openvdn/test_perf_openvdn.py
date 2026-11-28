@@ -43,7 +43,7 @@ from models.tt_dit.tests.models.minimax_h3.common import (
     packed_layout,
     randomize_norm_weights,
 )
-from models.tt_dit.tests.models.openvdn.test_mesh_openvdn import SP_AXIS, TP_AXIS, _parallel
+from models.tt_dit.tests.models.openvdn.test_mesh_openvdn import SP_AXIS, TP_AXIS, Packing, _parallel
 from models.tt_dit.tests.models.openvdn.test_modules_openvdn import (
     BF16_PCC,
     BF16_RMSE,
@@ -73,15 +73,13 @@ CHUNK, RADIUS = 5, 1
 ITERS = int(os.environ.get("OPENVDN_PERF_ITERS", 2))
 #: OPENVDN_PERF_TRACE=1: capture the block forward in a trace (persistent CCL buffers) and time trace replays.
 TRACE = os.environ.get("OPENVDN_PERF_TRACE") == "1"
+#: OPENVDN_ALIGNED=1: the block's rows in the frame-aligned order (`HybridLayout.aligned`), as the pipeline packs them.
+ALIGNED = os.environ.get("OPENVDN_ALIGNED", "1") == "1"
 MESH = (
     pytest.param((4, 8), {**MESH_4X8_RING.values[1], "trace_region_size": 1_175_000_000}, id="4x8_traced")
     if TRACE
     else MESH_4X8_RING
 )
-
-
-def _pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
-    return torch.cat([x, torch.zeros(rows - x.shape[0], *x.shape[1:], dtype=x.dtype)])
 
 
 def _artifacts() -> Path:
@@ -105,13 +103,23 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     _randomize_hybrid(block.attn, gen)
     block = _round_params(block).eval()
 
-    align = tuple(mesh_device.shape)[SP_AXIS] * ttnn.TILE_SIZE
-    padded_len = -(-SEQ_LEN // align) * align
+    layout = HybridLayout(
+        seq_len=SEQ_LEN,
+        video_start=NUM_TEXT + NUM_AUDIO,
+        num_frames=NUM_FRAMES,
+        frame_height=GRID[0],
+        frame_width=GRID[1],
+        text_start=0,
+        text_len=NUM_TEXT,
+        aligned=ALIGNED,
+    )
+    packing = Packing(mesh_device, layout)
+    padded_len = packing.padded_len
     position_ids, token_tags, timestep_indices = packed_layout(NUM_TEXT, NUM_AUDIO, NUM_VIDEO, grid_hw=GRID)
     cos, sin = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)(position_ids)
     tt_cos, tt_sin = (
         tensor.from_torch(
-            _pad_rows(t, padded_len).reshape(1, 1, padded_len, -1),
+            packing.pack(t).reshape(1, 1, padded_len, -1),
             device=mesh_device,
             dtype=ttnn.float32,
             mesh_axes=[..., SP_AXIS, None],
@@ -137,18 +145,10 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     )
     tt_block.load_torch_state_dict(block.state_dict())
     del block
-    tt_block.attn.layout = HybridLayout(
-        seq_len=SEQ_LEN,
-        video_start=NUM_TEXT + NUM_AUDIO,
-        num_frames=NUM_FRAMES,
-        frame_height=GRID[0],
-        frame_width=GRID[1],
-        text_start=0,
-        text_len=NUM_TEXT,
-    )
+    tt_block.attn.layout = layout
 
     spatial = tensor.from_torch(
-        _pad_rows(x, padded_len).reshape(1, 1, padded_len, HIDDEN),
+        packing.pack(x).reshape(1, 1, padded_len, HIDDEN),
         device=mesh_device,
         dtype=ttnn.bfloat16,
         mesh_axes=[None, None, SP_AXIS, TP_AXIS],
@@ -157,7 +157,7 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
         logical_n=tensor.logical_length_tensor(SEQ_LEN, device=mesh_device),
         temb=tensor.from_torch(temb.reshape(1, 1, *temb.shape), device=mesh_device, dtype=ttnn.float32),
         adaln_indices=tensor.from_torch(
-            _pad_rows(adaln_indices.to(torch.int32), padded_len).reshape(1, 1, 1, padded_len),
+            packing.pack(adaln_indices.to(torch.int32)).reshape(1, 1, 1, padded_len),
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.Layout.ROW_MAJOR,
@@ -211,7 +211,7 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
     signpost("stop")
 
     result = tensor.to_torch(out, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float()
-    result = result.reshape(result.shape[-2], result.shape[-1])[:SEQ_LEN]
+    result = packing.unpack(result.reshape(result.shape[-2], result.shape[-1]))
     artifacts = _artifacts()
     torch.save(result.bfloat16(), artifacts / "block_out.pt")
     summary = dict(
@@ -222,6 +222,7 @@ def test_block_perf_openvdn(mesh_device: ttnn.MeshDevice) -> None:
         runs_ms=times,
         sync_log=sync_log,
         traced=TRACE,
+        aligned=ALIGNED,
     )
 
     baseline = os.environ.get("OPENVDN_PERF_BASELINE")

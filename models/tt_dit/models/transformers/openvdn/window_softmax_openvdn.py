@@ -306,6 +306,169 @@ class _AlignedLayout:
         return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
 
 
+def aligned_geometry(layout: WindowLayout, sp_factor: int, block: int = 64) -> _AlignedLayout:
+    """The frame-aligned packed layout (`_AlignedLayout` with `block`-row segments, total a multiple of `block * SP`):
+    the order `LocalSparseWindow` and the aligned hybrid attention take the whole block's rows in (stage 4). Logical
+    row i sits at aligned row `nonzero(valid)[i]`."""
+    return _AlignedLayout(layout, multiple=block, total_multiple=block * sp_factor)
+
+
+def _sparse_block_mask(
+    device: ttnn.MeshDevice,
+    layout: WindowLayout,
+    geo: _AlignedLayout,
+    bounds: Sequence[Range],
+    *,
+    anchor_frames: str,
+    sp_axis: int,
+    sp_factor: int,
+    num_heads: int,
+    dense_globals: bool,
+    block: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """`sparse_ring_sdpa`'s `(block_mask, block_counts)` for the window groups on the aligned layout `geo`: a query
+    block keeps the key blocks of its group's key ranges, the pad rows are left out by the counts (real rows first in
+    every block). With `dense_globals` the global query rows keep nothing (the op returns zeros there)."""
+    num_blocks = geo.total // block
+    per_shard = num_blocks // sp_factor
+    pad = per_shard + (-per_shard % 32)
+
+    valid = geo.valid.reshape(num_blocks, block)
+    counts = valid.sum(dim=1)
+    assert bool((valid == (torch.arange(block)[None, :] < counts[:, None])).all()), "real rows first in every block"
+
+    def blocks(r0: int, r1: int) -> slice:
+        a0, a1 = geo.map(r0, r1)
+        return slice(a0 // block, -(-a1 // block))
+
+    vs, ve = layout.video_start, layout.video_end
+    keep = torch.zeros(num_blocks, num_blocks, dtype=torch.int32)
+    for (q0, q1), key_ranges in window_groups(layout, bounds, anchor_frames):
+        if dense_globals and (q1 <= vs or q0 >= ve):
+            continue
+        for r0, r1 in key_ranges:
+            keep[blocks(q0, q1), blocks(r0, r1)] = 1
+
+    def shard_cols(t: torch.Tensor) -> torch.Tensor:  # [..., num_blocks] -> [..., sp * pad], each shard padded
+        t = t.reshape(*t.shape[:-1], sp_factor, per_shard)
+        t = torch.nn.functional.pad(t, (0, pad - per_shard))
+        return t.reshape(*t.shape[:-2], sp_factor * pad)
+
+    mask = shard_cols(keep).reshape(sp_factor, per_shard, sp_factor * pad)
+    mask = torch.nn.functional.pad(mask, (0, 0, 0, pad - per_shard)).reshape(1, 1, sp_factor * pad, -1)
+    block_mask = tensor.from_torch(
+        mask.expand(1, num_heads, -1, -1).contiguous(),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_axes=[None, None, sp_axis, None],
+    )
+    block_counts = tensor.from_torch(
+        shard_cols(counts.to(torch.int32)).reshape(1, 1, 1, -1),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    return block_mask, block_counts
+
+
+class LocalSparseWindow:
+    """The window softmax on the frame-aligned packed layout (`aligned_geometry`, stage 4): the whole block runs in
+    that row order, so q, k, v come in as each device's own rows `[1, H, N / SP, d]` and go straight into the
+    block-sparse ring attention, which gathers K/V around the ring itself. No whole-sequence gathers, no re-layout;
+    the output is this device's rows.
+
+    The global query rows (all in the head segment, which must sit on the first SP device) stay dense at
+    `compute_config` (HiFi4 / fp32 accumulation) with `dense_globals`: on every device, the head rows of q against
+    this device's K/V followed by the ring buffer's other shards, i.e. the whole K/V on the first device, where the
+    result is kept (scaled by 0 elsewhere). The ring buffer holds every shard but the device's own, which comes from
+    its local K/V. Without `dense_globals` they run in the sparse op with all key blocks kept."""
+
+    BLOCK = 64
+
+    def __init__(
+        self,
+        device: ttnn.MeshDevice,
+        layout: WindowLayout,
+        bounds: Sequence[Range],
+        *,
+        anchor_frames: str,
+        sp_axis: int,
+        sp_factor: int,
+        ring_sdpa: Callable[..., tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]],
+        num_heads: int,
+        scale: float,
+        dense_globals: bool = True,
+        compute_config: ttnn.DeviceComputeKernelConfig | None = None,
+    ) -> None:
+        """`ring_sdpa(q, k, v, block_mask, block_counts)` returns `(out, gathered_k, gathered_v)`, the last two the
+        op's persistent K/V gather buffers."""
+        self.device = device
+        self.ring_sdpa = ring_sdpa
+        self.scale = scale
+        self.geo = geo = aligned_geometry(layout, sp_factor, self.BLOCK)
+        self.shard = geo.total // sp_factor
+        self.block_mask, self.block_counts = _sparse_block_mask(
+            device,
+            layout,
+            geo,
+            bounds,
+            anchor_frames=anchor_frames,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            num_heads=num_heads,
+            dense_globals=dense_globals,
+            block=self.BLOCK,
+        )
+        self.global_rows = 0
+        if dense_globals and layout.video_start:
+            assert geo.tail_len == 0, "dense global rows: only head globals are supported on the aligned layout"
+            assert geo.head <= self.shard, "dense global rows: the head globals must sit on the first SP device"
+            self.global_rows = geo.head
+            mask = torch.zeros(1, 1, geo.head, geo.total)
+            mask[..., ~geo.valid] = float("-inf")
+            self.global_mask = tensor.from_torch(mask, device=device, dtype=ttnn.bfloat16)
+            first = torch.zeros(sp_factor, 1, 1, 1)
+            first[0] = 1.0
+            self.first_device = tensor.from_torch(
+                first, device=device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None]
+            )
+            self.dense_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                q_chunk_size=_PAD,
+                k_chunk_size=_PAD,
+                exp_approx_mode=False,
+            )
+            self.dense_compute = compute_config
+
+    def __call__(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+        out, k_all, v_all = self.ring_sdpa(q, k, v, self.block_mask, self.block_counts)
+        if not self.global_rows:
+            return out
+        _, heads, rows, dim = q.shape
+        total, g = self.geo.total, self.global_rows
+        qg = ttnn.slice(q, [0, 0, 0, 0], [1, heads, g, dim])
+        keys, values = (
+            ttnn.concat([local, ttnn.slice(gathered, [0, 0, rows, 0], [1, heads, total, dim])], dim=2)
+            for local, gathered in ((k, k_all), (v, v_all))
+        )
+        dense = ttnn.transformer.scaled_dot_product_attention(
+            qg,
+            keys,
+            values,
+            attn_mask=self.global_mask,
+            is_causal=False,
+            scale=self.scale,
+            program_config=self.dense_config,
+            compute_kernel_config=self.dense_compute,
+        )
+        ttnn.deallocate(keys)
+        ttnn.deallocate(values)
+        dense = ttnn.multiply(dense, self.first_device)
+        zeros = ops.zeros(self.device, [1, heads, rows - g, dim], dense.dtype)
+        return ttnn.add(out, ttnn.concat([dense, zeros], dim=2))
+
+
 class SparseWindowSoftmax:
     """The window softmax as one block-sparse ring attention (`ttnn.transformer.sparse_ring_sdpa`, the op H3's VSA
     runs) instead of one dense SDPA per group (stage 4).
@@ -345,32 +508,24 @@ class SparseWindowSoftmax:
         self.device = device
         self.sp_axis, self.sp_factor, self.gather, self.ring_sdpa = sp_axis, sp_factor, gather, ring_sdpa
         self.scale = scale
-        self.geo = geo = _AlignedLayout(layout, multiple=block, total_multiple=block * sp_factor)
-        num_blocks = geo.total // block
-        per_shard = num_blocks // sp_factor
-        pad = per_shard + (-per_shard % 32)
-
-        valid = geo.valid.reshape(num_blocks, block)
-        counts = valid.sum(dim=1)
-        # real rows first in every block
-        assert bool((valid == (torch.arange(block)[None, :] < counts[:, None])).all())
-
-        def blocks(r0: int, r1: int) -> slice:
-            a0, a1 = geo.map(r0, r1)
-            return slice(a0 // block, -(-a1 // block))
-
-        vs, ve = layout.video_start, layout.video_end
-        keep = torch.zeros(num_blocks, num_blocks, dtype=torch.int32)
-        for (q0, q1), key_ranges in window_groups(layout, bounds, anchor_frames):
-            if dense_globals and (q1 <= vs or q0 >= ve):
-                continue  # a global group: dense, below
-            for r0, r1 in key_ranges:
-                keep[blocks(q0, q1), blocks(r0, r1)] = 1
+        self.geo = geo = aligned_geometry(layout, sp_factor, block)
+        self.block_mask, self.block_counts = _sparse_block_mask(
+            device,
+            layout,
+            geo,
+            bounds,
+            anchor_frames=anchor_frames,
+            sp_axis=sp_axis,
+            sp_factor=sp_factor,
+            num_heads=num_heads,
+            dense_globals=dense_globals,
+            block=block,
+        )
 
         # Dense global groups on the aligned rows: (aligned query range) each, all real keys, pad keys masked.
         self.dense_groups: list[Range] = []
         if dense_globals:
-            if vs:
+            if layout.video_start:
                 self.dense_groups.append((0, geo.head))
             if geo.tail_len:
                 self.dense_groups.append((geo.tail_start, geo.total))
@@ -389,30 +544,9 @@ class SparseWindowSoftmax:
                 mask[..., ~geo.valid] = float("-inf")
                 self.dense_masks[q_rows] = tensor.from_torch(mask, device=device, dtype=ttnn.bfloat16)
 
-        def shard_cols(t: torch.Tensor) -> torch.Tensor:  # [..., num_blocks] -> [..., sp * pad], each shard padded
-            t = t.reshape(*t.shape[:-1], sp_factor, per_shard)
-            t = torch.nn.functional.pad(t, (0, pad - per_shard))
-            return t.reshape(*t.shape[:-2], sp_factor * pad)
-
-        mask = shard_cols(keep).reshape(sp_factor, per_shard, sp_factor * pad)
-        mask = torch.nn.functional.pad(mask, (0, 0, 0, pad - per_shard)).reshape(1, 1, sp_factor * pad, -1)
-        self.block_mask = tensor.from_torch(
-            mask.expand(1, num_heads, -1, -1).contiguous(),
-            device=device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_axes=[None, None, sp_axis, None],
-        )
-        self.block_counts = tensor.from_torch(
-            shard_cols(counts.to(torch.int32)).reshape(1, 1, 1, -1),
-            device=device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
     def __call__(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
         q, k, v = (self.geo.to_aligned(t) for t in (q, k, v))
-        out = self.ring_sdpa(
+        out, _, _ = self.ring_sdpa(
             *(ttnn.mesh_partition(t, dim=2, cluster_axis=self.sp_axis) for t in (q, k, v)),
             self.block_mask,
             self.block_counts,

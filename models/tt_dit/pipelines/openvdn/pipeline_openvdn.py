@@ -20,11 +20,13 @@ the VDN repo's `h3-base/` plus MiniMax-H3's text encoder); `checkpoint_dir` is o
 `<vdn repo>/stage-dmd-step-250`.
 
 Eager and unbucketed for now: no denoise trace, no dynamic length, no warmup. Coresident (every stage stays loaded
-across requests) since stage 4 measured it fits: the hybrid layers no longer gather the whole hidden state.
+across requests) since stage 4 measured it fits: the hybrid layers no longer gather the whole hidden state. The packed
+sequence goes to the transformer frame-aligned (see `_denoise`).
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -202,12 +204,77 @@ class OpenVDNPipeline(MiniMaxH3Pipeline):
         )
         return state
 
+    # ------------------------------------------------------------------ frame-aligned packing (stage 4)
+    #
+    # With OPENVDN_ALIGNED=1 (default) the packed sequence goes to the transformer in the frame-aligned order
+    # (`HybridLayout.aligned`): the head globals padded to a multiple of 64 rows, each frame to its own slot, so the
+    # hybrid layers run their window and linear branch on each device's own rows. The H3 assembly gathers rows by
+    # index, so only the indices change: pad rows read source row 0 and copy the metadata (rotary position, modality
+    # tag) of the real row before them; the output indices pick the real rows.
+
     def _denoise(self, transformer, layout, *args, **kwargs):
-        transformer.set_layout(hybrid_layout(layout))
+        hybrid = hybrid_layout(layout)
+        if os.environ.get("OPENVDN_ALIGNED", "1") == "1" and self.sp_factor > 1:
+            hybrid = dataclasses.replace(hybrid, aligned=True)
+            self._aligned_rows, total = hybrid.aligned_rows(self.sp_factor)
+            layout = _aligned_packed_sequence(layout, self._aligned_rows, total)
+        transformer.set_layout(hybrid)
         try:
             return super()._denoise(transformer, layout, *args, **kwargs)
         finally:
             transformer.set_layout(None)
+            self._aligned_rows = None
+
+    _aligned_rows: torch.Tensor | None = None
+
+    def _assembly_indices(self, condition_spec, caps, l_len, a_len, v_len, rung, vsa_geometry=None):
+        if self._aligned_rows is None:
+            return super()._assembly_indices(condition_spec, caps, l_len, a_len, v_len, rung, vsa_geometry)
+        assert vsa_geometry is None
+        # The logical order, as `MiniMaxH3Pipeline._assembly_indices` builds it, then moved to the aligned rows.
+        src = self._assembly_source_offsets(caps)
+        logical = [torch.arange(l_len)]
+        cursors = {"video": 0, "audio": 0}
+        for modality, rows in condition_spec:
+            base = src[f"condition_{modality}"] + cursors[modality]
+            cursors[modality] += rows
+            logical.append(torch.arange(base, base + rows))
+        logical.append(torch.arange(src["audio"], src["audio"] + a_len))
+        logical.append(torch.arange(src["video"], src["video"] + v_len))
+        logical = torch.cat(logical).to(torch.int32)
+        indices = torch.zeros(rung, dtype=torch.int32)
+        indices[self._aligned_rows] = logical
+        if self._shard_assembly_indices:
+            return self._row_indices(indices, rung)
+        return self._replicated_indices(indices)
+
+    def _output_indices(self, start, count, capacity, vsa_geometry=None):
+        if self._aligned_rows is None:
+            return super()._output_indices(start, count, capacity, vsa_geometry)
+        assert vsa_geometry is None
+        rows = self._aligned_rows.to(torch.int32)
+        indices = torch.full((capacity,), int(rows[start]), dtype=torch.int32)
+        indices[:count] = rows[start : start + count]
+        return self._replicated_indices(indices)
+
+
+def _aligned_packed_sequence(
+    layout: MiniMaxH3PackedSequence, rows: torch.Tensor, total: int
+) -> MiniMaxH3PackedSequence:
+    """`layout` with its rows at `rows` of a `total`-row sequence; every pad row copies the metadata of the real row
+    before it."""
+    valid = torch.zeros(total, dtype=torch.bool)
+    valid[rows] = True
+    source = (torch.cumsum(valid.long(), 0) - 1).clamp(min=0)
+    return dataclasses.replace(
+        layout,
+        sequence_length=total,
+        position_ids=layout.position_ids[source],
+        token_tags=layout.token_tags[source],
+        video_indices=rows[layout.video_indices],
+        audio_indices=rows[layout.audio_indices],
+        text_indices=rows[layout.text_indices],
+    )
 
 
 __all__ = ["OPENVDN_NUM_FORWARDS", "OpenVDNPipeline", "hybrid_layout"]

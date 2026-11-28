@@ -306,10 +306,12 @@ def conv_spatial(
     frame_size: tuple[int, int],
     kernel: int,
     row0: int = 0,
+    frame_stride: int | None = None,
 ) -> ttnn.Tensor:
     """Depthwise `kernel` x `kernel` conv per frame (zero padding `kernel // 2`), straight into the head layout.
 
-    x: `[1, 1, rows, C]` bf16 tiled, frame f's tokens at rows `row0 + f S ..` (S = gh gw, row-major over the grid).
+    x: `[1, 1, rows, C]` bf16 tiled, frame f's tokens at rows `row0 + f stride ..` (S = gh gw, row-major over the
+    grid; `frame_stride` defaults to S, contiguous frames).
     weights: `[kernel^2, 1, 32, C]` fp32 tiled, tap `i k + j` (cross-correlation offset (i - k/2, j - k/2)) with every
     tile row the channel weights. Returns `[frames, C / 128, S, 128]` fp32 tiled, pad rows zero. `kernel=1` with unit
     weights is an exact re-layout."""
@@ -318,6 +320,8 @@ def conv_spatial(
     S, channels = gh * gw, x.shape[-1]
     rt, c_tiles, heads = math.ceil(S / TILE), channels // TILE, channels // 128
     taps = kernel * kernel
+    stride = S if frame_stride is None else frame_stride
+    assert stride >= S and row0 + (frames - 1) * stride + S <= x.shape[-2], "frames past the end of x"
     assert channels % 128 == 0 and x.dtype == ttnn.bfloat16 and list(weights.shape) == [taps, 1, TILE, channels]
     out = _empty(device, [frames, heads, S, 128])
 
@@ -331,7 +335,7 @@ def conv_spatial(
         for k in range(per_group):
             core = cores[g * per_group + k]
             n = base + (1 if k < extra else 0)
-            reader_rt[core.x][core.y] = [x.buffer_address(), weights.buffer_address(), g, first, n, row0]
+            reader_rt[core.x][core.y] = [x.buffer_address(), weights.buffer_address(), g, first, n, row0, stride]
             writer_rt[core.x][core.y] = [out.buffer_address(), g, first, n]
             compute_rt[core.x][core.y] = [n]
             first += n

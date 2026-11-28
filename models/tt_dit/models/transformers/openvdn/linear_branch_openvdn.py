@@ -70,8 +70,10 @@ def from_heads(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
 
-def heads_column(x: ttnn.Tensor, num_frames: int) -> ttnn.Tensor:
-    """Per-token, per-head scalars `[1, 1, F*S, H]` -> `[F, H, S, 1]` (beta as `frame_statistics` takes it)."""
+def heads_column(x: ttnn.Tensor, num_frames: int, frame_rows: int | None = None) -> ttnn.Tensor:
+    """Per-token, per-head scalars `[1, 1, F*S, H]` -> `[F, H, S, 1]` (beta as `frame_statistics` takes it). With
+    `frame_rows`, each frame's slot of S rows holds `frame_rows` real ones first (the frame-aligned layout), and
+    the result keeps those: `[F, H, frame_rows, 1]`."""
     rows, num_heads = x.shape[-2], x.shape[-1]
     per_frame = rows // num_frames
     x = ttnn.transpose(x, -2, -1)  # [1, 1, H, F*S]
@@ -79,7 +81,10 @@ def heads_column(x: ttnn.Tensor, num_frames: int) -> ttnn.Tensor:
     x = ttnn.reshape(x, [num_heads, num_frames, 1, per_frame])
     x = ttnn.permute(x, (1, 0, 2, 3))
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-    return ttnn.transpose(x, -2, -1)
+    x = ttnn.transpose(x, -2, -1)
+    if frame_rows is not None and frame_rows != per_frame:
+        x = ttnn.slice(x, [0, 0, 0, 0], [num_frames, num_heads, frame_rows, 1])
+    return x
 
 
 def _pad_dim(x: ttnn.Tensor, dim: int, size: int) -> ttnn.Tensor:
@@ -260,12 +265,21 @@ class OpenVDNLinearBranch(Module):
         return self._local_weights[key]
 
     def fused_features(
-        self, tokens: ttnn.Tensor, proj: str, num_frames: int, frame_size: tuple[int, int], use_conv: bool = True
+        self,
+        tokens: ttnn.Tensor,
+        proj: str,
+        num_frames: int,
+        frame_size: tuple[int, int],
+        use_conv: bool = True,
+        *,
+        row0: int = 0,
+        frame_stride: int | None = None,
     ) -> ttnn.Tensor:
         """`features` for this device's channels of the head split as the fused kernels: depthwise spatial conv (a
         unit 1x1 tap for q, which has no conv, and without `use_conv`, e.g. the text chunk as one 1 x T frame)
         straight into the head layout, then the temporal conv, SiLU and L2 norm. `[1, 1, F*S, C]` bf16 ->
-        `[F, C / d, S, d]` bf16, no layout ops in between."""
+        `[F, C / d, S, d]` bf16, no layout ops in between. Frame f's rows start at `row0 + f * frame_stride`
+        (default: contiguous frames from row 0)."""
         if use_conv and proj in self.short_conv:
             sp, tm = self._local_conv_rows(proj)
             kernel = self.KERNEL
@@ -275,7 +289,9 @@ class OpenVDNLinearBranch(Module):
                 self.mesh_device, ("unit_tap", channels), lambda: torch.ones(1, 1, ttnn.TILE_SIZE, channels), ttnn.float32
             )
             tm, kernel = None, 1
-        y = kernels.conv_spatial(tokens, sp, frames=num_frames, frame_size=frame_size, kernel=kernel)
+        y = kernels.conv_spatial(
+            tokens, sp, frames=num_frames, frame_size=frame_size, kernel=kernel, row0=row0, frame_stride=frame_stride
+        )
         return kernels.conv_temporal_features(y, tm, l2=proj != "v")
 
     def conv(
@@ -423,14 +439,17 @@ class OpenVDNLinearBranch(Module):
         text_v_raw: ttnn.Tensor,
         head_split: bool = False,
         text_beta: ttnn.Tensor | None = None,
+        channels_local: bool = False,
     ) -> ttnn.Tensor:
         """`_text_state`: `TEXT_STATE_SCALE * (B (I + A)^-1)` over all prompt rows as one chunk, `[1, H, d_v, d_k]`
         fp32 (`head_split`: this device's heads only, see `_head_split`). `text_beta` (`RowInputs`) replaces
-        `text_x`."""
+        `text_x`. `channels_local`: the raw rows already hold only this device's channels of the head split."""
         length = text_k_raw.shape[-2]
         local = local_channels = lambda t: t  # noqa: E731
         if head_split:
             local, local_channels, _ = self._head_split()
+            if channels_local:
+                local_channels = lambda t: t  # noqa: E731
         if head_split and kernels.enabled("conv") and kernels.conv_fits(self.mesh_device, text_k_raw.shape[-1]):
             key, value = (
                 self.fused_features(local_channels(raw), proj, 1, (1, length), use_conv=False)
@@ -659,3 +678,89 @@ class OpenVDNLinearBranch(Module):
             rows=rows,
         )
         return ttnn.concat([zeros, inner, zeros], dim=2)
+
+    def forward_aligned(
+        self,
+        q_heads: ttnn.Tensor,
+        k_heads: ttnn.Tensor,
+        v_heads: ttnn.Tensor,
+        *,
+        video_row: int,
+        frame_stride: int,
+        num_frames: int,
+        frame_size: tuple[int, int],
+        bounds: Sequence[Range],
+        skip_ends: bool,
+        text: tuple[int, int] | None,
+        rows: RowInputs,
+    ) -> ttnn.Tensor:
+        """`forward` on the frame-aligned layout, for this device's heads of the head split (stage 4).
+
+        q/k/v_heads: `[1, 1, R, h*d]` bf16, every row of the aligned sequence for this device's `h` heads (the
+        attention's all-to-all from its own rows); frame f's tokens at rows `video_row + f * frame_stride ..`.
+        text: the prompt's `(first, end)` rows in the same tensors, or None. rows: `RowInputs` for all F frames,
+        `beta` in the aligned rows of the video `[1, 1, F * frame_stride, H]`. Returns the ungated, normed readout
+        `[1, 1, R, h*d]` fp32 in the same rows, zero outside the read-out frames; the caller hands it back to the
+        rows' owners and gates it there. The features read their frames in place (no slices or channel partitions),
+        and q . state is computed on whole frame slots, so the readout lands in the aligned rows without a re-layout.
+        """
+        mark = lambda name: ops.mark(self.mesh_device, f"linear branch: {name}")  # noqa: E731
+        local, _, _ = self._head_split()
+        factor = self.frame_split[1]
+        local_heads = -(-self.num_local_heads // factor)
+        per_frame = frame_size[0] * frame_size[1]
+
+        text_state = None
+        if text is not None:
+            ts, te = text
+            text_state = self.text_state(
+                None,
+                rows_slice(k_heads, ts, te),
+                rows_slice(v_heads, ts, te),
+                head_split=True,
+                text_beta=rows.text_beta,
+                channels_local=True,
+            )
+        mark("text state")
+
+        first = 1 if skip_ends else 0
+        frames = num_frames - 2 if skip_ends else num_frames
+        if skip_ends:
+            bounds = [(lo - 1, hi - 1) for lo, hi in bounds[1 : num_frames - 1]]
+        row0 = video_row + first * frame_stride
+        place = dict(row0=row0, frame_stride=frame_stride)
+        # q has no conv: its unit tap copies whole frame slots, so q . state covers the slots' pad rows too.
+        query = self.fused_features(q_heads, "q", frames, (1, frame_stride), **place)
+        key = self.fused_features(k_heads, "k", frames, frame_size, **place)
+        value = self.fused_features(v_heads, "v", frames, frame_size, **place)
+        mark("q, k, v features (conv)")
+
+        beta = rows_slice(rows.beta, first * frame_stride, (first + frames) * frame_stride)
+        a, b = ops.frame_statistics(key, value, local(heads_column(beta, frames, per_frame)), config=self.config)
+        mean = rows.frame_mean
+        if skip_ends:
+            mean = rows_slice(mean, 1, num_frames - 1)
+        alpha_rows = self._head_split()[1](self.alpha_from_mean(mean))
+        alpha = ops.rows_to_heads(alpha_rows, frames, local_heads, self.head_dim)
+        mark("frame statistics and alpha")
+        transition, injection = self.factor_apply(alpha, a, b, max_eig=1.0 + per_frame)
+        mark("inverse")
+        prefix, suffix = self.scan(transition, injection, text_state)
+        mark("scans")
+        state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
+        mark("state gather")
+
+        out = ops.split_matmul(query, ttnn.transpose(state, -2, -1), config=self.config)  # [F, h, slot, d_v]
+        mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
+        out = ttnn.multiply(out, ttnn.rsqrt(ttnn.add(mean_square, self.NORM_EPS)))
+        out = ttnn.multiply(out, self.norm_weight.data)
+        out = ttnn.experimental.nlp_concat_heads(out)  # [F, 1, slot, h*d]
+        out = ttnn.reshape(out, [1, 1, frames * frame_stride, out.shape[-1]])
+        total, width = q_heads.shape[-2], out.shape[-1]
+        pieces = [ops.zeros(self.mesh_device, [1, 1, row0, width], out.dtype), out]
+        end = row0 + frames * frame_stride
+        if end < total:
+            pieces.append(ops.zeros(self.mesh_device, [1, 1, total - end, width], out.dtype))
+        out = ttnn.concat(pieces, dim=2)
+        mark("readout")
+        return out

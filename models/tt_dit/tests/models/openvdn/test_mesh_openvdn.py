@@ -59,6 +59,8 @@ CHUNK, RADIUS = 5, 1
 TP_AXIS, SP_AXIS = 0, 1
 
 MESH = pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=True)
+#: Both packed orders the hybrid attention takes: logical (the SP pad tail only) and frame-aligned (stage 4).
+LAYOUTS = pytest.mark.parametrize("aligned", [False, True], ids=["logical", "aligned"])
 
 
 def _parallel(mesh_device):
@@ -72,16 +74,7 @@ def _parallel(mesh_device):
     return ccl_manager, parallel_config
 
 
-def _padded_len(mesh_device) -> int:
-    align = tuple(mesh_device.shape)[SP_AXIS] * ttnn.TILE_SIZE
-    return -(-SEQ_LEN // align) * align
-
-
-def _pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
-    return torch.cat([x, torch.zeros(rows - x.shape[0], *x.shape[1:], dtype=x.dtype)])
-
-
-def _layouts():
+def _layouts(aligned: bool = False):
     video_start = NUM_TEXT + NUM_AUDIO
     common = dict(
         seq_len=SEQ_LEN,
@@ -92,15 +85,38 @@ def _layouts():
         text_start=0,
         text_len=NUM_TEXT,
     )
-    return ref_h.SequenceLayout(tokens_per_frame=PER_FRAME, **common), HybridLayout(**common)
+    return ref_h.SequenceLayout(tokens_per_frame=PER_FRAME, **common), HybridLayout(**common, aligned=aligned)
 
 
-def _rope(mesh_device, padded_len: int):
+class Packing:
+    """Where the logical rows sit in the packed tensor the device takes: in order with an SP pad tail, or in the
+    frame-aligned order (`HybridLayout.aligned_rows`)."""
+
+    def __init__(self, mesh_device, layout: HybridLayout) -> None:
+        sp = tuple(mesh_device.shape)[SP_AXIS]
+        if layout.aligned:
+            self.rows, self.padded_len = layout.aligned_rows(sp)
+        else:
+            align = sp * ttnn.TILE_SIZE
+            self.padded_len = -(-layout.seq_len // align) * align
+            self.rows = torch.arange(layout.seq_len)
+
+    def pack(self, x: torch.Tensor) -> torch.Tensor:
+        """`[N, ...]` logical rows -> `[padded, ...]`, zeros elsewhere."""
+        out = torch.zeros(self.padded_len, *x.shape[1:], dtype=x.dtype)
+        out[self.rows] = x
+        return out
+
+    def unpack(self, x: torch.Tensor) -> torch.Tensor:
+        return x[self.rows]
+
+
+def _rope(mesh_device, packing: Packing):
     from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3RotaryPosEmbed
 
     position_ids, token_tags, timestep_indices = packed_layout(NUM_TEXT, NUM_AUDIO, NUM_VIDEO, grid_hw=GRID)
     cos, sin = MiniMaxH3RotaryPosEmbed(rope_freq_dim=ROPE_FREQ_DIM, rope_theta=ROPE_THETA)(position_ids)
-    tables = [_pad_rows(t, padded_len) for t in prepare_rope_tables(cos, sin, HEAD_DIM)]
+    tables = [packing.pack(t) for t in prepare_rope_tables(cos, sin, HEAD_DIM)]
     tt = [
         tensor.from_torch(
             t.reshape(1, 1, *t.shape), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., SP_AXIS, None]
@@ -110,19 +126,19 @@ def _rope(mesh_device, padded_len: int):
     return (cos, sin), tt, token_tags, timestep_indices
 
 
-def _upload_hidden(x: torch.Tensor, mesh_device, padded_len: int) -> ttnn.Tensor:
-    """`[N, hidden]` -> `[1, 1, padded, hidden]`, fractured rows on SP and hidden on TP."""
-    x = _pad_rows(x, padded_len)
+def _upload_hidden(x: torch.Tensor, mesh_device, packing: Packing) -> ttnn.Tensor:
+    """`[N, hidden]` -> `[1, 1, padded, hidden]` in the packed order, fractured rows on SP and hidden on TP."""
+    x = packing.pack(x)
     return tensor.from_torch(
         x.reshape(1, 1, *x.shape), device=mesh_device, dtype=ttnn.bfloat16, mesh_axes=[None, None, SP_AXIS, TP_AXIS]
     )
 
 
-def _download_hidden(x: ttnn.Tensor) -> torch.Tensor:
+def _download_hidden(x: ttnn.Tensor, packing: Packing) -> torch.Tensor:
     logger.info(f"reading back {tuple(x.shape)} per device")
     out = tensor.to_torch(x, mesh_axes=[None, None, SP_AXIS, TP_AXIS]).float()
     logger.info(f"read back {tuple(out.shape)}")
-    return out.reshape(out.shape[-2], out.shape[-1])[:SEQ_LEN]
+    return packing.unpack(out.reshape(out.shape[-2], out.shape[-1]))
 
 
 def _attention_kwargs(mesh_device, rotary_dim: int) -> dict:
@@ -141,7 +157,8 @@ def _attention_kwargs(mesh_device, rotary_dim: int) -> dict:
 
 
 @MESH
-def test_hybrid_attention_mesh(mesh_device: ttnn.MeshDevice) -> None:
+@LAYOUTS
+def test_hybrid_attention_mesh(mesh_device: ttnn.MeshDevice, aligned: bool) -> None:
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3Attention as TorchMiniMaxH3Attention
 
@@ -154,11 +171,12 @@ def test_hybrid_attention_mesh(mesh_device: ttnn.MeshDevice) -> None:
     model = ref_h.HybridAttention(orig, HIDDEN, radius=RADIUS, chunk=CHUNK)
     _randomize_hybrid(model, gen)
     model = _round_params(model).eval()
-    ref_layout, tt_layout = _layouts()
+    ref_layout, tt_layout = _layouts(aligned)
     model.layout = ref_layout
 
-    padded_len = _padded_len(mesh_device)
-    rope, (tt_cos, tt_sin), _, _ = _rope(mesh_device, padded_len)
+    packing = Packing(mesh_device, tt_layout)
+    padded_len = packing.padded_len
+    rope, (tt_cos, tt_sin), _, _ = _rope(mesh_device, packing)
     x = _bf16(torch.randn(1, SEQ_LEN, HIDDEN, generator=gen))
     with torch.no_grad():
         expected = model(x, rope)[0]
@@ -166,15 +184,17 @@ def test_hybrid_attention_mesh(mesh_device: ttnn.MeshDevice) -> None:
     tt_model = OpenVDNHybridAttention(radius=RADIUS, chunk=CHUNK, **_attention_kwargs(mesh_device, rope[0].shape[-1]))
     tt_model.load_torch_state_dict(model.state_dict())
     tt_model.layout = tt_layout
-    out = _download_hidden(tt_model(_upload_hidden(x[0], mesh_device, padded_len), rope_cos=tt_cos, rope_sin=tt_sin))
-    logger.info(f"mesh {tuple(mesh_device.shape)}, N {SEQ_LEN} padded to {padded_len}")
+    out = tt_model(_upload_hidden(x[0], mesh_device, packing), rope_cos=tt_cos, rope_sin=tt_sin)
+    out = _download_hidden(out, packing)
+    logger.info(f"mesh {tuple(mesh_device.shape)}, N {SEQ_LEN} padded to {padded_len}, aligned {aligned}")
 
     vs, ve = ref_layout.video_start, ref_layout.video_end
-    details = f"4x8 TP4 x SP8, 56 heads, N{SEQ_LEN} padded {padded_len}, frame {GRID[0]}x{GRID[1]}"
-    _check("mesh_hybrid_attention", out, expected, pcc=BF16_PCC, rmse=BF16_RMSE, details=details)
-    _check("mesh_hybrid_attention_video_rows", out[vs:ve], expected[vs:ve], pcc=BF16_PCC, rmse=BF16_RMSE)
+    suffix = "_aligned" if aligned else ""
+    details = f"4x8 TP4 x SP8, 56 heads, N{SEQ_LEN} padded {padded_len}, frame {GRID[0]}x{GRID[1]}, aligned {aligned}"
+    _check("mesh_hybrid_attention" + suffix, out, expected, pcc=BF16_PCC, rmse=BF16_RMSE, details=details)
+    _check("mesh_hybrid_attention_video_rows" + suffix, out[vs:ve], expected[vs:ve], pcc=BF16_PCC, rmse=BF16_RMSE)
     _check(
-        "mesh_hybrid_attention_global_rows",
+        "mesh_hybrid_attention_global_rows" + suffix,
         out[:vs],
         expected[:vs],
         pcc=BF16_PCC,
@@ -184,7 +204,8 @@ def test_hybrid_attention_mesh(mesh_device: ttnn.MeshDevice) -> None:
 
 
 @MESH
-def test_transformer_block_mesh(mesh_device: ttnn.MeshDevice) -> None:
+@LAYOUTS
+def test_transformer_block_mesh(mesh_device: ttnn.MeshDevice, aligned: bool) -> None:
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM
     from diffusers.models.transformers.transformer_minimax_h3 import MiniMaxH3TransformerBlock as TorchMiniMaxH3Block
@@ -196,11 +217,12 @@ def test_transformer_block_mesh(mesh_device: ttnn.MeshDevice) -> None:
     block.attn = ref_h.HybridAttention(block.attn, HIDDEN, radius=RADIUS, chunk=CHUNK)
     _randomize_hybrid(block.attn, gen)
     block = _round_params(block).eval()
-    ref_layout, tt_layout = _layouts()
+    ref_layout, tt_layout = _layouts(aligned)
     block.attn.layout = ref_layout
 
-    padded_len = _padded_len(mesh_device)
-    rope, (tt_cos, tt_sin), token_tags, timestep_indices = _rope(mesh_device, padded_len)
+    packing = Packing(mesh_device, tt_layout)
+    padded_len = packing.padded_len
+    rope, (tt_cos, tt_sin), token_tags, timestep_indices = _rope(mesh_device, packing)
     num_timesteps = int(timestep_indices.max().item()) + 1
     adaln_indices = timestep_indices * MINIMAX_H3_MODALITY_NUM + token_tags.clamp(min=0)
     x = _bf16(torch.randn(1, SEQ_LEN, HIDDEN, generator=gen))
@@ -222,9 +244,9 @@ def test_transformer_block_mesh(mesh_device: ttnn.MeshDevice) -> None:
     )
     tt_block.load_torch_state_dict(block.state_dict())
     tt_block.attn.layout = tt_layout
-    indices = _pad_rows(adaln_indices.to(torch.int32), padded_len)
+    indices = packing.pack(adaln_indices.to(torch.int32))
     out = tt_block(
-        spatial_1BND=_upload_hidden(x[0], mesh_device, padded_len),
+        spatial_1BND=_upload_hidden(x[0], mesh_device, packing),
         logical_n=tensor.logical_length_tensor(SEQ_LEN, device=mesh_device),
         temb=tensor.from_torch(temb.reshape(1, 1, *temb.shape), device=mesh_device, dtype=ttnn.float32),
         adaln_indices=tensor.from_torch(
@@ -237,12 +259,12 @@ def test_transformer_block_mesh(mesh_device: ttnn.MeshDevice) -> None:
         rope_cos=tt_cos,
         rope_sin=tt_sin,
     )
-    out = _download_hidden(out)
+    out = _download_hidden(out, packing)
     _check(
-        "mesh_transformer_block",
+        "mesh_transformer_block" + ("_aligned" if aligned else ""),
         out,
         expected,
         pcc=BF16_PCC,
         rmse=BF16_RMSE,
-        details=f"4x8 TP4 x SP8, 56 heads, N{SEQ_LEN} padded {padded_len}",
+        details=f"4x8 TP4 x SP8, 56 heads, N{SEQ_LEN} padded {padded_len}, aligned {aligned}",
     )
