@@ -40,7 +40,10 @@ if [ "$plugin_ref" = main ] || [ "$plugin_ref" = "$legacy_plugin_ref" ]; then
     echo "::warning::Ignoring VLLM_TT_PLUGIN_REF=$plugin_ref; using the pinned Qwen revision" >&2
     plugin_ref=$qwen_plugin_ref
 fi
-git -C "$work/plugin" checkout "$plugin_ref"
+# The pinned commit is not on any branch since vllm-tt-plugin#140 was force-pushed, so a plain clone lacks it.
+# GitHub still serves it by sha; fetch the ref explicitly before checking it out.
+git -C "$work/plugin" fetch --quiet origin "$plugin_ref"
+git -C "$work/plugin" checkout FETCH_HEAD
 git -C "$work/plugin" rev-parse HEAD > "$results/plugin-revision.txt"
 unset VLLM_TT_PLUGIN_REF
 pushd "$work/plugin"
