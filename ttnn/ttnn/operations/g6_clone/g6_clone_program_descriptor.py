@@ -59,9 +59,23 @@ BLOCKS_PER_CORE_KNOB = 1
 # (one-row f32 tiles) +10% and 1024 B (17x16 f32 tiles) +53%.
 PIECE_MERGE_GAP_BYTES = 448
 
-# Gate of bank_affine_runs: the fewest pages any core may get in the bank-affine split. Below it the
-# tensor is too small for bank locality to pay and flat_page_range runs instead.
+# Gate of the full-row bank_affine_runs split (every bank has at least as many pages as its row has
+# cores): the fewest pages any core may get. Below it flat_page_range runs; smaller plans take the
+# SMALL_PLAN_BANK_CORES split instead.
 BANK_AFFINE_MIN_CORE_PAGES = 1
+
+# Small plans: when some bank holds fewer pages than its row has cores, bank_affine_runs still runs on
+# at most this many of the row's cores per bank (as many as its pages allow), nearest the middle DRAM
+# column first (bank_row_start_order), each a run of the bank's pages moved as one transfer, both kernels on the
+# bank's row endpoint. 0 sends small plans to flat_page_range. A one-page logical_rows plan moves to the
+# same core, its kernels addressing the same endpoint (page_endpoint_noc).
+# Blackhole p150b, case bench ns, flat_page_range -> 2 cores per bank: one page (64-128 B) 724-738 ->
+# 570-578; (1,1) f32/bf16 TILE 686/685 -> 524/527; F10 32 pages of 2 KB 1280 -> 947; Q7 24 x 5120 B 1541
+# -> 1136; Q14 3 x 5120 B 1011 -> 759; 9 x 2 KB 1136 -> 829; 43 x 2 KB 1305 -> 1016. Every page on its own
+# core of the row (no cap): F10 1045, Q7 1133, 43 pages 1174; one core per bank: F10 927, Q7 1123. The
+# longest single-core span (free of per-tile clock offsets) drops too: F10 1243 -> 1017 cycles, Q7 1588 ->
+# 1268. A one-page chain pays for sharing the bank endpoint's row: its round trips skip the torus y-lap.
+SMALL_PLAN_BANK_CORES = 2
 
 # Which cores serve which bank in bank_affine_runs:
 #   "dram_rows":  only the cores in the bank's anchor row, between its DRAM column and the next one
@@ -80,6 +94,10 @@ BANK_AFFINE_PLACEMENT = "dram_rows"
 # NoC endpoints on its column, and the NoC0 and NoC1 defaults sit on different rows. Addressing one
 # endpoint from both kernels keeps a bank's reads (NoC0) and writes (NoC1) on the row of its cores.
 BANK_AFFINE_ENDPOINT_NOC = 0
+
+# CT value of bank_endpoint_noc on a consecutive-page walk that addresses each kernel's own NoC's endpoints
+# (NUM_NOCS on Blackhole); 0 or 1 there makes both kernels address that NoC's table.
+OWN_NOC_ENDPOINTS = 2
 
 # Consecutive-page walks (flat_page_range, logical_rows_partial_tile): rotate core k's walk so its first
 # page sits in bank k mod num_banks and wrap once at the end of its range, so the grid's first requests
@@ -285,6 +303,16 @@ def bank_core_groups(device, grid, num_banks: int, placement: str) -> list:
     return groups
 
 
+def bank_row_start_order(group) -> list:
+    """A bank's row cores (bank_core_groups order, x ascending), the ones nearest the middle DRAM column
+    first: a west row (anchor at the grid's west edge) from its east end, an east row from its anchor.
+    Blackhole p150b: per-tile wall clocks lead the middle columns by up to 444 cycles (a semaphore
+    ping-pong probe, perf_experiments/stagger_placement), and the westmost columns also start 66-167
+    cycles late in real time; DEVICE KERNEL DURATION reads both, a core's own span neither."""
+    anchor_x = group[0][0]
+    return sorted(group, key=lambda core: -core[0]) if anchor_x == 0 else sorted(group, key=lambda core: core[0])
+
+
 def _row_run_ranges(cores) -> ttnn.CoreRangeSet:
     """The fewest rectangles covering `cores` built from row runs: a run of consecutive x in one row,
     stacked with the same run of the rows directly below it."""
@@ -310,16 +338,28 @@ def _row_run_ranges(cores) -> ttnn.CoreRangeSet:
 
 def _bank_affine_roles(device, grid, tensor_pages: int, num_banks: int):
     """Per-core (core, role, start_page, num_pages) of bank_affine_runs, or None when the gate fails.
-    Bank b holds page ids b, b + num_banks, ...; each of its cores takes a contiguous run of them."""
+    Bank b holds page ids b, b + num_banks, ...; each of its cores takes a contiguous run of them.
+    A small plan (some bank holds fewer pages than its row has cores) runs on SMALL_PLAN_BANK_CORES."""
     groups = bank_core_groups(device, grid, num_banks, BANK_AFFINE_PLACEMENT)
     bank_pages = [len(range(bank, tensor_pages, num_banks)) for bank in range(num_banks)]
-    if any(not group or pages // len(group) < BANK_AFFINE_MIN_CORE_PAGES for group, pages in zip(groups, bank_pages)):
+    if any(pages and not group for group, pages in zip(groups, bank_pages)):
         return None
+    if any(pages < len(group) for group, pages in zip(groups, bank_pages)):
+        if not SMALL_PLAN_BANK_CORES:
+            return None
+        bank_cores = [
+            bank_row_start_order(group)[: min(pages, SMALL_PLAN_BANK_CORES)] if pages else []
+            for group, pages in zip(groups, bank_pages)
+        ]
+    elif any(pages // len(group) < BANK_AFFINE_MIN_CORE_PAGES for group, pages in zip(groups, bank_pages)):
+        return None
+    else:
+        bank_cores = groups
     roles = []
-    for bank, group in enumerate(groups):
+    for bank, cores in enumerate(bank_cores):
         run_start = 0
-        for idx, (x, y) in enumerate(group):
-            num_pages = bank_pages[bank] // len(group) + (1 if idx < bank_pages[bank] % len(group) else 0)
+        for idx, (x, y) in enumerate(cores):
+            num_pages = bank_pages[bank] // len(cores) + (1 if idx < bank_pages[bank] % len(cores) else 0)
             roles.append((ttnn.CoreCoord(x, y), "reader+writer", bank + num_banks * run_start, num_pages))
             run_start += num_pages
     return roles
@@ -375,12 +415,22 @@ def compute_plan(device, tensor_pages: int, aligned_page_bytes: int, geometry=No
         bank_endpoint_noc = BANK_AFFINE_ENDPOINT_NOC
         all_cores = _row_run_ranges([(core.x, core.y) for core, _, _, _ in roles])
         core_pages_g1 = core_pages_g2 = None
+    elif walk is not None and tensor_pages == 1 and num_banks > 1 and SMALL_PLAN_BANK_CORES:
+        # One logical-rows page: the small-plan core of its bank (bank 0), both kernels on the bank's
+        # row endpoint.
+        regime = REGIME_LOGICAL_ROWS
+        page_stride = 1
+        bank_endpoint_noc = BANK_AFFINE_ENDPOINT_NOC
+        x, y = bank_row_start_order(bank_core_groups(device, grid, num_banks, BANK_AFFINE_PLACEMENT)[0])[0]
+        roles = [(ttnn.CoreCoord(x, y), "reader+writer", 0, 1)]
+        all_cores = _row_run_ranges([(x, y)])
+        core_pages_g1 = core_pages_g2 = None
     else:
         regime = REGIME_LOGICAL_ROWS if walk is not None else REGIME_FLAT
         page_stride = 1
-        # Unused by consecutive-page walks (each kernel addresses its own NoC's endpoints); fixed so
-        # every flat descriptor compiles one binary.
-        bank_endpoint_noc = 0
+        # NUM_NOCS: each kernel addresses its own NoC's endpoints; fixed so every flat descriptor
+        # compiles one binary.
+        bank_endpoint_noc = OWN_NOC_ENDPOINTS
         _, all_cores, core_group_1, _, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
             grid, tensor_pages, row_wise=True
         )

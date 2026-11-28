@@ -161,9 +161,10 @@ def test_g6_clone_poisoned_padding_kinds(device, shape, dtype, poison_bits):
         ((1, 1, 32, 62080), ttnn.bfloat16, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
         ((16, 12, 128, 128), ttnn.float32, ttnn.TILE_LAYOUT, "bank_affine_runs", None),
         ((16, 3, 2560), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
-        # Below the gate: 40 pages leave a 6-core group 5 pages, so flat_page_range is the fallback.
-        ((40, 32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "flat_page_range", None),
-        ((1,), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "flat_page_range", None),
+        # Small plans (some bank holds fewer pages than its row has cores) run bank_affine_runs on
+        # SMALL_PLAN_BANK_CORES cores per bank; a one-page full-page plan is one core on bank 0's row.
+        ((40, 32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
+        ((1,), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, "bank_affine_runs", None),
     ],
 )
 def test_g6_clone_plan_regime(device, shape, dtype, layout, regime, kind_pieces):

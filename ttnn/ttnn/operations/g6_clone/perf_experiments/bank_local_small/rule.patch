@@ -1,0 +1,200 @@
+diff -ru a/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py b/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py
+--- a/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py	2026-11-27 20:42:21.228582908 -0500
++++ b/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py	2026-11-27 20:42:49.957948569 -0500
+@@ -63,6 +63,17 @@
+ # tensor is too small for bank locality to pay and flat_page_range runs instead.
+ BANK_AFFINE_MIN_CORE_PAGES = 1
+ 
++# Small plans: when some bank holds fewer pages than its row has cores, bank_affine_runs still runs on
++# at most this many of the row's cores per bank (as many as its pages allow), taken in kernel start
++# order (bank_row_start_order), each a run of the bank's pages moved as one transfer, both kernels on the
++# bank's row endpoint. 0 sends small plans to flat_page_range. A one-page logical_rows plan moves to the
++# same core, its kernels addressing the same endpoint (page_endpoint_noc).
++# Blackhole p150b, case bench ns, flat_page_range -> 2 cores per bank: one page (64-128 B) 724-738 ->
++# 570-578; (1,1) f32/bf16 TILE 686/685 -> 524/527; F10 32 pages of 2 KB 1280 -> 947; Q7 24 x 5120 B 1541
++# -> 1136; Q14 3 x 5120 B 1011 -> 759; 9 x 2 KB 1136 -> 829; 43 x 2 KB 1305 -> 1016. Every page on its own
++# core of the row (no cap): F10 1045, Q7 1133, 43 pages 1174; one core per bank: F10 927, Q7 1123.
++SMALL_PLAN_BANK_CORES = 2
++
+ # Which cores serve which bank in bank_affine_runs:
+ #   "dram_rows":  only the cores in the bank's anchor row, between its DRAM column and the next one
+ #                 (44 cores on an 11x10 Blackhole grid). Read data flows east along that row from the
+@@ -81,6 +92,10 @@
+ # endpoint from both kernels keeps a bank's reads (NoC0) and writes (NoC1) on the row of its cores.
+ BANK_AFFINE_ENDPOINT_NOC = 0
+ 
++# CT value of bank_endpoint_noc on a consecutive-page walk that addresses each kernel's own NoC's endpoints
++# (NUM_NOCS on Blackhole); 0 or 1 there makes both kernels address that NoC's table.
++OWN_NOC_ENDPOINTS = 2
++
+ # Consecutive-page walks (flat_page_range, logical_rows_partial_tile): rotate core k's walk so its first
+ # page sits in bank k mod num_banks and wrap once at the end of its range, so the grid's first requests
+ # spread over the banks instead of starting on the few banks the range starts share. Off is the
+@@ -285,6 +300,15 @@
+     return groups
+ 
+ 
++def bank_row_start_order(group) -> list:
++    """A bank's row cores (bank_core_groups order, x ascending) in the order their kernels start.
++    Blackhole p150b: a core's kernel starts later the farther its physical column lies from the middle
++    DRAM column, so a west row (anchor at the grid's west edge) starts from its east end and an east row
++    from its anchor: x11 < x6 < x12 < x13 < x5 < x4 < x14 < x15 < x3 < x1/x2."""
++    anchor_x = group[0][0]
++    return sorted(group, key=lambda core: -core[0]) if anchor_x == 0 else sorted(group, key=lambda core: core[0])
++
++
+ def _row_run_ranges(cores) -> ttnn.CoreRangeSet:
+     """The fewest rectangles covering `cores` built from row runs: a run of consecutive x in one row,
+     stacked with the same run of the rows directly below it."""
+@@ -310,16 +334,28 @@
+ 
+ def _bank_affine_roles(device, grid, tensor_pages: int, num_banks: int):
+     """Per-core (core, role, start_page, num_pages) of bank_affine_runs, or None when the gate fails.
+-    Bank b holds page ids b, b + num_banks, ...; each of its cores takes a contiguous run of them."""
++    Bank b holds page ids b, b + num_banks, ...; each of its cores takes a contiguous run of them.
++    A small plan (some bank holds fewer pages than its row has cores) runs on SMALL_PLAN_BANK_CORES."""
+     groups = bank_core_groups(device, grid, num_banks, BANK_AFFINE_PLACEMENT)
+     bank_pages = [len(range(bank, tensor_pages, num_banks)) for bank in range(num_banks)]
+-    if any(not group or pages // len(group) < BANK_AFFINE_MIN_CORE_PAGES for group, pages in zip(groups, bank_pages)):
++    if any(pages and not group for group, pages in zip(groups, bank_pages)):
++        return None
++    if any(pages < len(group) for group, pages in zip(groups, bank_pages)):
++        if not SMALL_PLAN_BANK_CORES:
++            return None
++        bank_cores = [
++            bank_row_start_order(group)[: min(pages, SMALL_PLAN_BANK_CORES)] if pages else []
++            for group, pages in zip(groups, bank_pages)
++        ]
++    elif any(pages // len(group) < BANK_AFFINE_MIN_CORE_PAGES for group, pages in zip(groups, bank_pages)):
+         return None
++    else:
++        bank_cores = groups
+     roles = []
+-    for bank, group in enumerate(groups):
++    for bank, cores in enumerate(bank_cores):
+         run_start = 0
+-        for idx, (x, y) in enumerate(group):
+-            num_pages = bank_pages[bank] // len(group) + (1 if idx < bank_pages[bank] % len(group) else 0)
++        for idx, (x, y) in enumerate(cores):
++            num_pages = bank_pages[bank] // len(cores) + (1 if idx < bank_pages[bank] % len(cores) else 0)
+             roles.append((ttnn.CoreCoord(x, y), "reader+writer", bank + num_banks * run_start, num_pages))
+             run_start += num_pages
+     return roles
+@@ -375,12 +411,22 @@
+         bank_endpoint_noc = BANK_AFFINE_ENDPOINT_NOC
+         all_cores = _row_run_ranges([(core.x, core.y) for core, _, _, _ in roles])
+         core_pages_g1 = core_pages_g2 = None
++    elif walk is not None and tensor_pages == 1 and num_banks > 1 and SMALL_PLAN_BANK_CORES:
++        # One logical-rows page: the small-plan core of its bank (bank 0), both kernels on the bank's
++        # row endpoint.
++        regime = REGIME_LOGICAL_ROWS
++        page_stride = 1
++        bank_endpoint_noc = BANK_AFFINE_ENDPOINT_NOC
++        x, y = bank_row_start_order(bank_core_groups(device, grid, num_banks, BANK_AFFINE_PLACEMENT)[0])[0]
++        roles = [(ttnn.CoreCoord(x, y), "reader+writer", 0, 1)]
++        all_cores = _row_run_ranges([(x, y)])
++        core_pages_g1 = core_pages_g2 = None
+     else:
+         regime = REGIME_LOGICAL_ROWS if walk is not None else REGIME_FLAT
+         page_stride = 1
+-        # Unused by consecutive-page walks (each kernel addresses its own NoC's endpoints); fixed so
+-        # every flat descriptor compiles one binary.
+-        bank_endpoint_noc = 0
++        # NUM_NOCS: each kernel addresses its own NoC's endpoints; fixed so every flat descriptor
++        # compiles one binary.
++        bank_endpoint_noc = OWN_NOC_ENDPOINTS
+         _, all_cores, core_group_1, _, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
+             grid, tensor_pages, row_wise=True
+         )
+diff -ru a/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_reader.cpp b/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_reader.cpp
+--- a/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_reader.cpp	2026-11-27 20:42:21.230582934 -0500
++++ b/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_reader.cpp	2026-11-27 20:43:12.082230162 -0500
+@@ -42,6 +42,9 @@
+     uint32_t bank_vc,
+     uint32_t other_noc_pages) {
+     constexpr uint8_t other_noc = 1 - noc_index;
++    // Consecutive-page walks address each page on this NoC's endpoint table: bank_endpoint_noc's when it
++    // names a NoC (a one-page plan on its bank's row), else this kernel's own.
++    constexpr uint8_t page_endpoint_noc = bank_endpoint_noc < NUM_NOCS ? bank_endpoint_noc : noc_index;
+     {
+         G6C_ZONE("g6c_rd_reserve");
+         cb_reserve_back(cb_page_staging, block_pages);
+@@ -87,7 +90,7 @@
+                 }
+                 if constexpr (logical_rows) {
+                     const g6_clone::PagePieces& pieces = walk.pieces();
+-                    const uint64_t page_noc_addr = x_accessor.get_noc_addr(page);
++                    const uint64_t page_noc_addr = x_accessor.get_noc_addr(page, 0, page_endpoint_noc);
+                     noc_async_read<NOC_MAX_BURST_SIZE>(
+                         page_noc_addr + pieces.offset0, l1_write_addr + pieces.offset0, pieces.length0);
+                     if (pieces.length1 != 0) {
+@@ -96,7 +99,11 @@
+                     }
+                     walk.advance();
+                 } else {
+-                    noc_async_read_page(page, x_accessor, l1_write_addr);
++                    if constexpr (page_endpoint_noc == noc_index) {
++                        noc_async_read_page(page, x_accessor, l1_write_addr);
++                    } else {
++                        noc_async_read(x_accessor.get_noc_addr(page, 0, page_endpoint_noc), l1_write_addr, page_bytes);
++                    }
+                 }
+                 l1_write_addr += page_bytes;
+             }
+@@ -127,7 +134,9 @@
+     constexpr auto x_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
+     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
+     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
+-    static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
++    static_assert(
++        bank_endpoint_noc < NUM_NOCS || (page_stride == 1 && bank_endpoint_noc == NUM_NOCS),
++        "g6_clone: bank_endpoint_noc names a NoC, or NUM_NOCS (own NoC) on a consecutive-page walk");
+     static_assert(page_stride == 1 || !bank_stagger, "g6_clone: a bank run is already one bank");
+     static_assert(!noc_split || page_stride != 1, "g6_clone: only a bank run splits over both NoCs");
+     static_assert(!noc_split || NOC_MODE == DM_DYNAMIC_NOC, "g6_clone: issuing on both NoCs needs DM_DYNAMIC_NOC");
+diff -ru a/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_writer.cpp b/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_writer.cpp
+--- a/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_writer.cpp	2026-11-27 20:42:21.230582934 -0500
++++ b/ttnn/ttnn/operations/g6_clone/kernels/g6_clone_writer.cpp	2026-11-27 20:43:12.082230162 -0500
+@@ -40,6 +40,9 @@
+     uint32_t bank_vc,
+     uint32_t other_noc_pages) {
+     constexpr uint8_t other_noc = 1 - noc_index;
++    // Consecutive-page walks address each page on this NoC's endpoint table: bank_endpoint_noc's when it
++    // names a NoC (a one-page plan on its bank's row), else this kernel's own.
++    constexpr uint8_t page_endpoint_noc = bank_endpoint_noc < NUM_NOCS ? bank_endpoint_noc : noc_index;
+     {
+         G6C_ZONE("g6c_wr_wait");
+         cb_wait_front(cb_page_staging, block_pages);
+@@ -85,7 +88,7 @@
+                 }
+                 if constexpr (logical_rows) {
+                     const g6_clone::PagePieces& pieces = walk.pieces();
+-                    const uint64_t page_noc_addr = out_accessor.get_noc_addr(page);
++                    const uint64_t page_noc_addr = out_accessor.get_noc_addr(page, 0, page_endpoint_noc);
+                     noc_async_write<NOC_MAX_BURST_SIZE>(
+                         l1_read_addr + pieces.offset0, page_noc_addr + pieces.offset0, pieces.length0);
+                     if (pieces.length1 != 0) {
+@@ -94,7 +97,11 @@
+                     }
+                     walk.advance();
+                 } else {
+-                    noc_async_write_page(page, out_accessor, l1_read_addr);
++                    if constexpr (page_endpoint_noc == noc_index) {
++                        noc_async_write_page(page, out_accessor, l1_read_addr);
++                    } else {
++                        noc_async_write(l1_read_addr, out_accessor.get_noc_addr(page, 0, page_endpoint_noc), page_bytes);
++                    }
+                 }
+                 l1_read_addr += page_bytes;
+             }
+@@ -125,7 +132,9 @@
+     constexpr auto out_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
+     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
+     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
+-    static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
++    static_assert(
++        bank_endpoint_noc < NUM_NOCS || (page_stride == 1 && bank_endpoint_noc == NUM_NOCS),
++        "g6_clone: bank_endpoint_noc names a NoC, or NUM_NOCS (own NoC) on a consecutive-page walk");
+     static_assert(page_stride == 1 || !bank_stagger, "g6_clone: a bank run is already one bank");
+     static_assert(!noc_split || page_stride != 1, "g6_clone: only a bank run splits over both NoCs");
+     static_assert(!noc_split || NOC_MODE == DM_DYNAMIC_NOC, "g6_clone: issuing on both NoCs needs DM_DYNAMIC_NOC");

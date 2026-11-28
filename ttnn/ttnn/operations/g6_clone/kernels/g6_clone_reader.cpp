@@ -42,6 +42,9 @@ FORCE_INLINE void load_block(
     uint32_t bank_vc,
     uint32_t other_noc_pages) {
     constexpr uint8_t other_noc = 1 - noc_index;
+    // Consecutive-page walks address each page on this NoC's endpoint table: bank_endpoint_noc's when it
+    // names a NoC (a one-page plan on its bank's row), else this kernel's own.
+    constexpr uint8_t page_endpoint_noc = bank_endpoint_noc < NUM_NOCS ? bank_endpoint_noc : noc_index;
     {
         G6C_ZONE("g6c_rd_reserve");
         cb_reserve_back(cb_page_staging, block_pages);
@@ -87,7 +90,7 @@ FORCE_INLINE void load_block(
                 }
                 if constexpr (logical_rows) {
                     const g6_clone::PagePieces& pieces = walk.pieces();
-                    const uint64_t page_noc_addr = x_accessor.get_noc_addr(page);
+                    const uint64_t page_noc_addr = x_accessor.get_noc_addr(page, 0, page_endpoint_noc);
                     noc_async_read<NOC_MAX_BURST_SIZE>(
                         page_noc_addr + pieces.offset0, l1_write_addr + pieces.offset0, pieces.length0);
                     if (pieces.length1 != 0) {
@@ -96,7 +99,11 @@ FORCE_INLINE void load_block(
                     }
                     walk.advance();
                 } else {
-                    noc_async_read_page(page, x_accessor, l1_write_addr);
+                    if constexpr (page_endpoint_noc == noc_index) {
+                        noc_async_read_page(page, x_accessor, l1_write_addr);
+                    } else {
+                        noc_async_read(x_accessor.get_noc_addr(page, 0, page_endpoint_noc), l1_write_addr, page_bytes);
+                    }
                 }
                 l1_write_addr += page_bytes;
             }
@@ -127,7 +134,9 @@ void kernel_main() {
     constexpr auto x_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
-    static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
+    static_assert(
+        bank_endpoint_noc < NUM_NOCS || (page_stride == 1 && bank_endpoint_noc == NUM_NOCS),
+        "g6_clone: bank_endpoint_noc names a NoC, or NUM_NOCS (own NoC) on a consecutive-page walk");
     static_assert(page_stride == 1 || !bank_stagger, "g6_clone: a bank run is already one bank");
     static_assert(!noc_split || page_stride != 1, "g6_clone: only a bank run splits over both NoCs");
     static_assert(!noc_split || NOC_MODE == DM_DYNAMIC_NOC, "g6_clone: issuing on both NoCs needs DM_DYNAMIC_NOC");
