@@ -3578,13 +3578,16 @@ class MiniMaxH3Pipeline:
         if sol is None:
             transformer.set_sol_request(None)
         else:
-            transformer.set_sol_request(sol, tau=schedule.tau, dense_layers=schedule.dense_layers)
+            transformer.set_sol_request(
+                sol, tau=schedule.tau, dense_layers=schedule.dense_layers, pooled=schedule.pooled
+            )
         if (sol, schedule) != (self._sol_key, self._sol_schedule):
             self._log(
                 "attention: dense ring"
                 if sol is None
                 else f"attention: Sol-Attn (tau {schedule.tau}, dense steps {schedule.dense_steps}, dense layers "
-                f"{schedule.dense_layers}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]})"
+                f"{schedule.dense_layers}, {sol[0]} rows/device, logical {sol[1]}, sink {sol[2]}"
+                f"{'' if schedule.pooled else ', no pooled term'})"
             )
         self._sol_key, self._sol_schedule = sol, schedule
 

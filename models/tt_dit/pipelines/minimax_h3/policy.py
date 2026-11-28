@@ -69,13 +69,16 @@ class SolSchedule:
     """Where one generation's ring attention runs Sol-Attn: the first `dense_steps` denoise steps and the first
     `dense_layers` blocks stay dense, the rest route with threshold `tau`. `sinks` keeps the prefix in front of the
     target video (text, condition and audio rows) exact for every query; without it only the routing rule decides.
-    A clip of more than `max_frames` frames runs every step dense."""
+    A clip of more than `max_frames` frames runs every step dense. `pooled` folds the blocks a query does not keep
+    into its softmax through their mean K/V (Sol's pooled term); without it a query attends to its kept blocks only
+    (Sol's `tail=False`)."""
 
     tau: float = 1.0
     dense_steps: int = 2
     dense_layers: int = 2
     sinks: bool = True
     max_frames: int | None = None
+    pooled: bool = True
 
     def is_dense_step(self, step: int) -> bool:
         return step < self.dense_steps
@@ -100,7 +103,8 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
     `H3_SOL_ATTN=1` turns it on for every clip length and any other value is the off switch; unset, it is on only for
     a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule is the `SOL_PRESETS`
     entry of `preset`, the model the pipeline reads from its files; `H3_SOL_TAU` and `H3_SOL_DENSE_STEPS` override
-    their field. One dense step costs 4-step models their picture and sound against dense.
+    their field and `H3_SOL_POOLED=0` drops the pooled term. One dense step costs 4-step models their picture and
+    sound against dense.
     """
     by_default = "H3_SOL_ATTN" not in env and preset in SOL_DEFAULT_ON
     if not by_default and env.get("H3_SOL_ATTN") != "1":
@@ -111,6 +115,7 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
         tau=float(env.get("H3_SOL_TAU", base.tau)),
         dense_steps=int(env.get("H3_SOL_DENSE_STEPS", base.dense_steps)),
         max_frames=SOL_DEFAULT_ON[preset] if by_default else None,
+        pooled=env["H3_SOL_POOLED"] != "0" if "H3_SOL_POOLED" in env else base.pooled,
     )
 
 

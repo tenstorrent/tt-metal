@@ -305,7 +305,7 @@ class MiniMaxH3Attention(Module):
         self.sdpa_scale = 1.0 / math.sqrt(head_dim)
         # `dense_step` keeps one denoise step on the dense ring op while the request stays armed (the schedule's
         # leading dense steps); the transformer sets it per step and keys its traces by it.
-        self._sol: dict = {"prepass": {}, "on": False, "dense_step": False}
+        self._sol: dict = {"prepass": {}, "on": False, "dense_step": False, "pooled": True}
         self._sol_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
             q_chunk_size=SOL_BLOCK,
@@ -315,7 +315,12 @@ class MiniMaxH3Attention(Module):
         )
 
     def set_sol_request(
-        self, request: tuple[int, int, int] | None, *, tau: float = 1.0, constants: SolRouteConstants | None = None
+        self,
+        request: tuple[int, int, int] | None,
+        *,
+        tau: float = 1.0,
+        constants: SolRouteConstants | None = None,
+        pooled: bool = True,
     ) -> None:
         """Route this request's ring attention through Sol-Attn, or (None) through the dense ring op.
 
@@ -324,7 +329,8 @@ class MiniMaxH3Attention(Module):
         video). `constants` is the transformer's shared set for that padded length, already set to the request (None:
         the pre-pass keeps its own). Each padded length keeps its pre-pass, and the packed length reaches the
         programs as data, so a captured trace stays valid across requests; only a new tau rebuilds the pre-passes,
-        and the caller releases its traces for that.
+        and the caller releases its traces for that. `pooled=False` runs the kept blocks only, without the pooled
+        K/V correction (another program of the sparse op: the caller releases its traces for that too).
         """
         if request is None or not self.use_ring or self.dynamic_length:
             self._sol["on"] = False
@@ -344,22 +350,24 @@ class MiniMaxH3Attention(Module):
             )
         geo = SolGeometry(shards=self.parallel_config.sequence_parallel.factor, rows=rows, logical_n=logical_n)
         held[rows].prepare(geo, sink_tokens, self.sdpa_scale, constants)
+        self._sol["pooled"] = pooled
         self._sol["on"] = True
 
     def _sol_attention(
         self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor, prepass: SolPrepass, logical_n: ttnn.Tensor
     ) -> ttnn.Tensor:
         """Sol-Attn: the routing pre-pass picks the exact (Q block, K block) pairs, the sparse ring op computes them
-        and folds the rest in through the pooled K/V correction. The op reads the packed length from `logical_n` on
+        and folds the rest in through the pooled K/V correction (not with `pooled` off: the pre-pass returns the
+        mask alone and the op normalizes over the kept blocks). The op reads the packed length from `logical_n` on
         device; its integer argument is only the bound it checks, the padded length."""
-        routed = prepass(q_BHNE, k_BHNE, v_BHNE, scale=self.sdpa_scale)
+        routed = prepass(q_BHNE, k_BHNE, v_BHNE, scale=self.sdpa_scale, pooled=self._sol["pooled"])
         out = ttnn.transformer.sparse_ring_sdpa(
             q_BHNE,
             k_BHNE,
             v_BHNE,
             routed["block_mask"],
-            routed["pooled_k"],
-            routed["pooled_v"],
+            routed.get("pooled_k"),
+            routed.get("pooled_v"),
             persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
                 k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
             ),
@@ -382,8 +390,8 @@ class MiniMaxH3Attention(Module):
             use_column_major_ccl=True,
             block_size=SOL_BLOCK,
         )
-        for name in ("block_mask", "pooled_k", "pooled_v"):
-            ttnn.deallocate(routed[name])
+        for tensor in routed.values():
+            ttnn.deallocate(tensor)
         return out
 
     # ------------------------------------------------------------------ weights

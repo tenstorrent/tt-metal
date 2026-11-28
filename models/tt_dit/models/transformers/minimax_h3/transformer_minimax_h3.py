@@ -807,16 +807,20 @@ class MiniMaxH3Transformer3DModel(Module):
                     ttnn.deallocate(total)
             ttnn.deallocate(temb)
 
-    def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0, dense_layers: int = 0) -> None:
+    def set_sol_request(
+        self, request: tuple[int, int, int] | None, *, tau: float = 1.0, dense_layers: int = 0, pooled: bool = True
+    ) -> None:
         """Run the blocks' ring attention through Sol-Attn for this request shape, or (None) dense again.
 
         The first `dense_layers` blocks stay dense. See `MiniMaxH3Attention.set_sol_request`. A new packed length or
         sink moves the shared route constants in place, so captured `run_blocks` traces stay valid; the caller
-        releases them only when tau or `dense_layers` changes.
+        releases them only when tau, `dense_layers` or `pooled` changes.
         """
         constants = None if request is None else self._sol_route_constants(request)
         for index, block in enumerate(self.transformer_blocks):
-            block.attn.set_sol_request(None if index < dense_layers else request, tau=tau, constants=constants)
+            block.attn.set_sol_request(
+                None if index < dense_layers else request, tau=tau, constants=constants, pooled=pooled
+            )
 
     def _sol_route_constants(self, request: tuple[int, int, int]) -> SolRouteConstants | None:
         """The route constants every block shares for this padded length, set to the request."""

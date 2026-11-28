@@ -751,15 +751,26 @@ class SolPrepass(Module):
     # ------------------------------------------------------------------ forward
 
     def forward(
-        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, *, scale: float, report_density: bool = False
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        *,
+        scale: float,
+        report_density: bool = False,
+        pooled: bool = True,
     ) -> dict:
+        """`pooled=False` returns the mask alone, for the sparse op's kept-blocks-only mode: pooled K is gathered
+        for the routing only and pooled V not at all."""
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"
         geo = self.geo
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         out_dtype = k.dtype if self.pooled_dtype is None else self.pooled_dtype
         cast = out_dtype != ttnn.bfloat16
         kc = self._gather(kc_local, barrier=True)  # bf16: the route program scores against it
-        if cast:  # V is only returned: cast the local shard, so the gather moves the smaller tiles
+        if not pooled:
+            vc = None
+        elif cast:  # V is only returned: cast the local shard, so the gather moves the smaller tiles
             vc_local_cast = ttnn.typecast(vc_local, out_dtype)
             vc = self._gather(vc_local_cast)
             ttnn.deallocate(vc_local_cast)
@@ -794,6 +805,9 @@ class SolPrepass(Module):
             sub = host[:, : host.shape[1] // tuple(self.mesh_device.shape)[1 - self.sp_axis], : geo.nb].float()
             cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
+        if not pooled:  # the route program has been enqueued on kc; the in-order queue keeps it alive for it
+            ttnn.deallocate(kc)
+            return {"block_mask": mask}
         if cast:  # the route program has been enqueued on the bf16 copy; the in-order queue keeps it alive for it
             kc_cast = ttnn.typecast(kc, out_dtype)
             ttnn.deallocate(kc)
