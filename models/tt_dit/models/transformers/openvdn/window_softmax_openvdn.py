@@ -398,13 +398,14 @@ class LocalSparseWindow:
         sp_axis: int,
         sp_factor: int,
         ring_sdpa: Callable[..., tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]],
+        gather: Callable[[ttnn.Tensor], ttnn.Tensor],
         num_heads: int,
         scale: float,
         dense_globals: bool = True,
         compute_config: ttnn.DeviceComputeKernelConfig | None = None,
     ) -> None:
         """`ring_sdpa(q, k, v, block_mask, block_counts)` returns `(out, gathered_k, gathered_v)`, the last two the
-        op's persistent K/V gather buffers."""
+        op's persistent K/V gather buffers. `gather`: an all-gather on dim 2 over `sp_axis`."""
         self.device = device
         self.ring_sdpa = ring_sdpa
         self.scale = scale
@@ -427,9 +428,25 @@ class LocalSparseWindow:
             assert geo.tail_len == 0, "dense global rows: only head globals are supported on the aligned layout"
             assert geo.head <= self.shard, "dense global rows: the head globals must sit on the first SP device"
             self.global_rows = geo.head
-            mask = torch.zeros(1, 1, geo.head, geo.total)
+            # The global query rows split over the SP devices (OPENVDN_GLOBAL_SPLIT=1, default): each device runs
+            # its share against the whole K/V (the ring buffer with its own shard written into its slot), and one
+            # gather brings the rows back to the first device. Otherwise every device runs all of them.
+            self.split = sp_factor if os.environ.get("OPENVDN_GLOBAL_SPLIT", "1") == "1" else 1
+            self.sp_axis, self.gather = sp_axis, gather
+            self.split_rows = _ceil(geo.head, _PAD * self.split)
+            q_rows = self.split_rows // self.split
+            mask = torch.zeros(1, 1, q_rows, geo.total)
             mask[..., ~geo.valid] = float("-inf")
             self.global_mask = tensor.from_torch(mask, device=device, dtype=ttnn.bfloat16)
+            slot = torch.zeros(sp_factor, 1, 1, 8, dtype=torch.int32)
+            slot[:, 0, 0, 0] = torch.arange(sp_factor) * (self.shard // _PAD)
+            self.slot_tiles = tensor.from_torch(
+                slot,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_axes=[sp_axis, None, None, None],
+            )
             # 1 on the head rows of the first SP device, 0 elsewhere (a per-row factor: the fast broadcast).
             first = torch.zeros(sp_factor, 1, geo.head, 1)
             first[0] = 1.0
@@ -451,16 +468,24 @@ class LocalSparseWindow:
         """`q_global`: q's first `global_rows` rows `[1, H, g, d]`, if the caller has them more cheaply than a slice
         of q (which is slow in the head layout)."""
         out, k_all, v_all = self.ring_sdpa(q, k, v, self.block_mask, self.block_counts)
+        ops.mark(self.device, "window: sparse ring attention")
         if not self.global_rows:
             return out
         _, heads, rows, dim = q.shape
         total, g = self.geo.total, self.global_rows
         qg = q_global if q_global is not None else ttnn.slice(q, [0, 0, 0, 0], [1, heads, g, dim])
-        # The gather buffers hold every shard but this device's own: write it into its slot (the first, which is
-        # right on the first SP device, the only one whose result is kept).
-        keys, values = (kernels.copy_rows(local, gathered, 0) for local, gathered in ((k, k_all), (v, v_all)))
+        if self.split > 1:  # the first device's head rows, this device's share of them
+            qg = ttnn.slice(self.gather(qg), [0, 0, 0, 0], [1, heads, g, dim])
+            if self.split_rows > g:
+                qg = ttnn.pad(qg, [(0, 0), (0, 0), (0, self.split_rows - g), (0, 0)], 0.0)
+            qg = ttnn.mesh_partition(qg, dim=2, cluster_axis=self.sp_axis)
+        # The gather buffers hold every shard but this device's own: write it into its slot. (Unsplit, the first
+        # slot suffices: only the first device's result is kept.)
+        slot = dict(row_tiles=self.slot_tiles) if self.split > 1 else {}
+        keys, values = (kernels.copy_rows(local, gathered, **slot) for local, gathered in ((k, k_all), (v, v_all)))
         if keys.shape[2] != total:  # a capacity-sized pair
             keys, values = (ttnn.slice(t, [0, 0, 0, 0], [1, heads, total, dim]) for t in (keys, values))
+        ops.mark(self.device, "window: global rows' keys")
         dense = ttnn.transformer.scaled_dot_product_attention(
             qg,
             keys,
@@ -471,6 +496,11 @@ class LocalSparseWindow:
             program_config=self.dense_config,
             compute_kernel_config=self.dense_compute,
         )
+        ops.mark(self.device, "window: global rows' dense SDPA")
+        if self.split > 1:
+            dense = self.gather(dense)
+            if self.split_rows > g:
+                dense = ttnn.slice(dense, [0, 0, 0, 0], [1, heads, g, dim])
         dense = ttnn.multiply(dense, self.first_device)
         zeros = ops.zeros(self.device, [1, heads, rows - g, dim], dense.dtype)
         return ttnn.add(out, ttnn.concat([dense, zeros], dim=2))

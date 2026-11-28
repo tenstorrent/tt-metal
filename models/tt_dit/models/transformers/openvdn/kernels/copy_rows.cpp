@@ -6,9 +6,12 @@
 // interleaved): src page ((h RT) + r) WT + c -> dst page ((h RTd) + row_tile0 + r) WT + c. One dataflow kernel per
 // core reads a range of src pages into its buffer and writes them out.
 //
-// Compile-time args: the tensor accessor args of src, dst.
+// DYNAMIC: row_tile0 is read on device from word 0 of a small uint32 row-major tensor (one value per device of a
+// mesh, so each device can write its rows at its own offset).
+//
+// Compile-time args: dynamic, then the tensor accessor args of src, dst, offset (src again when not dynamic).
 // Runtime args: src, dst addresses, first page, number of pages, RT (src row tiles), RTd (dst row tiles), WT,
-// row_tile0.
+// row_tile0 (static), offset tensor address.
 
 #include <stdint.h>
 
@@ -19,6 +22,7 @@
 
 namespace {
 constexpr uint32_t cb_tiles = 0;
+constexpr uint32_t cb_offset = 1;
 constexpr uint32_t BATCH = 8;
 }  // namespace
 
@@ -30,16 +34,28 @@ void kernel_main() {
     const uint32_t rt = get_arg_val<uint32_t>(4);
     const uint32_t rt_dst = get_arg_val<uint32_t>(5);
     const uint32_t wt = get_arg_val<uint32_t>(6);
-    const uint32_t row_tile0 = get_arg_val<uint32_t>(7);
+    uint32_t row_tile0 = get_arg_val<uint32_t>(7);
+    const uint32_t offset_addr = get_arg_val<uint32_t>(8);
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr bool dynamic = get_compile_time_arg_val(0) != 0;
+    constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    constexpr auto offset_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
     Noc noc;
     DataflowBuffer buf(cb_tiles);
     const uint32_t bytes = buf.get_entry_size();
     const auto src = TensorAccessor(src_args, src_addr);
     const auto dst = TensorAccessor(dst_args, dst_addr);
+
+    if constexpr (dynamic) {
+        DataflowBuffer offset_buf(cb_offset);
+        const auto offset = TensorAccessor(offset_args, offset_addr);
+        offset_buf.reserve_back(1);
+        noc.async_read(offset, offset_buf, offset_buf.get_entry_size(), {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        row_tile0 = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offset_buf.get_write_ptr());
+    }
 
     buf.reserve_back(BATCH);  // scratch, never pushed
     for (uint32_t p = first; p < first + count; p += BATCH) {

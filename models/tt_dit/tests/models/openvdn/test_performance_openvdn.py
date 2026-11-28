@@ -90,6 +90,9 @@ def test_openvdn_t2va_performance(mesh_device, reset_seeds):
     )
     request = dict(num_frames=num_frames, height=height, width=width, seed=SEED)
     warm_quietly(pipeline, PROMPT, warmup_steps=3, **request)
+    if TRACE:  # the first full request captures the denoise trace; the measured one replays it
+        pipeline(PROMPT, num_inference_steps=NUM_INFERENCE_STEPS, **request)
+        ttnn.synchronize_device(mesh_device)
     # As `run_warm_generation`, but the cache misses are logged, not asserted: the stages reloaded per request
     # (not coresident) may compile upload programs, and the times are wanted either way.
     profiler = BenchmarkProfiler()

@@ -465,13 +465,16 @@ def readout(
     return out
 
 
-def copy_rows(src: ttnn.Tensor, dst: ttnn.Tensor, row0: int) -> ttnn.Tensor:
+def copy_rows(src: ttnn.Tensor, dst: ttnn.Tensor, row0: int = 0, *, row_tiles: ttnn.Tensor | None = None) -> ttnn.Tensor:
     """Writes src `[1, H, R, W]` into rows `[row0, row0 + R)` of dst `[1, H, Rd, W]` in place (tiled, same dtype,
-    row0 and R multiples of 32). Returns dst."""
+    row0 and R multiples of 32). Returns dst. `row_tiles`: instead of row0, a uint32 row-major `[1, 1, 1, 8]` tensor
+    whose first word is `row0 / 32`, read on device (it may differ per device of a mesh; the caller checks it is in
+    range)."""
     device = src.device()
     _, heads, rows, width = src.shape
     assert dst.shape[1] == heads and dst.shape[3] == width and src.dtype == dst.dtype
     assert rows % TILE == 0 and row0 % TILE == 0 and row0 + rows <= dst.shape[2]
+    offset = src if row_tiles is None else row_tiles
     rt, wt = rows // TILE, width // TILE
     work = _split_work(device, heads * rt * wt)
     _, core_set = _cores(device, len(work))
@@ -486,17 +489,29 @@ def copy_rows(src: ttnn.Tensor, dst: ttnn.Tensor, row0: int) -> ttnn.Tensor:
             dst.shape[2] // TILE,
             wt,
             row0 // TILE,
+            offset.buffer_address(),
         ]
     kernel = ttnn.KernelDescriptor(
         kernel_source=f"{KERNEL_DIR}/copy_rows.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=_accessor_args(src, dst),
+        compile_time_args=[int(row_tiles is not None)] + _accessor_args(src, dst, offset),
         runtime_args=runtime,
         config=ttnn.ReaderConfigDescriptor(),
     )
     cbs = [_cb(0, src.dtype, 8, core_set)]
-    ttnn.generic_op([src, dst], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
+    io = [src, dst]
+    if row_tiles is not None:
+        page = 32  # [1, 1, 1, 8] uint32, one row-major page
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=page,
+                core_ranges=core_set,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=1, data_format=ttnn.uint32, page_size=page)],
+            )
+        )
+        io = [src, row_tiles, dst]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
     return dst
 
 

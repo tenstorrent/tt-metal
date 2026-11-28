@@ -198,6 +198,7 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
                 sp_axis=self.sp_mesh_axis,
                 sp_factor=self.sp_factor,
                 ring_sdpa=self._ring_sdpa,
+                gather=lambda t: self._gather(t, dim=2, mesh_axis=self.sp_mesh_axis, factor=self.sp_factor),
                 num_heads=self.n_local_heads,
                 scale=self.head_dim**-0.5,
                 dense_globals=os.environ.get("OPENVDN_SPARSE_DENSE_GLOBALS", "1") == "1",
@@ -597,7 +598,8 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(*self.sdpa_worker_grid),
                 q_chunk_size=SparseWindowSoftmax.BLOCK,
-                k_chunk_size=vsa_k_chunk_size(rows),
+                # OPENVDN_SPARSE_K_CHUNK (a multiple of 64) overrides H3's choice, for sweeps.
+                k_chunk_size=int(os.environ.get("OPENVDN_SPARSE_K_CHUNK", 0)) or vsa_k_chunk_size(rows),
                 exp_approx_mode=False,
             ),
             scale=self.head_dim**-0.5,
