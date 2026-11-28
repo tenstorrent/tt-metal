@@ -117,3 +117,28 @@
 - Needed by: the retirement of fabric_all_gather_ttnn
 - Files: fabric_all_gather_py.py, fabric_all_gather_py.md, fabric_all_gather_py_report.md, fabric_all_gather_cli.py,
   fabric_reduce_scatter.py, __init__.py, tests/unit/test_fabric_all_gather_py.py, tests/unit/test_fabric_rs_vs_ag.py
+
+### Native C++ op (deepseek_v41_flash_d_p NC.2, 2026-11-28)
+- What: `ttnn.bringup.fabric_reduce_scatter` is now the native C++ device op `ttnn.fabric_reduce_scatter`
+  (`ttnn/cpp/ttnn/operations/fabric_reduce_scatter`: planner, ProgramDescriptor factory, the same kernels moved out of
+  the Python strings into `device/kernels/`, nanobind), ported with tt_ops_code_gen native_migrate (branch
+  port/fabric_reduce_scatter-nm-20261127T224650Z @ e9daca39766, round 4) and taken as is but for one change: the scratch
+  is cached per (mesh, group size, input rows / columns, dtype, dim) in C++ (`cached_scratch`, as the Python
+  `_SCRATCH_CACHE`), where the port allocated one each call (host 63-66 -> 46 us a call). Same arguments;
+  `cache_descriptors` / `program_hash` / `prepared` keep only their refusals (the C++ program cache serves every
+  call); `_DESC_CACHE` is a read-only view of the C++ op's record of program_hash calls. `prepare()` calls the C++
+  planner. `fabric_all_gather_py.py` unchanged (the flow would have deleted it as a "generic route": the state was
+  edited to keep it).
+- Why: host time (OWNER 2026-11-27 C++ port series): no Python key, LRU or run_prepared patching a call.
+- Measured (8x4 BH Galaxy, FABRIC_2D_TORUS_XY, the model's calls; deepseek results/NC.2_layer.md): bit-identical to
+  the Python prepared route on every chip (bf16 FPU and fp32 exact, rows and columns, Linear and Ring); host a warm
+  call 45.8-47.5 us vs 72.5-74.4 (bf16), 73.5 vs 116.9 (fp32 exact); device equal (attn_out 181.9 vs 182.0 us) or
+  lower (moe rows, Ring 145.9 vs 164.4). The port's acceptance suite (tests/ttnn/unit_tests/operations/
+  fabric_reduce_scatter/pre_migration, TT_PRE_MIGRATION_MODE=native TT_PRE_MIGRATION_ENTRY=ttnn:fabric_reduce_scatter,
+  BRINGUP_TEST_MESH=8x4): 43 passed, 1 failed (test_bf16_full_mesh_golden, red on the untouched op too). The flow
+  ended not_ported on one case: test_refusal[prepared_needs_hash]'s valid call (axis 0, [256, 64]) 38.9 -> 46.8 us on
+  the device, cause not found (no model call uses axis 0).
+- Needed by: deepseek_v41_flash_d_p NC.2
+- Files: `fabric_reduce_scatter.py`, `__init__.py`, `generic/` (the pre-port Python route, test only),
+  `ttnn/cpp/ttnn/operations/fabric_reduce_scatter/`, `ttnn/cpp/ttnn-nanobind/__init__.cpp`,
+  `ttnn/cpp/ttnn/operations/CMakeLists.txt`, `tests/ttnn/unit_tests/operations/fabric_reduce_scatter/pre_migration/`.

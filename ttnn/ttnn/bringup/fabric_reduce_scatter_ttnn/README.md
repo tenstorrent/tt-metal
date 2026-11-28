@@ -1,4 +1,10 @@
-# ttnn.bringup.fabric_reduce_scatter  (Python op, PYTHON_OPS; plus `ttnn.bringup.fabric_reduce_scatter_ttnn.prepare`)
+# ttnn.bringup.fabric_reduce_scatter  (the native C++ op ttnn.fabric_reduce_scatter since NC.2; plus `ttnn.bringup.fabric_reduce_scatter_ttnn.prepare`)
+
+Since 2026-11-28 (deepseek_v41_flash_d_p NC.2, CHANGELOG "Native C++ op"): the C++ device op `ttnn.fabric_reduce_scatter`
+(`ttnn/cpp/ttnn/operations/fabric_reduce_scatter`), same arguments and results; host 46 us a call vs 73 us as the
+Python prepared program (8x4). `cache_descriptors` / `program_hash` / `prepared` keep only their refusals. The
+Python route below is kept, unregistered, in `generic/` for comparison tests. The text below describes the program
+(unchanged).
 
 ## What it does
 New op (no TTNN source on this tree; from `ttnn/ttnn/operations/examples/fabric_reduce_scatter` on

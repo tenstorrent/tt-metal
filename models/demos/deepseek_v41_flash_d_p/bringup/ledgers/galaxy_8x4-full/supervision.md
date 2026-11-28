@@ -1584,3 +1584,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   program, owned send, lane / chip rows); NC.8 the ONE end ladder (layers 0-20; single 8192, 4x2k, 4x1792s) + cold strict
   no-rebuild. tasks.yaml 520 -> 498 KB (WA.1-WA.5 briefs -> pointers to 14431ec9616; validate: valid). Not queued (not
   on the serving path): engram device lookup (ENGRAM_DEVICE off), decoder-tail send (never under decode), diagnostic stamps.
+- 22:50 heartbeat: NC.2 agent active; RAM used 63 GB; / 70G free.
+- 23:20 heartbeat: NC.2 agent active (native_migrate on fabric_reduce_scatter in the separate checkout); RAM used 68 GB; / 69G free.
+- 23:50 heartbeat: NC.2 native_migrate fabric_reduce_scatter in rounds; RAM used 67 GB; / 69G free.
+- 00:20 heartbeat: NC.2 native_migrate fabric_reduce_scatter not_ported after 5 rounds (85 min): one acceptance case >5% slower on device than the original (perf only, correctness passes); agent handling. RAM used 73 GB; / 68G free.

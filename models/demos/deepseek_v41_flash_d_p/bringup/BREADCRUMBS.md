@@ -1863,3 +1863,48 @@
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.1 --spec $BRINGUP_SPEC --check`; layer test
   alone: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "scripts/run_safe_pytest.sh
   --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_gmm_native_layer.py"`.
+
+## NC.2 (perf, attempt 1): the native C++ fabric_reduce_scatter in place of the Python prepared route
+
+- Expected saving a chunk (written before measuring, perf_guide: host-only change, the same kernels): device ~0 (same
+  kernels, same runtime args, same cores); host: the Python wrapper (cache key build, LRU lookup, run_prepared's
+  slot patching) goes, the C++ program-cache hit stays; DS41-263 puts a 32-chip prepared launch at ~90-100 us, of
+  which the per-core args dispatch stays (DS41-145), so ~20-50 us a call saved x the RS calls of a chunk (tt/ccl.py
+  sum_cols / tp_sum / sum_rows, ~2-3 a layer; 92 a chunk on the block-MoE path at 40 layers) = ~2-4.5 ms host a
+  chunk at 40 layers, ~1-2 ms at layers 0-20. Op-level only (NATIVE_PORT_RULES.md): judged on the op test's numbers.
+- Port: tt_ops_code_gen native_migrate in /scratch/dnijemcevic/native/tt-metal (dnijemcevic/native_gmm fast-forwarded
+  to b18aab0e74e; work dir generated/native_migrate/fabric_reduce_scatter; tests.yaml golden = the fork's unit files
+  that run on the 8x4, the cluster_axis=None cases deselected: red on the untouched op there). Two restarts: (1) the
+  flow listed fabric_all_gather_py.py as the generic route to delete (it names generic_op: the all-gather prototype)
+  -> ccl.py `_num_banks` and glm53 `plan` would break: state.json `generic` emptied, run resumed (DS41-399);
+  (2) the golden baseline opened a 2x2 on the Galaxy (fabric router sync timeout, no card dirty): BRINGUP_TEST_MESH=8x4.
+  Result after 84.6 min, $27, 5 rounds: not_ported on ONE case (test_refusal[prepared_needs_hash]'s valid call, axis
+  0, [256, 64]: device 38.9 -> 46.8 us, confirmed alone; cause not found by the flow; no model call uses axis 0);
+  build, clang-tidy, hooks and the acceptance suite green from round 4 (e9daca39766).
+- Brought in: `git diff b18aab0e74e e9daca39766 | git apply` (no conflicts); `cmake --build build --target install`.
+  One change on top: the port allocated the scratch each call (create_device_tensor on 32 chips); now cached per
+  (mesh, G, rows, cols, dtype, dim) in C++ (fabric_reduce_scatter.cpp `cached_scratch`, as the Python `_SCRATCH_CACHE`):
+  host 63-66 -> 46 us a call. The pre-port Python route copied to fabric_reduce_scatter_ttnn/generic/ (test only).
+  Model call sites unchanged (tt/ccl.py, moe_block.py: same import paths and arguments; cache_descriptors /
+  program_hash / prepared are accepted no-ops). No setting: the allowed paths exclude tt/settings.py (as NC.1); the
+  old route is reachable for the test only.
+- Gate test tests/native/test_native_reduce_scatter.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads,
+  56 s): the model's calls at R = 1024 (8192 single / packed 4x2k over SP 8) and 640 (5120): attn_out [R, 5120] dim 3,
+  q_a [R, 1792] dim 3, comp [R, 1024] dim 3, idx [R, 32] dim 2 (bf16, FPU add: CCL_IMPL=fabric_bf16), exact [R, 5120]
+  fp32 dim 3 (CCL_IMPL=fabric), moe [R, 5120] dim 2 Ring (moe_block._tp_rs_rows). Mismatch / repeat / cache growth 0
+  in every case. Host a warm call native 45.8-47.5 us vs generic 72.5-74.4 (bf16; exact 73.5 vs 116.9; moe 45.8 vs
+  7413: moe_block's call has no cache_descriptors, so the Python route rebuilt its descriptor each call). Device equal
+  (attn_out 181.9 / 182.0, idx 40.5 / 40.5, exact 477.9 / 479.3) or lower (q_a 70.0 / 74.0, comp 48.4 / 66.3, moe
+  145.9 / 164.4). Saving a chunk: ~27 us x the RS calls (92 a chunk at 40 layers, P.1) = ~2.5 ms host; device ~0.
+  Report results/NC.2_layer.md.
+- Acceptance (the port's suite, own FABRIC_2D mesh, safe runner directly: the held torus mesh is another fabric):
+  run in native mode (TT_PRE_MIGRATION_MODE=native TT_PRE_MIGRATION_ENTRY=ttnn:fabric_reduce_scatter
+  BRINGUP_TEST_MESH=8x4; the default "source" mode now runs the native op and expects generic_op dispatches: 30
+  false failures): 43 passed, 1 failed = test_bf16_full_mesh_golden (cluster_axis=None, error 0.665 > 0.587), red on
+  the untouched op too (the flow carved it).
+- Not run: `orchestrator measure --task NC.2` and any model load (NATIVE_PORT_RULES.md, owner: op-level checks only;
+  the series' one ladder is NC.8); the fork's regression suites (owner: none on the 8x4).
+- Rule 20: no per-chunk value touched. Every call's tensors' addresses go in as runtime args on a program-cache hit
+  (0 growth on fresh buffers / new data); the scratch is allocated once per configuration (first call), as before.
+  Cores: the same port / final cores as the Python plan (no matmul; the 110-core cap does not apply).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.2 --spec $BRINGUP_SPEC --check`.

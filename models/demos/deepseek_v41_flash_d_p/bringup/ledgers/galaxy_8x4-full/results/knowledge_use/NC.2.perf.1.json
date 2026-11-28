@@ -1,0 +1,103 @@
+{
+ "used": [
+  {
+   "id": "DS41-398",
+   "how": "NC.1's layer-check design (native vs Python route, native_direct, host us alternating rounds) reused for the RS gate test; expected the ttnn.bringup wrapper's +~1 us (measured 0.5-1.6 us)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-263",
+   "how": "expected-saving estimate: a 32-chip prepared launch ~90-100 us, of which the per-core-args dispatch stays native",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "expected saving bounded by the per-core runtime-arg dispatch that the native op still pays",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-216",
+   "how": "checked the port keeps the Python's counter sharing (one semaphore set per core set, as _SEM_CACHE) rather than a new sharing pattern",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "the C++ scratch cache allocates on a configuration's first call only, as the Python _SCRATCH_CACHE did, so no new mid-forward allocation pattern",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "native_migrate treats every sibling module in the op package that names generic_op / ProgramDescriptor as the generic route and deletes it (fabric_all_gather_py.py here); NATIVE_PORT_RULES.md does not warn (now DS41-399)",
+  "the fork's MESH_PARAMS default to 2x2: the port's golden baseline needs BRINGUP_TEST_MESH=8x4 on the Galaxy (NATIVE_PORT_RULES names only BRINGUP_SPEC)",
+  "the port's pre_migration acceptance suite run in tree needs TT_PRE_MIGRATION_MODE=native TT_PRE_MIGRATION_ENTRY=ttnn:<op>; the default source mode now runs the native op and fails on generic_op dispatch counts"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the port runs the same kernels on the same shapes; the one change (scratch cache) removes work"
+  }
+ ],
+ "cited_only": [
+  "DS41-399"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.2",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T00:29:52",
+  "head": "b18aab0e74e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.2_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.2.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_reduce_scatter.py",
+   "tests/ttnn/unit_tests/operations/fabric_reduce_scatter/pre_migration/conftest.py",
+   "tests/ttnn/unit_tests/operations/fabric_reduce_scatter/pre_migration/test_acceptance.py",
+   "tests/ttnn/unit_tests/operations/fabric_reduce_scatter/pre_migration/test_fabric_reduce_scatter_host_perf.py",
+   "tests/ttnn/unit_tests/operations/fabric_reduce_scatter/pre_migration/test_golden_cut.py",
+   "ttnn/cpp/ttnn-nanobind/__init__.cpp",
+   "ttnn/cpp/ttnn/operations/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_planner.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_planner.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/fabric_reduce_scatter_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/compute_add.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/compute_exact_add.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/fabric_reduce_scatter_args.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/fabric_reduce_scatter_chunk_walk.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/final_reader.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/final_writer.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/port_reader.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/device/kernels/port_sender.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/fabric_reduce_scatter_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/fabric_reduce_scatter/sources.cmake",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/README.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/fabric_reduce_scatter.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/generic/__init__.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/generic/fabric_reduce_scatter.py"
+  ]
+ }
+}
