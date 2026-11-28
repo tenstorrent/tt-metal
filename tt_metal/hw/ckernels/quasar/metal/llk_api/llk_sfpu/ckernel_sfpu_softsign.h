@@ -42,7 +42,10 @@ sfpi_inline void _softsign_x2_(sfpi::vFloat& out0, sfpi::vFloat& out1, sfpi::vFl
     out1 = y1;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+// Whether BF16 DEST runs the generated softsign kernel as one call over the whole tile.
+inline constexpr bool softsign_bf16_whole_tile = false;
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_softsign() {
     static_assert(ITERATIONS % 2 == 0, "calculate_softsign processes two rows per iteration");
     for (int d = 0; d < ITERATIONS / 2; d++) {
@@ -64,7 +67,7 @@ inline void calculate_softsign() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void init_softsign() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<APPROXIMATION_MODE>();
