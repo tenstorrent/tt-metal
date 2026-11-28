@@ -71,7 +71,7 @@ class SolSchedule:
     target video (text, condition and audio rows) exact for every query; without it only the routing rule decides.
     A clip of more than `max_frames` frames runs every step dense. `pooled` folds the blocks a query does not keep
     into its softmax through their mean K/V (Sol's pooled term); without it a query attends to its kept blocks only
-    (Sol's `tail=False`), and no query sees a partly filled last block (`SolPrepass.forward`)."""
+    (Sol's `tail=False`), and no query sees a shard's partly filled last block (`SolPrepass.forward`)."""
 
     tau: float = 1.0
     dense_steps: int = 2

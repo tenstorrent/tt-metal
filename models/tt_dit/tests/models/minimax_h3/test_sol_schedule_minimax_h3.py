@@ -133,7 +133,7 @@ def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
 
 def test_pooled_off_reaches_the_transformer(monkeypatch):
     pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1", "H3_SOL_POOLED": "0"})
-    pipeline._release_denoise_traces, transformer = Mock(), Mock()
+    transformer = Mock()
     pipeline._set_sol_attention(transformer, 76800, 73419, 843)
     assert transformer.set_sol_request.call_args.kwargs["pooled"] is False
 
