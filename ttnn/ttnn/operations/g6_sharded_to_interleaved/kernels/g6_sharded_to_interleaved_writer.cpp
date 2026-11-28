@@ -1,64 +1,82 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// One issue lane of the owner-writes store. The same source runs on BRISC (lane 0) and NCRISC
-// (lane 1); each lane writes its contiguous slice of this core's resident shard straight from the
-// shard slots to their interleaved output pages, one NoC write per tile.
+// g6_sharded_to_interleaved writer, one instance per write lane on every core of the input's
+// shard grid. The core's shard is resident in L1 behind cb_input_shard (a CB bound to the input's
+// own buffer), so store_block writes each tile of the core's block straight from its shard slot to
+// its interleaved output page: one NoC write per tile, no NoC read, one barrier per kernel.
 //
-// cb_shard is bound zero-copy on the input shard and used only as an address binding: no kernel
-// pushes or pops it, so get_read_ptr() is the shard base for the whole program.
+// Raw dataflow API, no kernel_lib helper: the library has no writer from a resident L1 source to
+// NoC-addressed interleaved pages (eltwise copy goes through unpack/pack and would regroup bfp8
+// exponents; the local-copy helpers target local L1 only).
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 
-void kernel_main() {
-    constexpr uint32_t cb_shard = get_compile_time_arg_val(0);
-    // Row stride of the shard in slots: the full shard width, also on a shorter last width shard.
-    constexpr uint32_t shard_cols_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t tensor_cols_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t slot_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
-    constexpr auto out_args = TensorAccessorArgs<5>();
+namespace {
 
-    constexpr uint32_t shard_row_bytes = shard_cols_tiles * slot_bytes;
-
-    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
-
-    uint32_t rt = 0;
-    const uint32_t num_blocks = get_arg_val<uint32_t>(rt++);
-
-    for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        DeviceZoneScopedN("store_block");
-        // bind_resident_block: block origin in the tile grid, block width, and this lane's range of
-        // local (row-major over block_extent_cols) tile indices.
-        const uint32_t a0 = get_arg_val<uint32_t>(rt++);
-        const uint32_t b0 = get_arg_val<uint32_t>(rt++);
-        const uint32_t block_extent_cols = get_arg_val<uint32_t>(rt++);
-        const uint32_t lane_start = get_arg_val<uint32_t>(rt++);
-        const uint32_t lane_tiles = get_arg_val<uint32_t>(rt++);
-
-        const auto out = TensorAccessor(out_args, out_addr);
-
-        uint32_t r = lane_start / block_extent_cols;
-        uint32_t c = lane_start - r * block_extent_cols;
-        uint32_t src_row_addr = get_read_ptr(cb_shard) + r * shard_row_bytes;
-        uint32_t dst_row_page = (a0 + r) * tensor_cols_tiles + b0;
-
-        // store_block: whole pages only — a bfloat8_b tile carries its shared exponents, and an
-        // interleaved neighbour page lives in another bank, so pages are neither split nor merged.
-        for (uint32_t i = 0; i < lane_tiles; ++i) {
-            noc_async_write_page(dst_row_page + c, out, src_row_addr + c * slot_bytes, page_bytes);
-            if (++c == block_extent_cols) {
-                c = 0;
-                src_row_addr += shard_row_bytes;
-                dst_row_page += tensor_cols_tiles;
-            }
+// Slots keep the nominal shard stride even in a short last shard, so the row stride is
+// shard_tile_cols pages, never block_tile_cols. Interleaved pages lie in different banks, so each
+// tile is its own write; page_size fits one NoC packet (host-asserted).
+template <uint32_t page_size, typename Accessor>
+FORCE_INLINE void store_block(
+    const Accessor& output,
+    uint32_t first_slot_addr,
+    uint32_t first_page,
+    uint32_t block_tile_rows,
+    uint32_t block_tile_cols,
+    uint32_t shard_row_stride_bytes,
+    uint32_t tensor_tile_cols) {
+    uint32_t row_slot_addr = first_slot_addr;
+    uint32_t row_page = first_page;
+    for (uint32_t r = 0; r < block_tile_rows; ++r) {
+        uint32_t slot_addr = row_slot_addr;
+        for (uint32_t c = 0; c < block_tile_cols; ++c) {
+            noc_async_write<page_size>(slot_addr, output.get_noc_addr(row_page + c), page_size);
+            slot_addr += page_size;
         }
+        row_slot_addr += shard_row_stride_bytes;
+        row_page += tensor_tile_cols;
+    }
+}
+
+}  // namespace
+
+void kernel_main() {
+    constexpr uint32_t cb_input_shard = get_compile_time_arg_val(0);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr auto output_args = TensorAccessorArgs<2>();
+
+    const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t tensor_tile_cols = get_common_arg_val<uint32_t>(1);
+    const uint32_t shard_tile_cols = get_common_arg_val<uint32_t>(2);
+
+    // num_blocks_this_core is 0 on a grid core without a shard (or without a lane piece).
+    const uint32_t num_blocks_this_core = get_arg_val<uint32_t>(0);
+    const uint32_t block_first_slot = get_arg_val<uint32_t>(1);
+    const uint32_t block_first_page = get_arg_val<uint32_t>(2);
+    const uint32_t block_tile_rows = get_arg_val<uint32_t>(3);
+    const uint32_t block_tile_cols = get_arg_val<uint32_t>(4);
+
+    const auto output = TensorAccessor(output_args, output_addr, page_size);
+    // cb_input_shard is never waited on or popped: the shard is resident before launch.
+    const uint32_t shard_base_addr = get_read_ptr(cb_input_shard);
+
+    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
+        DeviceZoneScopedN("S2I-STORE-BLOCK");
+        store_block<page_size>(
+            output,
+            shard_base_addr + block_first_slot * page_size,
+            block_first_page,
+            block_tile_rows,
+            block_tile_cols,
+            shard_tile_cols * page_size,
+            tensor_tile_cols);
     }
 
     {
-        DeviceZoneScopedN("retire_writes");
+        DeviceZoneScopedN("S2I-WRITE-BARRIER");
         noc_async_write_barrier();
     }
 }
