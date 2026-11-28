@@ -58,7 +58,7 @@ void bind_gather_tosa_operation(nb::module_& mod) {
 
             # Convert tensors to ttnn format
             input_tensor_ttnn = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
-            index_tensor_ttnn = ttnn.from_torch(index_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+            index_tensor_ttnn = ttnn.from_torch(indices, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
             # Perform the gather operation
             gathered_tensor = ttnn.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
