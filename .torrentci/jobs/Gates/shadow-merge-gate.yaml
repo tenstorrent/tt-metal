@@ -26,6 +26,11 @@ dashboards:
       - job: ttnn-basic-p150b-asan
         when:
           changed: [cmake, tt-metalium, tt-nn, tt-metalium-tests, tt-nn-tests, image]
-      # The static checks in Lint/static-checks.yaml (unconditional in
-      # merge-gate.yaml) are not members: they take about 30 s here against
-      # 15-20 s in GitHub, and a member must not slow the gate down.
+      # Static checks from Lint/static-checks.yaml, unconditional as in
+      # merge-gate.yaml. Each takes about 30 s, far below the card jobs that set
+      # the gate's long pole, so they add no time to the gate.
+      - job: check-metal-kernel-count
+      - job: check-forbidden-imports
+      - job: check-symlinks-valid
+      - job: check-sweeps-workflow
+      - job: check-interleaved-addr-gen-usage
