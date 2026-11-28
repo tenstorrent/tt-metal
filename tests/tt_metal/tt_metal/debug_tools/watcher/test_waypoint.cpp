@@ -55,6 +55,23 @@ std::string build_waypoint_string(uint32_t n) {
     return result;
 }
 
+// Polls the watcher log until it has all of poll_strings. The bound is in watcher dumps, not wall time: a simulator
+// advances only while the host (here, the watcher) accesses it. ttsim Quasar needs ~370 dumps under fast dispatch.
+bool WaitForWatcherLog(MeshWatcherFixture* fixture, const std::vector<std::string>& poll_strings) {
+    constexpr int max_dumps = 600;
+    const auto& watcher_server = MetalContext::instance().watcher_server();
+    const int first_dump = watcher_server->dump_count();
+    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
+        if (watcher_server->dump_count() - first_dump >= max_dumps || watcher_server->killed_due_to_error()) {
+            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    }
+    log_info(tt::LogTest, "All patterns found after {} watcher dumps", watcher_server->dump_count() - first_dump);
+    return true;
+}
+
 void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
@@ -174,20 +191,9 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
     log_info(tt::LogTest, "Polling for {} patterns", poll_strings.size());
 
-    constexpr int timeout_ms = 30000;
-    auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-        if (elapsed >= timeout_ms) {
-            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
-        }
-        ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
-    log_info(tt::LogTest, "All patterns found!");
+    const bool found = WaitForWatcherLog(fixture, poll_strings);
 
-    // Release all cores
+    // Release all cores, also after a timeout, so that device close doesn't wait on them forever
     std::vector<uint32_t> release_data = {1};
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
@@ -195,6 +201,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
     }
     distributed::Finish(mesh_device->mesh_command_queue());
+    ASSERT_TRUE(found) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
 
     log_info(tt::LogTest, "Verifying: {} waypoints/TENSIX", num_tensix);
 
@@ -305,17 +312,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
         }
     }
 
-    constexpr int timeout_ms = 30000;
-    auto start = std::chrono::steady_clock::now();
-    while (!FileContainsAllStrings(fixture->log_file_name, poll_strings, /*report_missing=*/false)) {
-        auto elapsed =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
-        if (elapsed >= timeout_ms) {
-            FileContainsAllStrings(fixture->log_file_name, poll_strings);  // logs what's missing, and the file
-        }
-        ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log ETH waypoints";
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
+    const bool found = WaitForWatcherLog(fixture, poll_strings);
 
     if (has_idle_eth_cores) {
         std::vector<uint32_t> release_data = {1};
@@ -324,6 +321,7 @@ void RunEthTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::
         }
     }
     distributed::Finish(mesh_device->mesh_command_queue());
+    ASSERT_TRUE(found) << "Timed out waiting for watcher to log ETH waypoints";
 
     auto check_core = [&](const CoreCoord& logical_core,
                           const CoreCoord& virtual_core,
