@@ -108,7 +108,7 @@ void bind_unary_clip(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16
+               * - BFLOAT16, BFLOAT8_B, INT32, FLOAT32
                  - TILE, ROW_MAJOR
 
         )doc";
@@ -940,7 +940,7 @@ void bind_gelu(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE, ROW_MAJOR
         )doc",
         "gelu",
@@ -1082,7 +1082,7 @@ void bind_sigmoid(nb::module_& mod) {
 
                * - Dtypes
                  - Layouts
-               * - BFLOAT16
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE, ROW_MAJOR
         )doc",
         "sigmoid",
