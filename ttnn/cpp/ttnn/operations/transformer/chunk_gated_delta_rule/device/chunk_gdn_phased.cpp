@@ -20,7 +20,7 @@ void check(const Tensor& t, const char* name, DataType dt) {
 
 // A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
 // num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
-void check_gdn_gate(
+void check_phased_gdn_gate(
     const Tensor& t, const char* name, uint32_t BH, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
@@ -69,8 +69,8 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
     validate_gdn_chunk_size(attrs.chunk_size);
-    check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
-    check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_phased_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_phased_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
     TT_FATAL(
         in.g.logical_shape()[1] == in.beta.logical_shape()[1],
