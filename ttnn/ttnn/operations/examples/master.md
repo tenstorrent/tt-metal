@@ -247,7 +247,7 @@ move.
 **How to recognize it:** time vs number of passes over M: ~1.5 µs (WH B0) / ~1.4 µs (BH) per extra pass, flat across payload size.
 **Helps when:** many passes, small payload each: M,K,N = 8,4,4 tiles WH B0 29 064 → 17 271 ns = **1.68×** · BH 18 623 → 9 096 ns = **2.05×**; 8,2,16 1.39× (WH B0).
 **Does not help when:** few passes that each carry a large payload: 2,16,16 tiles WH B0 37 202 → 35 634 ns = **1.04×**. BH has no flat case that fits L1: 2,16,16 is 19 976 → 18 693 ns = **1.07×** (on BH the per-pass payload time is shorter while the fixed cost stays).
-**Gist:** run each helper on the whole row-parallel block (or the largest L1 allows); also drop data-format reconfig at boundaries where the format is constant (up to 1.19× on WH B0, see README).
+**Gist:** run each helper on the whole row-parallel block (or the largest L1 allows); also drop data-format reconfig at boundaries where the format is constant (up to 1.19× on WH B0, see README). Size any block, chunk or DEST window that walks W as balanced pieces with a ragged last piece (pieces = ⌈W / cap⌉, piece = ⌈W / pieces⌉), never as the largest divisor of W under a cap: a prime tile count (127 tiles = 4064 elements) then collapses to 1-tile pieces — `resident_shard_locality` README, BH p150b: [24, 4064] 68.6 µs with 1-tile chunks vs 10.2 µs balanced.
 **Code:** `examples/compute_block_size/program_descriptor_with_inline_kernels.py` — `block_rows_for()`, `create_program_descriptor()` (host only; `_COMPUTE_KERNEL` unchanged, block size is a compile-time arg).
 **See also:** `compute_fusion`.
 
