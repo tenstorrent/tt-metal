@@ -652,7 +652,7 @@ ALWI void power_iterative_tile_init() { MATH(SFPU_UNARY_INIT(power)); }
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
- * On a Wormhole bf16 DEST the body can read vConstFloatPrgm0..1 (LREG12..13), which
+ * On a Wormhole bf16 DEST the body can read vConstFloatPrgm0..2 (LREG12..14), which
  * exp2_tile_init programs and other SFPU inits overwrite, and it records into replay
  * slots [0, 16). So call exp2_tile_init again after any other SFPU init before the next
  * exp2_tile.
