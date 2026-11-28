@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <bit>
+#include <limits>
 
 #include "sort_device_operation.hpp"
 #include "tt_stl/assert.hpp"
@@ -179,6 +180,16 @@ void SortDeviceOperation::validate_on_program_cache_miss(
                     tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
                 "Output indices tensor dtype must be UINT16 or UINT32. Got output indices tensor dtype: {}",
                 tensor_args.output_tensors.at(1)->dtype());
+            // UINT16 indices hold the positions 0 to 65535, so a longer (padded) sort dimension needs UINT32 indices.
+            constexpr uint32_t max_uint16_sort_dim = std::numeric_limits<uint16_t>::max() + 1;
+            TT_FATAL(
+                tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32 ||
+                    tensor_args.input_tensor.logical_shape()[-1] <= max_uint16_sort_dim,
+                "Output indices tensor dtype must be UINT32 when the sort dimension has more than {} elements. Got: {} "
+                "for {} elements",
+                max_uint16_sort_dim,
+                tensor_args.output_tensors.at(1)->dtype(),
+                tensor_args.input_tensor.logical_shape()[-1]);
             if (tensor_args.input_tensor.dtype() == DataType::FLOAT32 ||
                 tensor_args.input_tensor.dtype() == DataType::UINT16) {
                 TT_FATAL(
