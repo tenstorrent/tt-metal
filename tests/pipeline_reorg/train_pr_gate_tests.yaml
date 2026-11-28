@@ -17,7 +17,7 @@
     mkdir -p generated/test_reports
     tt-train/tests/ops/run_smoke_tests.sh --gtest_output=xml:generated/test_reports/ctest_report.xml
   skus:
-    bh_p150b_civ2:
+    bh_p150b_civ2_viommu:
       timeout: 10
   owner_id: U07K00A281X # Kevin Wu
   team: train
