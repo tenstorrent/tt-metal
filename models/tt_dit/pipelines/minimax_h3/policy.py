@@ -94,18 +94,18 @@ SOL_PRESETS = {
 
 #: Presets whose model runs Sol-Attn with `H3_SOL_ATTN` unset, each with the longest clip (frames) it then runs sparse.
 #: 10Eros-Max: at 6 s the served audio is level with dense; at 10 s it stays about 2 LU under, with fewer sound events.
-SOL_DEFAULT_ON = {"10eros-max": 158}
+SOL_DEFAULT_ON = {"10eros-max": get_num_frames(6)}
 
 
 def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedule | None:
     """The Sol-Attn schedule `env` asks for, or None for dense ring attention.
 
     `H3_SOL_ATTN=1` turns it on for every clip length and any other value is the off switch; unset, it is on only for
-    a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule starts from the model's `SOL_PRESETS` entry: `preset` is the one
-    the pipeline reads from its files, and `H3_SOL_PRESET` names it for a model the files do not tell apart
-    (a 10Eros-Max build under another file name). `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and
-    `H3_SOL_SINKS` (`0` drops the dense prefix) each override their field. One dense step costs 4-step models
-    their picture and sound against dense.
+    a pipeline whose `preset` is in `SOL_DEFAULT_ON`, up to that entry's clip length. The schedule starts from the
+    model's `SOL_PRESETS` entry: `preset` is the one the pipeline reads from its files, and `H3_SOL_PRESET` names it
+    for a model the files do not tell apart (a 10Eros-Max build under another file name). `H3_SOL_TAU`,
+    `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS` and `H3_SOL_SINKS` (`0` drops the dense prefix) each override their
+    field. One dense step costs 4-step models their picture and sound against dense.
     """
     by_default = "H3_SOL_ATTN" not in env and preset in SOL_DEFAULT_ON
     if not by_default and env.get("H3_SOL_ATTN") != "1":

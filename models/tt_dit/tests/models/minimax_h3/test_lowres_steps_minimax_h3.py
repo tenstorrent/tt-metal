@@ -187,6 +187,7 @@ def test_lowres_stage_never_runs_sol(monkeypatch):
     pipeline._buckets, pipeline._request_state = {}, SimpleNamespace(warm=True)
     pipeline._log = lambda message: None
     pipeline._warming = False
+    pipeline.task, pipeline.transformer_file = "t2va", None
     transformer = SimpleNamespace(set_sol_request=lambda request, **kwargs: requests.append(request))
 
     pipeline._sol_key = pipeline._sol_schedule = None

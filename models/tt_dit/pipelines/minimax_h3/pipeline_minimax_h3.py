@@ -3532,7 +3532,7 @@ class MiniMaxH3Pipeline:
         *,
         first_stage: bool = False,
     ) -> None:
-        """Switch the ring attention between dense and Sol-Attn for this request (`H3_SOL_ATTN`, see `policy.sol_schedule`).
+        """Switch the ring attention between dense and Sol-Attn for this request (see `policy.sol_schedule`).
 
         The schedule (`policy.sol_schedule`: `H3_SOL_TAU`, `H3_SOL_DENSE_STEPS`, `H3_SOL_DENSE_LAYERS`) says which
         leading steps and blocks stay dense. `sink_tokens` is the always-dense prefix: text, condition and audio
