@@ -1,0 +1,7 @@
+#U 240
+tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_fp32
+tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
+tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_buffer_type_variations
+#U 240
+tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_fp32
+tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_interleaved_to_height_sharded_unaligned_row

@@ -29,15 +29,17 @@ for a in "${ARMS[@]}"; do use $(var $a); export TMPDIR=$OUT/build_$a; mkdir -p $
   echo "CIAB PRODUCE $a rc=$rc $(( $(date +%s) - t1 )) s $(grep -aE '[0-9]+ (passed|failed|error)' $OUT/prod_$a.log | tail -n 1)"; [[ $rc -ne 0 ]] && grep -a -m5 -E '^(FAILED|ERROR)|rror' $OUT/prod_$a.log | cut -c1-300
 done
 for ((r = 0; r < ${#ord[@]}; r++)); do a=${ord[$r]}; b=$((r / NA)); use $(var $a)
-  export TMPDIR=$OUT/build_$a PERF_RUN_TAG=p0; rm -rf $L/perf_data/runs/p*; mkdir -p $TMPDIR; t1=$(date +%s)
+  export TMPDIR=$OUT/build_$a PERF_RUN_TAG=p0; rm -rf $L/perf_data/runs/p*; mkdir -p $TMPDIR; find $TMPDIR -type d -name "temp_perf_data_p*" -prune -exec rm -rf {} + 2>/dev/null; t1=$(date +%s)
   (cd $PT && timeout -s INT -k 30 ${CIAB_PT_TO:-3000} $LLKPY -m pytest --compile-consumer -p no:cacheprovider --override-ini=log_cli=false -q -o timeout_method=thread --timeout 300 "${I[@]}" > $OUT/r${r}_$a.log 2>&1); rc=$?
   echo "CIAB RUN $r block $b arm $a rc=$rc $(( $(date +%s) - t1 )) s $(grep -aE '[0-9]+ (passed|failed|error)' $OUT/r${r}_$a.log | tail -n 1)"
   [[ $rc -ne 0 ]] && { grep -a -m5 -E '^(FAILED|ERROR)|Error' $OUT/r${r}_$a.log | cut -c1-300; tail -n 4 $OUT/r${r}_$a.log | cut -c1-300; }
-  $LLKPY - "$L/perf_data/runs" "$a" "$b" <<'EOF'
-import sys, glob, json, os, pandas as pd
-d, a, b = sys.argv[1:4]; n = 0
-for f in sorted(glob.glob(d + "/p*/**/*.post.csv", recursive=True)):
-    sh = os.path.relpath(f, d).split("/")[0][1:]
+  $LLKPY - "$L/perf_data/runs" "$a" "$b" "$TMPDIR" <<'EOF'
+import sys, glob, json, os, re, pandas as pd
+d, a, b, t = sys.argv[1:5]; n = 0
+# position 0 lands in runs/p0; the other positions stay in temp_perf_data_p<n> when the strict Parquet step fails on the census columns
+fs = [(f, os.path.relpath(f, d).split("/")[0][1:]) for f in glob.glob(d + "/p*/**/*.post.csv", recursive=True)]
+fs += [(f, re.search(r"temp_perf_data_p(\d+)", f).group(1)) for f in glob.glob(t + "/**/temp_perf_data_p*/**/*.post.csv", recursive=True)]
+for f, sh in sorted(fs):
     x = pd.read_csv(f, low_memory=False)
     x = x[x.marker.isin(["TILE_LOOP", "KERNEL"])]
     for _, q in x.iterrows():
