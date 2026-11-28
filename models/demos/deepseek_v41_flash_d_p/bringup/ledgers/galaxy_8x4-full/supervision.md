@@ -1616,3 +1616,9 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 05:02 At the pause: NC.8's gate + the wo_a bank same-load off / on at 1M (WOA_OFFON_POS=1024000; packed 4x2k, single
   8192; same executed-layers load), metric woa_offon_max_abs_diff_* == 0 (validate: valid). Resume -> NC.8 (the one end
   check). NC.4 stays out of tasks.yaml; its record is the commit 8c35cf154d7 (report, BREADCRUMBS, DS41-401) and this log.
+- 05:40 NC.8 (the one end check): units ladder / packed walls / no-rebuild PASS; my 1M offon unit exceeded test_woa_offon's
+  CAP (155648) -> fix agent aborted (OV-83), unit dropped, gate --continue: committed d1a51c81c47. END RESULT vs before the
+  C++ ports (bank on both): packed 4x2k tok/s +2.8 / +3.3 / +5.0 / +0.8 % at 51k / 139k / 524k / 1M; 4x1792s +2.9 / +4.4 /
+  +4.7 / +0.7 %; single 8192 +2.7 / +1.2 / -1.1 / +0.5 %; device ms flat except 1M (+1.6 single, +1.8 4x2k). No-rebuild PASS
+  everywhere, determinism 0. Open: bank layout at 1M packed (device on 121.0 / 122.8 vs off 119.95, separate loads):
+  queued a fix job (same-load off / on at 1M, test extended).

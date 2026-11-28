@@ -867,6 +867,13 @@ notes:
     (DS41_PACKED*=on, POS_DYNAMIC=on; see results/PB.MM256 gate commands). Evidence: the call site under those settings
     and a run log line (logs/WA.4R*.log). Drop any program that does not run there (as NC.4 found: DS41-401), say so with
     the evidence in your report, and port only the ones that run.'
+- id: OV-83
+  tasks:
+  - NC.8
+  status: open
+  t: '2026-11-28T05:16:08'
+  text: 'The overseer stopped attempt 1 (fix): the overseer''s own gate error: WOA_OFFON_POS=1024000 exceeds test_woa_offon''s
+    slot capacity (h + CHUNK + SEG <= CAP); the overseer sets a supported position; no agent work needed'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1647,6 +1654,44 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/tt
   released: '2026-11-27T21:29:16'
   placed: '2026-11-27T21:31:10'
+- id: FIX.41
+  title: 'OWNER 2026-11-27: bring the batching branch''s wo_a bank layout (WA.2-WA.4) and every C++ port of the'
+  gate:
+  - NC.3
+  status: held
+  t: '2026-11-28T04:45:22'
+  text: 'OWNER 2026-11-27: bring the batching branch''s wo_a bank layout (WA.2-WA.4) and every C++ port of the series (NC.1-NC.7,
+    the ops model_bringup also runs; not the packed-only ones) to dnijemcevic/model_bringup as ONE batch; op-level checks
+    per op as on batching; then ONE 5120 ladder (layers 0-20) + cold no-rebuild. No 40-layer load.'
+  hold: runs on dnijemcevic/model_bringup after NC.8 (branch switch)
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+- id: FIX.42
+  title: 'OWNER 2026-11-27 (after the C++ series): wq_b / wo_b bank-layout probe built directly in C++ (groupe'
+  gate:
+  - NC.1
+  status: held
+  t: '2026-11-28T04:45:23'
+  text: 'OWNER 2026-11-27 (after the C++ series): wq_b / wo_b bank-layout probe built directly in C++ (grouped_matmul with
+    G = 1, N split over the 8 banks): stub test first (no weight reads); kill if not read-bound; op level only.'
+  hold: 'owner decision: build only on the owner''s word'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+- id: FIX.43
+  title: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max'
+  gate:
+  - WA.3
+  status: queued
+  t: '2026-11-28T05:17:19'
+  text: 'wo_a bank layout at 1M history, same load: test_woa_offon caps history at CAP 155648 (its load''s max_seq), so
+    the same-load off / on cannot run at 1M. Extend it (a variant or a WOA_OFFON_POS-driven max_seq, BATCH_MAX_SEQ) to run
+    off vs on at H = 1024000 for packed 4x2k and single 8192 in one executed-layers load; record woa_offon_max_abs_diff_*_1m
+    (must be 0) and the device ms of the whole chunk and of the attention section off vs on (median of 3, alternating).
+    Evidence for the question: device ms with the bank layout on is 121.0 / 122.8 vs 119.95 off at 1M packed 4x2k (WA.4,
+    NC.8 vs WA.4R, separate loads). Report results/FIX_woa_1m.md with a one-line verdict. Op / layer-level only: no ladder,
+    no 40-layer load.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
 classified:
   L.smoke:
     kind: framework
@@ -1664,3 +1709,7 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-27T17:19:36'
+  NC.8:
+    kind: framework
+    why: ''
+    t: '2026-11-28T05:16:26'
