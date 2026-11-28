@@ -249,3 +249,22 @@ only decode, so decoding users never stall behind prefill.
 - 32 x 16K: impossible on one Galaxy (needs separate prefill hardware). On 2 Galaxies (1 prefill + 1 decode) decode
   would pass (~35 tok/s, no stalls) with TTFT ~7 s, but simply splitting the 32 users over the same 2 Galaxies already
   passes decode (28.1 / 21.4 tok/s) with TTFT 3.84 s. Disaggregation is dominated; not built.
+
+### Optional: admission cap for 16K bursts (off by default; `lb.py --slots 16`)
+
+The balancer admits 32 users per Galaxy by default. To turn the cap on, start it with `--slots 16`:
+
+```bash
+python sla_scripts/bh_quad/lb.py --backends <galaxy urls> --port 9000 --slots 16
+```
+
+Capping each Galaxy at 16 concurrent users (the rest queue in the balancer) keeps every admitted user behind at most
+3 later prefill waves. Decode (reference 25 / 15 tok/s, not an SLA line) passes; TTFT rises because queued users wait:
+
+| Line | Uncapped | `--slots 16` |
+|---|---|---|
+| 1 Galaxy 32 x 16K (single-backend balancer) | decode 18.5 / 12.6, TTFT 6.8 s | decode 28.0 / 21.4, TTFT 9.3 s (P99 16.9) |
+| Quad 128 x 16K | decode 18.7 / 12.6, TTFT 6.8 s | decode 28.2 / 21.4, TTFT 9.2 s (P99 17.0), 128/128 ok |
+
+The capped decode step is ~24.6 ms (28.4 uncapped). Use `--slots 16` only when long-prompt decode speed matters more
+than time to first token; the default stays 32.
