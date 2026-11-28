@@ -42,6 +42,14 @@ def golden_maxpool2d(
     output_tensor = golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
     indices = pool_output_to_flat_nhwc(indices)
 
+    if isinstance(padding, (list, tuple)) and len(padding) == 4:
+        # The 4-element padding was applied with F.pad, so torch returned flat indices into the padded
+        # (H + pad_t + pad_b) x (W + pad_l + pad_r) grid. Convert them to flat indices into the unpadded H x W input,
+        # which is what torch.nn.functional.max_pool2d returns for a 2-element padding and what the device returns.
+        pad_t, _, pad_l, pad_r = padding
+        padded_w = input_w + pad_l + pad_r
+        indices = (indices // padded_w - pad_t) * input_w + (indices % padded_w - pad_l)
+
     if return_indices:
         return output_tensor, indices
 
@@ -202,6 +210,73 @@ def golden_rotate(
 ttnn.attach_golden_function(ttnn.rotate, golden_rotate)
 
 
+def _golden_avg_pool2d_asymmetric_padding(
+    input_nchw, kernel_size, stride, padding, ceil_mode, count_include_pad, divisor_override
+):
+    """
+    avg_pool2d for 4-element padding [pad_t, pad_b, pad_l, pad_r] with pad_t != pad_b or pad_l != pad_r, which
+    torch.nn.functional.avg_pool2d cannot express. Follows the same rules as the device (see
+    SlidingWindowConfig::get_ceil_pad_hw): the output size is floor or ceil((in + pad_total - kernel) / stride) + 1, and
+    with ceil_mode the last window is dropped when it would start at or past in + pad_top (pad_left). The divisor is the
+    window clipped to the padded input when count_include_pad is set, or to the unpadded input otherwise; windows
+    hanging past the padded input (ceil_mode) never count. divisor_override replaces the divisor.
+    """
+    import math
+    import torch
+
+    pad_t, pad_b, pad_l, pad_r = padding
+    # Sums and the division run in float32 and the result is cast once at the end, like the device: the pool compute
+    # kernel accumulates the window in DEST and scales by the per-window 1/divisor scalar before a single pack to the
+    # output dtype, so bf16 inputs are not rounded between the sum and the division.
+    output_dtype = input_nchw.dtype
+    input_nchw = input_nchw.to(torch.float32)
+    in_h, in_w = input_nchw.shape[-2:]
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+
+    def out_size(in_size, kernel, stride_, pad_before, pad_total):
+        span = in_size + pad_total - kernel
+        if not ceil_mode:
+            return span // stride_ + 1
+        out = math.ceil(span / stride_) + 1
+        if (out - 1) * stride_ >= in_size + pad_before:
+            out -= 1
+        return out
+
+    out_h = out_size(in_h, kernel_h, stride_h, pad_t, pad_t + pad_b)
+    out_w = out_size(in_w, kernel_w, stride_w, pad_l, pad_l + pad_r)
+
+    # Zero-pad far enough on the bottom and right that every window of the output lies inside the buffer.
+    extra_b = max(0, (out_h - 1) * stride_h + kernel_h - (in_h + pad_t + pad_b))
+    extra_r = max(0, (out_w - 1) * stride_w + kernel_w - (in_w + pad_l + pad_r))
+    pad = (pad_l, pad_r + extra_r, pad_t, pad_b + extra_b)
+
+    def window_sums(x):
+        # Window sums over the padded buffer; the kernel never overruns it, so no torch padding is involved.
+        return torch.nn.functional.avg_pool2d(torch.nn.functional.pad(x, pad), kernel_size, stride, divisor_override=1)[
+            ..., :out_h, :out_w
+        ]
+
+    sums = window_sums(input_nchw)
+    if divisor_override is not None:
+        return (sums / divisor_override).to(output_dtype)
+
+    ones = torch.ones((1, 1, in_h, in_w), dtype=input_nchw.dtype)
+    valid_count = window_sums(ones)
+    if count_include_pad:
+        # Padded input = unpadded input plus the explicit padding, without the ceil_mode overhang.
+        ones_padded = torch.ones((1, 1, in_h + pad_t + pad_b, in_w + pad_l + pad_r), dtype=input_nchw.dtype)
+        divisor = torch.nn.functional.avg_pool2d(
+            torch.nn.functional.pad(ones_padded, (0, pad[1] - pad_r, 0, pad[3] - pad_b)),
+            kernel_size,
+            stride,
+            divisor_override=1,
+        )[..., :out_h, :out_w]
+    else:
+        divisor = valid_count
+    return (sums / divisor).to(output_dtype)
+
+
 def golden_avg_pool2d(
     input_tensor: ttnn.Tensor,
     batch_size: int,
@@ -238,6 +313,17 @@ def golden_avg_pool2d(
     """
     import torch
     from tests.sweep_framework.sweep_utils.pool2d_common import prepare_torch_pool_input, pool_output_to_flat_nhwc
+
+    if isinstance(padding, (list, tuple)) and len(padding) == 4:
+        pad_t, pad_b, pad_l, pad_r = padding
+        if (pad_t, pad_l) != (pad_b, pad_r):
+            input_nchw = input_tensor.reshape(batch_size, input_h, input_w, channels).permute(0, 3, 1, 2)
+            output_tensor = _golden_avg_pool2d_asymmetric_padding(
+                input_nchw, kernel_size, stride, padding, ceil_mode, count_include_pad, divisor_override
+            )
+            return golden_to_output_dtype(pool_output_to_flat_nhwc(output_tensor), dtype)
+        # Symmetric 4-element padding is the same as torch's 2-element padding (pad_t, pad_l).
+        padding = (pad_t, pad_l)
 
     input_nchw, torch_padding = prepare_torch_pool_input(
         input_tensor, batch_size, input_h, input_w, channels, padding, pad_fill_value=0
