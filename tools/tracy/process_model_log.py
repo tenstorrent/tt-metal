@@ -106,8 +106,12 @@ def merge_pass_csv(pass1_csv_path, pass2_csv_path):
         logger.warning("No L1 bank 1 columns found in pass 2 CSV to merge")
         return
 
-    merge_keys = ["GLOBAL CALL COUNT", "METAL TRACE ID", "METAL TRACE REPLAY SESSION ID"]
-    merged = df1.merge(df2[merge_keys + l1_1_cols], on=merge_keys, how="left")
+    merge_keys = [
+        key
+        for key in ("GLOBAL CALL COUNT", "METAL TRACE ID", "METAL TRACE REPLAY SESSION ID", "DEVICE ID")
+        if key in df1.columns and key in df2.columns
+    ]
+    merged = df1.merge(df2[merge_keys + l1_1_cols], on=merge_keys, how="left", validate="many_to_one")
     merged.to_csv(pass1_csv_path, index=False)
     logger.info(f"Merged {len(l1_1_cols)} L1 bank 1 columns from pass 2 into {pass1_csv_path}")
 
