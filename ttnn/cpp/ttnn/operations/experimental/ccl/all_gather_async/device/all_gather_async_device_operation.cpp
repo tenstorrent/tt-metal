@@ -65,6 +65,8 @@ void validate_row_dependent_invariants(const AllGatherAsyncParams& args, const A
             output_tensor.is_allocated(),
             "The persistent output buffer of all_gather needs to be allocated in a buffer on device!");
         const auto output_shape = output_tensor.padded_shape();
+        const auto expected_output_shape =
+            AllGatherAsyncDeviceOperation::compute_output_specs(args, tensor_args).padded_shape();
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -72,10 +74,10 @@ void validate_row_dependent_invariants(const AllGatherAsyncParams& args, const A
         for (size_t i = 0; i < input_shape.size(); ++i) {
             if (i == args.dim) {
                 TT_FATAL(
-                    output_shape[i] <= input_shape[i] * args.ring_size,
+                    output_shape[i] == expected_output_shape[i],
                     "Error, Output tensor shape at dimension {} should be {} but has {}",
                     i,
-                    input_shape[i] * args.ring_size,
+                    expected_output_shape[i],
                     output_shape[i]);
             } else {
                 TT_FATAL(
