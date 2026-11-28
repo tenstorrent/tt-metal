@@ -1,0 +1,93 @@
+--- a/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py
++++ b/ttnn/ttnn/operations/g6_clone/g6_clone_program_descriptor.py
+@@ -13,6 +13,8 @@
+   cores sit on its endpoint's row east of its DRAM column, and both kernels address that one
+   endpoint, so no two banks' routes share a link.
+ - `flat_page_range` (page_stride = 1): contiguous page ranges over the grid, one transfer per page.
++  With fewer pages than grid cores (SMALL_FLAT_BAND), one page per core in a band of num_banks columns
++  around the interior DRAM column, so each band column serves one bank.
+ - `logical_rows_partial_tile` (TILE with a partial last tile row or column): the flat split, but a
+   partial page moves only the face rows that hold logical elements, selected by a CT flag.
+
+@@ -88,6 +90,19 @@
+ # Q8 7258 -> 7248 ns, F13 1620 -> 1646 ns (noise); flat-forced p1 63528 -> 62719, p3 25843 -> 25076.
+ FLAT_BANK_STAGGER = False
+
++# Placement of a small consecutive-page plan (flat_page_range, logical_rows_partial_tile with fewer pages
++# than grid cores): one page per core in a band of k = min(pages, num_banks, grid.x) columns nearest the
++# interior DRAM column, filled row-first from row 0 over ceil(pages / k) rows; a plan the band cannot
++# hold keeps the row-first split. Page p lies in bank p mod num_banks and in band column p mod k, so a
++# band column's cores read and write one bank (with k = num_banks) and no two banks' streams share a
++# column's links. The band also leaves out the grid's outer columns: on Blackhole p150b their kernels
++# really start up to ~170 cycles late (west edge), and their wall clocks read up to 444 cycles ahead of
++# the centre columns', which DEVICE KERNEL DURATION (raw first start to last end) counts as span.
++# Blackhole p150b, row-first -> band: F10 (32 x 2 KB) 1273 -> 1168 ns, Q7 (24 x 5 KB) 1538 -> 1304,
++# Q14 (3 x 5 KB) 1003 -> 996, one-page Q4 730 -> 722, F8 684 -> 679; clock-corrected span F10
++# 1005 -> 983, Q7 1254 -> 1126. Same band filled column-major (pages down a column, banks mixed): Q7 1366.
++SMALL_FLAT_BAND = True
++
+ # NoC route knobs of bank_affine_runs. A bank's cores share one row and one DRAM endpoint, so the link
+ # next to the endpoint carries every one of their reads (NoC0, eastward) and writes (NoC1, westward).
+ #
+@@ -285,6 +300,24 @@
+     return groups
+
+
++def small_flat_band(device, grid, tensor_pages: int, num_banks: int):
++    """Row-major cores of the SMALL_FLAT_BAND placement of `tensor_pages` pages, or None when the plan has
++    a page per grid core or more, or the band cannot hold it."""
++    if tensor_pages >= grid.x * grid.y:
++        return None
++    k = max(1, min(tensor_pages, num_banks, grid.x))
++    rows = -(-tensor_pages // k)
++    if rows > grid.y:
++        return None
++    # The centre line runs half a column west of the westmost interior anchor (the worker just east of
++    # the interior DRAM column); the k columns nearest to it are a contiguous range.
++    anchors = ttnn.device.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_0)
++    interior = sorted({anchor.x for anchor in anchors if 0 < anchor.x < grid.x})
++    center = interior[0] - 0.5 if interior else (grid.x - 1) / 2
++    cols = sorted(sorted(range(grid.x), key=lambda x: (abs(x - center), -x))[:k])
++    return [(x, y) for y in range(rows) for x in cols][:tensor_pages]
++
++
+ def _row_run_ranges(cores) -> ttnn.CoreRangeSet:
+     """The fewest rectangles covering `cores` built from row runs: a run of consecutive x in one row,
+     stacked with the same run of the rows directly below it."""
+@@ -381,18 +414,24 @@
+         # Unused by consecutive-page walks (each kernel addresses its own NoC's endpoints); fixed so
+         # every flat descriptor compiles one binary.
+         bank_endpoint_noc = 0
+-        _, all_cores, core_group_1, _, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
+-            grid, tensor_pages, row_wise=True
+-        )
+-        # split_work_to_cores(row_wise=True) hands group 1 the first cores in row-major order and
+-        # group 2 the rest; start_page is the running page count in that same order.
+-        num_cores_g1 = core_group_1.num_cores()
+-        roles = []
+-        start_page = 0
+-        for idx, core in enumerate(ttnn.grid_to_cores(all_cores.num_cores(), grid.x, grid.y, True)):
+-            num_pages = core_pages_g1 if idx < num_cores_g1 else core_pages_g2
+-            roles.append((core, "reader+writer", start_page, num_pages))
+-            start_page += num_pages
++        band = small_flat_band(device, grid, tensor_pages, num_banks) if SMALL_FLAT_BAND else None
++        if band is not None:
++            all_cores = _row_run_ranges(band)
++            core_pages_g1, core_pages_g2 = 1, 0
++            roles = [(ttnn.CoreCoord(x, y), "reader+writer", page, 1) for page, (x, y) in enumerate(band)]
++        else:
++            _, all_cores, core_group_1, _, core_pages_g1, core_pages_g2 = ttnn.split_work_to_cores(
++                grid, tensor_pages, row_wise=True
++            )
++            # split_work_to_cores(row_wise=True) hands group 1 the first cores in row-major order and
++            # group 2 the rest; start_page is the running page count in that same order.
++            num_cores_g1 = core_group_1.num_cores()
++            roles = []
++            start_page = 0
++            for idx, core in enumerate(ttnn.grid_to_cores(all_cores.num_cores(), grid.x, grid.y, True)):
++                num_pages = core_pages_g1 if idx < num_cores_g1 else core_pages_g2
++                roles.append((core, "reader+writer", start_page, num_pages))
++                start_page += num_pages
+
+     covered = sorted(start + page_stride * i for _, _, start, count in roles for i in range(count))
+     if covered != list(range(tensor_pages)):

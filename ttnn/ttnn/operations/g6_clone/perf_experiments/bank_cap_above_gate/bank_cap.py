@@ -11,6 +11,12 @@ import os
 
 
 def install(descriptor_module):
+    # BANK_CORES=<n> (op at or after the 2-per-bank graduation): set BANK_AFFINE_CORES_PER_BANK; 6 restores
+    # the whole-row split of the 5-6-core dram_rows groups. BANK_CAP_BYTES below targets the op before it.
+    cores = os.environ.get("BANK_CORES", "")
+    if cores:
+        descriptor_module.BANK_AFFINE_CORES_PER_BANK = int(cores)
+        return
     cap = int(os.environ.get("BANK_CAP_BYTES", "0") or 0)
     if not cap:
         return
