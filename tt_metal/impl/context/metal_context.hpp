@@ -253,8 +253,9 @@ private:
     // Caller holds the g_instance mutex.
     static ContextId create_default_instance_implicit_locked();
 
-    // Register handlers -- caller already holds the instance lock
-    static void register_handlers_locked();
+    // Register the exit handlers -- caller already holds the instance lock. silicon_cluster_open says whether a
+    // silicon (non-mock) cluster has been opened by now; the exit teardown must be registered after that happens.
+    static void register_handlers_locked(bool silicon_cluster_open);
 
     // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
     // This updates cached dispatch/compute core allocations to match current dispatch mode

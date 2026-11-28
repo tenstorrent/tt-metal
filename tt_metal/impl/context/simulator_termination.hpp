@@ -11,7 +11,7 @@ namespace tt::tt_metal {
 void install_simulator_termination_handler();
 
 // Marks the process as exiting, so a later signal bounds that teardown instead of starting a second
-// exit. Call after registering the teardown atexit handler, so this one runs first.
+// exit. Call after each registration of the teardown atexit handler, so this one runs first.
 void install_simulator_exit_guard();
 
 // Exits through atexit instead of returning to a caller that would keep running on a dead context.
