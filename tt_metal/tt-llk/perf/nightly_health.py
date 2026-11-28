@@ -16,6 +16,7 @@ NIGHTLIES = (
     ("SoL", "llk-perf.yaml"),
     ("non-SoL", "llk-perf-gate.yaml"),
 )
+HEALTH = "llk-perf-nightly-health.yaml"
 VERDICT = re.compile(r"verdict=(\w+) regressions=(\d+)")
 BASELINE = re.compile(r"(?:^|Z )baseline \S+ \(([0-9a-f]+), (\d{4}-\d{2}-\d{2})", re.M)
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
@@ -74,7 +75,7 @@ def scheduled_run(repo, workflow, day):
             "api",
             f"repos/{repo}/actions/workflows/{workflow}/runs?event=schedule&created={day}&per_page=10",
             "--jq",
-            ".workflow_runs[] | {id, html_url, head_sha, status, conclusion, updated_at} | @json",
+            ".workflow_runs[] | {id, html_url, head_sha, status, conclusion, created_at, updated_at} | @json",
         )
     )
     return runs[0] if runs else None
@@ -242,10 +243,13 @@ def build_text(day, reports):
     return "\n".join(lines)
 
 
-def last_to_finish(runs, trigger_run):
-    if any(r is None or r["status"] != "completed" for r in runs):
-        return False
-    return max(runs, key=lambda r: r["updated_at"])["id"] == trigger_run
+def finished_after(run, check):
+    return bool(
+        run
+        and check
+        and run["status"] == "completed"
+        and run["updated_at"] > check["created_at"]
+    )
 
 
 def main(argv=None):
@@ -260,17 +264,17 @@ def main(argv=None):
     ap.add_argument(
         "--trigger-run",
         type=int,
-        help="send only once every nightly of the day is done and this run finished last",
+        help="send only if this nightly finished after the scheduled check of the day",
     )
     ap.add_argument("--out", default="health_payloads.json")
     a = ap.parse_args(argv)
     day = dt.date.fromisoformat(a.date)
     runs = [scheduled_run(a.repo, workflow, a.date) for _, workflow in NIGHTLIES]
-    if a.trigger_run and not last_to_finish(
-        [r for r in runs if r is not None], a.trigger_run
-    ):
-        print("not the last nightly of the day to finish; that one sends the message")
-        return 0
+    if a.trigger_run:
+        late = next((r for r in runs if r and r["id"] == a.trigger_run), None)
+        if not finished_after(late, scheduled_run(a.repo, HEALTH, a.date)):
+            print("the scheduled check reports this nightly")
+            return 0
     limits = leg_limits(a.tests_yaml)
     reports = []
     for (name, _), run in zip(NIGHTLIES, runs):

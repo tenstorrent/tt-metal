@@ -1,6 +1,10 @@
 name: "LLK perf nightly health"
 
 on:
+  # One check a day, after both nightlies are due.
+  schedule:
+    - cron: '0 8 * * *'
+  # Sends only for a nightly that finishes after that check.
   workflow_run:
     workflows: ["LLK perf", "LLK perf gate"]
     types: [completed]
@@ -18,7 +22,7 @@ permissions:
 jobs:
   health:
     name: "Check the nightlies and report"
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'schedule'
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule'
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
