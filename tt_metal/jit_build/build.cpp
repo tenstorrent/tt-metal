@@ -913,18 +913,18 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         kMaxBuildBitset);
 
     std::bitset<kMaxBuildBitset> compiled;
-    std::vector<std::shared_future<void>> events;
+    std::vector<std::function<void()>> compile_jobs;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (state_changed || need_compile(out_dir, this->objs_[i])) {
             compiled.set(i);
-            launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
+            compile_jobs.emplace_back([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); });
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
             BuildCacheTelemetry::inst().record_cache_hit();
         }
     }
 
-    sync_build_steps(events);
+    detail::run_all(compile_jobs);
 
     BuildCacheTelemetry::inst().record_compile(
         static_cast<uint32_t>(this->srcs_.size()), static_cast<uint32_t>(compiled.count()));
@@ -1273,13 +1273,13 @@ void jit_build_for_processors(std::span<const JitBuildState* const> targets, con
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
-    std::vector<std::shared_future<void>> events;
+    std::vector<std::function<void()>> build_jobs;
     for (const auto& build : build_subset) {
         // Capture the necessary objects by reference
-        launch_build_step([&build, settings] { build.build(settings); }, events);
+        build_jobs.emplace_back([&build, settings] { build.build(settings); });
     }
 
-    sync_build_steps(events);
+    detail::run_all(build_jobs);
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
@@ -1290,8 +1290,7 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events) {
     // Join EVERY build step before returning, even when one throws.
     //
     // A build_func runs asynchronously and captures locals BY REFERENCE — e.g.
-    // jit_build_subset's `[&build, settings]` over the by-value `build_subset`, and
-    // JitBuildState::compile's `[this, &out_dir, ...]`. Those locals are destroyed as soon as
+    // ProgramImpl::compile's `[&, kernel]`. Those locals are destroyed as soon as
     // the enclosing scope unwinds. If we let the first exception propagate straight out of this
     // loop, the remaining in-flight tasks keep running against references that are about to be
     // freed (shared_future's destructor does not wait) — a use-after-scope. So we wait on all
