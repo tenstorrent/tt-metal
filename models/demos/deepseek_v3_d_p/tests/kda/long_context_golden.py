@@ -38,11 +38,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
 MANIFEST = "manifest.json"
 
 
-def _segment_path(run_dir: Path, index: int) -> Path:
+def segment_path(run_dir: Path, index: int) -> Path:
     return run_dir / f"segment_{index:06d}.pt"
 
 
-def _atomic_save(payload: object, path: Path) -> None:
+def atomic_save(payload: object, path: Path) -> None:
     temporary = path.with_suffix(f".{os.getpid()}.tmp")
     try:
         torch.save(payload, temporary)
@@ -51,13 +51,13 @@ def _atomic_save(payload: object, path: Path) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _write_manifest(run_dir: Path, manifest: dict) -> None:
+def write_manifest(run_dir: Path, manifest: dict) -> None:
     temporary = run_dir / f"{MANIFEST}.{os.getpid()}.tmp"
     temporary.write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     temporary.replace(run_dir / MANIFEST)
 
 
-def _provenance() -> dict:
+def provenance() -> dict:
     """What determines the golden's last bits besides its identity: code, torch, and the CPU backend."""
     try:
         revision = subprocess.run(
@@ -71,6 +71,25 @@ def _provenance() -> dict:
         "cpu_capability": torch.backends.cpu.get_cpu_capability(),
         "machine": platform.machine(),
     }
+
+
+def resume_manifest(run_dir: Path, expected: dict, segments: int) -> dict:
+    """The manifest of a segmented run in ``run_dir``: new, or the directory's own when every ``expected`` field
+    matches it (a resume refuses a directory holding a different run). While segments remain, the session's
+    provenance is recorded with the segment it starts from."""
+    manifest_path = run_dir / MANIFEST
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        mismatched = sorted(key for key, value in expected.items() if manifest.get(key) != value)
+        if mismatched:
+            raise ValueError(f"{run_dir} holds a different run; mismatched fields: {mismatched}")
+    else:
+        manifest = {**expected, "sessions": [], "segments": []}
+    done = len(manifest["segments"])
+    if done < segments:
+        manifest["sessions"].append({"first_segment": done, **provenance()})
+        write_manifest(run_dir, manifest)
+    return manifest
 
 
 def token_ids_sha256(token_ids: Sequence[int]) -> str:
@@ -106,47 +125,36 @@ def run_golden(
         "dtype": str(dtype),
         "threads": torch.get_num_threads(),
     }
-    manifest_path = run_dir / MANIFEST
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        mismatched = sorted(key for key, value in expected.items() if manifest.get(key) != value)
-        if mismatched:
-            raise ValueError(f"{run_dir} holds a different run; mismatched fields: {mismatched}")
-    else:
-        manifest = {**expected, "sessions": [], "segments": []}
-
     segments = -(-len(token_ids) // segment)
+    manifest = resume_manifest(run_dir, expected, segments)
     done = len(manifest["segments"])
-    if done < segments:
-        manifest["sessions"].append({"first_segment": done, **_provenance()})
-        _write_manifest(run_dir, manifest)
     state = None
     if done:
-        state = KDAReferenceState(**torch.load(_segment_path(run_dir, done - 1), weights_only=True)["state"])
+        state = KDAReferenceState(**torch.load(segment_path(run_dir, done - 1), weights_only=True)["state"])
         print(f"resuming at segment {done}/{segments} (token {manifest['segments'][-1]['end']})", flush=True)
 
     for index in range(done, segments):
         start, end = index * segment, min((index + 1) * segment, len(token_ids))
         began = time.perf_counter()
         output, state = kda_forward_reference(layer_input(token_ids[start:end]), weights, config, state, dtype=dtype)
-        _atomic_save(
-            {"start": start, "end": end, "output": output[0], "state": vars(state)}, _segment_path(run_dir, index)
+        atomic_save(
+            {"start": start, "end": end, "output": output[0], "state": vars(state)}, segment_path(run_dir, index)
         )
         seconds = time.perf_counter() - began
         manifest["segments"].append({"start": start, "end": end, "seconds": seconds})
-        _write_manifest(run_dir, manifest)
+        write_manifest(run_dir, manifest)
         print(f"segment {index + 1}/{segments} tokens [{start}, {end}) {seconds:.2f} s", flush=True)
 
     if "token_floor" not in manifest:
         manifest["token_floor"] = golden_floor(
             torch.cat(
                 [
-                    torch.load(_segment_path(run_dir, index), weights_only=True)["output"].norm(dim=-1)
+                    torch.load(segment_path(run_dir, index), weights_only=True)["output"].norm(dim=-1)
                     for index in range(segments)
                 ]
             )
         )
-        _write_manifest(run_dir, manifest)
+        write_manifest(run_dir, manifest)
     return manifest
 
 
@@ -166,10 +174,10 @@ def load_window(run_dir: Path, start: int, end: int) -> tuple[torch.Tensor, KDAR
     first = start // segment
     state = None
     if first:
-        state = KDAReferenceState(**torch.load(_segment_path(run_dir, first - 1), weights_only=True)["state"])
+        state = KDAReferenceState(**torch.load(segment_path(run_dir, first - 1), weights_only=True)["state"])
     rows = []
     for index in range(first, -(-end // segment)):
-        payload = torch.load(_segment_path(run_dir, index), weights_only=True)
+        payload = torch.load(segment_path(run_dir, index), weights_only=True)
         rows.append(
             payload["output"][
                 max(start, payload["start"]) - payload["start"] : min(end, payload["end"]) - payload["start"]
@@ -184,7 +192,7 @@ def state_after(run_dir: Path, end: int) -> KDAReferenceState:
     ends = [segment["end"] for segment in json.loads((run_dir / MANIFEST).read_text(encoding="utf-8"))["segments"]]
     if end not in ends:
         raise ValueError(f"token {end} is not the end of a complete segment of the golden in {run_dir}")
-    return KDAReferenceState(**torch.load(_segment_path(run_dir, ends.index(end)), weights_only=True)["state"])
+    return KDAReferenceState(**torch.load(segment_path(run_dir, ends.index(end)), weights_only=True)["state"])
 
 
 def main() -> None:
