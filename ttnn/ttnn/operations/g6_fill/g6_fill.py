@@ -55,8 +55,8 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "layout": [ttnn.TILE_LAYOUT],
+    "dtype": [ttnn.float32, ttnn.int32],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["w_non_aligned", "h_non_aligned"],
 }
 
@@ -225,18 +225,29 @@ def g6_fill_plan(input_tensor) -> dict:
     """The plan a call on input_tensor dispatches, with the role of every core. No dispatch."""
     plan = _plan(input_tensor)
     assignment = _pd.core_assignment(plan)
-    return {
+    units_per_core = {(core.x, core.y): n for core, _, n in assignment}
+    report = {
         "regime": plan.regime,
         "num_cores": plan.num_cores,
         "core_ranges": [((r.start.x, r.start.y), (r.end.x, r.end.y)) for r in plan.all_cores.ranges()],
-        "tiles_per_core": {(core.x, core.y): n for core, _, n in assignment},
-        "block_w_tiles": plan.block_w_tiles,
         "fill_row_source": plan.fill_row_source,
         "fill_row_depth": plan.fill_row_depth,
-        "segment_bytes": plan.segment_bytes,
-        "segments_per_tile": plan.segments_per_tile,
+        "segment_bytes": plan.geometry.segment_bytes,
         "roles": {(core.x, core.y): "fill_writer" for core, _, _ in assignment},
     }
+    if plan.regime == _pd.REGIME_TILE_ROW0:
+        report.update(
+            tiles_per_core=units_per_core,
+            block_w_tiles=plan.block_units,
+            segments_per_tile=plan.geometry.segments_per_unit,
+        )
+    else:
+        report.update(
+            chunks_per_core=units_per_core,
+            rm_chunk_bytes=plan.geometry.unit_byte_stride,
+            num_rm_chunks=plan.geometry.num_units,
+        )
+    return report
 
 
 _DESCRIPTOR_CACHE = {}
