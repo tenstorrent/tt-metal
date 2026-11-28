@@ -13,12 +13,13 @@ from typing import Sequence
 from .common import print_phase_summary
 from .device_tests import run_tests
 from .model import FAIL, PASS, SKIP, Check, Phase
-from .resets import reset_loop
+from .resets import add_reset_outcome, reset_loop
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
 # Keeps the first run's checks and logs.
 RETEST_SUFFIX = "_after_reset"
+RETEST_RESET_OK = "retest_reset_ok"
 
 
 def run_retest(
@@ -31,17 +32,20 @@ def run_retest(
     dry_run: bool,
     logs_dir: Path,
     snapshot_out: Path | None,
+    gate: str | None = None,
+    hook: str | None = None,
 ) -> Phase | None:
     """Returns the post-reset snapshot phase, or None. Named snapshot_after_* so
     normalize_health_report() judges the run on it."""
     first = {c.name: c.status for c in first_run.checks}
-    not_passed = [n for n in names if first.get(n) != PASS]
-    if not_passed:
+    # A test that failed the first time already counts; the second boot is for the ones that passed.
+    passed = [n for n in names if first.get(n) == PASS]
+    if not passed:
         phase.add(
             Check(
                 name="retest",
                 status=SKIP,
-                details=f"{', '.join(not_passed)} did not pass on the first boot; no second boot",
+                details=f"none of {', '.join(names)} passed on the first boot; no second boot",
                 ip="other",
             )
         )
@@ -49,22 +53,10 @@ def run_retest(
 
     tt_smi = resolve_tt_smi(tt_smi_path)
     # Own dir: keeps the pre-test reset_1_* log.
-    reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest")
+    reset_loop(tt_smi, (reset_flag,), phase, dry_run, logs_dir=logs_dir / "retest", gate=gate, hook=hook)
     # reset_* checks don't count toward the verdict; restate under a name that does.
-    broke = [c.name for c in phase.checks if c.status == FAIL]
-    phase.add(
-        Check(
-            name="retest_reset_ok",
-            status=FAIL if broke else PASS,
-            details=(
-                f"reset before the retest left the unit degraded: {', '.join(broke)}"
-                if broke
-                else f"unit back after tt-smi {reset_flag}"
-            ),
-            ip="other",
-        )
-    )
-    if broke:
+    ok_text, fail_prefix = f"unit back after tt-smi {reset_flag}", "reset before the retest left the unit degraded"
+    if add_reset_outcome(phase, RETEST_RESET_OK, ok_text, fail_prefix) != PASS:  # no second boot to retest on
         return None
 
     snap_phase = None
@@ -83,5 +75,5 @@ def run_retest(
             snap_phase.rollup()
             print_phase_summary(snap_phase.name, asdict(snap_phase))
 
-    run_tests(tt_metal, names, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
+    run_tests(tt_metal, passed, phase, dry_run, logs_dir, name_suffix=RETEST_SUFFIX)
     return snap_phase

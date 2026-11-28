@@ -1079,7 +1079,8 @@ hosts_from_unretrainable_yaml() {
         sort -u | paste -sd, -
 }
 
-# Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available.
+# Galaxy units reset with tt-smi -glx_reset, not tt-smi -r: -r can leave chips that
+# re-enumerate but read 0xffffffff until a -glx_reset.
 # --glx-reset-cmd replaces it where tt-smi cannot reach the BMC, e.g. a container without sudo.
 run_glx_reset() {
     local reset_hosts="$1"

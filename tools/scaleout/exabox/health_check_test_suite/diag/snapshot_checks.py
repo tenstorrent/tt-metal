@@ -8,6 +8,7 @@ Also run after every pre-test reset, against a fresh snapshot (see resets.py).
 """
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 
 from .galaxy import (
@@ -16,6 +17,7 @@ from .galaxy import (
     BOARD_REV_EXPECTATIONS,
     ETH_EXAMAX_BY_ASIC,
     ETH_INTERNAL_BY_ASIC,
+    EXPECTED_BDFS,
     EXPECTED_CHIP_COUNT,
     TRAY_TO_UBB_NIBBLE,
     UBB_NIBBLE_TO_TRAY,
@@ -24,6 +26,31 @@ from .galaxy import (
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+
+# Check names the verdict's rows match on.
+PCIE_ENUM_COUNT = "pcie_enum_count"
+ASIC_LOCATION_PER_UBB = "asic_location_per_ubb"
+PCIE_GEN = "pcie_gen"
+PCIE_LANE_WIDTH = "pcie_lane_width"
+ASIC_THERMAL_PRECHECK = "asic_thermal_precheck"
+GDDR_TRAINING_PER_CHANNEL = "gddr_training_per_channel"
+GDDR_BIST_PER_CHANNEL = "gddr_bist_per_channel"
+DRAM_STATUS = "dram_status"
+ETH_SPEED = "eth_speed"
+GDDR_DBI_FW = "gddr_dbi_fw"
+GDDR_DBI_MIN_FW = (19, 17, 1)  # older FW bundles give GDDR DBI errors
+
+
+def fw_bundles(versions) -> tuple[list[str], list[str]]:
+    """(parsed FW bundle versions, those older than GDDR_DBI_MIN_FW); one that does not parse is not judged."""
+    known = {v: tuple(map(int, m.groups())) for v in versions if (m := re.match(r"(\d+)\.(\d+)\.(\d+)", str(v)))}
+    return sorted(known), sorted(v for v, t in known.items() if t < GDDR_DBI_MIN_FW)
+
+
+def _parts(bdfs) -> list[str]:
+    """Check.parts for these BDFs: each chip once, named by tray and ASIC."""
+    return [format_bdf(b) for b in dict.fromkeys(bdfs)]
+
 
 # GDDR train+BIST bitmask layout — tt-system-firmware telemetry.h:103-118.
 # Exposed by tt-smi -s as smbus_telem.DDR_STATUS (legacy WH name; on BH this is
@@ -73,14 +100,13 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     # localise the missing chip(s) without manual cross-referencing.
     n = len(devs)
     actual_bdfs = sorted((d.get("board_info") or {}).get("bus_id", "") for d in devs)
-    all_expected_bdfs = sorted(expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9))
-    missing_bdfs_enum = sorted(set(all_expected_bdfs) - set(actual_bdfs))
+    missing_bdfs_enum = sorted(set(EXPECTED_BDFS) - set(actual_bdfs))
     enum_details = f"{n}/{EXPECTED_CHIP_COUNT} chips enumerated"
     if missing_bdfs_enum:
         enum_details += "; missing: " + ", ".join(format_bdf(b) for b in missing_bdfs_enum)
     phase.add(
         Check(
-            name="pcie_enum_count",
+            name=PCIE_ENUM_COUNT,
             status=PASS if n == EXPECTED_CHIP_COUNT else FAIL,
             details=enum_details,
             data={
@@ -90,6 +116,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "actual_bdfs": actual_bdfs,
             },
             ip="pcie",
+            parts=_parts(missing_bdfs_enum),
         )
     )
     if n == 0:
@@ -161,12 +188,13 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     bad = [d["board_info"]["bus_id"] for d, ok in zip(devs, dram_ok) if not ok]
     phase.add(
         Check(
-            name="dram_status",
+            name=DRAM_STATUS,
             status=PASS if all(dram_ok) else FAIL,
             details=f"{sum(dram_ok)}/{n} dram_status=True"
             + (f"; failed: [{', '.join(format_bdf(b) for b in bad)}]" if bad else ""),
             data={"failed_chips": bad},
             ip="gddr",
+            parts=_parts(bad),
         )
     )
 
@@ -181,6 +209,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             + (f"; partial: [{', '.join(f'{format_bdf(b)}={m}' for b, m in gddr_bad[:5])}]" if gddr_bad else ""),
             data={"partial_chips": gddr_bad},
             ip="gddr",
+            parts=_parts(b for b, _ in gddr_bad),
         )
     )
 
@@ -197,6 +226,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             data={"harvested_chips": harv_bad, "distribution": dict(Counter(harv))},
             ip="asic",
             console_visible=False,
+            parts=_parts(b for b, _ in harv_bad),
         )
     )
 
@@ -231,7 +261,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         details.append(f"expected BDFs: {missing_bdfs}")
     phase.add(
         Check(
-            name="asic_location_per_ubb",
+            name=ASIC_LOCATION_PER_UBB,
             status=PASS if asic_loc_ok else FAIL,
             details="all UBBs complete" if asic_loc_ok else "; ".join(details),
             data={
@@ -241,6 +271,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 "missing_bdfs": missing_bdfs,
             },
             ip="asic",
+            parts=_parts(missing_bdfs),
         )
     )
 
@@ -273,6 +304,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             + (f"; mismatches: [{'; '.join(_fmt_mismatch(m) for m in mismatches[:3])}]" if mismatches else ""),
             data={"mismatches": mismatches},
             ip="asic",
+            parts=_parts(m["bdf"] for m in mismatches),
         )
     )
 
@@ -331,6 +363,18 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
 
+    bundles, old = fw_bundles([d.get("firmwares", {}).get("fw_bundle_version") for d in devs])
+    phase.add(
+        Check(
+            name=GDDR_DBI_FW,
+            status=WARN if old else PASS if bundles else SKIP,
+            details=f"FW bundle {', '.join(old or bundles) or 'not read'}"
+            + (" is older than 19.17.1: GDDR DBI errors" if old else ""),
+            data={"old": old},
+            ip="fw",
+        )
+    )
+
     # 8. GDDR per-channel training + BIST decoded from smbus_telem.DDR_STATUS.
     # Layout in header comment at top of file.
     train_failures: list[dict] = []
@@ -370,7 +414,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     total_channels = n * 8
     phase.add(
         Check(
-            name="gddr_training_per_channel",
+            name=GDDR_TRAINING_PER_CHANNEL,
             status=PASS if not train_failures else FAIL,
             details=f"{total_channels - len(train_failures)}/{total_channels} channels trained"
             + (
@@ -380,11 +424,12 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"failures": train_failures},
             ip="gddr",
+            parts=_parts(f["bdf"] for f in train_failures),
         )
     )
     phase.add(
         Check(
-            name="gddr_bist_per_channel",
+            name=GDDR_BIST_PER_CHANNEL,
             status=PASS if not bist_failures else FAIL,
             details=f"{total_channels - len(bist_failures)}/{total_channels} channels BIST passed"
             + (
@@ -394,6 +439,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"failures": bist_failures},
             ip="gddr",
+            parts=_parts(f["bdf"] for f in bist_failures),
         )
     )
 
@@ -433,7 +479,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
 
     phase.add(
         Check(
-            name="pcie_lane_width",
+            name=PCIE_LANE_WIDTH,
             status=PASS if not lane_mismatches else FAIL,
             details=(
                 f"{n - len(lane_mismatches)}/{n} chips at expected lane width "
@@ -446,6 +492,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             ),
             data={"mismatches": lane_mismatches},
             ip="pcie",
+            parts=_parts(m["bdf"] for m in lane_mismatches),
         )
     )
 
@@ -459,7 +506,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
     if rev is None:
         phase.add(
             Check(
-                name="pcie_gen",
+                name=PCIE_GEN,
                 status=SKIP,
                 details="board_rev indeterminate; cannot pick expected gen (see board_rev)",
                 data={"per_chip": dict(per_chip_gen), "expected": None, "rev": None},
@@ -491,7 +538,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             bits.append(f"above-spec: {', '.join(format_bdf(bdf) for bdf, _ in over)}")
         phase.add(
             Check(
-                name="pcie_gen",
+                name=PCIE_GEN,
                 status=WARN if under else PASS,
                 details="; ".join(bits),
                 data={
@@ -502,6 +549,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     "rev": rev,
                 },
                 ip="pcie",
+                parts=_parts(bdf for bdf, _ in under),
             )
         )
 
@@ -544,13 +592,14 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                     "rev": rev,
                 },
                 ip="gddr",
+                parts=_parts(b for b, _ in gddr_speed_bad),
             )
         )
 
     # 12. ETH speed — no eth speed field in tt-smi 4.1.2 or 5.1.1 schema.
     phase.add(
         Check(
-            name="eth_speed",
+            name=ETH_SPEED,
             status=SKIP,
             details="no eth speed field in tt-smi snapshot schema",
             data={},
@@ -558,9 +607,12 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         )
     )
 
-    # 12b. ETH links up — verify internal (non-QSFP) ports report as live.
-    # Expected per chip = (Internal | ExaMAX) & ENABLED_ETH. Compare to
-    # ETH_LIVE_STATUS masked to the same non-QSFP set.
+    # 12b. ETH links up — verify on-host internal (non-QSFP) ports report link up.
+    # Expected per chip = (Internal | ExaMAX) & ENABLED_ETH. Compare to the
+    # link-up half of ETH_LIVE_STATUS (bits 16-31; bits 0-15 are the port
+    # heartbeats, which stop while a workload owns the ports) masked to the
+    # same set. QSFP ports lead to other hosts or loop back on this one;
+    # eth_status_cabling judges those.
     #
     # The port-topology tables (ETH_INTERNAL_BY_ASIC, ETH_EXAMAX_BY_ASIC) are
     # indexed by *physical* ASIC_LOCATION (the chip's slot on the UBB, fixed
@@ -592,7 +644,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         loc = _phys_asic_loc(d)
         live_str = d.get("smbus_telem", {}).get("ETH_LIVE_STATUS")
         try:
-            live = int(live_str, 16) if live_str is not None else None
+            live = int(live_str, 16) >> 16 & 0xFFFF if live_str is not None else None
         except (ValueError, TypeError):
             live = None
         live_status_vals.append(live)
@@ -661,6 +713,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 ),
                 data={"failures": eth_link_failures},
                 ip="eth",
+                parts=_parts(f["bdf"] for f in eth_link_failures),
             )
         )
     else:
@@ -731,7 +784,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
         status = PASS if hottest_t < threshold else WARN
         phase.add(
             Check(
-                name="asic_thermal_precheck",
+                name=ASIC_THERMAL_PRECHECK,
                 status=status,
                 details=f"hottest chip {hottest_bdf} @ {hottest_t:.1f}°C (limit {thm_limit}°C)",
                 data={
@@ -742,6 +795,7 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
                 },
                 ip="thermal",
                 console_visible=False,
+                parts=_parts([hottest_bdf] if status == WARN else []),
             )
         )
 

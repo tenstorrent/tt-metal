@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections import defaultdict
@@ -29,12 +30,55 @@ def default_tt_metal_path() -> Path:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def kill_process_group(proc: subprocess.Popen, grace_s: float) -> None:
+    """SIGTERM then SIGKILL the child's process group."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=grace_s)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
 def run(cmd: list[str], dry_run: bool = False, **kw) -> subprocess.CompletedProcess:
     """Run a command. In dry_run, print and return a stubbed CompletedProcess."""
     log(f"$ {' '.join(cmd)}")
     if dry_run:
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
     return subprocess.run(cmd, **kw)
+
+
+HOOK_TIMEOUT_S = 1800
+
+
+def call_hook(
+    hook: str | None, event: str, step: str, status: str, outdir: Path, dry_run: bool, cwd: Path | None = None
+) -> int:
+    """Run --hook as SCRIPT <event> <step> <status> <outdir> from cwd: its rc (0 with no hook or in a dry run)."""
+    if not hook:
+        return 0
+    if dry_run:
+        log(f"[dry-run] {hook} {event} {step} {status} {outdir}")
+        return 0
+    outdir.mkdir(parents=True, exist_ok=True)
+    # Paths are made absolute here, before cwd moves; a bare name is still looked up on PATH.
+    cmd = [os.path.abspath(hook) if "/" in hook else hook, event, step, status, str(outdir.absolute())]
+    try:  # a site power cycle and boot fit in the bound; a hung hook is rc 124
+        return subprocess.run(cmd, check=False, timeout=HOOK_TIMEOUT_S, cwd=cwd).returncode
+    except subprocess.TimeoutExpired:
+        log(f"hook {hook} {event} {step} timed out after {HOOK_TIMEOUT_S} s")
+        return 124
+    except OSError as e:
+        log(f"hook {hook} did not run: {e}")
+        return 127
 
 
 def as_text(v) -> str:

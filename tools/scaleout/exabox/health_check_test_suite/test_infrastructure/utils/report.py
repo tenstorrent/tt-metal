@@ -18,7 +18,7 @@ from __future__ import annotations
 EXCLUDED_CHECKS = frozenset({"snapshot_capture"})
 
 
-# Reset *operation* steps (`tt-smi -r`/`-glx_reset` iterations, CPLD auto-recover):
+# Reset *operation* steps (`tt-smi -glx_reset` iterations; cpld_auto_recover in older reports):
 # a means to get the node testable, not a verdict. A node the resets can't fix still
 # fails via the tests phase / final snapshot, so these don't gate the verdict.
 # `post_reset_state_stable` is a real post-reset check, not a reset op.

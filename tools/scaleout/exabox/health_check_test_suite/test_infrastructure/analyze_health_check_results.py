@@ -56,6 +56,15 @@ CHECK_CATEGORY = {
 }
 STRESS_PHASES = {"tests", "retest"}
 
+# Cause class of a WARN/FAIL row, by category. A lost chip is UNKNOWN unless the run set the row's own cause from the
+# tray's power reads (diag/sensors.py).
+CAUSE_BY_CATEGORY = {
+    **dict.fromkeys(("pcie", "eth"), "PCIE/LINK"),
+    **dict.fromkeys(("gddr", "asic", "firmware", "thermal", "board"), "CHIP/BOARD"),
+}
+CHIP_LOST_CHECKS = {"pcie_enum_count", "asic_location_per_ubb"}
+TRAY_RE = re.compile(r"\((UBB\d)/U\d\)")
+
 # Benign fleet-wide WARNs: tracked but kept out of the actionable rollups.
 ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 
@@ -169,6 +178,8 @@ CHECKS_COLS = [
     "testcases_failed",
     "executed",
     "details_short",
+    "cause",
+    "part",
 ]
 
 
@@ -206,6 +217,19 @@ def category_for(phase: str, check: dict) -> str:
     return IP_TO_CATEGORY.get(check.get("ip", ""), "other")
 
 
+def cause_for(category: str, check_name: str) -> str:
+    if check_name in CHIP_LOST_CHECKS or category == "reset":
+        return "UNKNOWN"
+    return CAUSE_BY_CATEGORY.get(category, "UNKNOWN")
+
+
+def part_cell(parts: list) -> str:
+    """The check's chips, '; '-joined; a tray with all 8 chips listed is named once."""
+    trays = [m.group(1) if m else None for m in map(TRAY_RE.search, parts)]
+    whole = {t for t in trays if t and trays.count(t) == 8}
+    return "; ".join(dict.fromkeys(f"{t} (all 8 chips)" if t in whole else p for p, t in zip(parts, trays)))
+
+
 def iter_checks(report: dict, primary_only: bool = True):
     for pname, ph in report.get("phases", {}).items():
         if primary_only and phase_kind(pname) != "primary":
@@ -234,12 +258,9 @@ def _hexint(v):
 
 
 def _max_asic_temp(report: dict):
-    c = _find_check(report, "asic_thermal_precheck")
-    if not c:
-        return ""
-    temps = (c.get("data", {}) or {}).get("all_temps_c", {}) or {}
-    vals = [float(v) for v in temps.values() if v not in ("", None)]
-    return round(max(vals), 1) if vals else ""
+    c = _find_check(report, "asic_thermal_precheck") or {}
+    t = (c.get("data", {}) or {}).get("hottest_temp_c")
+    return round(float(t), 1) if t not in ("", None) else ""
 
 
 def _gddr_temp_and_uncorr(report: dict):
@@ -371,6 +392,8 @@ def checks_rows(report: dict, meta: dict):
                 "testcases_failed": tf,
                 "executed": executed,
                 "details_short": (c.get("details", "") or "").replace("\n", " | ")[:cap],
+                "cause": (c.get("cause") or cause_for(cat, name)) if st in ("WARN", "FAIL") else "",
+                "part": part_cell(c.get("parts") or []) if st in ("WARN", "FAIL") else "",
             }
         )
     return rows

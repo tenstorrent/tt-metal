@@ -98,15 +98,14 @@ When you encounter issues that require escalation, use the following contacts an
 3. **Check link status**: Use the eth status script to see which ports are up/down
 4. **Run validation first**: Most issues surface during physical validation
 
-**Note on tt-smi commands**: As of tt-smi 3.1.1, `tt-smi -glx_reset` is deprecated in favor of `tt-smi -r`. The new command is faster, doesn't require sudo, and works in Docker/VMs. The validation scripts in this repo still use `-glx_reset` during the transition period as tt-smi 3.1.1+ is rolled out to Metal CI and Exabox clusters.
+**Note on tt-smi commands**: On a Galaxy, reset with `tt-smi -glx_reset`, not `tt-smi -r`. `tt-smi -r` can leave chips that re-enumerate but read 0xffffffff until a `-glx_reset`. After a reset, count the chips (`tt-smi -l`, 32 on a Galaxy) before you go on.
 
 **Useful commands:**
 
 | Command | Purpose |
 | --------- | --------- |
 | `tt-smi -l` | List visible devices |
-| `tt-smi -r` | Reset devices (3.1.1+, preferred) |
-| `tt-smi -glx_reset` | Galaxy reset (deprecated as of 3.1.1, use `-r`) |
+| `tt-smi -glx_reset` | Galaxy reset (use this, not `-r`) |
 | `who` | See who's logged in |
 | `uptime` | Check if machine recently rebooted |
 | `dmesg \| tail -100` | Check kernel logs for errors |
@@ -146,7 +145,7 @@ The script categorizes each log file and gives you a summary with success rate, 
 | **Extra connections** | Unexpected links found | FSD doesn't match actual cabling. Verify you're using the correct FSD file (8x16 vs 4x32) |
 | **Workload timeout** | Traffic tests timed out | Cores hung waiting for response. Power cycle the cluster. See [Tensix Stall Issue](#tensix-stall-issue-requires-power-cycle) |
 | **DRAM training failures** | Chip memory failed to initialize | Hardware issue. See [GDDR Issue on Chip](#gddr-issue-on-chip). Contact syseng |
-| **ARC timeout** | ARC communication issues | Try reset with `tt-smi -r`. If persistent, may need power cycle. See [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout) |
+| **ARC timeout** | ARC communication issues | Try reset with `tt-smi -glx_reset`. If persistent, may need power cycle. See [tt-smi Reset Fails with ARC Timeout](#tt-smi-reset-fails-with-arc-timeout) |
 | **AICLK timeout** | AICLK failed to settle during chip init | Possible bad firmware or hardware. See [AICLK Timeout During Chip Initialization](#aiclk-timeout-during-chip-initialization). Escalate to syseng |
 | **MPI error** | Lost connection between hosts during test | Check network connectivity. Verify SSH agent forwarding. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
 | **SSH error** | Authentication failed (publickey) | SSH agent not forwarded or key not added. See [SSH Agent Forwarding for MPI](#ssh-agent-forwarding-for-mpi) |
@@ -342,8 +341,6 @@ sudo /usr/local/bin/tt_reidle_downed_node.sh <hostname>
 
 ### tt-smi Reset Requires Sudo Password in SLURM Session
 
-**Note**: This issue only affects the deprecated `tt-smi -glx_reset` command. Use `tt-smi -r` (available in tt-smi 3.1.1+) instead, which doesn't require sudo.
-
 **Symptom**: Running `tt-smi -glx_reset` via mpirun in a SLURM session fails with:
 
 ```text
@@ -354,9 +351,7 @@ Running `groups` in the SLURM session shows wrong groups (e.g., another user's g
 
 **Cause**: UID/group mismatch between slurm-login node and galaxy nodes. The SLURM session inherits incorrect group IDs.
 
-**Solution**: Use `tt-smi -r` instead (available in tt-smi 3.1.1+), which doesn't require sudo and works in SLURM sessions.
-
-**Legacy workaround** (if stuck on older tt-smi): SSH directly to the galaxy node (not via srun) and run the reset:
+**Solution**: SSH directly to the galaxy node (not via srun) and run the reset:
 
 ```bash
 ssh <your-username>@<galaxy-host>.exabox.tenstorrent.com
@@ -383,9 +378,7 @@ If this issue persists, report to infra team to fix group synchronization.
 
 ### tt-smi Reset Fails with ARC Timeout
 
-**Note**: As of tt-smi 3.1.1, use `tt-smi -r` for resets. The `-glx_reset` option is deprecated. The new reset goes through the driver instead of BMC, doesn't need sudo, and works in docker/VMs.
-
-**Symptom**: `tt-smi -r` fails with ARC timing out.
+**Symptom**: `tt-smi -glx_reset` fails with ARC timing out.
 
 **Cause**: Can be transient or caused by underlying GDDR issues on a specific chip.
 
@@ -428,7 +421,7 @@ This error originates from UMD during chip initialization (`tt_metal/third_party
 **Resolution steps**:
 
 1. Check the ASIC temperature in the error message - if abnormally high, allow cooldown
-2. Try a reset with `tt-smi -r`
+2. Try a reset with `tt-smi -glx_reset`
 3. If issue persists, try a soft reboot of the host
 4. If still failing after reboot, escalate to Systems Engineering
 
@@ -616,7 +609,7 @@ This error typically appears across multiple MPI ranks with the same hostname me
    Option B - Run the validation command directly with the correct FSD:
 
    ```bash
-   mpirun --host <hosts> tt-smi -r
+   mpirun --host <hosts> tt-smi -glx_reset
    sleep 30
    mpirun --host <hosts> --tag-output ./build/tools/scaleout/run_cluster_validation \
        --factory-descriptor-path /data/scaleout_configs/merged_fsd.textproto \
@@ -913,7 +906,7 @@ The error originates from `tt_metal/impl/context/metal_context.cpp` during `Meta
 1. **Immediate fix**: Reset the cluster and retry:
 
    ```bash
-   mpirun --host <hosts> tt-smi -r
+   mpirun --host <hosts> tt-smi -glx_reset
    sleep 30
    # Re-run the test
    ```
@@ -922,7 +915,7 @@ The error originates from `tt_metal/impl/context/metal_context.cpp` during `Meta
 
    ```bash
    # Reset all hosts
-   mpirun --host <hosts> tt-smi -r
+   mpirun --host <hosts> tt-smi -glx_reset
    sleep 30
 
    # Validate cluster health
@@ -968,7 +961,7 @@ The error originates from `tt_metal/impl/device/device_manager.cpp` during `Devi
 
    ```bash
    # Reset and wait
-   mpirun --host <hosts> tt-smi -r
+   mpirun --host <hosts> tt-smi -glx_reset
    sleep 60
 
    # Validate - exit early if cluster is unhealthy
