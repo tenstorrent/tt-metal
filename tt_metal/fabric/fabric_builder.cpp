@@ -105,9 +105,6 @@ void FabricBuilder::discover_channels() {
 }
 
 void FabricBuilder::create_routers() {
-    const auto& control_plane = fabric_context_.get_control_plane();
-    const auto& cluster = fabric_context_.get_cluster();
-
     // Create router builders
     for (const auto& [direction, eth_channels] : channels_by_direction_) {
         const auto& neighbor_node = chip_neighbors_.at(direction);
@@ -122,8 +119,6 @@ void FabricBuilder::create_routers() {
                 .is_dispatch_link = is_dispatch,
             };
 
-            cluster.register_sim_fabric_endpoint_direction(
-                device_->id(), eth_chan, control_plane.routing_direction_to_eth_direction(direction));
             routers_.insert({eth_chan, make_router(location)});
         }
     }
