@@ -55,8 +55,12 @@ ALWI void mm_no_mop_unpack(
         mm_main::llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim);
         return;
     }
-#endif
+    // per row: behind the no-MOP math the hoisted row loop reads 1 to 2 cycles per block slower than main
+    llk_unpack_AB_matmul<false, 0, DataFormat::Invalid, 0, 0, true, false, true>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim);
+#else
     llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim);
+#endif
 }
 #endif
 
