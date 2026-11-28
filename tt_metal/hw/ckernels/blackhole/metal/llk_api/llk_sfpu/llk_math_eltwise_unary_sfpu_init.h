@@ -118,7 +118,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     // Per-op common SFPU init (config reg). The executes assume the ADDR_MOD_7 zero-advance invariant,
     // so _llk_math_hw_configure_ (compute_kernel_hw_startup) must already have run on this thread.
     _llk_math_eltwise_unary_sfpu_init_once_();
-    if constexpr (sfpu_op == SfpuType::abs) {
+    if constexpr (sfpu_op == SfpuType::abs || sfpu_op == SfpuType::abs_int32) {
+        // abs_int32 needs the ADDR_MOD_6 abs_init programs (ttnn reaches it through abs_tile_init).
         sfpu::abs_init();
     } else if constexpr (sfpu_op == SfpuType::acos) {
         sfpu::acos_init<is_fp32_dest_acc_en>();
