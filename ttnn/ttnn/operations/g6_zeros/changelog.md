@@ -159,3 +159,11 @@ Device kernel duration (Blackhole, one fresh `--profile` run each):
 That is about 49 % of the 512 GB/s nominal DRAM peak, so p2 and p3 are not at the DRAM bound with
 these values. The design's grid-sync lamp (`writers_per_bank` in {1, 2, 4, 8, 13}) and its
 core↔bank placement lamp are the next things to measure. Both are knob turns with no kernel change.
+
+## Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
+- Date: 2026-11-28
+- What was done: widened `SUPPORTED["dtype"]` to `[float32, bfloat16, bfloat8_b]`. No kernel, program-descriptor or `validate()` change: the page stride comes from `ttnn.tile_size(dtype)` (cross-checked against the allocator's `buffer_aligned_page_size()`), the `cb_zero_source` format tag follows `output.dtype`, and the writer kernel is dtype-agnostic (it streams all-zero bytes; a bfp8 page of all-zero bytes is +0.0 in every datum and exponent). 1088 B bfp8 pages tile the 16 KiB chunks because chunks are byte-addressed over a contiguous bank run, not page-aligned. Reused: the single `bank_run` regime, plan, CB and writer kernel. Added: nothing. No `compute_kernel_config` is exposed: the op has no compute kernel. No EXCLUSIONS entry: every production cell is tile-aligned, so the usual bfloat8_b × non-aligned exclusion does not arise.
+- Accuracy achieved: exact. p4 (1,4,256,128) bfloat16 and p1 (32831,1,32,256) bfloat8_b: max ULP 0, 0 negative zeros, max abs error 0.0 (PCC 1.0 and relative RMS are degenerate against an all-zero reference; the bit-pattern gate is the meaningful one).
+- Golden test progress: the 6 previously `xfail_expected` cells (p1 bf8b ×3, p4 bf16 ×3: plain, model profile, dirty destination) now pass, 6/6 in the `-k bfloat` slice; with the 13 float32 cells unchanged this is 19/19 expected. Unit suite: 26/26 pass, 0 xfail (`test_g6_zeros.py`, `test_g6_zeros_precision_baseline.py`), including both dirty-destination cases.
+- Issues encountered: None.
+- Tests added: none. The existing acceptance and precision-baseline tests already parametrize p4 bf16 and p1 bf8b and gate on SUPPORTED, so they switched from xfail to run. The skill's `test_<op>_precision_matrix` (math_fidelity × fp32_dest_acc_en) does not apply: there is no compute kernel and no compute config; `test_g6_zeros_precision_baseline.py` is the op's precision characterization.

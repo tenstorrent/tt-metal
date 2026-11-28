@@ -14,3 +14,6 @@
 {"event":"test_run","result":"pass","detail":"acceptance 19 passed 4 xfailed (--dev, plain); bank_run debug 14 passed (--dev, plain); golden 13 passed 6 xfailed; perf_knobs 3 passed","ts":"2026-11-27T06:06:40-05:00"}
 {"event":"test_run","phase":"bank_run rebuild","result":"pass","acceptance":"17 passed, 4 xfailed (plain and --dev)","golden":"13 passed, 6 xfailed","perf_ns":{"p2":49884,"p3":24917},"cores":104,"ts":"2026-11-27T20:41:42-05:00"}
 {"event":"fix_applied","what":"describe_plan used nonexistent ttnn.round_up when called before any g6_zeros call; replaced with integer round-up","ts":"2026-11-27T20:41:42-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-27T23:57:52-05:00"}
+{"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros.py + test_g6_zeros_precision_baseline.py","result":"26 passed, 0 xfail; p4 bf16 + p1 bf8b max_ulp=0 negative_zeros=0","ts":"2026-11-28T00:00:23-05:00"}
+{"event":"test_run","status":"pass","tests":"eval/golden_tests/g6_zeros/test_golden.py -k bfloat","result":"6/6 passed (p1 bf8b x3, p4 bf16 x3)","ts":"2026-11-28T00:00:23-05:00"}

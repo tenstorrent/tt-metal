@@ -48,7 +48,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
 }
 

@@ -34,7 +34,7 @@
 - **Golden baseline**: 13 / 19 cells pass. The other 6 are `xfail_expected`: every bfloat16 and bfloat8_b cell. 0 `supported_fail`, 0 `xpass_drift`, 0 `xfail_wrong_mode`.
 - **Device time** (Blackhole, device kernel duration): p1 bf8b 1,102,674 ns (259 GB/s), p2 fp32 48,693 ns, p3 fp32 24,827 ns, p4 bf16 1,603 ns.
 
-### [ ] Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
+### [x] Refinement 1 — Numerical formats: bfloat16 and bfloat8_b
 
 **Goal**: add `ttnn.bfloat16` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. This moves the six `xfail_expected` golden cells (p4 bf16 ×3, p1 bf8b ×3: plain, model profile, dirty destination) to passing. No `compute_kernel_config` is exposed: the op has no compute kernel, and the spec says no compute configuration exists.
 
