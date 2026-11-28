@@ -13,8 +13,8 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-// Builds one sdpa_fw program per device for this ring step, with the mask that device uses at this step. A device that
-// sits the step out gets an empty descriptor, which the framework skips.
+// Builds one sdpa_fw program per device for this ring step, on the chunk and with the mask that device uses at this
+// step. A device that sits the step out gets an empty descriptor, which the framework skips.
 struct RingSDPAFwProgramFactory {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const operation_attributes_t& operation_attributes,

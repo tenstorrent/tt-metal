@@ -22,28 +22,22 @@ namespace {
 
 namespace sdpa_fw = ttml::metal::ops::sdpa_fw::device;
 
-// Calls `fn(attrs, tensor_args, return_value)` with the SDPA forward arguments for one device at this ring step. No
-// explicit mask tensor is needed: the SDPA kernel generates the causal mask internally.
+// Calls `fn(attrs, tensor_args, return_value)` with the SDPA forward arguments of the chunk one device computes at this
+// ring step. No explicit mask tensor is needed: the SDPA kernel generates the causal mask internally.
 template <typename Fn>
-decltype(auto) with_sdpa_fw_args(
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
-    AttentionMaskType mask_type,
-    Fn&& fn) {
-    auto& output = std::get<0>(tensor_return_value);
-    auto& intermediates = std::get<1>(tensor_return_value);
+decltype(auto) with_sdpa_fw_args(const RingSDPAFwChunk& chunk, AttentionMaskType mask_type, Fn&& fn) {
     const std::optional<ttnn::Tensor> no_tensor = std::nullopt;
     const sdpa_fw::operation_attributes_t sdpa_attrs{
         .return_intermediates = true, .mask_type = mask_type, .dropout_probability = 0.0F};
     const sdpa_fw::tensor_args_t sdpa_tensor_args{
-        .query = tensor_args.query,
-        .key = tensor_args.key,
-        .value = tensor_args.value,
+        .query = chunk.query,
+        .key = chunk.key,
+        .value = chunk.value,
         .mask = no_tensor,
-        .preallocated_intermediate = intermediates,
-        .preallocated_output = output,
+        .preallocated_intermediate = chunk.intermediates,
+        .preallocated_output = chunk.output,
         .gate = no_tensor};
-    sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
+    sdpa_fw::tensor_return_value_t sdpa_return_value{chunk.output, chunk.intermediates};
     return fn(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
 }
 
@@ -52,15 +46,15 @@ decltype(auto) with_sdpa_fw_args(
 tt::tt_metal::ProgramDescriptor RingSDPAFwProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
     TT_FATAL(mesh_coordinate.has_value(), "Ring SDPA forward builds one program per device and needs its coordinate");
-    const auto mask_type = mask_for_device_at_step(operation_attributes, *mesh_coordinate);
-    if (!mask_type.has_value()) {
+    const auto work = work_for_device_at_step(operation_attributes, *mesh_coordinate);
+    if (!work.execute) {
         return {};
     }
     return with_sdpa_fw_args(
-        tensor_args, tensor_return_value, *mask_type, [](const auto& attrs, const auto& args, auto& return_value) {
+        tensor_args.chunks[work.chunk], work.mask_type, [](const auto& attrs, const auto& args, auto& return_value) {
             return sdpa_fw::SDPAForwardProgramFactory::create_descriptor(attrs, args, return_value);
         });
 }
@@ -69,14 +63,14 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
     TT_FATAL(mesh_coordinate.has_value(), "Ring SDPA forward builds one program per device and needs its coordinate");
-    // Only devices that run this step have a program.
-    const auto mask_type = mask_for_device_at_step(operation_attributes, *mesh_coordinate);
-    TT_FATAL(mask_type.has_value(), "Ring SDPA forward has a program on a device that sits this step out");
+    // Only devices that run this step have a program; a cache hit rebinds the chunk by its list position.
+    const auto work = work_for_device_at_step(operation_attributes, *mesh_coordinate);
+    TT_FATAL(work.execute, "Ring SDPA forward has a program on a device that sits this step out");
     with_sdpa_fw_args(
-        tensor_args, tensor_return_value, *mask_type, [&](const auto& attrs, const auto& args, auto& return_value) {
+        tensor_args.chunks[work.chunk], work.mask_type, [&](const auto& attrs, const auto& args, auto& return_value) {
             sdpa_fw::SDPAForwardProgramFactory::override_runtime_arguments(
                 program, attrs, args, return_value, mesh_coordinate);
         });

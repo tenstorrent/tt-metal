@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <optional>
 #include <string_view>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt_stl/assert.hpp>
@@ -17,16 +16,39 @@
 
 namespace ttml::metal::ops {
 
+// ZigZag: with N = ring_size, device d holds global blocks [d | 2N-1-d]; chunks[0] = block d, chunks[1] = block 2N-1-d.
+// Same device layout as ttnn's ring_joint_sdpa is_balanced and ring_distributed_sdpa chunk_1 / chunk_2.
+// At step >= 1, with src = get_ring_source_device(d, step), the device computes chunk 0 if src < d, chunk 1 if src > d,
+// unmasked. At step 0 the caller makes one causal call with RingLoadBalancing::None; at each step >= 1 it adds an
+// unmasked call for Q chunk 1 x K/V chunk 0.
+enum class RingLoadBalancing : uint8_t { None = 0, ZigZag = 1 };
+
+inline uint32_t get_ring_chunk_count(RingLoadBalancing load_balancing) {
+    switch (load_balancing) {
+        case RingLoadBalancing::None: return 1U;
+        case RingLoadBalancing::ZigZag: return 2U;
+    }
+    TT_THROW("Unknown load balancing {}", static_cast<int>(load_balancing));
+}
+
+inline uint32_t get_ring_source_device(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
+    switch (ring_direction) {
+        case ttnn_fixed::distributed::RingShiftDirection::Backward: return (device_ring_id + step) % ring_size;
+        case ttnn_fixed::distributed::RingShiftDirection::Forward:
+            // step % ring_size first: d - s would wrap in uint32 when s > d, which is wrong unless ring_size is 2^k.
+            return (device_ring_id + ring_size - (step % ring_size)) % ring_size;
+    }
+    TT_THROW("Unknown ring direction {}", static_cast<int>(ring_direction));
+}
+
 // Determine if a device should execute at this ring step and which mask type to use.
-// Shared by the ring_sdpa_fw and ring_sdpa_bw program factories, which must agree on
-// the schedule: the backward relies on skipping exactly the (device, step) pairs the
-// forward skipped.
 // Returns: (should_execute, mask_type_to_use)
 //
-// At step s, device d processes the K/V chunk originating from source device:
-// - Backward ring direction: src = (d + s) mod ring_size
-// - Forward ring direction:  src = (d - s) mod ring_size
-// Causal logic on the source chunk:
+// Causal logic on the source chunk, src = get_ring_source_device(d, step):
 // - src == d: diagonal chunk, apply causal mask
 // - src < d:  earlier chunk, full attention (no mask)
 // - src > d:  later chunk, fully masked, skip
@@ -41,15 +63,7 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
         return {true, AttentionMaskType::None};
     }
 
-    uint32_t src_device = 0;
-    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
-        src_device = (device_ring_id + step) % ring_size;
-    } else {
-        // Reduce step mod ring_size before subtracting so the uint32 expression cannot
-        // underflow: plain (d - s + ring_size) wraps mod 2^32 when s > d, which is only
-        // correct for power-of-2 ring sizes.
-        src_device = (device_ring_id + ring_size - (step % ring_size)) % ring_size;
-    }
+    const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
 
     if (src_device == device_ring_id) {
         return {true, AttentionMaskType::Causal};  // Diagonal: use causal mask
@@ -60,14 +74,59 @@ inline std::pair<bool, AttentionMaskType> get_device_execution_info(
     }
 }
 
-// The mask the device at `mesh_coordinate` uses at this ring step, or nullopt when it sits the step out. The ring SDPA
-// program factories build one program per device from it, and an empty one for a device that sits the step out.
+struct RingStepWork {
+    bool execute = false;
+    AttentionMaskType mask_type = AttentionMaskType::None;
+    uint32_t chunk = 0;
+
+    bool operator==(const RingStepWork&) const = default;
+};
+
+// fw, bw_q and bw_kv must all use this function so that each device gets the same chunk at each step: bw_kv reads the
+// u_scaler that bw_q wrote for that chunk.
+inline RingStepWork get_ring_step_work(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    AttentionMaskType mask_type,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction,
+    RingLoadBalancing load_balancing) {
+    switch (load_balancing) {
+        case RingLoadBalancing::None: {
+            const auto [execute, effective_mask] =
+                get_device_execution_info(device_ring_id, step, ring_size, mask_type, ring_direction);
+            return {.execute = execute, .mask_type = effective_mask, .chunk = 0U};
+        }
+        case RingLoadBalancing::ZigZag: {
+            TT_FATAL(
+                mask_type == AttentionMaskType::Causal,
+                "Zig-zag load balancing is only defined for causal attention, got mask type {}",
+                static_cast<int>(mask_type));
+            const uint32_t src_device = get_ring_source_device(device_ring_id, step, ring_size, ring_direction);
+            if (src_device == device_ring_id) {
+                return {.execute = false, .mask_type = AttentionMaskType::None, .chunk = 0U};
+            }
+            return {
+                .execute = true,
+                .mask_type = AttentionMaskType::None,
+                .chunk = src_device < device_ring_id ? 0U : 1U,
+            };
+        }
+    }
+    TT_THROW("Unknown load balancing {}", static_cast<int>(load_balancing));
+}
+
+// The work of the device at `mesh_coordinate` at this ring step. The ring SDPA program factories build one program per
+// device from it, and an empty one for a device that sits the step out.
 template <typename RingAttrs>
-inline std::optional<AttentionMaskType> mask_for_device_at_step(
-    const RingAttrs& attrs, const ttnn::MeshCoordinate& mesh_coordinate) {
-    const auto [should_execute, mask_type] = get_device_execution_info(
-        mesh_coordinate[attrs.ring_axis], attrs.step, attrs.ring_size, attrs.mask_type, attrs.ring_direction);
-    return should_execute ? std::optional<AttentionMaskType>(mask_type) : std::nullopt;
+inline RingStepWork work_for_device_at_step(const RingAttrs& attrs, const ttnn::MeshCoordinate& mesh_coordinate) {
+    return get_ring_step_work(
+        mesh_coordinate[attrs.ring_axis],
+        attrs.step,
+        attrs.ring_size,
+        attrs.mask_type,
+        attrs.ring_direction,
+        attrs.load_balancing);
 }
 
 // Common attribute validation for the ring SDPA device operations. The ring factories
@@ -96,6 +155,44 @@ inline void validate_ring_attributes(const RingAttrs& attrs, const ttnn::Tensor&
         attrs.ring_size,
         mesh_shape[attrs.ring_axis],
         attrs.ring_axis);
+}
+
+template <typename RingAttrs>
+inline void validate_ring_load_balancing(const RingAttrs& attrs, size_t chunk_count) {
+    TT_FATAL(
+        chunk_count == get_ring_chunk_count(attrs.load_balancing),
+        "Load balancing {} expects {} chunks, got {}",
+        static_cast<int>(attrs.load_balancing),
+        get_ring_chunk_count(attrs.load_balancing),
+        chunk_count);
+    switch (attrs.load_balancing) {
+        case RingLoadBalancing::None: return;
+        case RingLoadBalancing::ZigZag:
+            TT_FATAL(
+                attrs.mask_type == AttentionMaskType::Causal,
+                "Zig-zag load balancing requires a causal mask, got mask type {}",
+                static_cast<int>(attrs.mask_type));
+            TT_FATAL(
+                attrs.step != 0U,
+                "Zig-zag load balancing is not defined for step 0 (every device holds its own K/V); run step 0 as "
+                "one causal call over the full local sequence");
+            return;
+    }
+    TT_THROW("Unknown load balancing {}", static_cast<int>(attrs.load_balancing));
+}
+
+// Each device builds its program from the chunk it computes, and chunk-sized buffers (u_scaler) serve every chunk.
+inline void validate_same_spec(
+    const ttnn::Tensor& tensor, const ttnn::Tensor& reference, std::string_view name, size_t c) {
+    TT_FATAL(
+        tensor.device() == reference.device(), "Chunk {} '{}' must be on the same mesh device as chunk 0", c, name);
+    TT_FATAL(
+        tensor.tensor_spec() == reference.tensor_spec(),
+        "Chunk {} '{}' spec {} must match chunk 0's spec {}",
+        c,
+        name,
+        tensor.tensor_spec(),
+        reference.tensor_spec());
 }
 
 // Per-tensor device contract of the reused SDPA kernels: on device, allocated,

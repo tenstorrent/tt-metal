@@ -29,6 +29,10 @@ struct RingSDPABwQDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    // The outputs are the caller's buffers: each keeps its own label instead of the one TTNN merges from the inputs.
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttml::metal::ops::ring_sdpa_bw::q
@@ -36,18 +40,13 @@ struct RingSDPABwQDeviceOperation {
 namespace ttnn::prim {
 
 ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQDeviceOperation::tensor_return_value_t ttml_ring_sdpa_bw_q(
-    const ttnn::Tensor& grad_output,
-    const ttnn::Tensor& attn_output,
-    const ttnn::Tensor& query,
-    const ttnn::Tensor& key,
-    const ttnn::Tensor& value,
-    const ttnn::Tensor& intermediates,
+    std::vector<ttml::metal::ops::ring_sdpa_bw::q::RingSDPABwQChunk> chunks,
     uint32_t ring_size,
     uint32_t ring_axis,
     uint32_t step,
-    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::None,
+    ttml::metal::AttentionMaskType mask_type,
     ttml::metal::ops::ring_sdpa_bw::RingDirection ring_direction =
         ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward,
-    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt);
+    ttml::metal::ops::RingLoadBalancing load_balancing = ttml::metal::ops::RingLoadBalancing::None);
 
 }  // namespace ttnn::prim
