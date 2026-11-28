@@ -935,10 +935,11 @@ def test_demo_text(
     if apc_test:
         demo_targets = load_demo_targets("models/demos/llama3_70b_galaxy/demo/text_demo_targets.json", galaxy_type)
 
+    # Override parameters from command line if they are provided
+    prefill_profile = request.config.getoption("--prefill_profile") or prefill_profile
     if prefill_profile:  # Special mode where we only run prefill with tracy
         from tracy import signpost
 
-    # Override parameters from command line if they are provided
     input_prompts = request.config.getoption("--input_prompts") or input_prompts
     if request.config.getoption("--instruct") in [
         0,

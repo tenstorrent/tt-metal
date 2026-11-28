@@ -297,7 +297,7 @@ def main():
         "--l1-small-size",
         type=int,
         default=16384,
-        help="L1 small size for device (default: 24576)",
+        help="L1 small size for device (default: 16384)",
     )
     parser.add_argument(
         "--image-path",

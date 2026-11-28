@@ -56,12 +56,6 @@ def main():
         help="model compute dtype; float32 is the PCC gold reference (~140 GB RAM)",
     )
     ap.add_argument("--prompts-file", default=None, help="optional JSON list of prompts")
-    ap.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=1,
-        help="1 = single forward step capture (prefill+first logits); >1 also decodes",
-    )
     ap.add_argument("--layers", default="all", help="'all' or 'START-END' inclusive range (memory-saver)")
     args = ap.parse_args()
 
