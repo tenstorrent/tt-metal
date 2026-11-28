@@ -5,6 +5,7 @@ Fake backend: /v1/completions and /v1/chat/completions sleep prompt_len * PREFIL
 SSE chunks (or one JSON body) whose text encodes (backend, request id, token index), so the client can check every
 byte arrived in order from one backend. It records its concurrency high-water mark and requests the client aborted.
 """
+
 import asyncio
 import collections
 import json
@@ -34,6 +35,7 @@ class Fake:
         self.cur = self.hwm = self.count = self.aborted = 0
         self.fail_5xx = 0
         self.die_mid_stream = False
+        self.hang = False  # accept, send headers, then never send a byte (a hung device)
         self.runner = None
 
     async def gen(self, request):
@@ -57,6 +59,8 @@ class Fake:
                 return web.json_response({"choices": [{"text": text}], "backend": self.name})
             resp = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
             await resp.prepare(request)
+            if self.hang:
+                await asyncio.sleep(3600)
             for i in range(n):
                 if self.die_mid_stream and i == 2:
                     request.transport.close()
@@ -144,6 +148,8 @@ async def main():
             "18099",
             "--health-interval",
             "0.3",
+            "--stall-timeout",
+            "2",
         ]
     )
     bal = lb.Balancer(args)
@@ -284,6 +290,40 @@ async def main():
     res = await asyncio.gather(*(stream(s, url, 3000 + i, n=3) for i in range(30)))
     check(all(r.get("ok") and r["backend"] != "b3" for r in res), "disabled backend gets no traffic")
     await s.post(url + "/lb/backend", json={"url": f"http://127.0.0.1:{fakes[3].port}", "enabled": True})
+
+    # 10a. a backend that accepts requests but never sends a byte (hung device, health still OK): the stall
+    # timeout retries those requests elsewhere and marks it down
+    fakes[1].hang = True
+    res = await asyncio.gather(*(stream(s, url, 3200 + i, n=3) for i in range(8)))
+    st = await (await s.get(url + "/lb/stats")).json()
+    hung = [b for b in st["backends"] if b["url"].endswith(str(fakes[1].port))][0]
+    check(
+        all(r.get("ok") and r["backend"] != "b1" for r in res),
+        f"hung backend: all 8 requests served elsewhere ({[r.get('backend') for r in res]})",
+    )
+    check(
+        hung["retried_away"] >= 1 and "Timeout" in hung["last_error"],
+        f"hung backend marked down by the stall timeout ({hung['last_error'][:60]})",
+    )
+    fakes[1].hang = False
+    await asyncio.sleep(1.0)  # health checks bring it back
+
+    # 10b. add a fifth backend at runtime (a Galaxy joining): it takes its share of the next burst
+    b4 = Fake("b4", 18104)
+    await b4.start()
+    async with s.post(url + "/lb/backend", json={"url": f"http://127.0.0.1:{b4.port}", "add": True}) as rr:
+        added = await rr.json()
+    check(rr.status == 200 and added.get("healthy"), f"runtime add: new backend registered and healthy ({rr.status})")
+    await asyncio.sleep(0.5)
+    res = await asyncio.gather(*(stream(s, url, 3500 + i, n=20) for i in range(160)))
+    per = collections.Counter(r.get("backend") for r in res)
+    check(
+        all(r.get("ok") for r in res) and per["b4"] == 32,
+        f"160 concurrent after add split 32 each incl. b4: {dict(per)}",
+    )
+    async with s.post(url + "/lb/backend", json={"url": f"http://127.0.0.1:{b4.port}", "enabled": False}) as rr:
+        assert rr.status == 200
+    fakes.append(b4)
 
     # 11. overhead: 1000 tiny streams through the LB vs direct
     async def burst(u):

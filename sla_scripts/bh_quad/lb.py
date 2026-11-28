@@ -19,10 +19,12 @@ after 2 misses, up again on the first success. A client that disconnects closes 
 makes vLLM abort the request and free its slot.
 
 Endpoints of the balancer itself: GET /health (200 if any backend is up), GET /lb/stats (JSON),
-POST /lb/backend {"url": ..., "enabled": false|true} (drain / re-enable one backend).
+POST /lb/backend {"url": ..., "enabled": false|true} (drain / re-enable one backend; add "add": true to register
+a new one at runtime).
 
 usage: lb.py --backends http://10.82.97.43:8000,http://10.82.97.44:8000,... [--port 9000] [--slots 32]
 """
+
 import argparse
 import asyncio
 import collections
@@ -408,12 +410,28 @@ class Balancer:
                     b.slots = int(d["slots"])
                 self.drain()
                 return web.json_response(b.stats())
-        return web.json_response({"error": "unknown backend"}, status=404)
+        if not d.get("add"):
+            return web.json_response({"error": "unknown backend"}, status=404)
+        # {"url": ..., "add": true}: register a new backend at runtime (a Galaxy joining the fleet). It takes
+        # traffic once its first health check passes.
+        b = Backend(d["url"], int(d.get("slots", self.a.slots)), len(self.backends))
+        b.enabled = bool(d.get("enabled", True))
+        self.backends.append(b)
+        await self.check(b)
+        self.drain()
+        return web.json_response(b.stats())
 
     async def on_startup(self, app):
         self.session = ClientSession(
             connector=TCPConnector(limit=0, ttl_dns_cache=300, keepalive_timeout=60),
-            timeout=ClientTimeout(total=None, connect=self.a.connect_timeout, sock_connect=self.a.connect_timeout),
+            timeout=ClientTimeout(
+                total=None,
+                connect=self.a.connect_timeout,
+                sock_connect=self.a.connect_timeout,
+                # a backend silent this long (no headers, no first byte, or a stalled stream) is hung: before the first
+                # byte the request is retried elsewhere and the backend marked down; mid-stream the client gets an error
+                sock_read=self.a.stall_timeout or None,
+            ),
             auto_decompress=False,
             read_bufsize=1 << 20,
         )
@@ -453,6 +471,12 @@ def parse(argv=None):
     p.add_argument("--health-interval", type=float, default=2.0)
     p.add_argument("--health-timeout", type=float, default=5.0)
     p.add_argument("--connect-timeout", type=float, default=10.0)
+    p.add_argument(
+        "--stall-timeout",
+        type=float,
+        default=300.0,
+        help="seconds a backend may send nothing before it counts as hung (0 = never)",
+    )
     p.add_argument("--log-level", default="WARNING")
     return p.parse_args(argv)
 

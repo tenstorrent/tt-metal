@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 import torch
 from tqdm import tqdm
@@ -175,6 +177,14 @@ class LlamaForCausalLM(Generator):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+    @classmethod
+    def get_max_tokens_all_users(cls, **kwargs):
+        # KV-cache tokens per lane (each DP lane serves max_num_seqs users; the plugin adds one block per user).
+        # The plugin fallback, 131,072, holds exactly 8 x 16K prompts per lane, so with 32 x 16K at once the
+        # first-prefilled users stall ~6.7 s waiting for KV blocks once the last prefill is in.
+        # LLAMA_BH_KV_TOKENS_PER_LANE raises it.
+        return int(os.environ.get("LLAMA_BH_KV_TOKENS_PER_LANE", "131072"))
 
     @classmethod
     def initialize_vllm_model(

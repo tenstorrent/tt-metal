@@ -6,6 +6,7 @@ while every latency number still looks normal. This catches that in ~30 s: short
 at once (batched decode), and a long number sequence the model must continue (long-context prefill + decode).
 usage: sanity_check.py [base_url]
 """
+
 import json
 import sys
 import urllib.request
@@ -49,14 +50,16 @@ def main():
                 bad.append(f"{label}: {q!r} -> {got!r}")
     k = 2500  # ~9K-token prompt: crosses several prefill chunks
     seq = ", ".join(str(i) for i in range(1, k + 1))
-    got = chat(f"Continue this sequence exactly, with no other text:\n{seq},", max_tokens=12)
-    if f"{k + 1}, {k + 2}" not in got:
-        bad.append(f"long ({k} numbers): -> {got!r}")
+    # twice: the second request is a prefix-cache hit, a path bad chips can break while cold prefill still works
+    for label in ("cold", "cached"):
+        got = chat(f"Continue this sequence exactly, with no other text:\n{seq},", max_tokens=12)
+        if f"{k + 1}, {k + 2}" not in got:
+            bad.append(f"long ({k} numbers, {label}): -> {got!r}")
     if bad:
         print("SANITY FAILED (reset the Galaxy with tt-smi -glx_reset_auto, then restart the server):")
         print("\n".join(bad))
         sys.exit(1)
-    print(f"SANITY OK ({2 * len(QA)} short answers, {k}-number continuation)")
+    print(f"SANITY OK ({2 * len(QA)} short answers, {k}-number continuation cold and cached)")
 
 
 if __name__ == "__main__":

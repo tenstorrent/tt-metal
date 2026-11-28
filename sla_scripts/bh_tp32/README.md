@@ -873,3 +873,79 @@ one server start; `"trace": 1` logs lane states per prefill step.
 
 Speed of light for 32 x 16K at once (83 PFLOP): ~4.3 s mean in waves of 4 if every FLOP ran at the measured matmul
 rate at the 130 W cap (~340 TF/s per chip), ~2.9 s at full clock; ~5.9 s with attention at its measured energy cost.
+
+### Nov 23 (later): sequence-parallel prefill ruled out (`tests/test_sp4_ring_attn.py`)
+
+Idea: one 16K prompt over all 4 columns (zigzag chunks c and 7-c, TP8 matmuls per column as in DP4), so prompts finish
+one at a time instead of in waves of 4 (mean 4.5 -> 4.125 step-times, -8%). Attention is the only cross-column op:
+`ring_joint_scaled_dot_product_attention(is_causal=True, is_balanced=True, cluster_axis=1)` gathers K/V around the
+columns itself. One-layer attention, 8x4 mesh, bf8, LoFi, full clock:
+
+| Attention at 16K | ms per 4 prompts | PCC vs torch |
+|---|---|---|
+| DP4 today (one prompt per column, causal SDPA q256 k512) | 3.64 | |
+| SP4 ring, q256 k512, Ring topology, 1 link | 4.76 (+31%) | 0.998 |
+| SP4 ring, q128 k256 | 4.31 (+18%) | 0.994 |
+
+Attention is about a quarter of a 16K layer, so the ring costs +5-8% per layer and cancels the -8% from finishing one
+prompt at a time. Not integrated. The op's gathered K/V buffer comes back in device (zigzag) order, not natural order.
+
+Speed of light for 32 x 16K at once (83 PFLOP, every FLOP at the measured matmul rate at the 130 W cap, ~340 TF/s per
+chip): mean ~4.3 s in waves of 4, ~3.9 s finishing one prompt at a time, ~7.6 s if all 32 finished together.
+
+### Nov 23 (evening): the three remaining 32 x 16K levers
+
+Target: 32 x 16K at once is 8 waves of 4 prompts, mean ~4.5 x the wave time; under 5 s needs the wave to drop from
+1.48 s to ~1.1 s (-25%).
+
+1. **One prompt over all 4 columns, K/V all-gather + chunked SDPA** (`tests/test_sp4_ag_attn.py`): the gather is cheap
+   (0.37-0.42 ms for K+V at 16K) and the output is right (PCC 0.998), but `chunked_scaled_dot_product_attention` with a
+   per-column `chunk_start_idx_tensor` on 2K query chunks costs 6.7-25.7 ms per 4 prompts (q128 best) against 3.66 ms
+   for today's per-column causal SDPA. Time doubles each time the q chunk halves, so the op's per-q-chunk overhead
+   dominates. Ruled out with the existing ops (the ring op above as well); needs a new attention kernel.
+2. **Attention compute config** (`tests/test_sdpa16k_sweep.py`, one 16K prompt per column, 8 heads per chip):
+   HiFi2 + fp32 acc 5.78 ms, HiFi2 no fp32 acc 3.89, LoFi + fp32 acc 4.55, **LoFi no fp32 acc 3.66-3.72, which env.sh
+   already ships for DP4** (`LLAMA_BH_PREFILL_DP4_SDPA_FP32=0`, SDPA LoFi). Nothing left at the config level. The TP32
+   path's `compute_kernel_config_sdpa` with fp32 acc off broke short-prompt accuracy (quick MMLU 1.75%); not used.
+3. **No decode steps between 16K waves** (plugin knob, runs/f32off_nov23): 6.71 / 6.75 s against 6.75-6.81 s with one
+   decode step per wave (-0.5%, noise level). Removed.
+
+32 x 4K over 21 more runs today (runs/sla_nov23c, ord_nov23, trc_nov23, f32off_nov23): 0.94-1.04 s, 4 of 21 over 1 s.
+The slow runs have rounds 1-2 at 0.48-0.60 s instead of 0.43 s. No ordering effect after the 16K runs (ord_nov23).
+Exploratory closed loop at 16K (96 prompts, 32 in flight, ord_nov23): mean 4.42 s (200 out) / 4.56 s (500 out);
+round 0 6.76 s, rounds 1-2 3.0-3.7 s. Not the benchmark.
+
+### Nov 23 (night): one prompt over 4 columns with `ring_distributed_sdpa`; 32 x 4K run-to-run spread
+
+**ring_distributed_sdpa** already computes the zigzag split (each device its slices c and 7-c, ring index from the mesh
+coordinate) with the plain SDPA kernels, so a "local Q" mode (Q holding only the device's two slices) looked like a
+host-side change. Its attention cost, full Q given (`tests/test_sp4_rd_attn.py`, 16K, LoFi, k512):
+
+| q chunk | ms per prompt | x4 prompts | vs per-column causal SDPA (3.66 ms per 4 prompts) |
+|---|---|---|---|
+| 256 | 2.63 | 10.50 | 2.9x |
+| 128 | 1.64 | 6.56 | 1.8x |
+| 64 | 4.02 | 16.08 | 4.4x |
+
+One prompt's attention over a column is a quarter of the per-core work of today's layout, and the causal lengths of its
+Q chunks differ by up to 8x, so the cores sit idle; the split wins only below ~0.84 ms per prompt. Closing that needs
+a different parallelization (split each Q chunk's K range over cores and merge the partial softmaxes), for at most the
+8% from finishing prompts one at a time. Not pursued. The local-Q patch (C++, ~30 lines) gave wrong output (PCC 0.005)
+and was reverted.
+
+**32 x 4K spread** (tracing `TT_PLUGIN_POLICY_FILE` with `"trace": 1`, runs/trc2_nov23; analysis scripts ttstats.py /
+ttsplit.py): every run does rounds 1-2 in 16 full prefill steps of 4 prompts. The slow runs (0.99-1.04 s) have ~10% of
+round 1-2 prompts reach the scheduler ~330-410 ms late: they re-arrive while another group's prefill step runs and are
+picked up after it. Tried: 16 API servers (0.940-1.017 s, avg 0.973 vs 0.968 with 8) and prefilling at once whenever
+exactly one prompt waits per column (`fresh_full`: 0.966-0.986, avg 0.976). Neither helps; both removed.
+
+### Nov 25: the accuracy loss on .43 was bad chip state
+
+From Nov 23 ~3:40 PM PST every server run on .43 failed accuracy: quick MMLU 1.5-2.5% and 9-12 needle misses, with normal latency. The A/B runs ruled out the policy file (fails with and without), source changes (all match their backups), the JIT kernel cache (a fresh `TT_METAL_CACHE` also fails) and test order. A `tt-smi -glx_reset_auto` on the same code restored needle 0 misses and MMLU 81.9%. The likely trigger is the on-device SDPA pytest runs just before the first failing server. Two consequences:
+
+- The earlier "fp32 acc off in `compute_kernel_config_sdpa` breaks MMLU" result is void. That knob only affects the TP32 path, which the 4K and 16K SLA prefills do not use, so it was not retested.
+- Bad chips broke ~1K cold prompts and prefix-cache hits, while short answers and a single cold 9K prompt stayed correct. `sanity_check.py` now sends the 2500-number prompt twice (cold, then cached). Reset before a server run that follows any on-device pytest.
+
+Post-reset run (reset_chk, Nov 25): single 4K 0.41 s, cold 16K 1.36 s, cold 32K 4.86 s, rpm60 0.39 s, rpm60 prefix40 0.42 s, rpm240 0.39 s (p99 0.96 s), 32 x 4K 1.00 s.
+
+Finish-aware gather (Nov 25, reverted): also holding a prefill step while a user finished within the last 40 or 60 ms did not help 32 x 4K. One server, alternating: off 0.949-0.978 s (mean 0.956, 5 runs), 40 ms 0.950-1.025 s (mean 0.975, 5 runs), 60 ms 0.960-0.974 s (3 runs). Needle 0, quick MMLU 81.84% after the sweep.

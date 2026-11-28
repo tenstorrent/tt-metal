@@ -73,3 +73,6 @@ export FABRIC=${FABRIC:-FABRIC_1D_RING} TT_FABRIC_OVERRIDE=${TT_FABRIC_OVERRIDE:
 # vLLM async scheduling is on by default in run_server.sh (+13% decode vs off). MMLU 81.6% before and 82.9% after the
 # full SLA bench with it on (Nov 19). Garbage output seen earlier came from chips left dirty by a failed or killed server,
 # not from async: reset the Galaxy (tt-smi -glx_reset_auto) after any hang, hard kill or experimental-op crash.
+# KV-cache tokens per DP lane (8 users per lane): 131,072 held exactly 8 x 16K prompts, so in 32 x 16K at once the first
+# users stalled ~6.7 s for KV blocks. 163,840 (~20K per user) removes that stall; +25% KV DRAM (~0.7 GB per chip).
+export LLAMA_BH_KV_TOKENS_PER_LANE=${LLAMA_BH_KV_TOKENS_PER_LANE:-163840}
