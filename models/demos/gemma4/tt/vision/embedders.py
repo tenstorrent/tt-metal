@@ -185,13 +185,13 @@ class Gemma4UnifiedVisionEmbedder(LightweightModule):
             raise KeyError(
                 f"'{PATCH_DENSE_KEY}' / '{PROJECTION_KEY}' not in checkpoint: not a unified Gemma-4 checkpoint"
             )
-        PREFIX, PROJECTION_KEY = layout  # noqa: N806 - shadow the module defaults with this checkpoint's layout
+        prefix, projection_key = layout
 
-        dense_w = state_dict[PREFIX + "patch_dense.weight"]  # [mm_embed, patch_dim]
+        dense_w = state_dict[prefix + "patch_dense.weight"]  # [mm_embed, patch_dim]
         self.mm_embed_dim, self.patch_dim = int(dense_w.shape[0]), int(dense_w.shape[1])
         # pos table [mm_posemb_size, 2, mm_embed] stays on host (float32) for the gather.
-        self.pos_table = state_dict[PREFIX + "pos_embedding"].float()
-        proj_w = state_dict[PROJECTION_KEY]  # [text_hidden, mm_embed]
+        self.pos_table = state_dict[prefix + "pos_embedding"].float()
+        proj_w = state_dict[projection_key]  # [text_hidden, mm_embed]
         if tuple(proj_w.shape) != (text_hidden_size, self.mm_embed_dim):
             raise ValueError(
                 f"projection {tuple(proj_w.shape)} vs text_hidden={text_hidden_size}, mm_embed={self.mm_embed_dim}"
@@ -215,14 +215,14 @@ class Gemma4UnifiedVisionEmbedder(LightweightModule):
         def vec(name, t):  # [1, 1, 1, N] rows for layer_norm weight / bias and the linear bias
             return dev(name, t.reshape(1, 1, 1, -1))
 
-        self.ln1_w = vec("vision_embedder.patch_ln1.weight", state_dict[PREFIX + "patch_ln1.weight"])
-        self.ln1_b = vec("vision_embedder.patch_ln1.bias", state_dict[PREFIX + "patch_ln1.bias"])
+        self.ln1_w = vec("vision_embedder.patch_ln1.weight", state_dict[prefix + "patch_ln1.weight"])
+        self.ln1_b = vec("vision_embedder.patch_ln1.bias", state_dict[prefix + "patch_ln1.bias"])
         self.dense_w = dev("vision_embedder.patch_dense.weight", dense_w.transpose(0, 1).unsqueeze(0).unsqueeze(0))
-        self.dense_b = vec("vision_embedder.patch_dense.bias", state_dict[PREFIX + "patch_dense.bias"])
-        self.ln2_w = vec("vision_embedder.patch_ln2.weight", state_dict[PREFIX + "patch_ln2.weight"])
-        self.ln2_b = vec("vision_embedder.patch_ln2.bias", state_dict[PREFIX + "patch_ln2.bias"])
-        self.ln3_w = vec("vision_embedder.pos_norm.weight", state_dict[PREFIX + "pos_norm.weight"])
-        self.ln3_b = vec("vision_embedder.pos_norm.bias", state_dict[PREFIX + "pos_norm.bias"])
+        self.dense_b = vec("vision_embedder.patch_dense.bias", state_dict[prefix + "patch_dense.bias"])
+        self.ln2_w = vec("vision_embedder.patch_ln2.weight", state_dict[prefix + "patch_ln2.weight"])
+        self.ln2_b = vec("vision_embedder.patch_ln2.bias", state_dict[prefix + "patch_ln2.bias"])
+        self.ln3_w = vec("vision_embedder.pos_norm.weight", state_dict[prefix + "pos_norm.weight"])
+        self.ln3_b = vec("vision_embedder.pos_norm.bias", state_dict[prefix + "pos_norm.bias"])
         self.proj_w = dev("embed_vision.embedding_projection.weight", proj_w.transpose(0, 1).unsqueeze(0).unsqueeze(0))
 
     def _replicate(self):
