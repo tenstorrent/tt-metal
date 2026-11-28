@@ -3704,9 +3704,13 @@ class MiniMaxH3Pipeline:
         threshold = _step_cache_threshold()
         if threshold == 0.0:
             return None, None
-        if self.trace_denoise or self.dynamic_length:
-            self._log("step cache: off, it serves the bucketed untraced denoise only")
-            return None, None
+        if self.trace_denoise or self.dynamic_length or ttnn.using_distributed_env():
+            # The cache decides each step from a host readback of one host's sums; the mask is one rung's shape.
+            msg = (
+                f"{_STEP_CACHE_ENV} serves the bucketed untraced single-host denoise only: set "
+                f"{_DYNAMIC_LENGTH_ENV}=0 with trace_denoise off, or unset {_STEP_CACHE_ENV}"
+            )
+            raise RuntimeError(msg)
         config = DBCacheConfig(
             Fn_compute_blocks=1,
             Bn_compute_blocks=0,

@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-free checks of what is H3's own in the step cache (First Block Cache): the pipeline hands the shared `DBCache` a mask of the rung's true rows."""
+"""Device-free checks of what is H3's own in the step cache (First Block Cache): the pipeline refuses the switch on
+the denoise paths the cache does not serve, and hands the shared `DBCache` a mask of the rung's true rows."""
 
 from __future__ import annotations
 
 from types import SimpleNamespace
+
+import pytest
 
 from models.tt_dit.pipelines.minimax_h3 import pipeline_minimax_h3 as pm
 
@@ -18,6 +21,17 @@ def _step_cache(*, trace_denoise=False, dynamic_length=False):
     pipeline.trace_denoise, pipeline.dynamic_length = trace_denoise, dynamic_length
     pipeline.mesh_device, pipeline.sp_axis = None, 0
     return pipeline._step_cache(SimpleNamespace(num_blocks=4), 64, 40)
+
+
+@pytest.mark.parametrize("path", [{"dynamic_length": True}, {"trace_denoise": True}])
+def test_switch_is_refused_where_the_cache_does_not_run(monkeypatch, expect_error, path):
+    """The pipeline's own 4x8 preset is dynamic-length and its 4x32 one traced: the switch must not be silently
+    off there."""
+    monkeypatch.setenv(ENV, "0.08807")
+    with expect_error(RuntimeError, "MINIMAX_H3_DYNAMIC_LENGTH=0"):
+        _step_cache(**path)
+    monkeypatch.delenv(ENV)
+    assert _step_cache(**path) == (None, None)
 
 
 def test_padding_rows_are_masked_out_of_the_change_test(monkeypatch):
