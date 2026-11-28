@@ -510,11 +510,18 @@ unit_tests_llk:
   # mailboxes, BFD datacopy, MX fp4/fp6/fp8/int typecast, DFB broadcast,
   # transpose-dest, pack/unpack tilize, reconfig, matmul no-MOP and MxFp4x2,
   # column reduce MxFp4x2, SFPU reduce, Quasar SFPU relu / unpack-to-dest.
-  - filter: "LLKQuasarMeshDeviceSingleCardFixture*"
+  - filter: "LLKQuasarMeshDeviceSingleCardFixture*:-*ReconfigSrcA"
     config: 1x3
     back2back: true
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
+
+  # Reconfig on a to-dest DFB (#63025) only fails through LLK_ASSERT, so run it with LLK asserts on.
+  - filter: "*ReconfigSrcA"
+    config: 1x3
+    env:
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_LLK_ASSERTS: 1
 
   # Unary SFPU on LLKMeshDeviceFixture, including approx, 32-bit dest, and
   # the Int32 unary suite. On Quasar none of these ops take the arch skip.

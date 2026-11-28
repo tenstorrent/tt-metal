@@ -75,7 +75,7 @@ class UnaryBroadcastUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         return (
-            f"_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B, false>"
+            "_llk_unpack_unary_broadcast_operands_<p_unpacr::UNP_B>"
             f"({block.tile_id_src_a});\n"
         )
 
