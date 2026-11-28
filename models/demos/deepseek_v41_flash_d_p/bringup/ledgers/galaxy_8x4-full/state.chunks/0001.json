@@ -3704,7 +3704,7 @@
   },
   "attempt": 1,
   "attempts": 1,
-  "duration_s": 2.6,
+  "duration_s": 148.5,
   "history": [
    {
     "s": 15.8,
@@ -3723,32 +3723,44 @@
     "s": 2.6,
     "status": "PASS",
     "t": "2026-11-28T06:28:06"
+   },
+   {
+    "status": "STOPPED",
+    "t": "2026-11-28T06:28:17"
+   },
+   {
+    "attempt": 1,
+    "from": "STOPPED",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-11-28T06:30:39"
+   },
+   {
+    "s": 148.5,
+    "status": "PASS",
+    "t": "2026-11-28T06:34:11"
    }
   ],
-  "last_run": "2026-11-28T06:28:03",
+  "last_run": "2026-11-28T06:34:08",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/MB.NC.log",
   "rc": 0,
   "reason": [],
+  "review": [
+   "changed files outside the allowed paths (revert them): ['n/ttnn/bringup/block_select_ttnn/kernels/block_gather.cpp', 'n/ttnn/bringup/block_select_ttnn/kernels/block_keys.cpp', 'n/ttnn/bringup/block_select_ttnn/kernels/block_max_bf16.cpp', 'n/ttnn/bringup/block_select_ttnn/kernels/block_max_strip.cpp', 'n/ttnn/bringup/fp8_rows_ttnn/kernels/pack_fp8_rows.cpp', 'n/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_compute.cpp', 'n/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_reader.cpp', 'n/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_writer.cpp', 'n/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_compute.cpp', 'n/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_reader.cpp', 'n/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_writer.cpp', 'n/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_common.hpp', 'n/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_compute.cpp', 'n/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_reader.cpp', 'n/ttnn/bringup/pair_pool_ttnn/kernels/pair_pool_writer.cpp']"
+  ],
   "role": "perf",
   "stamp": {
-   "reused": [
-    "MB.NC#test_gmm_native_layer",
-    "MB.NC#test_native_reduce_scatter",
-    "MB.NC#test_native_sends",
-    "MB.NC#test_native_lowbit",
-    "MB.NC#test_native_block_select",
-    "MB.NC#test_native_chunk_programs"
-   ],
+   "reused": [],
    "units": {
-    "MB.NC#test_gmm_native_layer": "d204fa4311c7c70f",
-    "MB.NC#test_native_block_select": "681e55986231473e",
-    "MB.NC#test_native_chunk_programs": "5a6d25b218188aa3",
-    "MB.NC#test_native_lowbit": "87992bd40da4ee30",
-    "MB.NC#test_native_reduce_scatter": "b77bd3e305e656bc",
-    "MB.NC#test_native_sends": "31e8a3acd2a881cc"
+    "MB.NC#test_gmm_native_layer": "c6052d12cc458563",
+    "MB.NC#test_native_block_select": "960c87c5eeebb125",
+    "MB.NC#test_native_chunk_programs": "739b9406517c4e15",
+    "MB.NC#test_native_lowbit": "a33f682507b1ff6c",
+    "MB.NC#test_native_reduce_scatter": "5f05df06b4a03368",
+    "MB.NC#test_native_sends": "47ce897403929dfa"
    }
   },
-  "started": "2026-11-28T06:28:01",
+  "started": "2026-11-28T06:31:40",
   "status": "PASS",
   "units": {
    "MB.NC#test_gmm_native_layer": "PASS",

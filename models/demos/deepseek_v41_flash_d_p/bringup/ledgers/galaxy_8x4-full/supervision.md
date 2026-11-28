@@ -737,3 +737,4 @@
   cold no-rebuild). validate: valid. (The batching ledger's held FIX.41 is the placeholder these replace.)
 - 06:25 orchestrator resume --until MB.NCL (tmux orch_mb).
 - 06:20 heartbeat (model_bringup): MB.NC agent active; RAM used 69 GB; / 99G free.
+- 06:40 MB.NC gate PASS -> d80256ef4f7, then STOPPED on a false path violation ('n/ttnn/...': renames in porcelain -z mis-parsed). FRAMEWORK F311 41cbc32e001 (porcelain_paths; selftest; 60 passed). The 15 kernel deletions the gate commit left staged committed as a487116c323 (moved copies present; batching has the same). Resume -> MB.NCL.

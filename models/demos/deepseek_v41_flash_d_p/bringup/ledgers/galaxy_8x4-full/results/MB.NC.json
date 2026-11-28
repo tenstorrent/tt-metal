@@ -1,955 +1,955 @@
 {
  "metrics": {
   "gate_model_loads": {
-   "t": "2026-11-28T06:26:43",
+   "t": "2026-11-28T06:34:08",
    "value": 0
   },
   "gmm_native_cache_growth_bank160": {
-   "t": "2026-11-28T06:24:23",
+   "t": "2026-11-28T06:31:50",
    "value": 0
   },
   "gmm_native_cache_growth_interleaved160": {
-   "t": "2026-11-28T06:24:20",
+   "t": "2026-11-28T06:31:47",
    "value": 0
   },
   "gmm_native_device_us_generic_bank160": {
-   "t": "2026-11-28T06:24:23",
-   "value": 108.13
+   "t": "2026-11-28T06:31:50",
+   "value": 108.44
   },
   "gmm_native_device_us_generic_interleaved160": {
-   "t": "2026-11-28T06:24:20",
-   "value": 127.1
+   "t": "2026-11-28T06:31:47",
+   "value": 127.05
   },
   "gmm_native_device_us_native_bank160": {
-   "t": "2026-11-28T06:24:23",
-   "value": 108.37
+   "t": "2026-11-28T06:31:50",
+   "value": 108.33
   },
   "gmm_native_device_us_native_interleaved160": {
-   "t": "2026-11-28T06:24:20",
-   "value": 127.21
+   "t": "2026-11-28T06:31:47",
+   "value": 127.12
   },
   "gmm_native_host_us_generic_bank160": {
-   "t": "2026-11-28T06:24:23",
-   "value": 67.9
+   "t": "2026-11-28T06:31:50",
+   "value": 66.4
   },
   "gmm_native_host_us_generic_interleaved160": {
-   "t": "2026-11-28T06:24:20",
-   "value": 61.6
+   "t": "2026-11-28T06:31:47",
+   "value": 62.3
   },
   "gmm_native_host_us_native_bank160": {
-   "t": "2026-11-28T06:24:23",
-   "value": 25.6
+   "t": "2026-11-28T06:31:50",
+   "value": 26.5
   },
   "gmm_native_host_us_native_direct_bank160": {
-   "t": "2026-11-28T06:24:23",
-   "value": 24.5
+   "t": "2026-11-28T06:31:50",
+   "value": 25.1
   },
   "gmm_native_host_us_native_direct_interleaved160": {
-   "t": "2026-11-28T06:24:20",
-   "value": 20.6
+   "t": "2026-11-28T06:31:47",
+   "value": 21.2
   },
   "gmm_native_host_us_native_interleaved160": {
-   "t": "2026-11-28T06:24:20",
-   "value": 21.4
+   "t": "2026-11-28T06:31:47",
+   "value": 21.7
   },
   "gmm_native_mismatch_bank160": {
-   "t": "2026-11-28T06:24:23",
+   "t": "2026-11-28T06:31:50",
    "value": 0.0
   },
   "gmm_native_mismatch_interleaved160": {
-   "t": "2026-11-28T06:24:20",
+   "t": "2026-11-28T06:31:47",
    "value": 0.0
   },
   "gmm_native_repeat_bank160": {
-   "t": "2026-11-28T06:24:23",
+   "t": "2026-11-28T06:31:50",
    "value": 0.0
   },
   "gmm_native_repeat_interleaved160": {
-   "t": "2026-11-28T06:24:20",
+   "t": "2026-11-28T06:31:47",
    "value": 0.0
   },
   "gmm_py_cache_growth_bank160": {
-   "t": "2026-11-28T06:24:23",
+   "t": "2026-11-28T06:31:50",
    "value": 0
   },
   "gmm_py_cache_growth_interleaved160": {
-   "t": "2026-11-28T06:24:20",
+   "t": "2026-11-28T06:31:47",
    "value": 0
   },
   "native_cache_growth_attn_out640": {
-   "t": "2026-11-28T06:24:28",
+   "t": "2026-11-28T06:31:55",
    "value": 0
   },
   "native_cache_growth_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
+   "t": "2026-11-28T06:33:10",
    "value": 0
   },
   "native_cache_growth_comp640": {
-   "t": "2026-11-28T06:24:31",
+   "t": "2026-11-28T06:31:58",
    "value": 0
   },
   "native_cache_growth_crope5120": {
-   "t": "2026-11-28T06:26:28",
+   "t": "2026-11-28T06:33:54",
    "value": 0
   },
   "native_cache_growth_exact640": {
-   "t": "2026-11-28T06:24:36",
+   "t": "2026-11-28T06:32:03",
    "value": 0
   },
   "native_cache_growth_gather5120": {
-   "t": "2026-11-28T06:25:48",
+   "t": "2026-11-28T06:33:16",
    "value": 0
   },
   "native_cache_growth_ids5120": {
-   "t": "2026-11-28T06:26:29",
+   "t": "2026-11-28T06:33:55",
    "value": 0
   },
   "native_cache_growth_idx640": {
-   "t": "2026-11-28T06:24:32",
+   "t": "2026-11-28T06:32:00",
    "value": 0
   },
   "native_cache_growth_keys5120": {
-   "t": "2026-11-28T06:25:50",
+   "t": "2026-11-28T06:33:18",
    "value": 0
   },
   "native_cache_growth_moe640": {
-   "t": "2026-11-28T06:24:42",
+   "t": "2026-11-28T06:32:09",
    "value": 0
   },
   "native_cache_growth_pack320": {
-   "t": "2026-11-28T06:24:56",
+   "t": "2026-11-28T06:32:24",
    "value": 0
   },
   "native_cache_growth_pack640": {
-   "t": "2026-11-28T06:24:57",
+   "t": "2026-11-28T06:32:25",
    "value": 0
   },
   "native_cache_growth_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
+   "t": "2026-11-28T06:32:22",
    "value": 0
   },
   "native_cache_growth_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
+   "t": "2026-11-28T06:33:21",
    "value": 0
   },
   "native_cache_growth_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
+   "t": "2026-11-28T06:33:23",
    "value": 0
   },
   "native_cache_growth_pc_slab": {
-   "t": "2026-11-28T06:25:57",
+   "t": "2026-11-28T06:33:25",
    "value": 0
   },
   "native_cache_growth_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
+   "t": "2026-11-28T06:33:22",
    "value": 0
   },
   "native_cache_growth_q_a640": {
-   "t": "2026-11-28T06:24:30",
+   "t": "2026-11-28T06:31:57",
    "value": 0
   },
   "native_cache_growth_rope5120": {
-   "t": "2026-11-28T06:26:23",
+   "t": "2026-11-28T06:33:49",
    "value": 0
   },
   "native_cache_growth_rows_hist": {
-   "t": "2026-11-28T06:25:21",
+   "t": "2026-11-28T06:32:49",
    "value": 0
   },
   "native_cache_growth_rows_tail": {
-   "t": "2026-11-28T06:25:35",
+   "t": "2026-11-28T06:33:03",
    "value": 0
   },
   "native_cache_growth_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
+   "t": "2026-11-28T06:32:17",
    "value": 0
   },
   "native_cache_growth_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
+   "t": "2026-11-28T06:32:15",
    "value": 0
   },
   "native_cache_growth_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
+   "t": "2026-11-28T06:32:19",
    "value": 0
   },
   "native_cache_growth_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
+   "t": "2026-11-28T06:32:16",
    "value": 0
   },
   "native_cache_growth_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
+   "t": "2026-11-28T06:32:35",
    "value": 0
   },
   "native_cache_growth_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
+   "t": "2026-11-28T06:32:30",
    "value": 0
   },
   "native_cache_growth_window5120": {
-   "t": "2026-11-28T06:24:45",
+   "t": "2026-11-28T06:32:13",
    "value": 0
   },
   "native_cache_growth_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
+   "t": "2026-11-28T06:32:12",
    "value": 0
   },
   "native_device_us_generic_attn_out640": {
-   "t": "2026-11-28T06:24:28",
-   "value": 117.66
+   "t": "2026-11-28T06:31:55",
+   "value": 117.71
   },
   "native_device_us_generic_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
-   "value": 74.2
+   "t": "2026-11-28T06:33:10",
+   "value": 74.21
   },
   "native_device_us_generic_comp640": {
-   "t": "2026-11-28T06:24:31",
-   "value": 54.46
+   "t": "2026-11-28T06:31:58",
+   "value": 54.67
   },
   "native_device_us_generic_exact640": {
-   "t": "2026-11-28T06:24:36",
-   "value": 304.28
+   "t": "2026-11-28T06:32:03",
+   "value": 301.92
   },
   "native_device_us_generic_gather5120": {
-   "t": "2026-11-28T06:25:48",
-   "value": 135.17
+   "t": "2026-11-28T06:33:16",
+   "value": 135.79
   },
   "native_device_us_generic_idx640": {
-   "t": "2026-11-28T06:24:32",
-   "value": 45.62
+   "t": "2026-11-28T06:32:00",
+   "value": 36.19
   },
   "native_device_us_generic_keys5120": {
-   "t": "2026-11-28T06:25:50",
+   "t": "2026-11-28T06:33:18",
    "value": 22.73
   },
   "native_device_us_generic_moe640": {
-   "t": "2026-11-28T06:24:42",
-   "value": 109.61
+   "t": "2026-11-28T06:32:09",
+   "value": 109.31
   },
   "native_device_us_generic_pack320": {
-   "t": "2026-11-28T06:24:56",
-   "value": 10.08
+   "t": "2026-11-28T06:32:24",
+   "value": 10.1
   },
   "native_device_us_generic_pack640": {
-   "t": "2026-11-28T06:24:57",
-   "value": 11.28
+   "t": "2026-11-28T06:32:25",
+   "value": 11.29
   },
   "native_device_us_generic_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
-   "value": 76.26
+   "t": "2026-11-28T06:32:22",
+   "value": 76.27
   },
   "native_device_us_generic_q_a640": {
-   "t": "2026-11-28T06:24:30",
-   "value": 66.79
+   "t": "2026-11-28T06:31:57",
+   "value": 66.67
   },
   "native_device_us_generic_rows_hist": {
-   "t": "2026-11-28T06:25:21",
-   "value": 25.15
+   "t": "2026-11-28T06:32:49",
+   "value": 25.18
   },
   "native_device_us_generic_rows_tail": {
-   "t": "2026-11-28T06:25:35",
-   "value": 20.5
+   "t": "2026-11-28T06:33:03",
+   "value": 20.48
   },
   "native_device_us_generic_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
-   "value": 20.77
+   "t": "2026-11-28T06:32:35",
+   "value": 20.78
   },
   "native_device_us_generic_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
-   "value": 23.85
+   "t": "2026-11-28T06:32:30",
+   "value": 23.86
   },
   "native_device_us_native_attn_out640": {
-   "t": "2026-11-28T06:24:28",
-   "value": 117.45
+   "t": "2026-11-28T06:31:55",
+   "value": 117.55
   },
   "native_device_us_native_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
-   "value": 74.24
+   "t": "2026-11-28T06:33:10",
+   "value": 74.29
   },
   "native_device_us_native_comp640": {
-   "t": "2026-11-28T06:24:31",
-   "value": 45.76
+   "t": "2026-11-28T06:31:58",
+   "value": 46.62
   },
   "native_device_us_native_crope5120": {
-   "t": "2026-11-28T06:26:28",
+   "t": "2026-11-28T06:33:54",
    "value": 7.83
   },
   "native_device_us_native_exact640": {
-   "t": "2026-11-28T06:24:36",
-   "value": 303.59
+   "t": "2026-11-28T06:32:03",
+   "value": 301.21
   },
   "native_device_us_native_gather5120": {
-   "t": "2026-11-28T06:25:48",
-   "value": 135.9
+   "t": "2026-11-28T06:33:16",
+   "value": 135.97
   },
   "native_device_us_native_ids5120": {
-   "t": "2026-11-28T06:26:29",
-   "value": 26.97
+   "t": "2026-11-28T06:33:55",
+   "value": 27.01
   },
   "native_device_us_native_idx640": {
-   "t": "2026-11-28T06:24:32",
-   "value": 39.38
+   "t": "2026-11-28T06:32:00",
+   "value": 36.27
   },
   "native_device_us_native_keys5120": {
-   "t": "2026-11-28T06:25:50",
-   "value": 22.72
+   "t": "2026-11-28T06:33:18",
+   "value": 22.71
   },
   "native_device_us_native_moe640": {
-   "t": "2026-11-28T06:24:42",
-   "value": 92.11
+   "t": "2026-11-28T06:32:09",
+   "value": 93.08
   },
   "native_device_us_native_pack320": {
-   "t": "2026-11-28T06:24:56",
-   "value": 10.09
+   "t": "2026-11-28T06:32:24",
+   "value": 10.1
   },
   "native_device_us_native_pack640": {
-   "t": "2026-11-28T06:24:57",
+   "t": "2026-11-28T06:32:25",
    "value": 11.3
   },
   "native_device_us_native_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
-   "value": 76.27
+   "t": "2026-11-28T06:32:22",
+   "value": 76.4
   },
   "native_device_us_native_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
-   "value": 44.08
+   "t": "2026-11-28T06:33:21",
+   "value": 44.06
   },
   "native_device_us_native_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
+   "t": "2026-11-28T06:33:23",
    "value": 1.31
   },
   "native_device_us_native_pc_slab": {
-   "t": "2026-11-28T06:25:57",
-   "value": 5.14
+   "t": "2026-11-28T06:33:25",
+   "value": 5.13
   },
   "native_device_us_native_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
-   "value": 6.8
+   "t": "2026-11-28T06:33:22",
+   "value": 6.83
   },
   "native_device_us_native_q_a640": {
-   "t": "2026-11-28T06:24:30",
-   "value": 48.92
+   "t": "2026-11-28T06:31:57",
+   "value": 49.32
   },
   "native_device_us_native_rope5120": {
-   "t": "2026-11-28T06:26:23",
-   "value": 5.4
+   "t": "2026-11-28T06:33:49",
+   "value": 5.41
   },
   "native_device_us_native_rows_hist": {
-   "t": "2026-11-28T06:25:21",
-   "value": 25.23
+   "t": "2026-11-28T06:32:49",
+   "value": 25.2
   },
   "native_device_us_native_rows_tail": {
-   "t": "2026-11-28T06:25:35",
+   "t": "2026-11-28T06:33:03",
    "value": 20.49
   },
   "native_device_us_native_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
-   "value": 47.58
+   "t": "2026-11-28T06:32:17",
+   "value": 47.57
   },
   "native_device_us_native_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
-   "value": 47.35
+   "t": "2026-11-28T06:32:15",
+   "value": 47.94
   },
   "native_device_us_native_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
-   "value": 51.98
+   "t": "2026-11-28T06:32:19",
+   "value": 51.6
   },
   "native_device_us_native_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
-   "value": 50.68
+   "t": "2026-11-28T06:32:16",
+   "value": 51.05
   },
   "native_device_us_native_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
+   "t": "2026-11-28T06:32:35",
    "value": 20.77
   },
   "native_device_us_native_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
+   "t": "2026-11-28T06:32:30",
    "value": 23.93
   },
   "native_device_us_native_window5120": {
-   "t": "2026-11-28T06:24:45",
-   "value": 39.55
+   "t": "2026-11-28T06:32:13",
+   "value": 39.38
   },
   "native_device_us_native_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
-   "value": 39.78
+   "t": "2026-11-28T06:32:12",
+   "value": 40.01
   },
   "native_device_us_python_crope5120": {
-   "t": "2026-11-28T06:26:28",
-   "value": 9.43
+   "t": "2026-11-28T06:33:54",
+   "value": 9.45
   },
   "native_device_us_python_ids5120": {
-   "t": "2026-11-28T06:26:29",
-   "value": 27.09
+   "t": "2026-11-28T06:33:55",
+   "value": 27.21
   },
   "native_device_us_python_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
-   "value": 43.79
+   "t": "2026-11-28T06:33:21",
+   "value": 43.78
   },
   "native_device_us_python_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
-   "value": 1.31
+   "t": "2026-11-28T06:33:24",
+   "value": 1.3
   },
   "native_device_us_python_pc_slab": {
-   "t": "2026-11-28T06:25:57",
+   "t": "2026-11-28T06:33:25",
    "value": 5.14
   },
   "native_device_us_python_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
-   "value": 6.81
+   "t": "2026-11-28T06:33:22",
+   "value": 6.79
   },
   "native_device_us_python_rope5120": {
-   "t": "2026-11-28T06:26:23",
-   "value": 6.13
+   "t": "2026-11-28T06:33:49",
+   "value": 6.14
   },
   "native_device_us_python_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
-   "value": 60.75
+   "t": "2026-11-28T06:32:17",
+   "value": 59.54
   },
   "native_device_us_python_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
-   "value": 59.59
+   "t": "2026-11-28T06:32:15",
+   "value": 59.95
   },
   "native_device_us_python_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
-   "value": 58.82
+   "t": "2026-11-28T06:32:19",
+   "value": 57.77
   },
   "native_device_us_python_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
-   "value": 61.03
+   "t": "2026-11-28T06:32:16",
+   "value": 61.5
   },
   "native_device_us_python_window5120": {
-   "t": "2026-11-28T06:24:45",
-   "value": 38.76
+   "t": "2026-11-28T06:32:13",
+   "value": 39.31
   },
   "native_device_us_python_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
-   "value": 39.55
+   "t": "2026-11-28T06:32:12",
+   "value": 39.37
   },
   "native_host_us_generic_attn_out640": {
-   "t": "2026-11-28T06:24:28",
-   "value": 69.8
+   "t": "2026-11-28T06:31:55",
+   "value": 69.5
   },
   "native_host_us_generic_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
-   "value": 58.1
+   "t": "2026-11-28T06:33:10",
+   "value": 57.7
   },
   "native_host_us_generic_comp640": {
-   "t": "2026-11-28T06:24:31",
-   "value": 69.4
+   "t": "2026-11-28T06:31:58",
+   "value": 69.8
   },
   "native_host_us_generic_exact640": {
-   "t": "2026-11-28T06:24:36",
-   "value": 171.0
+   "t": "2026-11-28T06:32:03",
+   "value": 69.9
   },
   "native_host_us_generic_gather5120": {
-   "t": "2026-11-28T06:25:48",
-   "value": 70.5
+   "t": "2026-11-28T06:33:16",
+   "value": 71.0
   },
   "native_host_us_generic_idx640": {
-   "t": "2026-11-28T06:24:32",
-   "value": 80.5
+   "t": "2026-11-28T06:32:00",
+   "value": 68.8
   },
   "native_host_us_generic_keys5120": {
-   "t": "2026-11-28T06:25:50",
-   "value": 88.5
+   "t": "2026-11-28T06:33:18",
+   "value": 87.7
   },
   "native_host_us_generic_moe640": {
-   "t": "2026-11-28T06:24:42",
-   "value": 7811.4
+   "t": "2026-11-28T06:32:09",
+   "value": 7792.7
   },
   "native_host_us_generic_pack320": {
-   "t": "2026-11-28T06:24:56",
-   "value": 79.1
+   "t": "2026-11-28T06:32:24",
+   "value": 80.3
   },
   "native_host_us_generic_pack640": {
-   "t": "2026-11-28T06:24:57",
-   "value": 79.4
+   "t": "2026-11-28T06:32:25",
+   "value": 81.2
   },
   "native_host_us_generic_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
-   "value": 56.6
+   "t": "2026-11-28T06:32:22",
+   "value": 57.3
   },
   "native_host_us_generic_q_a640": {
-   "t": "2026-11-28T06:24:30",
-   "value": 69.3
+   "t": "2026-11-28T06:31:57",
+   "value": 70.1
   },
   "native_host_us_generic_rows_hist": {
-   "t": "2026-11-28T06:25:21",
-   "value": 59.4
+   "t": "2026-11-28T06:32:49",
+   "value": 60.0
   },
   "native_host_us_generic_rows_tail": {
-   "t": "2026-11-28T06:25:35",
+   "t": "2026-11-28T06:33:03",
    "value": 59.4
   },
   "native_host_us_generic_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
-   "value": 336.5
+   "t": "2026-11-28T06:32:35",
+   "value": 335.6
   },
   "native_host_us_generic_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
-   "value": 335.9
+   "t": "2026-11-28T06:32:30",
+   "value": 335.7
   },
   "native_host_us_native_attn_out640": {
-   "t": "2026-11-28T06:24:28",
-   "value": 43.5
+   "t": "2026-11-28T06:31:55",
+   "value": 44.4
   },
   "native_host_us_native_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
-   "value": 21.6
+   "t": "2026-11-28T06:33:10",
+   "value": 21.7
   },
   "native_host_us_native_comp640": {
-   "t": "2026-11-28T06:24:31",
-   "value": 44.6
+   "t": "2026-11-28T06:31:58",
+   "value": 45.6
   },
   "native_host_us_native_crope5120": {
-   "t": "2026-11-28T06:26:28",
-   "value": 69.5
+   "t": "2026-11-28T06:33:54",
+   "value": 69.1
   },
   "native_host_us_native_direct_attn_out640": {
-   "t": "2026-11-28T06:24:28",
-   "value": 43.2
+   "t": "2026-11-28T06:31:55",
+   "value": 43.7
   },
   "native_host_us_native_direct_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
+   "t": "2026-11-28T06:33:10",
    "value": 20.7
   },
   "native_host_us_native_direct_comp640": {
-   "t": "2026-11-28T06:24:31",
-   "value": 43.7
+   "t": "2026-11-28T06:31:58",
+   "value": 44.7
   },
   "native_host_us_native_direct_exact640": {
-   "t": "2026-11-28T06:24:36",
-   "value": 107.9
+   "t": "2026-11-28T06:32:03",
+   "value": 43.8
   },
   "native_host_us_native_direct_gather5120": {
-   "t": "2026-11-28T06:25:48",
+   "t": "2026-11-28T06:33:16",
    "value": 21.6
   },
   "native_host_us_native_direct_idx640": {
-   "t": "2026-11-28T06:24:32",
-   "value": 50.4
+   "t": "2026-11-28T06:32:00",
+   "value": 44.2
   },
   "native_host_us_native_direct_keys5120": {
-   "t": "2026-11-28T06:25:50",
-   "value": 31.1
+   "t": "2026-11-28T06:33:18",
+   "value": 31.4
   },
   "native_host_us_native_direct_moe640": {
-   "t": "2026-11-28T06:24:42",
-   "value": 43.0
+   "t": "2026-11-28T06:32:09",
+   "value": 43.1
   },
   "native_host_us_native_direct_pack320": {
-   "t": "2026-11-28T06:24:56",
-   "value": 30.1
+   "t": "2026-11-28T06:32:24",
+   "value": 30.8
   },
   "native_host_us_native_direct_pack640": {
-   "t": "2026-11-28T06:24:57",
-   "value": 30.7
+   "t": "2026-11-28T06:32:25",
+   "value": 31.4
   },
   "native_host_us_native_direct_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
-   "value": 20.1
+   "t": "2026-11-28T06:32:22",
+   "value": 20.5
   },
   "native_host_us_native_direct_q_a640": {
-   "t": "2026-11-28T06:24:30",
-   "value": 43.8
+   "t": "2026-11-28T06:31:57",
+   "value": 44.3
   },
   "native_host_us_native_direct_rows_hist": {
-   "t": "2026-11-28T06:25:21",
-   "value": 19.9
+   "t": "2026-11-28T06:32:49",
+   "value": 20.2
   },
   "native_host_us_native_direct_rows_tail": {
-   "t": "2026-11-28T06:25:35",
-   "value": 20.1
+   "t": "2026-11-28T06:33:03",
+   "value": 20.4
   },
   "native_host_us_native_direct_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
-   "value": 21.5
-  },
-  "native_host_us_native_direct_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
+   "t": "2026-11-28T06:32:35",
    "value": 21.7
   },
+  "native_host_us_native_direct_unpack_hist": {
+   "t": "2026-11-28T06:32:30",
+   "value": 22.8
+  },
   "native_host_us_native_exact640": {
-   "t": "2026-11-28T06:24:36",
-   "value": 69.6
+   "t": "2026-11-28T06:32:03",
+   "value": 44.9
   },
   "native_host_us_native_gather5120": {
-   "t": "2026-11-28T06:25:48",
-   "value": 22.1
+   "t": "2026-11-28T06:33:16",
+   "value": 22.3
   },
   "native_host_us_native_ids5120": {
-   "t": "2026-11-28T06:26:29",
-   "value": 89.5
+   "t": "2026-11-28T06:33:55",
+   "value": 86.3
   },
   "native_host_us_native_idx640": {
-   "t": "2026-11-28T06:24:32",
-   "value": 51.8
+   "t": "2026-11-28T06:32:00",
+   "value": 45.2
   },
   "native_host_us_native_keys5120": {
-   "t": "2026-11-28T06:25:50",
+   "t": "2026-11-28T06:33:18",
    "value": 32.3
   },
   "native_host_us_native_moe640": {
-   "t": "2026-11-28T06:24:42",
+   "t": "2026-11-28T06:32:09",
    "value": 44.3
   },
   "native_host_us_native_pack320": {
-   "t": "2026-11-28T06:24:56",
-   "value": 31.8
+   "t": "2026-11-28T06:32:24",
+   "value": 31.9
   },
   "native_host_us_native_pack640": {
-   "t": "2026-11-28T06:24:57",
-   "value": 31.1
+   "t": "2026-11-28T06:32:25",
+   "value": 32.2
   },
   "native_host_us_native_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
-   "value": 20.8
+   "t": "2026-11-28T06:32:22",
+   "value": 21.2
   },
   "native_host_us_native_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
-   "value": 19.3
+   "t": "2026-11-28T06:33:21",
+   "value": 19.6
   },
   "native_host_us_native_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
+   "t": "2026-11-28T06:33:23",
    "value": 19.3
   },
   "native_host_us_native_pc_slab": {
-   "t": "2026-11-28T06:25:57",
-   "value": 19.8
+   "t": "2026-11-28T06:33:25",
+   "value": 19.5
   },
   "native_host_us_native_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
-   "value": 19.3
+   "t": "2026-11-28T06:33:22",
+   "value": 19.4
   },
   "native_host_us_native_q_a640": {
-   "t": "2026-11-28T06:24:30",
-   "value": 44.7
+   "t": "2026-11-28T06:31:57",
+   "value": 45.2
   },
   "native_host_us_native_rope5120": {
-   "t": "2026-11-28T06:26:23",
-   "value": 74.8
+   "t": "2026-11-28T06:33:49",
+   "value": 70.5
   },
   "native_host_us_native_rows_hist": {
-   "t": "2026-11-28T06:25:21",
-   "value": 20.8
+   "t": "2026-11-28T06:32:49",
+   "value": 21.0
   },
   "native_host_us_native_rows_tail": {
-   "t": "2026-11-28T06:25:35",
-   "value": 20.8
+   "t": "2026-11-28T06:33:03",
+   "value": 21.2
   },
   "native_host_us_native_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
-   "value": 47.3
+   "t": "2026-11-28T06:32:17",
+   "value": 46.6
   },
   "native_host_us_native_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
-   "value": 46.8
+   "t": "2026-11-28T06:32:15",
+   "value": 46.6
   },
   "native_host_us_native_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
-   "value": 52.9
+   "t": "2026-11-28T06:32:19",
+   "value": 51.6
   },
   "native_host_us_native_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
-   "value": 49.5
+   "t": "2026-11-28T06:32:16",
+   "value": 48.6
   },
   "native_host_us_native_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
-   "value": 22.5
+   "t": "2026-11-28T06:32:35",
+   "value": 22.7
   },
   "native_host_us_native_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
-   "value": 22.9
+   "t": "2026-11-28T06:32:30",
+   "value": 23.3
   },
   "native_host_us_native_window5120": {
-   "t": "2026-11-28T06:24:45",
-   "value": 40.2
+   "t": "2026-11-28T06:32:13",
+   "value": 41.3
   },
   "native_host_us_native_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
-   "value": 44.7
+   "t": "2026-11-28T06:32:12",
+   "value": 45.9
   },
   "native_host_us_python_crope5120": {
-   "t": "2026-11-28T06:26:28",
-   "value": 164.0
+   "t": "2026-11-28T06:33:54",
+   "value": 163.1
   },
   "native_host_us_python_ids5120": {
-   "t": "2026-11-28T06:26:29",
-   "value": 120.1
+   "t": "2026-11-28T06:33:55",
+   "value": 115.0
   },
   "native_host_us_python_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
+   "t": "2026-11-28T06:33:21",
    "value": 54.8
   },
   "native_host_us_python_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
-   "value": 55.4
+   "t": "2026-11-28T06:33:23",
+   "value": 55.7
   },
   "native_host_us_python_pc_slab": {
-   "t": "2026-11-28T06:25:57",
-   "value": 55.1
+   "t": "2026-11-28T06:33:25",
+   "value": 55.5
   },
   "native_host_us_python_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
-   "value": 54.8
+   "t": "2026-11-28T06:33:22",
+   "value": 55.1
   },
   "native_host_us_python_rope5120": {
-   "t": "2026-11-28T06:26:23",
-   "value": 172.9
+   "t": "2026-11-28T06:33:49",
+   "value": 165.1
   },
   "native_host_us_python_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
-   "value": 62.5
+   "t": "2026-11-28T06:32:17",
+   "value": 62.6
   },
   "native_host_us_python_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
-   "value": 63.1
+   "t": "2026-11-28T06:32:15",
+   "value": 62.9
   },
   "native_host_us_python_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
-   "value": 69.1
+   "t": "2026-11-28T06:32:19",
+   "value": 67.5
   },
   "native_host_us_python_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
-   "value": 63.4
+   "t": "2026-11-28T06:32:16",
+   "value": 63.7
   },
   "native_host_us_python_window5120": {
-   "t": "2026-11-28T06:24:45",
-   "value": 44.4
+   "t": "2026-11-28T06:32:13",
+   "value": 45.2
   },
   "native_host_us_python_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
-   "value": 55.2
+   "t": "2026-11-28T06:32:12",
+   "value": 56.4
   },
   "native_mismatch_attn_out640": {
-   "t": "2026-11-28T06:24:28",
+   "t": "2026-11-28T06:31:55",
    "value": 0.0
   },
   "native_mismatch_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
+   "t": "2026-11-28T06:33:10",
    "value": 0.0
   },
   "native_mismatch_comp640": {
-   "t": "2026-11-28T06:24:31",
+   "t": "2026-11-28T06:31:58",
    "value": 0.0
   },
   "native_mismatch_crope5120": {
-   "t": "2026-11-28T06:26:28",
+   "t": "2026-11-28T06:33:54",
    "value": 0.0
   },
   "native_mismatch_exact640": {
-   "t": "2026-11-28T06:24:36",
+   "t": "2026-11-28T06:32:03",
    "value": 0.0
   },
   "native_mismatch_gather5120": {
-   "t": "2026-11-28T06:25:48",
+   "t": "2026-11-28T06:33:16",
    "value": 0.0
   },
   "native_mismatch_ids5120": {
-   "t": "2026-11-28T06:26:29",
+   "t": "2026-11-28T06:33:55",
    "value": 0.0
   },
   "native_mismatch_idx640": {
-   "t": "2026-11-28T06:24:32",
+   "t": "2026-11-28T06:32:00",
    "value": 0.0
   },
   "native_mismatch_keys5120": {
-   "t": "2026-11-28T06:25:50",
+   "t": "2026-11-28T06:33:18",
    "value": 0.0
   },
   "native_mismatch_moe640": {
-   "t": "2026-11-28T06:24:42",
+   "t": "2026-11-28T06:32:09",
    "value": 0.0
   },
   "native_mismatch_pack320": {
-   "t": "2026-11-28T06:24:56",
+   "t": "2026-11-28T06:32:24",
    "value": 0.0
   },
   "native_mismatch_pack640": {
-   "t": "2026-11-28T06:24:57",
+   "t": "2026-11-28T06:32:25",
    "value": 0.0
   },
   "native_mismatch_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
+   "t": "2026-11-28T06:32:22",
    "value": 0.0
   },
   "native_mismatch_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
+   "t": "2026-11-28T06:33:21",
    "value": 0.0
   },
   "native_mismatch_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
+   "t": "2026-11-28T06:33:23",
    "value": 0.0
   },
   "native_mismatch_pc_slab": {
-   "t": "2026-11-28T06:25:57",
+   "t": "2026-11-28T06:33:25",
    "value": 0.0
   },
   "native_mismatch_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
+   "t": "2026-11-28T06:33:22",
    "value": 0.0
   },
   "native_mismatch_q_a640": {
-   "t": "2026-11-28T06:24:30",
+   "t": "2026-11-28T06:31:57",
    "value": 0.0
   },
   "native_mismatch_rope5120": {
-   "t": "2026-11-28T06:26:23",
+   "t": "2026-11-28T06:33:49",
    "value": 0.0
   },
   "native_mismatch_rows_hist": {
-   "t": "2026-11-28T06:25:21",
+   "t": "2026-11-28T06:32:49",
    "value": 0.0
   },
   "native_mismatch_rows_tail": {
-   "t": "2026-11-28T06:25:35",
+   "t": "2026-11-28T06:33:03",
    "value": 0.0
   },
   "native_mismatch_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
+   "t": "2026-11-28T06:32:17",
    "value": 0.0
   },
   "native_mismatch_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
+   "t": "2026-11-28T06:32:15",
    "value": 0.0
   },
   "native_mismatch_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
+   "t": "2026-11-28T06:32:19",
    "value": 0.0
   },
   "native_mismatch_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
+   "t": "2026-11-28T06:32:16",
    "value": 0.0
   },
   "native_mismatch_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
+   "t": "2026-11-28T06:32:35",
    "value": 0.0
   },
   "native_mismatch_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
+   "t": "2026-11-28T06:32:30",
    "value": 0.0
   },
   "native_mismatch_window5120": {
-   "t": "2026-11-28T06:24:45",
+   "t": "2026-11-28T06:32:13",
    "value": 0.0
   },
   "native_mismatch_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
+   "t": "2026-11-28T06:32:12",
    "value": 0.0
   },
   "native_repeat_attn_out640": {
-   "t": "2026-11-28T06:24:28",
+   "t": "2026-11-28T06:31:55",
    "value": 0.0
   },
   "native_repeat_bmax_s5120": {
-   "t": "2026-11-28T06:25:42",
+   "t": "2026-11-28T06:33:10",
    "value": 0.0
   },
   "native_repeat_comp640": {
-   "t": "2026-11-28T06:24:31",
+   "t": "2026-11-28T06:31:58",
    "value": 0.0
   },
   "native_repeat_crope5120": {
-   "t": "2026-11-28T06:26:28",
+   "t": "2026-11-28T06:33:54",
    "value": 0.0
   },
   "native_repeat_exact640": {
-   "t": "2026-11-28T06:24:36",
+   "t": "2026-11-28T06:32:03",
    "value": 0.0
   },
   "native_repeat_gather5120": {
-   "t": "2026-11-28T06:25:48",
+   "t": "2026-11-28T06:33:16",
    "value": 0.0
   },
   "native_repeat_ids5120": {
-   "t": "2026-11-28T06:26:29",
+   "t": "2026-11-28T06:33:55",
    "value": 0.0
   },
   "native_repeat_idx640": {
-   "t": "2026-11-28T06:24:32",
+   "t": "2026-11-28T06:32:00",
    "value": 0.0
   },
   "native_repeat_keys5120": {
-   "t": "2026-11-28T06:25:50",
+   "t": "2026-11-28T06:33:18",
    "value": 0.0
   },
   "native_repeat_moe640": {
-   "t": "2026-11-28T06:24:42",
+   "t": "2026-11-28T06:32:09",
    "value": 0.0
   },
   "native_repeat_pack320": {
-   "t": "2026-11-28T06:24:56",
+   "t": "2026-11-28T06:32:24",
    "value": 0.0
   },
   "native_repeat_pack640": {
-   "t": "2026-11-28T06:24:57",
+   "t": "2026-11-28T06:32:25",
    "value": 0.0
   },
   "native_repeat_pair_pool640": {
-   "t": "2026-11-28T06:24:55",
+   "t": "2026-11-28T06:32:22",
    "value": 0.0
   },
   "native_repeat_pc_hist320": {
-   "t": "2026-11-28T06:25:53",
+   "t": "2026-11-28T06:33:21",
    "value": 0.0
   },
   "native_repeat_pc_row_u32": {
-   "t": "2026-11-28T06:25:56",
+   "t": "2026-11-28T06:33:23",
    "value": 0.0
   },
   "native_repeat_pc_slab": {
-   "t": "2026-11-28T06:25:57",
+   "t": "2026-11-28T06:33:25",
    "value": 0.0
   },
   "native_repeat_pc_tile_bf16": {
-   "t": "2026-11-28T06:25:55",
+   "t": "2026-11-28T06:33:22",
    "value": 0.0
   },
   "native_repeat_q_a640": {
-   "t": "2026-11-28T06:24:30",
+   "t": "2026-11-28T06:31:57",
    "value": 0.0
   },
   "native_repeat_rope5120": {
-   "t": "2026-11-28T06:26:23",
+   "t": "2026-11-28T06:33:49",
    "value": 0.0
   },
   "native_repeat_rows_hist": {
-   "t": "2026-11-28T06:25:21",
+   "t": "2026-11-28T06:32:49",
    "value": 0.0
   },
   "native_repeat_rows_tail": {
-   "t": "2026-11-28T06:25:35",
+   "t": "2026-11-28T06:33:03",
    "value": 0.0
   },
   "native_repeat_snap_dyn_mixed": {
-   "t": "2026-11-28T06:24:50",
+   "t": "2026-11-28T06:32:17",
    "value": 0.0
   },
   "native_repeat_snap_dyn_own": {
-   "t": "2026-11-28T06:24:47",
+   "t": "2026-11-28T06:32:15",
    "value": 0.0
   },
   "native_repeat_snap_static_mixed": {
-   "t": "2026-11-28T06:24:51",
+   "t": "2026-11-28T06:32:19",
    "value": 0.0
   },
   "native_repeat_snap_static_own": {
-   "t": "2026-11-28T06:24:48",
+   "t": "2026-11-28T06:32:16",
    "value": 0.0
   },
   "native_repeat_unpack_chunk": {
-   "t": "2026-11-28T06:25:07",
+   "t": "2026-11-28T06:32:35",
    "value": 0.0
   },
   "native_repeat_unpack_hist": {
-   "t": "2026-11-28T06:25:02",
+   "t": "2026-11-28T06:32:30",
    "value": 0.0
   },
   "native_repeat_window5120": {
-   "t": "2026-11-28T06:24:45",
+   "t": "2026-11-28T06:32:13",
    "value": 0.0
   },
   "native_repeat_window_fused5120": {
-   "t": "2026-11-28T06:24:44",
+   "t": "2026-11-28T06:32:12",
    "value": 0.0
   }
  },
