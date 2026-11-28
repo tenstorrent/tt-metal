@@ -167,6 +167,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_format, src_format);
 
+        // copy_init's datacopy init: the ALU config, then (except for unpack to dest) the datacopy MOP.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(src_format, src_format);
         if constexpr (!unpack_to_dest)
         {
             _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_faces * TEST_FACE_R_DIM, 1 /*num_matrices*/);
