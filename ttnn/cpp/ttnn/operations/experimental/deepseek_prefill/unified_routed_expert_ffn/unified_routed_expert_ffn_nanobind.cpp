@@ -55,6 +55,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             gate_projs (list[ttnn.Tensor]): one (emb, hidden) per local expert.
             up_projs (list[ttnn.Tensor]): one (emb, hidden) per local expert.
             down_projs (list[ttnn.Tensor]): one (hidden, emb) per local expert.
+                The weights may be stored in transposed tiles (ttnn.Tile(..., transpose_tile=True), all of them
+                alike): the matmuls transpose each tile back as they unpack it, as ttnn.matmul does. A block-float
+                weight then shares one exponent per 16 consecutive input rows of one output column.
             max_dispatched_tokens_per_expert (int): rows extract gives back.
 
         Keyword Args:
