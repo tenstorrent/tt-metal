@@ -144,8 +144,22 @@ inline void calculate_silu_fp32_dest() {
     }
 }
 
+}  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_silu_bf16.h"
+
+namespace ckernel::sfpu {
+
+// Whether BF16 DEST runs the generated silu kernel as one call over the whole tile.
+inline constexpr bool silu_bf16_whole_tile = true;
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_silu() {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_silu()) {
+            calculate_silu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     if constexpr (is_fp32_dest_acc_en) {
         calculate_silu_fp32_dest<ITERATIONS>();
     } else {
