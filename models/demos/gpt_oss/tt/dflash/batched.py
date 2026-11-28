@@ -31,6 +31,7 @@ import torch
 import ttnn
 from models.tt_transformers.tt.load_checkpoints import reverse_permute, reverse_permute_1d
 
+from ..weight_source import dense_rounded_tag
 from .draft import draft_snapshot, load_draft_config
 
 TILE = ttnn.TILE_SIZE
@@ -485,7 +486,8 @@ def _even_lm_head(model):
     per = V // D
     assert per * D == V and per % TILE == 0
     cache = os.environ.get("TT_CACHE_PATH")
-    name = os.path.join(cache, "b32_lm_head_even.weight") if cache else None
+    # named by the LM head values (checkpoint or GPTQ-rounded, weight_source.dense_rounded_tag) like the model's copy
+    name = os.path.join(cache, f"b32_lm_head_even{dense_rounded_tag()}.weight") if cache else None
     full = None
     if name is not None and not glob.glob(name + "_dtype_*") and not os.access(cache, os.W_OK):
         name = None  # (a read-only cache, as CI mounts the shared one: built in memory, not cached)

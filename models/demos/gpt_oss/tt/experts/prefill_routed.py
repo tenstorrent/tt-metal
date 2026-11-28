@@ -31,6 +31,7 @@ compute_kernel_config, so this module does not pass one.
 Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
 """
 
+import hashlib
 import math
 import os
 import types
@@ -91,14 +92,26 @@ ROUTED_COMBINE_BLOCK = 3072
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
+# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py). The
+# GPTQ layers' files have their own names ("_tt" + source hash) and marker entry (":gptq"), so a GPTQ format change
+# does not need a bump here (which would make every Blackhole 1xN mesh's gpt-oss-20b cache rebuild).
 ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
+# GPT_OSS_PREFILL_GPTQ=1: the bfloat4_b routed prefill experts read the same GPTQ weights as the decode experts
+# (GPT_OSS_DECODE_SPLIT_ROUND_DIR: layer_<L>.pt rounded on the bfloat4_b grid whose 16-value exponent groups run along
+# the INPUT dimension, inside one MXFP4 block). The weights use transposed tiles (ttnn.Tile transpose_tile), so their
+# bfloat4_b groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back
+# as it unpacks them. The tile grid, sharding and reads are unchanged. Prefills the routed path does
+# not take on its own (shorter than its minimum, or not a multiple of 64) are padded into it (MLP.__call__), so every
+# batch-1 prefill reads these weights. The bfloat8_b layers keep the checkpoint values.
+PREFILL_GPTQ_ENV = "GPT_OSS_PREFILL_GPTQ"
 ROUTED_WEIGHTS_DTYPE = ttnn.bfloat4_b
 # Layers whose routed expert weights are bfloat8_b instead of bfloat4_b ("all", "" or a comma list of layer ids).
 # bf8 holds the MXFP4 checkpoint values almost exactly (weight rel. error ~1e-4 for gate/up); bf4 shares one exponent
 # per 16 values and loses 12-16% of the weight norm on every layer. Layers 0 and 1 are the smallest set that passes the
 # per-prompt accuracy guard (layer 0 alone does not); each bf8 layer costs ~0.2 ms TTFT at 1K, and "all" ~4 ms.
+# Still true with GPT_OSS_PREFILL_GPTQ: layers 0 and 1 on the GPTQ bf4 values instead measured v4 KL 0.1066 vs 0.1001
+# (9,216 positions, QuietBox 2), so prefill keeps the bf8 checkpoint values there while decode reads the GPTQ rounding.
 ROUTED_PREFILL_BF8_LAYERS = "0,1"
 
 
@@ -119,6 +132,17 @@ def routed_prefill_chunk():
 def routed_prefill_bf8_layers():
     """The bf8 layer spec ("all" or comma-separated layer indices; recorded in the weight-cache marker)."""
     return ROUTED_PREFILL_BF8_LAYERS
+
+
+def prefill_gptq_enabled():
+    return os.getenv(PREFILL_GPTQ_ENV, "0") == "1"
+
+
+def _weights_tile(transposed):
+    """The expert weights' ttnn.Tile: 32x32, transposed within itself when `transposed` (the GPTQ experts), else None
+    (the default tile). unified_routed_expert_moe reads it from weight tensors, and takes it as weights_tile for
+    table-addressed weights (byte streams, no tile of their own)."""
+    return ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if transposed else None
 
 
 def routed_weights_dtype(layer_idx):
@@ -357,6 +381,17 @@ class RoutedPrefillExperts:
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
         self.weights_dtype = routed_weights_dtype(layer_idx)
+        # GPT_OSS_PREFILL_GPTQ: the bfloat4_b layers read the decode experts' GPTQ weights in transposed tiles.
+        self.weights_tile_transposed = prefill_gptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
+        self.weights_tile = _weights_tile(self.weights_tile_transposed)
+        # The GPTQ source as given (a local directory or a pinned hf:// location): it names the cache files, and is
+        # resolved (downloaded) only when the weights are loaded, so a complete cache needs no Hub access.
+        gptq_spec = ""
+        if self.weights_tile_transposed:
+            gptq_spec = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip()
+            assert (
+                gptq_spec and layer_idx is not None
+            ), f"{PREFILL_GPTQ_ENV}=1 needs GPT_OSS_DECODE_SPLIT_ROUND_DIR (the GPTQ experts) and the layer index"
         # Slot v (device v // experts_per_chip, local slot v % experts_per_chip) holds expert expert_order[v]; None is
         # the identity order. The ids this module receives are slot ids: the MLP routes with a router whose output
         # column v is expert expert_order[v] (TopKRouter.with_expert_order), so the dispatch / global-index tables and
@@ -470,6 +505,12 @@ class RoutedPrefillExperts:
             cache_dir = Path(tensor_cache_path) / f"{ROUTED_CACHE_SUBDIR}{mesh_device.shape[0]}x{mesh_device.shape[1]}"
         self.cache_dir = cache_dir
         prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
+        if self.weights_tile_transposed:
+            # Own cache files per GPTQ source. The source as given, not its resolved path: a Hub location names its
+            # pinned revision, and the resolved path also holds the machine's Hub cache root, which would give every
+            # machine (and the shared CI cache) its own file names.
+            # "_tt": the files hold transposed-tile tensors.
+            prefix += "_tt" + hashlib.sha1(gptq_spec.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
         if has_weights and cache_dir is not None and not self._cache_complete(prefix):
@@ -493,12 +534,22 @@ class RoutedPrefillExperts:
         if has_weights:
             from models.demos.gpt_oss_d_p.tt.moe.weights import prepare_routed_expert_weights
 
+            weights_source = state_dict
+            if self.weights_tile_transposed:
+                # GPTQ weights (checkpoint channel order, HF layout); the biases stay the checkpoint's.
+                from ..weight_source import resolve
+
+                rw = torch.load(f"{resolve(gptq_spec)}/layer_{int(layer_idx)}.pt")
+                weights_source = dict(state_dict, gate_up_proj=rw["gate_up_proj"], down_proj=rw["down_proj"])
+                del rw
             torch_weights, _ = prepare_routed_expert_weights(
-                state_dict, self.num_experts, self.hidden_size, self.intermediate_size
+                weights_source, self.num_experts, self.hidden_size, self.intermediate_size
             )
+            del weights_source
         # TtRoutedExpert only loads/places the weights here (DRAM ND-sharded on Blackhole); forward calls
         # unified_routed_expert_moe directly so the per-expert token bound follows the chunk length.
-        if self.expert_order is None:
+        # Transposed tiles take the ordered loader in any order: TtRoutedExpert has no tile argument.
+        if self.expert_order is None and not self.weights_tile_transposed:
             self.routed_expert = TtRoutedExpert(
                 mesh_device=mesh_device,
                 experts_per_chip=self.experts_per_chip,
@@ -536,8 +587,8 @@ class RoutedPrefillExperts:
                     return False
         return True
 
-    def _place_ordered(self, host_slots, memory_config):
-        """Identity-order host tensors -> device tensors in self.expert_order.
+    def _place_ordered(self, host_slots, memory_config, order=None):
+        """Identity-order host tensors -> device tensors in `order` (default self.expert_order).
 
         host_slots[e]: multi-device host tensor of local slot e in the identity order (device d's shard is expert
         d * epc + e, the cached layout). Device d's slot e of the result holds expert expert_order[d * epc + e]: its
@@ -548,7 +599,7 @@ class RoutedPrefillExperts:
         for e in range(epc):
             per_device = []
             for d in range(self.num_devices):
-                o = self.expert_order[d * epc + e]
+                o = (order if order is not None else self.expert_order)[d * epc + e]
                 per_device.append(shards[o % epc][o // epc])
             t = ttnn.from_host_shards(per_device, self.mesh_device.shape)
             t = ttnn.squeeze(ttnn.squeeze(t, 0), 0)
@@ -564,7 +615,8 @@ class RoutedPrefillExperts:
         cache serves every placement. Without one, the HF weights are permuted and placed directly."""
         rows, cols = self.mesh_device.shape
         epc = self.experts_per_chip
-        if self.cache_dir is None:
+        order = self.expert_order if self.expert_order is not None else list(range(self.num_experts))
+        if self.cache_dir is None and not self.weights_tile_transposed:
             assert torch_weights is not None, "routed weights need HF weights or a cache directory"
             te = TtRoutedExpert(
                 mesh_device=self.mesh_device,
@@ -573,7 +625,7 @@ class RoutedPrefillExperts:
                 emb_dim=self.hidden_size,
                 hidden_dim=self.intermediate_size,
                 max_tokens=self.chunk_size,
-                torch_weights=[torch_weights[o] for o in self.expert_order],
+                torch_weights=[torch_weights[o] for o in order],
                 torch_biases=None,
                 weights_dtype=self.weights_dtype,
                 weight_cache_path=None,
@@ -597,18 +649,26 @@ class RoutedPrefillExperts:
                     ws = {"gate": g, "up": u, "down": d}[proj]
                     stacked = torch.stack([w.T.contiguous() for w in ws], dim=0)
                     stacked = stacked.reshape(rows, cols, stacked.shape[1], stacked.shape[2])
+                assert stacked is not None or self.cache_dir is not None, "routed weights need HF weights or a cache"
                 host_slots.append(
                     ttnn.as_tensor(
                         stacked,
                         mesh_mapper=mapper,
                         layout=ttnn.TILE_LAYOUT,
                         dtype=self.weights_dtype,
-                        cache_file_name=str(self.cache_dir / f"{prefix}.local_{e}_{proj}"),
+                        cache_file_name=None
+                        if self.cache_dir is None
+                        else str(self.cache_dir / f"{prefix}.local_{e}_{proj}"),
+                        tile=self.weights_tile,
                     )
                 )
                 del stacked
-            placed[proj] = self._place_ordered(host_slots, weight_mem)
+            placed[proj] = self._place_ordered(host_slots, weight_mem, order)
             del host_slots
+            # The op reads whether the tiles are transposed from the tensors: a placement step that dropped the tile
+            # would make it read the transposed bytes as normal tiles (wrong values, no error).
+            for w in placed[proj]:
+                assert w.tile.transpose_within_face == self.weights_tile_transposed, (proj, w.tile)
         return types.SimpleNamespace(gate_projs=placed["gate"], up_projs=placed["up"], down_projs=placed["down"])
 
     def _load_biases(self, state_dict, prefix):

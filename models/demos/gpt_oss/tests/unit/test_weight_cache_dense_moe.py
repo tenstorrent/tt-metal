@@ -22,6 +22,8 @@ def _args(monkeypatch, cache_path):
     monkeypatch.setattr(ModelArgs, "weight_cache_path", lambda self, dtype: cache_path)
     monkeypatch.setattr(ModelArgs, "_routed_prefill_weights_version", lambda self: None)
     monkeypatch.delenv("GPT_OSS_FORCE_MODEL_LOAD", raising=False)
+    for name in ModelArgs.DENSE_SETTING_VARS:  # the GPTQ dense weights are a marker setting: none here
+        monkeypatch.delenv(name, raising=False)
     return args
 
 
