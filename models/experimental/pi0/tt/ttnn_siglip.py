@@ -529,7 +529,7 @@ class SigLIPMLPTTNN:
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config,
-            activation="gelu",
+            activation="gelu_tanh",
         )
 
         # FC2 - use L1 for intermediate computation
