@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from conftest import requires_hybrid_allocator
 
 # Views reference caller-owned SRAM; all owning allocations stay explicit in these tests.
 
@@ -68,6 +69,7 @@ def _address(tensor, coord, core):
     return tensor.buffer_address()
 
 
+@requires_hybrid_allocator
 @pytest.mark.parametrize("per_core", [True, False])
 def test_caller_owned_views_preserve_neighbor_bytes(per_core_mesh_device, per_core):
     """Keep backing alive explicitly; destroying views must not release its bytes."""
@@ -92,6 +94,7 @@ def test_caller_owned_views_preserve_neighbor_bytes(per_core_mesh_device, per_co
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, coord, core) == baseline
 
 
+@requires_hybrid_allocator
 @pytest.mark.parametrize("bad", ["alignment", "short_span", "missing"])
 def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error):
     mesh = per_core_mesh_device
@@ -111,6 +114,7 @@ def test_view_rejects_invalid_placements(per_core_mesh_device, bad, expect_error
     ttnn.deallocate(owner)
 
 
+@requires_hybrid_allocator
 def test_view_rejects_span_that_fits_payload_but_not_padding(per_core_mesh_device, expect_error):
     """Reject a 17-byte span when the tensor's aligned writes need more bytes."""
     mesh = per_core_mesh_device
@@ -132,6 +136,7 @@ def test_view_rejects_span_that_fits_payload_but_not_padding(per_core_mesh_devic
     ttnn.deallocate(owner)
 
 
+@requires_hybrid_allocator
 def test_nested_view_preserves_address_and_geometry(per_core_mesh_device):
     """Nested views expose their own spec and offset without changing their backing."""
     mesh = per_core_mesh_device
@@ -164,6 +169,7 @@ def test_lockstep_view_requires_one_address(per_core_mesh_device, expect_error):
     ttnn.deallocate(owner)
 
 
+@requires_hybrid_allocator
 def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expect_error):
     """Exercise different addresses on two cores, including padding and untouched neighbors."""
     mesh, coord = per_core_mesh_device, ttnn.MeshCoordinate(0, 0)
@@ -196,6 +202,7 @@ def test_distinct_per_core_addresses_preserve_backing(per_core_mesh_device, expe
     ttnn.deallocate(owner)
 
 
+@requires_hybrid_allocator
 def test_view_preserves_selected_device_coverage(mesh_device):
     mesh = mesh_device
     coord, core = ttnn.MeshCoordinate(0, 1), ttnn.CoreCoord(0, 0)
@@ -220,6 +227,7 @@ def test_view_preserves_selected_device_coverage(mesh_device):
     torch.testing.assert_close(_read(view), value)
 
 
+@requires_hybrid_allocator
 def test_view_device_order_is_independent_of_span_insertion(mesh_device):
     """Keep tensor topology and reference addresses stable for unordered span maps."""
     mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
@@ -235,6 +243,7 @@ def test_view_device_order_is_independent_of_span_insertion(mesh_device):
         assert _address(first, coord, core) == _address(second, coord, core) == _address(owner, coord, core)
 
 
+@requires_hybrid_allocator
 def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     """Exercise selected-device allocation, narrow writes and caller-owned backing for native copies."""
     mesh, core = mesh_device, ttnn.CoreCoord(0, 0)
@@ -293,6 +302,7 @@ def test_allocation_only_views_narrow_writes_and_lifetime(mesh_device):
     assert ttnn.experimental_get_l1_occupied_ranges(mesh, other, core) == other_before
 
 
+@requires_hybrid_allocator
 def test_semaphore_rejects_invalid_addresses_before_writing(per_core_mesh_device, expect_error):
     """Reject reserved, unaligned and out-of-range semaphore writes without touching backing bytes."""
     mesh, coord, core = per_core_mesh_device, ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0)
