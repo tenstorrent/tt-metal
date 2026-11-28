@@ -1188,11 +1188,11 @@ bool write_to_device_buffer(
             remote_chip = noc_addr_pair_opt->device_id != device_id;
             const uint64_t pinned_noc_base = noc_addr_pair_opt->addr;
             const uint8_t* pinned_host_base = static_cast<const uint8_t*>(pinned_memory->get_host_ptr());
-            const uint8_t* src_ptr = static_cast<const uint8_t*>(src);
             const uint64_t pinned_size = pinned_memory->get_buffer_size();
-            auto region = buffer.impl().root_buffer_region();
-            const uint8_t* src_region_start = src_ptr + region.offset;
-            const uint8_t* src_region_end = src_region_start + region.size;
+            // ``src`` holds this buffer's bytes only, as in the copy path: byte 0 of a view is ``src[0]``, wherever
+            // the view sits in its root buffer.
+            const uint8_t* src_region_start = static_cast<const uint8_t*>(src);
+            const uint8_t* src_region_end = src_region_start + buffer.size();
             // Check against L1 alignment because we need the copy from the prefetcher to the dispatcher to be aligned.
             const uint32_t pinned_src_alignment = hal.get_read_alignment(HalMemType::L1);
             if (reinterpret_cast<uintptr_t>(src_region_start) % pinned_src_alignment != 0) {

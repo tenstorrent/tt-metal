@@ -14,6 +14,7 @@
 #include <array>
 #include <cstddef>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -64,6 +65,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include "tt_metal/impl/dispatch/vector_aligned.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -1510,6 +1512,82 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         EXPECT_EQ(*src, dst);
         // Pinned memory should have been used, so locking may block.
         EXPECT_TRUE(pinned_shared->lock_may_block());
+    }
+}
+
+// A region write from pinned memory takes its host pointer as the region's first byte, as the unpinned path does.
+TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryRegion) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        return;
+    }
+    const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    const uint32_t tiles_per_device = 128;
+    const uint32_t bytes_per_device = tiles_per_device * single_tile_size;
+    ReplicatedBufferConfig global_buffer_config{.size = bytes_per_device};
+    auto mesh_buffer = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    // Pages [32, 64) come from the same pages of a pinned image of the whole buffer. Reading from the pointer plus the
+    // region offset would take pages [64, 96) instead, which are still inside the pinned range.
+    const uint32_t region_first_page = 32;
+    const uint32_t region_num_pages = 32;
+    const BufferRegion region(region_first_page * single_tile_size, region_num_pages * single_tile_size);
+
+    constexpr int device_read_align{64};
+    using AlignedWords = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>;
+    auto src = std::make_shared<AlignedWords>(bytes_per_device / sizeof(uint32_t), 0);
+    std::iota(src->begin(), src->end(), 0);
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), src->size()), MemoryPin(src));
+    AlignedWords zeros(bytes_per_device / sizeof(uint32_t), 0);
+    AlignedWords dst(bytes_per_device / sizeof(uint32_t), 0);
+
+    AlignedWords expected = zeros;
+    const auto region_first_word = region.offset / sizeof(uint32_t);
+    const auto region_end_word = region_first_word + (region.size / sizeof(uint32_t));
+    std::copy(src->begin() + region_first_word, src->begin() + region_end_word, expected.begin() + region_first_word);
+
+    distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
+    auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
+        *mesh_device_,
+        MeshCoordinateRangeSet(coord_range),
+        host_buffer,
+        /*map_to_noc=*/true);
+    ASSERT_TRUE(pinned_shared);
+    auto& cq = mesh_device_->mesh_command_queue();
+    for (const auto& coord : coord_range) {
+        auto clear_transfer = distributed::ShardDataTransfer{coord}
+                                  .host_data(static_cast<void*>(zeros.data()))
+                                  .region(BufferRegion(0, bytes_per_device));
+        cq.enqueue_write_shards(mesh_buffer, {clear_transfer}, /*blocking=*/true);
+
+        auto write_transfer =
+            distributed::ShardDataTransfer{coord}
+                .host_data(static_cast<void*>(reinterpret_cast<uint8_t*>(src->data()) + region.offset))
+                .region(region);
+        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned_shared);
+        // The copy path puts the payload in the issue queue during the call; the pinned path writes only commands.
+        // (lock_may_block() can't tell them apart: the barrier event is dropped if the write has already completed.)
+        auto& sysmem = mesh_device_->impl().get_device(coord)->sysmem_manager();
+        const auto cq_id = static_cast<uint8_t>(cq.id());
+        const uint32_t issue_queue_size = sysmem.get_issue_queue_size(cq_id);
+        const uint32_t issue_wr_ptr_before = sysmem.get_issue_queue_write_ptr(cq_id);
+        cq.enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/false);
+        const uint32_t issue_bytes =
+            (sysmem.get_issue_queue_write_ptr(cq_id) + issue_queue_size - issue_wr_ptr_before) % issue_queue_size;
+        EXPECT_LT(issue_bytes, region.size) << "shard " << coord << ": the write went through the issue queue";
+
+        // Read back the whole shard through the hugepage.
+        std::fill(dst.begin(), dst.end(), 0);
+        auto read_transfer = distributed::ShardDataTransfer{coord}
+                                 .host_data(static_cast<void*>(dst.data()))
+                                 .region(BufferRegion(0, bytes_per_device));
+        cq.enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        const auto first_mismatch = static_cast<size_t>(
+            std::distance(expected.begin(), std::mismatch(expected.begin(), expected.end(), dst.begin()).first));
+        EXPECT_EQ(first_mismatch, expected.size()) << "shard " << coord << ": word " << first_mismatch << " is "
+                                                   << dst[first_mismatch] << ", expected " << expected[first_mismatch];
     }
 }
 
