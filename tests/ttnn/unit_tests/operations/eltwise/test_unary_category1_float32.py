@@ -458,65 +458,88 @@ def test_erfinv(device):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# erfc: the rational is fit on [0, 5] and the input is clamped there (#51137).
-#       x >= 5 is checked against torch.erfc in test_erfc_tail, which is
-#       xfailed until that clamp is removed. The constant is not the expected result.
+# erfc: x >= 5 is clamped (#51137), so the body test covers x < 5 and x >= 5 is
+#       checked against torch.erfc in test_erfc_tail, which is xfailed until the clamp is removed.
+#       Blackhole is held to 4 float32 ULP; Wormhole keeps its allclose bands.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# erfc(2) ≈ 4.68e-3. Blackhole's body atol sits under that, so a zero result fails.
+# erfc(2) ≈ 4.68e-3. Wormhole's body atol (1e-4) sits well under that, so a zero result fails there;
+# on Blackhole the ULP check catches it directly.
 ERFC_BODY_END = 2.0
 ERFC_CLAMP = 5.0
+ERFC_ULP_THRESHOLD = 4
+
+
+def _erfc_golden(x, device):
+    """Blackhole: float64 erfc rounded once to float32. Wormhole: the ttnn golden function."""
+    if is_blackhole():
+        return torch.erfc(x.to(torch.float64)).to(torch.float32)
+    return ttnn.get_golden_function(ttnn.erfc)(x, device=device)
 
 
 def _assert_erfc(x, golden, result):
+    if is_blackhole():
+        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ERFC_ULP_THRESHOLD)
+        return
+
     body = x <= ERFC_BODY_END
     mid = (x > ERFC_BODY_END) & (x < ERFC_CLAMP)
     assert body.any() and mid.any()
 
-    if is_blackhole():
-        assert_allclose(expected_result=golden[body], actual_result=result[body], atol=3.9e-3, rtol=0)
-    else:
-        assert_allclose(expected_result=golden[body], actual_result=result[body], atol=1e-4, rtol=1e-4)
-
+    assert_allclose(expected_result=golden[body], actual_result=result[body], atol=1e-4, rtol=1e-4)
     assert_allclose(expected_result=golden[mid], actual_result=result[mid], atol=0, rtol=3.2e-1)
 
 
 def test_erfc(device):
-    """Float32 sweep on [-10, 10], for x < 5. The fit is [-5, 5]; the tail is test_erfc_tail.
+    """Float32 sweep on [-10, 10], for x < 5; the tail is test_erfc_tail.
 
-    | slice     | wormhole                  | blackhole                     |
-    |-----------|---------------------------|-------------------------------|
-    | x <= 2    | atol=1e-4, rtol=1e-4      | atol=3.9e-3, rtol=0           |
-    |           | max abs 9.70e-5 at x=-2.5 | max abs 3.883e-3 near x=-6e-8 |
-    | 2 < x < 5 | atol=0, rtol=0.32         | atol=0, rtol=0.32             |
-    |           | max rel 0.311             | max rel 0.312 at x=3.453125   |
+    Blackhole: <= 4 float32 ULP over the whole range (the kernel measures 4 over all 2^32 inputs below 5).
+    Wormhole:  atol=1e-4, rtol=1e-4 for x <= 2 (max abs 9.70e-5 at x=-2.5);
+               atol=0, rtol=0.32 for 2 < x < 5 (max rel 0.311).
     """
     input_tensor = generate_float32_bits_in_range(-10.0, 10.0)
     input_tensor = input_tensor[input_tensor < ERFC_CLAMP]
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn.erfc)
-    golden = golden_function(input_tensor, device=device)
+    golden = _erfc_golden(input_tensor, device)
 
     result = ttnn.to_torch(ttnn.erfc(tt_in))
     _assert_erfc(input_tensor, golden, result)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="4 ULP erfc is a Blackhole kernel property")
+def test_erfc_full_mantissa(device):
+    """Float32 inputs with nonzero low mantissa bits, within 4 ULP of float64 erfc rounded once to float32."""
+    magnitudes = torch.arange(0, 0x41200000, 4099, dtype=torch.int32).view(torch.float32)  # [0, 10)
+    positive = magnitudes[magnitudes < ERFC_CLAMP]
+    input_tensor = torch.cat([positive, -magnitudes])
+    padding = (-input_tensor.numel()) % 1024
+    input_tensor = torch.cat([input_tensor, input_tensor[:padding]]).reshape(-1, 32)
+
+    tt_in = to_float32_tt_tensor(input_tensor, device)
+
+    golden = _erfc_golden(input_tensor, device)
+    result = ttnn.to_torch(ttnn.erfc(tt_in))
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ERFC_ULP_THRESHOLD)
 
 
 @pytest.mark.xfail(
     reason="#51137: |x| >= 5 is clamped instead of decaying.",
 )
 def test_erfc_tail(device):
-    """x >= 5 against torch.erfc, same rtol as (2, 5). Expected to fail while the input is clamped at 5."""
+    """x >= 5 against torch.erfc: 4 ULP on Blackhole, rtol=0.32 on Wormhole. Expected to fail while the input is clamped at 5."""
     input_tensor = generate_float32_bits_in_range(ERFC_CLAMP, 10.0)
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
-    golden_function = ttnn.get_golden_function(ttnn.erfc)
-    golden = golden_function(input_tensor, device=device)
+    golden = _erfc_golden(input_tensor, device)
 
     result = ttnn.to_torch(ttnn.erfc(tt_in))
-    assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=3.2e-1)
+    if is_blackhole():
+        assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ERFC_ULP_THRESHOLD)
+    else:
+        assert_allclose(expected_result=golden, actual_result=result, atol=0, rtol=3.2e-1)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
