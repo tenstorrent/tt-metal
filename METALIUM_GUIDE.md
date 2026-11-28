@@ -92,7 +92,7 @@ The following are the kernels, when run together, will perform vector addition o
 
 ```c++
 // Data read kernel (data movement kernel 0)
-#include <dataflow_api.h>
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     // Read parameters from the kernel run-time arguments
@@ -135,9 +135,9 @@ Synchronization with the reader and writer kernels, as well as between the three
 
 ```c++
 // Compute kernel
-#include <compute_kernel_api.h>
-#include <compute_kernel_api/common.h>
-#include <compute_kernel_api/eltwise_binary.h>
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
 
 void kernel_main() {
     const uint32_t n_tiles = get_arg_val<uint32_t>(0);
@@ -176,7 +176,7 @@ The writer is simple. Just waits for the output data from the compute kernel to 
 
 ```c++
 // Data write kernel (data movement kernel 1)
-#include <dataflow_api.h>
+#include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
     const uint32_t c_addr = get_arg_val<uint32_t>(0);
