@@ -13,6 +13,10 @@ One deliberate substitution: every layer's FFN is K3's dense FFN (`DENSE_FFN_CON
 LatentMoE layer is 896 routed experts at 33 M parameters each, ~59 GB per layer; the MoE is the same
 in K3 and K3.1 and covered by K3's own tests. Attention, norms, AttnRes and KDA are the model's own.
 
+A stack that needs the model's own LatentMoE without a checkpoint builds with `KimiK31Config` and
+`synthetic_state_dict(..., moe_chips=...)`, then `use_synthetic_moe`: the MoE block (the model's MoE) on
+random weights, one chip's worth of routed experts repeated on every chip (see `synthetic_moe_weights`).
+
 Weights are drawn per GLOBAL layer index, so every window sees the same weights: a pipeline rank
 built from layers [12, 16) holds exactly what an undivided [0, 16) stack holds there.
 
@@ -39,6 +43,13 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import STAGE_LAYOUTS, 
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    create_gate_weights,
+    create_latent_weights,
+    create_shared_expert_weights,
+)
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import TtMoEBlockFfn
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural
@@ -66,19 +77,24 @@ def hf_config():
     return kimi_k3_1_hf_config(CACHE_LEN)
 
 
-def placements(**device_params) -> list:
+def placements(moe_block: bool = False, **device_params) -> list:
     """`(mesh_device, device_params)` for each `STAGE_LAYOUTS` mesh at K3.1's L1_SMALL; extra `device_params`
-    (e.g. a trace test's `trace_region_size`) are added or override (a test's own `l1_small_size`).
+    (e.g. a trace test's `trace_region_size`) are added or override (a test's own `l1_small_size`). `moe_block`:
+    for a stack with the model's MoE (`use_synthetic_moe`), the fabric payload raised to one combine row of the
+    MoE block, as the runner raises it.
 
     8x4 on Fabric2D. 4x4 on the stage's Linear/Ring fabric; it needs the Galaxy narrowed to one tray half
     (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by tests/run_4x4_stage_tests.sh). Unnarrowed, the system
     mesh is 8x4 and requires_mesh_topology skips that row, and the 8x4 row skips on a tray half."""
+    with_moe = (lambda params: moe_block_device_params(KimiK31Config, params)) if moe_block else (lambda params: params)
     return [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=KimiK31Config.FABRIC_PAYLOAD_SIZE,
-                **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
+            with_moe(
+                fabric2d_device_params(
+                    fabric_payload_size=KimiK31Config.FABRIC_PAYLOAD_SIZE,
+                    **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
+                )
             ),
             marks=[pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"), SKIP_8X4_SP_AXIS_1],
             id="fabric2d-8x4",
@@ -87,9 +103,11 @@ def placements(**device_params) -> list:
             (4, 4),
             # The runner's packet size (the adapter's): at the arch maximum, the KDA layers' fused TP gather
             # (all_gather_minimal_matmul_async, on the Linear axis 0 here) overflows L1 with its mux buffers.
-            torus_x_device_params(
-                fabric_payload_size=get_adapter("kimi_k3_1").fabric_payload_size(),
-                **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
+            with_moe(
+                torus_x_device_params(
+                    fabric_payload_size=get_adapter("kimi_k3_1").fabric_payload_size(),
+                    **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
+                )
             ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id=f"4x4-sp{STAGE_LAYOUTS[(4, 4)].sp_axis}",
@@ -101,8 +119,57 @@ def _lin(generator, out_features, in_features):
     return (torch.randn(out_features, in_features, generator=generator) * STD).to(torch.bfloat16)
 
 
-def synthetic_state_dict(first_layer_idx: int, num_layers: int) -> dict:
-    """Embedding, final norm, AttnRes queries, and per layer: norms, DSA or KDA, dense FFN."""
+def synthetic_moe_weights(layer_idx: int, chips: int) -> dict:
+    """One layer's LatentMoE on random weights, in the state-dict form `TtMoEBlockFfn` takes: the router (gate
+    weight and score bias), the shared expert, the latent pair with its norm, and the 896 routed experts.
+
+    The routed experts are one chip's worth (896 / chips, at 33 M parameters each) repeated on every chip: 896
+    distinct ones would take the host ~59 GB per layer in bf16. The router's 896 rows are all distinct, so tokens
+    still spread over every expert of every chip; with random gate rows the spread is near uniform, not a trained
+    router's skew. Router, shared expert and latent pair come from the MoE tests' creators (init_helpers)."""
+    K = KimiK31Config
+    hidden, latent, inter = K.EMB_SIZE, K.ROUTED_EXPERT_HIDDEN_SIZE, K.MOE_INTERMEDIATE_SIZE
+    experts_per_chip = K.NUM_ROUTED_EXPERTS // chips
+    generator = torch.Generator().manual_seed(4052 + layer_idx)
+    pool = [
+        {
+            "gate_proj": _lin(generator, inter, latent),
+            "up_proj": _lin(generator, inter, latent),
+            "down_proj": _lin(generator, latent, inter),
+        }
+        for _ in range(experts_per_chip)
+    ]
+    return {
+        "gate_weights": create_gate_weights(K.NUM_ROUTED_EXPERTS, hidden, seed=6078 + layer_idx),
+        "shared_expert_weights": create_shared_expert_weights(
+            hidden, K.SHARED_EXPERT_INTERMEDIATE_SIZE, seed=8104 + layer_idx
+        ),
+        "latent_weights": create_latent_weights(hidden, latent, seed=10130 + layer_idx),
+        # The same objects on every chip: TtMoEBlockFfn then uploads one chip's experts replicated.
+        "routed_expert_weights": [pool[e % experts_per_chip] for e in range(K.NUM_ROUTED_EXPERTS)],
+    }
+
+
+def use_synthetic_moe(transformer, layer_states: list) -> None:
+    """Point every MoE layer of a stack built with `KimiK31Config` at its layer's `synthetic_moe_weights`
+    (`layer_states`: the stack's window of `synthetic_state_dict(..., moe_chips=...)["layers"]`).
+
+    `TtKimiK3Block` builds its MoE block layer to read the checkpoint and the TTNN weight cache; `TtMoEBlockFfn`
+    also takes a state dict (the MoE block tests' way), so each layer's is rebuilt with one here. The block loads
+    its weights at its first call, so nothing was read yet. Call this before the first forward or compile()."""
+    assert len(layer_states) == len(transformer.layers), (len(layer_states), len(transformer.layers))
+    for layer, state in zip(transformer.layers, layer_states):
+        if getattr(layer, "moe_block", False):
+            assert "routed_expert_weights" in state, f"layer {layer.layer_idx}: no synthetic MoE weights"
+            layer.ffn = TtMoEBlockFfn(
+                layer.mesh_device, KimiK31Config, layer.layer_idx, state_dict=state, options=layer.ffn.options
+            )
+
+
+def synthetic_state_dict(first_layer_idx: int, num_layers: int, moe_chips: int | None = None) -> dict:
+    """Embedding, final norm, AttnRes queries, and per layer: norms, DSA or KDA, dense FFN. With `moe_chips` (the
+    mesh's chip count) the layers past K3.1's dense ones hold `synthetic_moe_weights` in place of the dense FFN,
+    for a stack built with `KimiK31Config`."""
     config = hf_config()
     hidden, inter = config.hidden_size, config.intermediate_size
     mla_layers = set(KimiK3Config.mla_layer_ids())
@@ -112,12 +179,15 @@ def synthetic_state_dict(first_layer_idx: int, num_layers: int) -> dict:
         layer = {
             "attn_norm_weight": torch.ones(hidden, dtype=torch.bfloat16),
             "ffn_norm_weight": torch.ones(hidden, dtype=torch.bfloat16),
-            "ffn_weights": {
+        }
+        if moe_chips is not None and layer_idx >= KimiK31Config.NUM_DENSE_LAYERS:
+            layer.update(synthetic_moe_weights(layer_idx, moe_chips))
+        else:
+            layer["ffn_weights"] = {
                 "gate_proj": _lin(generator, inter, hidden),
                 "up_proj": _lin(generator, inter, hidden),
                 "down_proj": _lin(generator, hidden, inter),
-            },
-        }
+            }
         if layer_idx in mla_layers:
             layer["mla_weights"] = random_mla_weights(config, seed=layer_idx)
         else:

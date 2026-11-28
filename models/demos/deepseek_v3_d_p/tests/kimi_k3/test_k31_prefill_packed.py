@@ -14,14 +14,22 @@ counterparts of `test_k3_prefill_multiuser.py`, with the index cache compared be
   the same model, then against a model built for one chunk per forward. Plain residual stream: bit-exact output, KV,
   index cache and KDA carries. AttnRes: PCC bars (it rounds a row by its position in the call; see the K3 test).
 * test_k31_packed_traced_matches_eager: the same schedule through TtKimiK3Runtime.prefill_forward with use_trace
-  (one capture, replayed per forward, every chunk position's slot and bounds read on device, an empty position in
-  the scratch slot) must leave the caches and carries the eager packed forward leaves, bit for bit.
+  (one capture per real-chunk count, every chunk position's slot and bounds read on device; a forward with an empty
+  tail replays the capture in which that tail skips its attention) must leave the caches and carries the eager
+  packed forward leaves, bit for bit. Every forward with an empty tail replays its own capture, and no capture or
+  replay compiles a program.
 * test_k31_packed_pipeline_matches_one_rank: the K3.1 runtime split over two pipeline ranks on one mesh (layers 0-11
   and 12-15, two DSA layers each side), packed activations handed rank to rank and D2H acks from rank 0, must match
-  one rank (plain residual, eager: bit-exact), and traced must match eager on both ranks (bit-exact). No indexer
+  one rank (plain residual, eager: bit-exact), and traced must match eager on both ranks (bit-exact), at two and at
+  four chunks per forward; the handoff rank 0 sends for a forward with an empty tail is compared too. No indexer
   indices cross the boundary.
+* test_k31_real_moe_packed_traced_matches_eager: the traced-against-eager check on layers 0-4 with the model's own
+  LatentMoE (the MoE block) on random weights, on the 4x4 stage, at two and at four chunks per forward. Four
+  2,560-token chunks are the production forward: 2,560 MoE rows per SP chip, all of them real in one forward of the
+  schedule.
 
-Synthetic weights and the dense-FFN stand-in for the MoE (synthetic.py): the MoE is K3's, covered by the K3 test.
+Synthetic weights. Every test but the last runs the dense-FFN stand-in for the MoE (synthetic.py): the MoE is K3's,
+covered by the K3 test, which needs the checkpoint's TTNN weight cache.
 """
 
 import gc
@@ -50,6 +58,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
     stage_layout,
     synthetic_state_dict,
     token_ids,
+    use_synthetic_moe,
     window,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_k3_prefill_multiuser import _PlainK3Runtime, _read_d2h_records
@@ -58,6 +67,8 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.residual import PlainResidualStream
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import to_mesh_order
+from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import TtMoEBlockFfn, release_blocks
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3_1 import KimiK31Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
@@ -84,6 +95,15 @@ PACKED_TEST_L1_SMALL_SIZE = KimiK31Config.L1_SMALL_SIZE + 512
 # and 15.
 PIPELINE_LAYERS = 16
 PIPELINE_SPLIT = 12
+# The real-MoE stack: layers 0-3 hold every K3.1 layer kind (0 KDA + dense FFN, 1-2 KDA + MoE, 3 DSA + MoE). Layer 4
+# (KDA + MoE) is there for its carries: they are the compared state that the DSA layer's MoE output reaches (the
+# last layer's MoE output reaches none: the comparison reads caches and carries, not the stack's output).
+REAL_MOE_LAYERS = 5
+# The real-MoE test's mesh: the 4x4 stage only (production packs four chunks on it), opened as a mesh that runs the
+# MoE block (its fabric payload).
+REAL_MOE_PLACEMENTS = [
+    p for p in placements(moe_block=True, trace_region_size=TRACE_REGION_SIZE) if tuple(p.values[0]) == (4, 4)
+]
 
 
 def _schedule(mesh_device):
@@ -101,6 +121,43 @@ def _schedule(mesh_device):
         [PrefillChunk(1, C, C + 704), E],
     ]
     return lengths, forwards
+
+
+def _schedule4(mesh_device):
+    """(user lengths, forwards) at four chunks per forward, the production shape: forwards with 3, 1, 2, 4, 1, 3, 2
+    and 1 real chunks, so every partial capture replays two or three times, with other captures in between, and one
+    zero block fills up to three empty positions of a forward. The last forward is a partial chunk alone."""
+    C = stage_layout(mesh_device).chunk
+    lengths = [6 * C, C + 704, C + 896, 6 * C + 1344]
+    E = PrefillChunk(0, 0, 0)
+    forwards = [
+        [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(2, 0, C), E],
+        [PrefillChunk(0, C, 2 * C), E, E, E],
+        [PrefillChunk(3, 0, C), PrefillChunk(3, C, 2 * C), E, E],
+        [
+            PrefillChunk(0, 2 * C, 3 * C),
+            PrefillChunk(1, C, C + 704),
+            PrefillChunk(2, C, C + 896),
+            PrefillChunk(3, 2 * C, 3 * C),
+        ],
+        [PrefillChunk(0, 3 * C, 4 * C), E, E, E],
+        [PrefillChunk(3, 3 * C, 4 * C), PrefillChunk(3, 4 * C, 5 * C), PrefillChunk(0, 4 * C, 5 * C), E],
+        [PrefillChunk(0, 5 * C, 6 * C), PrefillChunk(3, 5 * C, 6 * C), E, E],
+        [PrefillChunk(3, 6 * C, 6 * C + 1344), E, E, E],
+    ]
+    return lengths, forwards
+
+
+def _schedule4_full(mesh_device):
+    """`_schedule4` behind one forward of four full chunks, one per user (every user's chunks move one chunk on):
+    the forward in which every MoE row is real. Forwards with 4, 3, 1, 2, 4, 1, 3, 2 and 1 real chunks."""
+    C = stage_layout(mesh_device).chunk
+    lengths, forwards = _schedule4(mesh_device)
+    later = [
+        [c if c.is_empty else PrefillChunk(c.slot_id, c.actual_start + C, c.actual_end + C) for c in chunks]
+        for chunks in forwards
+    ]
+    return [n + C for n in lengths], [[PrefillChunk(u, 0, C) for u in range(len(lengths))]] + later
 
 
 def _streams(num_users, length):
@@ -159,6 +216,26 @@ def _chunk_rows(hidden, k, n, chunk, sp, chunk_len):
             if chunk.actual_start + c * s + r < chunk.actual_end:
                 rows.append(hidden[(c * n + k) * s + r])
     return torch.stack(rows)
+
+
+def _handoff_real_rows(mesh_device, handoff, chunks):
+    """The real rows of a packed handoff (`[1, planes, n * chunk / sp, emb / tp]`: the live stream and the sealed
+    AttnRes snapshots) on the host, every plane, chunk by chunk."""
+    layout = stage_layout(mesh_device)
+    dims = [None, None]
+    dims[layout.sp_axis], dims[layout.tp_axis] = 2, 3
+    host = ttnn.to_torch(
+        handoff, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+    )[0]
+    sp, n = mesh_device.shape[layout.sp_axis], len(chunks)
+    return torch.cat(
+        [
+            _chunk_rows(plane, k, n, c, sp, layout.chunk)
+            for plane in host
+            for k, c in enumerate(chunks)
+            if not c.is_empty
+        ]
+    ).to(torch.float32)
 
 
 def _forward(model, caches, mesh_device, chunks, streams, user_of=lambda s: s):
@@ -332,7 +409,17 @@ def test_k31_packed_forward_matches_one_chunk_forwards(mesh_device, device_param
     assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
 
 
-def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace):
+def _rt_config(
+    mesh_device,
+    device_params,
+    first,
+    n,
+    total,
+    num_users,
+    use_trace,
+    forward_chunks=FORWARD_CHUNKS,
+    model_cfg=DENSE_FFN_CONFIG,
+):
     layout = stage_layout(mesh_device)
     return TtPrefillRuntimeConfig(
         num_layers=n,
@@ -341,13 +428,13 @@ def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace
         sp_axis=layout.sp_axis,
         tp_axis=layout.tp_axis,
         chunk_size=layout.chunk,
-        forward_tokens_budget=FORWARD_CHUNKS * layout.chunk,
+        forward_tokens_budget=forward_chunks * layout.chunk,
         num_users=num_users,
         num_links=1,
         topology=per_axis_topology(device_params["fabric_config"]),
         capacity_factor=2,
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
-        model_cfg=DENSE_FFN_CONFIG,
+        model_cfg=model_cfg,
         routing_use_l1_small_for_semaphores=True,
         weight_cache_path=None,
         kv_only_last_layer=False,
@@ -361,16 +448,30 @@ def _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace
 
 
 def _runtime(
-    mesh_device, device_params, state_dict, first, n, total, num_users, use_trace, runtime_cls=TtKimiK3Runtime
+    mesh_device,
+    device_params,
+    state_dict,
+    first,
+    n,
+    total,
+    num_users,
+    use_trace,
+    runtime_cls=TtKimiK3Runtime,
+    forward_chunks=FORWARD_CHUNKS,
+    model_cfg=DENSE_FFN_CONFIG,
 ):
     """A K3.1 runtime over layers [first, first + n) of a ``total``-layer synthetic model, and its caches from the
-    serving allocator (the index and KV caches with the traced scratch slot, the KDA slabs at num_users)."""
+    serving allocator (the index and KV caches with the traced scratch slot, the KDA slabs at num_users).
+    ``model_cfg``: the dense-FFN stand-in, or KimiK31Config for the model's MoE on the state dict's synthetic MoE
+    weights (synthetic_state_dict's moe_chips)."""
     rt = runtime_cls(
         mesh_device,
         hf_config(),
         window(state_dict, first, n),
-        _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace),
+        _rt_config(mesh_device, device_params, first, n, total, num_users, use_trace, forward_chunks, model_cfg),
     )
+    if model_cfg is not DENSE_FFN_CONFIG:
+        use_synthetic_moe(rt.model, window(state_dict, first, n)["layers"])
     params = run_params(
         mesh_device,
         first,
@@ -378,7 +479,7 @@ def _runtime(
         is_first_rank=first == 0,
         is_last_rank=first + n == total,
         num_users=num_users,
-        forward_chunks=FORWARD_CHUNKS,
+        forward_chunks=forward_chunks,
         use_trace=use_trace,
     )
     caches = KimiK31Adapter().allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config(), params=params)
@@ -387,8 +488,11 @@ def _runtime(
 
 
 def _release_runtimes(pairs):
-    """Every runtime's trace before any sub-device manager (the models share one mesh here), then the slabs."""
+    """Every runtime's traces before any sub-device manager (the models share one mesh here), then the slabs."""
     for rt, _ in pairs:
+        for partial in rt._controllers_by_real_count.values():
+            partial.release()
+        rt._controllers_by_real_count = {}
         if rt._controller is not None:
             rt._controller.release()
     for rt, caches in pairs:
@@ -397,26 +501,128 @@ def _release_runtimes(pairs):
             caches.kda_states.deallocate()
 
 
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    placements(trace_region_size=TRACE_REGION_SIZE),
-    indirect=["mesh_device", "device_params"],
-)
-def test_k31_packed_traced_matches_eager(mesh_device, device_params):
-    """Traced packed forwards (slots 0..3) must leave the KV, index cache and KDA carries the eager packed forward of
-    the same chunks on the same model leaves (slots 4..7), bit for bit."""
-    lengths, forwards = _schedule(mesh_device)
+def _count_replays(rt):
+    """Wrap every capture's replay with a counter: {real-chunk count (F for the full capture): replays}."""
+    counts = {}
+
+    def counting(controller, real):
+        replay = controller.replay
+
+        def wrapped(*args, **kwargs):
+            counts[real] = counts.get(real, 0) + 1
+            return replay(*args, **kwargs)
+
+        controller.replay = wrapped
+
+    counting(rt._controller, rt.config.forward_chunks)
+    for real, controller in rt._controllers_by_real_count.items():
+        counting(controller, real)
+    return counts
+
+
+def _expected_replays(forwards):
+    want = {}
+    for chunks in forwards:
+        real = sum(not c.is_empty for c in chunks)
+        want[real] = want.get(real, 0) + 1
+    return want
+
+
+def _assert_skip_captures(rt):
+    """K3.1 declares packed_trace_skips_empty_positions: one capture per real-chunk count 1..F-1 beside the full one,
+    none of which compiled a program (compile() warmed each)."""
+    full = rt.config.forward_chunks
+    assert type(rt.model).packed_trace_skips_empty_positions
+    assert sorted(rt._controllers_by_real_count) == list(range(1, full)), rt._controllers_by_real_count
+    assert sorted(rt.capture_new_programs) == list(range(1, full + 1)), f"captures: {rt.capture_new_programs}"
+    assert all(n == 0 for n in rt.capture_new_programs.values()), f"captures compiled: {rt.capture_new_programs}"
+
+
+def _count_moe_picks(monkeypatch):
+    """Wrap the MoE block FFN to read, after every eager packed MoE call, how many (row, expert) picks its planner
+    counted: each chip's own experts' slice of the head's per-expert counts, summed over the mesh. A list, one total
+    per MoE call. For a block that runs its forward in one call (`_assert_moe_runs_in_one_call`): with splits the
+    head's counts hold the last split only."""
+    calls = []
+    call = TtMoEBlockFfn.__call__
+
+    def counting(self, x, *args, chunks=None, forward_chunks=None, **kwargs):
+        assert chunks is not None, "this hook reads eager packed forwards only"
+        y = call(self, x, *args, chunks=chunks, forward_chunks=forward_chunks, **kwargs)
+        chips = self.mesh.get_num_devices()
+        sp = tuple(self.mesh.shape)[self.options.sp_axis]
+        block = self._block(int(x.shape[-2]) * sp, forward_chunks if forward_chunks is not None else len(chunks))
+        assert block.splits == 1, f"layer {self.layer_idx}: the MoE block ran as {block.splits} splits"
+        epc = self.dims.num_experts // chips
+        # Device i holds the block's chip order[i] (transposed on the 4x4 stage, SP on axis 1), experts
+        # [order[i] * epc, (order[i] + 1) * epc).
+        order = to_mesh_order(list(range(chips)), self.mesh.shape, self.options.sp_axis)
+        total = 0
+        for i, d in enumerate(ttnn.get_device_tensors(block.last_head.counts)):
+            total += int(ttnn.to_torch(d).reshape(-1)[order[i] * epc : (order[i] + 1) * epc].to(torch.int64).sum())
+        calls.append(total)
+        return y
+
+    monkeypatch.setattr(TtMoEBlockFfn, "__call__", counting)
+    return calls
+
+
+def _assert_moe_runs_in_one_call(model, mesh_device, forward_chunks):
+    """Every MoE layer's block (built at the stack's first forward) runs a whole forward in one call. A forward that
+    does not fit the block's L1 runs as splits instead, which works but reads every routed expert's weights once per
+    split: at the production forward that is a regression to fail on, not a warning in the log."""
+    layout = stage_layout(mesh_device)
+    tokens = forward_chunks * layout.chunk
+    for layer in model.layers:
+        if getattr(layer, "moe_block", False):
+            block = layer.ffn._block(tokens, forward_chunks)
+            assert block.splits == 1, (
+                f"layer {layer.layer_idx}: the MoE block does not fit a forward of {forward_chunks} chunks "
+                f"({tokens // mesh_device.shape[layout.sp_axis]} rows per SP chip) in one call; it runs as "
+                f"{block.splits} splits of {tokens // block.splits} tokens (see the MoEBlock PERFORMANCE WARNING)"
+            )
+
+
+def _traced_matches_eager(mesh_device, device_params, schedule, num_layers, model_cfg, monkeypatch=None):
+    """Traced packed forwards into slots 0..3, then the eager packed forward of the same chunks on the same model
+    into slots 4..7: every forward replays its own capture, no replay compiles a program, and the KV, index cache
+    and KDA carries are equal bit for bit.
+
+    ``schedule``: `_schedule`, `_schedule4` or `_schedule4_full`. ``model_cfg`` KimiK31Config (with
+    ``monkeypatch``): the model's MoE on synthetic weights. Its block must then run every forward in one call (no
+    splits), and each eager forward's MoE calls must count exactly its real rows' picks (real rows x
+    NUM_EXPERTS_PER_TOKEN): a routed pad or empty-position row, or a dropped real row, changes the total."""
+    real_moe = model_cfg is not DENSE_FFN_CONFIG
+    lengths, forwards = schedule(mesh_device)
+    forward_chunks = len(forwards[0])
     num_users = len(lengths)
     num_slots = 2 * num_users
     mesh_device.enable_program_cache()
-    state_dict = synthetic_state_dict(0, NUM_LAYERS)
+    state_dict = synthetic_state_dict(0, num_layers, moe_chips=mesh_device.get_num_devices() if real_moe else None)
     streams = _streams(num_users, max(lengths))
-    rt, caches = _runtime(mesh_device, device_params, state_dict, 0, NUM_LAYERS, NUM_LAYERS, num_slots, True)
+    rt, caches = _runtime(
+        mesh_device,
+        device_params,
+        state_dict,
+        0,
+        num_layers,
+        num_layers,
+        num_slots,
+        True,
+        forward_chunks=forward_chunks,
+        model_cfg=model_cfg,
+    )
     try:
         model = rt.model
+        moe_layers = sum(bool(getattr(layer, "moe_block", False)) for layer in model.layers)
+        assert moe_layers == (num_layers - KimiK31Config.NUM_DENSE_LAYERS if real_moe else 0), moe_layers
         rt.compile(caches)
+        if real_moe:
+            _assert_moe_runs_in_one_call(model, mesh_device, forward_chunks)
         rt.capture_trace(caches)
+        _assert_skip_captures(rt)
+        replays = _count_replays(rt)
+        programs = mesh_device.num_program_cache_entries()
 
         def forward_input(chunks, user_of):
             return rt.make_forward_input(
@@ -428,25 +634,77 @@ def test_k31_packed_traced_matches_eager(mesh_device, device_params):
             logger.info(f"[traced] forward {f}: {chunks}")
             rt.prefill_forward(forward_input(chunks, lambda s: s), caches, chunks)
         ttnn.synchronize_device(mesh_device)
+        assert replays == _expected_replays(forwards), f"replays by real-chunk count {replays}"
+        assert mesh_device.num_program_cache_entries() == programs, "a traced forward compiled a program"
 
-        for chunks in forwards:
+        picks = _count_moe_picks(monkeypatch) if real_moe else []
+        failures = []
+        for f, chunks in enumerate(forwards):
             ref = [
                 c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end) for c in chunks
             ]
             inp = forward_input(ref, lambda s: s - num_users)
+            del picks[:]
             out = model.forward(
                 inp, caches.kvpe, index_kv_cache=caches.index, actual_isl=stage_layout(mesh_device).chunk, chunks=ref
             )
             ttnn.deallocate(inp)
             if out is not None:
                 ttnn.deallocate(out)
+            if real_moe:
+                want = sum(c.actual_end - c.actual_start for c in chunks) * KimiK31Config.NUM_EXPERTS_PER_TOKEN
+                logger.info(f"[moe picks] eager forward {f}: the planner counted {picks} per MoE call, want {want}")
+                assert len(picks) == moe_layers, f"eager forward {f}: {len(picks)} MoE calls, {moe_layers} MoE layers"
+                if picks != [want] * moe_layers:
+                    failures.append(f"eager forward {f}: MoE picks per call {picks}, want {want}")
+        if real_moe:
+            monkeypatch.undo()
         ttnn.synchronize_device(mesh_device)
 
-        state = _state(mesh_device, model.schedule, 0, NUM_LAYERS, caches, range(num_slots))
-        failures = _compare("traced", state, [(u + num_users, u) for u in range(num_users)], exact=True)
+        state = _state(mesh_device, model.schedule, 0, num_layers, caches, range(num_slots))
+        failures += _compare("traced", state, [(u + num_users, u) for u in range(num_users)], exact=True)
+        if real_moe:
+            # Two users' KV must differ: catches a comparison that reads one slot twice.
+            kv_layer = max(l for l, kind in state if kind == "kvpe")
+            cross = _pcc(state[(kv_layer, "kvpe")][0], state[(kv_layer, "kvpe")][3])
+            assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D hold the same KV (PCC {cross:.6f})"
         assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         _release_runtimes([(rt, caches)])
+        if real_moe:
+            release_blocks(mesh_device)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    placements(trace_region_size=TRACE_REGION_SIZE),
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("forward_chunks", [2, 4], ids=["2-chunks", "4-chunks"])
+def test_k31_packed_traced_matches_eager(mesh_device, device_params, forward_chunks):
+    """Traced packed forwards (slots 0..3) must leave the KV, index cache and KDA carries the eager packed forward of
+    the same chunks on the same model leaves (slots 4..7), bit for bit. Four chunks per forward is the production
+    shape: every partial capture (1, 2 and 3 real chunks) replays."""
+    schedule = _schedule if forward_chunks == 2 else _schedule4
+    _traced_matches_eager(mesh_device, device_params, schedule, NUM_LAYERS, DENSE_FFN_CONFIG)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mesh_device, device_params", REAL_MOE_PLACEMENTS, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize("forward_chunks", [2, 4], ids=["2-chunks", "4-chunks"])
+def test_k31_real_moe_packed_traced_matches_eager(mesh_device, device_params, forward_chunks, monkeypatch):
+    """test_k31_packed_traced_matches_eager with the model's own LatentMoE (the MoE block, random weights: see
+    synthetic_moe_weights) on layers 0-4, on the 4x4 stage: bit for bit as well. The MoE block's combine sums in
+    whole steps of its snap (2^-14), so its output does not depend on the order rows arrive in, and its planner reads
+    the same chunk bounds traced (the forward's metadata words on device) and eager (the chunks).
+
+    Two chunks per forward are 1,280 MoE rows per SP chip, four are 2,560: the production forward, whose schedule
+    (`_schedule4_full`) has a forward with all four chunks full. The MoE block must run each forward in one call: a
+    block that needs splits to fit its L1 fails the test, and one that does not fit at all raises from its plan
+    (MoEBlock: "... does not fit in one call") at the stack's first forward, inside compile()."""
+    schedule = _schedule if forward_chunks == 2 else _schedule4_full
+    _traced_matches_eager(mesh_device, device_params, schedule, REAL_MOE_LAYERS, KimiK31Config, monkeypatch)
 
 
 @pytest.mark.timeout(3600)
@@ -455,16 +713,21 @@ def test_k31_packed_traced_matches_eager(mesh_device, device_params):
     placements(l1_small_size=PACKED_TEST_L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE),
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("traced, residual", [(False, "plain"), (True, "attnres")], ids=["eager-plain", "traced"])
-def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced, residual):
+@pytest.mark.parametrize(
+    "traced, residual, forward_chunks",
+    [(False, "plain", 2), (True, "attnres", 2), (True, "attnres", 4)],
+    ids=["eager-plain", "traced", "traced-4-chunks"],
+)
+def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced, residual, forward_chunks):
     """Packed forwards over two pipeline ranks (layers 0-11, 12-15) with D2H acks from rank 0.
 
     Eager on the plain residual stream: every layer's KV, index keys and KDA carries on both ranks bit-exact against
-    one rank holding all 16 layers (run first and released before the ranks are built). Traced (AttnRes): the ranks'
-    replays into slots 0..3 bit-exact against the same two models run eagerly into slots 4..7. The ranks pass no
-    indexer indices: each DSA layer runs its own indexer, so the runner's PP split needs no
-    supports_packed_forward_indexer_indices."""
-    lengths, forwards = _schedule(mesh_device)
+    one rank holding all 16 layers (run first and released before the ranks are built). Traced (AttnRes), at two
+    chunks per forward and at the production four: the ranks' replays into slots 0..3 bit-exact against the same two
+    models run eagerly into slots 4..7, and so are the real rows of the handoff rank 0 sends for the first forward
+    with one real chunk (its empty tail skips its attention). The ranks pass no indexer indices: each DSA layer runs
+    its own indexer, so the runner's PP split needs no supports_packed_forward_indexer_indices."""
+    lengths, forwards = (_schedule if forward_chunks == 2 else _schedule4)(mesh_device)
     num_users = len(lengths)
     num_slots = num_users * (2 if traced else 1)
     mesh_device.enable_program_cache()
@@ -477,7 +740,7 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
     assert not adapter.passes_indexer_indices
     assert (
         packed_forward_refusals(
-            FORWARD_CHUNKS, indexer_indices=adapter.passes_indexer_indices, **packed_forward_capabilities(adapter)
+            forward_chunks, indexer_indices=adapter.passes_indexer_indices, **packed_forward_capabilities(adapter)
         )
         == []
     )
@@ -490,7 +753,16 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
     ref_state = None
     if not traced:
         ref = _runtime(
-            mesh_device, device_params, state_dict, 0, PIPELINE_LAYERS, PIPELINE_LAYERS, num_slots, False, runtime_cls
+            mesh_device,
+            device_params,
+            state_dict,
+            0,
+            PIPELINE_LAYERS,
+            PIPELINE_LAYERS,
+            num_slots,
+            False,
+            runtime_cls,
+            forward_chunks,
         )
         try:
             ref[0].compile(ref[1])
@@ -505,9 +777,23 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
 
     split = [(0, PIPELINE_SPLIT), (PIPELINE_SPLIT, PIPELINE_LAYERS - PIPELINE_SPLIT)]
     ranks = [
-        _runtime(mesh_device, device_params, state_dict, first, n, PIPELINE_LAYERS, num_slots, traced, runtime_cls)
+        _runtime(
+            mesh_device,
+            device_params,
+            state_dict,
+            first,
+            n,
+            PIPELINE_LAYERS,
+            num_slots,
+            traced,
+            runtime_cls,
+            forward_chunks,
+        )
         for first, n in split
     ]
+    # The first forward with one real chunk: its traced handoff is compared with the eager one below.
+    handoff_forward = next(f for f, chunks in enumerate(forwards) if sum(not c.is_empty for c in chunks) == 1)
+    traced_handoff = None
     d2h = ttnn.D2HStreamService(
         mesh_device,
         global_spec=None,
@@ -525,17 +811,27 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             ranks[0][0].set_d2h_ack_service(d2h)
             for rt, caches in ranks:
                 rt.capture_trace(caches)
+                _assert_skip_captures(rt)
+            replays = [_count_replays(rt) for rt, _ in ranks]
             warm = _read_d2h_records(d2h, ranks[0][0].warmup_ack_count())
             logger.info(f"[pipeline] drained {len(warm)} warm-up D2H records")
 
         (rt0, caches0), (rt1, caches1) = ranks
+        compiled = [0, 0]  # programs compiled inside each rank's prefill_forward (traced: none may)
         for f, chunks in enumerate(forwards):
             logger.info(f"[pipeline {'traced' if traced else 'eager'}] forward {f}: {chunks}")
-            out = rt0.prefill_forward(tokens(rt0, chunks), caches0, chunks, d2h_service=d2h)
+            inp = tokens(rt0, chunks)
+            programs = mesh_device.num_program_cache_entries()
+            out = rt0.prefill_forward(inp, caches0, chunks, d2h_service=d2h)
+            compiled[0] += mesh_device.num_program_cache_entries() - programs
+            if traced and f == handoff_forward:
+                traced_handoff = _handoff_real_rows(mesh_device, out, chunks)
             act = ttnn.clone(out)  # what the D2D socket delivers
             if not traced:
                 ttnn.deallocate(out)
+            programs = mesh_device.num_program_cache_entries()
             assert rt1.prefill_forward(act, caches1, chunks) is None
+            compiled[1] += mesh_device.num_program_cache_entries() - programs
             want = [
                 (c.slot_id, c.actual_start, c.actual_end)
                 for c in chunks
@@ -546,7 +842,9 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
             assert got == want, f"forward {f}: D2H records {got} != {want}"
 
         if traced:
-            for chunks in forwards:
+            assert replays == [_expected_replays(forwards)] * 2, f"replays by real-chunk count per rank {replays}"
+            assert compiled == [0, 0], f"traced forwards compiled programs, per rank: {compiled}"
+            for f, chunks in enumerate(forwards):
                 shifted = [
                     c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end)
                     for c in chunks
@@ -554,6 +852,10 @@ def test_k31_packed_pipeline_matches_one_rank(mesh_device, device_params, traced
                 inp = tokens(rt0, shifted)
                 h = rt0.model.forward_packed(inp, caches0.kvpe, shifted, index_kv_cache=caches0.index)
                 ttnn.deallocate(inp)
+                if f == handoff_forward:
+                    diff = (traced_handoff - _handoff_real_rows(mesh_device, h, shifted)).abs().max().item()
+                    logger.info(f"[pipeline-traced] forward {f} ({chunks[0]}, empty tail): handoff diff {diff:.3e}")
+                    assert diff == 0, f"forward {f}: the traced handoff's real rows differ from eager's by {diff:.3e}"
                 out = rt1.model.forward_packed(h, caches1.kvpe, shifted, index_kv_cache=caches1.index)
                 ttnn.deallocate(h)
                 if out is not None:
