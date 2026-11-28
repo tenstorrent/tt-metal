@@ -233,8 +233,9 @@ def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
     user = tokenizer.encode("user", bos=False, eos=False)
     assistant = tokenizer.encode("assistant", bos=False, eos=False)
     prompt = tokenizer.encode(prompt_text, bos=False, eos=False)
+    system_prompt_ids = tokenizer.encode(system_prompt_text, bos=False, eos=False) if system_prompt_text else []
 
-    system_prompt = start_header + system + end_header + system_prompt_text + end_turn if system_prompt_text else []
+    system_prompt = start_header + system + end_header + system_prompt_ids + end_turn if system_prompt_text else []
     user_prompt = start_header + user + end_header + prompt + end_turn
     assistant_reply = start_header + assistant + end_header
     return begin_of_text + system_prompt + user_prompt + assistant_reply
