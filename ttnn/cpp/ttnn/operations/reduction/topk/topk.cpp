@@ -553,17 +553,23 @@ std::vector<Tensor> topk(
     // Same if k is 0 (i.e. top 0 elements were requested).
     if (input_tensor.logical_volume() == 0 || k == 0) {
         if (!preallocated_output_tensors.has_value()) {
-            auto make_zero_volume_tensor = [&] {
+            // The indices tensor has no entries, but its dtype is part of the op's contract
+            // (UINT16 or UINT32, per is_uint32_index_required); it was created with the input
+            // dtype, so k = 0 returned float-typed indices.
+            const ttnn::DataType indices_dtype = ttnn::prim::is_uint32_index_required(input_tensor, adjusted_dim)
+                                                     ? ttnn::DataType::UINT32
+                                                     : ttnn::DataType::UINT16;
+            auto make_zero_volume_tensor = [&](ttnn::DataType dtype) {
                 return ttnn::full(
                     desired_final_shape,
                     0.0f,  // Value doesn't matter, since it is a 0-volume tensor.
-                    input_tensor.dtype(),
+                    dtype,
                     input_tensor.layout(),
                     *input_tensor.device(),
                     memory_config.value_or(input_tensor.memory_config()));
             };
 
-            return {make_zero_volume_tensor(), make_zero_volume_tensor()};
+            return {make_zero_volume_tensor(input_tensor.dtype()), make_zero_volume_tensor(indices_dtype)};
         }
 
         // If the output tensors were preallocated, they should already have
