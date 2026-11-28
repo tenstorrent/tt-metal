@@ -793,6 +793,80 @@ notes:
     err_* <= limit) with bit-identical REPEATS of its own (determinism) and cold no-rebuild; include the order-changing
     winners you dropped (wq_b minimal, wo_a block_w 2, family switches). The brief and gate are being updated; your work
     stays in the tree.'
+- id: OV-76
+  tasks:
+  - WA.2
+  status: open
+  t: '2026-11-27T15:22:50'
+  text: 'The probe file is the gate''s: models/demos/deepseek_v41_flash_d_p/tests/woa/test_woa_probe.py (WOA_BANK_DESIGN.md
+    section 7 says tests/perf/test_woa_bank_probe.py: use the gate''s path; tests/perf is outside your paths). Run WOA_BANK_DESIGN.md
+    step 0 (today''s op with no-weight-read / no-compute / no-x stubs at 160 and 256 rows) FIRST, before building the bank
+    path, and record woa_stub_us_<stub>_<rows>; if no-weight-reads >= 0.9 x today at 256 rows, write the KILL verdict at
+    the top of results/WA.2_probe.md and stop building (the gate still needs today''s woa_us_today_* and repeats; record
+    woa_us_bank_* only for what you built, else skip those metrics). The resident runner is up (mesh only).'
+- id: OV-77
+  tasks:
+  - WA.3
+  - WA.4
+  status: open
+  t: '2026-11-27T15:44:46'
+  text: 'OWNER 2026-11-27: holding both wo_a copies (interleaved + bank) in DRAM is ONLY for the off/on comparison; it is
+    not kept. Build it so the A/B / test loads can hold both (call-time, one load), but a normal load (serving, the shipped
+    default once accepted) uploads ONLY the copy of the layout in use: no second copy, the ~1.33 GiB a chip (40 layers)
+    returned. E.g. a load-time setting of which copies to upload (default: the selected layout only; ''both'' set by the
+    A/B / off-on tests), with the switch refusing a layout that was not loaded (raise, never a fallback). WA.4''s report
+    states weight DRAM a chip for the shipped load (one copy) and for the A/B load (both).'
+- id: OV-78
+  tasks:
+  - WA.3
+  status: open
+  t: '2026-11-27T16:19:02'
+  text: 'WA.2''s probe measured HOST us a call of the bank path 296 (160 rows) / 124 (256) vs today 99.6 / 100.2. In the
+    model the bank call must cost no more host time than today''s (one prepared program, run_prepared, the same patch count;
+    no per-call layout / CoreSlot / runtime-arg rebuild): find the cause, fix it, and record woa_host_us_<off|on>_<case>
+    next to the device ms in test_woa_offon. A device gain eaten by exposed host time is not a win.'
+- id: OV-79
+  tasks:
+  - WA.3
+  status: open
+  t: '2026-11-27T16:23:44'
+  text: 'OWNER question 2026-11-27: why scatter the cores into 8 clusters at all? Measure first (op level, minutes, the
+    WA.2 probe on the runner): the bank-local reader on TODAY''s core set (one 8 x 11 rectangle, grid row g = group g, each
+    row reading only bank g: shape ''row'' or today''s placement) vs the band clusters, device us AND host us a call at
+    256 and 160 rows. If today''s rectangle keeps the device gain within noise, wire THAT (same launch shape as today, no
+    extra ranges). Also cut the per-call host cost of the bank path: no str() of the sharded memory config or shard-spec
+    asserts on every call (check once at prepare / cache it on the tensor or layout). Report the split of the host delta
+    (Python key / checks vs enqueue) in results/WA.3_offon.md.'
+- id: OV-80
+  tasks:
+  - WA.5
+  status: closed
+  t: '2026-11-27T20:04:33'
+  text: 'First: re-render results/WA.4_ladder.md with the REAL off side (python3 -m models.demos.deepseek_v41_flash_d_p.tests.woa.woa_ladder_report
+    over runs/galaxy_8x4-full/run1/ab/WA.4: the orchestrator''s A/B measured both sides after F306); drop the PROXY wording;
+    keep the verdict section. Use those real off / on device ms in WA.5_report.md.'
+  closed: '2026-11-27T20:59:52'
+  why_closed: 'agent''s evidence holds: the off side ran with the switch on (F308); off ladders re-measured after the fix'
+- id: OV-81
+  tasks:
+  - NC.4
+  status: open
+  t: '2026-11-28T00:55:27'
+  text: 'The overseer stopped attempt 2 (perf): NC.4 dropped by the overseer: attempt 1 showed with evidence that tail_a2a
+    / fused_head / prepared_tail run only under MOE_BLOCK_SRC=carried and tail_engine needs a latent; the shipped MoE block
+    (block) is already native C++. Nothing to port.'
+- id: OV-82
+  tasks:
+  - NC.5
+  - NC.6
+  - NC.7
+  status: open
+  t: '2026-11-28T00:55:46'
+  text: 'Before porting anything: check each program your task names actually runs on the SHIPPED path of this branch: the
+    defaults (tt/settings.py) for a single 8192 / 5120 chunk AND the packed path with the switches every packed gate sets
+    (DS41_PACKED*=on, POS_DYNAMIC=on; see results/PB.MM256 gate commands). Evidence: the call site under those settings
+    and a run log line (logs/WA.4R*.log). Drop any program that does not run there (as NC.4 found: DS41-401), say so with
+    the evidence in your report, and port only the ones that run.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1553,6 +1627,26 @@ fixes:
   - models/demos/deepseek_v41_flash_d_p/tests
   released: '2026-11-18T20:12:17'
   placed: '2026-11-18T20:27:18'
+- id: FIX.40
+  title: Re-render models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md
+  gate:
+  - WA.5
+  status: placed
+  t: '2026-11-27T21:04:37'
+  text: 'Re-render models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/WA.4_ladder.md with the REAL
+    off side: WA.4''s A/B off side ran every ladder with DS41_WOA_BANK=on (framework F308, fixed). On side: runs/galaxy_8x4-full/run1/ab/WA.4/new
+    (test_skip_positions__BRINGUP_CHUNK-8192__*, test_packed_walls, test_skip_positions__BRINGUP_CHUNK-5120). Off side:
+    the gate results of tasks WA.4R (8192 single + 4x2k + 4x1792s) and WA.4R5 (5120), results/WA.4R*.json and their logs
+    under runs/galaxy_8x4-full/run1/logs. Same tables as before (per history: steady wall ms, tok/s, resumed wall ms, device
+    ms, exposed host ms, attention device ms; off / on / delta), say in one line that off and on were measured in different
+    loads (walls drift between loads: judge device ms), keep the verdict section (test_woa_offon''s same-load numbers).
+    Update results/WA.5_report.md part 1 with the real ladder deltas. Extend tests/woa/woa_ladder_report.py to read the
+    off side from the WA.4R / WA.4R5 runs if needed. No device runs.'
+  hold: WA.4R and WA.4R5 passed (the real off side)
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  released: '2026-11-27T21:29:16'
+  placed: '2026-11-27T21:31:10'
 classified:
   L.smoke:
     kind: framework
@@ -1566,3 +1660,7 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-21T05:05:14'
+  WA.3:
+    kind: framework
+    why: ''
+    t: '2026-11-27T17:19:36'

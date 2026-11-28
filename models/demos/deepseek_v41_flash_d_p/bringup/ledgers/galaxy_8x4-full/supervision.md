@@ -1589,3 +1589,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 23:50 heartbeat: NC.2 native_migrate fabric_reduce_scatter in rounds; RAM used 67 GB; / 69G free.
 - 00:20 heartbeat: NC.2 native_migrate fabric_reduce_scatter not_ported after 5 rounds (85 min): one acceptance case >5% slower on device than the original (perf only, correctness passes); agent handling. RAM used 73 GB; / 68G free.
 - 00:32 NC.2 PASS -> 8c26d3280e0 (C++ ttnn.fabric_reduce_scatter). Op level: identical on 7 cases, repeats 0, no cache growth; host a call 72-117 -> 46-74 us; the MoE block's call 7413 -> 46 us (its old route was not prepared); device same or faster (comp 66 -> 48, MoE 164 -> 146 us). Accepted. NC.3 next.
+- 00:52 NC.3 PASS -> b947498334e (C++ ttnn.layer_send: WindowSend fused / plain, SnapshotSend dyn / static / multi, GluedSend; kernels moved verbatim; model call sites switched). Identical on 10 cases, repeats 0, no cache growth; host ~0.5 ms a chunk saved single, ~1.9 ms packed; snapshot device 59 -> 47 us, multi 127 -> 87 us. Accepted.
+- 00:50 heartbeat: NC.4 running; RAM used 63 GB; / 68G free.
+- 01:00 NC.4 DROPPED (overseer decision; my task, my error): attempt 1's agent showed with evidence that the MoE programs it
+  names (tail_a2a, fused_head, prepared_tail.ShapeKeyedTailA2A) run only under MOE_BLOCK_SRC=carried and tail_engine needs
+  a latent model; the shipped block (MOE_BLOCK_SRC=block) already uses native C++ moe_head / moe_tail; WA.4R logs show no
+  carried path. My survey had counted the carried path. Attempt 2 aborted (OV-81); NC.4 removed from tasks.yaml, NC.5 deps
+  -> NC.3 (validate: valid); the agent's evidence kept (BREADCRUMBS NC.4, DS41-401, results/NC.4_layer.md). Note OV-82 to
+  NC.5-NC.7: check every named program runs on the shipped path (defaults + the packed gate switches) before porting.

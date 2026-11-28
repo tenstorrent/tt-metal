@@ -1955,3 +1955,27 @@
   series' one ladder is NC.8).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.3 --spec $BRINGUP_SPEC --check`; build:
   `cmake --build build --target install`.
+
+## NC.4 (perf, attempt 1): STOPPED before any code. The three programs are not on the shipped MoE path
+
+- Expected saving a chunk (written before any code, perf_guide section 2 "pick the target"): device 0, host 0 on the
+  shipped path, because none of the three programs runs there:
+  - Default `MOE_BLOCK_SRC=block` (owner 2026-11-18): tt/moe_block_adapter.py:378 -> tt/moe_block_v2_adapter.py, which
+    builds models/demos/moe_block/tt/moe_block.py MoEBlock on `ttnn.bringup.moe_block` (C++ ops: moe_head,
+    sparse_dispatch_2d, routed_experts_combine, moe_tail; OWN_ROWS: stock all_to_all_async_generic + to_layout + add).
+    That file imports none of tail_a2a / tail_engine / fused_head. The fused head and the tail all-to-all / tail
+    engine are already native C++ there (ttnn/ttnn/bringup/moe_block_ttnn/moe_head, moe_tail/device/moe_tail_plan.cpp
+    make_tail_all_to_all_plan / make_tail_engine_plan).
+  - tail_a2a.TailA2A, fused_head and tt/prepared_tail.ShapeKeyedTailA2A run only under `MOE_BLOCK_SRC=carried`
+    (models/demos/moe_block/moe_block.py FusedTail / FusedHead; prepared_tail.install is called only in
+    tt/moe_block_adapter.py TtMoEBlockLayer.block, line ~329). The "20 calls a chunk" is the carried path's count
+    (P.14 census, before P.43 / 2026-11-18 moved the default).
+  - tail_engine.TailEngine runs only with a latent (moe_block.py FusedTail.__init__: `model.latent_dim is None` ->
+    TailA2A); DSV41_FLASH has no latent, so it never runs for this model on any path.
+  - Run evidence: the last model loads (logs WA.4R.log, WA.4R5.log, 2026-11-27) log
+    `models.demos.moe_block.tt.moe_block:__init__` (the block path) and no carried MoEBlock / TailA2A / fused_head line.
+- Decision: no port. A hand port of three Python prepared programs (~2900 lines with inline kernels and fabric routes)
+  for a non-default path is debt with 0 ms saved a chunk. The gate test test_native_moe_tail.py was not written: its
+  metrics only make sense for a port. The owner decides whether to (a) drop NC.4, (b) re-point it at a prepared
+  program that does run on the block path (none in the MoE block: its ops are C++), or (c) port the carried path anyway.
+- No device run, no code change. Report: results/NC.4_layer.md. Known issue DS41-401.

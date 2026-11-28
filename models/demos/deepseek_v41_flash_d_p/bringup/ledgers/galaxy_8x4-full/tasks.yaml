@@ -7558,41 +7558,6 @@ tasks:
       native_mismatch_*: == 0
       native_repeat_*: == 0
       native_cache_growth_*: == 0
-- id: NC.4
-  title: 'OWNER 2026-11-27 C++ port series: the MoE block''s prepared programs (fused tail all-to-all, tail engine, fused
-    head) to native C++ ops; op-level checks only'
-  step: perf
-  role: perf
-  device: true
-  ab_mode: none
-  deps:
-  - NC.3
-  paths:
-  - models/demos/moe_block/tt
-  - models/demos/deepseek_v41_flash_d_p/tt/prepared_tail.py
-  - models/demos/deepseek_v41_flash_d_p/tt/moe_block_adapter.py
-  - ttnn/ttnn/bringup/
-  - ttnn/cpp/ttnn/operations
-  - ttnn/cpp/ttnn-nanobind
-  - ttnn/ttnn/bringup/INDEX.md
-  - tests/ttnn/unit_tests/operations
-  - models/demos/deepseek_v41_flash_d_p/tests/native
-  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
-  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
-  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.4_layer.md
-  - models/demos/deepseek_v41_flash_d_p/bringup/NATIVE_PORT_RULES.md
-  brief:
-    prior_work: NC.1 (b10e845af78, results/NC.1_layer.md); the prepared-program survey (supervision.md 2026-11-27 21:xx).
-    details: 'Port the MoE block''s prepared programs: models/demos/moe_block/tt/tail_a2a.py (:765), tail_engine.py, fused_head.py
-      (:876), wrapped by tt/prepared_tail.py ShapeKeyedTailA2A (20 calls a chunk). This is Marko Staletovic''s block (MOE_BLOCK_SRC=block):
-      change only how the programs are launched, never what they compute. Read models/demos/deepseek_v41_flash_d_p/bringup/NATIVE_PORT_RULES.md
-      first (binding: tool, separate checkout, op-level checks only, the gate test, the report).'
-  gate:
-    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/native/test_native_moe_tail.py
-    metrics:
-      native_mismatch_*: == 0
-      native_repeat_*: == 0
-      native_cache_growth_*: == 0
 - id: NC.5
   title: 'OWNER 2026-11-27 C++ port series: the forks ckv_bfp4 (4-bit history pack), pair_pool (compressor pooling) and fp8_rows
     (fp8 index-key pack / unpack) to native C++ ops; op-level checks only'
@@ -7601,7 +7566,7 @@ tasks:
   device: true
   ab_mode: none
   deps:
-  - NC.4
+  - NC.3
   paths:
   - ttnn/ttnn/bringup/ckv_bfp4_ttnn
   - ttnn/ttnn/bringup/pair_pool_ttnn

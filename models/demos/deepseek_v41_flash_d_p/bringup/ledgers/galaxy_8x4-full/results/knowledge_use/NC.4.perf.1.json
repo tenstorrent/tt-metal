@@ -1,0 +1,44 @@
+{
+ "used": [
+  {
+   "id": "DS41-400",
+   "how": "read as the template for a hand port (NC.3 layer_send); checked first whether the targets run at all before planning one",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-401",
+   "how": "written this step: the targets run only under MOE_BLOCK_SRC=carried / a latent model, so no port",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the C++ port series' task list (NC.4) was written from a static grep of prepare_program call sites (tail_a2a.py:765, fused_head.py:876) and the P.14 census of the carried block; nothing told the task writer that MOE_BLOCK_SRC=block (default since 2026-11-18) replaced those programs with ttnn.bringup.moe_block C++ ops"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no code written: nothing padded or inflated; the step stopped because its targets are not on the shipped path (BREADCRUMBS NC.4, DS41-401)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.4",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T00:54:52",
+  "head": "b947498334e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.4_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.4.perf.1.json"
+  ]
+ }
+}
