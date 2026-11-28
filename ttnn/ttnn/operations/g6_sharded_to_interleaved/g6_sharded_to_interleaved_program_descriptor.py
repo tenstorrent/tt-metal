@@ -1,370 +1,197 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Program descriptor for g6_sharded_to_interleaved: the `owner_writes` regime.
+"""g6_sharded_to_interleaved — ProgramDescriptor (regime ``owner_writes``).
 
-Every shard core writes its own resident tiles straight to their interleaved output pages (one NoC
-write per tile, zero reads). The plan and the descriptor are memoized per program-shaping key; a call
-only patches the output address (common RT arg) and rebinds `cb_input_shard` to its own input.
+Each core holding shard k writes its resident shard rectangle straight from L1
+(zero-copy CB ``cb_input_shard`` on the input's shard buffer) to the interleaved
+output pages. One NoC crossing per tile, no reader, no compute kernel.
+
+Knobs (single source of truth, see ``Knobs``):
+  * ``blocks_per_shard`` — number of store blocks per write lane (Phase 0: 1 =
+    the whole resident shard is one block). Block rows derive from it.
+  * ``writer_lanes``     — 1: one writer (BRISC / NoC1); 2: the shard rectangle
+    is split between a BRISC/NoC1 and an NCRISC/NoC0 instance of the same
+    kernel (catalog ``split_reader``). Phase 0: 1.
+
+The descriptor is built once per cache key and patched per call (output
+address common RT arg + the shard CB's buffer binding), with
+``custom_program_hash`` set from the key (BB-07).
 """
 
-from __future__ import annotations
-
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-WRITER_KERNEL = KERNEL_DIR / "g6_sharded_to_interleaved_writer.cpp"
+WRITER_KERNEL = str(KERNEL_DIR / "g6_sharded_to_interleaved_writer.cpp")
 
 TILE = 32
-CB_INPUT_SHARD = 0
+CB_INPUT_SHARD = 0  # the resident input shard (zero-copy, globally allocated on the input buffer)
 
-# Blocking-model knobs (op_design.md -> Blocking Model). Each is defined once here; every dependent
-# quantity (lane rectangles, block extents, kernel instances, RT args) is derived from them. `Knobs()` is the
-# plainest plan; `default_knobs` picks what a call without explicit knobs runs.
+REGIME = "owner_writes"
 
 
 @dataclass(frozen=True)
 class Knobs:
-    # Data-movement RISCs per shard core issuing the block's writes. 1 = BRISC on NoC1; 2 adds an
-    # instance of the same kernel on NCRISC / NoC0, the block cut along its longer tile axis.
-    num_write_lanes: int = 1
-    # NoCs each lane's writes alternate over. 2 compiles the lane in dynamic NoC mode so one RISC spreads its
-    # traffic over both NoC networks without a second kernel.
-    num_write_nocs: int = 1
-    # Block extents along tile_row / tile_col; None = the lane's whole rectangle (one block per lane).
-    block_tile_rows: int | None = None
-    block_tile_cols: int | None = None
-    # Rotate each core's row walk so that cores whose rectangles start on the same output bank issue to
-    # different banks at every write step (see `issue_first_row`). False = every core walks from row 0.
-    bank_stagger: bool = False
+    blocks_per_shard: int = 1
+    writer_lanes: int = 1
 
 
-# Below this many pages per shard core, a second write lane's per-call dispatch cost outweighs what it takes off
-# the core's write issue.
-TWO_LANE_MIN_SHARD_PAGES = 8
+DEFAULT_KNOBS = Knobs()
+
+# lane index -> data-movement config (lane 0 = BRISC / NoC1, lane 1 = NCRISC / NoC0)
+_LANE_CONFIGS = (ttnn.WriterConfigDescriptor, ttnn.ReaderConfigDescriptor)
 
 
-def default_knobs(input_tensor, memory_config):
-    """The knobs a call without explicit knobs runs.
-
-    Two lanes put the writes on both NoC networks, which pays for L1 destinations (banks spread over the worker
-    grid) once the shard holds enough pages. DRAM destinations stay on one lane: the second NoC's path to the
-    DRAM endpoints is slower there. The stagger only spreads banks usefully when the traffic spans both NoCs; on
-    one NoC it reorders the hot links and is slower, so it follows the lane count.
-    """
-    spec = input_tensor.memory_config().shard_spec
-    shard_pages = (spec.shape[0] // TILE) * (spec.shape[1] // TILE)
-    two_lanes = memory_config.buffer_type == ttnn.BufferType.L1 and shard_pages >= TWO_LANE_MIN_SHARD_PAGES
-    return Knobs(num_write_lanes=2 if two_lanes else 1, bank_stagger=two_lanes)
-
-
-def resolve_knobs(input_tensor, memory_config, knobs):
-    return default_knobs(input_tensor, memory_config) if knobs is None else knobs
-
-
-# (processor, NoC) of write lane i.
-_LANE_CONFIGS = (
-    (ttnn.DataMovementProcessor.RISCV_0, ttnn.NOC.NOC_1),
-    (ttnn.DataMovementProcessor.RISCV_1, ttnn.NOC.NOC_0),
-)
-
-NOC_MAX_BURST_SIZE = 16384
-MODEL_L1_BUDGET = 1347776
-
-
-@dataclass(frozen=True)
-class Block:
-    first_tile_row: int
-    first_tile_col: int
-    tile_rows: int
-    tile_cols: int
-
-
-@dataclass(frozen=True)
-class Plan:
-    tensor_tile_rows: int
-    tensor_tile_cols: int
-    shard_tile_rows: int
-    shard_tile_cols: int
-    num_shards: int
-    cores: tuple  # ttnn.CoreCoord per shard slot k, in the buffer's own shard order
-    blocks: tuple  # Block per core, None for a grid core without a shard
-    page_size: int
-    knobs: Knobs
-    # Shards k and k + issue_period start on the same output bank; 0 = no rotation.
-    issue_period: int
-
-
-def _tile_grid(input_tensor):
+def shard_geometry(input_tensor):
+    """Tile-level geometry of the input, alignment-aware (per image)."""
     padded = tuple(input_tensor.padded_shape)
-    return math.prod(padded[:-1]) // TILE, padded[-1] // TILE
-
-
-def _split(extent, parts):
-    """Near-even split of `extent` into `parts` contiguous pieces, larger pieces first."""
-    base, rem = divmod(extent, parts)
-    return [base + (1 if i < rem else 0) for i in range(parts)]
-
-
-def _lane_rects(block, num_lanes):
-    """Cuts a block into `num_lanes` disjoint rectangles along its longer tile axis.
-
-    Returns (row_offset, col_offset, rows, cols) per lane, offsets local to the block.
-    """
-    rects = []
-    offset = 0
-    if block.tile_rows >= block.tile_cols:
-        for rows in _split(block.tile_rows, num_lanes):
-            rects.append((offset, 0, rows, block.tile_cols))
-            offset += rows
-    else:
-        for cols in _split(block.tile_cols, num_lanes):
-            rects.append((0, offset, block.tile_rows, cols))
-            offset += cols
-    return rects
-
-
-def build_plan(input_tensor, memory_config, knobs=None):
-    knobs = resolve_knobs(input_tensor, memory_config, knobs)
     spec = input_tensor.memory_config().shard_spec
-    tensor_tile_rows, tensor_tile_cols = _tile_grid(input_tensor)
-    shard_tile_rows, shard_tile_cols = spec.shape[0] // TILE, spec.shape[1] // TILE
-    layout = input_tensor.memory_config().memory_layout
-
-    if layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and shard_tile_cols != tensor_tile_cols:
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: height-sharded shard is {shard_tile_cols} tile cols wide, "
-            f"tensor is {tensor_tile_cols}"
-        )
-    if layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED and shard_tile_rows != tensor_tile_rows:
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: width-sharded shard is {shard_tile_rows} tile rows high, "
-            f"tensor is {tensor_tile_rows}"
-        )
-    if not 1 <= knobs.num_write_lanes <= len(_LANE_CONFIGS):
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: num_write_lanes={knobs.num_write_lanes} not in [1, {len(_LANE_CONFIGS)}]"
-        )
-    if knobs.num_write_nocs not in (1, 2):
-        raise RuntimeError(f"g6_sharded_to_interleaved: num_write_nocs={knobs.num_write_nocs} not in [1, 2]")
-    for cap in (knobs.block_tile_rows, knobs.block_tile_cols):
-        if cap is not None and cap < 1:
-            raise RuntimeError(f"g6_sharded_to_interleaved: block extent {cap} < 1")
-
-    # The buffer maps shard k to cores[k] with exactly this walk: ranges in order, each along rows
-    # (ROW_MAJOR) or columns (COL_MAJOR). Rebuilding or sorting the ranges would permute the map.
+    tensor_col_tiles = padded[-1] // TILE
+    rows = 1
+    for d in padded[:-1]:
+        rows *= d
+    tensor_row_tiles = rows // TILE
+    shard_row_tiles = spec.shape[0] // TILE
+    shard_col_tiles = spec.shape[1] // TILE
+    height = input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    if height:
+        num_shards = -(-tensor_row_tiles // shard_row_tiles)
+    else:
+        num_shards = -(-tensor_col_tiles // shard_col_tiles)
     row_wise = spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
-    cores = tuple(ttnn.corerange_to_cores(spec.grid, None, row_wise))
-
-    shards_along_rows = math.ceil(tensor_tile_rows / shard_tile_rows)
-    shards_along_cols = math.ceil(tensor_tile_cols / shard_tile_cols)
-    num_shards = shards_along_rows * shards_along_cols
-    if num_shards > len(cores):
-        raise RuntimeError(f"g6_sharded_to_interleaved: {num_shards} shards on {len(cores)} cores")
-
-    blocks = []
-    for k in range(len(cores)):
-        if k >= num_shards:
-            blocks.append(None)
-            continue
-        first_row = (k // shards_along_cols) * shard_tile_rows
-        first_col = (k % shards_along_cols) * shard_tile_cols
-        blocks.append(
-            Block(
-                first_row,
-                first_col,
-                min(shard_tile_rows, tensor_tile_rows - first_row),
-                min(shard_tile_cols, tensor_tile_cols - first_col),
-            )
-        )
-
-    covered = sum(b.tile_rows * b.tile_cols for b in blocks if b is not None)
-    if covered != tensor_tile_rows * tensor_tile_cols:
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: blocks cover {covered} of {tensor_tile_rows * tensor_tile_cols} pages"
-        )
-
-    page_size = ttnn.tile_size(input_tensor.dtype)
-    if input_tensor.buffer_aligned_page_size() != page_size:
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: shard slot stride {input_tensor.buffer_aligned_page_size()} B "
-            f"!= tile size {page_size} B"
-        )
-    if page_size > NOC_MAX_BURST_SIZE:
-        raise RuntimeError(f"g6_sharded_to_interleaved: page {page_size} B exceeds one NoC packet")
-
-    issue_period = 0
-    if knobs.bank_stagger and num_shards > 1:
-        n_banks = ttnn.get_memory_view(input_tensor.device(), memory_config.buffer_type).num_banks
-        # First output page of shard k is k * shard_page_stride, so its bank repeats every
-        # n_banks / gcd(stride, n_banks) shards.
-        shard_page_stride = shard_tile_cols if shards_along_cols > 1 else shard_tile_rows * tensor_tile_cols
-        issue_period = n_banks // math.gcd(shard_page_stride, n_banks)
-
-    return Plan(
-        tensor_tile_rows=tensor_tile_rows,
-        tensor_tile_cols=tensor_tile_cols,
-        shard_tile_rows=shard_tile_rows,
-        shard_tile_cols=shard_tile_cols,
+    return dict(
+        height=height,
+        tensor_row_tiles=tensor_row_tiles,
+        tensor_col_tiles=tensor_col_tiles,
+        shard_row_tiles=shard_row_tiles,
+        shard_col_tiles=shard_col_tiles,
         num_shards=num_shards,
-        cores=cores,
-        blocks=tuple(blocks),
-        page_size=page_size,
-        knobs=knobs,
-        issue_period=issue_period,
+        grid=spec.grid,
+        row_wise=row_wise,
     )
 
 
-def issue_first_row(plan, k, rect_rows):
-    """The row core k's lane rectangle is issued from. The j-th core of each bank-sharing class (k // period)
-    is rotated by j rows, so at write step i the class issues to rows j + i: distinct pages, distinct banks."""
-    if plan.issue_period == 0 or rect_rows == 0:
-        return 0
-    return (k // plan.issue_period) % rect_rows
+def _shard_rect(geo, k):
+    """(row0, col0, rows, cols) of shard k in the tile grid."""
+    if geo["height"]:
+        row0 = k * geo["shard_row_tiles"]
+        return row0, 0, min(geo["shard_row_tiles"], geo["tensor_row_tiles"] - row0), geo["tensor_col_tiles"]
+    col0 = k * geo["shard_col_tiles"]
+    return 0, col0, geo["tensor_row_tiles"], min(geo["shard_col_tiles"], geo["tensor_col_tiles"] - col0)
 
 
-def _check_l1_budget(plan, device, memory_config):
-    if memory_config.buffer_type != ttnn.BufferType.L1:
-        return
-    n_l1_banks = ttnn.get_memory_view(device, ttnn.BufferType.L1).num_banks
-    pages = plan.tensor_tile_rows * plan.tensor_tile_cols
-    per_bank = math.ceil(pages / n_l1_banks) * plan.page_size
-    if per_bank > MODEL_L1_BUDGET:
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: L1 output needs {per_bank} B per bank, model budget is {MODEL_L1_BUDGET} B"
-        )
+def _split(n, parts):
+    """Split n into `parts` contiguous chunks -> list of (offset, length)."""
+    base, rem = divmod(n, parts)
+    out, off = [], 0
+    for i in range(parts):
+        ln = base + (1 if i < rem else 0)
+        out.append((off, ln))
+        off += ln
+    return out
 
 
-def _common_rt_args(plan, output_tensor, spec):
-    """The writer's common RT args, identical on every core: each core derives its own block, lane rectangle and
-    issue row from its logical coordinates (the kernel mirrors `build_plan`, `_lane_rects`, `issue_first_row`).
-    Per-core unique args are avoided on purpose: the dispatcher writes them core by core on every call, which
-    costs a traced p1 call ~3.3 us whatever their count."""
-    shards_along_cols = math.ceil(plan.tensor_tile_cols / plan.shard_tile_cols)
-    # Shards stack along one tile axis only (height: one shard column; width: one shard row), so shard k
-    # starts k * step along it.
-    row_step, col_step = (plan.shard_tile_rows, 0) if shards_along_cols == 1 else (0, plan.shard_tile_cols)
-    ranges = list(spec.grid.ranges())  # the walk `build_plan` maps shards with, in its order
-    args = [
-        output_tensor.buffer_address(),  # index 0: patched per call by `CachedProgram.bind`
-        plan.shard_tile_rows,
-        plan.shard_tile_cols,
-        plan.tensor_tile_rows,
-        plan.tensor_tile_cols,
-        row_step,
-        col_step,
-        plan.num_shards,
-        plan.knobs.block_tile_rows or 0,
-        plan.knobs.block_tile_cols or 0,
-        plan.issue_period,
-        int(spec.orientation == ttnn.ShardOrientation.ROW_MAJOR),
-        len(ranges),
+def _lane_rects(rows, cols, lanes):
+    """Disjoint sub-rectangles (r_off, c_off, rows, cols) of a shard rectangle, one per lane.
+
+    Split along rows when there are enough rows, else along columns."""
+    if lanes == 1:
+        return [(0, 0, rows, cols)]
+    if rows >= lanes:
+        return [(off, 0, ln, cols) for off, ln in _split(rows, lanes)]
+    return [(0, off, rows, ln) for off, ln in _split(cols, lanes)]
+
+
+def _lane_rt_args(geo, rect, knobs):
+    """RT args [num_blocks, block_rows, block_cols, total_rows, first_page, src_first_slot]."""
+    row0, col0, r_off, c_off, rows, cols = rect
+    if rows == 0 or cols == 0:
+        return [0, 0, 0, 0, 0, 0]
+    block_rows = -(-rows // knobs.blocks_per_shard)
+    num_blocks = -(-rows // block_rows)
+    first_page = (row0 + r_off) * geo["tensor_col_tiles"] + (col0 + c_off)
+    src_first_slot = r_off * geo["shard_col_tiles"] + c_off  # slot stride = full shard width
+    return [num_blocks, block_rows, cols, rows, first_page, src_first_slot]
+
+
+def build_program_descriptor(input_tensor, output_tensor, knobs: Knobs = DEFAULT_KNOBS):
+    """Build the cacheable parts of the program: kernels (with per-core RT args).
+
+    Returns (kernel_descriptors, plan). The shard CB is bound per call
+    (``bind_call``) because it carries the input buffer pointer."""
+    assert knobs.writer_lanes in (1, 2), "writer_lanes must be 1 or 2"
+    assert knobs.blocks_per_shard >= 1
+    geo = shard_geometry(input_tensor)
+    assert geo["tensor_row_tiles"] * geo["tensor_col_tiles"] < 2**32
+
+    grid = geo["grid"]
+    # The allocator's own shard -> core order (buffer.cpp): ranges in set order, each walked
+    # row- or column-wise. Shard k lives on core k.
+    cores = ttnn.corerange_to_cores(grid, row_wise=geo["row_wise"])
+    num_shards = geo["num_shards"]
+    assert num_shards <= len(cores), "more shards than shard-grid cores"
+
+    out_page_size = output_tensor.buffer_page_size()
+    in_slot_bytes = input_tensor.buffer_aligned_page_size()
+    ct_args = [
+        CB_INPUT_SHARD,
+        geo["shard_col_tiles"],
+        geo["tensor_col_tiles"],
+        out_page_size,
+        in_slot_bytes,
     ]
-    for r in ranges:
-        args.extend((r.start.x, r.start.y, r.end.x, r.end.y))
-    return args
+    ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    lane_rt = [ttnn.RuntimeArgs() for _ in range(knobs.writer_lanes)]
+    for k, core in enumerate(cores):
+        if k < num_shards:
+            row0, col0, rows, cols = _shard_rect(geo, k)
+            rects = _lane_rects(rows, cols, knobs.writer_lanes)
+        else:
+            row0 = col0 = 0
+            rects = [(0, 0, 0, 0)] * knobs.writer_lanes
+        for lane, (r_off, c_off, lr, lc) in enumerate(rects):
+            lane_rt[lane][core.x][core.y] = _lane_rt_args(geo, (row0, col0, r_off, c_off, lr, lc), knobs)
 
-def create_program_descriptor(input_tensor, output_tensor, plan):
-    """ProgramDescriptor for `plan`. Addresses in it belong to this call's tensors; see `CachedProgram.bind`."""
-    # The accessor strides banks by `page_size`, so the output's aligned page must equal it exactly.
-    out_pages = (output_tensor.buffer_page_size(), output_tensor.buffer_aligned_page_size())
-    if out_pages != (plan.page_size, plan.page_size):
-        raise RuntimeError(
-            f"g6_sharded_to_interleaved: output page / aligned page {out_pages} B != input page {plan.page_size} B"
-        )
-
-    spec = input_tensor.memory_config().shard_spec
-    cb_input_shard = ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor)
-
-    knobs = plan.knobs
-    accessor_ct_args = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
-    common_rt_args = _common_rt_args(plan, output_tensor, spec)
-
-    noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if knobs.num_write_nocs == 2 else ttnn.NOC_MODE.DM_DEDICATED_NOC
     kernels = []
-    for lane in range(knobs.num_write_lanes):
-        processor, noc = _LANE_CONFIGS[lane]
-        ct_args = [CB_INPUT_SHARD, plan.page_size, knobs.num_write_nocs, lane, knobs.num_write_lanes]
-        ct_args.extend(accessor_ct_args)
+    for lane in range(knobs.writer_lanes):
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=str(WRITER_KERNEL),
-                core_ranges=spec.grid,
+                kernel_source=WRITER_KERNEL,
+                core_ranges=grid,
                 compile_time_args=ct_args,
-                runtime_args=ttnn.RuntimeArgs(),
-                common_runtime_args=common_rt_args,
-                config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=noc_mode),
+                runtime_args=lane_rt[lane],
+                common_runtime_args=[output_tensor.buffer_address()],
+                config=_LANE_CONFIGS[lane](),
             )
         )
 
-    return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_input_shard])
+    plan = {
+        "regime": REGIME,
+        "num_shards": num_shards,
+        "grid_cores": len(cores),
+        "writer_lanes": knobs.writer_lanes,
+        "blocks_per_shard": knobs.blocks_per_shard,
+    }
+    return kernels, plan
 
 
-class CachedProgram:
-    """A memoized descriptor plus live references into it for the per-call patch."""
-
-    def __init__(self, plan, descriptor):
-        self.plan = plan
-        self.descriptor = descriptor
-        # Element references into the C++ vectors: mutating them mutates the descriptor in place.
-        self._kernels = list(descriptor.kernels)
-        self._cb_input_shard = descriptor.cbs[0]
-
-    def bind(self, input_tensor, output_tensor):
-        """Points the descriptor at this call's tensors. The program cache hashes neither address."""
-        output_addr = output_tensor.buffer_address()
-        for kernel in self._kernels:
-            kernel.common_runtime_args[0] = output_addr
-        self._cb_input_shard.set_buffer_from_cb(ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor))
-        return self.descriptor
+def bind_call(kernels, input_tensor, output_tensor, program_hash):
+    """Per-call patch of a cached build: output address + the shard CB on the current input."""
+    out_addr = output_tensor.buffer_address()
+    for kd in kernels:
+        kd.common_runtime_args = [out_addr]
+    cb_input_shard = ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor)
+    desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb_input_shard])
+    desc.custom_program_hash = program_hash
+    return desc
 
 
-_PROGRAMS = {}
-
-
-def program_key(input_tensor, memory_config, knobs=None):
-    """Everything that shapes the plan or the descriptor. Orientation, range order and shard geometry change only
-    common RT values (not the C++ program hash), so they must be in this key."""
-    knobs = resolve_knobs(input_tensor, memory_config, knobs)
-    mc = input_tensor.memory_config()
-    spec = mc.shard_spec
-    ranges = tuple((r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges())
-    return (
-        id(input_tensor.device()),
-        tuple(input_tensor.padded_shape),
-        input_tensor.dtype,
-        mc.memory_layout,
-        tuple(spec.shape),
-        ranges,
-        spec.orientation,
-        memory_config.buffer_type,
-        knobs,
-    )
-
-
-def lookup_program(input_tensor, memory_config, knobs=None):
-    """(key, cached program or None, plan). On a miss the plan is built and checked against the L1 bound
-    (BB-05) here, so a refused shape is refused before the caller allocates its output."""
-    key = program_key(input_tensor, memory_config, knobs)
-    cached = _PROGRAMS.get(key)
-    if cached is not None:
-        return key, cached, cached.plan
-    plan = build_plan(input_tensor, memory_config, knobs)
-    _check_l1_budget(plan, input_tensor.device(), memory_config)
-    return key, None, plan
-
-
-def store_program(key, input_tensor, output_tensor, plan):
-    cached = CachedProgram(plan, create_program_descriptor(input_tensor, output_tensor, plan))
-    _PROGRAMS[key] = cached
-    return cached
-
-
-def cached_plan(input_tensor, memory_config, knobs=None):
-    cached = _PROGRAMS.get(program_key(input_tensor, memory_config, knobs))
-    return None if cached is None else cached.plan
+def core_roles(input_tensor):
+    """BB-21: core -> role ('writer' for shard cores, 'idle' for grid cores without a shard)."""
+    geo = shard_geometry(input_tensor)
+    cores = ttnn.corerange_to_cores(geo["grid"], row_wise=geo["row_wise"])
+    return {(c.x, c.y): ("writer" if k < geo["num_shards"] else "idle") for k, c in enumerate(cores)}

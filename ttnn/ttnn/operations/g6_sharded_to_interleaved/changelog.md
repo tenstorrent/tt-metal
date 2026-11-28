@@ -126,3 +126,23 @@ default stays at 1 lane. p1 is above the 2.05 us stock incumbent, so the flagged
   `test_describe_plan_production`, in impl_debug; new knob sets in the impl_debug matrix; perf harness cases
   `p2l1` and knob sets `default` (public entry point), `lanes1_stagger`, `lanes2_nostagger`, `nocs2`,
   `nocs2_nostagger`, `lanes2_nocs2`.
+
+## Phase 0 — Re-implementation from op_design.md (this run)
+- **Date**: 2026-11-28
+- Regime `owner_writes`: one writer kernel (BRISC/NoC1) per shard-grid core walks its resident shard
+  rectangle (zero-copy `cb_input_shard` via `cb_descriptor_from_sharded_tensor`) and issues one
+  `noc_async_write_page` per tile to `first_page + r*C + c` (slot stride = full `shard_col_tiles`),
+  then one `noc_async_write_barrier`. Shard ↔ core order from `ttnn.corerange_to_cores(grid, row_wise=...)`.
+  Grid cores with `k >= num_shards` get `num_blocks = 0`.
+- **No reader / compute kernel** (design: data_movement op, no arithmetic, no staging CB) — the task's
+  generic output list names them, the binding design does not.
+- Knobs (`Knobs` in the program descriptor, single source): `blocks_per_shard` (Phase 0 = 1, whole shard
+  = one block; block_rows derived) and `writer_lanes` (Phase 0 = 1; 2 = BRISC/NoC1 + NCRISC/NoC0 instances
+  on disjoint sub-rectangles). Both verified bit-exact at non-default values on p1/p2, both specs, DRAM+L1
+  (probe_017), so height/bf8b/L1 are SUPPORTED-list edits.
+- Program cache (BB-07): kernels built once per key `(shape, padded_shape, dtype, in_scheme, shard_shape,
+  grid ranges, orientation, buffer, knobs)`; per call only the output address (common RT arg) and the shard
+  CB binding are patched; `custom_program_hash` = sha256 of the key. `last_plan()` / `roles()` for BB-08/21.
+- Zones `S2I_STORE_BLOCK`, `S2I_DRAIN` (BB-21).
+- **SUPPORTED**: dtype=[bfloat16], layout=[TILE], in_scheme=[width_sharded], buffer=[dram]; EXCLUSIONS none.
+- Acceptance test: 4 passed, 3 xfailed (dev + non-dev). p2 device kernel duration 1434–1539 ns (32 cores).
