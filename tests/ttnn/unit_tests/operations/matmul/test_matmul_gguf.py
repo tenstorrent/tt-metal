@@ -16,7 +16,12 @@ import torch
 import ttnn
 
 from tests.ttnn.unit_tests.tensor.gguf_test_utils import SOURCE, gguf
-from tests.ttnn.unit_tests.tensor.gguf_test_utils import blocks as _blocks, k_of as _k, name as _name, qtype as _qtype
+from tests.ttnn.unit_tests.tensor.gguf_test_utils import (
+    blocks as _blocks,
+    dequantize as _dequantize,
+    k_of as _k,
+    name as _name,
+)
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="GGUF weights need Blackhole")
 
@@ -25,7 +30,7 @@ MAX_ERROR = 0.01  # of the largest output
 
 
 def _check(out, x, blocks, dtype, k, n):
-    w = torch.from_numpy(gguf.quants.dequantize(blocks, _qtype(dtype)).reshape(n, k).astype(np.float64))
+    w = torch.from_numpy(_dequantize(blocks, dtype).reshape(n, k).astype(np.float64))
     want = x.to(torch.float64) @ w.T
     got = out.to(torch.float64)
     assert torch.isfinite(want).all(), "the reference must be finite"
@@ -198,7 +203,7 @@ def test_prefill_n_passes(device, dtype, m, k):
 
 def _check_tiles(out, x, blocks, dtype, k, n):
     """No output tile with an error above MAX_ERROR of the largest output (a few wrong tiles pass the PCC check)."""
-    w = torch.from_numpy(gguf.quants.dequantize(blocks, _qtype(dtype)).reshape(n, k).astype(np.float64))
+    w = torch.from_numpy(_dequantize(blocks, dtype).reshape(n, k).astype(np.float64))
     want = (x.reshape(-1, k).to(torch.float64) @ w.T).reshape(-1, n)
     err = (out.to(torch.float64).reshape(-1, n) - want).abs()
     m = want.shape[0]

@@ -13,7 +13,9 @@ import ttnn
 gguf = pytest.importorskip("gguf")
 
 # gguf-py quantizes these; the others get random bytes.
-QUANTIZED = {"Q8_0", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "MXFP4", "TQ1_0", "TQ2_0", "Q1_0", "Q2_0"}
+QUANTIZED = {"Q8_0", "Q4_0", "Q4_1", "Q5_0", "Q5_1", "MXFP4", "TQ1_0", "TQ2_0"}
+# Formats gguf-py neither quantizes nor dequantizes: (block elements, block bytes), d (fp16) at byte 0.
+LOCAL = {"Q1_0": (128, 18), "Q2_0": (64, 18)}
 # Byte offsets of the fp16 scale fields in a block of each format that gguf-py cannot quantize.
 FP16_FIELDS = {
     "IQ4_NL": (0,),
@@ -58,6 +60,8 @@ def fmt(dtype):
 
 
 def qtype(dtype):
+    if fmt(dtype) in LOCAL:
+        return None
     qtype = getattr(gguf.GGMLQuantizationType, fmt(dtype), None)
     if qtype is None:
         pytest.skip(f"gguf-py has no {fmt(dtype)}")
@@ -71,7 +75,7 @@ def blocks(dtype, k, n, seed=0, raw=False):
     rng = np.random.default_rng(seed)
     if name in QUANTIZED:
         return gguf.quants.quantize(rng.standard_normal((n, k), dtype=np.float32), q)
-    block_elems, block_bytes = gguf.GGML_QUANT_SIZES[q]
+    block_elems, block_bytes = LOCAL[name] if name in LOCAL else gguf.GGML_QUANT_SIZES[q]
     data = rng.integers(0, 256, size=(n * k // block_elems, block_bytes), dtype=np.uint8)
     if raw:
         if name == "NVFP4":  # UE4M3 scales: bit 7 clear (from_gguf refuses the rest)
@@ -89,9 +93,27 @@ def blocks(dtype, k, n, seed=0, raw=False):
             words[:, j] = (words[:, j] & 0x0FFF) | (((d >> (4 * j)) & 0xF) << 12)
         data[:, 48:56] = words.view(np.uint8)
     else:
-        for i, offset in enumerate(FP16_FIELDS[name]):
+        for i, offset in enumerate(FP16_FIELDS.get(name, (0,))):
             data[:, offset : offset + 2] = scales[:, 2 * i : 2 * i + 2]
     return data.reshape(n, -1)
+
+
+def dequantize(blocks, dtype):
+    """The float32 values of GGUF blocks: gguf-py's dequantization, or ggml-quants.c's dequantize_row_q1_0 /
+    dequantize_row_q2_0 for the formats gguf-py lacks."""
+    name = fmt(dtype)
+    if name not in LOCAL:
+        return gguf.quants.dequantize(blocks, qtype(dtype))
+    block_elems, block_bytes = LOCAL[name]
+    data = np.ascontiguousarray(blocks).reshape(-1, block_bytes)
+    d = data[:, 0:2].copy().view(np.float16).astype(np.float32)
+    qs = data[:, 2:]
+    w = np.arange(block_elems)
+    if name == "Q1_0":
+        values = np.where((qs[:, w // 8] >> (w % 8)) & 1, d, -d)
+    else:
+        values = (((qs[:, w // 4] >> (2 * (w % 4))) & 3).astype(np.float32) - 1.0) * d
+    return values.astype(np.float32).reshape(-1)
 
 
 def k_of(dtype, pages=2):
