@@ -1,98 +1,199 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""ProgramDescriptor for g6_unsqueeze: one mover kernel per data-movement RISC, no compute.
+"""g6_unsqueeze program descriptor: plan selection (the single source of every knob) and the
+ProgramDescriptor built from it.
 
-Every extent comes from the plan (`g6_unsqueeze_plan` in the op file); this module only
-turns a plan into CBs, kernels and arguments. Buffer addresses are the only per-call data
-and ride in each kernel's common runtime args, so a cached descriptor is reused by
-patching those two words.
+Topology (op_design.md, Blocking Model): `w_tile` split across cores (contiguous tile range per
+core, `split_work_to_cores(row_wise=True)`), `tile_half` split across the two data-movement RISCs of
+each core (HALVES_PER_RISC = 1). No compute kernel, no cross-core traffic. Each RISC owns a private
+staging CB (`cb_face_stage_half{h}`) sized `buffer_depth * block_w_tiles * halves_per_risc` faces
++ 64 B alignment slack.
 """
 
+from __future__ import annotations
+
+from collections import namedtuple
 from pathlib import Path
 
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
-MOVER_KERNEL = KERNEL_DIR / "g6_unsqueeze_mover.cpp"
 
-# Common runtime arg slots of every mover.
-COMMON_ARG_INPUT_ADDR = 0
-COMMON_ARG_OUTPUT_ADDR = 1
+# ---- Module-level knobs (each defined once; read at call time so tests can pin them) ----
+L1_BUDGET_BYTES = 1347776  # L1 left to the op per core by the model (BB-05)
+MAX_CORES = None  # None = whole compute grid
+MAX_BLOCK_W_TILES = None  # None = only the L1 cap bounds the block
+HALVES_PER_RISC = 1  # 1: half 0 on the reader-config RISC, half 1 on the writer-config RISC; 2: one RISC
+
+TILE_W = 32
+FACE_W = 16
+HALVES_PER_TILE = TILE_W // FACE_W
+READ_ALIGN_SLACK_BYTES = 64  # BH DRAM read alignment: landing is align_up(cb_base, 64)
+
+# Semantic CB ids, indexed by the first tile half the instance owns.
+CB_FACE_STAGE_HALF0 = 0
+CB_FACE_STAGE_HALF1 = 1
+_CB_FACE_STAGE = {0: CB_FACE_STAGE_HALF0, 1: CB_FACE_STAGE_HALF1}
+
+G6UnsqueezePlan = namedtuple(
+    "G6UnsqueezePlan",
+    [
+        "regime",
+        "num_cores",
+        "core_w_tiles_max",
+        "block_w_tiles",
+        "buffer_depth",
+        "core_ranges",
+        "halves_per_risc",
+        "core_assignments",  # [(CoreCoord, start_tile, core_w_tiles)]
+        "tensor_w_tiles",
+        "face_bytes",
+    ],
+)
 
 
-def _core_range_set(ranges):
-    return ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1)) for (x0, y0), (x1, y1) in ranges]
+def _face_bytes(tensor):
+    return FACE_W * FACE_W * tensor.element_size()
+
+
+def _block_cap(buffer_depth, halves_per_risc, face_bytes):
+    """Largest block (tiles) whose staging fits the per-instance share of the L1 budget."""
+    num_instances = HALVES_PER_TILE // halves_per_risc
+    per_cb_bytes = L1_BUDGET_BYTES // num_instances - READ_ALIGN_SLACK_BYTES
+    cap = per_cb_bytes // (buffer_depth * halves_per_risc * face_bytes)
+    if MAX_BLOCK_W_TILES is not None:
+        cap = min(cap, MAX_BLOCK_W_TILES)
+    if cap < 1:
+        raise ValueError(f"g6_unsqueeze: L1 budget {L1_BUDGET_BYTES} B cannot stage one block")
+    return cap
+
+
+def select_plan(input_tensor) -> G6UnsqueezePlan:
+    halves_per_risc = HALVES_PER_RISC
+    if halves_per_risc not in (1, 2):
+        raise ValueError(f"g6_unsqueeze: HALVES_PER_RISC must be 1 or 2, got {halves_per_risc}")
+    face_bytes = _face_bytes(input_tensor)
+    tensor_w_tiles = (int(input_tensor.shape[-1]) + TILE_W - 1) // TILE_W
+
+    grid = input_tensor.device().compute_with_storage_grid_size()
+    num_cores = min(grid.x * grid.y, tensor_w_tiles)
+    if MAX_CORES is not None:
+        num_cores = min(num_cores, MAX_CORES)
+    core_pool = ttnn.num_cores_to_corerangeset(num_cores, grid, True)
+    (n_used, all_cores, group_1, group_2, tiles_1, tiles_2) = ttnn.split_work_to_cores(core_pool, tensor_w_tiles, True)
+    core_w_tiles_max = max(tiles_1, tiles_2)
+
+    cap1 = _block_cap(1, halves_per_risc, face_bytes)
+    if core_w_tiles_max <= cap1:
+        regime, buffer_depth, block_w_tiles = "resident", 1, core_w_tiles_max
+    else:
+        regime, buffer_depth = "streaming", 2
+        block_w_tiles = _block_cap(2, halves_per_risc, face_bytes)
+
+    assignments = []
+    start = 0
+    for group, tiles in ((group_1, tiles_1), (group_2, tiles_2)):
+        if tiles == 0:
+            continue
+        for core in ttnn.corerange_to_cores(group, None, True):
+            assignments.append((core, start, tiles))
+            start += tiles
+    assert start == tensor_w_tiles, f"work split covers {start} of {tensor_w_tiles} tiles"
+
+    return G6UnsqueezePlan(
+        regime=regime,
+        num_cores=n_used,
+        core_w_tiles_max=core_w_tiles_max,
+        block_w_tiles=block_w_tiles,
+        buffer_depth=buffer_depth,
+        core_ranges=all_cores,
+        halves_per_risc=halves_per_risc,
+        core_assignments=assignments,
+        tensor_w_tiles=tensor_w_tiles,
+        face_bytes=face_bytes,
     )
 
 
-def build_program_descriptor(plan, input_tensor, output_tensor):
-    geometry = plan.geometry
-    mover_cores = _core_range_set(plan.core_ranges)
-    face_slots_pages = plan.staging_depth * plan.block_w_tiles * plan.block_tile_halves
+def describe_plan(plan) -> str:
+    """Plan report (BB-08/BB-21): knobs, core -> tile range, RISC -> tile half."""
+    lines = [
+        f"g6_unsqueeze plan: regime={plan.regime} cores={plan.num_cores} tiles={plan.tensor_w_tiles} "
+        f"core_w_tiles_max={plan.core_w_tiles_max} block_w_tiles={plan.block_w_tiles} "
+        f"buffer_depth={plan.buffer_depth} halves_per_risc={plan.halves_per_risc}"
+    ]
+    for core, start, n in plan.core_assignments:
+        lines.append(f"  core ({core.x},{core.y}): tiles [{start}, {start + n})")
+    for half_begin in range(0, HALVES_PER_TILE, plan.halves_per_risc):
+        risc = "reader-config (NCRISC)" if half_begin == 0 else "writer-config (BRISC)"
+        lines.append(f"  {risc}: tile halves [{half_begin}, {half_begin + plan.halves_per_risc})")
+    return "\n".join(lines)
 
-    per_core_args = ttnn.RuntimeArgs()
-    for (x, y), first_tile, core_w_tiles in plan.core_work:
-        per_core_args[x][y] = [first_tile, core_w_tiles]
+
+def create_program_descriptor(input_tensor, output_tensor, plan=None) -> ttnn.ProgramDescriptor:
+    if plan is None:
+        plan = select_plan(input_tensor)
+    logical_w = int(input_tensor.shape[-1])
+    elem_bytes = input_tensor.element_size()
+    in_tile_bytes = input_tensor.buffer_page_size()
+    out_tile_bytes = output_tensor.buffer_page_size()
+    assert in_tile_bytes == out_tile_bytes, "input and output tiles must match"
+
+    stage_faces = plan.buffer_depth * plan.block_w_tiles * plan.halves_per_risc
+    stage_total_bytes = stage_faces * plan.face_bytes + READ_ALIGN_SLACK_BYTES
+
+    accessor_ct = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    accessor_ct = list(accessor_ct) + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     cbs = []
     kernels = []
-    for role in plan.roles:
+    for half_begin in range(0, HALVES_PER_TILE, plan.halves_per_risc):
+        cb_id = _CB_FACE_STAGE[half_begin]
         cbs.append(
             ttnn.CBDescriptor(
-                total_size=face_slots_pages * geometry.face_bytes,
-                core_ranges=mover_cores,
+                total_size=stage_total_bytes,
+                core_ranges=plan.core_ranges,
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
-                        buffer_index=role.cb_index,
+                        buffer_index=cb_id,
                         data_format=input_tensor.dtype,
-                        page_size=geometry.face_bytes,
+                        # Private scratch (no push/pop): the page is the 64 B alignment unit so the
+                        # +64 B landing slack keeps total_size a whole number of pages.
+                        page_size=READ_ALIGN_SLACK_BYTES,
                     )
                 ],
             )
         )
-        compile_time_args = [
-            role.cb_index,
-            role.first_half,
-            plan.block_tile_halves,
+        ct_args = [
+            half_begin,
+            plan.halves_per_risc,
             plan.block_w_tiles,
-            plan.staging_depth,
-            geometry.face_h,
-            geometry.face_w,
-            geometry.face_bytes,
-            geometry.face_row_bytes,
-            geometry.faces_per_face_row * geometry.face_bytes,
-            input_tensor.buffer_aligned_page_size(),
-            output_tensor.buffer_aligned_page_size(),
-        ]
-        compile_time_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-        compile_time_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-
-        common_args = [0, 0]
-        common_args[COMMON_ARG_INPUT_ADDR] = input_tensor.buffer_address()
-        common_args[COMMON_ARG_OUTPUT_ADDR] = output_tensor.buffer_address()
-
+            plan.buffer_depth,
+            logical_w,
+            cb_id,
+            elem_bytes,
+            in_tile_bytes,
+        ] + accessor_ct
+        rt_args = ttnn.RuntimeArgs()
+        for core, start, n in plan.core_assignments:
+            rt_args[core.x][core.y] = [
+                input_tensor.buffer_address(),
+                output_tensor.buffer_address(),
+                start,
+                n,
+            ]
+        if half_begin == 0:
+            source, config = "g6_unsqueeze_reader.cpp", ttnn.ReaderConfigDescriptor()
+        else:
+            source, config = "g6_unsqueeze_writer.cpp", ttnn.WriterConfigDescriptor()
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source=str(MOVER_KERNEL),
-                core_ranges=mover_cores,
-                compile_time_args=compile_time_args,
-                runtime_args=per_core_args,
-                common_runtime_args=common_args,
-                config=ttnn.DataMovementConfigDescriptor(processor=role.processor, noc=role.noc),
+                kernel_source=str(KERNEL_DIR / source),
+                core_ranges=plan.core_ranges,
+                compile_time_args=ct_args,
+                runtime_args=rt_args,
+                config=config,
             )
         )
 
     return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-
-
-def patch_buffer_addresses(program_descriptor, input_tensor, output_tensor):
-    """Point a cached descriptor at this call's buffers; nothing else changes on a cache hit."""
-    input_addr = input_tensor.buffer_address()
-    output_addr = output_tensor.buffer_address()
-    # `kernels` yields references into the descriptor, so this writes the cached object in place.
-    for kernel in program_descriptor.kernels:
-        kernel.common_runtime_args[COMMON_ARG_INPUT_ADDR] = input_addr
-        kernel.common_runtime_args[COMMON_ARG_OUTPUT_ADDR] = output_addr

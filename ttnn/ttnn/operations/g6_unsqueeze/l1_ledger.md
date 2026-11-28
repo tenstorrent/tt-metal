@@ -10,6 +10,13 @@ unit dims (extent 1), `in_tile_row` (only row 0), new axis (extent 1).
 | `cb_face_stage_half0` | `buffer_depth · block_w_tiles` pages of `face_bytes` (1024 B), `total_size = buffer_depth·block_w_tiles·face_bytes + 64` | `resident`: `block_w_tiles` faces (all in flight between the read barrier and the write barrier); `streaming`: `2·block_w_tiles` (block b being written while b+1 lands) | `{w_tile: spans → block_w_tiles; tile_half: spans → 1 (half 0 only); leading dims: streams → extent 1; in_tile_row: spans → row 0 lands in face row 0, scatter fills column 0 of the same face; new axis: streams → extent 1; blocks: streams → buffer_depth window}` | Float32 (raw fp32 bytes; dataflow-only payload, never through DEST — width must equal the tensor's 4 B element to keep bit-exactness) | reader-config kernel (`tile_half=0`) | same kernel (private scratch; no hand-off) | whole kernel | Not shared with `cb_face_stage_half1`: both live concurrently on two different RISCs (the point of the split). Input row and output face share one allocation already (in-place scatter: the 64 B row lands at row 0 of the face it becomes) — no separate input CB. +64 B: alignment slack for the 64 B DRAM-read landing |
 | `cb_face_stage_half1` | same expression | same | `{w_tile: spans → block_w_tiles; tile_half: spans → 1 (half 1 only); leading dims: streams → 1; in_tile_row: spans → row 0; new axis: streams → 1; blocks: streams → buffer_depth window}` | Float32 (same reason) | writer-config kernel (`tile_half=1`) | same kernel | whole kernel | Not shared with `cb_face_stage_half0`: concurrent lifetime on the other RISC. In-place as above. +64 B alignment slack |
 
+Implementation note (implementer): `CircularBufferConfig` requires `total_size` to be a whole
+number of pages, so each staging CB is declared with `page_size = 64 B` (the read-alignment unit;
+the CB is private scratch with no push/pop, so the page size only sizes the allocation). The byte
+capacity is unchanged: `buffer_depth·block_w_tiles·halves_per_risc·face_bytes + 64`. With
+`HALVES_PER_RISC = 2` only `cb_face_stage_half0` exists and holds both halves of each tile
+(`halves_per_risc` faces per tile); the per-CB L1 share then is the whole budget.
+
 Capacity vs live set: capacity equals the live set (+64 B alignment slack) in both regimes; a face
 (1024 B) is staged per tile half because the output write is a whole face (2 transactions per tile);
 the 16 B-segment alternative (perf lamp) would shrink a page to 32·16 B = 512 B.
