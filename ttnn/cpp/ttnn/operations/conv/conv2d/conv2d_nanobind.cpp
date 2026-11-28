@@ -425,6 +425,7 @@ void bind_conv2d(nb::module_& mod) {
         3. No dilation applied (dilation == [1, 1])
         4. Input height and width (after padding) are divisible by respective stride values
         5. Input tensor memory: DRAM (all types except bfloat8_b) OR L1 Height-sharded (all types)
+        6. No padding, or padding_mode is PaddingMode.Zeros (the fold pads with zeros)
 
         Manual Enablement:
         Particularly beneficial for unaligned input channels (e.g., small channel counts like 3 RGB channels).
@@ -433,6 +434,7 @@ void bind_conv2d(nb::module_& mod) {
         - Stride ≤ kernel size in both dimensions
         - Input tensor supports folding (DRAM except bfloat8_b, or L1 Height-sharded)
         - Input dimensions after padding are divisible by stride values
+        - No padding, or padding_mode is PaddingMode.Zeros (the fold pads with zeros)
 
         Example:
         For small channel counts (like 3 RGB channels) with stride=2x2, kernel=7x7:

@@ -1292,7 +1292,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         kernel_size,
         stride,
         dilation,
-        padding_n4);
+        padding_n4,
+        conv_config.padding_mode);
     if (conv_config.enable_kernel_stride_folding.value()) {
         auto folding_result = compute_kernel_stride_folding_params(
             input_height, input_width, in_channels, kernel_size, stride, padding_n4, conv_config);

@@ -5188,6 +5188,7 @@ def run_conv2d_replicate_pad(
     dilation_w=1,
     shard_layout=HS,
     padding_mode=ttnn.PaddingMode.Replicate,
+    input_in_dram=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = (batch_size, input_channels, input_height, input_width)
@@ -5244,7 +5245,12 @@ def run_conv2d_replicate_pad(
             torch_bias_tensor.reshape(1, 1, 1, -1), weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
+    if input_in_dram:
+        tt_input_tensor = ttnn.from_torch(
+            torch_input_tensor, ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    else:
+        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
@@ -5324,6 +5330,69 @@ def test_conv2d_replicate_pad(
         dilation_h=dilation_h,
         dilation_w=dilation_w,
     )
+
+
+# kernel == stride with padding and a row-major input in DRAM: the conditions under which conv2d folds the input
+# automatically (enable_kernel_stride_folding left unset). ttnn.fold pads with zeros and the folded conv skips the
+# halo, so with replicate padding conv2d has to stay off that path.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, padding",
+    (
+        (1, 32, 32, 30, 30, 2, 2, 2, 2, (1, 1)),
+        (1, 64, 32, 28, 28, 4, 4, 4, 4, (2, 2)),
+    ),
+)
+def test_conv2d_replicate_pad_kernel_equals_stride(
+    device, torch_tensor_map, batch_size, output_channels, input_channels, input_height, input_width,
+    filter_height, filter_width, stride_h, stride_w, padding,
+):
+    run_conv2d_replicate_pad(
+        device,
+        torch_tensor_map,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        padding=padding,
+        shard_layout=None,
+        input_in_dram=True,
+    )
+
+
+# Forcing kernel stride folding with replicate padding would pad with zeros, so conv2d has to reject it.
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_replicate_pad_forced_folding_raises(device):
+    torch_input_tensor = torch.randn((1, 30, 30, 32), dtype=torch.bfloat16)
+    torch_weight_tensor = torch.randn((32, 32, 2, 2), dtype=torch.bfloat16)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    conv_config = ttnn.Conv2dConfig(
+        weights_dtype=ttnn.bfloat16,
+        padding_mode=ttnn.PaddingMode.Replicate,
+        enable_kernel_stride_folding=True,
+    )
+    with pytest.raises(RuntimeError, match="kernel stride folding pads with zeros"):
+        ttnn.conv2d(
+            input_tensor=tt_input_tensor,
+            weight_tensor=ttnn.from_torch(torch_weight_tensor, ttnn.bfloat16),
+            in_channels=32,
+            out_channels=32,
+            device=device,
+            kernel_size=(2, 2),
+            stride=(2, 2),
+            padding=(1, 1),
+            batch_size=1,
+            input_height=30,
+            input_width=30,
+            conv_config=conv_config,
+        )
 
 
 # Width-sharded smoke test: replicate padding should work for WS halo as well.

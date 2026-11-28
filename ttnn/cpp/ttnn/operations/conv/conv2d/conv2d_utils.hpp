@@ -286,7 +286,8 @@ bool auto_enable_kernel_folding(
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 2>& dilation,
-    std::array<uint32_t, 4>& padding_n4);
+    std::array<uint32_t, 4>& padding_n4,
+    sliding_window::PaddingMode padding_mode);
 
 Tensor fold_input_tensor_if_required(
     const ttnn::Tensor& input_tensor,
