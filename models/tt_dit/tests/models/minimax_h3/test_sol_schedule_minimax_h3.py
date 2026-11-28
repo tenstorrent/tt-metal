@@ -108,7 +108,7 @@ def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, file, env, dense):
     """The dense flag of each forward of a warm-up generation. `num_inference_steps` counts the schedule's points,
     one more than its forwards."""
     pipeline, calls = _pipeline(monkeypatch, env), []
-    pipeline.task, pipeline.transformer_file = "t2va", file and Path(file)
+    pipeline.transformer_file = file and Path(file)
     pipeline._warming = True
     monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: calls.append(kwargs))
     pipeline._run_forced(76800, "a prompt", {"num_frames": 158})
@@ -122,9 +122,8 @@ def test_warmup_runs_a_dense_and_a_sparse_step(monkeypatch, file, env, dense):
 
 def test_a_request_keeps_the_schedules_dense_steps(monkeypatch):
     pipeline = _pipeline(monkeypatch, {"H3_SOL_ATTN": "1"})
-    assert not any(
-        pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4)
-    )  # Sol-Attn not set up: the off switch
+    # Sol-Attn not set up: the off switch
+    assert not any(pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4))
     pipeline._sol_schedule = pipeline._requested_sol_schedule()
     assert [pipeline._is_sol_dense_step(step, num_latent_frames=1) for step in range(4)] == [True, True, False, False]
 
