@@ -9,12 +9,15 @@ from helpers.llk_params import (
 from helpers.param_config import parametrize, quasar_dest_sync_modes, runtime
 from quasar.test_unary_broadcast_quasar import (
     BROADCAST_TYPES,
-    INPUT_DIMENSIONS,
     UNARY_BROADCAST_FORMATS,
     get_valid_dest_acc_unary_broadcast,
 )
 from quasar.test_unary_broadcast_quasar import (
     test_unary_broadcast_quasar as run_unary_broadcast,
+)
+from quasar.test_unary_broadcast_quasar import (
+    unary_broadcast_input_dimensions,
+    unary_broadcast_tile_dimensions,
 )
 
 
@@ -25,7 +28,8 @@ from quasar.test_unary_broadcast_quasar import (
     dest_acc=get_valid_dest_acc_unary_broadcast,
     broadcast_type=BROADCAST_TYPES,
     dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    tile_dimensions=runtime(unary_broadcast_tile_dimensions),
+    input_dimensions=runtime(unary_broadcast_input_dimensions),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -36,6 +40,7 @@ def test_perf_unary_broadcast_quasar(
     dest_acc,
     broadcast_type,
     dest_sync,
+    tile_dimensions,
     input_dimensions,
     run_types,
     loop_factor,
@@ -46,6 +51,7 @@ def test_perf_unary_broadcast_quasar(
         dest_acc,
         broadcast_type,
         dest_sync,
+        tile_dimensions,
         input_dimensions,
         run_types=run_types,
         loop_factor=loop_factor,

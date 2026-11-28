@@ -113,15 +113,11 @@ inline void llk_unpack_A_init(
             }
         } else {
             static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
-            // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
-            // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
-            LLK_ASSERT(
-                tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
-                    tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
-                "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
+            // The broadcast LLK takes the TensorShape and scales its L1 tile index by the face count itself;
+            // it asserts the shapes it does not support (COL and unpack_to_dest need 32x32 tiles).
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, DST_ACCUM_MODE, unpack_to_dest, acc_to_dest>(
-                bfd_id, 1 /*num_tiles*/);
+                bfd_id, tensor_shape, 1 /*num_tiles*/);
         }
     }
 }
@@ -189,7 +185,7 @@ inline void llk_unpack_A(
     } else {
         static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+        _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx, tensor_shape);
     }
     WAYPOINT("UPAD");
 }
@@ -269,7 +265,7 @@ inline void llk_unpack_A_block(
                 _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx, tensor_shape);
             } else {
                 constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-                _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
+                _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx, tensor_shape);
             }
             WAYPOINT("UPAD");
         }

@@ -39,6 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_in_block = static_cast<std::uint32_t>(INPUT_NUM_TILES_IN_BLOCK);
     // Unpack to dest must use the num tiles per unpack parameter in order to unpack multiple tiles per Dest bank
     const std::uint32_t num_tiles_per_unpack = unpack_to_dest ? tiles_in_block : 1;
+    const ckernel::TensorShape tensor_shape  = TENSOR_SHAPE_FROM_PARAMS(params);
 
     {
         START_PERF_MEASURE("INIT")
@@ -60,8 +61,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
         }
 
-        const ckernel::TensorShape tensor_shape = TENSOR_SHAPE_FROM_PARAMS(params);
-
         // Record the descriptor under the engine UNPACKER_ENGINE_SEL actually drives (UNP_B -> UNPACR1/Unp1).
         constexpr auto unp_res = (UNPACKER_ENGINE_SEL == p_unpacr::UNP_B) ? ckernel::trisc::BFD_ID_UNP1 : ckernel::trisc::BFD_ID_UNP0;
         ckernel::trisc::program_bfd<unp_res>(tensor_shape, L1_ADDRESS(buffer_B[0]), formats.unpack_A_src);
@@ -76,7 +75,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(bfd_unpack, num_tiles_per_unpack);
+        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(
+            bfd_unpack, tensor_shape, num_tiles_per_unpack);
 
         PROFILER_SYNC();
     }
@@ -117,7 +117,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(block * tiles_in_block);
+                    _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(block * tiles_in_block, tensor_shape);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -138,7 +138,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
                         const std::uint32_t input_tile_idx = (block * tiles_in_block) + tile;
-                        _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(input_tile_idx);
+                        _llk_unpack_unary_broadcast_operands_<UNPACKER_ENGINE_SEL, unpack_to_dest>(input_tile_idx, tensor_shape);
                     }
                 }
             }
