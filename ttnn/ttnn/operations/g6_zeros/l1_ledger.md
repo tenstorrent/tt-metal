@@ -42,3 +42,16 @@ per participating core (≤ 16 KiB · cores used). NoC write transactions `Σ_co
 > tier against every other legal split (all move exactly the minimum: one output write, no reads, no
 > cross-core traffic); it is cheapest on transaction count (`N / burst_pages` vs `N`). Implemented:
 > R1. It is the cheapest split, so nothing is deferred on traffic grounds.
+
+## Block-size default: departure from "full grid" (Refinement 2, measured)
+
+The Blocking Model's default `cores_per_bank = floor(G/B)` (104 cores, row-major placement) is
+**replaced** by `cores_per_bank = 1` (8 cores) at `placement = "bank_near"` (each bank's writer is
+the NoC1-optimal worker for that bank, `get_optimal_dram_bank_to_logical_worker_assignment`).
+Concurrent writers into one bank contend, and row-major cores send their NoC1 write streams over
+shared links; one bank-adjacent writer per bank runs every case at its fastest
+(Blackhole p150, device kernel ns, Phase-0 default → new default):
+p1 1 092 860 → 559 495, p2 47 114 → 25 492, p3 24 271 → 13 139, p4 1 807 → 1 439.
+The per-core footprint is unchanged (`zero_source_bytes ≤ 16 KiB`); per-core run length grows to
+`ceil(N/B)` pages, which appears in no capacity expression. Both knobs stay live
+(`make_plan(..., cores_per_bank=, placement=)`), and `test_g6_zeros_perf.py` sweeps them.

@@ -112,7 +112,7 @@ def _plan_inputs(shape, dtype, device):
 
 
 def g6_zeros_plan(shape, dtype, device):
-    """Report the selected plan (BB-08): regime R1, cores_per_bank, cores used, burst_pages, B.
+    """Report the selected plan (BB-08): regime R1, cores_per_bank, placement, cores used, burst_pages, B.
 
     Pure host computation: allocates nothing on the device."""
     num_pages, aps, _, _, _ = _plan_inputs(shape, dtype, device)
@@ -122,6 +122,7 @@ def g6_zeros_plan(shape, dtype, device):
         "num_pages": plan.num_pages,
         "num_banks": plan.num_banks,
         "cores_per_bank": plan.cores_per_bank,
+        "placement": plan.placement,
         "cores_used": plan.num_cores,
         "core_ranges": str(plan.core_range_set()),
         "burst_pages": plan.burst_pages,

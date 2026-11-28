@@ -23,3 +23,4 @@
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros.py","result":"13 passed, 4 xfailed (bf16/bfp8 not in Phase-0 SUPPORTED); --dev pass","perf_ns":{"p2_fp32":48207,"p3_fp32":23956},"cores":104,"ts":"2026-11-28T13:36:31+01:00"}
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-11-28T13:44:07+01:00"}
 {"event":"test_run","status":"pass","tests":"unit 21/21 + golden bf16/bf8b slice 6/6","ts":"2026-11-28T13:46:59+01:00"}
+{"event":"test_run","status":"pass","detail":"R2 bank_near cpb1: p1 559495ns (was 1092860); unit 17+4 pass, golden 19/19","ts":"2026-11-28T13:53:40+01:00"}

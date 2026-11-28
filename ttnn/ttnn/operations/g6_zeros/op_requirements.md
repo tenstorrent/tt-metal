@@ -48,7 +48,7 @@
 
 **Done when**: `SUPPORTED["dtype"] == [float32, bfloat16, bfloat8_b]`, and the golden suite passes 19 / 19 with 0 `xfail_expected` and every loud category at 0. The acceptance suite passes with no xfail, and the precision baseline reports max ULP 0 and no -0.0 on all four production cases.
 
-### [ ] Refinement 2 — Speed up the perf-flagged p1 profile (writer count and bank-near placement)
+### [x] Refinement 2 — Speed up the perf-flagged p1 profile (writer count and bank-near placement)
 
 **Type**: perf
 
@@ -68,3 +68,5 @@ The op writes to DRAM only, so the levers are write-stream geometry, all knob-tu
 **Verifier notes**: after Refinement 1, because p1 is bf8b. The other three cases also got faster at `cores_per_bank = 1` in the same sweep (p2 47.1→40.6 µs, p3 24.3→20.8 µs, p4 1.81→1.76 µs). So if the per-shape choice differs, it must be a plan the op can report (`g6_zeros_plan`, BB-08), keyed in the descriptor cache (BB-07). It must not be a silent fall to a slower plan. Fold one ledger-level change in here: the ledger's "block-size default: full grid" row must record the measured departure. `tests/ttnn/unit_tests/operations/g6_zeros/test_g6_zeros_perf.py` is the sweep harness; extend it with the placement knob.
 
 **Done when**: measured device kernel time on p1 is ≤ 837.19 µs, the exact gate still holds, and the golden suite is green (19 / 19). There is no device-time regression on the guard set: p2 and p3 fp32 (same kernel, 4096 B pages), and p4 bf16 (128 pages, per-call overhead).
+
+**Outcome**: new default plan `placement="bank_near"` (each bank's writer is that bank's NoC1-optimal worker) with `cores_per_bank=1` (8 writers). Device kernel ns, Phase 0 → now: p1 bf8b 1,092,860 → 559,495 (1.95×, ≈511 GB/s, below the 837.19 µs target and the 620 µs roofline estimate), p2 47,114 → 25,492, p3 24,271 → 13,139, p4 1,807 → 1,439. Exact gate holds; golden 19/19. Bank-near beats row-major at every `cores_per_bank` (1/2/3/4/8/13), and 1 writer per bank beats more writers at both placements, so one plan serves every shape. What binds now: the DRAM write bandwidth (511 GB/s is at the Blackhole peak of about 512 GB/s), so the `burst_pages` co-tune and a second writer RISC were not tried. No lever is left for this op beyond measurement noise.

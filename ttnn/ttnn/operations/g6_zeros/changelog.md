@@ -24,3 +24,17 @@
 - Golden test progress: 19/19 expected. The 6 previously-xfail bf16/bf8b cells were run as a golden slice and all 6 pass (plain + loose ×2 each). The 13 fp32 cells use the same untouched path.
 - Issues encountered: None.
 - Tests added: none. The existing acceptance and precision-baseline cases for bf16/bf8b now run instead of xfailing (21/21 pass).
+
+## Refinement 2 — Speed up the perf-flagged p1 profile (writer count and bank-near placement)
+- Date: 2026-11-28
+- What was done: added the core-placement knob to the plan, and changed the defaults of it and of the writer-count knob.
+  - `make_plan(..., placement=)` accepts `"row_major"` (the old map) or `"bank_near"`. `G6ZerosPlan.cores` is now the single source of truth for which core serves which (bank, slot).
+  - `bank_near` anchors bank b on `ttnn.get_optimal_dram_bank_to_logical_worker_assignment(device, NOC_1)[b]`, because the writer uses BRISC / NoC1. Extra slots take the nearest free cores, preferring the anchor's row.
+  - `core_range_set()` merges the used cores into horizontal runs per row.
+  - Defaults: `placement="bank_near"` and `cores_per_bank=1` (8 writers); previously `cores_per_bank` was 13 at row-major placement. The plan report (`g6_zeros_plan`) now includes `placement`. The descriptor-cache key is unchanged, because the plan is a deterministic function of it.
+  - Reused: the writer kernel (unchanged), the run split, and the descriptor. Added: the placement function and knob, and the perf sweep axis.
+- Device kernel time (ns, Blackhole), Phase 0 default → new default: p1 1,092,860 → 559,495; p2 47,114 → 25,492; p3 24,271 → 13,139; p4 1,807 → 1,439. Full sweep, p1 (row_major / bank_near): cpb1 906,910 / 559,495; cpb2 972,962 / 749,901; cpb4 941,513 / 813,387; cpb13 1,102,287 / 814,536. p1 now writes at ≈511 GB/s, which is the DRAM write ceiling, so `burst_pages` was not co-tuned.
+- Accuracy achieved: exact. PCC=1.0, relative RMS=0 on p1, p2, p3, p4 (precision baseline, 4/4).
+- Golden test progress: 19/19 passing.
+- Issues encountered: None.
+- Tests added: `test_g6_zeros_perf.py` now sweeps `placement` × `cores_per_bank` ∈ {default, 1, 2, 3, 4, 8, 13}.

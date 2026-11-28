@@ -1,0 +1,14 @@
+{
+  "supported": {
+    "dtype": [
+      "FLOAT32",
+      "BFLOAT16",
+      "BFLOAT8_B"
+    ],
+    "layout": [
+      "TILE"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}

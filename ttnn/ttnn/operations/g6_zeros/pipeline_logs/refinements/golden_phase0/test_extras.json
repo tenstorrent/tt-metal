@@ -1,0 +1,36 @@
+{
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose0-32831x1x32x256-dtype=BFLOAT8_B-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose1-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose2-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose3-1x4x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "math_fidelity": null,
+    "gate": "exact"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose4-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dirty_destination": true
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose5-16x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "dirty_destination": true
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose6-1x4x256x128-dtype=BFLOAT16-layout=TILE]": {
+    "dirty_destination": true
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose7-32831x1x32x256-dtype=BFLOAT8_B-layout=TILE]": {
+    "dirty_destination": true
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose8-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "then_shapes": "((16, 12, 128, 128), (8, 12, 128, 128))"
+  },
+  "eval/golden_tests/g6_zeros/test_golden.py::test_op_loose[loose9-8x12x128x128-dtype=FLOAT32-layout=TILE]": {
+    "new_storage": true
+  }
+}

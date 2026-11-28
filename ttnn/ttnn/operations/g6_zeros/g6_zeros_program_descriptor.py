@@ -7,6 +7,9 @@ Every knob of the Blocking Model is a single-source parameter here:
   * ``cores_per_bank`` — how many cores split one DRAM bank's bank-rows (grid-sync lamp)
   * ``burst_pages``    — pages per NoC write; sizes the zero source (burst lamp)
   * ``MAX_WRITE_BURST_BYTES`` — the cap ``burst_pages`` is derived from
+  * ``placement``      — which grid core serves which (bank, slot): ``"row_major"`` (ordinal k ->
+    k-th core in row-major order) or ``"bank_near"`` (each bank's cores are the free cores nearest
+    that bank's NoC-optimal worker, ``get_optimal_dram_bank_to_logical_worker_assignment``)
 Per-core ``(first_page, run_pages)`` and the core ranges are derived from them.
 """
 
@@ -35,6 +38,8 @@ class G6ZerosPlan:
     grid_y: int
     cores_per_bank: int
     burst_pages: int
+    placement: str
+    cores: tuple  # cores[k] = (x, y) of core ordinal k; the single source of the bank -> core map
 
     @property
     def num_cores(self) -> int:
@@ -53,11 +58,14 @@ class G6ZerosPlan:
             self.grid_y,
             self.cores_per_bank,
             self.burst_pages,
+            self.placement,
+            self.cores,
         )
 
     def core_coord(self, k: int) -> ttnn.CoreCoord:
-        """Core ordinal k in row-major grid order."""
-        return ttnn.CoreCoord(k % self.grid_x, k // self.grid_x)
+        """Core of ordinal k (serves bank k % B, slot k // B)."""
+        x, y = self.cores[k]
+        return ttnn.CoreCoord(x, y)
 
     def core_runs(self):
         """Yield (ordinal, first_page, run_pages) for every used core."""
@@ -71,14 +79,21 @@ class G6ZerosPlan:
             yield k, row_start * B + b, run_pages
 
     def core_range_set(self) -> ttnn.CoreRangeSet:
-        """First num_cores cores in row-major order: full rows + at most one partial row."""
-        n, gx = self.num_cores, self.grid_x
-        full_rows, tail = divmod(n, gx)
+        """Used cores, merged into maximal horizontal runs per grid row (few rectangular ranges)."""
+        rows = {}
+        for x, y in self.cores:
+            rows.setdefault(y, []).append(x)
         ranges = []
-        if full_rows:
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, full_rows - 1)))
-        if tail:
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, full_rows), ttnn.CoreCoord(tail - 1, full_rows)))
+        for y in sorted(rows):
+            xs = sorted(rows[y])
+            lo = prev = xs[0]
+            for x in xs[1:] + [None]:
+                if x is not None and x == prev + 1:
+                    prev = x
+                    continue
+                ranges.append(ttnn.CoreRange(ttnn.CoreCoord(lo, y), ttnn.CoreCoord(prev, y)))
+                if x is not None:
+                    lo = prev = x
         return ttnn.CoreRangeSet(ranges)
 
 
@@ -86,17 +101,54 @@ def num_dram_banks(device) -> int:
     return ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
 
 
-def make_plan(num_pages: int, aligned_page_size: int, device, *, cores_per_bank=None, burst_pages=None) -> G6ZerosPlan:
+PLACEMENTS = ("row_major", "bank_near")
+DEFAULT_PLACEMENT = "bank_near"
+DEFAULT_CORES_PER_BANK = 1
+
+
+def _place_cores(device, gx: int, gy: int, B: int, cores_per_bank: int, placement: str) -> tuple:
+    """cores[k] for ordinal k = slot * B + bank. One source of truth for the bank -> core map."""
+    n = B * cores_per_bank
+    if placement == "row_major":
+        return tuple((k % gx, k // gx) for k in range(n))
+    assert placement == "bank_near", f"g6_zeros: unknown placement {placement!r}"
+    # The writer runs on BRISC / NoC1 (WriterConfigDescriptor), so anchor on the NoC1-optimal workers.
+    anchors = [(c.x, c.y) for c in ttnn.get_optimal_dram_bank_to_logical_worker_assignment(device, ttnn.NOC.NOC_1)]
+    assert len(anchors) >= B, (len(anchors), B)
+    free = {(x, y) for x in range(gx) for y in range(gy)}
+    cores = []
+    for s in range(cores_per_bank):
+        for b in range(B):
+            ax, ay = anchors[b]
+            # Nearest free core; prefer the anchor's own row (short, link-disjoint write path to the bank).
+            c = min(free, key=lambda p: (abs(p[1] - ay) * 2 + abs(p[0] - ax), p[1] != ay, p))
+            free.remove(c)
+            cores.append(c)
+    return tuple(cores)
+
+
+def make_plan(
+    num_pages: int,
+    aligned_page_size: int,
+    device,
+    *,
+    cores_per_bank=None,
+    burst_pages=None,
+    placement=None,
+) -> G6ZerosPlan:
     grid = device.compute_with_storage_grid_size()
     gx, gy = grid.x, grid.y
     B = num_dram_banks(device)
     G = gx * gy
     if cores_per_bank is None:
-        cores_per_bank = min(G // B, -(-num_pages // B))
-    cores_per_bank = max(1, min(cores_per_bank, G // B))
+        cores_per_bank = DEFAULT_CORES_PER_BANK
+    cores_per_bank = max(1, min(cores_per_bank, G // B, -(-num_pages // B)))
     if burst_pages is None:
         burst_pages = max(1, MAX_WRITE_BURST_BYTES // aligned_page_size)
-    plan = G6ZerosPlan(num_pages, aligned_page_size, B, gx, gy, cores_per_bank, burst_pages)
+    if placement is None:
+        placement = DEFAULT_PLACEMENT
+    cores = _place_cores(device, gx, gy, B, cores_per_bank, placement)
+    plan = G6ZerosPlan(num_pages, aligned_page_size, B, gx, gy, cores_per_bank, burst_pages, placement, cores)
     covered = sum(r for _, _, r in plan.core_runs())
     assert covered == num_pages, f"g6_zeros plan covers {covered} of {num_pages} pages"
     return plan

@@ -2,14 +2,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device-time harness for g6_zeros: the four production cases × the `cores_per_bank` knob.
+"""Device-time harness for g6_zeros: the four production cases × `cores_per_bank` × `placement`.
 
 Measurement only; correctness is the acceptance suite's job. "default" is the knob value
 `make_plan` picks; the others turn `cores_per_bank` (the grid-sync lamp of the Blocking Model)
 for an A/B in the same session. The descriptor is dispatched directly so the harness can also
 time dtypes not yet in SUPPORTED (no validate()). Run under
 `scripts/run_safe_pytest.sh --profile --no-py-zones`; one ops-CSV row per test, in collection
-order (cases outer, knob inner).
+order (cases outer, cores_per_bank, placement inner).
 """
 
 import pytest
@@ -25,14 +25,19 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("cores_per_bank", [None, 1, 2, 4, 8], ids=lambda v: f"cpb_{v or 'default'}")
+@pytest.mark.parametrize("placement", [None, "row_major", "bank_near"], ids=lambda v: f"pl_{v or 'default'}")
+@pytest.mark.parametrize("cores_per_bank", [None, 1, 2, 3, 4, 8, 13], ids=lambda v: f"cpb_{v or 'default'}")
 @pytest.mark.parametrize("shape, dtype", CASES)
-def test_g6_zeros_device_time(shape, dtype, cores_per_bank, device):
+def test_g6_zeros_device_time(shape, dtype, cores_per_bank, placement, device):
     output = ttnn.allocate_tensor_on_device(
         ttnn.Shape(list(shape)), dtype, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     plan = pdm.make_plan(
-        output.buffer_num_pages(), output.buffer_aligned_page_size(), device, cores_per_bank=cores_per_bank
+        output.buffer_num_pages(),
+        output.buffer_aligned_page_size(),
+        device,
+        cores_per_bank=cores_per_bank,
+        placement=placement,
     )
     ttnn.generic_op([output], pdm.create_program_descriptor(output, plan))
     ttnn.synchronize_device(device)

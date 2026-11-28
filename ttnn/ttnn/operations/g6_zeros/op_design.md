@@ -147,7 +147,7 @@ drain_writes();                           // once per core per call
 | Grid synchronization (cores used) | p4 (128 pages) and p3 (1536 pages) give 1 and 12 pages per core at `cores_per_bank = 16`; launch + RT-arg + barrier fixed cost may dominate the 2–48 KiB a core writes | `cores_per_bank ∈ {1, 2, 4, 8, floor(G/B)}` per case (knob-turn: host only) |
 | Burst size | 16 KiB bursts are the packet cap; DRAM controller page/row behaviour may favour a smaller multiple of the page | `burst_pages ∈ {1, 2, floor(16384/aps)}` |
 | Writer count per core | one RISC (BRISC, NoC1) issues every write; for p1 (~2050 bfp8 pages/core at 16 cores/bank) issue rate could bind (catalog `split_reader`: helps only if issue-bound) | split each core's run in two halves: second kernel on NCRISC/NoC0 (catalog `noc_placement`: writes on NoC0 can be 2.5–4.8× slower for spread placements — measure, do not assume) |
-| Core placement | ordinal `k → bank k % B` in row-major grid order ignores which DRAM column each bank sits on (catalog `noc_placement`, `bank_stagger`) | bank-near placement (cores of bank `b` chosen nearest that bank's DRAM endpoint) vs row-major interleaved |
+| Core placement | ordinal `k → bank k % B` in row-major grid order ignores which DRAM column each bank sits on (catalog `noc_placement`, `bank_stagger`) | bank-near placement (cores of bank `b` chosen nearest that bank's DRAM endpoint) vs row-major interleaved. **Refinement 2 (measured): `placement="bank_near"` + `cores_per_bank=1` is the default** (p1 1 092 860 → 559 495 ns, ≈511 GB/s, at the DRAM write ceiling); see `l1_ledger.md` |
 | Overlap | n/a — no compute and no CB handshake; nothing to overlap. Declared empty for that reason | — |
 
 ## Dataflow Strategy
