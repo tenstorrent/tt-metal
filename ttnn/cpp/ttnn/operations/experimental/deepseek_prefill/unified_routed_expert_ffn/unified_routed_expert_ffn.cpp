@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unified_routed_expert_ffn.hpp"
+#include <tt-metalium/data_formats/tile_constants.hpp>
 
 #include "device/unified_routed_expert_ffn_device_operation.hpp"
 #include "tt-metalium/utils/math.hpp"
@@ -29,7 +30,18 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t l1_end,
     const std::optional<ttnn::Tensor>& x_row_index,
     bool output_row_major,
-    uint32_t zero_output_row) {
+    uint32_t zero_output_row,
+    const std::optional<ttnn::Tensor>& weight_pages,
+    const std::optional<ttnn::Tensor>& gate_up_weight_source,
+    const std::optional<ttnn::Tensor>& down_weight_source,
+    uint32_t gate_up_k_stride,
+    uint32_t down_k_stride,
+    uint32_t weights_n_gate_up,
+    uint32_t weights_n_down,
+    uint32_t weights_k_gate_up,
+    uint32_t weights_k_down,
+    const std::optional<tt::tt_metal::DataType>& weights_dtype,
+    const std::optional<tt::tt_metal::Tile>& weights_tile) {
     // Single fused device op across ALL local experts. This builds ONE program
     // whose reader/compute/writer kernels iterate over every local expert.
     TT_FATAL(
@@ -38,7 +50,60 @@ ttnn::Tensor unified_routed_expert_moe(
         gate_projs.size(),
         up_projs.size(),
         down_projs.size());
-    const uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
+
+    // Table-addressed weights: weight_pages and both sources together, and no weight lists.
+    const int page_args = static_cast<int>(weight_pages.has_value()) +
+                          static_cast<int>(gate_up_weight_source.has_value()) +
+                          static_cast<int>(down_weight_source.has_value());
+    TT_FATAL(
+        page_args == 0 || page_args == 3,
+        "weight_pages, gate_up_weight_source and down_weight_source must be given together or all omitted (got {} "
+        "of 3)",
+        page_args);
+    const bool from_pages = page_args == 3;
+    uint32_t experts_per_chip = static_cast<uint32_t>(gate_projs.size());
+    if (from_pages) {
+        TT_FATAL(
+            gate_projs.empty(),
+            "with weight_pages the gate/up/down projection lists must be empty (got {} entries)",
+            gate_projs.size());
+        TT_FATAL(weights_dtype.has_value(), "weight_pages needs weights_dtype (the weight tiles' data format)");
+        TT_FATAL(
+            weights_n_gate_up > 0 && weights_n_down > 0 && weights_k_gate_up > 0 && weights_k_down > 0,
+            "weight_pages needs weights_n_gate_up, weights_n_down, weights_k_gate_up and weights_k_down > 0 (got {}, "
+            "{}, {}, {})",
+            weights_n_gate_up,
+            weights_n_down,
+            weights_k_gate_up,
+            weights_k_down);
+        // One table row per local expert: 2 words per entry, n_gu gate + n_gu up + n_d down entries.
+        const uint64_t row_words = 2ull * (2ull * weights_n_gate_up + weights_n_down);
+        const auto& pshape = weight_pages->logical_shape();
+        TT_FATAL(
+            pshape.rank() >= 2 && static_cast<uint64_t>(pshape[-1]) == row_words,
+            "weight_pages must be [experts, {}] (2 * (2 * weights_n_gate_up + weights_n_down) uint32 per expert), "
+            "got shape {}",
+            row_words,
+            pshape);
+        experts_per_chip = static_cast<uint32_t>(pshape.volume() / row_words);
+        // The sources are byte buffers (only their addresses are used), so weights_tile describes the tiles: the
+        // normal 32x32 tile or the same tile transposed (faces and within them, as ttnn.matmul reads one).
+        if (weights_tile.has_value()) {
+            TT_FATAL(
+                weights_tile->get_height() == tt::constants::TILE_HEIGHT &&
+                    weights_tile->get_width() == tt::constants::TILE_WIDTH &&
+                    weights_tile->get_transpose_within_face() == weights_tile->get_transpose_of_faces(),
+                "weights_tile must be a 32x32 tile, transposed or not, got {}",
+                *weights_tile);
+        }
+    } else {
+        TT_FATAL(
+            gate_up_k_stride == 0 && down_k_stride == 0 && weights_n_gate_up == 0 && weights_n_down == 0 &&
+                weights_k_gate_up == 0 && weights_k_down == 0 && !weights_dtype.has_value() &&
+                !weights_tile.has_value(),
+            "gate_up_k_stride / down_k_stride / weights_n_* / weights_k_* / weights_dtype / weights_tile apply only "
+            "with weight_pages (the weight tensors carry their own dtype and tile)");
+    }
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
     // Optional per-expert biases (gpt-oss): all three lists together or none,
@@ -124,7 +189,18 @@ ttnn::Tensor unified_routed_expert_moe(
         max_active_tokens,
         l1_end,
         x_row_index,
-        zero_output_row);
+        zero_output_row,
+        weight_pages,
+        gate_up_weight_source,
+        down_weight_source,
+        gate_up_k_stride,
+        down_k_stride,
+        weights_n_gate_up,
+        weights_n_down,
+        weights_k_gate_up,
+        weights_k_down,
+        weights_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
+        weights_tile);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
