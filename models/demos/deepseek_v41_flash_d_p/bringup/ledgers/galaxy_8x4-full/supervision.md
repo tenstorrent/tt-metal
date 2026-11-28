@@ -745,3 +745,4 @@
 - 10:12 heartbeat (model_bringup): MB.QB agent active; RAM used 79 GB; / 94G free.
 - 10:14 MB.QB PASS -> 3b9ca2e3f27: wq_b bank at 160 rows device 177.7 -> 151.7 us (21 calls), host 86 -> 52 us; ids reorder into embedding; replay rotation fused; identical, repeats 0, no cache growth. MB.QBL next.
 - 10:23 OWNER asked where the exposed host time comes from. No breakdown after the C++ ports exists (old: single 5120 layer-2 launches ~4.9, chunk end ~3, engram 2-5 ms; packed 19-22 ms, no breakdown). Decided: after MB.QBL, a measurement-only host profile task on the batching ledger (test_profile.py BRINGUP_PROFILE_HOST=1 at 139264 / 1024000, single 8192 + packed 4x2k).
+- 10:28 MB.QBL PASS -> 31949724327: 5120 ladder vs MB.9 +1.9..+6.3 % new tok/s at every history; vs MB.NCL device -0.1..-0.6 ms, walls flat to +3 %; no-rebuild 0, determinism 0. Back to batching for the host profile.
