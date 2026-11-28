@@ -357,6 +357,16 @@ def test_fused_msda_kernel_perf(
     model = _tt_model(device, config, tt_parameters, spatial_shapes)
 
     value_p, refs, offsets_p, attn_p = _packed_operands(model, tt_query, tt_value, tt_refs)
+    if variant.endswith("_l1") and not ttnn.experimental.can_use_fused_msda_from_offsets_l1_value(
+        value_p,
+        refs,
+        offsets_p,
+        attn_p,
+        _spatial_shapes_list(spatial_shapes),
+        reference_mode="pillar",
+        value_layout="head_major" if variant.startswith("head_major") else "auto",
+    ):
+        pytest.skip("the value and output do not fit this grid's L1")
 
     if variant == "packed_multi_dram":
         assert value_p.memory_config() == ttnn.DRAM_MEMORY_CONFIG

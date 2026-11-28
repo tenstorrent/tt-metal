@@ -38,6 +38,7 @@ from models.experimental.bevformer.reference.point_sampling_3d_2d import (
 from models.experimental.bevformer.tests.test_utils import check_with_pcc
 from models.experimental.bevformer.tt import tt_ms_deformable_attention
 from models.experimental.bevformer.tt.model_preprocessing import create_bevformer_layer_parameters
+from models.experimental.bevformer.tt.tt_common import reduced_grid
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerLayer
 from models.experimental.bevformer.tt.tt_temporal_self_attention import shifted_reference_points
 from models.experimental.bevformer.tt.tt_spatial_cross_attention import build_rebatch_plan
@@ -216,7 +217,8 @@ def test_bevformer_layer_perf(
     passed, message = check_with_pcc(ref_output, tt_output_torch, expected_pcc)
     assert passed, f"PCC check failed: {message}"
     logger.info(f"PCC gate: {message}")
-    assert not fallbacks, f"fused_msda fell back to DRAM: {fallbacks}"
+    # A reduced grid's L1 holds no value, so there DRAM is the plan.
+    assert reduced_grid(device) or not fallbacks, f"fused_msda fell back to DRAM: {fallbacks}"
     ttnn.deallocate(tt_output)
 
     ttnn.synchronize_device(device)
