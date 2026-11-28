@@ -22,3 +22,17 @@ dashboards:
         when:
           changed: [llk-wormhole, llk-blackhole, llk-common, llk-sfpi, llk-tests, llk-ci, llk-perf, llk-hardware-free,
                     llk-quasar]
+      # llk-smoke-tests with the sku-allowlist's bh_p150b_civ2_viommu.
+      - job: llk-smoke-p150b-g1
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]
+      - job: llk-smoke-p150b-g2
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]
+      - job: llk-smoke-p150b-g3
+        when:
+          changed: [llk-common, llk-sfpi, llk-tests, llk-ci, llk-blackhole, image]
+      # train-smoke-tests (bh_p150b_civ2).
+      - job: train-smoke-p150b-asan
+        when:
+          changed: [tt-train, image]
