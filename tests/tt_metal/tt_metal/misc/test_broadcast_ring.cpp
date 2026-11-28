@@ -330,6 +330,38 @@ TEST(BroadcastRing, WakeBetweenTokenAndWaitIsNotLost) {
     EXPECT_FALSE(reader.read(out));
 }
 
+// wait(token, spins) with no spinning: returns at once when items are pending, otherwise blocks until a wake, and a
+// wake between taking the token and waiting is not lost.
+TEST(BroadcastRing, WaitWithoutSpinning) {
+    BroadcastRing<uint32_t> ring(4);
+    auto reader = ring.make_reader();
+
+    ring.writer().publish(7);
+    reader.wait(reader.wait_token(), /*spins=*/0);  // pending item: must not block
+    uint32_t out = 0;
+    EXPECT_TRUE(reader.read(out));
+    EXPECT_EQ(out, 7u);
+
+    const auto early = reader.wait_token();
+    ring.writer().wake_readers();
+    reader.wait(early, /*spins=*/0);  // woken before waiting: must not block
+
+    std::latch waiting{1};
+    std::atomic<bool> received{false};
+    std::thread reader_thread([&]() {
+        uint32_t value = 0;
+        const auto token = reader.wait_token();
+        waiting.count_down();
+        reader.wait(token, /*spins=*/0);
+        received.store(reader.read(value) && value == 42, std::memory_order_release);
+    });
+    waiting.wait();
+    ring.writer().publish(42);
+    ring.writer().wake_readers();
+    reader_thread.join();
+    EXPECT_TRUE(received.load(std::memory_order_acquire));
+}
+
 TEST(BroadcastRing, ReaderIsMovable) {
     BroadcastRing<uint32_t> ring(8);
     auto reader = ring.make_reader();
