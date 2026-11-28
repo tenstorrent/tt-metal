@@ -190,8 +190,14 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
         return tt::tt_metal::TensorSpec(
             output_shape, TensorLayout(operation_attributes.output_dtype, PageConfig(Layout::TILE), output_mem_config));
     }
+    // Report the logical kv length (e.g. 100), not the tile-padded one (128): the padded shape follows from the
+    // TILE layout.
+    Shape logical_output_shape = output_shape;
+    if (!operation_attributes.transpose_hw.value_or(false)) {
+        logical_output_shape = Shape({1, ashape[1], ashape[2], input_tensor_b.logical_shape()[3]});
+    }
     return tt::tt_metal::TensorSpec(
-        output_shape,
+        logical_output_shape,
         TensorLayout(
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }
