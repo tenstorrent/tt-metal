@@ -417,6 +417,12 @@ an op request's approval and the op-gen launch (section 5), and evidence that th
 needing a shared file, a wider allowed path, a framework fix, a rerun, a retry after a stop) you decide, do, log in
 supervision.md, and report in one line.
 
+Never wait on a trivial decision (owner, 2026-11-27, DeepSeek-V4.1: a 10-minute check and an already-agreed probe sat
+for hours waiting on "should I run this?"). A run of minutes, a check, a probe, a measurement, the next step of a plan
+the owner already agreed: queue it and run it; say so in one line. If you did ask and the owner has not answered by
+the next heartbeat, decide it yourself, queue it in the ledger and run it. An idle box waiting on a non-decision is
+the overseer's failure.
+
 Every owner rule goes into this skill (models/demos/common/bringup/skill/bringup/SKILL.md; ~/.claude/skills/bringup is a
 symlink to it), the agent definition (agents/*.md) or the framework the same hour it is given, never only into the
 session's private memory (owner, said many times; 2026-10-30): memory stays on one machine, is not versioned, and the
