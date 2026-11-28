@@ -1264,7 +1264,7 @@ def get_device_data_generate_report(
                         if series and op2opID == series[0][1]:
                             coreOpToOp = series.popleft()
                             perCoreRowDict[get_core_str_format(core)] = (
-                                coreOpToOp[2] - PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC
+                                round(coreOpToOp[2] * 1000 / freq) - PROFILER_OP_TO_OP_OVERHEAD_NANO_SEC
                             )
                             pickedOps.add(coreOpToOp)
 
@@ -1460,7 +1460,7 @@ def generate_reports(
                 else:
                     host_op_record = ops[op]
                     host_op_record["metal_trace_replay_session_id"] = ""
-                    if "trac_id" not in host_op_record or host_op_record["metal_trace_id"] is None:
+                    if "metal_trace_id" not in host_op_record or host_op_record["metal_trace_id"] is None:
                         host_op_record["metal_trace_id"] = ""
                     active_op_record = host_op_record
 
