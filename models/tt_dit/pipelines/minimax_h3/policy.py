@@ -102,7 +102,7 @@ def sol_schedule(env: Mapping[str, str], preset: str | None = None) -> SolSchedu
     """
     if env.get("H3_SOL_ATTN", "0") != "1":
         return None
-    name = env.get("H3_SOL_PRESET", preset)
+    name = env.get("H3_SOL_PRESET") or preset
     if name is not None and name not in SOL_PRESETS:
         raise ValueError(f"H3_SOL_PRESET must be one of {sorted(SOL_PRESETS)}, got {name!r}")
     base = SOL_PRESETS[name] if name else SolSchedule()

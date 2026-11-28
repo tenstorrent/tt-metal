@@ -63,6 +63,8 @@ _HF = SolSchedule(tau=1.0, dense_steps=2, dense_layers=2, sinks=False)  # its Hy
         ({}, "hyperflow", _HF),
         ({"H3_SOL_PRESET": "hyperflow"}, None, _HF),
         ({"H3_SOL_PRESET": "10eros-max"}, "hyperflow", _CARD13),
+        # An empty value names no preset: the pipeline's own stands.
+        ({"H3_SOL_PRESET": ""}, "hyperflow", _HF),
         ({}, None, SolSchedule()),
         (
             {"H3_SOL_PRESET": "10eros-max", "H3_SOL_TAU": "1.97", "H3_SOL_SINKS": "0"},
