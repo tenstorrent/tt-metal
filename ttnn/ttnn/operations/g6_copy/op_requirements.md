@@ -36,7 +36,7 @@
 - **Golden baseline**: 10 / 39 registry cells supported_pass, 29 xfail_expected, 0 loud; 3 / 3 numerics regression tests pass (13 / 42 total)
 - **Perf (flagged shape)**: (16, 12, 128, 128) fp32 measured 67.6 µs median, range 67.2–68.7 µs (goal < 68.56 µs; roofline 54.61 µs)
 
-### [ ] Refinement 1 — Full dtype set and ROW_MAJOR layout
+### [x] Refinement 1 — Full dtype set and ROW_MAJOR layout
 
 **Goal**: Add the full dtype set and the ROW_MAJOR layout:
 - Add `ttnn.bfloat16`, `ttnn.bfloat8_b`, `ttnn.int32` and `ttnn.uint32` to `SUPPORTED["dtype"]`.

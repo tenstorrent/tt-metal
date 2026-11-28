@@ -39,8 +39,10 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
-    "layout": [ttnn.TILE_LAYOUT],
+    # Every dtype and layout is the same page copy: page_bytes = buffer_aligned_page_size(),
+    # and the CB format is the tensor's own, never interpreted (no compute path).
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32, ttnn.uint32],
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
 }
 

@@ -29,3 +29,21 @@
   - `op_design.md` updated to match the code's `BANK_STAGGER = True` default.
 - **Tests added**: `test_g6_copy_precision_baseline.py`, `test_g6_copy_trace.py` (BB-16 trace replay). The
   acceptance test `test_g6_copy.py` and perf sweep `test_g6_copy_lamps.py` come from the implementer.
+
+## Refinement 1 — Full dtype set and ROW_MAJOR layout
+- Date: 2026-11-28
+- What was done: SUPPORTED widened to dtype {float32, bfloat16, bfloat8_b, int32, uint32} and layout
+  {TILE, ROW_MAJOR}. No kernel or descriptor change: the page walk is already the pure-RM data-movement
+  pattern (a page is a row, `page_bytes = buffer_aligned_page_size()`), and the CB format is the tensor's own,
+  never interpreted. The three contract EXCLUSIONS ({float32, RM}, {int32, TILE}, {uint32, TILE}) kept;
+  bfloat8_b × RM stays INVALID (feature_spec). New paths stay on the full-grid page split (plan test asserts
+  `num_cores = min(pages, grid)`). Reused: SUPPORTED/validate(), the reader/writer pair, descriptor. Added:
+  only SUPPORTED values and one test file.
+- Accuracy achieved: bit-exact (float32 / bfloat16 / int32 / uint32) and within the bfp8 one-step gate
+  (bfloat8_b) on every production row, adversarial bits per dtype and bf16 poisoned padding.
+- Golden test progress: the 29 former xfail cells (24 production rows + 5 loose cases) pass (golden slice
+  `-k "not float32"`: 29/29); the 10 float32 cells were untouched.
+- Issues encountered: None.
+- Tests added: `tests/ttnn/unit_tests/operations/g6_copy/test_g6_copy_dtypes_layouts.py` (values per
+  non-float32 production row incl. shortest RM rows uint32/int32 `(1,)`, adversarial bits per dtype, bf16
+  poisoned padding (1, 1, 1, 256), `describe_plan` determinism / full-grid / L1 per row).

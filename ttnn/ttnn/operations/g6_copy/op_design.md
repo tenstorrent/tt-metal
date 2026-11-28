@@ -35,8 +35,8 @@ canonicalization is needed.
 | Property | Requirement |
 |----------|-------------|
 | Shape | `(d0, …, dn)`, rank 1–4 |
-| Dtype | Phase 0: float32. TARGET adds bfloat16, bfloat8_b, int32, uint32 |
-| Layout | Phase 0: TILE. TARGET adds ROW_MAJOR (bfloat16, int32, uint32) |
+| Dtype | Phase 0: float32. Refinement 1: float32, bfloat16, bfloat8_b, int32, uint32 (= TARGET) |
+| Layout | Phase 0: TILE. Refinement 1: TILE and ROW_MAJOR (= TARGET; ROW_MAJOR in bfloat16, int32, uint32 per the EXCLUSIONS / INVALID) |
 | Memory | DRAM interleaved |
 
 ### Output
@@ -368,7 +368,7 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply.
 |------|---------------|
 | Files | `ttnn/ttnn/operations/g6_copy/__init__.py` (exports `g6_copy`, `INPUT_TAGGERS`, `SUPPORTED`, `EXCLUSIONS`, `validate`, `describe_plan`); `g6_copy.py` (registry, `validate`, entry point); `g6_copy_program_descriptor.py` (knob constants `L1_BUDGET_BYTES = 1347776`, `MAX_CORES = None`, `MAX_BLOCK_PAGES = None`, `STREAM_DEPTH_BLOCKS = 2`, `BANK_STAGGER = True` (measured lamp, see Bank-run walk); `_plan()`; descriptor builder and cache; `describe_plan()`); `kernels/g6_copy_reader.cpp`, `kernels/g6_copy_writer.cpp`, `kernels/g6_copy_page_walk.hpp` |
 | `INPUT_TAGGERS` | `{"alignment": tag_alignment}`. On the shared shape: `W = shape[-1]`, `H = shape[-2]` (H = 1 for rank 1). `"w_non_aligned"` if `W % 32`, else `"h_non_aligned"` if `H % 32`, else `"tile_aligned"` |
-| `SUPPORTED` | `{"dtype": [ttnn.float32], "layout": [ttnn.TILE_LAYOUT], "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"]}` |
+| `SUPPORTED` | Refinement 1: `{"dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.int32, ttnn.uint32], "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], "alignment": [...]}`; Phase 0 was `{"dtype": [ttnn.float32], "layout": [ttnn.TILE_LAYOUT], "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"]}` |
 | `EXCLUSIONS` | `[{"dtype": ttnn.float32, "layout": ttnn.ROW_MAJOR_LAYOUT}, {"dtype": ttnn.int32, "layout": ttnn.TILE_LAYOUT}, {"dtype": ttnn.uint32, "layout": ttnn.TILE_LAYOUT}]` |
 | `validate(input_tensor, output_tensor)` | (1) Malformed-request checks, raising `ValueError`, in this order: both tensors on device (`ttnn.is_tensor_storage_on_device`); rank 1–4; shapes equal; dtypes equal; layouts equal; memory configs equal; memory DRAM interleaved. (2) Axes from `input_tensor`: dtype, layout, then the taggers. (3) SUPPORTED → `UnsupportedAxisValue`. (4) EXCLUSIONS → `ExcludedCell`. INVALID is never checked. Every message starts with `g6_copy:` (the acceptance test matches it) |
 | `g6_copy(input_tensor, output_tensor)` | `validate(...)` is the first line. Then fetch the cached descriptor (build on a miss), patch the two buffer addresses, call `ttnn.generic_op([input_tensor, output_tensor], descriptor)` (output last), and `return output_tensor` — the caller's object. Exactly one device program per call; no host-side tensor transformation |
@@ -400,6 +400,7 @@ No compute kernel exists, so `compute_kernel_hw_startup()` does not apply.
 | `test_g6_copy_poisoned_padding` | (1, 1) and (1, 1, 1, 256), source padding = 1000.0 | no logical destination element may depend on source padding |
 | `test_g6_copy_rebinds_buffers` | (1, 12, 128, 128), two live tensor pairs | BB-07 (cache hit with new addresses writes its own destination only) and BB-06 (repeat is bit-identical) |
 | `test_g6_copy_streamed_plan` | (16, 12, 128, 128) with `MAX_BLOCK_PAGES = 3` on the full grid, `BANK_STAGGER` off and on (blocks shorter than `num_banks`, 1-page runs, ragged 1-page last block); (1, 12, 128, 128) with `MAX_CORES = 3`, `MAX_BLOCK_PAGES = 11`, `BANK_STAGGER` on (64 pages per core: multi-page runs, a capped grid, a ragged 9-page last block) | pins the `streamed` plan: multi-block, ring wrap, ragged last block, `nk < num_banks` and `nk = num_banks`, rotated walk |
+| `test_g6_copy_dtypes_layouts.py` (Refinement 1) | the non-float32 production rows (bf16 / bf8b TILE, bf16 / int32 / uint32 RM, incl. shortest RM row `(1,)`), adversarial bits per dtype, bf16 poisoned padding (1, 1, 1, 256), `describe_plan` per row | values graded by `helpers.TOLERANCES`; plan deterministic, full-grid split, L1 ≤ 1347776 |
 | `test_g6_copy_plan` | the Phase 0 shapes | BB-08 (plan reported, deterministic, production shapes on `one_block`) and BB-05 (L1 ≤ 1347776) |
 | `test_g6_copy_rejects_*` | shape, dtype, layout and memory-config mismatches; rank 5; host tensor | the spec's Validation list |
 | `test_g6_copy_trace_replay` (verifier) | (1, 12, 128, 128) and (16, 12, 128, 128), eager call then capture; replay into a zeroed destination, then replay after a new source is written in place | BB-16: a replay equals the eager call bit for bit and copies the source's current contents |
