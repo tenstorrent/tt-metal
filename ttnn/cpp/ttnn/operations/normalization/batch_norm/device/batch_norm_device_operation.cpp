@@ -44,6 +44,11 @@ void BatchNormOperation::validate_tensors(
     // output (N, C, H, W)
     if (output.has_value()) {
         check_tensor_BN(output.value(), "output_shape", C);
+        TT_FATAL(
+            output->logical_shape() == input.logical_shape(),
+            "batch_norm output_shape must match the input logical shape, got output: {} vs input: {}",
+            output->logical_shape(),
+            input.logical_shape());
     }
 
     // weight (1, C, 1, 1)
