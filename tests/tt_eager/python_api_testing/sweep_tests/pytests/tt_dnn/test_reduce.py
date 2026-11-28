@@ -96,7 +96,6 @@ def test_run_reduce_max_hw_test(input_shapes, minmax, device, function_level_def
 shapes5 = (
     [[1, 1, 32, 32]],  # Single core
     [[1, 1, 32, 3840]],  # Multi core h
-    [[1, 1, 32, 3840]],  # Multi core h
 )
 
 
@@ -139,7 +138,6 @@ def test_run_reduce_sum_w_test(input_shapes, device, function_level_defaults):
 
 shapes5 = (
     [[1, 1, 32, 32]],  # Single core
-    [[1, 1, 512, 512]],  # Multi core hw (== multi core w + multi core h)
     [[1, 1, 512, 512]],  # Multi core hw (== multi core w + multi core h)
 )
 

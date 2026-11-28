@@ -19,7 +19,6 @@ import pytest
         (torch.Size([1, 2, 6, 8]), (2, 4), None, 0, 1, False, False, False),
         (torch.Size([1, 2, 6, 8]), (2, 4), None, 0, 1, False, False, True),
         (torch.Size([2, 1, 32, 64]), 6, None, 0, 1, False, False, False),
-        (torch.Size([2, 1, 32, 64]), 6, None, 0, 1, False, False, False),
     ),
 )
 def test_MaxPool2d_fallback(

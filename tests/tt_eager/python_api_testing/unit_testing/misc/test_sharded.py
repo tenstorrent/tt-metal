@@ -327,18 +327,12 @@ def test_to_layout_height_sharded(device, H):
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
-)
 def test_sharded_partial_op(
     device,
     H,
     num_cores,
     num_slices,
     activations_dtype,
-    output_dtype,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
@@ -521,14 +515,7 @@ def test_interleaved_to_sharded_partial_same_padded_shape_different_alignment(de
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
-)
-def test_block_sharded_partial_op(
-    device, H, W, num_cores, num_slices, activations_dtype, output_dtype, function_level_defaults
-):
+def test_block_sharded_partial_op(device, H, W, num_cores, num_slices, activations_dtype, function_level_defaults):
     compute_grid_size = device.compute_with_storage_grid_size()
     if num_cores > (compute_grid_size.x * compute_grid_size.y):
         pytest.skip(f"Need {num_cores} cores to run this test but core grid is {compute_grid_size}")
@@ -665,11 +652,6 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     [ttnn.bfloat16, ttnn.bfloat8_b],
     ids=["inputs_BFLOAT16", "inputs_BFLOAT8_B"],
 )
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-    ids=["out_BFLOAT16", "out_BFLOAT8_B"],
-)
 def test_width_sharded_partial_op(
     device,
     H,
@@ -677,7 +659,6 @@ def test_width_sharded_partial_op(
     num_cores,
     num_slices,
     activations_dtype,
-    output_dtype,
     function_level_defaults,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
