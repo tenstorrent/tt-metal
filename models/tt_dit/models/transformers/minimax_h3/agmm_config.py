@@ -109,11 +109,11 @@ def resolve_agmm_mode(mode: AgmmMode | str | None = None) -> AgmmMode:
 
 class AgmmLayerPin(NamedTuple):
     """One layer's pinned program: the (M, K, N) blocking per length class, the worker-grid orientation, the
-    subblock and whether Dst accumulates in fp32."""
+    subblock (one for every class, or per class) and whether Dst accumulates in fp32."""
 
     blockings: dict[str, tuple[int, int, int]]
     transpose_core_grid: bool
-    subblock: tuple[int, int] = (2, 2)
+    subblock: tuple[int, int] | dict[str, tuple[int, int]] = (2, 2)
     fp32_dest_acc_en: bool = True
 
 
@@ -123,7 +123,11 @@ AGMM_PINS: dict[tuple[int, int], dict[AgmmMode, dict[tuple[int, int], AgmmLayerP
     BLACKHOLE_COMPUTE_GRID: {
         AgmmMode.ACCURATE: {
             (5376, 5376): AgmmLayerPin({"short": (4, 6, 16), "long": (4, 6, 16)}, transpose_core_grid=False),
-            (5376, 7168): AgmmLayerPin({"short": (6, 3, 16), "long": (4, 3, 16)}, transpose_core_grid=False),
+            (5376, 7168): AgmmLayerPin(
+                {"short": (3, 7, 14), "long": (4, 3, 16)},
+                transpose_core_grid=False,
+                subblock={"short": (3, 1), "long": (2, 2)},
+            ),
             (7168, 1344): AgmmLayerPin({"short": (6, 8, 6), "long": (6, 8, 6)}, transpose_core_grid=True),
         },
     },
@@ -162,7 +166,7 @@ class AgmmPin(NamedTuple):
 
 def _pin_override(k: int, n: int, pin: AgmmLayerPin) -> AgmmLayerPin:
     """For sweeping: `MINIMAX_H3_AGMM_PIN_<K>_<N>="M,K,N"` replaces the layer's blocking at every length class and
-    keeps its subblock and Dst accumulation; `"M,K,N,subblock_h,subblock_w"` also sets the subblock, with fp32 dest
+    keeps its subblock (2x2 if it has one per class) and Dst accumulation; `"M,K,N,subblock_h,subblock_w"` also sets the subblock, with fp32 dest
     accumulation off above 4 tiles."""
     name = f"MINIMAX_H3_AGMM_PIN_{k}_{n}"
     value = os.environ.get(name)
@@ -173,7 +177,8 @@ def _pin_override(k: int, n: int, pin: AgmmLayerPin) -> AgmmLayerPin:
         raise ValueError(f"{name}={value!r}: expected M,K,N or M,K,N,subblock_h,subblock_w")
     blockings = {cls.name: fields[:3] for cls in LENGTH_CLASSES}
     if len(fields) == 3:
-        return pin._replace(blockings=blockings)
+        subblock = (2, 2) if isinstance(pin.subblock, dict) else pin.subblock
+        return pin._replace(blockings=blockings, subblock=subblock)
     subblock_h, subblock_w = fields[3:]
     return pin._replace(
         blockings=blockings, subblock=(subblock_h, subblock_w), fp32_dest_acc_en=subblock_h * subblock_w <= 4
@@ -221,11 +226,14 @@ def agmm_pins(
     in0_axis = grid.x if layer.transpose_core_grid else grid.y
     workers = math.ceil(in0_axis / num_links)
     compute_kernel_config = _with_fp32_dest_acc(compute_kernel_config, layer.fp32_dest_acc_en)
-    subblock_h, subblock_w = layer.subblock
-    pins: dict[tuple[int, int, int], AgmmPin] = {}
-    for blocking in layer.blockings.values():
-        if blocking not in pins:
+    pins: dict[tuple, AgmmPin] = {}
+    keys: dict[str, tuple] = {}
+    for name, blocking in layer.blockings.items():
+        subblock = layer.subblock[name] if isinstance(layer.subblock, dict) else layer.subblock
+        key = keys[name] = (blocking, subblock)
+        if key not in pins:
             m_block, k_block, n_block = blocking
+            subblock_h, subblock_w = subblock
             if m_block % subblock_h or n_block % subblock_w:
                 raise ValueError(
                     f"AGMM blocking {blocking} of (K, N)={(k, n)} does not tile by {subblock_h}x{subblock_w}"
@@ -238,8 +246,8 @@ def agmm_pins(
                 subblock_w=subblock_w,
                 compute_with_storage_grid_size=grid,
             )
-            pins[blocking] = AgmmPin(config, workers, layer.transpose_core_grid, compute_kernel_config)
-    return {name: pins[blocking] for name, blocking in layer.blockings.items()}
+            pins[key] = AgmmPin(config, workers, layer.transpose_core_grid, compute_kernel_config)
+    return {name: pins[key] for name, key in keys.items()}
 
 
 def agmm_kwargs(
