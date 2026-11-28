@@ -618,7 +618,7 @@ reserved size rather than dynamic allocation.
 
 - **Model keys** — same short kebab-case + `aliases` convention as `model_targets.yaml`.
 - **SKU keys** — canonical names (`wh_n150`, `wh_llmbox_perf`, `bh_p150`, …); legacy labels like `T3K` / `P150x4` / `wh_llmbox` / `bh_galaxy` resolve via `normalize_sku` in [`model_targets.py`](./demos/utils/model_targets.py).
-- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./tt_transformers/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set (root [`conftest.py`](../conftest.py) applies the override on `mesh_device`).
+- **`tt_transformers`** — `get_supported_trace_region_size` in [`demo/trace_region_config.py`](./ttt_compat/demo/trace_region_config.py) loads from the YAML automatically when `HF_MODEL` is set (root [`conftest.py`](../conftest.py) applies the override on `mesh_device`).
 - **Other demos** — call `resolve_trace_region_size(model_name, get_current_device_sku_name())` from [`demos/utils/trace_region_sizes.py`](./demos/utils/trace_region_sizes.py).
 
 #### Galaxy and other bypass demos
@@ -678,7 +678,7 @@ code — always go through the resolver or `build_trace_device_params`.
 
 #### CI coverage test
 
-[`models/tt_transformers/tests/test_trace_region_sizes.py`](./tt_transformers/tests/test_trace_region_sizes.py)
+[`models/ttt_compat/tests/test_trace_region_sizes.py`](./ttt_compat/tests/test_trace_region_sizes.py)
 checks that every tiered CI job that sets `HF_MODEL` (including per-SKU
 `hf_model` placeholders in device-perf entries) resolves to a valid size —
 either an explicit YAML entry or the dynamic-allocation fallback (`0`). Run

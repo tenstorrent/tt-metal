@@ -16,7 +16,7 @@ without the native factory was actually run** (2026-08-20). Not yet implemented.
 >
 - Substrate facts + measured baseline: [`QUASAR_NATIVE_RESEARCH.md`](QUASAR_NATIVE_RESEARCH.md)
 - Review findings this revision is derived from, with all evidence:
-  [`.link_to_claude/plans/quasar-native-binary-ng-review-findings.md`](.link_to_claude/plans/quasar-native-binary-ng-review-findings.md)
+  `.link_to_claude/plans/quasar-native-binary-ng-review-findings.md` (not in the repository)
 
 Several v1 decisions were revised and six of its factual claims were measured false; the findings doc
 carries the evidence. Read it before questioning a decision here.
