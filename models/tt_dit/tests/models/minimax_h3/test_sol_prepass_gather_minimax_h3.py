@@ -14,6 +14,8 @@ import ttnn
 
 from ....models.transformers.minimax_h3 import sol_prepass
 from ....models.transformers.minimax_h3.sol_prepass import SolPrepass
+from ....parallel import manager
+from ....parallel.manager import CCLManager
 
 
 def _prepass(monkeypatch):
@@ -21,7 +23,6 @@ def _prepass(monkeypatch):
     gathers, freed = [], []
     fake_ttnn = SimpleNamespace(
         bfloat16=ttnn.bfloat16,
-        create_global_semaphore=lambda *a: object(),
         deallocate=freed.append,
         experimental=SimpleNamespace(all_gather_async=lambda t, **kw: gathers.append(kw) or ("gathered", t)),
     )
@@ -33,6 +34,7 @@ def _prepass(monkeypatch):
         num_links=1,
         topology=None,
         get_barrier_semaphore=lambda axis: handed_out.append(axis) or barriers[len(handed_out) % 2],
+        get_sol_gather_semaphores=lambda: [object(), object()],
     )
     prepass = SolPrepass(mesh_device=None, ccl_manager=ccl, sp_axis=1, tau=1.0)
     prepass._state = {"scale": 0.5}
@@ -71,3 +73,30 @@ def test_pooled_off_gathers_k_for_the_routing_only(monkeypatch):
     assert prepass.forward(x, x, x, scale=0.5, pooled=False) == {"block_mask": ("mask", k)}
     assert len(gathers) == 3 and gathers[2]["barrier_semaphore"] is not None
     assert freed == [k]
+
+
+def test_every_prepass_gathers_on_the_managers_one_semaphore_pool(monkeypatch):
+    """A worker keeps a pre-pass per layer and per padded length, and a global semaphore holds L1 for good: with
+    four of its own per pre-pass, the 4th length of one process ran into the circular buffers of cached programs.
+    They all draw on one pool of the CCL manager: two sets, K and V of a call on different ones."""
+    made, gathers = [], []
+    monkeypatch.setattr(manager.ttnn, "create_global_semaphore", lambda *a: made.append(object()) or made[-1])
+    monkeypatch.setattr(
+        sol_prepass.ttnn.experimental,
+        "all_gather_async",
+        lambda t, **kw: gathers.append(kw["multi_device_global_semaphore"]),
+    )
+    ccl = SimpleNamespace(
+        mesh_device=None, ccl_cores=None, num_links=1, topology=None, get_barrier_semaphore=lambda axis: object()
+    )
+    ccl._sol_gather_semaphores, ccl._sol_gather_idx = None, 0
+    ccl.get_sol_gather_semaphores = lambda: CCLManager.get_sol_gather_semaphores(ccl)
+
+    for _ in range(3):  # three pre-passes, as for three layers or lengths
+        prepass = SolPrepass(mesh_device=None, ccl_manager=ccl, sp_axis=1, tau=1.0)
+        prepass._gather(object(), barrier=True)
+        prepass._gather(object(), barrier=False)
+
+    assert len(made) == 4
+    k, v = gathers[:2]
+    assert gathers == [k, v] * 3 and not set(k) & set(v)

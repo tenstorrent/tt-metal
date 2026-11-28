@@ -398,11 +398,6 @@ class SolPrepass(Module):
         # calls, skipping the route program; the pool program and the two gathers still run every call because the
         # ring op's correction term needs the current block means. 1 (default) = route every call.
         self.mask_reuse = int(mask_reuse)
-        # The two pooled gathers run on their own global semaphores (two sets, alternated per gather) instead of the
-        # CCL manager's all-gather ping-pong pool, which the ring attention op's fused K/V gather shares and whose
-        # reader zeroes its semaphore at exit (ring_attention_all_gather_reader.cpp).
-        self._ag_sems: list | None = None
-        self._ag_idx = 0
         self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the built route program
         self._held_mask: ttnn.Tensor | None = None  # the last routed mask, while mask_reuse > 1
         self._reuse_left = 0  # calls the held route may still serve
@@ -690,17 +685,11 @@ class SolPrepass(Module):
         gather at 5 s): a chip finishes the K gather only once every chip has started it.
         """
         ccl = self.ccl_manager
-        if self._ag_sems is None:
-            self._ag_sems = [
-                [ttnn.create_global_semaphore(self.mesh_device, ccl.ccl_cores, 0) for _ in range(2)] for _ in range(2)
-            ]
-        sems = self._ag_sems[self._ag_idx]
-        self._ag_idx ^= 1
         return ttnn.experimental.all_gather_async(
             t,
             persistent_output_buffer=None,
             dim=2,
-            multi_device_global_semaphore=sems,
+            multi_device_global_semaphore=ccl.get_sol_gather_semaphores(),
             num_links=ccl.num_links,
             topology=ccl.topology,
             cluster_axis=self.sp_axis,

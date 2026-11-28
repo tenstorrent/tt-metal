@@ -157,6 +157,9 @@ class CCLManager:
         self.np_fused_ping_pong_semaphores = None
         self.barrier_fused_semaphores = None
         self.np_region_progress_semaphores = None
+        # The Sol attention pre-pass's gather semaphores, also on first use. See get_sol_gather_semaphores.
+        self._sol_gather_semaphores = None
+        self._sol_gather_idx = 0
 
     def get_dim(self, dim, shape):
         if dim < 0:
@@ -692,6 +695,24 @@ class CCLManager:
         n_sems = 1
         self.sr_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.sr_ping_pong_semaphores[mesh_axis][cur_idx]
+
+    def get_sol_gather_semaphores(self):
+        """Get the semaphores for one pooled gather of the Sol attention pre-pass (two sets, handed out in turn).
+
+        They are not the all-gather ping-pong pool: the ring attention op's fused K/V gather shares that one and its
+        reader zeroes its semaphore at exit (ring_attention_all_gather_reader.cpp). One pool serves every pre-pass:
+        there is a pre-pass per layer and per padded length, and when each kept four semaphores of its own, a
+        worker's 4th length pushed the L1 they hold into the circular buffers of cached programs. Two sets are
+        enough: a pre-pass call gathers K, then V, and a chip finishes a gather only once every chip has started
+        it, so a set is idle on every chip when its turn comes again.
+        """
+        if self._sol_gather_semaphores is None:
+            self._sol_gather_semaphores = [
+                [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)] for _ in range(2)
+            ]
+        sems = self._sol_gather_semaphores[self._sol_gather_idx]
+        self._sol_gather_idx ^= 1
+        return sems
 
     def get_np_region_progress_semaphores(self, mesh_axis):
         """Get the 4*num_links per-(region,link) progress sems (static, single bank), indexed [region*num_links + link]."""
