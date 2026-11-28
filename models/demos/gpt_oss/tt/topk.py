@@ -18,6 +18,7 @@ from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 
 from .fused_decode.config import DECODE_ROUTER_FAST_TOPK, ROUTER_DECODE_WEIGHT_DTYPE
 from .fused_decode.stream import NBIAS, as_stream_tensor, linear_stream_rows, stream_linear_layout
+from .stream_prefill_linear import StreamPrefillLinear, StreamSpec, unpack_stream_weight
 from .weight_source import dense_rounded_tag
 
 
@@ -72,14 +73,24 @@ class TopKRouter:
             state_dict["weight_decode"].transpose(0, 1) if state_dict and "weight_decode" in state_dict else None
         )
         torch_bias = state_dict["bias"].unsqueeze(0) if state_dict else None
-        self.weight = ttnn.as_tensor(
-            torch_weight,
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Batch-1 fused model: the decode weight_stream (+ its bias tiles) is the only router
+        # weight; prefill multiplies by it directly (StreamPrefillLinear, stream_prefill_linear.py; HiFi4: the bf8
+        # weights times the activation's bf16 values exactly, one output column so the cost is small).
+        self._prefill_op = None
+        if indexed_decode:
+            self._prefill_op = StreamPrefillLinear(
+                mesh_device, self.hidden_dim, self.num_experts, math_fidelity="HiFi4"
+            )
+        self.weight = None
+        if self._prefill_op is None:
+            self.weight = ttnn.as_tensor(
+                torch_weight,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                cache_file_name=get_cache_file_name(tensor_cache_path, f"weight{dense_rounded_tag()}"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         self.bias = ttnn.as_tensor(
             torch_bias,
             device=mesh_device,
@@ -145,6 +156,13 @@ class TopKRouter:
             get_cache_file_name(tensor_cache_path, f"weight_stream_e{self.num_experts}_b{banks}_nb{NBIAS}{tag}"),
         )
 
+    def _stream_weight_host(self):
+        """Batch-1 fused model: the [hidden, experts] router weight held by the decode weight_stream (its bf8 values),
+        on host (device 0's copy; the stream is replicated)."""
+        spec = StreamSpec(self.hidden_dim, self.num_experts, self.weight_stream.device().dram_grid_size().x)
+        layout = ttnn.to_torch(ttnn.get_device_tensors(self.weight_stream)[0]).float()
+        return unpack_stream_weight(layout.reshape(spec.rows, -1), spec)
+
     def _init_fused_op(self, device, B):
         """Lazily initialize fused op tensors (bias broadcast + output pre-alloc)."""
         mesh_mapper = ttnn.ReplicateTensorToMesh(device) if isinstance(device, ttnn.MeshDevice) else None
@@ -183,19 +201,17 @@ class TopKRouter:
         out = copy.copy(self)
         for name in ("weight", "bias"):
             t = getattr(self, name)
-            host = ttnn.to_torch(ttnn.get_device_tensors(t)[0])
+            if t is None:  # batch-1 fused model: the stream's weight values (out keeps a stored weight of its own)
+                host, device = self._stream_weight_host(), self.bias.device()
+                kw = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                host, device = ttnn.to_torch(ttnn.get_device_tensors(t)[0]), t.device()
+                kw = dict(dtype=t.dtype, layout=t.layout, memory_config=t.memory_config())
             host = host.reshape(-1, host.shape[-1])[:, perm]
             setattr(
                 out,
                 name,
-                ttnn.from_torch(
-                    host.contiguous(),
-                    device=t.device(),
-                    dtype=t.dtype,
-                    layout=t.layout,
-                    memory_config=t.memory_config(),
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(t.device()),
-                ),
+                ttnn.from_torch(host.contiguous(), device=device, mesh_mapper=ttnn.ReplicateTensorToMesh(device), **kw),
             )
         return out
 
@@ -263,6 +279,16 @@ class TopKRouter:
         # since shape[0] after reshape returns the tile-padded dimension
         # (e.g. 8 tokens padded to 32 in TILE_LAYOUT).
         actual_tokens = hidden_states.volume() // self.hidden_dim
+        if self.weight is None:
+            # Batch-1 fused model: the logits straight from the decode weight_stream (+ its bias tiles). Every row is
+            # summed alike whatever the row count, so a batched prefill's rows equal each user's batch-1 router.
+            logits = self._prefill_op(hidden_states, self.weight_stream, ttnn.bfloat16)
+            router_logits = ttnn.reshape(logits, (actual_tokens, self.num_experts))
+            expert_indices, expert_weights = topk_router(
+                router_logits, self.top_k, use_throughput_experts, self.softmax_compute_config
+            )
+            ttnn.deallocate(router_logits)
+            return expert_indices, expert_weights
         if batch_size > 1 and actual_tokens // batch_size <= 128:
             # Batched prefill of short users: each user's rows must equal its batch-1 router (<= 128 tokens: a linear
             # with an L1 output, which ttnn runs as MatmulMultiCoreProgramConfig: every output tile sums all K tiles

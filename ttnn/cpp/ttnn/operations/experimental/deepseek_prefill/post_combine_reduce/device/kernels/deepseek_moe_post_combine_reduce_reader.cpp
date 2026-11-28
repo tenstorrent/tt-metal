@@ -23,7 +23,8 @@ constexpr uint32_t experts_per_batch = get_compile_time_arg_val(3);
 constexpr auto combine_accessor_args = TensorAccessorArgs<4>();
 // Row-indexed combine: combine_output is a [rows, emb] table and slot j of token t reads row row_index[t, j]; a
 // 32-token chunk of index pages is read at once into cb_row_index. Slots pointing at skip_row are not read: the
-// expert skip drops them, so their c_0 slot only has to hold finite data (zeroed once, then earlier real rows).
+// expert skip drops them, so their c_0 slot only has to hold finite data (all of c_0 is zeroed once, then holds
+// earlier real rows).
 constexpr uint32_t ri_off = combine_accessor_args.next_compile_time_args_offset();
 constexpr bool row_indexed = get_compile_time_arg_val(ri_off) != 0;
 constexpr uint32_t skip_row = get_compile_time_arg_val(ri_off + 1);
@@ -32,8 +33,6 @@ constexpr uint32_t row_index_aligned_page_size = get_compile_time_arg_val(ri_off
 constexpr uint32_t table_rows = get_compile_time_arg_val(ri_off + 3);
 constexpr auto row_index_accessor_args = TensorAccessorArgs<ri_off + 4>();
 constexpr uint32_t cb_row_index_id = tt::CBIndex::c_5;
-// The zero-once above covers a single c_0 slot, so the factory does not batch row-indexed reads.
-static_assert(!row_indexed || experts_per_batch == 1);
 
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 
@@ -54,9 +53,10 @@ void kernel_main() {
     if constexpr (row_indexed) {
         CircularBuffer cb_row_index(cb_row_index_id);
         row_index_l1 = cb_row_index.get_write_ptr();
-        // c_0 is a single slot: zero it once so a skipped slot never hands compute uninitialized bytes.
-        cb_combine_input.reserve_back(emb_dim_cb_tiles);
-        noc.async_write_zeros(cb_combine_input, emb_dim_cb_tiles * cb_combine_input.get_tile_size());
+        // Zero all of c_0 once (every slot of the ring) so a skipped slot never hands compute uninitialized bytes.
+        constexpr uint32_t c0_pages = (experts_per_batch == 1 ? 1 : 2 * experts_per_batch) * emb_dim_cb_tiles;
+        cb_combine_input.reserve_back(c0_pages);
+        noc.async_write_zeros(cb_combine_input, c0_pages * cb_combine_input.get_tile_size());
         noc.write_zeros_l1_barrier();
     }
 

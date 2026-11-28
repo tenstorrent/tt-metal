@@ -24,7 +24,13 @@ def _args(monkeypatch, cache_path):
     monkeypatch.delenv("GPT_OSS_FORCE_MODEL_LOAD", raising=False)
     for name in ModelArgs.DENSE_SETTING_VARS:  # the GPTQ dense weights are a marker setting: none here
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("GPT_OSS_DECODE_SPLIT_ROUND_DIR", raising=False)  # checkpoint dense MoE weights
     return args
+
+
+def _dense_moe_entry():
+    """The dense MoE entry a build writes in the marker (ModelArgs._dense_moe_decode_version)."""
+    return ModelArgs._dense_moe_decode_version(ModelArgs.__new__(ModelArgs))
 
 
 def _marker(cache_path, dense_moe):
@@ -35,7 +41,7 @@ def _marker(cache_path, dense_moe):
                 "model_name": "gpt-oss-20b",
                 "n_layers": N_LAYERS,
                 "fused_decode_weights": False,
-                "dense_moe_decode_weights": ModelArgs.DENSE_MOE_DECODE_WEIGHTS_VERSION if dense_moe else False,
+                "dense_moe_decode_weights": _dense_moe_entry() if dense_moe else False,
                 "routed_prefill_weights": False,
             }
         )

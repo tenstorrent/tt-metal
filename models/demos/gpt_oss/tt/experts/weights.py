@@ -168,12 +168,20 @@ def load_expert_weights(
 
 @dataclass(frozen=True)
 class DenseDecodeExpertWeights:
-    """Per device, every expert's TP shard side by side (experts/decode.py decode_forward_dense):
-    gate / up: [H, E * I_local] with expert e in columns [e * I_local, (e + 1) * I_local), DRAM width-sharded over the
-    banks; their biases expanded to [32, E * I_local] (one row per token, DRAM interleaved);
-    down: [E * I_local, H] with expert e in rows [e * I_local, (e + 1) * I_local), DRAM width-sharded;
+    """Per device, every expert's TP shard side by side, each padded to intermediate_padded (whole tiles) columns with
+    zero weights and biases (experts/dense_layout.py; experts/decode.py decode_forward_dense):
+    gate / up: [H, E * I_pad] with expert e in columns [e * I_pad, (e + 1) * I_pad), DRAM width-sharded over the
+    banks (dense_layout.dram_shard_tiles columns per bank); their biases expanded to [32, E * I_pad] (one row per
+    token, DRAM interleaved);
+    down: [E * I_pad, H] with expert e in rows [e * I_pad, (e + 1) * I_pad), DRAM width-sharded;
     down_bias: [E, H] (real on the first TP device only: row-parallel), applied as routing_weights @ down_bias;
-    expand: [E, E * I_local] with expand[e, e * I_local + i] = 1 (routing weight of expert e on its columns)."""
+    expand: [E, E * I_pad] with expand[e, e * I_pad + i] = 1 (routing weight of expert e on its columns).
+    intermediate_local: the real columns per expert (I / tp); intermediate_padded: I_pad.
+    tile_transposed: gate / up / down hold the GPTQ experts (dense_gptq_dir) with every tile stored transposed
+    within itself (ttnn.Tile transpose_tile: the tensors' own tile spec, so ttnn.matmul transposes them back), so each
+    bfloat4_b exponent group runs along K and holds those values exactly; the custom kernels reading them
+    (dense_gu_*, the grouped MoE gmoe_*) and the routed prefill (weights_tile) transpose them back too.
+    The routed prefill experts read gate / up / down through a page table (prefill_routed.py, TP mode)."""
 
     gate: ttnn.Tensor
     up: ttnn.Tensor
@@ -183,16 +191,31 @@ class DenseDecodeExpertWeights:
     down_bias: ttnn.Tensor
     expand: ttnn.Tensor
     intermediate_local: int
+    intermediate_padded: int
+    tile_transposed: bool = False
 
 
-def _dram_width_sharded(mesh_device, k, n):
+def dense_gptq_dir(layer, weight_dtype):
+    """The GPTQ expert source as given (GPT_OSS_DECODE_SPLIT_ROUND_DIR: a directory or a pinned hf:// location of
+    layer_<L>.pt) the batched dense decode experts load, or "": a bfloat4_b layer with a known index, when the decode
+    experts read GPTQ (gpt-oss-20b release settings). Batch-32 decode and prefill then hold the same GPTQ values as
+    batch-1 decode and prefill. Resolved (downloaded) only when the weights are loaded."""
+    if weight_dtype != ttnn.bfloat4_b or layer is None:
+        return ""
+    return os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip()
+
+
+def _dram_width_sharded(mesh_device, k, n, shard_tiles=None):
+    """DRAM width-sharded over the banks, shard_tiles tile columns per bank (default: ceil(n / banks) in tiles)."""
     banks = mesh_device.dram_grid_size().x
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
-    shard_n = -(-n // (ttnn.TILE_SIZE * banks)) * ttnn.TILE_SIZE
+    if shard_tiles is None:
+        shard_tiles = -(-n // (ttnn.TILE_SIZE * banks))
+    assert shard_tiles * banks * ttnn.TILE_SIZE >= n, (n, shard_tiles, banks)
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(grid, (k, shard_n), ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(grid, (k, shard_tiles * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
@@ -205,41 +228,51 @@ def load_dense_decode_expert_weights(
     weight_dtype=ttnn.bfloat4_b,
     tensor_cache_path=None,
 ) -> DenseDecodeExpertWeights:
+    from ..fused_decode.config import DENSE_MOE_WORKERS_PER_BANK
+    from . import dense_layout as dl
+
     tp = mesh_config.decode.tp
     E, H, I = config.num_experts, config.hidden_size, config.intermediate_size
     il = I // tp
+    il_pad = dl.padded_expert_width(il)
+    banks = mesh_device.dram_grid_size().x
     columns = mesh_config.column_parallel(mesh_device)
     rows = mesh_config.row_parallel(mesh_device)
+    # the layer index, as the fused decode streams take it (load_decode_expert_weights): from the cache path
+    import re
+
+    layer_match = re.search(r"layers\.(\d+)", str(tensor_cache_path))
+    layer = layer_match.group(1) if layer_match else None
+    gptq_dir = dense_gptq_dir(layer, weight_dtype)
     gate = up = down = gate_bias = up_bias = down_bias = None
     if state_dict:
         gate_up = state_dict["gate_up_proj"]  # [E, H, 2 * I], gate / up interleaved
-        gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
-
-        def side_by_side(w):
-            """[E, H, I] -> [1, 1, H, tp * E * il]: TP shard d of every expert, experts side by side, shards in order."""
-            return torch.cat(
-                [w[:, :, d * il : (d + 1) * il].permute(1, 0, 2).reshape(H, E * il) for d in range(tp)], dim=-1
-            ).reshape(1, 1, H, tp * E * il)
-
-        def bias_rows(b):
-            """[E, I] -> [1, 1, tokens, tp * E * il], one identical row per token."""
-            flat = torch.cat([b[:, d * il : (d + 1) * il].reshape(E * il) for d in range(tp)])
-            return flat.reshape(1, 1, 1, -1).expand(1, 1, tokens, tp * E * il).contiguous()
-
-        gate = side_by_side(gate_up[..., ::2])
-        up = side_by_side(gate_up[..., 1::2])
-        gate_bias = bias_rows(gate_up_bias[..., ::2])
-        up_bias = bias_rows(gate_up_bias[..., 1::2])
         down_w = state_dict["down_proj"]  # [E, I, H]
-        down = torch.cat([down_w[:, d * il : (d + 1) * il, :].reshape(E * il, H) for d in range(tp)], dim=0)
-        down = down.reshape(1, 1, tp * E * il, H)
-        db = state_dict["down_proj_bias"].reshape(1, 1, E, H)
-        down_bias = torch.cat([db] + [torch.zeros_like(db)] * (tp - 1), dim=-1)
-    expand = torch.zeros(1, 1, E, E * il)
-    for e in range(E):
-        expand[0, 0, e, e * il : (e + 1) * il] = 1
+        if gptq_dir:
+            # the GPTQ experts (checkpoint channel order, the biases are the checkpoint's)
+            rw = torch.load(f"{resolve(gptq_dir)}/layer_{int(layer)}.pt")
+            gate_up, down_w = rw["gate_up_proj"], rw["down_proj"]
+        gate_up_bias = state_dict["gate_up_proj_bias"]  # [E, 2 * I]
+        gate = dl.gate_up_columns(gate_up[..., ::2], tp, il_pad)
+        up = dl.gate_up_columns(gate_up[..., 1::2], tp, il_pad)
+        gate_bias = dl.bias_rows(gate_up_bias[..., ::2], tp, il_pad, tokens)
+        up_bias = dl.bias_rows(gate_up_bias[..., 1::2], tp, il_pad, tokens)
+        down = dl.down_rows(down_w, tp, il_pad)
+        down_bias = dl.down_bias_rows(state_dict["down_proj_bias"].reshape(E, H), tp)
+    # Cache names carry the padded width (the unpadded 720-column layout had the same names without it). The GPTQ
+    # weights (transposed tiles) are named per source: a hash of the source as given, which names the pinned Hub
+    # revision (as the routed prefill's GPTQ caches, prefill_routed.py).
+    # "_i": the experts' tiles interleaved (dense_layout.py expert_tile); the expert-contiguous layout was "_p".
+    tag = f"dense_decode_i{il_pad}"
+    wtag = tag
+    if gptq_dir:
+        import hashlib
+
+        wtag += "_gptq_tt_" + hashlib.sha1(gptq_dir.rstrip("/").encode()).hexdigest()[:10]
+    tile = ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if gptq_dir else None
 
     def weight(t, name, mapper, k, n):
+        shard = dl.dram_shard_tiles(n // ttnn.TILE_SIZE, banks, DENSE_MOE_WORKERS_PER_BANK)
         return ttnn.as_tensor(
             t,
             device=mesh_device,
@@ -247,7 +280,8 @@ def load_dense_decode_expert_weights(
             dtype=weight_dtype,
             mesh_mapper=mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, name),
-            memory_config=_dram_width_sharded(mesh_device, k, n),
+            memory_config=_dram_width_sharded(mesh_device, k, n, shard),
+            tile=tile,
         )
 
     def bias(t, name, mapper):
@@ -262,14 +296,14 @@ def load_dense_decode_expert_weights(
         )
 
     return DenseDecodeExpertWeights(
-        gate=weight(gate, "dense_decode_gate", columns, H, E * il),
-        up=weight(up, "dense_decode_up", columns, H, E * il),
-        down=weight(down, "dense_decode_down", rows, E * il, H),
-        gate_bias=bias(gate_bias, f"dense_decode_gate_bias_t{tokens}", columns),
-        up_bias=bias(up_bias, f"dense_decode_up_bias_t{tokens}", columns),
-        down_bias=bias(down_bias, "dense_decode_down_bias", columns),
+        gate=weight(gate, f"{wtag}_gate", columns, H, E * il_pad),
+        up=weight(up, f"{wtag}_up", columns, H, E * il_pad),
+        down=weight(down, f"{wtag}_down", rows, E * il_pad, H),
+        gate_bias=bias(gate_bias, f"{tag}_gate_bias_t{tokens}", columns),
+        up_bias=bias(up_bias, f"{tag}_up_bias_t{tokens}", columns),
+        down_bias=bias(down_bias, f"{tag}_down_bias", columns),
         expand=ttnn.from_torch(
-            expand,
+            dl.expand_matrix(E, il_pad),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -277,6 +311,8 @@ def load_dense_decode_expert_weights(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         ),
         intermediate_local=il,
+        intermediate_padded=il_pad,
+        tile_transposed=bool(gptq_dir),
     )
 
 

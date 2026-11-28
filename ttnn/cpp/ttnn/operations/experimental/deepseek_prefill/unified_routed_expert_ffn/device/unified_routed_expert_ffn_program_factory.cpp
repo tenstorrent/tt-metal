@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
 #include <initializer_list>
 #include <limits>
 #include <tuple>
@@ -79,6 +80,10 @@ constexpr uint32_t CB_X_TILIZED = tt::CBIndex::c_20;
 constexpr uint32_t CB_X_ROW_IDX = tt::CBIndex::c_21;
 // output_row_major with zero_output_row: one output row of zeros (writer-only), the source of the zero-row write.
 constexpr uint32_t CB_ZERO_ROW = tt::CBIndex::c_22;
+// weights_from_pages: the current expert's weight_pages row, one copy per RISC (reader / writer) so neither waits on
+// the other. Only the weight sender cores fill them.
+constexpr uint32_t CB_PAGES_READER = tt::CBIndex::c_23;
+constexpr uint32_t CB_PAGES_WRITER = tt::CBIndex::c_24;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -109,9 +114,25 @@ void visit_weight_buffers(const std::vector<ttnn::Tensor>& tensors, const Fn& fn
     }
 }
 
-// Reader common args: x, counts, index table, region offsets, gate/up/down weights, optional biases.
+// Table-addressed weights: gate/up source, down source, then the page table (3 slots instead of the 3 per-expert
+// weight blocks).
 template <typename Fn>
-void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, const Fn& fn) {
+void visit_weight_page_buffers(const UnifiedRoutedExpertFfnInputs& t, const Fn& fn) {
+    TT_FATAL(
+        t.gate_up_weight_source.has_value() && t.down_weight_source.has_value() && t.weight_pages.has_value(),
+        "weights_from_pages needs weight_pages and both weight sources");
+    for (const auto* tensor : {&*t.gate_up_weight_source, &*t.down_weight_source, &*t.weight_pages}) {
+        auto* buffer = tensor->buffer();
+        TT_FATAL(buffer != nullptr, "weight_pages / weight source buffer must be allocated on device");
+        fn(buffer);
+    }
+}
+
+// Reader common args: x, counts, index table, region offsets, gate/up/down weights (or the table-mode triple),
+// optional biases.
+template <typename Fn>
+void visit_reader_common_buffers(
+    const UnifiedRoutedExpertFfnInputs& t, bool fuse_bias, bool weights_from_pages, const Fn& fn) {
     auto* x_buffer = t.x.buffer();
     auto* counts_buffer = t.counts.buffer();
     auto* idx_buffer = t.global_expert_idx_table.buffer();
@@ -125,9 +146,13 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
     fn(counts_buffer);
     fn(idx_buffer);
     fn(start_buffer);
-    visit_weight_buffers(t.gate_projs, fn);
-    visit_weight_buffers(t.up_projs, fn);
-    visit_weight_buffers(t.down_projs, fn);
+    if (weights_from_pages) {
+        visit_weight_page_buffers(t, fn);
+    } else {
+        visit_weight_buffers(t.gate_projs, fn);
+        visit_weight_buffers(t.up_projs, fn);
+        visit_weight_buffers(t.down_projs, fn);
+    }
     if (fuse_bias) {
         visit_weight_buffers(t.gate_biases, fn);
         visit_weight_buffers(t.up_biases, fn);
@@ -140,18 +165,22 @@ void visit_reader_common_buffers(const UnifiedRoutedExpertFfnInputs& t, bool fus
     }
 }
 
-// Writer common args: output, region offsets, up/down weights.
+// Writer common args: output, region offsets, up/down weights (or the table-mode triple).
 template <typename Fn>
 void visit_writer_common_buffers(
-    const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, const Fn& fn) {
+    const UnifiedRoutedExpertFfnInputs& t, tt::tt_metal::Buffer* out_buffer, bool weights_from_pages, const Fn& fn) {
     TT_FATAL(out_buffer != nullptr, "output buffer must be allocated on device");
     TT_FATAL(t.expert_region_offsets.has_value(), "expert_region_offsets is required");
     auto* start_buffer = t.expert_region_offsets->buffer();
     TT_FATAL(start_buffer != nullptr, "expert_region_offsets buffer must be allocated on device");
     fn(out_buffer);
     fn(start_buffer);
-    visit_weight_buffers(t.up_projs, fn);
-    visit_weight_buffers(t.down_projs, fn);
+    if (weights_from_pages) {
+        visit_weight_page_buffers(t, fn);
+    } else {
+        visit_weight_buffers(t.up_projs, fn);
+        visit_weight_buffers(t.down_projs, fn);
+    }
 }
 
 template <typename Visit>
@@ -172,19 +201,26 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     // All local experts share one shape/dtype (validated), so the program is
     // built once against expert 0's weights; the kernels loop over experts and
-    // vary only the per-expert base address.
+    // vary only the per-expert base address. Table-addressed weights
+    // (weights_from_pages) have no weight tensors: the shapes and the tile
+    // format come from the op attributes.
     const uint32_t experts_per_chip = op.experts_per_chip;
+    const bool from_pages = op.weights_from_pages;
     const auto& x_shape = t.x.padded_shape();
-    const auto& gate_shape = t.gate_projs[0].padded_shape();
-    const auto& down_shape = t.down_projs[0].padded_shape();
 
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;  // = N_gate K = emb / TILE
+    // = hidden / TILE
+    const uint32_t N_gate_tiles_full =
+        from_pages ? op.weights_n_gate_up : static_cast<uint32_t>(t.gate_projs[0].padded_shape()[-1]) / TILE;
+    // = hidden / TILE
+    const uint32_t K_down_tiles =
+        from_pages ? op.weights_k_down : static_cast<uint32_t>(t.down_projs[0].padded_shape()[-2]) / TILE;
+    // = emb / TILE
+    const uint32_t N_down_tiles_full =
+        from_pages ? op.weights_n_down : static_cast<uint32_t>(t.down_projs[0].padded_shape()[-1]) / TILE;
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -232,17 +268,63 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     //
     // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
     // chunks to divisors of per_core_M_max.
-    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
+    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
+    // Expert groups (weights_from_pages: gpt-oss's 32 narrow tensor-parallel experts per chip): the grid is NG
+    // stacked groups of GRID_X x GRID_Y cores, group g running experts g, g + NG, ... at the same time. One such
+    // expert takes ~45 us on any grid from 12x2 to 12x8 at light loads (its K-block handshake rounds, not its cores,
+    // bound it), so 12x8 ran the 32 experts one after another. Light loads take more, shorter groups; heavy loads
+    // fewer, taller ones (gpt-oss-20b traced TTFT, 1K: 12x8 78.2 ms, 2 x 12x4 67.4, 5 x 12x2 62.8; untraced 8K:
+    // 207.4 / 201.0 / 208.8 ms). m_tiles is the call's tokens / 32; a chip's 32 experts then average
+    // tokens * 4 / 32 of them (top-4), so m_tiles >= 128 (4K tokens) is >= 512 per expert.
+    uint32_t NG = 1;
+    uint32_t NGX = 1, NGY = 1;  // groups across x and y (NG = NGX * NGY)
+    if (from_pages) {
+        // Two groups side by side on a grid at least 12 wide: 4 hidden tiles per core instead of 2. The width sets the
+        // down matmul's K blocks and so the rounding: an expert width that splits evenly over the 12-wide grid (the
+        // 24-tile stream experts) takes it for heavy loads only (untraced 8K TTFT 183.5 -> 175.1 ms, v4 8K window KL
+        // unchanged; light loads lost: traced 1K 44.9 -> 47.4 ms, short-prompt KL 0.0727 -> 0.0754); any other width
+        // (the batch-32 dense experts' 23 tiles) at every load, so a user's prefill rounds the same alone or in a batch
+        // (batch-32 gate bit-exact; batch-32 TTFT 1K 674 -> 650 ms, 8K 5472 -> 5276).
+        const bool tall = M_tiles_full >= kGroupTallFromMTiles;
+        const bool splits_evenly = N_gate_tiles_full % grid_size.x == 0;
+        NGX = grid_size.x >= 12 && (tall || !splits_evenly) ? 2 : 1;
+        // Heavy loads: two groups over every grid row (12x5 each on the 10-row Blackhole grid; 12x4 left two rows
+        // idle). Untraced TTFT, 12x4 -> 12x5: 4K 114.3 -> 111.4 ms, 8K 200.1 -> 192.2, 16K 391.0 -> 374.4; 2K (light
+        // load, 5 x 12x2) 68.5 vs 70.7 with 12x5.
+        GRID_Y = tall ? std::max<uint32_t>(2, grid_size.y / 2) : 2;
+        NGY = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
+        NG = NGX * NGY;
+    }
+    const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
-    const auto grid_size = t.x.device()->compute_with_storage_grid_size();
     TT_FATAL(
-        grid_size.x >= kCoreGridX && grid_size.y >= kCoreGridY,
+        grid_size.x >= kCoreGridX && grid_size.y >= GRID_Y * NGY,
         "unified_routed_expert_ffn: expected at least {}x{} compute grid, got {}x{}",
         kCoreGridX,
         kCoreGridY,
         grid_size.x,
         grid_size.y);
+    // weights_from_pages (gpt-oss: each chip holds a narrow tensor-parallel slice of every expert, 24 hidden
+    // tiles): use the grid width that leaves the fewest phantom hidden columns, up to the device's width. On the
+    // 11-wide default, 24 tiles round up to 3 per core and the last 3 grid columns hold only padding.
+    if (from_pages) {
+        if (NGX > 1) {
+            // Side-by-side groups: each takes its share of the width (24 tiles: 4 per core; dense TP's 23: 4, the
+            // last core one phantom tile).
+            GRID_X = grid_size.x / NGX;
+        } else {
+            uint32_t best_pad = (N_gate_tiles_full + GRID_X - 1) / GRID_X * GRID_X;
+            for (uint32_t x = kCoreGridX + 1; x <= grid_size.x; ++x) {
+                const uint32_t pad = (N_gate_tiles_full + x - 1) / x * x;
+                if (pad < best_pad) {
+                    best_pad = pad;
+                    GRID_X = x;
+                }
+            }
+        }
+    }
+    TT_FATAL(GRID_X <= grid_size.x, "GRID_X ({}) exceeds the compute grid width ({})", GRID_X, grid_size.x);
     // per_core_M upper bound (the CB-sized max). The adaptive L1-budget guard
     // below may shrink per_core_M / in0_block_w_gu (and hence chunk_M_tiles) to
     // fit the device's per-core L1 on large models.
@@ -260,11 +342,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // skips OOB writes for output rows >= M_tiles_full. Avoids the host-side
     // pad/slice round-trip in the composite for non-aligned M.
 
+    // Bias CB depth in experts. weights_from_pages: 2, so the reader loads the next expert's biases while the compute
+    // still holds this expert's (the reader's cross-expert prefetch). Single-buffered, the reader's reserve waited for
+    // the compute to finish the whole expert (down phase included) before it could issue the next expert's bias reads:
+    // 9.6 us per expert on gpt-oss-20b's tensor-parallel experts (32 per chip per layer). Other callers: 1, as before
+    // (the prefetch is off for them, and a second slot would only take L1 from the matmul blocks).
+    const uint32_t bias_slots = from_pages ? 2 : 1;
     // Bias tile size (FUSE_BIAS): all three bias CBs share the gate-bias dtype
     // (enforced in validation). Zero when unused so the L1 footprint estimate
     // (cb_footprint_bytes below) is unchanged on the bias-free path.
     const uint32_t bias_ts =
         op.fuse_bias ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_biases[0].dtype())) : 0;
+    // weights_from_pages: one weight_pages row per RISC (CB_PAGES_READER / CB_PAGES_WRITER), sized to the table's
+    // aligned page. Zero otherwise, so the L1 estimate of the tensor path is unchanged.
+    const uint32_t pages_scratch_bytes =
+        from_pages ? static_cast<uint32_t>(t.weight_pages->buffer()->aligned_page_size()) : 0;
 
     // in0_block_w_gu (the gate/up K-loop block width) must divide K_gate_tiles.
     // The short_seq picker above already restricts itself to divisors, but the
@@ -291,9 +383,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // shard would still read correctly through the run loop but would split or straddle the slice,
     // losing the point, so it fails host-side instead. gate and up are pinned equal: the reader
     // and the writer read them through a single shared compile-time width.
-    const uint32_t gate_shard_w = nd_shard_n_tiles(t.gate_projs[0]);
-    const uint32_t up_shard_w = nd_shard_n_tiles(t.up_projs[0]);
-    const uint32_t d_shard_w = nd_shard_n_tiles(t.down_projs[0]);
+    // Table-addressed weights have no tensor layout to coalesce over (0: one read per tile).
+    const uint32_t gate_shard_w = from_pages ? 0 : nd_shard_n_tiles(t.gate_projs[0]);
+    const uint32_t up_shard_w = from_pages ? 0 : nd_shard_n_tiles(t.up_projs[0]);
+    const uint32_t d_shard_w = from_pages ? 0 : nd_shard_n_tiles(t.down_projs[0]);
     TT_FATAL(
         gate_shard_w == up_shard_w,
         "gate_proj and up_proj must share a weight layout: ND shard widths {} and {} tiles",
@@ -313,7 +406,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     (void)K_down_tiles;  // actual K_down; used by reader for OOB; suppress unused warning here
 
     // down-matmul K-block width (= gate N per-core slice). Independent of the
-    // adaptive levers below.
+    // adaptive levers below. (Grouping several grid columns' slices per K-block cut the handshake rounds at few
+    // tokens per expert, but any token-count-dependent choice changes the down sum's order between a batched
+    // prefill and each user's own one, which must stay bit-identical.)
     const uint32_t in0_block_w_d = per_core_N_gu;
     TT_FATAL(
         K_down_tiles_padded % in0_block_w_d == 0,
@@ -408,9 +503,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     // -------------------------- data formats / tile sizes -----------------
     const tt::DataFormat x_df = tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype());
-    const tt::DataFormat gate_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_projs[0].dtype());
-    const tt::DataFormat up_df = tt::tt_metal::datatype_to_dataformat_converter(t.up_projs[0].dtype());
-    const tt::DataFormat down_df = tt::tt_metal::datatype_to_dataformat_converter(t.down_projs[0].dtype());
+    const tt::DataFormat gate_df =
+        tt::tt_metal::datatype_to_dataformat_converter(from_pages ? op.weights_dtype : t.gate_projs[0].dtype());
+    const tt::DataFormat up_df =
+        tt::tt_metal::datatype_to_dataformat_converter(from_pages ? op.weights_dtype : t.up_projs[0].dtype());
+    const tt::DataFormat down_df =
+        tt::tt_metal::datatype_to_dataformat_converter(from_pages ? op.weights_dtype : t.down_projs[0].dtype());
     const tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(tensor_return_value.dtype());
     // Partials vs intermediates deliberately differ in format; the compute
     // kernel pack-reconfigs between them (partials <-> intermed) explicitly.
@@ -468,9 +566,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         total += static_cast<uint64_t>(M * per_core_N_d) * partials_d_tile_size;            // cb_mm_partials_d
         total += static_cast<uint64_t>(cb_out_tiles) * out_tile_size;                       // cb_out
         total += static_cast<uint64_t>(M * in0_block_w_d * 2) * intermed_tile_size;         // cb_in0_down_full
-        // Bias CBs (FUSE_BIAS): single-buffered, per_core_N_gu (gate/up) + per_core_N_d
-        // (down) tiles. Keep in sync with the CB allocations in the "Bias CBs" section.
-        total += static_cast<uint64_t>(2 * per_core_N_gu + per_core_N_d) * bias_ts;
+        // Bias CBs (FUSE_BIAS): bias_slots x (per_core_N_gu (gate/up) + per_core_N_d (down)) tiles.
+        // Keep in sync with the CB allocations in the "Bias CBs" section.
+        total += static_cast<uint64_t>(bias_slots * (2 * per_core_N_gu + per_core_N_d)) * bias_ts;
+        total += static_cast<uint64_t>(3) * pages_scratch_bytes;  // cb_pages_reader (2 rows) + cb_pages_writer
         if (has_zero_row) {
             total += rm_out_row_bytes;  // cb_zero_row
         }
@@ -563,6 +662,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             fit_w = wide_w;
         }
     }
+    // weights_from_pages (gpt-oss tensor-parallel experts): the narrow N slice leaves L1 for twice the rows at the
+    // SAME K-block width, so the doubling costs no extra K-blocks; it halves the chunk count of the experts that need
+    // more than one chunk (an uneven 8K prefill: some experts take several thousand tokens, and a chunk just past a
+    // boundary paid a whole chunk's fixed cost for a few rows). Measured: skewed loads cost the 24-tile TP slice
+    // 2.74 -> 3.5 ms per layer at 1024 tokens per expert on average, the full-width experts only 2.02 -> 2.35.
+    else if (from_pages && wide_M == per_core_M * 2 && wide_w == fit_w) {
+        fit_M = wide_M;
+    }
 
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;
@@ -605,17 +712,19 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range({0, 0}, {NGX * GRID_X - 1, NGY * GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     // Representative expert-0 buffers: one TensorAccessorArgs layout descriptor
     // per weight role covers every expert (identical shape/layout), and the
     // kernels build a per-expert accessor from that descriptor + the per-expert
     // base address (passed as a runtime-arg).
+    // Table-addressed weights: the role accessors only carry each source's bank base address (BankView), so they
+    // are plain DRAM-interleaved descriptors; the sources' buffers below stand in for the null checks.
     const auto* x_buffer = &t.x.mesh_buffer();
-    const auto* gate_buffer = &t.gate_projs[0].mesh_buffer();
-    const auto* up_buffer = &t.up_projs[0].mesh_buffer();
-    const auto* down_buffer = &t.down_projs[0].mesh_buffer();
+    const auto* gate_buffer = from_pages ? &t.gate_up_weight_source->mesh_buffer() : &t.gate_projs[0].mesh_buffer();
+    const auto* up_buffer = from_pages ? &t.gate_up_weight_source->mesh_buffer() : &t.up_projs[0].mesh_buffer();
+    const auto* down_buffer = from_pages ? &t.down_weight_source->mesh_buffer() : &t.down_projs[0].mesh_buffer();
     const auto* counts_buffer = &t.counts.mesh_buffer();
     const auto* idx_buffer = &t.global_expert_idx_table.mesh_buffer();
     auto* out_buffer = tensor_return_value.buffer();
@@ -902,21 +1011,26 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     make_cb(CB_START_SCRATCH_READER, tt::DataFormat::UInt32, /*tiles=*/1, start_scratch_bytes);
 
-    // Bias CBs (FUSE_BIAS): one full per-core N-column slice each; single-buffered
-    // (read once, reused across all chunks). gate/up: per_core_N_gu tiles; down:
-    // per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
+    // Bias CBs (FUSE_BIAS): one full per-core N-column slice per expert (read once, reused across all its
+    // chunks), bias_slots deep (see its definition).
+    // gate/up: per_core_N_gu tiles; down: per_core_N_d tiles. Bias broadcast across rows in the compute kernel.
     const bool fuse_bias = op.fuse_bias;
     if (fuse_bias) {
         // Validation enforces gate/up/down biases share one dtype, so all three CBs
         // (and the compute kernel's single unpack reconfig for gate/up) use it safely.
         const tt::DataFormat bias_df = tt::tt_metal::datatype_to_dataformat_converter(t.gate_biases[0].dtype());
         const uint32_t bias_tile_size = tt::tile_size(bias_df);
-        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
-        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/per_core_N_gu, bias_tile_size);
-        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/per_core_N_d, bias_tile_size);
+        make_cb(CB_GATE_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_gu, bias_tile_size);
+        make_cb(CB_UP_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_gu, bias_tile_size);
+        make_cb(CB_DOWN_BIAS, bias_df, /*tiles=*/bias_slots * per_core_N_d, bias_tile_size);
     }
     if (has_zero_row) {
         make_cb(CB_ZERO_ROW, tt::DataFormat::Float16_b, /*tiles=*/1, rm_out_row_bytes);
+    }
+    if (from_pages) {
+        // Two rows: the reader loads the next expert's row while this expert's down phase still reads its own.
+        make_cb(CB_PAGES_READER, tt::DataFormat::UInt32, /*tiles=*/2, pages_scratch_bytes);
+        make_cb(CB_PAGES_WRITER, tt::DataFormat::UInt32, /*tiles=*/1, pages_scratch_bytes);
     }
     if (op.x_indexed) {
         make_cb(
@@ -998,10 +1112,16 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x_indexed: entries in x_row_index; the reader clips its index-slice reads to them.
         op.x_indexed ? static_cast<uint32_t>(t.x_row_index->logical_shape()[-1]) : 0,  // 39
     };
+    // Weight role accessors. Table-addressed weights read by (bank, offset) from each source's bank base, which a
+    // DRAM-interleaved descriptor carries as well as the source's own (width-sharded) one.
+    const auto weight_args = [&](const auto* buffer) {
+        return from_pages ? tt::tt_metal::TensorAccessorArgs::create_dram_interleaved()
+                          : tt::tt_metal::TensorAccessorArgs(buffer);
+    };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(reader_ct_args);
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
+    weight_args(gate_buffer).append_to(reader_ct_args);
+    weight_args(up_buffer).append_to(reader_ct_args);
+    weight_args(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
     // `start` (= expert_region_offsets) accessor — appended last, matching the
@@ -1009,11 +1129,21 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // and each expert's rows begin at start[global_id].
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
+    // WEIGHT_PAGES (weights_from_pages): right after the `start` accessor, the gate/up and down k strides, the
+    // reader's table scratch CB, then the weight_pages accessor. The optional blocks below follow it.
+    tt::tt_metal::KernelDescriptor::Defines reader_defines;
+    if (from_pages) {
+        reader_ct_args.push_back(op.gate_up_k_stride);
+        reader_ct_args.push_back(op.down_k_stride);
+        reader_ct_args.push_back(CB_PAGES_READER);
+        tt::tt_metal::TensorAccessorArgs(t.weight_pages->buffer()).append_to(reader_ct_args);
+        reader_defines.emplace_back("WEIGHT_PAGES", "1");
+    }
+
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
     // bias tensor accessors (gate, up, down). The reader reads them at the
     // offset after start_args.next_compile_time_args_offset(). Only present when
     // fuse_bias — a distinct program (FUSE_BIAS define is in the cache key).
-    tt::tt_metal::KernelDescriptor::Defines reader_defines;
     if (fuse_bias) {
         reader_ct_args.push_back(CB_GATE_BIAS);
         reader_ct_args.push_back(CB_UP_BIAS);
@@ -1104,9 +1234,18 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
-    tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    weight_args(up_buffer).append_to(writer_ct_args);
     // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
-    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
+    weight_args(down_buffer).append_to(writer_ct_args);
+    // WEIGHT_PAGES: after the down accessor, the k strides, the writer's table scratch CB and the table accessor.
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
+    if (from_pages) {
+        writer_ct_args.push_back(op.gate_up_k_stride);
+        writer_ct_args.push_back(op.down_k_stride);
+        writer_ct_args.push_back(CB_PAGES_WRITER);
+        tt::tt_metal::TensorAccessorArgs(t.weight_pages->buffer()).append_to(writer_ct_args);
+        writer_defines.emplace_back("WEIGHT_PAGES", "1");
+    }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
@@ -1115,6 +1254,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = core_range_set;
     writer_kernel_desc.compile_time_args = std::move(writer_ct_args);
+    writer_kernel_desc.defines = std::move(writer_defines);
     writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
     // Compute kernel compile-time args: positional + named CB ids.
@@ -1235,6 +1375,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Weight tiles stored transposed within themselves: every matmul transposes in1 as it unpacks it.
         compute_defines.emplace_back("WEIGHTS_TILE_TRANSPOSED", "1");
     }
+    if (from_pages) {
+        // GU_FULL_M: gate / up K-blocks as one matmul over every row when the N slice is narrow (fused_swiglu.cpp).
+        // Page mode only, so the tensor path's compute program is unchanged.
+        compute_defines.emplace_back("GU_FULL_M", "1");
+    }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
@@ -1259,10 +1404,11 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // M-row groups (rotating sender per phase-4 K-block) using
     // act_{ready,valid}_sem. No global cross-grid barrier is needed.
     std::vector<CoreCoord> cores;
-    cores.reserve(GRID_X * GRID_Y);
-    for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
-        for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+    uint32_t reader_group_rt = 0, writer_group_rt = 0;
+    cores.reserve(GRID_X * GRID_Y * NG);
+    for (uint32_t y = 0; y < NGY * GRID_Y; ++y) {
+        for (uint32_t x = 0; x < NGX * GRID_X; ++x) {
+            cores.push_back(CoreCoord{x, y});
         }
     }
 
@@ -1270,8 +1416,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
 
     for (uint32_t idx = 0; idx < cores.size(); ++idx) {
         const auto& core = cores[idx];
-        const uint32_t gy = idx / GRID_X;
-        const uint32_t gx = idx % GRID_X;
+        // Expert group of the core, its origin and the core's place within it: every multicast below stays in the
+        // group.
+        const uint32_t group = (core.y / GRID_Y) * NGX + core.x / GRID_X;
+        const uint32_t x0 = core.x / GRID_X * GRID_X;
+        const uint32_t y0 = core.y / GRID_Y * GRID_Y;
+        const uint32_t gy = core.y % GRID_Y;
+        const uint32_t gx = core.x % GRID_X;
         const uint32_t my_mt = gy;
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
@@ -1303,14 +1454,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gy);
 
         const bool is_in1_sender = (gy == in1_sender_row);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0 + in1_sender_row});
         // The rectangle spans the WHOLE column, sender included: a multicast rectangle
         // must be contiguous and the sender is no longer on an edge row, so "everything
         // but the sender" is not expressible as one rectangle. The non-loopback
         // multicast drops the sender's own copy (it already holds the block), so
         // num_dests stays GRID_Y - 1.
-        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + gx, y0 + GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -1322,9 +1473,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
         // the whole row for the same reason as the weight column above.
         const bool is_in0_sender = (gx == in0_sender_col);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{x0 + in0_sender_col, y0 + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0, y0 + gy});
+        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{x0 + GRID_X - 1, y0 + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -1373,14 +1524,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // own copy, so num_dests is one less than the grid.
         {
             const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
-            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
-            reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{NGX * GRID_X - 1, NGY * GRID_Y - 1});
+            reader_args.push_back(static_cast<uint32_t>(idx == 0));  // is_counts_reader
             reader_args.push_back(static_cast<uint32_t>(grid_first.x));
             reader_args.push_back(static_cast<uint32_t>(grid_first.y));
             reader_args.push_back(static_cast<uint32_t>(grid_last.x));
             reader_args.push_back(static_cast<uint32_t>(grid_last.y));
             reader_args.push_back(counts_valid_sem_id);
-            reader_args.push_back(GRID_X * GRID_Y - 1);
+            reader_args.push_back(NG * GRID_X * GRID_Y - 1);
         }
         // DOWN_SPLIT go/done sems (dedicated; see down_go_sem_id).
         reader_args.push_back(down_go_sem_id);
@@ -1393,10 +1544,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{x0 + gxi, y0 + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        reader_group_rt = reader_args.size();  // EXPERT_GROUP_RT: this core's expert group
+        reader_args.push_back(group);
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args;
         reader_rt_args.append(reader_args);
         reader_kernel_desc.emplace_runtime_args(core, reader_rt_args);
@@ -1418,6 +1571,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         writer_args.push_back(in1_valid_sem_id);
         writer_args.push_back(mcast_go_sem_id);
         writer_args.push_back(mcast_done_sem_id);
+        writer_group_rt = writer_args.size();
+        writer_args.push_back(group);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt_args;
         writer_rt_args.append(writer_args);
         writer_kernel_desc.emplace_runtime_args(core, writer_rt_args);
@@ -1442,10 +1597,29 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             gx,                                                        // 2 tilize-once: own column
             GRID_X,                                                    // 3 tilize-once: M-row width
             gy,                                                        // 4 tilize-once: own row
+            group,                                                     // 5 expert group (EXPERT_GROUPS)
         };
         tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
         compute_rt_args.append(compute_args);
         compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
+    }
+
+    if (GRID_Y != 8) {
+        // adaptive_chunk.hpp's chunk rows (kGridY)
+        const auto gy = std::to_string(GRID_Y);
+        reader_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+        writer_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+        compute_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+    }
+    if (NG > 1) {
+        // EXPERT_GROUPS: the kernels run experts group, group + NG, ... (the group is a per-core runtime arg)
+        const auto ng = std::to_string(NG);
+        reader_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        reader_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", std::to_string(reader_group_rt));
+        writer_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        writer_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", std::to_string(writer_group_rt));
+        compute_kernel_desc.defines.emplace_back("EXPERT_GROUPS", ng);
+        compute_kernel_desc.defines.emplace_back("EXPERT_GROUP_RT", "5");
     }
 
     // Reader: x, counts, index table, region offsets, gate/up/down weights, optional biases.
@@ -1454,12 +1628,12 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // cannot drift between the miss path and the cache-hit patch.
     tt::tt_metal::KernelDescriptor::RTArgList reader_common_args;
     visit_reader_common_buffers(
-        t, fuse_bias, [&](tt::tt_metal::Buffer* buffer) { reader_common_args.push_back(buffer); });
+        t, fuse_bias, from_pages, [&](tt::tt_metal::Buffer* buffer) { reader_common_args.push_back(buffer); });
     reader_kernel_desc.emplace_common_runtime_args(reader_common_args);
 
     tt::tt_metal::KernelDescriptor::RTArgList writer_common_args;
     visit_writer_common_buffers(
-        t, out_buffer, [&](tt::tt_metal::Buffer* buffer) { writer_common_args.push_back(buffer); });
+        t, out_buffer, from_pages, [&](tt::tt_metal::Buffer* buffer) { writer_common_args.push_back(buffer); });
     writer_kernel_desc.emplace_common_runtime_args(writer_common_args);
 
     // Kernel index order is pinned for override_runtime_arguments: reader, writer, compute.
@@ -1480,13 +1654,15 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     // would rebuild this factory on every hit. Per-core args depend only on hashed attributes.
     // These common-arg addresses are the values that change between two calls of the same spec.
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIdx);
-    patch_common_buffer_addresses(
-        reader_args, [&](auto&& consume) { visit_reader_common_buffers(t, op.fuse_bias, consume); });
+    patch_common_buffer_addresses(reader_args, [&](auto&& consume) {
+        visit_reader_common_buffers(t, op.fuse_bias, op.weights_from_pages, consume);
+    });
 
     auto& writer_args = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIdx);
     auto* out_buffer = tensor_return_value.buffer();
-    patch_common_buffer_addresses(
-        writer_args, [&](auto&& consume) { visit_writer_common_buffers(t, out_buffer, consume); });
+    patch_common_buffer_addresses(writer_args, [&](auto&& consume) {
+        visit_writer_common_buffers(t, out_buffer, op.weights_from_pages, consume);
+    });
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

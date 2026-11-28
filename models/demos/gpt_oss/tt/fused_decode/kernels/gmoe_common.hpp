@@ -25,8 +25,12 @@ constexpr uint32_t ROWS = GMOE_ROWS;  // rows of the routed pass (gmoe_route.cpp
 constexpr uint32_t K_SEL = 4;
 constexpr uint32_t K_IDS = K_SEL + 1;  // the router's ids per row (top-k + 1: a BF16 tie routes k + 1 experts)
 
-// expert e's first column tile in the dense [*, E * 720] layout (720 columns = 22.5 tiles per expert)
-inline uint32_t g0(uint32_t e) { return (45 * e) / 2; }
+// column tiles per expert in the dense [*, E * 736] layout (each expert's 720 columns zero padded to 23 whole tiles,
+// experts/dense_layout.py)
+constexpr uint32_t NU_EXPERT = 23;
+// the dense layout's column (gate / up) or row (down) tile of expert e's local tile j: the experts' tiles interleaved
+// (dense_layout.py expert_tile), so the expert of tile n is n % E
+inline uint32_t tile(uint32_t e, uint32_t j) { return j * E + e; }
 
 struct Plan {
     uint32_t tiles[E];
