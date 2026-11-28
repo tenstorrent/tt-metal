@@ -30,16 +30,16 @@ namespace fpu = hal::fpu;
 
 // MVMUL operands print as clear_dvalid, broadcast, addr_mode, dst.
 
-extern "C" __attribute__((noinline, used)) void matrix_multiplies()
+extern "C" __attribute__((noinline, used)) void matmuls()
 {
-    fpu::run<fpu::MatrixMultiply {.release = fpu::SourceRelease::None}>();
-    fpu::run<fpu::MatrixMultiply {.broadcast = fpu::SrcBRowBroadcast::Row, .release = fpu::SourceRelease::None}>();
-    fpu::run<fpu::MatrixMultiply {.address_modifier = 4, .release = fpu::SourceRelease::None}>();
-    fpu::run<fpu::MatrixMultiply {.address_modifier = 2, .dest_row_offset = 8, .release = fpu::SourceRelease::Both}>();
-    fpu::run<fpu::MatrixMultiply {.dest_row_offset = 1023, .release = fpu::SourceRelease::SrcB}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::Row, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.address_modifier = 4, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.address_modifier = 2, .dest_row_offset = 8, .release = fpu::SourceRelease::Both}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.dest_row_offset = 1023, .release = fpu::SourceRelease::SrcB}>();
 }
 
-// CHECK-LABEL: <matrix_multiplies>:
+// CHECK-LABEL: <matmuls>:
 // CHECK-NEXT: ttmvmul 0,0,0,0{{$}}
 // CHECK-NEXT: ttmvmul 0,1,0,0{{$}}
 // CHECK-NEXT: ttmvmul 0,0,4,0{{$}}
@@ -50,33 +50,33 @@ extern "C" __attribute__((noinline, used)) void matrix_multiplies()
 //--- codegen.cpp
 #include "common.h"
 
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_matrix_multiply()
+extern "C" __attribute__((noinline, used)) std::uint32_t encode_matmul()
 {
-    return fpu::get_operation<fpu::MatrixMultiply {.broadcast = fpu::SrcBRowBroadcast::Row, .release = fpu::SourceRelease::SrcA}>();
+    return fpu::MatrixUnit.operation().matmul<fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::Row, .release = fpu::SourceRelease::SrcA}>();
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_matrix_multiply()
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_matmul()
 {
     return TT_OP_MVMUL(1 /*clear_dvalid*/, 1 /*instr_mod19*/, 0 /*addr_mode*/, 0 /*dst*/);
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t encode_matrix_multiply_runtime(const fpu::MatrixMultiply operation)
+extern "C" __attribute__((noinline, used)) std::uint32_t encode_matmul_runtime(const fpu::Matmul operation)
 {
-    return fpu::get_operation(operation);
+    return fpu::MatrixUnit.operation().matmul(operation);
 }
 
-extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_matrix_multiply_runtime(const fpu::MatrixMultiply operation)
+extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_matmul_runtime(const fpu::Matmul operation)
 {
     return TT_OP_MVMUL(
         static_cast<std::uint32_t>(operation.release), static_cast<std::uint32_t>(operation.broadcast), operation.address_modifier, operation.dest_row_offset);
 }
 
-extern "C" __attribute__((noinline, used)) void matrix_multiply_runtime(const fpu::MatrixMultiply operation)
+extern "C" __attribute__((noinline, used)) void matmul_runtime(const fpu::Matmul operation)
 {
-    fpu::run(operation);
+    fpu::MatrixUnit.matmul(operation);
 }
 
-extern "C" __attribute__((noinline, used)) void reference_matrix_multiply_runtime(const fpu::MatrixMultiply operation)
+extern "C" __attribute__((noinline, used)) void reference_matmul_runtime(const fpu::Matmul operation)
 {
     TT_MVMUL(
         static_cast<std::uint32_t>(operation.release), static_cast<std::uint32_t>(operation.broadcast), operation.address_modifier, operation.dest_row_offset);
@@ -90,7 +90,7 @@ extern "C" __attribute__((noinline, used)) void reference_matrix_multiply_runtim
 
 extern "C" void reject_invalid_runtime_broadcast()
 {
-    fpu::run(fpu::MatrixMultiply {.broadcast = static_cast<fpu::SrcBRowBroadcast>(2), .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.matmul(fpu::Matmul {.broadcast = static_cast<fpu::SrcBRowBroadcast>(2), .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_broadcast>:
@@ -100,7 +100,7 @@ extern "C" void reject_invalid_runtime_broadcast()
 
 extern "C" void reject_invalid_runtime_address_modifier()
 {
-    fpu::run(fpu::MatrixMultiply {.address_modifier = 8, .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.matmul(fpu::Matmul {.address_modifier = 8, .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_address_modifier>:
@@ -110,7 +110,7 @@ extern "C" void reject_invalid_runtime_address_modifier()
 
 extern "C" void reject_invalid_runtime_dest_row_offset()
 {
-    fpu::run(fpu::MatrixMultiply {.dest_row_offset = 1024, .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.matmul(fpu::Matmul {.dest_row_offset = 1024, .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_dest_row_offset>:
@@ -118,9 +118,20 @@ extern "C" void reject_invalid_runtime_dest_row_offset()
 // ASSERT: ebreak
 // ASSERT: ret
 
+// Row broadcast with Dst row bit 1 or 2 set is UnsupportedFunctionality.
+extern "C" void reject_misaligned_runtime_row_broadcast()
+{
+    fpu::MatrixUnit.matmul(fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::Row, .dest_row_offset = 2, .release = fpu::SourceRelease::None});
+}
+
+// ASSERT-LABEL: <reject_misaligned_runtime_row_broadcast>:
+// ASSERT-NOT: {{[[:space:]]tt}}
+// ASSERT: ebreak
+// ASSERT: ret
+
 extern "C" void reject_unset_runtime_release()
 {
-    fpu::run(fpu::MatrixMultiply {});
+    fpu::MatrixUnit.matmul(fpu::Matmul {});
 }
 
 // ASSERT-LABEL: <reject_unset_runtime_release>:
@@ -128,12 +139,12 @@ extern "C" void reject_unset_runtime_release()
 // ASSERT: ebreak
 // ASSERT: ret
 
-extern "C" void accept_runtime_matrix_multiply_boundaries()
+extern "C" void accept_runtime_matmul_boundaries()
 {
-    fpu::run(
-        fpu::MatrixMultiply {.broadcast = fpu::SrcBRowBroadcast::Row, .address_modifier = 7, .dest_row_offset = 1023, .release = fpu::SourceRelease::Both});
+    fpu::MatrixUnit.matmul(
+        fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::Row, .address_modifier = 7, .dest_row_offset = 1016, .release = fpu::SourceRelease::Both});
 }
 
-// ASSERT-LABEL: <accept_runtime_matrix_multiply_boundaries>:
+// ASSERT-LABEL: <accept_runtime_matmul_boundaries>:
 // ASSERT-NOT: ebreak
 // ASSERT: ret

@@ -33,8 +33,8 @@ namespace fpu = hal::fpu;
 
 extern "C" __attribute__((noinline, used)) void pool_functions()
 {
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Sum, .release = fpu::SourceRelease::None}>();
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Maximum, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Sum, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Maximum, .release = fpu::SourceRelease::None}>();
 }
 
 // CHECK-LABEL: <pool_functions>:
@@ -44,10 +44,10 @@ extern "C" __attribute__((noinline, used)) void pool_functions()
 
 extern "C" __attribute__((noinline, used)) void pool_options()
 {
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 7, .release = fpu::SourceRelease::None}>();
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Maximum, .dest_row_offset = 16, .release = fpu::SourceRelease::Both}>();
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Maximum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::SrcA}>();
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Sum, .dest_row_offset = 1023, .release = fpu::SourceRelease::SrcB}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 7, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Maximum, .dest_row_offset = 16, .release = fpu::SourceRelease::Both}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Maximum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::SrcA}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Sum, .dest_row_offset = 1023, .release = fpu::SourceRelease::SrcB}>();
 }
 
 // CHECK-LABEL: <pool_options>:
@@ -62,8 +62,9 @@ extern "C" __attribute__((noinline, used)) void pool_options()
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_pool()
 {
-    return fpu::get_operation<fpu::Pool {
-        .function = fpu::PoolFunction::Maximum, .indices = fpu::IndexTracking::Enabled, .address_modifier = 1, .release = fpu::SourceRelease::None}>();
+    return fpu::MatrixUnit.operation()
+        .pool<fpu::Pool {
+            .function = fpu::PoolFunction::Maximum, .indices = fpu::IndexTracking::Enabled, .address_modifier = 1, .release = fpu::SourceRelease::None}>();
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_pool()
@@ -82,7 +83,7 @@ inline __attribute__((always_inline)) std::uint32_t reference_pool_operation(con
 
 extern "C" __attribute__((noinline, used)) std::uint32_t encode_pool_runtime(const fpu::Pool operation)
 {
-    return fpu::get_operation(operation);
+    return fpu::MatrixUnit.operation().pool(operation);
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_pool_runtime(const fpu::Pool operation)
@@ -94,7 +95,7 @@ extern "C" __attribute__((noinline, used)) std::uint32_t reference_encode_pool_r
 // push of the selected word, so the reference issues the word with TT_INSN.
 extern "C" __attribute__((noinline, used)) void pool_runtime(const fpu::Pool operation)
 {
-    fpu::run(operation);
+    fpu::MatrixUnit.pool(operation);
 }
 
 extern "C" __attribute__((noinline, used)) void reference_pool_runtime(const fpu::Pool operation)
@@ -110,7 +111,7 @@ extern "C" __attribute__((noinline, used)) void reference_pool_runtime(const fpu
 
 extern "C" void reject_invalid_runtime_function()
 {
-    fpu::run(fpu::Pool {.function = static_cast<fpu::PoolFunction>(2), .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.pool(fpu::Pool {.function = static_cast<fpu::PoolFunction>(2), .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_function>:
@@ -120,7 +121,8 @@ extern "C" void reject_invalid_runtime_function()
 
 extern "C" void reject_invalid_runtime_indices()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Maximum, .indices = static_cast<fpu::IndexTracking>(2), .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.pool(
+        fpu::Pool {.function = fpu::PoolFunction::Maximum, .indices = static_cast<fpu::IndexTracking>(2), .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_indices>:
@@ -130,7 +132,7 @@ extern "C" void reject_invalid_runtime_indices()
 
 extern "C" void reject_invalid_runtime_address_modifier()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 8, .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.pool(fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 8, .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_address_modifier>:
@@ -140,7 +142,7 @@ extern "C" void reject_invalid_runtime_address_modifier()
 
 extern "C" void reject_invalid_runtime_dest_row_offset()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Sum, .dest_row_offset = 1024, .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.pool(fpu::Pool {.function = fpu::PoolFunction::Sum, .dest_row_offset = 1024, .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_invalid_runtime_dest_row_offset>:
@@ -150,7 +152,7 @@ extern "C" void reject_invalid_runtime_dest_row_offset()
 
 extern "C" void reject_unset_runtime_release()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Sum});
+    fpu::MatrixUnit.pool(fpu::Pool {.function = fpu::PoolFunction::Sum});
 }
 
 // ASSERT-LABEL: <reject_unset_runtime_release>:
@@ -160,7 +162,7 @@ extern "C" void reject_unset_runtime_release()
 
 extern "C" void reject_runtime_sum_index_tracking()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Sum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::None});
+    fpu::MatrixUnit.pool(fpu::Pool {.function = fpu::PoolFunction::Sum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::None});
 }
 
 // ASSERT-LABEL: <reject_runtime_sum_index_tracking>:
@@ -170,8 +172,8 @@ extern "C" void reject_runtime_sum_index_tracking()
 
 extern "C" void accept_runtime_pool_boundaries()
 {
-    fpu::run(fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 7, .dest_row_offset = 1023, .release = fpu::SourceRelease::Both});
-    fpu::run(fpu::Pool {
+    fpu::MatrixUnit.pool(fpu::Pool {.function = fpu::PoolFunction::Sum, .address_modifier = 7, .dest_row_offset = 1023, .release = fpu::SourceRelease::Both});
+    fpu::MatrixUnit.pool(fpu::Pool {
         .function         = fpu::PoolFunction::Maximum,
         .indices          = fpu::IndexTracking::Enabled,
         .address_modifier = 7,

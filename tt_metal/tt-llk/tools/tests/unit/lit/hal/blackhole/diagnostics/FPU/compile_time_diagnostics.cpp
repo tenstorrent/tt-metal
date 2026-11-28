@@ -4,127 +4,127 @@
 
 // clang-format off
 // RUN: %split-file %s %t
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/elementwise-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=ELEMENTWISE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/elementwise-operation.cpp 2>&1 | FileCheck %s --check-prefix=ELEMENTWISE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/elementwise-broadcast.cpp 2>&1 | FileCheck %s --check-prefix=ELEMENTWISE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/elementwise-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=ELEMENTWISE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/elementwise-dest-row-offset.cpp 2>&1 | FileCheck %s --check-prefix=ELEMENTWISE
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/dot-product-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=DOT_PRODUCT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/dot-product-dest-row-offset.cpp 2>&1 | FileCheck %s --check-prefix=DOT_PRODUCT
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matrix-multiply-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=MATRIX_MULTIPLY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matrix-multiply-broadcast.cpp 2>&1 | FileCheck %s --check-prefix=MATRIX_MULTIPLY
-// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matrix-multiply-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=MATRIX_MULTIPLY
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/eltwise-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=ELTWISE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/eltwise-operation.cpp 2>&1 | FileCheck %s --check-prefix=ELTWISE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/eltwise-broadcast.cpp 2>&1 | FileCheck %s --check-prefix=ELTWISE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/eltwise-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=ELTWISE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/eltwise-dest-row-offset.cpp 2>&1 | FileCheck %s --check-prefix=ELTWISE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matmul-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=MATMUL
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matmul-broadcast.cpp 2>&1 | FileCheck %s --check-prefix=MATMUL
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matmul-address-modifier.cpp 2>&1 | FileCheck %s --check-prefix=MATMUL
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/matmul-row-broadcast-offset.cpp 2>&1 | FileCheck %s --check-prefix=MATMUL
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-row-broadcast-offset.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_ROW_BROADCAST
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/pool-unset-release.cpp 2>&1 | FileCheck %s --check-prefix=POOL
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/pool-sum-indices.cpp 2>&1 | FileCheck %s --check-prefix=POOL
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/pool-function.cpp 2>&1 | FileCheck %s --check-prefix=POOL
 // clang-format on
 
 // Match an actual compiler error, not the echoed static_assert source text.
-// ELEMENTWISE: error: static assertion failed: invalid elementwise descriptor
-// DOT_PRODUCT: error: static assertion failed: invalid dot-product descriptor
-// MATRIX_MULTIPLY: error: static assertion failed: invalid matrix-multiply descriptor
-// POOL: error: static assertion failed: invalid pool descriptor
+// ELTWISE: error: static assertion failed: invalid eltwise options
+// MATMUL: error: static assertion failed: invalid matmul options
+// POOL: error: static assertion failed: invalid pool options
 
-//--- elementwise-unset-release.cpp
+//--- eltwise-unset-release.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Elementwise {.operation = fpu::ElementwiseOperation::Add}>();
+    fpu::MatrixUnit.eltwise<fpu::Eltwise {.operation = fpu::EltwiseOperation::Add}>();
 }
 
-//--- elementwise-operation.cpp
+//--- eltwise-operation.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Elementwise {.operation = static_cast<fpu::ElementwiseOperation>(3), .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.eltwise<fpu::Eltwise {.operation = static_cast<fpu::EltwiseOperation>(3), .release = fpu::SourceRelease::None}>();
 }
 
-//--- elementwise-broadcast.cpp
+//--- eltwise-broadcast.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Elementwise {
-        .operation = fpu::ElementwiseOperation::Add, .broadcast = static_cast<fpu::SrcBBroadcast>(4), .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.eltwise<fpu::Eltwise {
+        .operation = fpu::EltwiseOperation::Add, .broadcast = static_cast<fpu::SrcBBroadcast>(4), .release = fpu::SourceRelease::None}>();
 }
 
-//--- elementwise-address-modifier.cpp
+//--- eltwise-address-modifier.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Elementwise {.operation = fpu::ElementwiseOperation::Add, .address_modifier = 8, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.eltwise<fpu::Eltwise {.operation = fpu::EltwiseOperation::Add, .address_modifier = 8, .release = fpu::SourceRelease::None}>();
 }
 
-//--- elementwise-dest-row-offset.cpp
+//--- eltwise-dest-row-offset.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Elementwise {.operation = fpu::ElementwiseOperation::Add, .dest_row_offset = 1024, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.eltwise<fpu::Eltwise {.operation = fpu::EltwiseOperation::Add, .dest_row_offset = 1024, .release = fpu::SourceRelease::None}>();
 }
 
-//--- dot-product-unset-release.cpp
+//--- matmul-unset-release.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::DotProduct {.address_modifier = 0}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::None}>();
 }
 
-//--- dot-product-dest-row-offset.cpp
+//--- matmul-broadcast.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::DotProduct {.dest_row_offset = 1024, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.broadcast = static_cast<fpu::SrcBRowBroadcast>(2), .release = fpu::SourceRelease::None}>();
 }
 
-//--- matrix-multiply-unset-release.cpp
+//--- matmul-address-modifier.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::MatrixMultiply {.broadcast = fpu::SrcBRowBroadcast::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.address_modifier = 8, .release = fpu::SourceRelease::None}>();
 }
 
-//--- matrix-multiply-broadcast.cpp
+//--- matmul-row-broadcast-offset.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
-void f()
+void issue()
 {
-    fpu::run<fpu::MatrixMultiply {.broadcast = static_cast<fpu::SrcBRowBroadcast>(2), .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.matmul<fpu::Matmul {.broadcast = fpu::SrcBRowBroadcast::Row, .dest_row_offset = 4, .release = fpu::SourceRelease::None}>();
 }
 
-//--- matrix-multiply-address-modifier.cpp
+//--- runtime-row-broadcast-offset.cpp
 #include "hal/fpu.h"
 
 namespace fpu = hal::fpu;
 
-void f()
-{
-    fpu::run<fpu::MatrixMultiply {.address_modifier = 8, .release = fpu::SourceRelease::None}>();
-}
+// Constant evaluation of the runtime encoder rejects the misaligned row broadcast without a static_assert.
+constexpr auto operation =
+    fpu::MatrixUnit.operation().matmul({.broadcast = fpu::SrcBRowBroadcast::Row, .dest_row_offset = 2, .release = fpu::SourceRelease::None});
+// RUNTIME_ROW_BROADCAST: in 'constexpr' expansion of 'hal::detail::require({{.*}}"FPU matmul row broadcast needs a Dest row offset with bits 1 and 2 clear"))'
+// RUNTIME_ROW_BROADCAST: error: '__builtin_trap()' is not a constant expression
 
 //--- pool-unset-release.cpp
 #include "hal/fpu.h"
@@ -133,7 +133,7 @@ namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Maximum}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Maximum}>();
 }
 
 //--- pool-sum-indices.cpp
@@ -143,7 +143,7 @@ namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Pool {.function = fpu::PoolFunction::Sum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = fpu::PoolFunction::Sum, .indices = fpu::IndexTracking::Enabled, .release = fpu::SourceRelease::None}>();
 }
 
 //--- pool-function.cpp
@@ -153,5 +153,5 @@ namespace fpu = hal::fpu;
 
 void f()
 {
-    fpu::run<fpu::Pool {.function = static_cast<fpu::PoolFunction>(2), .release = fpu::SourceRelease::None}>();
+    fpu::MatrixUnit.pool<fpu::Pool {.function = static_cast<fpu::PoolFunction>(2), .release = fpu::SourceRelease::None}>();
 }
