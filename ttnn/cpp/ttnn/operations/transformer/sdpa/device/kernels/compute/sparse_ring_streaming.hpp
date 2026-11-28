@@ -606,8 +606,11 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
 
-    // Lazy rescale. S2 computes every member's new row max (this piece merged with the stored max) into the
-    // scratch. The step rescales (S3 alpha + S4) only when some initialized row's max grew by more than
+    // Lazy rescale. S2 computes every member's row max of this piece into the scratch, first without the stored
+    // max: the test below fires on the same steps either way (a piece max under the stored max is a negative d,
+    // no growth), and a step that does not rescale never reads an initialized member's scratch. Only a step whose
+    // test fires runs S2 and S2b again with the stored max merged in, which is what S3 and S4 then read.
+    // The step rescales (S3 alpha + S4) only when some initialized row's max grew by more than
     // kLazyThrRaw raw logit units; otherwise the stored max stays and S5 subtracts it, so the exp's input
     // (score - stored max) * scale is <= 16 ln 2, inside the shifted exp's range (see kExpOctaves). A rescale
     // rounds every member's Float32 slots to bf16 (they pass through the 16-bit DEST), so the threshold makes it
@@ -629,122 +632,140 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     bool rescale = false;
     CircularBuffer(cb_qkt_im).wait_front(qk_cap);
     {
-        // ---- S2: row max over each member's W_g columns, eltwise-max with the slot's stored max, into the scratch.
+        // ---- S2: row max over each member's W_g columns into the scratch. The first round leaves the stored max out
+        //      (no copy of it into DEST per batch): a row whose growth passes the rescale threshold passes it in this
+        //      round too, so a step this round does not send to the rescale needs none (the usual case), and its
+        //      scratch is then read only for first-step members. Otherwise S2 and S2b run again with the stored max
+        //      eltwise-maxed in, as before. ----
         CircularBuffer(cb_max_scratch).reserve_back(stats_cap);
-        configure_single_tile_pack(cb_max_scratch);
-        uint32_t last_w = 0;
-        for (uint32_t g0 = 0; g0 < n_slots; g0 += stat_slots_per_acq) {
-            const uint32_t n_g = n_slots - g0 < stat_slots_per_acq ? n_slots - g0 : stat_slots_per_acq;
-            tile_regs_acquire();
-            bool any_init = false;
-            for (uint32_t gg = 0; gg < n_g; ++gg) {
-                any_init |= slot_init(g0 + gg);
-            }
-            if (any_init) {
-                if (last_w != 0) {
-                    reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
-                    last_w = 0;
-                }
-                sdpa_reduce_copy_tile_to_dst_init_short(cb_max_in);
+        for (bool with_stored = false;; with_stored = true) {
+            configure_single_tile_pack(cb_max_scratch);
+            uint32_t last_w = 0;
+            for (uint32_t g0 = 0; g0 < n_slots; g0 += stat_slots_per_acq) {
+                const uint32_t n_g = n_slots - g0 < stat_slots_per_acq ? n_slots - g0 : stat_slots_per_acq;
+                tile_regs_acquire();
+                bool any_init = false;
                 for (uint32_t gg = 0; gg < n_g; ++gg) {
-                    if (!slot_init(g0 + gg)) {
-                        continue;
-                    }
-                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                        copy_tile(cb_max_in, slots[g0 + gg] * Sq_chunk_t + r, gg * Sq_chunk_t + r);
-                    }
+                    any_init |= slot_init(g0 + gg);
                 }
-            }
-            for (uint32_t gg = 0; gg < n_g; ++gg) {
-                const uint32_t w = W[g0 + gg];
-                if (w != last_w) {
+                if (with_stored && any_init) {
                     if (last_w != 0) {
                         reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+                        last_w = 0;
                     }
-                    reduce_block_max_row_init_runtime(cb_max_scratch, w, cb_qkt_im, cb_identity_scale_in, false);
-                    last_w = w;
-                }
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    reduce_block_max_row_runtime(
-                        cb_qkt_im, cb_identity_scale_in, sidx(g0 + gg, r, 0), gg * Sq_chunk_t + r, false, false);
-                }
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t gg = 0; gg < n_g; ++gg) {
-                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                    sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_max_scratch, slots[g0 + gg] * Sq_chunk_t + r);
-                }
-            }
-            tile_regs_release();
-        }
-        if (last_w != 0) {
-            reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
-        }
-        cb_push_back_hold_wr_ptr(cb_max_scratch, stats_cap);
-        CircularBuffer(cb_max_scratch).wait_front(stats_cap);
-        CircularBuffer(cb_exp_max_diff).reserve_back(stats_cap);
-        cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
-        CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
-
-        // ---- S2b: the rescale test. d = new max - stored max of every initialized member (>= 0, column 0),
-        //      column-max-reduced into one tile whose [0][0] is the largest growth. The unpack thread's RISC reads
-        //      that word once the pack has landed (it polls the PACK_DONE token itself: a Tensix-side wait would not
-        //      order its load) and read_tile_value hands the same word to the math and pack threads, so the three
-        //      threads take the same branch. ----
-        if (n_init > 0) {
-            // d = new - stored max of every initialized member, DEST batches of up to kDst tiles, packed to the
-            // alpha scratch pages 0..nd-1 (nd <= n_slots * Sq_chunk_t <= stats_cap).
-            uint32_t nd = 0;
-            configure_single_tile_pack(cb_exp_max_diff);
-            for (uint32_t g = 0; g < n_slots;) {
-                uint32_t nb = 0;
-                tile_regs_acquire();
-                sub_init(cb_max_scratch, cb_max_in);
-                for (; g < n_slots && nb + Sq_chunk_t <= kDst; ++g) {
-                    if (!slot_init(g)) {
-                        continue;
+                    sdpa_reduce_copy_tile_to_dst_init_short(cb_max_in);
+                    for (uint32_t gg = 0; gg < n_g; ++gg) {
+                        if (!slot_init(g0 + gg)) {
+                            continue;
+                        }
+                        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                            copy_tile(cb_max_in, slots[g0 + gg] * Sq_chunk_t + r, gg * Sq_chunk_t + r);
+                        }
                     }
-                    const uint32_t row0 = slots[g] * Sq_chunk_t;
+                }
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    const uint32_t w = W[g0 + gg];
+                    if (w != last_w) {
+                        if (last_w != 0) {
+                            reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
+                        }
+                        reduce_block_max_row_init_runtime(cb_max_scratch, w, cb_qkt_im, cb_identity_scale_in, false);
+                        last_w = w;
+                    }
                     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                        sub_tiles(cb_max_scratch, cb_max_in, row0 + r, row0 + r, nb++);
+                        reduce_block_max_row_runtime(
+                            cb_qkt_im, cb_identity_scale_in, sidx(g0 + gg, r, 0), gg * Sq_chunk_t + r, false, false);
                     }
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                for (uint32_t i = 0; i < nb; ++i) {
-                    sdpa_pack_tile_ooo(i, cb_exp_max_diff, nd + i);
+                for (uint32_t gg = 0; gg < n_g; ++gg) {
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sdpa_pack_tile_ooo(gg * Sq_chunk_t + r, cb_max_scratch, slots[g0 + gg] * Sq_chunk_t + r);
+                    }
                 }
                 tile_regs_release();
-                nd += nb;
             }
-            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-            UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
-            UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
-            tile_regs_acquire();
-            reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, cb_exp_max_diff);
-            for (uint32_t i = 0; i < nd; ++i) {
-                reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, i, 0, 0);
+            if (last_w != 0) {
+                reduce_block_max_row_uninit_runtime(cb_qkt_im, false, false);
             }
-            reduce_uninit();
-            tile_regs_commit();
-            tile_regs_wait();
-            configure_single_tile_pack(cb_exp_max_diff);
-            sdpa_pack_tile_ooo(0, cb_exp_max_diff, 0);
-            tile_regs_release();
-            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
-            UNPACK({
-                ckernel::tensix_sync();
-                while (ckernel::semaphore_read(semaphore::PACK_DONE) == 0) {
+            if (!with_stored) {
+                cb_push_back_hold_wr_ptr(cb_max_scratch, stats_cap);
+                CircularBuffer(cb_max_scratch).wait_front(stats_cap);
+                CircularBuffer(cb_exp_max_diff).reserve_back(stats_cap);
+                cb_push_back_hold_wr_ptr(cb_exp_max_diff, stats_cap);
+                CircularBuffer(cb_exp_max_diff).wait_front(stats_cap);
+            } else {
+                // The scratch pages are pushed already: wait for this round's packs to land.
+                PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+            }
+
+            // ---- S2b: the rescale test. d = new max - stored max of every initialized member (column 0; any sign in
+            //      the first round, >= 0 in the round with the stored max),
+            //      column-max-reduced into one tile whose [0][0] is the largest growth. The unpack thread's RISC reads
+            //      that word once the pack has landed (it polls the PACK_DONE token itself: a Tensix-side wait would
+            //      not order its load) and read_tile_value hands the same word to the math and pack threads, so the
+            //      three threads take the same branch. ----
+            if (n_init > 0) {
+                // d = new - stored max of every initialized member, DEST batches of up to kDst tiles, packed to the
+                // alpha scratch pages 0..nd-1 (nd <= n_slots * Sq_chunk_t <= stats_cap).
+                uint32_t nd = 0;
+                configure_single_tile_pack(cb_exp_max_diff);
+                for (uint32_t g = 0; g < n_slots;) {
+                    uint32_t nb = 0;
+                    tile_regs_acquire();
+                    sub_init(cb_max_scratch, cb_max_in);
+                    for (; g < n_slots && nb + Sq_chunk_t <= kDst; ++g) {
+                        if (!slot_init(g)) {
+                            continue;
+                        }
+                        const uint32_t row0 = slots[g] * Sq_chunk_t;
+                        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                            sub_tiles(cb_max_scratch, cb_max_in, row0 + r, row0 + r, nb++);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t i = 0; i < nb; ++i) {
+                        sdpa_pack_tile_ooo(i, cb_exp_max_diff, nd + i);
+                    }
+                    tile_regs_release();
+                    nd += nb;
                 }
-                t6_semaphore_get<>(semaphore::PACK_DONE);
-                invalidate_l1_cache();
-            });
-            const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
-            // bf16 bits compared as a signed 16-bit integer: positive values keep their order and a sign-set word
-            // (-0.0 or a tiny negative from rounding: no growth) is negative, so only positive growth above the
-            // threshold rescales. (One signed compare: the riscv-tt GCC 15 crashes on the equivalent range check.)
-            rescale = static_cast<int16_t>(growth & 0xFFFFu) > static_cast<int16_t>(kLazyThrBits);
+                PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+                tile_regs_acquire();
+                reduce_init<PoolType::MAX, ReduceDim::REDUCE_COL>(
+                    cb_exp_max_diff, cb_identity_scale_in, cb_exp_max_diff);
+                for (uint32_t i = 0; i < nd; ++i) {
+                    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_COL>(cb_exp_max_diff, cb_identity_scale_in, i, 0, 0);
+                }
+                reduce_uninit();
+                tile_regs_commit();
+                tile_regs_wait();
+                configure_single_tile_pack(cb_exp_max_diff);
+                sdpa_pack_tile_ooo(0, cb_exp_max_diff, 0);
+                tile_regs_release();
+                PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+                UNPACK({
+                    ckernel::tensix_sync();
+                    while (ckernel::semaphore_read(semaphore::PACK_DONE) == 0) {
+                    }
+                    t6_semaphore_get<>(semaphore::PACK_DONE);
+                    invalidate_l1_cache();
+                });
+                const uint32_t growth = ckernel::read_tile_value(cb_exp_max_diff, 0, 0);
+                // bf16 bits compared as a signed 16-bit integer: positive values keep their order and a sign-set word
+                // (-0.0, or a piece max under the stored max: no growth) is negative, so only positive growth above the
+                // threshold rescales. (One signed compare: the riscv-tt GCC 15 crashes on the equivalent range check.)
+                rescale = static_cast<int16_t>(growth & 0xFFFFu) > static_cast<int16_t>(kLazyThrBits);
+            }
+            if (!rescale || with_stored) {
+                break;
+            }
         }
 
         // ---- S3: rescale: alpha = exp((old max - new max) * scale) into cb_exp_max_diff and the new max into every

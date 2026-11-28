@@ -37,8 +37,8 @@ SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-siz
 TRACE_REGION_SIZE = 8 * 1024 * 1024
 # On CI (a shared job with a tight time budget) only these cases run, about 2 minutes on a Galaxy: one per feature
 # (dense equivalence, one local head, a short last shard, ragged shards, partial blocks, LoFi block float, block
-# counts, several passes, no block 0, frame masks, per-head masks, load balancing, argument checks). The rest run
-# locally.
+# counts, several passes, no block 0, frame masks, per-head masks, a lazy rescale, load balancing, argument checks).
+# The rest run locally.
 CI_SUBSET = {
     "test_keep_all_matches_dense[r1024k256]",
     "test_keep_all_matches_dense[r1024k256-one_head]",
@@ -51,6 +51,7 @@ CI_SUBSET = {
     "test_without_block0[r1024k256-band-kept_only]",
     "test_frame_mask[256-window]",
     "test_heads_differ",
+    "test_row_max_growth[kept_only]",
     "test_balance[r1024k256-prefix-kept_only]",
     "test_balance_masks_per_call",
 }
@@ -936,6 +937,29 @@ def test_determinism(runtime):
     a = case.run(q, k, v, mask, want_dense=False, want_ref=False)["sparse"]
     b = case.run(q, k, v, mask, want_dense=False, want_ref=False)["sparse"]
     assert torch.equal(a, b), f"max |diff| {(a - b).abs().max().item():.3e}"
+
+
+@pytest.mark.parametrize("pooled", [True, False], ids=["pooled", "kept_only"])
+def test_row_max_growth(runtime, pooled):
+    """Row maxima that grow past the lazy-rescale threshold (16 ln 2 / scale, about 125 raw score units) mid-stream.
+
+    Coordinates 0 and 1 take 300 off every score of the even Q blocks against the K of the even shards, and of the odd
+    Q blocks against the K of the odd shards. On every device the Q blocks of the shard's parity meet only low scores
+    in the local pieces and their real maxima after them, so their steps rescale then (kept_only: at a ring piece, in
+    steps shared with Q blocks whose max does not grow; pooled: at the pooled entries), and the other Q blocks never
+    rescale. 300 is past the exp's range above the stored max (28 ln 2 / scale, about 228), so a step that did not
+    rescale would saturate and fail. The offset only lowers scores: the ones a row attends to stay near 0, where bf16
+    resolves them as in the other tests (near +200 its quantum is 1, and the output comes out 2% small)."""
+    case = Case(runtime, ALIGNED["r1024k256"])
+    geo = case.geo
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=8)
+    q, k, v = case.raw_inputs(8)
+    row = torch.arange(case.S * geo.rows)
+    block, shard = row // BLOCK % 2, row // geo.rows % 2
+    q[..., 0], q[..., 1] = 4.0 * (1 - block), 4.0 * block
+    k[..., 0], k[..., 1] = -75.0 * (1 - shard), -75.0 * shard
+    r = case.run(*case.prepare(q, k, v), mask, want_dense=False, pooled=pooled)
+    _check(f"row max growth pooled={pooled}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
 
 
 BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
