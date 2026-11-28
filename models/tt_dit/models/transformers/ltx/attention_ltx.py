@@ -29,6 +29,27 @@ from .quant_config import LtxQuantProfile
 LTX_DEDUP_GATE_GATHER = os.environ.get("LTX_DEDUP_GATE_GATHER", "1") in ("1", "true", "True")
 
 
+def _can_preserve_qk_rope_rounding(norm, x, cos, sin, transform, heads):
+    """The device op's preserve_rope_rounding limits; other shapes keep the separate rotation."""
+    shape = tuple(x.shape)
+    weight = norm.weight.data if norm.weight is not None else None
+    if not (
+        norm.mesh_width == 4
+        and heads == 8
+        and len(shape) == 4
+        and shape[:2] == (1, 1)
+        and shape[-1] in (512, 1024)
+        and all(t is not None and t.dtype == ttnn.bfloat16 for t in (x, weight, cos, sin, transform))
+    ):
+        return False
+    return tuple(weight.shape) == (1, shape[-1]) and tuple(cos.shape) == tuple(sin.shape) == (
+        1,
+        heads,
+        shape[2],
+        shape[-1] // heads,
+    )
+
+
 class LTXAttention(Module):
     # Map from (is_blackhole, sp_factor, tp_factor) -> (q_chunk_size, k_chunk_size)
     sdpa_chunk_size_map = {
@@ -681,8 +702,23 @@ class LTXAttention(Module):
             )
 
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
-        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        # Self-attention rotates Q/K inside the norm, so the unrotated Q/K are never written and reread.
+        # Cross-attention may gather K across SP before rotating it, so it keeps the separate rotation.
+        k_cos = k_rope_cos if k_rope_cos is not None else rope_cos
+        k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+        fuse_qk_rope = (
+            self.is_self
+            and prompt_1BLP is None
+            and rope_cos is not None
+            and _can_preserve_qk_rope_rounding(self.norm_q, q_1BNF, rope_cos, rope_sin, trans_mat, self.n_local_heads)
+            and _can_preserve_qk_rope_rounding(self.norm_k, k_1BNF, k_cos, k_sin, trans_mat, self.n_local_heads)
+        )
+        q_rope_args, k_rope_args = {}, {}
+        if fuse_qk_rope:
+            q_rope_args = dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat, preserve_rope_rounding=True)
+            k_rope_args = dict(rope_cos=k_cos, rope_sin=k_sin, trans_mat=trans_mat, preserve_rope_rounding=True)
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, **q_rope_args)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, **k_rope_args)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -696,7 +732,6 @@ class LTXAttention(Module):
         # Cross-attn K/V must be full-seq for SDPA; gather across SP only when genuinely sharded.
         is_cross = prompt_1BLP is not None
         sp_factor = self.parallel_config.sequence_parallel.factor
-        _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
         # V2A cross: K/V stay SP-sharded (caller passes the sharded K-rope and kv_logical_n) so the
         # ring SDPA fuses the gather instead of an explicit K/V all-gather + local SDPA.
         use_ring_cross = is_cross and sp_factor > 1 and not kv_replicated and kv_logical_n is not None
@@ -704,8 +739,8 @@ class LTXAttention(Module):
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
             if kv_replicated:
                 need_gather = False
-            elif _k_cos_pe is not None:
-                need_gather = k_BHNE.shape[2] < _k_cos_pe.shape[2]
+            elif k_cos is not None:
+                need_gather = k_BHNE.shape[2] < k_cos.shape[2]
             else:
                 # Unknown sharded context with no rope reference: gather conservatively.
                 need_gather = True
@@ -713,14 +748,31 @@ class LTXAttention(Module):
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
-        if rope_cos is not None:
-            _k_cos = _k_cos_pe
-            _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+        if rope_cos is not None and not fuse_qk_rope:
+            # The op supports skipping idle cores only for interleaved batch-1 prefill.
+            active_cores_only = (
+                q_BHNE.shape[0] == 1
+                and k_BHNE.shape[0] == 1
+                and all(
+                    t.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+                    for t in (q_BHNE, k_BHNE, rope_cos, rope_sin, k_cos, k_sin, trans_mat)
+                )
+            )
             q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                q_BHNE,
+                rope_cos,
+                rope_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                active_cores_only=active_cores_only,
             )
             k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                k_BHNE,
+                k_cos,
+                k_sin,
+                trans_mat,
+                compute_kernel_config=self.rope_compute_kernel_config,
+                active_cores_only=active_cores_only,
             )
 
         # SDPA input quant, applied after RoPE so the rotation still runs at full precision. On the
