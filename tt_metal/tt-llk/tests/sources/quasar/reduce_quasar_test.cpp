@@ -148,6 +148,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
+        // reduce_init's ALU config, on the DEST-derived format when the reduce copies back from DEST.
+        const DataFormat alu_format = reduce_moves_dest_to_src<POOL_TYPE, REDUCE_DIM>()
+                                          ? ckernel::math::dest_src_format<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math))
+                                          : static_cast<DataFormat>(formats.math);
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(alu_format, alu_format);
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape_A);
         PROFILER_SYNC();
