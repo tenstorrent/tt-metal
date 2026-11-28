@@ -30,7 +30,10 @@ namespace {
 using experimental::per_core_allocation::get_shard_base_address;
 
 void WriteToDeviceSharded(
-    Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const CoreRangeSet* logical_core_filter,
+    tt::umd::SysmemBuffer* pinned_src) {
     TT_FATAL(
         host_buffer.size() <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
@@ -79,11 +82,12 @@ void WriteToDeviceSharded(
                     page.size(),
                     tt_cxy_pair(device->id(), core_coordinates),
                     absolute_address,
-                    tt::umd::IoOrdering::Relaxed);
+                    tt::umd::IoOrdering::Relaxed,
+                    pinned_src);
                 written_l1_cores.insert(core_coordinates);
             } else {
                 auto bank_local_address = buffer.address() + (write_device_page * buffer.aligned_page_size()) + offset;
-                WriteToDeviceDRAMChannel(*device, bank_id, bank_local_address, page);
+                WriteToDeviceDRAMChannel(*device, bank_id, bank_local_address, page, pinned_src);
             }
         };
 
@@ -130,7 +134,8 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
     return addr;
 }
 
-void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
+void WriteToDeviceInterleavedContiguous(
+    const Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, tt::umd::SysmemBuffer* pinned_src) {
     if (GraphTracker::instance().hook_write_to_device(&buffer)) {
         return;
     }
@@ -165,7 +170,9 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             switch (buffer.buffer_type()) {
-                case BufferType::DRAM: WriteToDeviceDRAMChannel(*device, bank_index, address + offset, page); break;
+                case BufferType::DRAM:
+                    WriteToDeviceDRAMChannel(*device, bank_index, address + offset, page, pinned_src);
+                    break;
                 case BufferType::L1:
                 case BufferType::L1_SMALL: {
                     const CoreCoord worker_core = device->worker_core_from_logical_core(
@@ -175,7 +182,8 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
                         page.size(),
                         tt_cxy_pair(device->id(), worker_core),
                         address + offset,
-                        tt::umd::IoOrdering::Relaxed);
+                        tt::umd::IoOrdering::Relaxed,
+                        pinned_src);
                     written_l1_cores.insert(worker_core);
                 } break;
                 default: TT_THROW("Unsupported buffer type to write to device!");
@@ -193,7 +201,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, ttsl::Span<const u
     cluster.l1_barrier(device->id(), written_l1_cores);
 }
 
-void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToDevice(
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const CoreRangeSet* logical_core_filter,
+    tt::umd::SysmemBuffer* pinned_src) {
     ZoneScoped;
     if (buffer.buffer_layout() == TensorMemoryLayout::INTERLEAVED) {
         if (logical_core_filter != nullptr) {
@@ -203,9 +215,9 @@ void WriteToDevice(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const 
                 "per-core filtering)");
             return;
         }
-        WriteToDeviceInterleavedContiguous(buffer, host_buffer);
+        WriteToDeviceInterleavedContiguous(buffer, host_buffer, pinned_src);
     } else if (is_sharded(buffer.buffer_layout())) {
-        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter);
+        WriteToDeviceSharded(buffer, host_buffer, logical_core_filter, pinned_src);
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
@@ -314,12 +326,16 @@ void ReadFromDevice(Buffer& buffer, uint8_t* host_buffer) {
     }
 }
 
-void WriteToBufferImpl(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet* logical_core_filter) {
+void WriteToBufferImpl(
+    Buffer& buffer,
+    ttsl::Span<const uint8_t> host_buffer,
+    const CoreRangeSet* logical_core_filter,
+    tt::umd::SysmemBuffer* pinned_src = nullptr) {
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
         case BufferType::L1_SMALL: {
-            WriteToDevice(buffer, host_buffer, logical_core_filter);
+            WriteToDevice(buffer, host_buffer, logical_core_filter, pinned_src);
         } break;
         case BufferType::SYSTEM_MEMORY: {
             TT_THROW("Writing to host memory is unsupported!");
@@ -335,6 +351,13 @@ void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer) {
         emule::check_buffer_allocated(buffer, "WriteToBuffer");
     }
     WriteToBufferImpl(buffer, host_buffer, /*logical_core_filter=*/nullptr);
+}
+
+void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, tt::umd::SysmemBuffer& pinned_src) {
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "WriteToBuffer (pinned)");
+    }
+    WriteToBufferImpl(buffer, host_buffer, /*logical_core_filter=*/nullptr, &pinned_src);
 }
 
 void WriteToBuffer(Buffer& buffer, ttsl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
@@ -400,14 +423,24 @@ void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
 }
 
 bool WriteToDeviceDRAMChannel(
-    IDevice& device, int dram_channel, uint32_t address, std::span<const uint8_t> host_buffer) {
+    IDevice& device,
+    int dram_channel,
+    uint32_t address,
+    std::span<const uint8_t> host_buffer,
+    tt::umd::SysmemBuffer* pinned_src) {
     TT_FATAL(
         address >= device.allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
         device.allocator()->get_base_allocator_addr(HalMemType::DRAM));
     const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&device));
     metal_ctx.get_cluster().write_dram_vec(
-        host_buffer.data(), host_buffer.size(), device.id(), dram_channel, address, tt::umd::IoOrdering::Relaxed);
+        host_buffer.data(),
+        host_buffer.size(),
+        device.id(),
+        dram_channel,
+        address,
+        tt::umd::IoOrdering::Relaxed,
+        pinned_src);
     return true;
 }
 

@@ -79,6 +79,20 @@ using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
 using MeshBufferViewTest = MeshDevice1x1Fixture;
 
+// Runs only under slow dispatch, which the other mesh device suites skip on hardware.
+class SlowDispatchMeshBufferTest : public MeshDeviceFixtureBase {
+protected:
+    SlowDispatchMeshBufferTest() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 1}, .allow_slow_dispatch = true}) {}
+
+    void SetUp() override {
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            GTEST_SKIP() << "Covers the slow dispatch write path";
+        }
+        MeshDeviceFixtureBase::SetUp();
+    }
+};
+
 class MeshBufferViewBoundsTest : public MeshDeviceFixtureBase {
 protected:
     // Reserve small SRAM and reduce worker capacity to exercise both allocator boundaries.
@@ -1802,6 +1816,73 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
                 EXPECT_TRUE(pinned_shared->lock_may_block());
             }
         }
+    }
+}
+
+// Slow dispatch writes a shard with a pin attached synchronously. Page writes large enough for DMA read straight from
+// the pinned pages, smaller ones go over MMIO, and pages outside the pinned range go through the driver's bounce
+// buffer. Each case overwrites the source as soon as the write returns, so a write that still read host memory
+// afterwards would read back the overwrite.
+TEST_F(SlowDispatchMeshBufferTest, WriteShardFromPinnedHostMemory) {
+    if (!tt_metal::experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+    const uint32_t dma_min_bytes =
+        tt::tt_metal::MetalContext::instance().hal().get_dma_write_min_bytes(tt::umd::IoOrdering::Relaxed);
+    if (dma_min_bytes == UINT32_MAX) {
+        GTEST_SKIP() << "This architecture has no DMA writes";
+    }
+
+    struct Case {
+        const char* name;
+        uint32_t page_size;
+        bool pin_whole_source;
+    };
+    const std::vector<Case> cases = {
+        {"DMA from pinned pages", dma_min_bytes, true},
+        {"MMIO", 2048, true},
+        {"DMA from bounce buffer past the pinned range", dma_min_bytes, false},
+    };
+
+    constexpr int device_read_align = 64;
+    // The source starts this far into its allocation, so it starts partway into the pinned mapping's first page.
+    constexpr size_t source_offset_words = 16;
+    constexpr uint32_t pages = 8;
+    const MeshCoordinate coord(0, 0);
+    auto& cq = mesh_device_->mesh_command_queue();
+
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.name);
+        const uint32_t bytes = pages * c.page_size;
+        const size_t words = bytes / sizeof(uint32_t);
+        DeviceLocalBufferConfig per_device_buffer_config{
+            .page_size = c.page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+        auto mesh_buffer =
+            MeshBuffer::create(ReplicatedBufferConfig{.size = bytes}, per_device_buffer_config, mesh_device_.get());
+
+        auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
+            words + source_offset_words, 0);
+        uint32_t* data = src->data() + source_offset_words;
+        std::iota(data, data + words, c.page_size);
+        const std::vector<uint32_t> expected(data, data + words);
+
+        const size_t pinned_words = c.pin_whole_source ? words : words / 2;
+        HostBuffer pinned_part(ttsl::Span<uint32_t>(data, pinned_words), MemoryPin(src));
+        auto pinned = tt_metal::experimental::PinnedMemory::Create(
+            *mesh_device_, MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)), pinned_part, /*map_to_noc=*/true);
+        ASSERT_TRUE(pinned);
+
+        auto write_transfer =
+            distributed::ShardDataTransfer{coord}.host_data(static_cast<void*>(data)).region(BufferRegion(0, bytes));
+        tt_metal::experimental::ShardDataTransferSetPinnedMemory(write_transfer, pinned);
+        cq.enqueue_write_shards(mesh_buffer, {write_transfer}, /*blocking=*/false);
+        std::fill(data, data + words, 0xdeadbeef);
+
+        std::vector<uint32_t> dst(words, 0);
+        auto read_transfer =
+            distributed::ShardDataTransfer{coord}.host_data(static_cast<void*>(dst.data())).region(BufferRegion(0, bytes));
+        cq.enqueue_read_shards({read_transfer}, mesh_buffer, /*blocking=*/true);
+        EXPECT_EQ(dst, expected);
     }
 }
 
