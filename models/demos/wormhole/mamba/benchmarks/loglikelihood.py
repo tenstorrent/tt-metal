@@ -25,27 +25,20 @@ def compute_loglikelihood_given_prompt_and_target(context_ids, target_ids, model
     input_ids = torch.cat([context_ids, target_ids], dim=-1)[:, :-1]  # B x L
 
     num_target_tokens = target_ids.shape[1]
-    last_token = context_ids[:, -1].unsqueeze(1)  # Model expects (Bx1)
 
     logits = []
-    is_greedy = True
     for idx in range((input_ids.shape[-1])):
         out = model(input_ids[:, idx].unsqueeze(1))  # (B x 1) => (B x 1 x VOCAB)
         probs = torch.nn.functional.log_softmax(out, dim=-1)
         logits.append(probs)
 
-        last_token = torch.argmax(out, dim=-1)
-        target_token = input_ids[:, idx].unsqueeze(0)
-        assert (
-            last_token.shape == target_token.shape
-        ), f"Expected actual and target token to be same shape ({last_token.shape} vs. {target_token.shape})"
-
-        if last_token.item() != target_token.item():
-            is_greedy = False
-
-    # Compute loglikelihood using the recorded logits
+    # Logits at position t predict token t + 1, so the last num_target_tokens logits score the target tokens
     logits = torch.cat(logits, dim=1)[:, -num_target_tokens:, :vocab_size]  # (B x L x VOCAB )
     labels = target_ids.unsqueeze(-1)  # (B x L x 1)
+
+    # Greedy as in lm-eval-harness: the argmax prediction equals the target token at every target position
+    is_greedy = bool((torch.argmax(logits, dim=-1) == target_ids).all().item())
+
     loglikelihood = compute_loglikelihood(logits, labels)
 
     return loglikelihood, is_greedy

@@ -46,7 +46,7 @@ class MambaEvalWrapper(LM):
                     device=self.device
                 )  # (1 x CONTEXT_LEN)
                 if context == "":
-                    context_ids = torch.Tensor([self.tokenizer.eos_token_id])
+                    context_ids = torch.tensor([[self.tokenizer.eos_token_id]], dtype=torch.long, device=self.device)
                 assert len(context_ids.shape) == 2 and context_ids.shape[1] > 0, "Expected at least one context token"
 
                 target_ids = self.tokenizer(target, return_tensors="pt").input_ids.to(
