@@ -34,17 +34,6 @@ FP32_MIN_NORMAL = float(np.finfo(np.float32).tiny)  # 1.1754944e-38
 # (742 inputs; every other input is within 1).
 FP32_MAX_ULP = 2
 
-# Blackhole-only for now: the Wormhole copy of ckernel_sfpu_tanh_derivative.h still
-# carries the bfloat16-grade two-piece fit (see tenstorrent/tt-metal#57509, defect 3).
-pytestmark = pytest.mark.skipif(
-    ttnn.get_arch_name() != "blackhole",
-    reason=(
-        "tanh derivative is only fixed on Blackhole; Wormhole tracked by "
-        "https://github.com/tenstorrent/tt-metal/issues/57509"
-    ),
-)
-
-
 def sech2_exact_fp32_input(x: float) -> float:
     """sech²(x) at 256-bit precision, evaluated at the fp32-rounded input.
 
