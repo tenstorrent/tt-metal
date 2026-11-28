@@ -44,6 +44,7 @@ class TransformerBlock(Module):
         attention_q_chunk_size: int = 128,
         is_fsdp: bool = False,
         attention_exp_approx_mode: bool = False,
+        norm_eps: float = 1e-6,
     ) -> None:
         super().__init__()
 
@@ -54,6 +55,7 @@ class TransformerBlock(Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.add_attention_to_output = add_attention_to_output
+        self.norm_eps = norm_eps
 
         self.context_pre_only = context_pre_only
         self.mesh_device = mesh_device
@@ -75,7 +77,7 @@ class TransformerBlock(Module):
 
         self.norm1_norm = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=self.norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -95,7 +97,7 @@ class TransformerBlock(Module):
         )
         self.norm1_context_norm = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=self.norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -111,7 +113,7 @@ class TransformerBlock(Module):
             added_kv_proj_dim=dim,
             context_pre_only=context_pre_only,
             context_head_scaling=context_head_scaling,
-            eps=1e-6,
+            eps=self.norm_eps,
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
@@ -124,7 +126,7 @@ class TransformerBlock(Module):
 
         self.norm2 = DistributedLayerNorm(
             dim,
-            norm_eps=1e-6,
+            norm_eps=self.norm_eps,
             norm_elementwise_affine=False,
             bias=False,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
@@ -148,7 +150,7 @@ class TransformerBlock(Module):
         if not context_pre_only:
             self.norm2_context = DistributedLayerNorm(
                 dim,
-                norm_eps=1e-6,
+                norm_eps=self.norm_eps,
                 norm_elementwise_affine=False,
                 bias=False,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
