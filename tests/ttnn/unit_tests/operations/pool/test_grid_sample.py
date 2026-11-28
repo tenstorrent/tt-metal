@@ -419,7 +419,8 @@ def test_grid_sample_float32_input_fp32_dest_acc(device, grid_kind, align_corner
     "grid_batching_factor, placement, batch_size",
     [(k, "interleaved", n) for n in (1, 2, 3) for k in (1, 2, 3, 4)]
     + [(4, "sharded", 1)]
-    + [(k, "custom_output", 2) for k in (1, 2, 3, 4)],
+    + [(k, "custom_output", 2) for k in (1, 2, 3, 4)]
+    + [(k, "sharded_grid_custom_output", 2) for k in (1, 2, 4)],
 )
 def test_grid_sample_nearest_batched_work_partition(
     device, input_dtype, batch_output_channels, grid_batching_factor, placement, batch_size
@@ -449,7 +450,7 @@ def test_grid_sample_nearest_batched_work_partition(
     )
     grid_host = ttnn.reshape(grid_host, (batch_size, 2, 96 // k, 2 * k))
     grid_device = ttnn.to_device(grid_host, device)
-    if placement == "sharded":
+    if placement in ("sharded", "sharded_grid_custom_output"):
         grid_memory_config = ttnn.create_sharded_memory_config(
             (batch_size * 192 // k // 2, 2 * k),
             ttnn.CoreGrid(y=1, x=2),
@@ -459,10 +460,10 @@ def test_grid_sample_nearest_batched_work_partition(
         )
         grid_device = ttnn.to_memory_config(grid_device, grid_memory_config)
     output_kwargs = {}
-    if placement == "custom_output":
+    if placement in ("custom_output", "sharded_grid_custom_output"):
         cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0))})
         shard_shape = [
-            batch_size * 192 // 2 // (k if batch_output_channels else 1),
+            (batch_size * 192 // 2 + 8 * k) // (k if batch_output_channels else 1),
             32 * (k if batch_output_channels else 1),
         ]
         output_kwargs["memory_config"] = ttnn.MemoryConfig(
@@ -480,6 +481,85 @@ def test_grid_sample_nearest_batched_work_partition(
         batch_output_channels=batch_output_channels,
         **output_kwargs,
     )
+    if "memory_config" in output_kwargs:
+        assert output.memory_config() == output_kwargs["memory_config"]
     torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0, rtol=0)
     # A previous overrun corrupted the grid allocation and affected subsequent operations.
     assert torch.equal(ttnn.to_torch(grid_device).view(torch.int16), ttnn.to_torch(grid_host).view(torch.int16))
+
+
+@pytest.mark.parametrize("use_precomputed_grid", [False, True])
+@pytest.mark.parametrize("batch_output_channels", [False, True])
+@pytest.mark.parametrize(
+    "placement",
+    [
+        "sharded_grid_to_dram_interleaved",
+        "sharded_grid_to_l1_interleaved",
+        "interleaved_grid_to_custom_sharded",
+        "sharded_grid_to_custom_sharded",
+    ],
+)
+def test_grid_sample_bilinear_memory_config_overrides(
+    device, use_precomputed_grid, batch_output_channels, placement
+):
+    torch.manual_seed(42)
+    batch_size, height, width, channels = 2, 8, 16, 32
+    k = 4
+    input_tensor = torch.randn(batch_size, height, width, channels, dtype=torch.bfloat16)
+    grid = torch.randint(-12, 13, (batch_size, 2, 32, 2)).float() / 8
+    expected = golden_grid_sample(input_tensor, grid, align_corners=True)
+    if batch_output_channels:
+        expected = expected.reshape(batch_size, 2, 32 // k, k, channels).permute(0, 1, 2, 4, 3)
+        expected = expected.reshape(batch_size, 2, 32 // k, channels * k)
+
+    grid_host = ttnn.from_torch(grid, dtype=ttnn.float32 if use_precomputed_grid else ttnn.bfloat16)
+    if use_precomputed_grid:
+        grid_host = ttnn.prepare_grid_sample_grid(
+            grid_host,
+            list(input_tensor.shape),
+            mode="bilinear",
+            align_corners=True,
+            output_dtype=ttnn.bfloat16,
+        )
+    elements_per_point = 6 if use_precomputed_grid else 2
+    grid_host = ttnn.reshape(grid_host, (batch_size, 2, 32 // k, k * elements_per_point))
+    grid_device = ttnn.to_device(grid_host, device)
+
+    if placement.startswith("sharded_grid"):
+        grid_memory_config = ttnn.create_sharded_memory_config(
+            (batch_size * 16 // 2, k * elements_per_point),
+            ttnn.CoreGrid(y=1, x=2),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        grid_device = ttnn.to_memory_config(grid_device, grid_memory_config)
+
+    if placement == "sharded_grid_to_dram_interleaved":
+        output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    elif placement == "sharded_grid_to_l1_interleaved":
+        output_memory_config = ttnn.L1_MEMORY_CONFIG
+    else:
+        cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0))})
+        # Include trailing padding sticks per shard to exercise curr_batch >= input_batch bounds check
+        grid_sticks_per_shard = batch_size * 16 // 2 + 4
+        output_shard_height = grid_sticks_per_shard if batch_output_channels else grid_sticks_per_shard * k
+        output_shard_width = channels * k if batch_output_channels else channels
+        output_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(cores, [output_shard_height, output_shard_width], ttnn.ShardOrientation.COL_MAJOR),
+        )
+
+    input_device = ttnn.from_torch(input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.grid_sample(
+        input_device,
+        grid_device,
+        mode="bilinear",
+        align_corners=True,
+        use_precomputed_grid=use_precomputed_grid,
+        batch_output_channels=batch_output_channels,
+        memory_config=output_memory_config,
+    )
+    assert output.memory_config() == output_memory_config
+    torch.testing.assert_close(ttnn.to_torch(output), expected, atol=0.05, rtol=0.05)
