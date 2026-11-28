@@ -1417,7 +1417,8 @@ def batch_call_settings(env=None) -> tuple:
     # score's compute kernel, read per indexer call) likewise, refreshed like POS_DYNAMIC
     # MM_TUNED256 (PB.MM256: the 8192 chunk's re-swept matmul configs, tt/mm_configs.py, read per call) likewise,
     # refreshed like POS_DYNAMIC; WOA_BANK (WA.3: wo_a's per-bank weight copy, read per wo_a call) likewise, refreshed
-    # like POS_DYNAMIC; a held model lacking the copy it selects gets it in batch_call_apply (WOA_BANK_COPIES, OV-77)
+    # like POS_DYNAMIC; a held model lacking the copy it selects gets it in batch_call_apply (WOA_BANK_COPIES, OV-77);
+    # WQB_BANK (QB.1: wq_b's G = 1 per-bank weight copy, read per wq_b call) likewise (WQB_BANK_COPIES)
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1444,6 +1445,7 @@ def batch_call_settings(env=None) -> tuple:
         "INDEXER_BMAX_COMPUTE",
         "MM_TUNED256",
         "WOA_BANK",
+        "WQB_BANK",
         "COMMON_VALUE_SLOTS",
         "MHC_POST_V2",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
@@ -1468,6 +1470,7 @@ def batch_call_apply(model) -> None:
         _settings.snap["INDEXER_BMAX_COMPUTE"] = _settings._read("INDEXER_BMAX_COMPUTE")  # PB.FBM: likewise
         _settings.snap["MM_TUNED256"] = _settings._read("MM_TUNED256")  # PB.MM256: likewise
         _settings.snap["WOA_BANK"] = _settings._read("WOA_BANK")  # WA.3: likewise
+        _settings.snap["WQB_BANK"] = _settings._read("WQB_BANK")  # QB.1: likewise
     # WA.3 (OV-77): a load uploads only WOA_BANK's wo_a copy (WOA_BANK_COPIES=selected); a held model put to the other
     # value gets that copy now, between runs (re-read from the checkpoint), never on the request path
     from models.demos.deepseek_v41_flash_d_p.tt.attention import woa_ensure
@@ -1477,6 +1480,15 @@ def batch_call_apply(model) -> None:
     if got["layers"]:
         print(
             f"WA.3: WOA_BANK={_settings.get('WOA_BANK')}: the held model's {kind} wo_a copies added ({got})", flush=True
+        )
+    # QB.1: likewise for wq_b (WQB_BANK_COPIES)
+    from models.demos.deepseek_v41_flash_d_p.tt.attention import wqb_ensure
+
+    kind = "bank" if _settings.get("WQB_BANK") == "on" else "interleaved"
+    got = wqb_ensure(model, (kind,))
+    if got["layers"]:
+        print(
+            f"QB.1: WQB_BANK={_settings.get('WQB_BANK')}: the held model's {kind} wq_b copies added ({got})", flush=True
         )
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)

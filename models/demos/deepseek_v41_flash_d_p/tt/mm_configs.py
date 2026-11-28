@@ -692,6 +692,19 @@ def woa_bank_knobs(x_shape) -> tuple:
     return WOA_BANK_KNOBS.get(int(x_shape[2]), (4, 1, 1))
 
 
+# WQB_BANK=on (QB.1): the G = 1 bank path of the attention's wq_b by its rows a chip (x [1, 1, rows, 1280] @ w [1280,
+# 32768] bfp8 -> bf16): (bank.plan shape, cores a bank, block_w, depth, w_inflight, x_ahead). FIX.42's op sweep on the
+# 8x4's matmul-capped 11 x 10 grid (tests/woa/test_qbob_bank_probe.py, 4 layouts x block_w x depth x w_inflight):
+# 256 rows rect 11 bw 4 d 4 wi 1 202.9 us (today 238.8), 160 rows row 11 bw 4 d 3 wi 1 151.4 us (today 195.6). The
+# layout is a load-time choice (the load's rows a chip, tables.geo.q_rows); a row count not swept takes 256's entry
+WQB_BANK_KNOBS: dict = {256: ("rect", 11, 4, 4, 1, 1), 160: ("row", 11, 4, 3, 1, 1)}
+
+
+def wqb_bank_knobs(rows: int) -> tuple:
+    """(shape, cores a bank, block_w, depth, w_inflight, x_ahead) of the wq_b bank path at ``rows`` rows a chip."""
+    return WQB_BANK_KNOBS.get(int(rows), WQB_BANK_KNOBS[256])
+
+
 # minimal_matmul blocking (tiles): the sweep's best within 1-2 % on every bf16-output projection of this run
 MIN_BLOCK_M, MIN_BLOCK_K, MIN_BLOCK_N = 4, 4, 8
 # at most this many row tiles: a wide-N bf16 projection on 1D multicast (P.9: the 160-row projections of ATTN_SP32_PROJ)

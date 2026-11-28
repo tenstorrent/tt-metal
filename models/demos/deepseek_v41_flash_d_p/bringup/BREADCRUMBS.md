@@ -2224,3 +2224,42 @@
 - Re-run: probe `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
   "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/woa/test_qbob_bank_probe.py"`
   (~2 min); fork test: the same with tests/woa/test_gmm_fork_nsub.py; gate `gate FIX.42 --spec $BRINGUP_SPEC --check`.
+
+## QB.1 perf (attempt 1): wq_b on the per-bank C++ grouped_matmul (G = 1) in the model (DS41_WQB_BANK off | on)
+
+- Expected saving per chunk (written before any code; perf_guide read: wq_b at 256 / 160 rows a chip is weight-read
+  bound, DS41-191 / DS41-306; the bank layout removes read time, DS41-396 / DS41-405): device, from FIX.42's op probe,
+  wq_b 238.8 -> 202.9 us at 256 rows = -35.9 us a call x 21 calls (layers 0-20, DECODER_SKIP=decode) = ~-0.75 ms a
+  8192 chunk (single and packed 4 x 2k: 256 rows a chip either way); 160 rows (a 5120 load) -44.2 us a call, ~-0.9 ms
+  a chunk. Host: ~0 (the C++ op on the program cache, DS41-398: ~21-29 us a call vs minimal_matmul's stock launch of
+  the same order); within the wall noise.
+- Loads: "needs the executed layers 0-20 once because off vs on and the on repeat must be measured on real chunks
+  (DS41-390: random inputs hide K-order differences)"; the gate's other units share that load (resident runner).
+- What: tt/settings WQB_BANK (call-time, off | on, default off until the owner accepts) and WQB_BANK_COPIES (selected |
+  both, load-time, as WOA_BANK_COPIES); mm_configs.WQB_BANK_KNOBS by rows a chip (256: rect 11 bw4 d4 wi1 xa1; 160:
+  row 11 bw4 d3 wi1 xa1, FIX.42's sweep bests), the layout picked at load from tables.geo.q_rows; tt/attention:
+  wq_b copies (_wqb_host / _wqb_attach / wqb_ensure / wqb_drop / wqb_layout, one shape spec wq_b_shape for
+  host_alloc), every wq_b call through `_wqb_mm` (on: ttnn.bringup.grouped_matmul with w_layout, one_group,
+  max_grid(); off: today's mm.linear; a layout the load lacks raises, as does a row count other than the load's);
+  tt/model sets wqb_src (checkpoint re-read); hooks: WQB_BANK in batch_call_settings, batch_call_apply refreshes it
+  and adds a held model's missing copy. No op / fork change (FIX.42's GMM_N_SUB build was already installed).
+- Test: tests/woa/test_wqb_offon.py (BATCH_SHARED, BATCH_LAYERS executed, layers 0-20, one load; single 8192 and
+  packed 4 x 2k at H = 139264; gated wqb_repeat_max_abs_diff_<case> == 0; off vs on rel L2 a layer diagnostic;
+  device / attention / wq_b ms and host us a call off vs on).
+- Measured (two runs, the gate's and the A/B's): on repeats 0.0; off vs on BIT-IDENTICAL on all 20 layer outputs
+  of both cases (DS41-406: the expected K-order difference did not show). wq_b 5.01 -> 4.13 ms a single 8192 chunk,
+  5.00 -> 4.38 a 4 x 2k chunk; chunk device -0.89 / -0.97 ms single, -0.83 / -0.77 packed; attention -0.82..-0.89
+  single; host a wq_b call 69-70 -> 42 us single, 76-78 -> 46-47 packed. Expected vs measured: device -0.75 ms a 8192
+  chunk expected -> -0.87 ms wq_b, -0.9 ms chunk; host 0 expected -> about -0.6 ms a chunk (C++ op on its program
+  cache vs minimal_matmul's launch).
+- Gate QB.1 --check PASS (all 6 units): reference L39 0.868 / 0.662 (limits 1.49 / 1.53), final hidden 0.140 / 0.135,
+  top5 1.0; strict cold no-rebuild 0 builds on every path; determinism 0.0. `orchestrator measure --task QB.1 --part
+  test` and `measure --task QB.1`: the on side, rc 0 (the final measure reused the --part runs). No profile run
+  (not tuning). Report: results/QB.1_ladder.md (rendered by generated/ds41_woa/qb1_ladder_report.py from
+  results/QB.1.json + generated/ds41_woa/wqb_offon.json; kept out of tests/ so the code key stays).
+- Gotcha: pre-commit's "Forbid models from importing the tests package" fails on files this step did not touch
+  (tests/test_expert_x_pieces.py, moe_block_main); every hook on the changed files passes.
+- Per-chunk values (rule 20): none touched. WQB_BANK is a per-call host branch; x / w / y addresses are the C++ op's
+  program-cache overrides; layout, knobs and core set are load / compile time (the cold strict no-rebuild: 0 builds).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate QB.1 --spec $BRINGUP_SPEC --check`; the test
+  alone: `gate QB.1 --check --unit QB.1#test_wqb_offon` (~7 min on the resident runner, model load included).

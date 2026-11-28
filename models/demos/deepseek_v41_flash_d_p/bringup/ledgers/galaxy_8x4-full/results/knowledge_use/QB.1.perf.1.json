@@ -1,0 +1,90 @@
+{
+ "used": [
+  {
+   "id": "DS41-405",
+   "how": "wired FIX.42's wq_b bank layouts / knobs by rows (256: rect 11 bw4 d4 wi1; 160: row 11 bw4 d3 wi1) into mm_configs.WQB_BANK_KNOBS; wo_b left on the stock call",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-390",
+   "how": "no off == on gate for wq_b (other K order): test_wqb_offon gates only the on repeat, off vs on rel L2 a layer is a diagnostic; accuracy left to the reference unit",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-382",
+   "how": "wq_b bank layout planned on max_grid (the matmul-capped compute sub-device) and the call passes max_grid() so the packed chunk's gather-hide region accepts it",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-392",
+   "how": "bank copy uploaded with grouped_matmul_ttnn/bank.upload (plain TILE conversion then the sharded placement): today's bfp8 bytes",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-394",
+   "how": "one_group=True on the wq_b bank call (few core ranges a launch, host a call ~ today's)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-395",
+   "how": "test_wqb_offon runs everything (comparison and timing re-runs) under DECODER_SKIP=decode on the executed layers 0-20",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-397",
+   "how": "the A/B switch WQB_BANK is named only by the gate's commands as given; test_wqb_offon sets both sides itself per call (_pc.switch)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-314",
+   "how": "WQB_BANK refreshed in the frozen snapshot in hooks.batch_call_apply and switched through packed_common.switch (snapshot + env)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding: bank.plan splits wq_b's 1024 column tiles evenly over 8 banks (128 a bank, 11 cores a bank, GMM_N_SUB DEST sub-blocks); a shape with no layout raises (tt/attention.wqb_layout)"
+  }
+ ],
+ "cited_only": [
+  "DS41-406"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "QB.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T08:36:12",
+  "head": "a0846ac0f59",
+  "touched": [
+   "generated/ds41_woa/qb1_ladder_report.py",
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/QB.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/QB.1_ladder.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/QB.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/woa/test_wqb_offon.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/host_alloc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
