@@ -385,6 +385,12 @@ void gather_rows_to_shard(
             return (i % N_TRIDS) + 1;
         }
     };
+    // set_async_read_state<TXN_ID> sets the sticky NOC_PACKET_TAG without issuing a read.
+    [[maybe_unused]] auto set_read_tag = [&](uint32_t trid) {
+        UnicastEndpoint self_ep;
+        noc.set_async_read_state<NocOptions::TXN_ID>(
+            self_ep, /*size_bytes=*/0, experimental::local_addr(0, noc.get_noc_id()), NocOptVals{.trid = trid});
+    };
     // Per-call fast path: if this call won't fill at least two ring cycles, the
     // post-loop drain of N_TRIDS barriers is wasted.  Floor at 2 * N_TRIDS reads.
     constexpr uint32_t kGatherFastPathReadCutoff = 2 * N_TRIDS;
@@ -412,9 +418,9 @@ void gather_rows_to_shard(
                 if constexpr (N_TRIDS != 0) {
                     if (use_ring) {
                         if (issued >= N_TRIDS) {
-                            experimental::async_read_barrier_with_trid(noc, trid_for(issued - N_TRIDS));
+                            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = trid_for(issued - N_TRIDS)});
                         }
-                        experimental::set_read_trid(noc, trid_for(issued));
+                        set_read_tag(trid_for(issued));
                     }
                 }
                 if constexpr (check_padding) {
@@ -559,11 +565,11 @@ void gather_rows_to_shard(
             // trid_for(issued - to_drain).
             const uint32_t to_drain = issued < N_TRIDS ? issued : N_TRIDS;
             for (uint32_t k = 0; k < to_drain; k++) {
-                experimental::async_read_barrier_with_trid(noc, trid_for(issued - to_drain + k));
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = trid_for(issued - to_drain + k)});
             }
             // Restore untagged state so vol2col / pre_zero / shift reads (which use trid 0)
             // don't get accounted against a stale per-trid counter.
-            experimental::set_read_trid(noc, 0);
+            set_read_tag(0);
         } else {
             // Small-burst fallback: ring code never set a trid this call, so no reset needed.
             noc.async_read_barrier();
