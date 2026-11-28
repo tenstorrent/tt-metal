@@ -215,7 +215,9 @@ init_packages() {
                 PACKAGES+=("cmake")
             fi
             if [ "$distributed" -eq 1 ]; then
-                PACKAGES+=("openmpi-bin" "libopenmpi-dev")
+                # gfortran: without it, libopenmpi-dev pulls in gfortran-16 on Ubuntu 26.04, and with it a GCC 16
+                # installation without libstdc++-16-dev that clang then selects
+                PACKAGES+=("gfortran" "openmpi-bin" "libopenmpi-dev")
             fi
             ;;
         redhat)
