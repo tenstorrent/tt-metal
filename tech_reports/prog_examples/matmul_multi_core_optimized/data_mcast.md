@@ -131,37 +131,37 @@ Below, let's set some core ID\'s associated with a specific sender-receiver kern
 
 auto mm_reader_kernel_in0_sender_in1_sender_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_sender.cpp",
     in0_sender_in1_sender,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 
 auto mm_reader_kernel_in0_sender_in1_receiver_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
     in0_sender_in1_receiver,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = reader_compile_time_args});
 
 auto mm_reader_kernel_in0_receiver_in1_sender_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
     in0_receiver_in1_sender,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
 auto mm_reader_kernel_in0_receiver_in1_receiver_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_receiver.cpp",
     in0_receiver_in1_receiver,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = reader_compile_time_args});
 
 auto unary_writer_kernel_noc0_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
     all_except_left_column,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default, .compile_args = writer_compile_time_args});
 
 auto unary_writer_kernel_noc1_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/writer_bmm_tile_layout.cpp",
     left_column,
     tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_1_default, .compile_args = writer_compile_time_args});
 ```
@@ -182,7 +182,7 @@ Like all the examples preceding, we call our compute kernel as usual, except her
 ``` cpp
 auto mm_kernel_id = tt_metal::CreateKernel(
     program,
-    "tt_metal/programming_examples/matmul_common/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
+    "tt_metal/programming_examples/matmul/matmul_common/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",
     all_cores,
     tt_metal::ComputeConfig{.math_fidelity = math_fidelity, .compile_args = compute_kernel_args}
 );

@@ -126,7 +126,7 @@ sweep_rank_binding_solutions.py [OPTIONS] -- <command> [args...]
 | `--select id[,id...]` | Only sweep these solution ids (default: all in the index). |
 | `--limit N` | Sweep at most the first N solutions (by index order / solver preference). |
 | `--mpi-args "..."` | Extra MPI args forwarded to each launch (e.g. `--allow-run-as-root --oversubscribe`). |
-| `--rankfile-syntax auto\|ompi\|prrte` | Forwarded to tt-run rankfile handling. |
+| `--rankfile-syntax auto\|rankfile\|map-by\|mca` | Forwarded to tt-run rankfile handling. |
 | `--tcp-interface IFACE` | Forwarded (multi-host TCP exclusions). |
 | `--per-solution-timeout SECONDS` | Kill a launch that exceeds this; record as `timeout`. |
 | `--continue-on-failure / --stop-on-failure` | Whether to keep sweeping after a failing solution (default: continue). |
@@ -263,18 +263,21 @@ the index) — the report already carries `host_set` per solution to support thi
 ```bash
 # A) Generate then sweep a passthrough test across every solution (mock cluster)
 python3 tools/scaleout/sweep_rank_binding_solutions.py \
-  -m tt_metal/fabric/mesh_graph_descriptors/9_quad_bh_galaxy_9x32x4_torus_graph_descriptor.textproto \
+  --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/9_quad_bh_galaxy_9x32x4_torus_graph_descriptor.textproto \
   --mock-cluster-rank-binding .../SC36_..._mapping.yaml \
-  --max-solutions 8 --output-dir generated/ttrun/sc36_sweep \
+  --max-solutions 8 --solutions-output-dir generated/ttrun/sc36_sweep \
   --mpi-args "--allow-run-as-root --oversubscribe" \
+  --recover-command 'true' \
   -- ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.*PipelineBuilder*"
 
 # B) Sweep an existing solutions dir with a trivial command
 python3 tools/scaleout/sweep_rank_binding_solutions.py \
   --solutions-dir generated/ttrun/sc4pod_on_sc20_allsol \
+  --recover-command 'true' \
   -- true
 
 # C) Real cluster: generate for a host list, sweep just 3 solutions, dry-run first
 python3 tools/scaleout/sweep_rank_binding_solutions.py \
-  -m <mgd> --hosts nodeA,nodeB,nodeC,nodeD --limit 3 --dry-run -- ./my_app
+  --mesh-graph-descriptor <mgd> --hosts nodeA,nodeB,nodeC,nodeD --limit 3 --dry-run \
+  --recover-command './recover.sh' -- ./my_app
 ```

@@ -76,7 +76,7 @@ EfficientNet-B0 is a lightweight and efficient convolutional neural network arch
   ```
 
 ## Details
-- The entry point to efficientnetb0 is in models/experimental/efficientnetb0/tt/ttnn_efficientnetb0.py.
+- The entry point to efficientnetb0 is in models/experimental/efficientnetb0/tt/efficientnetb0.py.
 - Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution - `(224, 224)` - (Height, Width).
 - Dataset used for evaluation - **imagenet-1k**

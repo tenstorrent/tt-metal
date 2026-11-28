@@ -79,7 +79,7 @@ transfuser/
 │   ├── test_self_attention.py          # Self-attention tests
 │   ├── test_bottleneck.py              # Bottleneck tests
 │   ├── test_stages.py                  # Stage tests
-│   ├── test_head.py                    # Detection head tests
+│   ├── test_lidar_center_net.py        # Detection head tests
 │   └── test_topdown.py                 # FPN tests
 └── demo/                # Demo scripts
     └── lidar_center_net_demo.py
@@ -212,7 +212,7 @@ pytest models/experimental/transfuser/tests/test_gpt.py
 pytest models/experimental/transfuser/tests/test_self_attention.py
 pytest models/experimental/transfuser/tests/test_bottleneck.py
 pytest models/experimental/transfuser/tests/test_stages.py
-pytest models/experimental/transfuser/tests/test_head.py
+pytest models/experimental/transfuser/tests/test_lidar_center_net.py
 pytest models/experimental/transfuser/tests/test_topdown.py
 ```
 
@@ -224,7 +224,7 @@ pytest models/experimental/transfuser/tests/test_topdown.py
 - **test_self_attention.py**: Tests self-attention mechanism (both optimized and non-optimized)
 - **test_bottleneck.py**: Tests bottleneck blocks
 - **test_stages.py**: Tests ResNet/RegNet stages
-- **test_head.py**: Tests LidarCenterNet detection head
+- **test_lidar_center_net.py**: Tests LidarCenterNet detection head
 - **test_topdown.py**: Tests FPN top-down pathway
 
 All tests use PCC (Pearson Correlation Coefficient) validation to compare TTNN outputs with PyTorch reference outputs.

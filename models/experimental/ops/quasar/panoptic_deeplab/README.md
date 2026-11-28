@@ -69,15 +69,15 @@ TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/ops/qu
 ### Run the Demo
 ```bash
 # Single image with custom output directory
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/tt/demo.py <image_path> <weights_path> <output_dir>
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/demo/demo.py <image_path> <weights_path> <output_dir>
 
 # Batch processing of directory
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/tt/demo.py <input_dir> <weights_path> <output_dir> --batch
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/demo/demo.py <input_dir> <weights_path> <output_dir> --batch
 ```
 
 For help with demo options:
 ```bash
-TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/tt/demo.py --help
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="4,3" python models/experimental/ops/quasar/panoptic_deeplab/demo/demo.py --help
 ```
 
 ### Demo Output Files

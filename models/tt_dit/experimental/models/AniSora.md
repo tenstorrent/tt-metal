@@ -21,7 +21,7 @@ final 10% (`boundary_ratio=0.9`, vs 0.5 for base Wan2.2).
 The AniSora safetensors use the original-Wan key naming
 (`blocks.X.self_attn.q.weight`, etc), identical to the lightx2v distill
 checkpoints. The same `wan_lightx2v_to_diffusers_key` rename function in
-`models/tt_dit/utils/lightx2v_loader.py` is reused.
+`models/tt_dit/experimental/utils/lightx2v_loader.py` is reused.
 
 `NUM_STEPS` is configurable (default 40). Lower step counts (16, 8) can produce video at decent quality.
 
