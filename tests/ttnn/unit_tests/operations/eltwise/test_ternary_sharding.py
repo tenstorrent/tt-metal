@@ -2825,3 +2825,46 @@ def test_where_inherited_sharded_output_runs_on_its_sub_device(device, a_shardin
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(manager)
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        lambda c, a, b, m: ttnn.where(c, a, b, memory_config=m),
+        lambda c, a, b, m: ttnn.addcmul(a, c, b, value=0.5, memory_config=m),
+        lambda c, a, b, m: ttnn.addcdiv(a, c, b, value=0.5, memory_config=m),
+        lambda c, a, b, m: ttnn.lerp(a, b, c, memory_config=m),
+        lambda c, a, b, m: ttnn.lerp(a, b, 0.25, memory_config=m),
+    ],
+    ids=["where_ttt", "addcmul", "addcdiv", "lerp", "lerp_scalar"],
+)
+@pytest.mark.parametrize(
+    "in_strategy, out_strategy, out_orientation",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.WIDTH, ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.COL_MAJOR),
+    ],
+    ids=["height_to_width", "width_to_height", "height_row_to_col_major"],
+)
+def test_ternary_output_shard_layout_differs_on_same_grid(device, op, in_strategy, out_strategy, out_orientation):
+    shape = (1, 1, 256, 256)
+    grid = ttnn.CoreGrid(y=2, x=4)
+    in_config = ttnn.create_sharded_memory_config(shape, grid, in_strategy)
+    out_config = ttnn.create_sharded_memory_config(shape, grid, out_strategy, orientation=out_orientation)
+    torch_cond = torch.randint(0, 2, shape).bfloat16()
+    torch_a = torch.randn(shape).bfloat16()
+    torch_b = torch.randn(shape).bfloat16()
+
+    def to_device(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_config)
+
+    interleaved = [
+        ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for t in (torch_cond, torch_a, torch_b)
+    ]
+    expected = ttnn.to_torch(op(*interleaved, None))
+    out = op(to_device(torch_cond), to_device(torch_a), to_device(torch_b), out_config)
+
+    assert out.memory_config() == out_config
+    assert torch.equal(ttnn.to_torch(out), expected)

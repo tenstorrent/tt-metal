@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ternary_op_utils.hpp"
+#include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -69,15 +70,14 @@ static bool is_native_L1_sharding(
         c.buffer_type() == BufferType::DRAM) {
         return false;
     }
-    // Check if output grid differs from input grids - if so, cannot use native sharding
+    // Native sharding aliases a sharded input as the output, so it needs the output's exact shard layout.
     if (c.is_sharded() && c.shard_spec().has_value()) {
-        const auto& out_grid = c.shard_spec()->grid;
         if (a.memory_config().is_sharded() && a.memory_config().shard_spec().has_value() &&
-            a.memory_config().shard_spec()->grid != out_grid) {
+            !binary_ng::sharded_layout_matches(a.memory_config(), c)) {
             return false;
         }
         if (b.memory_config().is_sharded() && b.memory_config().shard_spec().has_value() &&
-            b.memory_config().shard_spec()->grid != out_grid) {
+            !binary_ng::sharded_layout_matches(b.memory_config(), c)) {
             return false;
         }
     }
@@ -129,20 +129,19 @@ bool is_native_L1_sharding(
             output_memory_config.buffer_type() == BufferType::DRAM) {
             return false;
         }
-        // Check if output grid differs from input grids - if so, cannot use native sharding
+        // Native sharding aliases a sharded input as the output, so it needs the output's exact shard layout.
         if (output_memory_config.shard_spec().has_value()) {
-            const auto& out_grid = output_memory_config.shard_spec()->grid;
             if (predicate_spec.memory_config().is_sharded() &&
                 predicate_spec.memory_config().shard_spec().has_value() &&
-                predicate_spec.memory_config().shard_spec()->grid != out_grid) {
+                !binary_ng::sharded_layout_matches(predicate_spec.memory_config(), output_memory_config)) {
                 return false;
             }
             if (true_spec->memory_config().is_sharded() && true_spec->memory_config().shard_spec().has_value() &&
-                true_spec->memory_config().shard_spec()->grid != out_grid) {
+                !binary_ng::sharded_layout_matches(true_spec->memory_config(), output_memory_config)) {
                 return false;
             }
             if (false_spec->memory_config().is_sharded() && false_spec->memory_config().shard_spec().has_value() &&
-                false_spec->memory_config().shard_spec()->grid != out_grid) {
+                !binary_ng::sharded_layout_matches(false_spec->memory_config(), output_memory_config)) {
                 return false;
             }
         }
