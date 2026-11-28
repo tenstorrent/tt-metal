@@ -1320,6 +1320,7 @@ jobs:
                           "llama3.1-8b-dp-galaxy",
                           "llama3.3-70b-galaxy",
                           "qwen3-32b-galaxy",
+                          "glm53-flash",
                           "qwen3.6-27b",
                           "qwen3.6-35b-a3b",
                           "gpt-oss-120b",
@@ -1423,10 +1424,12 @@ jobs:
                           "all",
                           "llama3.1-8b",
                           "qwen3-32b-galaxy",
+                          "glm53-flash",
                           "qwen3.6-27b",
                           "qwen3.6-35b-a3b",
                           "gpt-oss-120b",
                           "minimax-m3",
+                          "multimedia-store",
                           "deepseek-v3",
                           "whisper",
                           "gemma-4-12b",
@@ -1441,6 +1444,7 @@ jobs:
                           "flux.1-dev",
                           "flux.2-dev",
                           "ltx-2.3",
+                          "minimax-h3",
                           "z-image-turbo",
                           "resnet50",
                           "tt-transformers-common"
@@ -1475,9 +1479,11 @@ jobs:
                           "bh_p300 (P300)",
                           "bh_quietbox_2 (BH QB2)",
                           "bh_galaxy (BH Galaxy)",
+                          "bh_p150b_civ2 (P150b CIv2)",
                           "bh_sc1 (BH Single Galaxy)",
                           "bh_sc4 (BH Supercluster 4)",
-                          "bh_sc16 (BH Supercluster 16)"
+                          "bh_sc16 (BH Supercluster 16)",
+                          "bh_qb2 (BH QB2 via TTOP)"
                         ],
                         "type": "string"
                       }
@@ -2799,6 +2805,7 @@ jobs:
                           "meta-llama/Llama-3.1-8B-Instruct",
                           "meta-llama/Llama-3.3-70B-Instruct",
                           "Qwen/Qwen3-32B",
+                          "zai-org/GLM-5.3-Flash",
                           "Qwen/Qwen3.6-27B",
                           "Qwen/Qwen2.5-VL-72B-Instruct",
                           "Qwen/Qwen2.5-VL-7B-Instruct",

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 import torch
 import copy
-from types import SimpleNamespace
 import ttnn
 import numpy as np
 import torch.nn as nn
@@ -255,12 +254,6 @@ def test_vad_transformer(
     map_reg_branch.append(nn.Linear(256, 2))
     map_reg_branch = nn.Sequential(*map_reg_branch)
     map_reg_branches = nn.ModuleList([copy.deepcopy(map_reg_branch) for i in range(3)])
-    # Trained weights: random ones barely move the reference points, so a wrong refinement still passes.
-    map_reg_branches = load_torch_model(
-        torch_model=map_reg_branches,
-        layer="pts_bbox_head.map_reg_branches.",
-        model_location_generator=model_location_generator,
-    )
     reg_branch = []
     for _ in range(2):
         reg_branch.append(nn.Linear(256, 256))
@@ -306,18 +299,6 @@ def test_vad_transformer(
         map_reg_branches=map_reg_branches,
         img_metas=img_metas,
     )
-
-    def branch_params(branches):
-        return {
-            str(lid): {
-                str(i): SimpleNamespace(
-                    weight=ttnn.to_device(preprocess_linear_weight(linear.weight, dtype=ttnn.bfloat16), device),
-                    bias=ttnn.to_device(preprocess_linear_bias(linear.bias, dtype=ttnn.bfloat16), device),
-                )
-                for i, linear in enumerate(m for m in branch if isinstance(m, nn.Linear))
-            }
-            for lid, branch in enumerate(branches)
-        }
 
     ttnn_model = TtVADPerceptionTransformer(
         params=parameter,

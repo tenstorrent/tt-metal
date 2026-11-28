@@ -238,11 +238,8 @@ class TtVADPerceptionTransformer:
         self._frame_ready = False
 
         if prev_bev is not None:
-            # prev_bev is the previous frame's bev_embed, already on host; torchvision's rotate has no
-            # ttnn equivalent, so the ego-rotation is applied in torch before the upload.
-            prev_bev = prev_bev.clone()
             if prev_bev.shape[1] == bev_h * bev_w:
-                prev_bev = prev_bev.permute(1, 0, 2)
+                prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
                 prev_bev = self._rotate_prev_bev(prev_bev)
 

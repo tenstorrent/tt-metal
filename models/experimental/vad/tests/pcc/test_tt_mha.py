@@ -50,7 +50,10 @@ def test_vad_mha_key_padding_mask(device, reset_seeds):
         )
         # The reference's hand-written attention must agree with torch's own.
         expected = torch_model.attn(query + query_pos, key + key_pos, key, key_padding_mask=key_padding_mask)[0] + query
+        unmasked = torch_model(query, key, key, query_pos=query_pos, key_pos=key_pos)
     assert torch.allclose(torch_output, expected, atol=1e-4), "reference MHA differs from torch.nn.MultiheadAttention"
+    # The mask must change the result, or this test would pass without it.
+    assert not torch.allclose(torch_output, unmasked, atol=0.1)
 
     params = SimpleNamespace(
         in_proj=_linear_params(torch_model.attn.in_proj_weight, torch_model.attn.in_proj_bias, device),

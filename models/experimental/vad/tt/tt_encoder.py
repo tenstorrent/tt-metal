@@ -167,17 +167,16 @@ class TtBEVFormerEncoder:
         bev_query = ttnn.permute(bev_query, (1, 0, 2))
         bev_pos = ttnn.permute(bev_pos, (1, 0, 2))
         bs, len_bev, _ = bev_query.shape
-        # Every BEV map's float32 reference points, previous BEV first: the previous one's moved
-        # by the ego shift, (bs, Q, 2, 2), as the temporal self-attention samples the two maps.
+        # Every BEV map's float32 reference points, (bs, Q, 2, 2), as the temporal self-attention
+        # samples the two maps. Upstream VAD shifts ref_2d in place (its shift_ref_2d aliases it), so
+        # the current BEV's points move by the ego shift too; the released weights were trained that way.
         if prev_bev is not None:
             prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             prev_bev = ttnn.stack([prev_bev, bev_query], 1)
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, len_bev, -1))
-            shifted_ref_2d = ttnn.add(ref_2d, shift)
-            hybird_ref_2d = ttnn.concat([shifted_ref_2d, ref_2d], dim=2)
-            ttnn.deallocate(shifted_ref_2d)
-        else:
-            hybird_ref_2d = ttnn.concat([ref_2d, ref_2d], dim=2)
+        shifted_ref_2d = ttnn.add(ref_2d, shift)
+        hybird_ref_2d = ttnn.concat([shifted_ref_2d, shifted_ref_2d], dim=2)
+        ttnn.deallocate(shifted_ref_2d)
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
