@@ -58,6 +58,9 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
     const size_t size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    if (is_gguf(tensor_spec.data_type())) {
+        return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
+    }
     switch (tensor_spec.data_type()) {
         case DataType::BFLOAT16: return HostBuffer(std::vector<bfloat16>(size_bytes / sizeof(bfloat16)));
         case DataType::FLOAT32: return HostBuffer(std::vector<float>(size_bytes / sizeof(float)));
@@ -77,7 +80,8 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
         case DataType::MXINT4:
         case DataType::MXINT2:
         case DataType::UINT32: return HostBuffer(std::vector<uint32_t>(size_bytes / sizeof(uint32_t)));
-        case DataType::INVALID: TT_THROW("Invalid data type");
+        case DataType::INVALID:
+        default: TT_THROW("Invalid data type");
     }
     TT_THROW("Unreachable");
 }

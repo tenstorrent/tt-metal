@@ -10,6 +10,7 @@ These tests correspond to the tensor implementation in `tt_metal/impl/tensor/` a
 - `test_host_tensor.cpp` - Sanity tests for HostTensor (type traits, construction, copy/move semantics)
 - `test_mesh_tensor.cpp` - Sanity tests for MeshTensor (type traits, construction, move semantics, device-based tests with MeshBuffer)
 - `test_tensor_types.cpp` - Free-function tensor type helpers (e.g. `tile_size`)
+- `test_gguf_dtypes.cpp` - GGUF dtypes: format table vs the Blackhole decoder, page geometry, `from_gguf` / `to_gguf` round trips
 - `test_tensor_layout.cpp` - TensorLayout alignment/physical-shape/strides/padding metadata, with optional H2D/D2H round-trip
 - `test_create_tensor.cpp` - HostTensor->MeshTensor H2D/D2H round-trips and create-tensor combination sweeps
 - `test_create_tensor_with_layout.cpp` - Layout-driven padding of an allocated MeshTensor (TILE vs ROW_MAJOR)

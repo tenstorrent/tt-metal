@@ -39,7 +39,46 @@ enum class DataType {
     MXINT8 = 15,
     MXINT4 = 16,
     MXINT2 = 17,
-    INVALID = 18,
+    // GGUF quantized weights, one value per format: TILE layout, each page one GGUF record, see
+    // experimental::GgufTraits.
+    GGUF_Q8_0 = 19,
+    GGUF_Q4_0 = 20,
+    GGUF_IQ4_NL = 21,
+    GGUF_MXFP4 = 22,
+    GGUF_NVFP4 = 23,
+    GGUF_Q6_K = 24,
+    GGUF_Q4_K = 25,
+    GGUF_Q5_K = 26,
+    GGUF_Q3_K = 27,
+    GGUF_Q2_K = 28,
+    GGUF_IQ4_XS = 29,
+    GGUF_TQ2_0 = 30,
+    GGUF_Q2_0 = 31,
+    GGUF_Q1_0 = 32,
+    GGUF_IQ2_XXS = 33,
+    GGUF_IQ1_S = 34,
+    GGUF_IQ2_S = 35,
+    GGUF_IQ3_S = 36,
+    GGUF_IQ3_XXS = 37,
+    GGUF_IQ2_XS = 38,
+    GGUF_IQ1_M = 39,
+    GGUF_Q4_1 = 40,
+    GGUF_Q5_0 = 41,
+    GGUF_Q5_1 = 42,
+    GGUF_TQ1_0 = 43,
+    // Expanded GGUF layouts, made by from_gguf from the GGUF format of the same name
+    // (experimental::gguf_source_dtype): exact, larger pages that the matmul decodes faster. The codebook formats hold
+    // each grid entry's level codes instead of its grid index (no lookup per matmul); TQ1_0 holds its weights as
+    // TQ2_0's 2-bit codes.
+    GGUF_IQ2_XXS_EXPANDED = 44,
+    GGUF_IQ1_S_EXPANDED = 45,
+    GGUF_IQ2_S_EXPANDED = 46,
+    GGUF_IQ3_S_EXPANDED = 47,
+    GGUF_IQ3_XXS_EXPANDED = 48,
+    GGUF_IQ2_XS_EXPANDED = 49,
+    GGUF_IQ1_M_EXPANDED = 50,
+    GGUF_TQ1_0_EXPANDED = 51,
+    INVALID = 52,
 };
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_type);
@@ -84,6 +123,10 @@ constexpr bool is_mx(DataType dtype) {
         default: return false;
     }
 }
+
+// True for the GGUF formats. Their pages hold GGUF records, not values: ops that do not handle GGUF see
+// DataFormat::Invalid for them, and the host converts them only with from_gguf / to_gguf.
+bool is_gguf(DataType dtype);
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);

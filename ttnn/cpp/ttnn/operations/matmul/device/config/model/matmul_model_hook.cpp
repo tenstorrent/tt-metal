@@ -115,7 +115,8 @@ std::optional<DataType> model_dtype(tt::tt_metal::DataType t) {
         case tt::tt_metal::DataType::MXINT8:
         case tt::tt_metal::DataType::MXINT4:
         case tt::tt_metal::DataType::MXINT2:
-        case tt::tt_metal::DataType::INVALID: return std::nullopt;
+        case tt::tt_metal::DataType::INVALID:
+        default: return std::nullopt;
     }
     TT_THROW("Unreachable");
 }
