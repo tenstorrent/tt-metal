@@ -2412,7 +2412,8 @@ class MiniMaxH3Pipeline:
         num_latent_frames = video_latent_num_frames(num_frames)
         # Maps the clip assembly's host buffer while this request denoises, so the decode skips the
         # page faults of fresh memory (0.2-1.9 s for the first clips after a load or length switch).
-        self._vae.reserve_decode_output(num_latent_frames, latent_height, latent_width)
+        if self.vae_output_type == "yuv420":
+            self._vae.reserve_decode_output(num_latent_frames, latent_height, latent_width)
 
         # `stretch` keys on position in the list, not on the anchor name: the FIRST keyframe given is
         # the geometry anchor and is stretched to the canvas, and any later one is cover-cropped to

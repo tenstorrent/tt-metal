@@ -23,7 +23,6 @@ def _vae(decode_clips, assemble_beside_decode=False):
     vae.decoder = None
     vae.device_stitch = True
     vae.assemble_beside_decode = assemble_beside_decode
-    vae._assembled_shapes = {}
     vae._ensure_loaded = lambda module, subfolder: None
     vae._decoder_subfolder = lambda: "vae"
     vae.reserve_decode_output = lambda *latent_key: None
@@ -119,6 +118,24 @@ def test_a_decode_with_no_consumer_can_assemble_beside_the_device_decode(latent_
     vae = _vae(decode_clips, assemble_beside_decode)
     result = vae._decode(torch.zeros(1, 1, latent_frames, 2, 2), "yuv420")
     np.testing.assert_array_equal(result, _reference(recorded, config, latent_frames))
+
+
+@pytest.mark.parametrize("latent_frames", [7, 47])
+def test_reserve_decode_output_maps_the_size_the_decode_assembles(monkeypatch, latent_frames):
+    config = vm.MiniMaxH3VaeConfig()
+    ratio = config.spatial_compression_ratio
+    reserved = []
+    monkeypatch.setattr(vm.host_buffers, "reserve", lambda shape, count=None: reserved.append(tuple(shape)))
+
+    def decode_clips(chunk_latents, output_type="float", on_clip=None):
+        frames = (config.tokens_chunk_size + config.token_overlap) * config.temporal_compression_ratio
+        return [np.zeros((frames, 2 * ratio * 3 // 2, 2 * ratio), dtype=np.uint8) for _ in chunk_latents]
+
+    vae = _vae(decode_clips)
+    del vae.reserve_decode_output  # the class's own
+    # These lengths need no padding, so the decode returns the assembly's buffer whole.
+    result = vae._decode(torch.zeros(1, 1, latent_frames, 2, 2), "yuv420")
+    assert reserved == [result.shape]
 
 
 class _FakeStream:

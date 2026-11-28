@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import math
+import resource
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -103,6 +104,10 @@ class MiniMaxH3VaeConfig:
         self.tokens_chunk_size = math.ceil(self.clip_length / self.temporal_compression_ratio)
         self.token_overlap = (-self.token_drop) % self.tokens_chunk_size
         self.frame_overlap = max(self.token_overlap * self.temporal_compression_ratio - self.frame_pre_padding, 0)
+
+    def num_decode_chunks(self, latent_frames: int) -> int:
+        """Chunks a latent this long decodes into, its last one padded up to a whole chunk."""
+        return -(-(latent_frames + self.token_drop) // self.tokens_chunk_size) - int(self.token_drop > 0)
 
     @classmethod
     def from_pretrained(cls, path: str | os.PathLike) -> "MiniMaxH3VaeConfig":
@@ -329,8 +334,6 @@ class MiniMaxH3Vae:
         # `perf_counter` calls against a multi-second stage, and without it "VAE decode: 6.0 s" is a
         # number with nowhere to go.
         self._profile = self._empty_profile()
-        # Latent (T, H, W) -> the uint8 clip buffer its decode assembled, for `reserve_decode_output`.
-        self._assembled_shapes: dict[tuple[int, int, int], tuple[int, ...]] = {}
         self.last_decode_profile: dict[str, float] = {}
 
         self.decoder = self._make_decoder()
@@ -460,6 +463,9 @@ class MiniMaxH3Vae:
             "blend": 0.0,
             "waves": 0,
             "units": 0,
+            # The process's page faults and system time over the decode: fresh host memory shows here.
+            "page_faults": 0,
+            "system_s": 0.0,
             # Per-wave readback durations, not just their sum: a mean hides a slow first wave, and
             # comparing a mean against someone else's min-of-N is how a 2x phantom appears.
             "readback_join": 0.0,
@@ -544,7 +550,8 @@ class MiniMaxH3Vae:
         logger.info(
             f"VAE decode profile: {total:.2f} s over {waves} waves / {units} units "
             f"({self.mesh_device.get_num_devices()} devices, "
-            f"{units / waves if waves else 0:.1f} units/wave)"
+            f"{units / waves if waves else 0:.1f} units/wave), "
+            f"{int(p['page_faults'])} page faults, {p['system_s']:.2f} s system"
         )
         for name in (
             "device",
@@ -1633,22 +1640,24 @@ class MiniMaxH3Vae:
             torch.set_num_threads(previous_threads)
 
     def reserve_decode_output(self, latent_frames: int, latent_height: int, latent_width: int) -> None:
-        """Map the host buffer the clip assembly of a decode this size will take, in the background.
+        """Map the host buffer the yuv420 clip assembly of a decode this size will take, in the background.
 
         A fresh buffer faults in page by page, 0.2-1.9 s for the first clips after a load or length
-        switch on a box full of page cache (blx04, 11-20). The size comes from the last decode of
-        this latent shape (the load's warm-up decodes every served length); unknown sizes wait.
+        switch on a box full of page cache. The size is `_decode`'s own: every chunk keeps
+        ``clip_length`` frames and the last one its cross-fade tail.
         """
-        shape = self._assembled_shapes.get((int(latent_frames), int(latent_height), int(latent_width)))
-        if shape is not None:
-            host_buffers.reserve(shape)
+        config = self.config
+        num_chunks = config.num_decode_chunks(latent_frames)
+        frames, ratio = num_chunks * config.clip_length + config.frame_overlap, config.spatial_compression_ratio
+        host_buffers.reserve((frames, latent_height * ratio * 3 // 2, latent_width * ratio))
 
     def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float", on_frames: Callable | None = None):
         self._ensure_loaded(self.decoder, self._decoder_subfolder())
-        latent_key = tuple(int(d) for d in z_BCTHW.shape[2:])
-        self.reserve_decode_output(*latent_key)
+        if output_type == "yuv420":
+            self.reserve_decode_output(*z_BCTHW.shape[2:])
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
+        usage_started = resource.getrusage(resource.RUSAGE_SELF)
         config = self.config
         chunk_size = config.tokens_chunk_size
         temporal_ratio = config.temporal_compression_ratio
@@ -1656,7 +1665,7 @@ class MiniMaxH3Vae:
 
         num_tokens = z_BCTHW.shape[2] + config.token_drop
         pad_tokens = (-num_tokens) % chunk_size
-        num_chunks = (num_tokens + pad_tokens) // chunk_size - int(config.token_drop > 0)
+        num_chunks = config.num_decode_chunks(z_BCTHW.shape[2])
         # The pixel frames the repeated padding latents produce, cut off the end.
         intra_tail = config.clip_length % temporal_ratio
         tokens_before_pad = z_BCTHW.shape[2]
@@ -1733,11 +1742,14 @@ class MiniMaxH3Vae:
 
             result = assemble_clip_parts(parts, config.frame_overlap) if parts else concat_clip_frames([])
             self._profile["blend"] = time.perf_counter() - assemble_mark
-        if isinstance(result, np.ndarray) and result.dtype == np.uint8:
-            self._assembled_shapes[latent_key] = result.shape
         self._profile["concat"] = 0.0
         if pad_frames > 0:
             result = clip_frames(result, 0, clip_num_frames(result) - pad_frames)
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        self._profile["page_faults"] = (
+            usage.ru_minflt + usage.ru_majflt - usage_started.ru_minflt - usage_started.ru_majflt
+        )
+        self._profile["system_s"] = usage.ru_stime - usage_started.ru_stime
         self._report_profile(time.perf_counter() - decode_started)
         return result
 

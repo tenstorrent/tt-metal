@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 
 import numpy as np
 import torch
@@ -95,12 +95,41 @@ def split_clip(clip, chunk_num_frames: int, frame_pre_padding: int, token_drop: 
     return pieces[0], (pieces[1] if len(pieces) > 1 else None)
 
 
+# Temporaries the size of a seam are fresh memory on every decode, and on a serving box whose RAM
+# is mostly page cache those faults stall for seconds. The seam goes frame by frame through two
+# frames each joining thread keeps, and the threads stay.
+_scratch = threading.local()
+_join_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="h3-clip-join")
+# One worker: a streamed clip's part is written, and handed out, after the clip before it.
+_stream_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3-clip-stream")
+
+
+def _crossfade_uint8(slab: np.ndarray, tail: np.ndarray, head: np.ndarray, extent: int) -> None:
+    """:func:`blend_clip_frames` of ``tail`` into ``head``, written to ``slab``; the same float32 arithmetic."""
+    frames = getattr(_scratch, "frames", None)
+    if frames is None or frames[0].shape != slab.shape[1:]:
+        frames = _scratch.frames = tuple(np.empty(slab.shape[1:], dtype=np.float32) for _ in range(2))
+    a, b = frames
+    positions = np.arange(extent, dtype=np.float32)
+    fade_out, fade_in = 1.0 - positions / extent, positions / extent
+    for k in range(extent):
+        np.multiply(tail[k], fade_out[k], out=a, dtype=np.float32)
+        np.multiply(head[k], fade_in[k], out=b, dtype=np.float32)
+        np.add(a, b, out=a)
+        np.rint(a, out=a)
+        np.clip(a, 0, 255, out=a)
+        slab[k] = a
+
+
 def write_clip_part(out, start: int, segment, previous, frame_overlap: int) -> None:
     """Write ``segment`` into ``out`` at frame ``start``, its head cross-faded with ``previous``'s tail."""
     frames = clip_num_frames(segment)
     slab = clip_frames(out, start, start + frames)
     extent = 0 if previous is None else min(clip_num_frames(previous), frames, frame_overlap)
-    if extent:
+    if extent and isinstance(out, np.ndarray) and out.dtype == np.uint8:
+        _crossfade_uint8(slab, previous[-extent:], segment, extent)
+        np.copyto(slab[extent:], segment[extent:])
+    elif extent:
         head = blend_clip_frames(previous, clip_frames(segment, 0, extent), extent)
         if isinstance(out, np.ndarray):
             slab[:extent] = head
@@ -137,9 +166,8 @@ def assemble_clip_parts(parts: list[tuple], frame_overlap: int):
     if len(jobs) == 1:
         write_clip_part(*jobs[0])
     else:
-        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
-            for done in [pool.submit(write_clip_part, *job) for job in jobs]:
-                done.result()
+        for done in [_join_pool.submit(write_clip_part, *job) for job in jobs]:
+            done.result()
     return out
 
 
@@ -171,7 +199,6 @@ class StreamingClipAssembly:
         self._frame_overlap = frame_overlap
         self._trim = trim
         self._on_frames = on_frames
-        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h3-clip-stream")
         self._futures: list[Future] = []
         self._lock = threading.Lock()
         self._out = None
@@ -192,7 +219,7 @@ class StreamingClipAssembly:
             self._added += 1
             if index >= self._num_clips:
                 raise ValueError(f"clip {index + 1} for a {self._num_clips}-clip decode")
-            self._futures.append(self._pool.submit(self._add, index, clip))
+            self._futures.append(_stream_pool.submit(self._add, index, clip))
 
     def _add(self, index: int, clip) -> None:
         if self._failed:
@@ -237,4 +264,7 @@ class StreamingClipAssembly:
         return self._out
 
     def close(self) -> None:
-        self._pool.shutdown(wait=True, cancel_futures=True)
+        """Drop this decode's clips still queued and wait for the one being written."""
+        for future in self._futures:
+            future.cancel()
+        wait(self._futures)

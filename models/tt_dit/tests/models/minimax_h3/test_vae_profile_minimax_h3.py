@@ -85,11 +85,15 @@ def test_log_prints_blend(monkeypatch):
     assert len(blend) == 1 and "0.07 s" in blend[0], lines
 
 
-def test_reserve_decode_output_maps_the_last_assembled_size(monkeypatch):
-    calls = []
-    monkeypatch.setattr(vm.host_buffers, "reserve", lambda shape, count=None: calls.append(shape))
-    vae = object.__new__(vm.MiniMaxH3Vae)
-    vae._assembled_shapes = {(31, 24, 42): (124, 1152, 1344)}
-    vae.reserve_decode_output(31, 24, 42)
-    vae.reserve_decode_output(61, 24, 42)  # never decoded: nothing to map yet
-    assert calls == [(124, 1152, 1344)]
+def test_log_carries_page_faults_and_system_time(monkeypatch):
+    monkeypatch.setattr(vm.ttnn, "using_distributed_env", lambda: False)
+    lines = []
+    sink = logger.add(lambda message: lines.append(str(message)), format="{message}")
+    try:
+        vae = _vae(synced=True, log=True)
+        vae._profile.update(page_faults=1234, system_s=0.05)
+        vae._report_profile(0.80)
+    finally:
+        logger.remove(sink)
+    (head,) = [line for line in lines if line.startswith("VAE decode profile")]
+    assert "1234 page faults, 0.05 s system" in head, head
