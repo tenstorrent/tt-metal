@@ -108,19 +108,20 @@ def test_refiner_unet(
 # Format: {test_id: {"wormhole": perf_ns, "blackhole": perf_ns}}
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
-        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (187.29M..187.60M); previous target 191.20M
-        "wormhole": 187_442_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 7 scheduled wh_n150 runs 2026-11-06..11-23 on 6 VMs (178.68M..180.33M)
+        "wormhole": 179_605_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         # mean of 3 scheduled bh_p150 runs 2026-10-10..10-12 (70.70M..70.74M); previous target 73.75M (2026-09-24, #55698)
         "blackhole": 70_724_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (73.25M..73.35M); previous target 77.80M
-        "wormhole": 73_287_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 7 scheduled wh_n150 runs 2026-11-06..11-23 on 6 VMs (70.62M..71.07M)
+        "wormhole": 70_840_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
         "wormhole": 244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (107.05M..107.22M)
+        "blackhole": 107_150_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
         # mean of 3 scheduled wh_n150 runs 2026-09-19..09-21 (75.30M..75.42M) after #56767 (nlp_create_qkv_heads kernels, 2026-09-18)
@@ -128,37 +129,38 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
-        "wormhole": 663_083_865,
-        # mean of bh_p150 runs 2026-10-17..19 (254.07M..254.62M) after #60876 (padded_slice RM reader no longer
-        # over-reads the input row); previous target 260.30M (2026-09-25, #55698)
-        "blackhole": 254_384_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (643.65M..643.69M)
+        "wormhole": 643_671_000,
+        # mean of 3 bh_p150 runs 2026-11-24 on 3 VMs (250.49M..250.66M)
+        "blackhole": 250_562_000,
     },
     "vae_decode_512x512": {
-        "wormhole": 167_473_541,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (158.89M..158.91M)
+        "wormhole": 158_898_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_encode_1024x1024": {
-        "wormhole": 328_968_938,  # Note: this is an average value of 30 test runs due to high variability
-        # bh_p150 run 2026-09-25 (137.84M) on #55698; previous target 141.18M
-        "blackhole": 137_841_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (316.50M..316.53M)
+        "wormhole": 316_516_000,
+        # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (135.57M..135.95M)
+        "blackhole": 135_768_000,
     },
     "vae_encode_512x512": {
-        # Mean of two local Wormhole runs on 2026-09-25 after GroupNorm wait reordering (80.60-80.92 ms).
-        "wormhole": 80_760_000,
+        # mean of 2 wh_n150 runs 2026-11-24 on 2 VMs (77.01M..77.08M)
+        "wormhole": 77_043_000,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        # Mean of 3 main CI runs 2026-10-20..22 (19.25M-19.30M). #57208 runs tt_dit Linear inputs of up to 128 rows as
-        # a 1D mcast matmul; previous target 23.75M.
-        "wormhole": 19_270_000,
-        # Mean of bh_p150 main CI runs 2026-10-20..21 (9.465M, 9.469M) after #57208; previous target 11.72M.
-        "blackhole": 9_467_000,
+        # mean of 3 wh_n150 runs 2026-11-07..11-23 on 3 VMs (18.05M..18.14M)
+        "wormhole": 18_091_000,
+        # mean of 8 scheduled bh_p150 runs 2026-11-06..11-23 on 4 VMs (9.00M..9.01M)
+        "blackhole": 9_004_000,
     },
     "clip_encoder_2": {
-        # Mean of 3 main CI runs 2026-10-20..22 (63.57M-63.80M) after #57208; previous target 88.53M.
-        "wormhole": 63_681_000,
-        # Mean of bh_p150 main CI runs 2026-10-20..21 (35.22M, 35.24M) after #57208; previous target 42.90M.
-        "blackhole": 35_231_000,
+        # mean of 3 wh_n150 runs 2026-11-07..11-23 on 3 VMs (60.09M..60.34M)
+        "wormhole": 60_199_000,
+        # mean of 7 scheduled bh_p150 runs 2026-11-06..11-23 on 3 VMs (33.75M..33.84M)
+        "blackhole": 33_792_000,
     },
 }
 

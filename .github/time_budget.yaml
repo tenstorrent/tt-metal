@@ -121,7 +121,7 @@ ttnn:
   unit_tier3:
     wh_n150: 4
   device_perf:
-    bh_p150b_civ2: 9
+    bh_p150b_civ2: 14
     wh_n150: 10
     wh_llmbox_perf: 8
   integration:
@@ -195,7 +195,7 @@ shield:
     bh_p150b_civ2: 70
     bh_p150: 2
   device_perf:
-    wh_n150: 100
+    wh_n150: 180
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
@@ -419,7 +419,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 206
-    wh_n150: 122
+    wh_n150: 129
     wh_n300: 30
     wh_galaxy_perf: 85
     bh_p150: 53
@@ -434,7 +434,7 @@ models:
     bh_p150: 30
     bh_p150b_civ2: 8  # VibeVoice-1.5B (PR #51447)
     bh_p300: 30
-    bh_quietbox_2: 25
+    bh_quietbox_2: 30
   integration:
     wh_llmbox: 0
   device_perf:

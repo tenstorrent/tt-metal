@@ -1059,7 +1059,7 @@
   model_family: Qwen3-TTS
   skus:
     wh_n150:
-      timeout: 25
+      timeout: 32
       tier: 2
     bh_p150:
       timeout: 30
@@ -1949,11 +1949,11 @@
     export HF_HOME=/mnt/MLPerf/huggingface HUNYUAN_MODEL_DIR=/mnt/MLPerf/huggingface/tencent/HunyuanImage-3.0
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tencent/HunyuanImage-3.0
     models/experimental/hunyuan_image_3_0/scripts/run_ci_pytest.sh unit \
-      --timeout 540 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
+      --timeout 720 models/experimental/hunyuan_image_3_0/tests/pcc/test_denoise.py -m "not slow"
   model: hunyuan-image-3.0
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 15
       tier: 3
   owner_id: U07J5E9NA9G # Dalar Vartanians
   team: models

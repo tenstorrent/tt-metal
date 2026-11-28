@@ -320,7 +320,8 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                shard_spec_32_cores_grid,
+                # Sharded softmax requires the mask's shard spec to equal the decode scores' (16 heads on (0,0)-(7,1)).
+                shard_spec_16_cores_grid,
                 [
                     row_height,
                     1,  # Dynamic
