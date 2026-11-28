@@ -310,6 +310,11 @@ After a successful preprocess compile, the client writes `.fulldephash` and `.bu
 next to the ELF. A later run that finds those still valid **skips the RPC** and loads the
 local ELF.
 
+The client rewrites a kernel's JIT-generated files before it checks them, so a cache that
+holds only the ELFs, their `.fulldephash` sidecars and the `.build_state` files is enough
+for that skip. A cache warmed on another machine can be stripped to those three before it
+is copied over.
+
 ### 5c. Other limitations and gotchas
 
 - **Precompiled kernels are not supported in remote mode.** A kernel with a

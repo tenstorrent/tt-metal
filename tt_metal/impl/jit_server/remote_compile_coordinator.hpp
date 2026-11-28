@@ -10,6 +10,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,15 +50,27 @@ public:
     RemoteCompileCoordinator(const RemoteCompileCoordinator&) = delete;
     RemoteCompileCoordinator& operator=(const RemoteCompileCoordinator&) = delete;
 
+    enum class SubmitResult {
+        Sent,          // This call owns the kernel and sent it to a server.
+        Reused,        // This call owns the kernel and make_descriptor() found nothing to compile.
+        Deduplicated,  // An earlier submission in this process owns the kernel.
+    };
+
     // Submit a kernel for remote compilation.
     // Deduplicates against prior submissions (even from previous batches in this process).
     // Sends the RPC immediately for new kernels; deduped kernels just record the future.
-    // make_descriptor() is invoked only by the owning caller.
-    void submit(std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor);
+    // make_descriptor() is invoked only by the owning caller. It returns std::nullopt when the
+    // kernel's ELFs are already valid on disk, in which case nothing is sent.
+    SubmitResult submit(
+        std::size_t kernel_hash, const std::function<std::optional<KernelCompileDescriptor>()>& make_descriptor);
 
     // Collect all outstanding RPC responses, write ELF blobs to disk,
     // and wait for any dedup'd kernels to complete.
     void finish();
+
+    // Forget every kernel this process has finished submitting, so its next submission owns it
+    // again. Kernels still in flight are kept. Part of experimental::ClearKernelCache().
+    static void clear_dedup_cache();
 
 private:
     const jit_server::UploadFirmwareRequest& get_firmware_request();

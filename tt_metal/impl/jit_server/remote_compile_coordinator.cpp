@@ -4,6 +4,7 @@
 
 #include "impl/jit_server/remote_compile_coordinator.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <utility>
@@ -39,8 +40,8 @@ RemoteCompileCoordinator::RemoteCompileCoordinator(
 
 RemoteCompileCoordinator::~RemoteCompileCoordinator() = default;
 
-void RemoteCompileCoordinator::submit(
-    std::size_t kernel_hash, const std::function<KernelCompileDescriptor()>& make_descriptor) {
+RemoteCompileCoordinator::SubmitResult RemoteCompileCoordinator::submit(
+    std::size_t kernel_hash, const std::function<std::optional<KernelCompileDescriptor>()>& make_descriptor) {
     // Check the cross-invocation dedup cache before generating files for this hash.
     std::shared_future<void> existing_future;
     std::shared_ptr<std::promise<void>> new_promise;
@@ -59,7 +60,7 @@ void RemoteCompileCoordinator::submit(
     submitted_.push_back(existing_future);
 
     if (!new_promise) {
-        return;
+        return SubmitResult::Deduplicated;
     }
 
     // This kernel is new — assign endpoint and pipeline the send.
@@ -67,11 +68,17 @@ void RemoteCompileCoordinator::submit(
 
     try {
         auto descriptor = make_descriptor();
+        if (!descriptor) {
+            // Nothing to compile. The dedup entry stays, already fulfilled, so later submissions
+            // of this hash return without calling make_descriptor() again.
+            new_promise->set_value();
+            return SubmitResult::Reused;
+        }
         ensure_session(ep_idx);
         ensure_firmware_uploaded(ep_idx);
 
-        sessions_[ep_idx]->send(descriptor.request);
-        pending_by_endpoint_[ep_idx].push_back({std::move(descriptor), std::move(new_promise)});
+        sessions_[ep_idx]->send(descriptor->request);
+        pending_by_endpoint_[ep_idx].push_back({std::move(*descriptor), std::move(new_promise)});
     } catch (...) {
         {
             std::lock_guard lock(s_dedup_mutex_);
@@ -80,6 +87,7 @@ void RemoteCompileCoordinator::submit(
         new_promise->set_exception(std::current_exception());
         throw;
     }
+    return SubmitResult::Sent;
 }
 
 void RemoteCompileCoordinator::finish() {
@@ -150,6 +158,13 @@ void RemoteCompileCoordinator::finish() {
     for (auto& v : pending_by_endpoint_) {
         v.clear();
     }
+}
+
+void RemoteCompileCoordinator::clear_dedup_cache() {
+    std::lock_guard lock(s_dedup_mutex_);
+    std::erase_if(s_dedup_cache_, [](const auto& entry) {
+        return entry.second.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+    });
 }
 
 void RemoteCompileCoordinator::ensure_session(std::size_t endpoint_index) {
