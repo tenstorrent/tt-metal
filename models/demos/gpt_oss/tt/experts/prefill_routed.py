@@ -85,7 +85,10 @@ ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 # fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c). 32768 vs 16384 (one-copy tree, BH 1x4,
 # TP experts): b1 32K 747.1 -> 714.0 ms, 64K 1870.6 -> 1852.4, 128K 5397.7 -> 5364.6; b32 1K 603.8 -> 591.6,
 # 8K 4922 -> 4834.5 (14.6 GB DRAM still free per device with the 32 x 64K KV cache).
-ROUTED_PREFILL_CHUNK_DEFAULT = 32768
+# 32768 only in tensor-parallel mode (gpt-oss-20b on a Blackhole 1x4 mesh, where it was measured); the expert-parallel
+# mode (other meshes) keeps 16384.
+ROUTED_PREFILL_CHUNK_DEFAULT = 16384
+ROUTED_PREFILL_CHUNK_TP_DEFAULT = 32768
 # Chunks of at most this many tokens take their [C, C] prefix-sum operator from a shared [8192, 8192] constant, longer
 # ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
 # of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
@@ -148,8 +151,9 @@ def routed_prefill_min_seq():
     return int(os.getenv(ROUTED_PREFILL_MIN_SEQ_ENV, str(ROUTED_PREFILL_MIN_SEQ_DEFAULT)))
 
 
-def routed_prefill_chunk():
-    chunk = int(os.getenv(ROUTED_PREFILL_CHUNK_ENV, str(ROUTED_PREFILL_CHUNK_DEFAULT)))
+def routed_prefill_chunk(tp_mode=False):
+    default = ROUTED_PREFILL_CHUNK_TP_DEFAULT if tp_mode else ROUTED_PREFILL_CHUNK_DEFAULT
+    chunk = int(os.getenv(ROUTED_PREFILL_CHUNK_ENV, str(default)))
     assert chunk > 0 and chunk % ROUTED_PREFILL_SEQ_MULTIPLE == 0, f"{ROUTED_PREFILL_CHUNK_ENV}={chunk}"
     return chunk
 
@@ -475,7 +479,7 @@ class RoutedPrefillExperts:
         self.experts_per_chip = self.num_experts if self.tp_mode else self.num_experts // self.num_devices
         # Extra unified_routed_expert_moe arguments of the TP mode (the page-table weights); empty in EP mode.
         self._table_kwargs = {}
-        self.chunk_size = routed_prefill_chunk()
+        self.chunk_size = routed_prefill_chunk(self.tp_mode)
         # L1 address the expert op's circular buffers must end below (0: the whole L1); set by Model.set_prefill_l1_end
         # when buffers stay resident in L1 (DFlash), so the op fits its blocking around them.
         self.l1_end = 0

@@ -974,7 +974,7 @@ class Model:
         """
         get_last_token = (last_token_idx // 32) * 32
         seq_len = int(logits.shape[-2])
-        if seq_len == 32:
+        if seq_len == 32 and self.select_last_tile_by_matmul:
             return logits  # the trace selected the last token's tile (set_prefill_trace_last_token)
         # Pass the offset at runtime rather than as a compile-time attribute. With literal bounds
         # every distinct prompt offset compiles its own slice program, and this runs after the
@@ -1443,8 +1443,10 @@ class Model:
     def set_prefill_trace_last_token(self, last_token_idx):
         """Generator hook, before a traced prefill: the prompt's last token index (relative to the traced chunk), or
         None (batched / unknown: the trace computes logits of all rows). prepare_prefill_inputs_trace, which the
-        generator calls before the compile pass, the capture and every replay, writes its tile into the selection."""
-        self._trace_last_token = last_token_idx
+        generator calls before the compile pass, the capture and every replay, writes its tile into the selection.
+        gpt-oss-20b on a Blackhole 1x4 mesh only (select_last_tile_by_matmul): other models and meshes ignore it, and
+        their traces compute the logits of all rows as before."""
+        self._trace_last_token = last_token_idx if self.select_last_tile_by_matmul else None
 
     def _trace_tile_select(self, seq_len, batch_size):
         """Point the traced forward at the last token's tile (_trace_last_token) of a seq_len prefill: write the
