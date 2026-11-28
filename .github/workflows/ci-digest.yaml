@@ -2,20 +2,28 @@ name: "CI Digest"
 
 on:
   schedule:
-    # Off :00, which GitHub sheds first under load. Weekdays only.
+    # Off :00, which GitHub sheds first under load.
     # The hour trades freshness for delivery time, and delivery time wins: the
     # digest must reach Slack before the 10:30 CET daily, and GitHub delays
     # scheduled runs by 8-35 min. blaze-models-prefill (starts 05:00) and
     # t3000-e2e (06:00) usually run past this, so their sections report the
     # previous day; demo-sp-release and blackhole-e2e finish in time.
     - cron: "12 7 * * 1-5"  # disaggregated-prefill
+    # Daily, weekends included: its 24h window must tile, or a weekend run is
+    # never reported. Most of the models scheduled runs (started 01:00-06:00 UTC,
+    # taking 1-15h) have finished by now; a later finisher lands in tomorrow's.
+    - cron: "17 16 * * *"  # models
   workflow_dispatch:
     inputs:
       digest:
         description: "which digest to run now (manual runs ignore the schedule and skip Slack)"
         type: choice
         default: all
-        options: [all, disaggregated-prefill]  # keep in sync with the matrix below
+        options: [all, disaggregated-prefill, models]  # keep in sync with the matrix below
+      window-hours:
+        description: "report runs completed in the last N hours (0 = latest run only; empty = the digest's own setting)"
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -41,6 +49,20 @@ jobs:
               - t3000-tests.yaml
               - blaze-models-prefill-tests.yaml
               - demo-sp-release.yaml
+          - name: models
+            schedule: "17 16 * * *"
+            slack_channel: "#dit-ci-digest"  # TODO: replace with the channel ID
+            # Every run that completed since the previous digest, not just the
+            # latest: tier 1 unit runs twice a day.
+            window_hours: 24
+            list_passing: true
+            workflows:
+              - models-t1-unit-tests.yaml
+              - models-t1-e2e-tests.yaml
+              - models-t2-unit-tests.yaml
+              - models-t2-e2e-tests.yaml
+              - models-t3-unit-tests.yaml
+              - models-t3-e2e-tests.yaml
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
 
@@ -57,9 +79,13 @@ jobs:
           (github.event_name == 'workflow_dispatch' && (inputs.digest == 'all' || inputs.digest == matrix.name))
         env:
           GH_TOKEN: ${{ github.token }}
+          # A dispatch's window-hours overrides the leg's; "0" is truthy as a string.
+          WINDOW_HOURS: ${{ inputs.window-hours || matrix.window_hours || 0 }}
+          LIST_PASSING: ${{ matrix.list_passing && '--list-passing' || '' }}
         run: |
           python3 .github/scripts/ci_digest.py --out-dir out \
             --name "${{ matrix.name }}" \
+            --window-hours "$WINDOW_HOURS" $LIST_PASSING \
             --workflows ${{ join(matrix.workflows, ' ') }}
           shopt -s nullglob
           files=(out/ci-digest-*.md)
