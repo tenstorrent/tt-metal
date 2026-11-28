@@ -239,13 +239,13 @@ constexpr bool has_contractual_handoff(const ClearWait wait, const SrcHandoff ha
 
 constexpr bool is_valid(const AddressCounterPostIncrements increments)
 {
-    return ckernel::is_valid(increments.channel0.y, 2) && ckernel::is_valid(increments.channel0.z, 2) && ckernel::is_valid(increments.channel1.y, 2) &&
-           ckernel::is_valid(increments.channel1.z, 2);
+    return hal::detail::is_valid(increments.channel0.y, 2) && hal::detail::is_valid(increments.channel0.z, 2) &&
+           hal::detail::is_valid(increments.channel1.y, 2) && hal::detail::is_valid(increments.channel1.z, 2);
 }
 
 constexpr bool is_valid(const Context context)
 {
-    return is_valid(context.source) && ckernel::is_valid(context.configuration_context, 3) && context.address_counter_context <= 2;
+    return is_valid(context.source) && hal::detail::is_valid(context.configuration_context, 3) && context.address_counter_context <= 2;
 }
 
 constexpr bool is_valid(const Transfer options)
@@ -276,12 +276,12 @@ constexpr bool supports(const Engine engine, const Clear options)
 
 inline constexpr __attribute__((always_inline)) void validate(const Transfer options)
 {
-    hal::detail::require(ckernel::is_valid(options.increments.channel0.y, 2), "UNPACR channel 0 Y increment must be in [0, 3]");
-    hal::detail::require(ckernel::is_valid(options.increments.channel0.z, 2), "UNPACR channel 0 Z increment must be in [0, 3]");
-    hal::detail::require(ckernel::is_valid(options.increments.channel1.y, 2), "UNPACR channel 1 Y increment must be in [0, 3]");
-    hal::detail::require(ckernel::is_valid(options.increments.channel1.z, 2), "UNPACR channel 1 Z increment must be in [0, 3]");
+    hal::detail::require(hal::detail::is_valid(options.increments.channel0.y, 2), "UNPACR channel 0 Y increment must be in [0, 3]");
+    hal::detail::require(hal::detail::is_valid(options.increments.channel0.z, 2), "UNPACR channel 0 Z increment must be in [0, 3]");
+    hal::detail::require(hal::detail::is_valid(options.increments.channel1.y, 2), "UNPACR channel 1 Y increment must be in [0, 3]");
+    hal::detail::require(hal::detail::is_valid(options.increments.channel1.z, 2), "UNPACR channel 1 Z increment must be in [0, 3]");
     hal::detail::require(is_valid(options.context.source), "UNPACR context source must be ThreadDefault, Explicit, or Counter");
-    hal::detail::require(ckernel::is_valid(options.context.configuration_context, 3), "UNPACR configuration context must be in [0, 7]");
+    hal::detail::require(hal::detail::is_valid(options.context.configuration_context, 3), "UNPACR configuration context must be in [0, 7]");
     hal::detail::require(options.context.address_counter_context <= 2u, "UNPACR address-counter context must be in [0, 2]");
     hal::detail::require(is_valid(options.handoff), "UNPACR source handoff must be Keep or FlipAndSetDataValid");
     hal::detail::require(is_valid(options.datum_override), "UNPACR datum override must be None or Zero");
@@ -378,7 +378,12 @@ constexpr std::uint32_t set_data_valid(const SrcHandoff handoff)
     return handoff == SrcHandoff::FlipAndSetDataValid ? 1 : 0;
 }
 
-/** @brief UNPACR_NOP Unpack_Pop modes; the ISA leaves Delay unsupported, with no known usage. */
+/**
+ * @brief UNPACR_NOP Unpack_Pop modes.
+ *
+ * The ISA marks Delay UnsupportedFunctionality; production still issues it as the unpack-template
+ * filler (ckernel_unpack_template::lzA), and @ref hal::nop::unpacker exposes it the same way.
+ */
 enum class NopMode : std::uint32_t
 {
     ClearSrc = 1,

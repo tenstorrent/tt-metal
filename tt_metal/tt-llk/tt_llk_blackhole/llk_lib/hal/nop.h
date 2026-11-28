@@ -56,6 +56,8 @@ inline __attribute__((always_inline)) void vector()
  * @brief Encode a pure-delay unpacker bubble (UNPACR_NOP, delay flavor).
  *
  * @tparam Engine: Unpacker whose queue the bubble occupies.
+ * @note The ISA marks the delay flavor UnsupportedFunctionality; production uses it only as the
+ *       unpack-template filler (ckernel_unpack_template::lzA).
  * @note The source-bank clear flavor of UNPACR_NOP, with its optional data-valid handoff, is an
  *       unpacker operation, not a NOP: use @ref hal::unpack::Unpacker::clear.
  */
