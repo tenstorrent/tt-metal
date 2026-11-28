@@ -72,24 +72,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_A, l1_addr_16B, formats.unpack_A_src);
         constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
+        // compute_kernel_hw_startup configures both unpackers; pack_untilize_init then inits a one-tile unpack.
+        _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+            static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
         if constexpr (unpack_to_dest)
         {
-            _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
             _llk_unpack_dest_init_();
-            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack, tensor_shape_A);
         }
         else
         {
-            if constexpr (is_fp32_dest_acc_en)
-            {
-                _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
-                    static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_A_dst));
-            }
-            else
-            {
-                _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
-            }
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, TILE_CNT);
+            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, 1 /*num_tiles*/);
         }
         PROFILER_SYNC();
     }
@@ -125,7 +118,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
                     // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
                     // ZEROACC to wipe subsequent tile rows after packing the first one.
-                    _llk_unpack_unary_operand_to_dest_block_(block_rt * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
+                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+                    {
+                        _llk_unpack_unary_operand_to_dest_tile_(block_rt * BLOCK_CT_DIM + block_ct /*l1_tile_idx*/, block_ct /*dst_tile_idx*/, tensor_shape_A);
+                    }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
@@ -137,7 +133,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                _llk_unpack_unary_operand_<SELECTED_UNPACKER>(0 /*l1_tile_idx*/, tensor_shape_A);
+                // pack_untilize_block unpacks one tile at a time, row by row.
+                for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
+                {
+                    for (std::uint32_t block_ct = 0; block_ct < BLOCK_CT_DIM; block_ct++)
+                    {
+                        _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM + block_ct /*l1_tile_idx*/, tensor_shape_A);
+                    }
+                }
             }
         }
         PROFILER_SYNC();
