@@ -371,13 +371,11 @@ void Cluster::initialize_device_drivers() {
         const auto& mmio_ids = this->driver_->get_target_mmio_device_ids();
         if (!mmio_ids.empty()) {
             ChipId mmio_id = *mmio_ids.begin();
+            // Ask through the same allocator map_sysmem_buffer() goes through, rather than re-deriving the
+            // IOMMU and KMD version gates here.
             if (auto* allocator = this->driver_->get_chip(mmio_id)->get_system_memory_allocator()) {
                 this->iommu_enabled_ = allocator->is_user_buffer_mapping_supported();
-            }
-            // Ask through the same handle map_sysmem_buffer() goes through, rather than re-deriving the
-            // IOMMU and KMD version gate here.
-            if (auto* sysmem_manager = this->driver_->get_chip(mmio_id)->get_sysmem_manager()) {
-                this->read_only_page_pinning_supported_ = sysmem_manager->is_read_only_page_pinning_supported();
+                this->read_only_page_pinning_supported_ = allocator->is_read_only_page_pinning_supported();
             }
         }
     }
@@ -1175,11 +1173,11 @@ void Cluster::advance_device_execution(ChipId device_id) const { this->driver_->
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::allocate_sysmem_buffer(
     ChipId device_id, size_t sysmem_buffer_size, bool map_to_noc) const {
-    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
-    if (!sysmem_manager) {
-        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    tt::umd::SystemMemoryAllocator* allocator = this->driver_->get_chip(device_id)->get_system_memory_allocator();
+    if (!allocator) {
+        TT_THROW("Failed to get SystemMemoryAllocator for device {}", device_id);
     }
-    return sysmem_manager->allocate_sysmem_buffer(sysmem_buffer_size, map_to_noc);
+    return allocator->allocate_buffer(sysmem_buffer_size, map_to_noc);
 }
 
 std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
@@ -1188,11 +1186,11 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
     size_t sysmem_buffer_size,
     bool map_to_noc,
     tt::umd::DeviceBufferAccess device_access) const {
-    tt::umd::SysmemManager* sysmem_manager = this->driver_->get_chip(device_id)->get_sysmem_manager();
-    if (!sysmem_manager) {
-        TT_THROW("Failed to get SysmemManager for device {}", device_id);
+    tt::umd::SystemMemoryAllocator* allocator = this->driver_->get_chip(device_id)->get_system_memory_allocator();
+    if (!allocator) {
+        TT_THROW("Failed to get SystemMemoryAllocator for device {}", device_id);
     }
-    return sysmem_manager->map_sysmem_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
+    return allocator->map_user_buffer(buffer, sysmem_buffer_size, map_to_noc, device_access);
 }
 
 std::optional<tt::umd::SemVer> Cluster::get_ethernet_firmware_version() const {
