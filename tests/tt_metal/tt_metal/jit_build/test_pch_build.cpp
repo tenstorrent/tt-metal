@@ -117,6 +117,10 @@ TEST(PchBuildDeathTest, SharesWithinArchitectureAndSeparatesHalTargetFlags) {
         const auto bh_flags = jit_build::utils::tokenize_flags(bh.export_target_recipe(nullptr).cflags);
         ASSERT_NE(std::find(wh_flags.begin(), wh_flags.end(), "-mcpu=tt-wh"), wh_flags.end());
         ASSERT_NE(std::find(bh_flags.begin(), bh_flags.end(), "-mcpu=tt-bh"), bh_flags.end());
+        ASSERT_NE(std::find(wh_flags.begin(), wh_flags.end(), "-ffunction-sections"), wh_flags.end());
+        ASSERT_NE(std::find(wh_flags.begin(), wh_flags.end(), "-fdata-sections"), wh_flags.end());
+        const auto wh_link_flags = jit_build::utils::tokenize_flags(wh_first.export_target_recipe(nullptr).lflags);
+        ASSERT_NE(std::find(wh_link_flags.begin(), wh_link_flags.end(), "-Wl,--gc-sections"), wh_link_flags.end());
         ASSERT_EQ(wh_first.export_target_recipe(nullptr).cflags, wh_second.export_target_recipe(nullptr).cflags);
 
         const auto wh_pch = wh_first.run(root / "first");

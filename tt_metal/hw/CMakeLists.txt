@@ -310,6 +310,8 @@ set(GPP_FLAGS_blackhole -mcpu=tt-bh)
 set(GPP_FLAGS_common
     -std=c++17
     -flto=auto
+    -ffunction-sections
+    -fdata-sections
     -ffast-math
     -fno-use-cxa-atexit
     -fno-exceptions

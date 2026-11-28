@@ -305,6 +305,9 @@ void JitBuildEnv::init(
         "-flto=1 -flto-partition=one "
         // Fast math allows non-IEEE compliant optimizations ...
         "-ffast-math "
+        // Put each function and data object in its own section so the linker can
+        // discard device code and data that is unreachable from the firmware entrypoint.
+        "-ffunction-sections -fdata-sections "
         // ... but we require these IEEE behaviors
         "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
         // No exceptions or rtti emission, and no using cxa-atexit for cleanups
@@ -542,7 +545,8 @@ void JitBuildEnv::init(
     this->includes_ = oss.str();
 
     this->lflags_ = common_flags;
-    this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
+    this->lflags_ +=
+        "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -Wl,--gc-sections -nostartfiles ";
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::StableHasher hasher;
