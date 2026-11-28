@@ -46,12 +46,7 @@ void issue_wait_for_event_commands(
     uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);
 
 void read_events_from_completion_queue(
-    ReadEventDescriptor& event_descriptor,
-    ChipId mmio_device_id,
-    ChipId device_id,
-    uint16_t channel,
-    uint8_t cq_id,
-    SystemMemoryManager& sysmem_manager);
+    ReadEventDescriptor& event_descriptor, ChipId device_id, uint8_t cq_id, SystemMemoryManager& sysmem_manager);
 
 }  // namespace event_dispatch
 
