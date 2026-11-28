@@ -960,8 +960,9 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
     const auto& hal = mesh_device_->impl().metal_env().get_hal();
     TT_FATAL(
         mesh_device_->impl().dram_sender_placement().has_value(),
-        "Tensor prefetcher requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0, or fast dispatch on a dispatch engine serving one command queue");
+        "Tensor prefetcher requires programmable DRAM cores, which are off ({}), or fast dispatch on a dispatch "
+        "engine serving one command queue",
+        mesh_device_->impl().metal_env().get_dram_cores_off_reason());
 
     // Populate devices_ before resolving sender slots: enumerate_dram_senders checks the slots
     // against every device's DRAM topology. Build the coord->index map at the same time so

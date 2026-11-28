@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -499,6 +500,10 @@ protected:
         return MetalEnvAccessor(env).impl().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM);
     }
 
+    static const std::string& dram_cores_off_reason(MetalEnv& env) {
+        return MetalEnvAccessor(env).impl().get_dram_cores_off_reason();
+    }
+
     // The seat of every DRAM core a MetalEnv programs on this host.
     std::vector<internal::drisc_service::SeatId> seats_;
 
@@ -520,6 +525,8 @@ TEST_F(MetalEnvSeatLocks, LeavesDramCoresWhoseSeatsAreHeld) {
     {
         MetalEnv env;
         EXPECT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on while their seats were held";
+        EXPECT_NE(dram_cores_off_reason(env).find("holds the seat of"), std::string::npos)
+            << dram_cores_off_reason(env);
     }
     setenv(override_var, "1", /*overwrite=*/1);
     try {
@@ -546,6 +553,44 @@ TEST_F(MetalEnvSeatLocks, ReleasesEverySeatWhenOneIsHeld) {
         EXPECT_TRUE(internal::drisc_service::SeatLock::try_acquire_exclusive(seats_[i]).has_value())
             << "metal kept the seat of DRAM core (" << seats_[i].noc0_x << ", " << seats_[i].noc0_y
             << ") with its DRAM programmable cores off";
+    }
+}
+
+// When taking the seat locks fails, a MetalEnv runs with its DRAM programmable cores off and says why, and fails when
+// they are forced on.
+TEST_F(MetalEnvSeatLocks, TurnsDramCoresOffWhenSeatLocksFail) {
+    static constexpr const char* lock_dir_var = "TT_DRISC_SEAT_LOCK_DIR";
+    struct Restore {
+        std::filesystem::path file;
+        std::optional<std::string> lock_dir;
+        ~Restore() {
+            if (lock_dir.has_value()) {
+                setenv(lock_dir_var, lock_dir->c_str(), /*overwrite=*/1);
+            } else {
+                unsetenv(lock_dir_var);
+            }
+            std::filesystem::remove(file);
+        }
+    } restore{std::filesystem::temp_directory_path() / ("seat_lock_dir_parent_" + std::to_string(::getpid()))};
+    if (const char* value = std::getenv(lock_dir_var)) {
+        restore.lock_dir = value;
+    }
+    // A lock dir inside a regular file cannot be created.
+    std::ofstream(restore.file) << "not a dir";
+    setenv(lock_dir_var, (restore.file / "seats").c_str(), /*overwrite=*/1);
+
+    {
+        MetalEnv env;
+        EXPECT_FALSE(dram_cores_on(env)) << "metal turned its DRAM programmable cores on without their seat locks";
+        EXPECT_NE(dram_cores_off_reason(env).find("seat locks failed"), std::string::npos)
+            << dram_cores_off_reason(env);
+    }
+    setenv(override_var, "1", /*overwrite=*/1);
+    try {
+        MetalEnv env;
+        ADD_FAILURE() << "metal started with its DRAM programmable cores forced on without their seat locks";
+    } catch (const std::exception& e) {
+        EXPECT_NE(std::string_view(e.what()).find("seat locks failed"), std::string_view::npos) << e.what();
     }
 }
 

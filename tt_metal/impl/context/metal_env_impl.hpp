@@ -51,6 +51,9 @@ public:
     distributed::SystemMesh& get_system_mesh();
     const MetalEnvDescriptor& get_descriptor() const;
 
+    // Why the DRAM programmable cores are off, for errors from code that needs them; empty while they are on.
+    const std::string& get_dram_cores_off_reason() const { return dram_cores_off_reason_; }
+
     // Requested fabric configuration (configure_fabric). Distinct from get_fabric_config(), which is the runtime
     // value and may differ after the dispatch fallback enables fabric.
     const FabricSettings& get_fabric_settings() const { return fabric_desc_; }
@@ -151,6 +154,7 @@ private:
     // Held while the DRAM programmable cores are on, so no DRISC service starts on a core metal resets. Released
     // after cluster_ closes.
     std::vector<internal::drisc_service::SeatLock> dram_core_seat_locks_;
+    std::string dram_cores_off_reason_;
 
     std::atomic<int> use_count_{0};
 

@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 
 namespace tt::tt_metal {
 
@@ -17,8 +18,8 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
     const auto& hal = MetalContext::instance(context_id).hal();
     TT_FATAL(
         hal.has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DriscL1Arena requires programmable DRAM cores, which auto-enable on Blackhole with firmware "
-        ">= 19.12.0.0");
+        "DriscL1Arena requires programmable DRAM cores, which are off: {}",
+        MetalEnvAccessor(MetalContext::instance(context_id).get_env()).impl().get_dram_cores_off_reason());
 
     unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
