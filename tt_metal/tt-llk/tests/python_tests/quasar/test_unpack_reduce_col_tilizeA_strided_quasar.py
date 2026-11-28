@@ -199,6 +199,16 @@ def generate_reduce_scaler(
     return torch.full((tile_shape.total_tile_size(),), scaler)
 
 
+def reduced_row_mask(tile_cnt: int, tile_shape: TileShape) -> torch.Tensor:
+    """Lanes of the first tile row (row 0 of each top face), where the column reduce lands."""
+    face_size = tile_shape.face_r_dim * tile_shape.face_c_dim
+    tile_mask = torch.zeros(tile_shape.total_tile_size(), dtype=torch.bool)
+    for face_col in range(tile_shape.num_faces_c_dim):
+        start = face_col * face_size
+        tile_mask[start : start + tile_shape.face_c_dim] = True
+    return tile_mask.repeat(tile_cnt)
+
+
 @pytest.mark.quasar
 @parametrize(
     **flat_axes(
@@ -325,6 +335,12 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     res_from_L1 = configuration.run().result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+    # tilizeA_B_reduce_init sets no pack reduce mask, so only the reduced row is defined (the row pool reads).
+    res_tensor = torch.where(
+        reduced_row_mask(tile_cnt_A, tile_shape),
+        res_tensor,
+        torch.zeros_like(res_tensor),
+    )
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format, tile_shape=tile_shape
