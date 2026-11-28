@@ -36,11 +36,10 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-from PIL import Image
 
 from models.experimental.kimi_k3_moonvit_v2.reference.checkpoint import CHECKPOINT_ENV
 from models.experimental.kimi_k3_moonvit_v2.service import format as media_format
-from models.experimental.kimi_k3_moonvit_v2.tt.image_prep import pixels_to_patches, resize_image
+from models.experimental.kimi_k3_moonvit_v2.tt.image_prep import resize_array
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import RING_SIZE, MoonViTConfig
 
 if TYPE_CHECKING:
@@ -73,7 +72,7 @@ def load_tokenizer(source: str):
 class K3Image:
     pixels: np.ndarray
     """Resized and padded RGB image, uint8 [height, width, 3]; height and width are multiples of 28. encode
-    normalizes it and cuts it into patches (`tt/image_prep.py:pixels_to_patches`)."""
+    normalizes it and cuts it into patches straight into the device inputs (`TT_MoonViT_Vision_Model.prepare_image`)."""
     grid_h: int
     """Image-token rows: height / 28 (14x14 patches merged 2x2)."""
     grid_w: int
@@ -157,7 +156,7 @@ class KimiK3Media:
         self._stub = False
 
     def prepare(self, kind: str, media: np.ndarray) -> K3Image:
-        """Resize and pad one image on the CPU as HF's processor does, bit for bit (`tt/image_prep.py:resize_image`).
+        """Resize and pad one image on the CPU as HF's processor does, bit for bit (`tt/image_prep.py:resize_array`).
         encode does the rest of HF's processing (normalize, patchify), so the item stays uint8 and pickles small.
 
         media: non-empty uint8 RGB [height, width, 3], any size: the largest grid HF's resize makes (67,320
@@ -167,11 +166,7 @@ class KimiK3Media:
             raise ValueError(f"Kimi-K3 does not accept {kind}")
         # TODO(#66023): Kimi-K3's reference handles non-RGB images (alpha onto a chessboard, after the resize), which
         # an RGB array can't reproduce. Either the service does it, or this interface takes alpha or the original image.
-        if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 3 or 0 in media.shape:
-            raise ValueError(
-                f"expected a non-empty uint8 RGB [height, width, 3] array, got {media.dtype} {media.shape}"
-            )
-        pixels = resize_image(Image.fromarray(media), self.config)
+        pixels = resize_array(media, self.config)  # raises for anything but a non-empty uint8 RGB array
         fh, fw = (k * self.config.patch_size for k in self.config.merge_kernel_size)
         height, width = media.shape[:2]
         return K3Image(pixels, pixels.shape[0] // fh, pixels.shape[1] // fw, width, height)
@@ -235,7 +230,7 @@ class KimiK3Media:
             )
             load_cached(model, options.get("cache_dir"), lambda: load_vision_state_dict(weights_path))
             # The inputs are written in place on every call, so a trace captured on this image replays any other.
-            inputs = model.prepare_inputs(*pixels_to_patches(np.zeros((28, 28, 3), np.uint8), self.config))
+            inputs = model.prepare_image(np.zeros((28, 28, 3), np.uint8))
             # Untraced first: that compiles the programs and allocates the ring-attention buffers, neither of which
             # can happen inside a capture. forward untilizes on the chips, inside the trace, so the replay's output
             # is read back as plain rows.
@@ -255,7 +250,9 @@ class KimiK3Media:
 
         out holds one slot per item: a writable, C-contiguous memoryview of `stored_nbytes(item)` bytes, in any format.
         Every slot is checked (writable, C-contiguous, the right size) before anything is written. encode normalizes
-        and patchifies each image on the CPU, then each chip's rows are copied straight into the slot
+        and patchifies each image on the CPU straight into the device inputs (`TT_MoonViT_Vision_Model.prepare_image`;
+        the position embeddings and RoPE tables are rebuilt and copied only when the grid differs from the previous
+        image's), then the rows of the chips that hold them are copied straight into the slot
         (`TT_MoonViT_Vision_Model.read_output`); the waits on the chips release the GIL. If encode raises, the caller
         must not use the slots of that call.
 
@@ -284,7 +281,7 @@ class KimiK3Media:
                 rows[:] = _stub_rows(item, self.hidden)
                 continue
             try:
-                self._model.prepare_inputs(*pixels_to_patches(item.pixels, self.config))
+                self._model.prepare_image(item.pixels)
                 self._model.read_output(self._trace.replay(), rows)
             except BaseException as error:
                 _clear_frames(error)  # so that close, while the caller holds the error, frees the device tensors

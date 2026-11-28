@@ -5,6 +5,7 @@
 """Image pre-processing on the host: a PIL image to `(pixel_values, grid_thws)`, as Kimi-K3's HF
 processor (`reference/kimi_k3_vision_processing.py`) produces them. Two steps: `resize_image` (resize and
 pad, uint8) and `pixels_to_patches` (normalize and patchify, float32); `image_to_patches` runs both.
+`resize_array` is `resize_image` for a uint8 array; an image that needs no resize skips PIL.
 
 This is layer 1 of the padding: the image is padded with black on the bottom and right to a multiple
 of `merge_kernel_size * patch_size` (28 px), and after normalization that black is -1.0. Those pad
@@ -63,32 +64,60 @@ def resize_image(image: Image.Image, config: MoonViTConfig) -> np.ndarray:
     """
     if image.mode != "RGB":
         raise ValueError(f"image mode {image.mode!r} is not supported, only 'RGB'")
-    plan = resize_plan(*image.size, config)
+    return _resize_and_pad(image, image.width, image.height, config)
+
+
+def resize_array(media: np.ndarray, config: MoonViTConfig) -> np.ndarray:
+    """`resize_image` for uint8 RGB pixels [height, width, 3]. An image that needs no resize never goes through PIL
+    (at scale 1 Pillow's resize returns a copy, so this is the same), and is copied once, into the padded array."""
+    if media.dtype != np.uint8 or media.ndim != 3 or media.shape[2] != 3 or 0 in media.shape:
+        raise ValueError(f"expected a non-empty uint8 RGB [height, width, 3] array, got {media.dtype} {media.shape}")
+    return _resize_and_pad(media, media.shape[1], media.shape[0], config)
+
+
+def _resize_and_pad(image: Image.Image | np.ndarray, width: int, height: int, config: MoonViTConfig) -> np.ndarray:
+    """The steps `resize_image` and `resize_array` share, for an RGB image of width x height: check the grid, resize
+    with Pillow only if the size changes, and pad."""
+    plan = resize_plan(width, height, config)
     try:
         check_grid(torch.tensor([[1, plan.grid_h, plan.grid_w]]), config)
     except ValueError as e:
-        raise ValueError(f"image {image.width}x{image.height}: {e}") from e
+        raise ValueError(f"image {width}x{height}: {e}") from e
+    if (plan.new_w, plan.new_h) != (width, height):
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        image = image.resize((plan.new_w, plan.new_h), resample=Image.Resampling.BICUBIC)
+    return _pad(np.asarray(image), plan)
 
-    image = image.resize((plan.new_w, plan.new_h), resample=Image.Resampling.BICUBIC)
-    return np.pad(
-        np.asarray(image),
-        ((0, plan.pad_h), (0, plan.pad_w), (0, 0)),
-        mode="constant",
-        constant_values=0,
-    )
+
+def _pad(pixels: np.ndarray, plan: ResizePlan) -> np.ndarray:
+    """`np.pad` with black on the bottom and right, zeroing only the pad."""
+    height, width = pixels.shape[:2]
+    out = np.empty((height + plan.pad_h, width + plan.pad_w, 3), np.uint8)
+    out[:height, :width] = pixels
+    out[:height, width:] = 0
+    out[height:] = 0
+    return out
+
+
+def check_pixels(pixels: np.ndarray, config: MoonViTConfig) -> tuple[int, int]:
+    """The patch grid (h, w) of `resize_image`'s output; ValueError unless it is uint8 [H, W, 3] with H and W multiples
+    of one merge window, and the grid is within the config's limits (`check_grid`)."""
+    fh, fw = (k * config.patch_size for k in config.merge_kernel_size)
+    shape = pixels.shape
+    if pixels.dtype != np.uint8 or len(shape) != 3 or shape[2] != 3 or shape[0] % fh or shape[1] % fw:
+        raise ValueError(f"expected uint8 [H, W, 3], H a multiple of {fh} and W of {fw}; got {pixels.dtype} {shape}")
+    h, w = shape[0] // config.patch_size, shape[1] // config.patch_size
+    check_grid(torch.tensor([[1, h, w]]), config)
+    return h, w
 
 
 def pixels_to_patches(pixels: np.ndarray, config: MoonViTConfig) -> tuple[torch.Tensor, torch.Tensor]:
     """`resize_image`'s uint8 [H, W, 3] -> `pixel_values` (h*w, 3, p, p) float32 in raster order and `grid_thws`
     [[1, h, w]] int64: normalized and cut into patches as HF's processor does."""
-    fh, fw = (k * config.patch_size for k in config.merge_kernel_size)
-    shape = pixels.shape
-    if pixels.dtype != np.uint8 or len(shape) != 3 or shape[2] != 3 or shape[0] % fh or shape[1] % fw:
-        raise ValueError(f"expected uint8 [H, W, 3], H a multiple of {fh} and W of {fw}; got {pixels.dtype} {shape}")
-    p = config.patch_size
-    h, w = pixels.shape[0] // p, pixels.shape[1] // p
+    h, w = check_pixels(pixels, config)
     grid_thws = torch.tensor([[1, h, w]], dtype=torch.int64)
-    check_grid(grid_thws, config)
+    p = config.patch_size
 
     x = (pixels / 255.0).astype(np.float32)
     x -= IMAGE_MEAN

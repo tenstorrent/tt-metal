@@ -118,6 +118,15 @@ def rope_tables(config: MoonViTConfig, h: int, w: int) -> tuple[torch.Tensor, to
     )
 
 
+def check_pixel_values(pixel_values: torch.Tensor, grid_thws: torch.Tensor, config: MoonViTConfig) -> tuple[int, int]:
+    """The grid (h, w) of `grid_thws` (`check_grid`); ValueError unless `pixel_values` is (h*w, C, p, p)."""
+    h, w = check_grid(grid_thws, config)
+    expected = (h * w, config.in_channels, config.patch_size, config.patch_size)
+    if tuple(pixel_values.shape) != expected:
+        raise ValueError(f"pixel_values {tuple(pixel_values.shape)} != {expected} for grid {h}x{w}")
+    return h, w
+
+
 def prepare_host_inputs(
     config: MoonViTConfig, pos_emb_weight: torch.Tensor, pixel_values: torch.Tensor, grid_thws: torch.Tensor
 ) -> dict:
@@ -131,10 +140,7 @@ def prepare_host_inputs(
     Returns `patches` (S, padded_patch_dim), `pos_emb` (S, hidden), `cos` and `sin` (S, head_dim) and
     `logical_n` = h*w, the number of real rows.
     """
-    h, w = check_grid(grid_thws, config)
-    expected = (h * w, config.in_channels, config.patch_size, config.patch_size)
-    if tuple(pixel_values.shape) != expected:
-        raise ValueError(f"pixel_values {tuple(pixel_values.shape)} != {expected} for grid {h}x{w}")
+    h, w = check_pixel_values(pixel_values, grid_thws, config)
     cos, sin = rope_tables(config, h, w)
     pos_emb = pos_embeds(pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     rows = config.max_patches

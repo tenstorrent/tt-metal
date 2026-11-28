@@ -41,7 +41,14 @@ class TT_Rope:
         self.trans_mat = DeviceInput((1, 1, 32, 32), mesh_device=mesh_device, sp_axis=None)
 
     def write(self, cos: torch.Tensor, sin: torch.Tensor) -> RopeTensors:
-        """Fill the tables from `host_prep.rope_tables` (or `prepare_host_inputs`) cos/sin."""
+        """Fill the first rows of the tables from cos/sin [n, head_dim], n up to the table length: whole tables from
+        `host_prep.rope_tables`, or the image's rows from `host_fill.rope_window_rows`. The rest are zero."""
         if self.trans_mat.tensor is None:
             self.trans_mat.write(host_prep.rot_transformation_mat())
-        return RopeTensors(self.cos.write(cos), self.sin.write(sin), self.trans_mat.tensor)
+        self.cos.write_rows(cos)
+        self.sin.write_rows(sin)
+        return self.tensors()
+
+    def tensors(self) -> RopeTensors:
+        """The tables as the last write left them."""
+        return RopeTensors(self.cos.tensor, self.sin.tensor, self.trans_mat.tensor)
