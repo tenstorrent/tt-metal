@@ -62,7 +62,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.unpack_B_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     {
         START_PERF_MEASURE("INIT")
-        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
         // Matmul flips the unpacker roles: operand A drives UNPACR1/SrcB, operand B drives UNPACR0/SrcA.
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
         constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
@@ -496,7 +495,6 @@ void uninit_zone()
 #include "llk_dest_borrow.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
-#include "llk_pack_matmul.h"
 #include "llk_sync.h"
 #include "params.h"
 
@@ -529,21 +527,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     if constexpr (active)
     {
+        // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(DataFormat::Float32, ckernel::ReluConfig::none());
+        _llk_pack_init_(ckernel::trisc::BFD_ID_PACK0, output_shape);
     }
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
-        }
-
-        if constexpr (active)
-        {
-            // The SFPU leaves fp32 in Dest; the Int32 format inferred from the matmul does not apply.
-            ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
-            constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-            _llk_pack_matmul_init_(bfd_pack, RT_DIM, CT_DIM, 1 /*num_subblocks_c_dim*/, output_shape);
         }
         PROFILER_SYNC();
     }
@@ -571,10 +564,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_tile_regs_borrow_<DstClient::PACK, DstClient::SFPU>();
                         _llk_tile_regs_return_<DstClient::PACK, DstClient::SFPU>();
                     }
-                    // Group 0 writes the result tiles; later groups accumulate onto them in L1 (fp32).
-                    TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+                    // pack_reconfig_l1_acc, then pack_block: group 0 writes the result tiles, later groups
+                    // accumulate onto them in L1 (fp32).
                     _llk_pack_set_l1_acc_<p_pacr::PACK0>(group > 0 /*l1_acc_en*/);
-                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, 0 /*start_l1_tile_idx*/, output_shape, RT_DIM * CT_DIM);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
                     {
                         // Stands in for the idle math's post, so the section done's SEMGET never underflows.
@@ -590,10 +583,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     t6_semaphore_post<p_stall::PACK0>(ACC_READY_SEM);
                 }
             }
-            TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
-            _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
         }
         PROFILER_SYNC();
+    }
+    // Outside the zones: later tests must not inherit L1 accumulation.
+    if constexpr (active)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK0);
+        _llk_pack_set_l1_acc_<p_pacr::PACK0>(false /*l1_acc_en*/);
     }
     uninit_zone();
 }
