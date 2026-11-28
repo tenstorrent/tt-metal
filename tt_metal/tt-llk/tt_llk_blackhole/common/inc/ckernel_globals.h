@@ -9,7 +9,6 @@
 #include "ckernel_structs.h"
 #include "internal/risc_attribs.h"
 
-extern std::uint32_t cfg_state_id;
 extern std::uint32_t unp_cfg_context;
 
 extern std::uint32_t pack_sync_tile_dst_ptr;
