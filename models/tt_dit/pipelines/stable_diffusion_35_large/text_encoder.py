@@ -323,7 +323,7 @@ def _get_t5_prompt_embeds(
             f" {max_sequence_length} tokens: {removed_text}"
         )
 
-    tt_text_input_ids = tensor.from_torch(text_input_ids, device=device)
+    tt_text_input_ids = tensor.from_torch(text_input_ids, dtype=ttnn.uint32, device=device)
     hidden_states = (tracer or text_encoder.forward)(prompt=tt_text_input_ids)
     tt_prompt_embeds = hidden_states[-1]
     tt_prompt_embeds = ttnn.get_device_tensors(tt_prompt_embeds)[0]
