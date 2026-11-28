@@ -1,0 +1,244 @@
+---
+# Merge Gate static checks (all-static-checks.yaml) that run on a stock pinned
+# Python image with no Docker and no tool downloads. The one install is
+# check-sweeps-workflow's `pip install pyyaml`, part of the check's own script.
+# The other static checks are not here: pre-commit, check-spdx-licenses and
+# codeowners-validator fetch tools from GitHub at run time, check-doc needs
+# aspell (in no TorrentCI image), check-docker-bake-ci needs docker buildx,
+# cmake-version downloads CMake 3.25, and check-docs-links is disabled in the
+# Merge Gate.
+jobs:
+  - id: check-metal-kernel-count
+    name: Check metal kernel count
+    description: Check the kernel count in base metal is at most 8
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+          limits:
+            memory: 2Gi
+            ephemeral-storage: 4Gi
+    env:
+      - name: HOME
+        value: /tmp/home
+    steps:
+      - id: check
+        kind: shell
+        shell:
+          run:
+            # The script uses bash syntax and the step shell is /bin/sh, so it runs under bash -e.
+            - |
+              cat > /tmp/check.sh <<'SCRIPT'
+              if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
+              SCRIPT
+              bash -e /tmp/check.sh
+  - id: check-forbidden-imports
+    name: Check forbidden imports
+    description: Check ttnn and tt_eager constructs are not used in tt_metal tests
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+          limits:
+            memory: 2Gi
+            ephemeral-storage: 4Gi
+    env:
+      - name: HOME
+        value: /tmp/home
+    steps:
+      - id: check
+        kind: shell
+        shell:
+          run:
+            # The script uses bash syntax and the step shell is /bin/sh, so it runs under bash -e.
+            - |
+              cat > /tmp/check.sh <<'SCRIPT'
+              if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 32 )); then exit 1; fi
+              if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
+              if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
+              SCRIPT
+              bash -e /tmp/check.sh
+  - id: check-symlinks-valid
+    name: Check symlinks valid
+    description: Check the tree's tracked symlinks are not broken
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+          limits:
+            memory: 2Gi
+            ephemeral-storage: 4Gi
+    env:
+      - name: HOME
+        value: /tmp/home
+    steps:
+      - id: check
+        kind: shell
+        shell:
+          run:
+            # TorrentCI checks out every submodule, so a `find -type l` walk would also
+            # cover submodule trees (umd's compile_commands.json points into a build
+            # tree). Only the superproject's tracked symlinks count, and a target inside a
+            # submodule counts as broken, so the result does not depend on submodule
+            # contents. Paths are NUL-separated so names with spaces work.
+            # The script uses bash syntax and the step shell is /bin/sh, so it runs under bash -e.
+            - |
+              cat > /tmp/check.sh <<'SCRIPT'
+              set -euo pipefail
+              top=$(pwd -P)
+              subs=()
+              while IFS= read -r -d '' rec; do subs+=("${rec#*$'\n'}"); done < <(git config -z -f .gitmodules --get-regexp '\.path$' || true)
+              broken=()
+              while IFS= read -r -d '' entry; do
+                [ "${entry%% *}" = 120000 ] || continue
+                l=${entry#*$'\t'}
+                t=$(realpath -m -- "$l"); t=${t#"$top"/}
+                in_sub=0
+                for m in "${subs[@]}"; do case "$t/" in "$m"/*) in_sub=1;; esac; done
+                if [ "$in_sub" = 1 ] || [ ! -e "$l" ]; then broken+=("./$l"); fi
+              done < <(git ls-files -s -z)
+              if [ ${#broken[@]} -gt 0 ]; then echo "Broken symlinks found:"; printf '%s\n' "${broken[@]}"; exit 1; fi
+              echo "All symlinks are valid."
+              SCRIPT
+              bash -e /tmp/check.sh
+  - id: check-sweeps-workflow
+    name: Check sweeps workflow
+    description: Check the sweeps workflow option count against the sweep file count
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+          limits:
+            memory: 2Gi
+            ephemeral-storage: 4Gi
+    env:
+      - name: HOME
+        value: /tmp/home
+    steps:
+      - id: check
+        kind: shell
+        shell:
+          run:
+            # The script uses bash syntax and the step shell is /bin/sh, so it runs under bash -e.
+            - |
+              cat > /tmp/check.sh <<'SCRIPT'
+              python3 -m venv /tmp/venv && /tmp/venv/bin/pip install -q pyyaml
+              /tmp/venv/bin/python tests/sweep_framework/framework/sweeps_workflow_verification.py
+              SCRIPT
+              bash -e /tmp/check.sh
+  - id: check-interleaved-addr-gen-usage
+    name: Check InterleavedAddrGen usage
+    description: Check changed C/C++ files add no InterleavedAddrGen usages against HEAD^
+    timeout: 10m
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: docker.io/library/python:3.10-bookworm@sha256:f72a86806f92fe13a49f49aeca1db0b19ea5cf4a0470b842a01b0e14314945b8
+        resources:
+          requests:
+            cpu: '1'
+            memory: 1Gi
+            ephemeral-storage: 2Gi
+          limits:
+            memory: 2Gi
+            ephemeral-storage: 4Gi
+    env:
+      - name: HOME
+        value: /tmp/home
+    steps:
+      - id: check
+        kind: shell
+        shell:
+          run:
+            # On a merge-queue entry HEAD^ is the queue base, so the diff is the entry's own change.
+            # The script uses bash syntax and the step shell is /bin/sh, so it runs under bash -e.
+            - |
+              cat > /tmp/check.sh <<'SCRIPT'
+              set -euo pipefail
+              BASE_REF="HEAD^"
+
+              declare -A OLD_FOR_NEW
+              CHANGED=()
+
+              # Collect changed C/C++ files and map renames (old -> new)
+              while IFS=$'\t' read -r status path1 path2; do
+                case "$status" in
+                  A|M)
+                    if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path1" =~ ^tt_metal/hw/inc/ ]]; then
+                      CHANGED+=("$path1")
+                    fi
+                    ;;
+                  R*)
+                    if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]] && [[ ! "$path2" =~ ^tt_metal/hw/inc/ ]]; then
+                      CHANGED+=("$path2")
+                      OLD_FOR_NEW["$path2"]="$path1"
+                    fi
+                    ;;
+                esac
+              done < <(git diff --name-status -M "$BASE_REF" HEAD)
+
+              if (( ${#CHANGED[@]} == 0 )); then
+                echo "No C/C++ files changed in this PR."
+                exit 0
+              fi
+
+              NEW_USAGE_FOUND=0
+              regex='(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)'
+
+              for file in "${CHANGED[@]}"; do
+                old_path="${OLD_FOR_NEW[$file]:-$file}"
+
+                base_count=$(git show "$BASE_REF:$old_path" 2>/dev/null | grep -E -o "$regex" | wc -l || true)
+                if [ -f "$file" ]; then
+                  head_count=$(grep -E -o "$regex" "$file" 2>/dev/null | wc -l || true)
+                else
+                  head_count=0
+                fi
+
+                if [ "$head_count" -gt "$base_count" ]; then
+                  echo "❌ Increased InterleavedAddrGen usage in: $file (base=$base_count → head=$head_count)"
+                  echo "Added matching lines:"
+                  git diff "$BASE_REF" HEAD -- "$file" | grep -E '^\+[^+].*(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)' || true
+                  NEW_USAGE_FOUND=1
+                fi
+              done
+
+              if [ "$NEW_USAGE_FOUND" -eq 1 ]; then
+                echo ""
+                echo "❌ New InterleavedAddrGen usages detected!"
+                echo "Please use TensorAccessor instead."
+                exit 1
+              else
+                echo "✅ No increase in InterleavedAddrGen usages found in changed files."
+              fi
+              SCRIPT
+              bash -e /tmp/check.sh
