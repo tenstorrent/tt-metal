@@ -157,6 +157,16 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             Each input block reaches its whole row or column of the matmul grid in one NoC multicast instead of a
             core-to-core relay. Independent of the fabric config; not supported with FSDP.
 
+        gather_in1 : bool, default: False
+            Gather in1 instead of in0. `weight_tensor` is then in1, [..., K / n, N], sharded along dim -2 over
+            `cluster_axis`, `input_tensor` is the whole [..., M, K], and the op returns input @ gathered(weight),
+            [..., M, N]. `persistent_output_buffer` is then the gather buffer, [..., N, K]. Not supported with a bias,
+            addcmul, SwiGLU, an activation, chunks, FSDP fusion or use_mcast.
+
+        transpose_b : bool, default: False
+            Only with `gather_in1`: `weight_tensor` holds in1 as its transpose, [..., N, K / n], sharded along its
+            last dim, and the op returns input @ gathered(weight)^T.
+
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
             alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
@@ -258,7 +268,9 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
             nb::arg("transpose_core_grid") = nb::none(),
-            nb::arg("use_mcast") = false});
+            nb::arg("use_mcast") = false,
+            nb::arg("gather_in1") = false,
+            nb::arg("transpose_b") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

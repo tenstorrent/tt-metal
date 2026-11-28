@@ -70,8 +70,8 @@ void validate_operands_on_device(const AllGatherMinimalMatmulAsyncInputs& tensor
 void validate_rows(
     const AllGatherMinimalMatmulAsyncParams& attributes, const AllGatherMinimalMatmulAsyncInputs& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
-    const uint32_t M = folded_rows(act_tensor);
-    const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
+    const uint32_t M = agmm_m(attributes, act_tensor);
+    const uint32_t K = agmm_k_per_device(attributes, act_tensor) * attributes.ring_size;
     TT_FATAL(
         M > 0 && M % TILE_HEIGHT == 0,
         "all_gather_minimal_matmul_async activation rows ({}) must be a positive multiple of {}",
@@ -147,9 +147,9 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& act_tensor = tensor_args.input_tensor;
     const auto& weight_tensor = tensor_args.weight_tensor;
-    const uint32_t M = folded_rows(act_tensor);
-    const uint32_t K = act_tensor.padded_shape()[-1] * attributes.ring_size;
-    const uint32_t N = weight_tensor.padded_shape()[-1];
+    const uint32_t M = agmm_m(attributes, act_tensor);
+    const uint32_t K = agmm_k_per_device(attributes, act_tensor) * attributes.ring_size;
+    const uint32_t N = agmm_n(attributes, weight_tensor);
     const auto rows_free = [](const std::optional<Tensor>& tensor) -> ttsl::hash::hash_t {
         if (tensor.has_value() && tensor->is_sharded()) {
             return ttsl::hash::hash_objects_with_default_seed(true, tensor->tensor_spec());
@@ -181,8 +181,11 @@ ttsl::hash::hash_t AllGatherMinimalMatmulAsyncOp::compute_program_hash(
         attributes,
         transposed,
         default_blocks,
-        output_sharded ? ttsl::hash::hash_objects_with_default_seed(true, act_tensor.tensor_spec())
-                       : rows_free(act_tensor),
+        // With gather_in1 the gathered operand is in1, not the activation whose rows change per call: all of its spec
+        // stays in the key.
+        output_sharded || attributes.gather_in1
+            ? ttsl::hash::hash_objects_with_default_seed(true, act_tensor.tensor_spec())
+            : rows_free(act_tensor),
         weight_tensor.tensor_spec(),
         tensor_args.bias_tensor,
         rows_free(tensor_args.persistent_output_buffer),
@@ -245,21 +248,37 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     TT_FATAL(
         a_logical.rank() >= 2 && w_logical.rank() >= 2, "all_gather_minimal_matmul_async expects rank >= 2 tensors");
 
+    // With gather_in1, act_tensor is the caller's in1 (gathered) and weight_tensor its activation [..., M, K].
+    const bool gather_in1 = attributes.gather_in1;
+    const bool stripes_are_rows = agmm_stripes_are_rows(attributes);
+    TT_FATAL(gather_in1 || !attributes.transpose_b, "all_gather_minimal_matmul_async transpose_b needs gather_in1");
+
     // Allow upper-dim broadcasting on activation (LHS): activation may have arbitrary upper dims
-    for (int i = 0; i < static_cast<int>(w_logical.rank()) - 2; ++i) {
-        TT_FATAL(w_logical[i] == 1, "all_gather_minimal_matmul_async weight must have 1 in all dims < -2");
+    const auto& unbatched_logical = gather_in1 ? a_logical : w_logical;
+    for (int i = 0; i < static_cast<int>(unbatched_logical.rank()) - 2; ++i) {
+        TT_FATAL(unbatched_logical[i] == 1, "all_gather_minimal_matmul_async weight must have 1 in all dims < -2");
     }
 
-    const uint32_t M = a_logical[-2];
-    const uint32_t K = a_logical[-1] * attributes.ring_size;
+    const uint32_t M = stripes_are_rows ? a_logical[-1] : a_logical[-2];
+    const uint32_t K = (stripes_are_rows ? a_logical[-2] : a_logical[-1]) * attributes.ring_size;
     // When FSDP fusion is active, the weight is sharded along K across `fsdp_ring_size`
     // devices, so the per-device weight only holds K/fsdp_ring_size of the K dim.
-    const uint32_t K_w = w_logical[-2] * attributes.fsdp_ring_size;
-    const uint32_t N = w_logical[-1];
+    const uint32_t K_w = gather_in1 ? w_logical[-1] : w_logical[-2] * attributes.fsdp_ring_size;
+    const uint32_t N = gather_in1 ? w_logical[-2] : w_logical[-1];
 
     TT_FATAL(K == K_w, "all_gather_minimal_matmul_async inner dimensions must match, got K={} and K_w={}", K, K_w);
     TT_FATAL(M > 0 && K > 0 && N > 0, "all_gather_minimal_matmul_async dimensions must be positive");
     validate_rows(attributes, tensor_args);
+
+    if (gather_in1) {
+        TT_FATAL(
+            !has_bias && !attributes.fused_ternary_scalar.has_value() &&
+                !tensor_args.fused_ternary_input_a.has_value() && !tensor_args.fused_ternary_input_b.has_value() &&
+                !attributes.fuse_swiglu && !attributes.fused_activation.has_value() && attributes.chunks == 1 &&
+                attributes.chunk_sizes.empty() && !attributes.fsdp_cluster_axis.has_value() && !attributes.use_mcast,
+            "all_gather_minimal_matmul_async gather_in1 does not support a bias, addcmul, SwiGLU, an activation, "
+            "chunks, FSDP fusion or use_mcast");
+    }
 
     if (attributes.fuse_swiglu) {
         TT_FATAL(
@@ -449,7 +468,7 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
         const auto& cfg = attributes.config.value();
         TT_FATAL(cfg.M_block_size > 0 && cfg.K_block_size > 0 && cfg.N_block_size > 0, "Block sizes must be > 0");
 
-        const uint32_t K_tiles_per_device = a_padded[-1] / TILE_WIDTH;
+        const uint32_t K_tiles_per_device = agmm_k_per_device(attributes, act_tensor) / TILE_WIDTH;
         // Ring topology uses a bidirectional half-block scheme that requires K_block_size to
         // evenly divide K_tiles_per_device (no tail-block support). Linear topology uses a
         // unidirectional full-block scheme that supports a tail block of K_tiles_per_device %
@@ -490,6 +509,13 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
                 cfg.compute_with_storage_grid_size.y <= device_grid.y,
             "compute_with_storage_grid_size must be <= device grid size");
 
+        // With gather_in1 the tile multiply needs at least as many columns as rows, or a single column.
+        TT_FATAL(
+            !gather_in1 || cfg.subblock_h >= cfg.subblock_w || cfg.subblock_h == 1,
+            "gather_in1 requires subblock_h ({}) >= subblock_w ({}), or subblock_h == 1",
+            cfg.subblock_h,
+            cfg.subblock_w);
+
         const uint32_t max_dest_volume = get_dest_reg_count(attributes.compute_kernel_config);
         TT_FATAL(
             cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
@@ -508,6 +534,10 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
     const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
 
     ttnn::Shape intermediate_shape(in0_input_tensor_shape);
+    // The gather buffer has the layout the program gathers: with in1 held as [K / ring_size, N], its transpose.
+    if (agmm_stripes_are_rows(attributes)) {
+        std::swap(intermediate_shape[-2], intermediate_shape[-1]);
+    }
     intermediate_shape[-1] = intermediate_shape[-1] * attributes.ring_size;
 
     const auto& memory_config = attributes.output_mem_config.value_or(in0_input_tensor.memory_config());
@@ -529,6 +559,20 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
         output_specs.push_back(tt::tt_metal::TensorSpec(
             weight_intermediate_shape,
             TensorLayout(in1_input_tensor.dtype(), PageConfig(Layout::TILE), in1_input_tensor.memory_config())));
+    }
+
+    if (attributes.gather_in1) {
+        // in0 @ gathered(in1): the activation's shape (the local operand here) with in1's N, the gather buffer's rows,
+        // as its last dim.
+        ttnn::Shape output_shape(in1_input_tensor_shape);
+        output_shape[-1] = intermediate_shape[-2];
+        output_specs.push_back(tt::tt_metal::TensorSpec(
+            output_shape,
+            TensorLayout(
+                attributes.output_dtype.value_or(in1_input_tensor.dtype()),
+                PageConfig(Layout::TILE),
+                attributes.output_mem_config.value_or(in1_input_tensor.memory_config()))));
+        return output_specs;
     }
 
     // Per-chunk widths: explicit when given, else the uniform N/chunks split.
@@ -592,7 +636,7 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
     // reported) a gather slot keeps its tensor's label and the chunks take the union over those.
     const TensorTopology activation_topology =
         ttnn::operations::ccl::common::all_gather_output_topology(
-            tensor_args.input_tensor, attributes.cluster_axis, /*gathered_dim=*/-1)
+            tensor_args.input_tensor, attributes.cluster_axis, agmm_stripes_are_rows(attributes) ? -2 : -1)
             .value_or(tensor_args.input_tensor.tensor_topology());
     const bool fsdp_fused = attributes.fsdp_cluster_axis.has_value();
     const TensorTopology weight_topology =
@@ -601,8 +645,24 @@ std::vector<tt::tt_metal::TensorTopology> AllGatherMinimalMatmulAsyncOp::compute
                          .value_or(tensor_args.weight_tensor.tensor_topology())
                    : tensor_args.weight_tensor.tensor_topology();
 
+    // With in1 held as its transpose, its rows are the result's last dim: its label goes to the result with the last
+    // two dims swapped.
+    std::optional<TensorTopology> transposed_label;
+    if (attributes.transpose_b) {
+        const auto rank = static_cast<int32_t>(tensor_args.input_tensor.logical_shape().rank());
+        auto placements = activation_topology.placements();
+        for (auto& placement : placements) {
+            auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&placement);
+            if (shard != nullptr && shard->dim >= rank - 2) {
+                shard->dim = 2 * rank - 3 - shard->dim;
+            }
+        }
+        transposed_label.emplace(
+            activation_topology.distribution_shape(), std::move(placements), activation_topology.mesh_coords());
+    }
+
     std::vector<std::reference_wrapper<const TensorTopology>> operands{
-        std::cref(activation_topology), std::cref(weight_topology)};
+        std::cref(transposed_label ? *transposed_label : activation_topology), std::cref(weight_topology)};
     if (tensor_args.bias_tensor.has_value()) {
         operands.emplace_back(tensor_args.bias_tensor->tensor_topology());
     }
@@ -659,7 +719,9 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     bool fuse_swiglu,
     const std::vector<uint32_t>& chunk_sizes,
     std::optional<bool> transpose_core_grid,
-    bool use_mcast) {
+    bool use_mcast,
+    bool gather_in1,
+    bool transpose_b) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -709,10 +771,13 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fuse_swiglu,
         chunk_sizes,
         transpose_core_grid,
-        use_mcast};
+        use_mcast,
+        gather_in1,
+        transpose_b};
+    // With gather_in1 the weight is the gathered operand and the activation the local one.
     auto tensor_args = OperationType::tensor_args_t{
-        input_tensor,
-        weight_tensor,
+        gather_in1 ? weight_tensor : input_tensor,
+        gather_in1 ? input_tensor : weight_tensor,
         bias_tensor,
         persistent_output_buffer,
         addcmul_input_tensor1,

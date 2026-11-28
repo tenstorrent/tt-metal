@@ -441,6 +441,25 @@ struct TensorShape2D {
     }
 };
 
+// Page of the program's tile (d0, d1) of in1 or of the output: with GATHER_IN1, tile (d1, d0) of the tensor.
+FORCE_INLINE uint32_t tile_page(const TensorShape2D& shape, uint32_t d0, uint32_t d1) {
+#ifdef GATHER_IN1
+    return d1 * shape.logical_d0 + d0;
+#else
+    return d0 * shape.logical_d1 + d1;
+#endif
+}
+
+// Page of the program's tile (d0, k) of this device's own stripe. With GATHER_IN1 and no TRANSPOSE_B the stripe is in1
+// as stored, [K / n, N]: tile (k, d0) of it.
+FORCE_INLINE uint32_t in0_stripe_page(const TensorShape2D& shape, uint32_t d0, uint32_t k, uint32_t stripe_Wt) {
+#if defined(GATHER_IN1) && !defined(TRANSPOSE_B)
+    return k * shape.logical_d0 + d0;
+#else
+    return d0 * stripe_Wt + k;
+#endif
+}
+
 /**
  * Read a block of in0 from a potentially padded tensor.
  * Since this is for matmul, no need to read when M >= logical_M
@@ -493,7 +512,7 @@ void read_in0_block_sync(
 #ifdef READ_FROM_LOCAL_INPUT
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
-                    uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
+                    uint32_t tile_id = in0_stripe_page(shape, i, j - local_k_start, input_tensor_Wt);
                     noc.async_read(
                         in3_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
@@ -516,7 +535,7 @@ void read_in0_block_sync(
 #ifdef READ_FROM_LOCAL_INPUT
                 if (local_k_start <= j && j <= local_k_end) {
                     // read from self_tensor_accessor
-                    uint32_t tile_id = i * input_tensor_Wt + (j - local_k_start);
+                    uint32_t tile_id = in0_stripe_page(shape, i, j - local_k_start, input_tensor_Wt);
                     noc.async_read(
                         in3_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
                 } else {
@@ -570,7 +589,7 @@ void read_in1_block_sync(
                 continue;
             }
             if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
+                uint32_t tile_id = tile_page(shape, i, j);
                 noc.async_read(
                     tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
@@ -588,7 +607,7 @@ void read_in1_block_sync(
                 continue;
             }
             if (i < shape.logical_d0) {
-                uint32_t tile_id = i * shape.logical_d1 + j;
+                uint32_t tile_id = tile_page(shape, i, j);
                 noc.async_read(
                     tensor_accessor, CoreLocalMem<uint8_t>(write_ptr), tile_size_bytes, {.page_id = tile_id}, {});
             } else {
@@ -630,7 +649,7 @@ void write_block_sync(
                 read_ptr += tile_size_bytes;
                 continue;
             }
-            uint32_t tile_id = i * shape.logical_d1 + j;
+            uint32_t tile_id = tile_page(shape, i, j);
             noc.async_write(
                 CoreLocalMem<uint8_t>(read_ptr), tensor_accessor, tile_size_bytes, {}, {.page_id = tile_id});
             read_ptr += tile_size_bytes;
@@ -792,7 +811,7 @@ void write_block_sync_granular(
                         tensor_accessor,
                         tile_size_bytes,
                         {},
-                        {.page_id = m_tile * shape.logical_d1 + n_tile_id});
+                        {.page_id = tile_page(shape, m_tile, n_tile_id)});
                     out_read_ptr += tile_size_bytes;
                 }
             }

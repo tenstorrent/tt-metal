@@ -11,6 +11,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation_types.hpp"
+#include "ttnn/operations/common/hash_without_rows.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -64,6 +65,13 @@ struct AllGatherMinimalMatmulAsyncParams {
     // relay. Independent of the fabric config.
     bool use_mcast = false;
 
+    // Gather in1 instead of in0. The caller passes the whole in0, [M, K], and a stripe of in1, [K / ring_size, N], and
+    // gets in0 @ gathered(in1), [M, N]. Inside the op the two tensors trade places: input_tensor, the one the op
+    // gathers, holds the in1 stripe and weight_tensor holds in0.
+    bool gather_in1 = false;
+    // With gather_in1: the caller's stripe is in1's transpose, [N, K / ring_size].
+    bool transpose_b = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -91,7 +99,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         bool fuse_swiglu = false,
         std::vector<uint32_t> chunk_sizes = {},
         std::optional<bool> transpose_core_grid = std::nullopt,
-        bool use_mcast = false) :
+        bool use_mcast = false,
+        bool gather_in1 = false,
+        bool transpose_b = false) :
         config(config),
         fused_activation(std::move(fused_activation)),
         output_mem_config(std::move(output_mem_config)),
@@ -118,7 +128,9 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_topology(fsdp_topology),
         fuse_swiglu(fuse_swiglu),
         transpose_core_grid(transpose_core_grid),
-        use_mcast(use_mcast) {}
+        use_mcast(use_mcast),
+        gather_in1(gather_in1),
+        transpose_b(transpose_b) {}
 
     // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
@@ -138,6 +150,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "using_persistent_weight_buffer",
         "fuse_swiglu",
         "use_mcast",
+        "gather_in1",
+        "transpose_b",
         "fused_activation",
         "output_dtype",
         // Selects DST_SYNC_MODE and the other compile-time compute settings.
@@ -161,6 +175,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->using_persistent_weight_buffer,
             this->fuse_swiglu,
             this->use_mcast,
+            this->gather_in1,
+            this->transpose_b,
             this->fused_activation,
             this->output_dtype,
             this->compute_kernel_config);
@@ -180,6 +196,25 @@ inline bool resolve_transpose_core_grid(
     const tt::tt_metal::distributed::MeshDevice& mesh_device) {
     return resolve_transpose_core_grid(
         params, M, N, tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(mesh_device)));
+}
+
+// The M, N and K per device the program runs with, read from the tensors in its two slots:
+//
+//                              input_tensor (gathered)      weight_tensor (local)    M      N      K per device
+//   default                    in0 stripe [rows, K / n]     in1 [K, N]               rows   N      K / n
+//   gather_in1                 in1 stripe [K / n, N]        in0 [rows, K]            N      rows   K / n
+//   gather_in1 + transpose_b   in1 stripe [N, K / n]        in0 [rows, K]            N      rows   K / n
+inline bool agmm_stripes_are_rows(const AllGatherMinimalMatmulAsyncParams& params) {
+    return params.gather_in1 && !params.transpose_b;
+}
+inline uint32_t agmm_m(const AllGatherMinimalMatmulAsyncParams& params, const Tensor& gathered) {
+    return agmm_stripes_are_rows(params) ? gathered.padded_shape()[-1] : operations::common::folded_rows(gathered);
+}
+inline uint32_t agmm_n(const AllGatherMinimalMatmulAsyncParams& params, const Tensor& local) {
+    return params.gather_in1 ? operations::common::folded_rows(local) : local.padded_shape()[-1];
+}
+inline uint32_t agmm_k_per_device(const AllGatherMinimalMatmulAsyncParams& params, const Tensor& gathered) {
+    return gathered.padded_shape()[agmm_stripes_are_rows(params) ? -2 : -1];
 }
 
 // Per-chunk widths (elements): explicit `chunk_sizes`, else the uniform N/chunks split.
