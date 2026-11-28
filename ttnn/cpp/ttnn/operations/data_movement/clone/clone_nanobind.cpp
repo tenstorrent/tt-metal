@@ -13,24 +13,40 @@
 namespace ttnn::operations::data_movement::clone {
 void bind_clone_operation(nb::module_& mod) {
     const auto* doc = R"doc(
-        Clones the input tensor, creating a copy with the specified memory configuration and converting its data type to dtype. This operation does not alter the tensor's layout.
+        Clones the input tensor into a newly allocated tensor, optionally converting its data type and moving it to another memory configuration. The layout does not change.
 
         Args:
-            input (ttnn.Tensor): the input tensor to be cloned.
+            input (ttnn.Tensor): the input tensor, allocated on device. A TILE input must use 32x32 tiles.
 
         Keyword Args:
-            dtype (ttnn.DataType, optional): the target data type of the cloned tensor. Defaults to `None`.
-            memory_config (ttnn.MemoryConfig, optional): the memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG. Defaults to `None`.
-            compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel. Defaults to `None`.
+            dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`, which keeps the input's data type.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to `None`, which uses the input tensor's memory configuration.
+            compute_kernel_config (ttnn.ComputeKernelConfig, optional): the configuration for the compute kernel that converts the data type. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): cores to run on for interleaved tensors. Defaults to `None`, which uses all cores.
 
         Returns:
-            ttnn.Tensor: the cloned output tensor.
+            ttnn.Tensor: a copy of the input, never a view. It has the input's logical and padded shape and layout, with the data type given by ``dtype`` and the memory configuration given by ``memory_config``.
 
         Note:
-            * ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
-            * TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
-            * If the input's current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            Converting the data type needs a TILE input. Converting to or from ``INT32`` is not supported: it is not
+            rejected, but gives wrong values.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED, in DRAM or L1. The input and output must both be sharded, with the same memory layout and the same shard spec; only the buffer type can differ
+            - A sharded input with an interleaved output, or the reverse, is not supported
     )doc";
 
     ttnn::bind_function<"clone">(

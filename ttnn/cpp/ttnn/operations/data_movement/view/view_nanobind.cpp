@@ -26,19 +26,44 @@ ttnn::Tensor view_shape_vector_wrapper(const ttnn::Tensor& input_tensor, const t
 void bind_view(nb::module_& mod) {
     const auto* doc =
         R"doc(
-        This is a 0 cost view operation that returns the same tensor that was passed to it but with a new shape
-
-        Note: The following conditions must be met:
-            * the memory is stored on the device
-            * the last dimension must not change
-            * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension
+        Returns a zero-cost view of the input tensor with a new shape. No data is copied or moved: the returned tensor
+        shares the input's buffer, so writes through either tensor are visible in the other. Use :func:`ttnn.reshape`
+        for shape changes that need data movement.
 
         Args:
-            * input_tensor: Input Tensor.
-            * shape: New shape of tensor.
+            input_tensor (ttnn.Tensor): the input tensor, on device.
+            shape (ttnn.Shape or List[int]): the new shape, with the same number of elements as the input. As a list, one dimension may be ``-1``; its size is inferred from the other dimensions.
 
         Returns:
-            ttnn.Tensor: a reference to the input tensor but with the new shape.
+            ttnn.Tensor: a view of the input with the new shape, and the input's dtype, layout, memory layout, buffer type and shard grid. The shard metadata can be adapted to the new shape: a rank 0 or 1 ND sharded input viewed as rank 2 gets a matching ND shard spec, and a 2D sharded input whose memory configuration was built from an ND shard spec keeps only its 2D shard spec when the padded shape changes. If the shape does not change, the input tensor itself is returned.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B, BFLOAT4_B
+                 - TILE
+
+            The last dimension must not change.
+
+            For TILE layout, the second-to-last dimension must not change, or must be a multiple of the tile height
+            (32 for the standard tile) both before and after the view. A rank 1 shape counts as a second-to-last
+            dimension of 1.
+
+            With a tile other than 32x32, a view whose last two dims are not multiples of the tile is padded to
+            multiples of 32, not of the tile, and the padded output must still fit in the input's buffer. For example,
+            a ``[2, 3, 32]`` tensor with 16x32 tiles cannot be viewed as ``[1, 2, 3, 32]``.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED, in DRAM or L1
+            - ND sharded: only a rank 0 or 1 input viewed as a rank 2 shape ``[1, N]``, or a view that keeps the rank and the padded shape. A TILE rank 2 input ``[1, N]`` cannot be viewed as rank 1 ``[N]``, although both have the padded shape ``[32, N]``
 
         Example:
 
