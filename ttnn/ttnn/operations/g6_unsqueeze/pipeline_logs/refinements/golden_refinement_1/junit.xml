@@ -1,0 +1,1261 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="20" failures="0" skipped="0" tests="20" time="0.159" timestamp="2026-11-28T13:57:22.266611+01:00" hostname="bh-qb-15"><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op[1x512-dim2-dtype=FLOAT32-layout=TILE]" time="0.009"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op[1x256-dim2-dtype=FLOAT32-layout=TILE]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-gate-math_fidelity]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-input_gen]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-poison_padding]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x512-dim-1-dtype=FLOAT32-layout=TILE]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x256-dim2-dtype=FLOAT32-layout=TILE-sequence]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_golden" name="test_op_loose[1x512-dim2-dtype=FLOAT32-layout=TILE-trace]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_repeat_bit_identical" time="0.006"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim0]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim1]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim-2]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim-3]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim3-out_of_range]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim-4-out_of_range]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x1x1x32-dim4-rank4]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x512-dim2-l1_interleaved]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[1x0-dim2-empty]" time="0.001"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase><testcase classname="eval.golden_tests.g6_unsqueeze.test_regression" name="test_validation_errors[2x64-dim2-two_rows]" time="0.002"><properties><property name="start_timestamp" value="2026-11-28T13:57:22" /><property name="end_timestamp" value="2026-11-28T13:57:22" /></properties><error message="failed on setup with &quot;RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.&#10;Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276&#10; 1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)&#10; 2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)&#10; 4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)&#10; 5. tt::umd::TopologyDiscovery::get_connected_devices()&#10; 6. tt::umd::TopologyDiscovery::create_ethernet_map()&#10; 7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)&#10; 8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)&#10; 9. tt::Cluster::open_driver(bool const&amp;)&#10;10. tt::Cluster::initialize_device_drivers()&#10;11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)&#10;12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()&#10;13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)&#10;14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)&#10;15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()&#10;16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)&#10;17. tt::tt_metal::GetClusterType()&#10;18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]&#10;19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]&#10;20. _PyEval_EvalFrameDefault&#10;21. _PyFunction_Vectorcall&#10;22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;23. _PyEval_EvalFrameDefault&#10;24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;28. _PyEval_EvalFrameDefault&#10;29. _PyFunction_Vectorcall&#10;30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;31. _PyEval_EvalFrameDefault&#10;32. _PyFunction_Vectorcall&#10;33. _PyEval_EvalFrameDefault&#10;34. _PyFunction_Vectorcall&#10;35. _PyEval_EvalFrameDefault&#10;36. _PyFunction_Vectorcall&#10;37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;38. _PyEval_EvalFrameDefault&#10;39. _PyFunction_Vectorcall&#10;40. _PyObject_Call_Prepend&#10;41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]&#10;42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]&#10;43. _PyEval_EvalFrameDefault&#10;44. _PyFunction_Vectorcall&#10;45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]&#10;46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;47. _PyEval_EvalFrameDefault&#10;48. _PyFunction_Vectorcall&#10;49. _PyEval_EvalFrameDefault&#10;50. _PyFunction_Vectorcall&#10;51. _PyEval_EvalFrameDefault&#10;52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]&#10;53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]&#10;54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]&#10;55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;56. _PyEval_EvalFrameDefault&#10;57. _PyFunction_Vectorcall&#10;58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]&#10;59. _PyEval_EvalFrameDefault&#10;60. _PyFunction_Vectorcall&#10;61. _PyEval_EvalFrameDefault&#10;62. _PyFunction_Vectorcall&quot;">E   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset.
+    Location: /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/tt_metal/third_party/umd/tt-umd/src/tt_device/tt_device.cpp:276
+     1. tt::umd::TTDevice::is_pcie_hung(unsigned int, tt::umd::TTDevice::HangAction)
+     2. tt::umd::TTDevice::init_tt_device(std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     3. tt::umd::TopologyDiscovery::init_device(tt::umd::TTDevice*, int, std::chrono::duration&lt;long, std::ratio&lt;1l, 1000l&gt; &gt;)
+     4. tt::umd::TopologyDiscovery::add_local_device(std::unique_ptr&lt;tt::umd::TTDevice, std::default_delete&lt;tt::umd::TTDevice&gt; &gt;, int)
+     5. tt::umd::TopologyDiscovery::get_connected_devices()
+     6. tt::umd::TopologyDiscovery::create_ethernet_map()
+     7. tt::umd::TopologyDiscovery::discover(tt::umd::TopologyDiscoveryOptions const&amp;, tt::umd::IODeviceType, std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const&amp;)
+     8. tt::umd::Cluster::Cluster(tt::umd::ClusterOptions)
+     9. tt::Cluster::open_driver(bool const&amp;)
+    10. tt::Cluster::initialize_device_drivers()
+    11. tt::Cluster::Cluster(tt::llrt::RunTimeOptions&amp;)
+    12. tt::tt_metal::MetalEnvImpl::initialize_base_objects()
+    13. tt::tt_metal::MetalEnvImpl::MetalEnvImpl(tt::tt_metal::MetalEnvDescriptor)
+    14. std::__detail::_MakeUniq&lt;tt::tt_metal::MetalEnvImpl&gt;::__single_object std::make_unique&lt;tt::tt_metal::MetalEnvImpl, tt::tt_metal::MetalEnvDescriptor&gt;(tt::tt_metal::MetalEnvDescriptor&amp;&amp;)
+    15. tt::tt_metal::MetalContext::create_default_instance_implicit_locked()
+    16. tt::tt_metal::MetalContext::instance(ttsl::StrongType&lt;int, tt::tt_metal::ContextIdTag&gt;)
+    17. tt::tt_metal::GetClusterType()
+    18. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x9bb9d6) [0x7f78534839d6]
+    19. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/ttnn/ttnn/_ttnn.so(+0x41b212) [0x7f7852ee3212]
+    20. _PyEval_EvalFrameDefault
+    21. _PyFunction_Vectorcall
+    22. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    23. _PyEval_EvalFrameDefault
+    24. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    25. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    26. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    27. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    28. _PyEval_EvalFrameDefault
+    29. _PyFunction_Vectorcall
+    30. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    31. _PyEval_EvalFrameDefault
+    32. _PyFunction_Vectorcall
+    33. _PyEval_EvalFrameDefault
+    34. _PyFunction_Vectorcall
+    35. _PyEval_EvalFrameDefault
+    36. _PyFunction_Vectorcall
+    37. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    38. _PyEval_EvalFrameDefault
+    39. _PyFunction_Vectorcall
+    40. _PyObject_Call_Prepend
+    41. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x3d3366) [0x559b0f40f366]
+    42. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e812) [0x559b0f36a812]
+    43. _PyEval_EvalFrameDefault
+    44. _PyFunction_Vectorcall
+    45. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a3b10) [0x559b0f2dfb10]
+    46. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    47. _PyEval_EvalFrameDefault
+    48. _PyFunction_Vectorcall
+    49. _PyEval_EvalFrameDefault
+    50. _PyFunction_Vectorcall
+    51. _PyEval_EvalFrameDefault
+    52. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2a8158) [0x559b0f2e4158]
+    53. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2f4cc9) [0x559b0f330cc9]
+    54. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x2c2a7f) [0x559b0f2fea7f]
+    55. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    56. _PyEval_EvalFrameDefault
+    57. _PyFunction_Vectorcall
+    58. /localdev/pmilojevic/campaign/bh-qb-15/slots/chip0/python_env/bin/python3(+0x32e629) [0x559b0f36a629]
+    59. _PyEval_EvalFrameDefault
+    60. _PyFunction_Vectorcall
+    61. _PyEval_EvalFrameDefault
+    62. _PyFunction_Vectorcall</error></testcase></testsuite></testsuites>
