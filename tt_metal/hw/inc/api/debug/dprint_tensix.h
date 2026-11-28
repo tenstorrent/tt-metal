@@ -329,9 +329,18 @@ inline void dprint_tensix_dest_row(DataFormat data_format, uint32_t row) {
 // that rendezvous, so keeping pack off DEST is the caller's responsibility, and the acquire-to-commit
 // window is what provides it: math owns DEST there and pack is still waiting on it. Called outside
 // that window, this races an in-flight pack.
+// With unpack-to-dest there is no rendezvous: math's tile_regs_acquire waits for unpack's tile_regs_commit, so math
+// would never reach its half. Math instead waits on the RISC until unpack has posted the section (UNPACK_MATH), which
+// unpack does only after its DEST writes have drained.
 inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
-    UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
-    MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
+    if constexpr (UnpackToDestEn) {
+        // The sync retires the previous section's UNPACK_MATH get, so a nonzero count is this section's post.
+        MATH(ckernel::tensix_sync());
+        MATH(_llk_sync_spin_until_posted_(semaphore::UNPACK_MATH));
+    } else {
+        UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
+        MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
+    }
     MATH({
         // Reading DEST at the wrong element width yields plausible-looking garbage rather than an
         // obvious failure, so refuse formats this path has not been validated against. Note the
@@ -369,7 +378,9 @@ inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0) {
             }
         }
     })
-    MATH(ckernel::dbg_thread_unhalt<ckernel::MathThreadId>());
+    if constexpr (!UnpackToDestEn) {
+        MATH(ckernel::dbg_thread_unhalt<ckernel::MathThreadId>());
+    }
 }
 #else
 // Print the contents of tile with index tile_id within the destination register
