@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import zlib
+
 from models.common.tensor_utils import align_shape_to_tile
 from models.common.tests.utils import stable_model_seed
 
 
 def test_stable_model_seed_deterministic() -> None:
-    assert stable_model_seed("llama-3") == stable_model_seed("llama-3")
+    assert stable_model_seed("llama-3") == (zlib.crc32(b"llama-3") & 0xFFFFFFFF) == 364764419
 
 
 def test_stable_model_seed_distinct() -> None:
