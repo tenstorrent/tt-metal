@@ -218,6 +218,7 @@ DB_SCHEMA = [
     Column("ternary_scalar_bits", "int64", True, "configuration"),
     Column("throttle_level", "int64", True, "configuration"),
     Column("tilize", "string", True, "configuration"),
+    Column("unpack_block", "string", True, "configuration"),
     Column("top32_mode", "int64", True, "configuration"),
     Column("top32_result_stride", "int64", True, "configuration"),
     Column("top_min", "bool", True, "configuration"),

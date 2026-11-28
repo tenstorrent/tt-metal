@@ -27,6 +27,28 @@ constexpr std::uint32_t llk_configured_cbs(const T (&formats)[n]) {
     return count;
 }
 
+// Whether any CB of the kernel holds Int32 or UInt32 data (formats 8 and 24)
+template <std::size_t n, typename T>
+constexpr bool llk_int32_cbs(const T (&formats)[n]) {
+    for (std::size_t i = 0; i < n; i++) {
+        if (formats[i] == 8 || formats[i] == 24) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Whether any CB of the kernel holds integer data: Int32, UInt32, UInt16, UInt8 or Int8 (formats 8, 24, 9, 30, 14)
+template <std::size_t n, typename T>
+constexpr bool llk_int_cbs(const T (&formats)[n]) {
+    for (std::size_t i = 0; i < n; i++) {
+        if (formats[i] == 8 || formats[i] == 24 || formats[i] == 9 || formats[i] == 30 || formats[i] == 14) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <std::size_t n, typename T>
 constexpr bool llk_gdn_kernel(const T (&formats)[n], const MathFidelity fidelity, const bool fp32_dest) {
     return llk_configured_cbs(formats) == llk_size_mode_gdn_cbs && fidelity == MathFidelity::HiFi4 && fp32_dest;
@@ -43,3 +65,12 @@ constexpr bool llk_gdn_kernel(const T (&formats)[n], const MathFidelity fidelity
 #define LLK_SIZE_MODE \
     (::ckernel::llk_configured_cbs(unpack_src_format) >= ::ckernel::llk_size_mode_min_cbs || LLK_SIZE_MODE_GDN)
 #endif
+
+// Unpack to dest takes main's per-tile handshake (the math RISC takes its own post back) at 16-bit DEST and in 32-bit DEST kernels
+// with an Int32 or UInt32 CB (pow_int 32x32 +0.6 %, fp32 sort with its UInt32 index +0.15 % on the other one); Float32-only kernels
+// keep the handshake where unpack takes the math post (fp32 fft, welford layernorm, cumprod +1 to +2 % without it). A 16-bit DEST
+// kernel with an integer CB keeps the early poll (sampling +0.7 % without it)
+#define LLK_U2D_INT_KERNEL (DST_ACCUM_MODE && ::ckernel::llk_int32_cbs(unpack_src_format))
+// The handshake also for 8- and 16-bit integer CBs (typecast UInt16 <-> UInt8 at 32-bit DEST +1.6 to +2.3 % without it); their
+// early poll stays.
+#define LLK_U2D_MAIN_HANDSHAKE (!DST_ACCUM_MODE || ::ckernel::llk_int_cbs(unpack_src_format))

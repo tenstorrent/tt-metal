@@ -10,6 +10,11 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "sanitizer/api.h"
 #include "llk_assert.h"
+#ifdef ARCH_BLACKHOLE
+#include "llk_size_mode.h"
+#include "llk_copy_kernel.h"
+#include "api/compute/matmul_fe_mark.h"
+#endif
 
 #ifdef TRISC_MATH
 #include "llk_math_unary_datacopy_api.h"
@@ -132,8 +137,20 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#if defined(ARCH_BLACKHOLE)
+    // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency. A size-mode
+    // kernel keeps main's smaller call, and so does a kernel with a plain matmul call: its output copy runs one tile
+    // per DEST acquire, where the early poll measured slower (minimal_matmul LoFi 888 2x2 +0.23 %, 224 2x1 +0.13 %), and
+    // a kernel with an Int32 or UInt32 CB too (pow_int 32x32 int32 +0.6 %), and a copy kernel (sharded identity, LLK_COPY_KERNEL)
+    constexpr bool early_poll = !LLK_SIZE_MODE && !LLK_U2D_INT_KERNEL && !LLK_COPY_KERNEL &&
+                                !matmul_fe_mark::is_used_d<7, std::integral_constant<bool, is_fp32_dest_acc_en>>(0) &&
+                                !matmul_fe_mark::is_used_d<8, std::integral_constant<bool, is_fp32_dest_acc_en>>(0);
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, early_poll>(
+        in_cb_id, in_tile_index, dst_tile_index)));
+#else
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index, dst_tile_index)));
+#endif
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -143,7 +160,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
- * (`copy_init`). The DST register buffer must be in acquired
+ * (`copy_init`, without transpose). The DST register buffer must be in acquired
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
@@ -172,6 +189,10 @@ ALWI void copy_block(
     std::uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
+#endif
+#ifdef ARCH_BLACKHOLE
+    // Marks the kernel: its unpack A inits clear the block replay record
+    static_cast<void>(sizeof(matmul_fe_mark::set_d<19, std::integral_constant<bool, is_fp32_dest_acc_en>>));
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));

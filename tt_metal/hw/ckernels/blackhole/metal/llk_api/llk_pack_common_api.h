@@ -565,9 +565,6 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
             } else {
                 llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, true>();
             }
-        } else if constexpr (ckernel::IS_BFP_FORMAT(pack_dst_format[new_output])) {
-            // A block-float output's immediates do not wait for the unpacker: the wait cost a 3-tile block 2.4 cy.
-            llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false, false, false>();
         } else {
             llk_pack_reconfig_data_format_ct_gate<is_fp32_dest_acc_en, new_output, false>();
         }
