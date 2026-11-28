@@ -112,8 +112,7 @@ class _MediaRuntime(_PackedRuntime):
 
 def _run_media_loop(monkeypatch, forward_chunks, sources, *, supports_packed_forward=True, d2h_service=None):
     """The first rank's request loop over ``sources``, forward k carrying MEDIA_REFS[k] in its H2D metadata bytes.
-    Returns the runtime, the padded forwards, each forward's metadata bytes, the ack record and the ack words written
-    into it."""
+    Returns the runtime and each forward's metadata bytes."""
     _configure(monkeypatch, supports_packed_forward=supports_packed_forward)
     monkeypatch.setattr(runner, "FORWARD_CHUNKS", forward_chunks)
     monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
@@ -124,14 +123,6 @@ def _run_media_loop(monkeypatch, forward_chunks, sources, *, supports_packed_for
     raws = [pack_forward_metadata(chunks, forward_chunks, r, 2) for chunks, r in zip(forwards, MEDIA_REFS)]
     drained = iter(raws + [sentinel_metadata(SHUTDOWN_WORD, forward_chunks, 2)])
     monkeypatch.setattr(runner, "_h2d_drain_op", lambda service, sockets, n_mtp: (_Tensor(), next(drained)))
-    record, acks = _Tensor(), []
-
-    def device_record(words, dev):
-        acks.append(words.flatten().tolist())
-        return record
-
-    monkeypatch.setattr(runner, "_device_record", device_record)
-    monkeypatch.setattr(runner, "_fill_record", lambda rec, words: acks.append(words.flatten().tolist()))
     runtime = _MediaRuntime()
     runner.run_request_loop(
         runtime,
@@ -144,29 +135,19 @@ def _run_media_loop(monkeypatch, forward_chunks, sources, *, supports_packed_for
         d2h_service=d2h_service,
         sockets=runner.SocketBuffers(metadata=None),
     )
-    return runtime, forwards, raws, record, acks
+    return runtime, raws
 
 
+@pytest.mark.parametrize("d2h_service", [None, object()], ids=["host_acks", "d2h_acks"])
 @pytest.mark.parametrize("forward_chunks", [1, F])
-def test_first_rank_decodes_media_refs_and_acks_only_the_chunks(monkeypatch, forward_chunks):
+def test_first_rank_decodes_media_refs(monkeypatch, forward_chunks, d2h_service):
     """The request loop decodes each forward's refs from its H2D metadata bytes and passes them to prefill_forward, or
-    to prefill_chunk at one chunk per forward. The D2H ack holds only the forward's chunk records, in one record built
-    on the first forward and refilled after."""
+    to prefill_chunk at one chunk per forward, with the metadata it received: the runtime acks its leading chunk
+    records."""
     sources = FORWARDS[:2] if forward_chunks > 1 else [FORWARDS[0][:1], FORWARDS[1]]
-    runtime, forwards, _, record, acks = _run_media_loop(monkeypatch, forward_chunks, sources, d2h_service=object())
+    runtime, raws = _run_media_loop(monkeypatch, forward_chunks, sources, d2h_service=d2h_service)
     entry = "prefill_forward" if forward_chunks > 1 else "prefill_chunk"
-    assert runtime.calls == [(entry, MEDIA_REFS[0], record), (entry, MEDIA_REFS[1], record)]
-    # One chunk per forward acks a single 12 B chunk record.
-    assert acks == [forward_metadata_words(chunks, forward_chunks) for chunks in forwards]
-    assert forward_chunks > 1 or all(len(words) == 3 for words in acks)
-
-
-def test_host_callback_acks_still_pass_media_refs(monkeypatch):
-    """Without a D2H ack service the runtime still gets each forward's refs, with the metadata it received; no ack
-    record is built."""
-    runtime, _, raws, _, acks = _run_media_loop(monkeypatch, F, FORWARDS[:2])
-    assert runtime.calls == [("prefill_forward", MEDIA_REFS[k], raws[k]) for k in range(2)]
-    assert acks == []
+    assert runtime.calls == [(entry, MEDIA_REFS[k], raws[k]) for k in range(2)]
 
 
 def test_per_chunk_forwards_pass_media_refs_from_the_loop(monkeypatch):
@@ -202,14 +183,6 @@ def test_first_rank_decodes_media_refs_from_the_metadata_bytes(monkeypatch, expe
     raw[metadata_size_bytes(forward_chunks)] = 3
     with expect_error(ValueError, "n_refs=3"):
         runner._decode_metadata(bytes(raw), with_media=True)
-
-
-def test_only_the_first_rank_acks_with_a_chunks_only_record(monkeypatch):
-    monkeypatch.setattr(runner, "MEDIA_MAX_REFS", 2)
-    sockets = runner.SocketBuffers(metadata=None)
-    sockets.metadata = "received record"
-    later_rank = SimpleNamespace(config=SimpleNamespace(is_first_rank=False))
-    assert runner._ack_metadata(later_rank, sockets, {}, d2h_service=object()) == "received record"
 
 
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):

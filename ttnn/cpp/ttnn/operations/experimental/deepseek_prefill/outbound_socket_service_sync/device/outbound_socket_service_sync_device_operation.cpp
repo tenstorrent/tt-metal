@@ -248,7 +248,8 @@ ttnn::Tensor outbound_socket_service_sync_impl(
     const ServiceT& service,
     const std::optional<ttnn::Tensor>& input,
     const std::optional<ttnn::Tensor>& metadata,
-    const std::vector<ttnn::Tensor>& extra_inputs = {}) {
+    const std::vector<ttnn::Tensor>& extra_inputs = {},
+    std::optional<uint32_t> metadata_size_bytes = std::nullopt) {
     using OperationType = ttnn::experimental::prim::OutboundSocketServiceSyncOperation;
     TT_FATAL(
         input.has_value() || metadata.has_value(),
@@ -284,8 +285,14 @@ ttnn::Tensor outbound_socket_service_sync_impl(
         TT_FATAL(extra_inputs.empty(), "outbound_socket_service_sync: extra inputs are D2D-only");
     }
     attrs.scratch_cb_index = 0;
-    attrs.metadata_size_bytes =
+    const uint32_t metadata_width_bytes =
         metadata.has_value() ? static_cast<uint32_t>(metadata->logical_shape()[-1] * sizeof(uint32_t)) : 0;
+    attrs.metadata_size_bytes = metadata_size_bytes.value_or(metadata_width_bytes);
+    TT_FATAL(
+        attrs.metadata_size_bytes <= metadata_width_bytes && (attrs.metadata_size_bytes > 0) == metadata.has_value(),
+        "outbound_socket_service_sync: metadata_size_bytes ({}) must be within the metadata tensor ({} B) and above 0",
+        attrs.metadata_size_bytes,
+        metadata_width_bytes);
     attrs.metadata_only = metadata_only;
     if (metadata.has_value()) {
         // The service sized its metadata buffer (D2D) or ring slot (D2H) for its configured size,
@@ -345,8 +352,9 @@ std::vector<ttnn::Tensor> outbound_socket_service_sync(
 ttnn::Tensor outbound_socket_service_sync(
     const tt::tt_metal::D2HStreamService& service,
     const std::optional<ttnn::Tensor>& input,
-    const std::optional<ttnn::Tensor>& metadata) {
-    return outbound_socket_service_sync_impl(service, input, metadata);
+    const std::optional<ttnn::Tensor>& metadata,
+    std::optional<uint32_t> metadata_size_bytes) {
+    return outbound_socket_service_sync_impl(service, input, metadata, {}, metadata_size_bytes);
 }
 
 }  // namespace ttnn::prim
