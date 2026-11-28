@@ -248,6 +248,13 @@ class OpenVDNPipeline(MiniMaxH3Pipeline):
             return self._row_indices(indices, rung)
         return self._replicated_indices(indices)
 
+    def _select_bucket(self, seq_len: int) -> int:
+        # The aligned length is already a multiple of 64 * SP and the hybrid layers take exactly it, so a traced
+        # (bucketed) denoise runs at that length rather than the ladder's next rung.
+        if self._aligned_rows is None:
+            return super()._select_bucket(seq_len)
+        return self._padded_length(seq_len)
+
     def _output_indices(self, start, count, capacity, vsa_geometry=None):
         if self._aligned_rows is None:
             return super()._output_indices(start, count, capacity, vsa_geometry)

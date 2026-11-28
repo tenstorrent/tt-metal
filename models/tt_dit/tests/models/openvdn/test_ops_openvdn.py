@@ -364,6 +364,40 @@ def test_conv_features_kernel(mesh_device, proj):
 
 
 @ONE_CHIP
+def test_readout_kernel(mesh_device):
+    """The fused readout (stage 4: `kernels.readout`) vs `RMSNorm(q @ state^T) * w` in float64, at the production
+    per-device shape on the frame-aligned layout: 35 frames of 1024-row slots, 2 heads, written token-major from row
+    1536 of a 38400-row buffer whose other rows stay zero. q is bf16 (the features' output), the state fp32; fp32
+    bars."""
+    from models.tt_dit.models.transformers.openvdn import kernels_openvdn as kernels
+
+    gen = torch.Generator().manual_seed(12)
+    f, h, slot, row0, total = 35, 2, 1024, 1536, 38400
+    query = torch.nn.functional.normalize(torch.randn(f, h, slot, HEAD_DIM, generator=gen), dim=-1).bfloat16()
+    state = torch.randn(f, h, HEAD_DIM, HEAD_DIM, generator=gen) / HEAD_DIM**0.5
+    weight = 1.0 + 0.1 * torch.randn(HEAD_DIM, generator=gen)
+    x = query.double() @ state.double().transpose(-2, -1)
+    x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6) * weight.double()
+    expected = torch.zeros(total, h * HEAD_DIM, dtype=torch.float64)
+    expected[row0 : row0 + f * slot] = x.permute(0, 2, 1, 3).reshape(f * slot, h * HEAD_DIM)
+
+    q_tt = _to_device(query, mesh_device, ttnn.bfloat16)
+    state_t = ops.split_bf16(ttnn.transpose(_to_device(state, mesh_device), -2, -1), 2)
+    w_tt = _to_device(weight.reshape(1, 1, 1, -1).expand(1, 1, 32, -1).contiguous(), mesh_device)
+    out_tt = ttnn.zeros([1, 1, total, h * HEAD_DIM], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    def run():
+        return kernels.readout(q_tt, state_t, w_tt, out_tt, row0=row0, frame_stride=slot)
+
+    run()  # compile
+    out, seconds = _timed(mesh_device, run)
+    logger.info(f"readout kernel F{f} H{h} slot {slot}: {seconds * 1e3:.2f} ms")
+    out = ttnn.to_torch(out).double().reshape(total, -1)
+    assert bool((out[:row0] == 0).all()) and bool((out[row0 + f * slot :] == 0).all()), "rows outside the frames"
+    _check("readout_kernel", out, expected, pcc=FP32_PCC, rmse=FP32_RMSE)
+
+
+@ONE_CHIP
 def test_delta_solve_kernel_steps(mesh_device):
     """Diagnostic, not asserted: the kernel after 0..3 Newton-Schulz iterations vs the same iterations in float64."""
     from models.tt_dit.models.transformers.openvdn import kernels_openvdn as kernels

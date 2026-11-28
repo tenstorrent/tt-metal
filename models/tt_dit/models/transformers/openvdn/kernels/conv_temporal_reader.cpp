@@ -6,8 +6,11 @@
 // column tile c: y[f + dt - 2] for the dt in 0..4 whose frame exists (TEMPORAL), else y[f]. The temporal weights
 // `[5, 1, 32, C]` (each tile row the channel weights) and the ones tile are read once.
 //
-// Compile-time args: temporal, l2, channel tiles, then the tensor accessor args of y, w, ones.
-// Runtime args: y, w, ones addresses, first unit, number of units, frames, heads, RT.
+// ROWS (no temporal taps): y is instead the token-major rows `[1, 1, R, heads 128]` (bf16 or fp32), frame f's rows
+// from tile row `row_tile0 + f stride_tiles`, whole tiles, so unit u's tiles are read in place (no head-layout copy).
+//
+// Compile-time args: temporal, l2, channel tiles, rows, then the tensor accessor args of y, w, ones.
+// Runtime args: y, w, ones addresses, first unit, number of units, frames, heads, RT, row_tile0, stride_tiles.
 
 #include <stdint.h>
 
@@ -33,11 +36,15 @@ void kernel_main() {
     const uint32_t frames = get_arg_val<uint32_t>(5);
     const uint32_t heads = get_arg_val<uint32_t>(6);
     const uint32_t rt_count = get_arg_val<uint32_t>(7);
+    const uint32_t row_tile0 = get_arg_val<uint32_t>(8);
+    const uint32_t stride_tiles = get_arg_val<uint32_t>(9);
 
     constexpr bool temporal = get_compile_time_arg_val(0) != 0;
     constexpr bool l2 = get_compile_time_arg_val(1) != 0;
     constexpr uint32_t c_tiles = get_compile_time_arg_val(2);
-    constexpr auto y_args = TensorAccessorArgs<3>();
+    constexpr bool rows = get_compile_time_arg_val(3) != 0;
+    static_assert(!(rows && temporal), "the rows input has no temporal taps");
+    constexpr auto y_args = TensorAccessorArgs<4>();
     constexpr auto w_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto ones_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
 
@@ -70,6 +77,22 @@ void kernel_main() {
     for (uint32_t u = first; u < first + count; ++u) {
         const uint32_t f = u / (heads * rt_count);
         const uint32_t in_frame = (u % (heads * rt_count)) * HEAD_TILES;
+        if constexpr (rows) {
+            const uint32_t head = (u / rt_count) % heads;
+            const uint32_t row_tile = row_tile0 + f * stride_tiles + u % rt_count;
+            y_buf.reserve_back(HEAD_TILES);
+            for (uint32_t c = 0; c < HEAD_TILES; ++c) {
+                noc.async_read(
+                    y,
+                    y_buf,
+                    y_bytes,
+                    {.page_id = row_tile * c_tiles + head * HEAD_TILES + c},
+                    {.offset_bytes = c * y_bytes});
+            }
+            noc.async_read_barrier();
+            y_buf.push_back(HEAD_TILES);
+            continue;
+        }
         for (uint32_t c = 0; c < HEAD_TILES; ++c) {
             for (uint32_t dt = 0; dt < TAPS; ++dt) {
                 const int32_t src = temporal ? static_cast<int32_t>(f + dt) - 2 : static_cast<int32_t>(f);

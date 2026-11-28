@@ -474,7 +474,18 @@ class OpenVDNHybridAttention(MiniMaxH3Attention):
         q_heads, k_heads, v_heads = (self._rows_to_heads(t) for t in (q_1BNF, k_1BNF, v_1BNF))
         self._mark("projections and all-to-all")
 
-        softmax_BHNE = self._window(layout)(q_BHNE, k_BHNE, v_BHNE)
+        window = self._window(layout)
+        q_global = None
+        if window.global_rows:  # q's head rows from the row-major projection: a slice in the head layout is slow
+            g = window.global_rows
+
+            def head_rows(t: ttnn.Tensor | None) -> ttnn.Tensor | None:
+                return None if t is None else ttnn.slice(t, [0, 0, 0, 0], [1, 1, g, t.shape[-1]])
+
+            q_global = self.norm_q(
+                head_rows(q_1BNF), **{**norm_kwargs, "rope_cos": head_rows(rope_cos), "rope_sin": head_rows(rope_sin)}
+            )
+        softmax_BHNE = window(q_BHNE, k_BHNE, v_BHNE, q_global=q_global)
         for t in (q_BHNE, k_BHNE, v_BHNE):
             ttnn.deallocate(t)
         self._mark("window softmax")

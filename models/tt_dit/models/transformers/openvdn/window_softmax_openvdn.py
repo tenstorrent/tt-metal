@@ -17,6 +17,7 @@ tile are padded, and padded keys are masked out.
 from __future__ import annotations
 
 import dataclasses
+import os
 from collections.abc import Callable, Sequence
 
 import torch
@@ -24,6 +25,7 @@ import torch
 import ttnn
 
 from ....utils import tensor
+from . import kernels_openvdn as kernels
 from . import linear_ops_openvdn as ops
 
 Range = tuple[int, int]
@@ -428,30 +430,37 @@ class LocalSparseWindow:
             mask = torch.zeros(1, 1, geo.head, geo.total)
             mask[..., ~geo.valid] = float("-inf")
             self.global_mask = tensor.from_torch(mask, device=device, dtype=ttnn.bfloat16)
-            first = torch.zeros(sp_factor, 1, 1, 1)
+            # 1 on the head rows of the first SP device, 0 elsewhere (a per-row factor: the fast broadcast).
+            first = torch.zeros(sp_factor, 1, geo.head, 1)
             first[0] = 1.0
             self.first_device = tensor.from_torch(
                 first, device=device, dtype=ttnn.bfloat16, mesh_axes=[sp_axis, None, None, None]
             )
+            q_chunk, k_chunk = (int(c) for c in os.environ.get("OPENVDN_GLOBAL_CHUNKS", "32,32").split(","))
             self.dense_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-                q_chunk_size=_PAD,
-                k_chunk_size=_PAD,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
                 exp_approx_mode=False,
             )
             self.dense_compute = compute_config
 
-    def __call__(self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, q: ttnn.Tensor, k: ttnn.Tensor, v: ttnn.Tensor, q_global: ttnn.Tensor | None = None
+    ) -> ttnn.Tensor:
+        """`q_global`: q's first `global_rows` rows `[1, H, g, d]`, if the caller has them more cheaply than a slice
+        of q (which is slow in the head layout)."""
         out, k_all, v_all = self.ring_sdpa(q, k, v, self.block_mask, self.block_counts)
         if not self.global_rows:
             return out
         _, heads, rows, dim = q.shape
         total, g = self.geo.total, self.global_rows
-        qg = ttnn.slice(q, [0, 0, 0, 0], [1, heads, g, dim])
-        keys, values = (
-            ttnn.concat([local, ttnn.slice(gathered, [0, 0, rows, 0], [1, heads, total, dim])], dim=2)
-            for local, gathered in ((k, k_all), (v, v_all))
-        )
+        qg = q_global if q_global is not None else ttnn.slice(q, [0, 0, 0, 0], [1, heads, g, dim])
+        # The gather buffers hold every shard but this device's own: write it into its slot (the first, which is
+        # right on the first SP device, the only one whose result is kept).
+        keys, values = (kernels.copy_rows(local, gathered, 0) for local, gathered in ((k, k_all), (v, v_all)))
+        if keys.shape[2] != total:  # a capacity-sized pair
+            keys, values = (ttnn.slice(t, [0, 0, 0, 0], [1, heads, total, dim]) for t in (keys, values))
         dense = ttnn.transformer.scaled_dot_product_attention(
             qg,
             keys,
@@ -462,8 +471,6 @@ class LocalSparseWindow:
             program_config=self.dense_config,
             compute_kernel_config=self.dense_compute,
         )
-        ttnn.deallocate(keys)
-        ttnn.deallocate(values)
         dense = ttnn.multiply(dense, self.first_device)
         zeros = ops.zeros(self.device, [1, heads, rows - g, dim], dense.dtype)
         return ttnn.add(out, ttnn.concat([dense, zeros], dim=2))

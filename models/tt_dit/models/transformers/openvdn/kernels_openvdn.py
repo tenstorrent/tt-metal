@@ -31,7 +31,7 @@ MAX_CBS = 64  # the unpack-to-dest vector covers Blackhole's buffer count
 
 def enabled(name: str) -> bool:
     """`OPENVDN_KERNELS` (comma list, default all) selects which fused kernels replace their composites."""
-    selected = os.environ.get("OPENVDN_KERNELS", "solve,scan,conv")
+    selected = os.environ.get("OPENVDN_KERNELS", "solve,scan,conv,readout")
     return name in {s.strip() for s in selected.split(",")}
 
 
@@ -378,18 +378,157 @@ def conv_spatial(
     return out
 
 
+def readout(
+    query: ttnn.Tensor,
+    state_t: list[ttnn.Tensor],
+    weight_rows: ttnn.Tensor,
+    out: ttnn.Tensor,
+    *,
+    row0: int,
+    frame_stride: int,
+) -> ttnn.Tensor:
+    """The linear branch's readout fused: `RMSNorm(query @ state_t) * w` per (frame, head), written token-major into
+    `out` `[1, 1, R, h 128]` fp32 (frame f's query rows at `row0 + f frame_stride ..`, head h's 128 columns); rows
+    no frame covers are left untouched.
+
+    query: `[F, h, Sq, 128]` bf16 tiled. state_t: the state's transpose `[F, h, 128, 128]` as bf16 hi, lo parts.
+    weight_rows: `[1, 1, 32, 128]` fp32 tiled, every row the norm weight."""
+    device = query.device()
+    frames, heads, rows, _ = query.shape
+    hi, lo = state_t
+    assert rows % TILE == 0 and row0 % TILE == 0 and frame_stride % TILE == 0 and frame_stride >= rows
+    assert list(hi.shape) == [frames, heads, 128, 128] and hi.dtype == lo.dtype == ttnn.bfloat16
+    assert out.dtype == ttnn.float32 and out.shape[-1] == heads * 128
+    assert row0 + (frames - 1) * frame_stride + rows <= out.shape[-2]
+    rt = rows // TILE
+    ones = _ones_tile(device)
+
+    work = _split_work(device, frames * heads * rt)
+    _, core_set = _cores(device, len(work))
+    reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+    for core, first, n in work:
+        reader_rt[core.x][core.y] = [
+            query.buffer_address(),
+            hi.buffer_address(),
+            lo.buffer_address(),
+            weight_rows.buffer_address(),
+            ones.buffer_address(),
+            first,
+            n,
+            rt,
+        ]
+        writer_rt[core.x][core.y] = [out.buffer_address(), first, n, heads, rt, row0 // TILE, frame_stride // TILE]
+        compute_rt[core.x][core.y] = [n, first, rt]
+
+    f32, bf16 = ttnn.float32, ttnn.bfloat16
+    cbs = [
+        _cb(0, bf16, 8, core_set),  # q
+        _cb(1, bf16, 16, core_set),  # state^T hi
+        _cb(2, bf16, 16, core_set),  # state^T lo
+        _cb(3, f32, 4, core_set),  # norm weight rows
+        _cb(4, bf16, 1, core_set),  # ones
+        _cb(6, f32, 4, core_set),  # q state^T
+        _cb(7, f32, 1, core_set),  # row partial sums
+        _cb(8, bf16, 1, core_set),  # sums hi
+        _cb(9, bf16, 1, core_set),  # sums lo
+        _cb(10, f32, 1, core_set),  # 1 / rms
+        _cb(16, f32, 2, core_set),  # out
+    ]
+    kernels = [
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/readout_reader.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=_accessor_args(query, hi, lo, weight_rows, ones),
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/readout_writer.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=_accessor_args(out),
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        ),
+        ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/readout_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=[],
+            runtime_args=compute_rt,
+            config=_compute_config([3, 6, 7, 10]),
+        ),
+    ]
+    io = [query, hi, lo, weight_rows, ones, out]
+    ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    return out
+
+
+def copy_rows(src: ttnn.Tensor, dst: ttnn.Tensor, row0: int) -> ttnn.Tensor:
+    """Writes src `[1, H, R, W]` into rows `[row0, row0 + R)` of dst `[1, H, Rd, W]` in place (tiled, same dtype,
+    row0 and R multiples of 32). Returns dst."""
+    device = src.device()
+    _, heads, rows, width = src.shape
+    assert dst.shape[1] == heads and dst.shape[3] == width and src.dtype == dst.dtype
+    assert rows % TILE == 0 and row0 % TILE == 0 and row0 + rows <= dst.shape[2]
+    rt, wt = rows // TILE, width // TILE
+    work = _split_work(device, heads * rt * wt)
+    _, core_set = _cores(device, len(work))
+    runtime = ttnn.RuntimeArgs()
+    for core, first, n in work:
+        runtime[core.x][core.y] = [
+            src.buffer_address(),
+            dst.buffer_address(),
+            first,
+            n,
+            rt,
+            dst.shape[2] // TILE,
+            wt,
+            row0 // TILE,
+        ]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source=f"{KERNEL_DIR}/copy_rows.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=core_set,
+        compile_time_args=_accessor_args(src, dst),
+        runtime_args=runtime,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    cbs = [_cb(0, src.dtype, 8, core_set)]
+    ttnn.generic_op([src, dst], ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs))
+    return dst
+
+
 def _ones_tile(device: ttnn.MeshDevice) -> ttnn.Tensor:
     return ops._constant(device, ("ones_tile",), lambda: torch.ones(1, 1, TILE, TILE), ttnn.bfloat16)
 
 
-def conv_temporal_features(y: ttnn.Tensor, weights: ttnn.Tensor | None, *, l2: bool) -> ttnn.Tensor:
+def conv_temporal_features(
+    y: ttnn.Tensor,
+    weights: ttnn.Tensor | None,
+    *,
+    l2: bool,
+    rows: tuple[int, int, int, int] | None = None,
+) -> ttnn.Tensor:
     """`prepare_linear_features` after the spatial conv, in the head layout: the 5-tap temporal conv over frames
     (zero padded; skipped when `weights` is None), SiLU, the L2 norm over each head's 128 channels when `l2`, bf16.
 
     y: `[F, H, S, 128]` fp32 tiled (`conv_spatial`). weights: `[5, 1, 32, H 128]` fp32 tiled, rows the channel
-    weights. Returns `[F, H, S, 128]` bf16 tiled."""
+    weights. Returns `[F, H, S, 128]` bf16 tiled.
+
+    `rows = (frames, S, row0, frame_stride)` (no temporal taps): y is instead token-major `[1, 1, R, H 128]` (bf16 or
+    fp32) with frame f's S rows from `row0 + f frame_stride`, all multiples of 32, read in place."""
     device = y.device()
-    frames, heads, S, _ = y.shape
+    if rows is not None:
+        assert weights is None
+        frames, S, row0, stride = rows
+        heads = y.shape[-1] // 128
+        assert S % TILE == 0 and row0 % TILE == 0 and stride % TILE == 0
+        assert row0 + (frames - 1) * stride + S <= y.shape[-2], "frames past the end of y"
+    else:
+        frames, heads, S, _ = y.shape
+        row0 = stride = 0
     rt, c_tiles = math.ceil(S / TILE), heads * 128 // TILE
     temporal = weights is not None
     if temporal:
@@ -411,13 +550,15 @@ def conv_temporal_features(y: ttnn.Tensor, weights: ttnn.Tensor | None, *, l2: b
             frames,
             heads,
             rt,
+            row0 // TILE,
+            stride // TILE,
         ]
         writer_rt[core.x][core.y] = [out.buffer_address(), first, n]
         compute_rt[core.x][core.y] = [n, frames, first, heads, rt]
 
     f32, bf16 = ttnn.float32, ttnn.bfloat16
     cbs = [
-        _cb(0, f32, 4, core_set),  # y
+        _cb(0, y.dtype, 4, core_set),  # y
         _cb(1, f32, 5 * c_tiles if temporal else 1, core_set),  # weights
         _cb(2, bf16, 1, core_set),  # ones
         _cb(3, f32, 1, core_set),  # 1 / norm
@@ -433,7 +574,7 @@ def conv_temporal_features(y: ttnn.Tensor, weights: ttnn.Tensor | None, *, l2: b
             kernel_source=f"{KERNEL_DIR}/conv_temporal_reader.cpp",
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
-            compile_time_args=flags + _accessor_args(y, w, ones),
+            compile_time_args=flags + [int(rows is not None)] + _accessor_args(y, w, ones),
             runtime_args=reader_rt,
             config=ttnn.ReaderConfigDescriptor(),
         ),
@@ -451,7 +592,7 @@ def conv_temporal_features(y: ttnn.Tensor, weights: ttnn.Tensor | None, *, l2: b
             core_ranges=core_set,
             compile_time_args=flags,
             runtime_args=compute_rt,
-            config=_compute_config([0, 1, 3, 6, 7]),
+            config=_compute_config(([0] if y.dtype == f32 else []) + [1, 3, 6, 7]),
         ),
     ]
     ttnn.generic_op([y, w, ones, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))

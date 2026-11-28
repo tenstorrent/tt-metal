@@ -10,7 +10,7 @@ gates (frame and audio sanity, mean CLIP >= 30), so every perf number comes with
 The pipeline is coresident (`pipeline_openvdn.py`), so no stage is reloaded per request.
 
 Env: OPENVDN_WEIGHTS_DIR, OPENVDN_CHECKPOINT_DIR, OPENVDN_ARTIFACTS, OPENVDN_DURATION_S (see test_pipeline_openvdn.py),
-OPENVDN_CORESIDENT=0 (reload each stage per request, the pre-stage-4 behaviour)
+OPENVDN_CORESIDENT=0 (reload each stage per request, the pre-stage-4 behaviour), OPENVDN_TRACE=1 (traced denoise)
 
 Run: pytest models/tt_dit/tests/models/openvdn/test_performance_openvdn.py -s --tb=short
 """
@@ -55,10 +55,17 @@ from .test_pipeline_openvdn import (
 )
 
 STAGES = ("encoder", "denoising", "vae", "audio", "run")
+#: OPENVDN_TRACE=1: the denoise loop captured once and replayed (`trace_denoise`, persistent CCL buffers).
+TRACE = os.environ.get("OPENVDN_TRACE") == "1"
+MESH = (
+    pytest.param((4, 8), {**MESH_4X8_RING.values[1], "trace_region_size": 1_175_000_000}, id="4x8_traced")
+    if TRACE
+    else MESH_4X8_RING
+)
 
 
 @pytest.mark.timeout(14400)
-@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH_4X8_RING], indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), [MESH], indirect=["mesh_device", "device_params"])
 def test_openvdn_t2va_performance(mesh_device, reset_seeds):
     weights_dir = _required_dir("OPENVDN_WEIGHTS_DIR")
     checkpoint_dir = _required_dir("OPENVDN_CHECKPOINT_DIR")
@@ -72,6 +79,8 @@ def test_openvdn_t2va_performance(mesh_device, reset_seeds):
 
     # The pipeline is coresident by default; OPENVDN_CORESIDENT=0 reloads each stage per request, as before stage 4.
     extra = dict(coresident=False) if os.environ.get("OPENVDN_CORESIDENT") == "0" else {}
+    if TRACE:
+        extra.update(trace_denoise=True, use_persistent_ccl_buffers=True)
     pipeline = OpenVDNPipeline.create_pipeline(
         mesh_device=mesh_device,
         weights_dir=weights_dir,
@@ -96,7 +105,7 @@ def test_openvdn_t2va_performance(mesh_device, reset_seeds):
     logger.info(f"measured call program cache misses: {misses or 'none'}")
     log_pipeline_perf(
         profiler,
-        label="openvdn t2va (warm, eager)",
+        label=f"openvdn t2va (warm, {'traced' if TRACE else 'eager'})",
         pipeline=pipeline,
         num_forwards=OPENVDN_NUM_FORWARDS,
         width=width,
@@ -118,6 +127,7 @@ def test_openvdn_t2va_performance(mesh_device, reset_seeds):
         Image.fromarray(frames[i]).save(artifacts / f"{stem}_frame{i:03d}.png")
     alignment = clip_prompt_alignment(frames, PROMPT)
     summary = {
+        "traced": TRACE,
         "times_s": times,
         "program_cache_misses": misses,
         "denoise_per_step_s": times.get("denoising", float("nan")) / OPENVDN_NUM_FORWARDS,

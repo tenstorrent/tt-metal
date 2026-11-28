@@ -679,6 +679,23 @@ class OpenVDNLinearBranch(Module):
         )
         return ttnn.concat([zeros, inner, zeros], dim=2)
 
+    def _readout_rows(self, rows: int, width: int) -> ttnn.Tensor:
+        """`[1, 1, rows, width]` fp32 zeros, made once and shared by every layer: the fused readout writes only its
+        frame rows, the same ones every call."""
+        shape = [1, 1, rows, width]
+        return ops._cached(
+            self.mesh_device,
+            ("readout_rows", rows, width),
+            lambda: ttnn.zeros(shape, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device),
+        )
+
+    def _norm_rows(self) -> ttnn.Tensor:
+        """The RMSNorm weight as `[1, 1, 32, d]` fp32 rows (cached per layer; the weight is loaded by then)."""
+        if self._local_weights.get("norm_rows") is None:
+            zeros = ops.zeros(self.mesh_device, [1, 1, ttnn.TILE_SIZE, self.head_dim], ttnn.float32)
+            self._local_weights["norm_rows"] = ttnn.add(zeros, self.norm_weight.data)
+        return self._local_weights["norm_rows"]
+
     def forward_aligned(
         self,
         q_heads: ttnn.Tensor,
@@ -729,8 +746,9 @@ class OpenVDNLinearBranch(Module):
             bounds = [(lo - 1, hi - 1) for lo, hi in bounds[1 : num_frames - 1]]
         row0 = video_row + first * frame_stride
         place = dict(row0=row0, frame_stride=frame_stride)
-        # q has no conv: its unit tap copies whole frame slots, so q . state covers the slots' pad rows too.
-        query = self.fused_features(q_heads, "q", frames, (1, frame_stride), **place)
+        # q has no conv: the feature kernel reads its whole frame slots in place (so q . state covers the slots' pad
+        # rows too, which the attention zeroes at the end).
+        query = kernels.conv_temporal_features(q_heads, None, l2=True, rows=(frames, frame_stride, row0, frame_stride))
         key = self.fused_features(k_heads, "k", frames, frame_size, **place)
         value = self.fused_features(v_heads, "v", frames, frame_size, **place)
         mark("q, k, v features (conv)")
@@ -750,13 +768,23 @@ class OpenVDNLinearBranch(Module):
         state = ops.gather_linear_state(prefix, suffix, alpha_rows, bounds, text_state=text_state, config=self.config)
         mark("state gather")
 
+        total = q_heads.shape[-2]
+        if kernels.enabled("readout"):
+            # One kernel from q and the state to the token-major rows; the rows outside the frames stay zero in a
+            # buffer kept for the purpose (each call overwrites the same frame rows).
+            state_t = ops.split_bf16(ttnn.transpose(state, -2, -1), 2)
+            out = self._readout_rows(total, query.shape[1] * self.head_dim)
+            kernels.readout(query, state_t, self._norm_rows(), out, row0=row0, frame_stride=frame_stride)
+            mark("readout")
+            return out
+
         out = ops.split_matmul(query, ttnn.transpose(state, -2, -1), config=self.config)  # [F, h, slot, d_v]
         mean_square = ttnn.multiply(ttnn.sum(ttnn.multiply(out, out), dim=-1, keepdim=True), 1.0 / self.head_dim)
         out = ttnn.multiply(out, ttnn.rsqrt(ttnn.add(mean_square, self.NORM_EPS)))
         out = ttnn.multiply(out, self.norm_weight.data)
         out = ttnn.experimental.nlp_concat_heads(out)  # [F, 1, slot, h*d]
         out = ttnn.reshape(out, [1, 1, frames * frame_stride, out.shape[-1]])
-        total, width = q_heads.shape[-2], out.shape[-1]
+        width = out.shape[-1]
         pieces = [ops.zeros(self.mesh_device, [1, 1, row0, width], out.dtype), out]
         end = row0 + frames * frame_stride
         if end < total:
