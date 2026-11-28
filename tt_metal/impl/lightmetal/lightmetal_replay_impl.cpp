@@ -45,12 +45,15 @@ TraceDescriptor from_flatbuffer(const flatbuffer::TraceDescriptor* fb_desc) {
     if (const auto* sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
         for (const auto* mapping : *sub_device_descriptors_fb) {
             if (mapping) {
+                const auto* fb_descriptor = mapping->descriptor();
+                TT_FATAL(
+                    fb_descriptor != nullptr, "SubDeviceDescriptorMapping descriptor is required for TraceDescriptor");
                 TraceWorkerDescriptor descriptor;
-                descriptor.num_completion_worker_cores = mapping->descriptor()->num_completion_worker_cores();
+                descriptor.num_completion_worker_cores = fb_descriptor->num_completion_worker_cores();
                 descriptor.num_traced_programs_needing_go_signal_multicast =
-                    mapping->descriptor()->num_traced_programs_needing_go_signal_multicast();
+                    fb_descriptor->num_traced_programs_needing_go_signal_multicast();
                 descriptor.num_traced_programs_needing_go_signal_unicast =
-                    mapping->descriptor()->num_traced_programs_needing_go_signal_unicast();
+                    fb_descriptor->num_traced_programs_needing_go_signal_unicast();
 
                 // Add the descriptor to the map
                 trace_desc.descriptors[SubDeviceId{mapping->sub_device_id()}] = descriptor;
@@ -548,10 +551,10 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateKernelC
 
     auto core_spec = core_spec_from_flatbuffer(cmd);
     auto kernel_config = kernel_config_from_flatbuffer(cmd);
+    const auto* file_name = cmd->file_name();
+    TT_FATAL(file_name != nullptr, "file_name is required for CreateKernelCommand");
     KernelHandle kernel_id = std::visit(
-        [&](const auto& cfg) -> KernelHandle {
-            return CreateKernel(*program, cmd->file_name()->c_str(), core_spec, cfg);
-        },
+        [&](const auto& cfg) -> KernelHandle { return CreateKernel(*program, file_name->c_str(), core_spec, cfg); },
         kernel_config);
     add_kernel_handle_to_map(cmd->global_id(), kernel_id);
     // Some APIs use Kernel, so convert to and store Kernel.
@@ -578,7 +581,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
         cmd->kernel_global_id());
 
     // API expects a span so create from flatbuffer vector.
-    ttsl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
+    const auto* args = cmd->args();
+    TT_FATAL(args != nullptr, "args is required for SetRuntimeArgsUint32Command");
+    ttsl::Span<const uint32_t> args_span(args->data(), args->size());
     auto core_spec = core_spec_from_flatbuffer(cmd);
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }
@@ -621,7 +626,9 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
 
     // Convert global_id to optional Shadow Buffer here to keep from_flatbuffer standalone function.
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
-    const auto* shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
+    const auto* fb_config = cmd->config();
+    TT_FATAL(fb_config != nullptr, "config is required for CreateCircularBufferCommand");
+    const auto* shadow_buf_global_id = fb_config->shadow_buf_global_id();
 
     if (shadow_buf_global_id) {
         auto global_id = shadow_buf_global_id->value();
@@ -634,7 +641,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::CreateCircula
         shadow_global_buffer = shadow_buf.get();  // Set the raw pointer
     }
 
-    auto config = from_flatbuffer(cmd->config(), shadow_global_buffer);
+    auto config = from_flatbuffer(fb_config, shadow_global_buffer);
     auto cb_handle = CreateCircularBuffer(*program, core_spec, config);
     add_cb_handle_to_map(cmd->global_id(), cb_handle);
 }
@@ -664,29 +671,28 @@ void LightMetalReplayImpl::execute(const ::tt::tt_metal::flatbuffer::LightMetalC
         log_debug(
             tt::LogMetalTrace, "Skipping LightMetalCompareCommand for buffer_global_id: {}.", cmd->buffer_global_id());
     } else {
-        if (rd_data.size() != cmd->golden_data()->size()) {
-            TT_THROW(
-                "Readback data size: {} does not match golden data size: {}",
-                rd_data.size(),
-                cmd->golden_data()->size());
+        const auto* golden_data = cmd->golden_data();
+        TT_FATAL(golden_data != nullptr, "golden_data is required for LightMetalCompareCommand");
+        if (rd_data.size() != golden_data->size()) {
+            TT_THROW("Readback data size: {} does not match golden data size: {}", rd_data.size(), golden_data->size());
         }
 
         // Optional debug to show verbose comparison
         if (show_reads_) {
             for (size_t i = 0; i < rd_data.size(); i++) {
-                bool match = rd_data[i] == cmd->golden_data()->Get(i);
+                bool match = rd_data[i] == golden_data->Get(i);
                 log_trace(
                     tt::LogMetalTrace,
                     "LightMetalCompare i: {:3d} match: {} RdData: {:x} Golden: {:x}",
                     i,
                     match,
                     rd_data[i],
-                    cmd->golden_data()->Get(i));
+                    golden_data->Get(i));
             }
         }
 
         // Do simple equality comparison between two vectors
-        if (!std::equal(rd_data.begin(), rd_data.end(), cmd->golden_data()->begin())) {
+        if (!std::equal(rd_data.begin(), rd_data.end(), golden_data->begin())) {
             TT_THROW("Golden vs rd_data mismatch for buffer_global_id: {}", cmd->buffer_global_id());
         }
     }
@@ -701,8 +707,11 @@ bool LightMetalReplayImpl::run() {
 
     const bool replay_manages_device = device_ == nullptr;
 
+    // A malformed binary is rejected up front (raises) rather than being reported as a failed replay.
+    const auto* trace_descs = fb_binary_->trace_descriptors();
+    TT_FATAL(trace_descs != nullptr, "trace_descriptors is required for LightMetalBinary");
+
     try {
-        const auto* trace_descs = fb_binary_->trace_descriptors();
         const auto* commands = fb_binary_->commands();
         if (!commands) {
             std::cerr << "Nothing to run, no commands in binary." << std::endl;
@@ -724,6 +733,7 @@ bool LightMetalReplayImpl::run() {
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
         [[maybe_unused]] uint32_t idx = 1;
         for (const auto* cmd : *commands) {
+            TT_FATAL(cmd != nullptr, "Command element must not be null");
             auto str_name = std::string(EnumNameCommandType(cmd->cmd_type()));
             log_trace(tt::LogMetalTrace, "Executing Binary CMD {}/{} (Type: {})", idx++, commands->size(), str_name);
             execute(cmd);
