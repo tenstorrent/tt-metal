@@ -206,6 +206,13 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False):
 
     import torch
 
+    # ULP is a per-element measure, so a shape mismatch has no meaning. Comparing elementwise would
+    # either raise a broadcasting error (2x3 against 3x2) or silently broadcast (4x4 against 1x4) and
+    # return a verdict for a comparison that never happened. Empty tensors are handled the same way:
+    # torch.equal treats two empties of different shapes as unequal.
+    if tuple(golden.shape) != tuple(calculated.shape):
+        return False, f"Shape mismatch: golden {tuple(golden.shape)} vs calculated {tuple(calculated.shape)}"
+
     # If both tensors are empty, then we can return True
     if torch.numel(golden) == 0 and torch.numel(calculated) == 0:
         return True, "Both tensors are empty"
