@@ -211,8 +211,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
 
+        // tilizeA_B_reduce_init has no pack part, so no reduce mask.
         _llk_pack_init_(bfd_pack, tensor_shape, TILE_CNT);
-        _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape);
         PROFILER_SYNC();
     }
     {
@@ -236,7 +236,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
-        _llk_pack_reduce_mask_clear_();
         PROFILER_SYNC();
     }
 }
