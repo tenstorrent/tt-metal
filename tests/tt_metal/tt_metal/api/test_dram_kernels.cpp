@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 #include <chrono>
 #include <tt-metalium/mesh/allocator.hpp>
@@ -313,6 +314,97 @@ TEST_F(DramKernelFixture, DramKernelTensixReadFromDRISCL1) {
     log_info(LogTest, "Tensix L1 result: 0x{:X} (expected: 0x{:X})", result[0], kMagicValue);
     EXPECT_EQ(result[0], kMagicValue) << "Tensix should have read the value from DRISC L1";
 }
+
+class DramKernelPlainAddrFixture : public DramKernelFixture, public testing::WithParamInterface<NOC> {};
+
+// A DRISC kernel initiates NoC traffic on a NIU in stream mode, where NoC traffic terminates at DRISC L1.
+// Checks whether another core then reaches that L1 on the same NoC with a plain on-chip address (no
+// DRAM_L1_NOC_OFFSET), by a write and by an atomic increment.
+TEST_P(DramKernelPlainAddrFixture, DramKernelTensixPlainAddrToStreamModeDRISCL1) {
+    constexpr uint32_t kMagicValue = 0xCAFEBABE;
+    constexpr uint32_t kWriteSentinel = 0x11111111;
+    constexpr uint32_t kAtomicSeed = 0x100;
+    constexpr uint32_t kAcked = 1;
+    constexpr uint32_t kWordStride = 64;
+    constexpr uint32_t bank = 0;
+    const NOC noc = GetParam();
+    const auto noc_id = static_cast<uint8_t>(noc);
+
+    // NOC0 is in stream mode on every DRISC-usable endpoint; NOC1 only where the endpoint serves no DRAM view.
+    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
+    std::optional<uint32_t> stream_mode_sub;
+    for (const uint32_t sub : usable_dram_endpoints(bank)) {
+        const bool serves_dram_view =
+            noc == NOC::NOC_1 && (sub == soc_desc
+                                             .get_logical_dram_core_from_translated(
+                                                 soc_desc.get_preferred_worker_core_for_dram_view(bank, noc_id))
+                                             .y ||
+                                  sub == soc_desc
+                                             .get_logical_dram_core_from_translated(
+                                                 soc_desc.get_preferred_eth_core_for_dram_view(bank, noc_id))
+                                             .y);
+        if (!serves_dram_view) {
+            stream_mode_sub = sub;
+            break;
+        }
+    }
+    if (!stream_mode_sub.has_value()) {
+        GTEST_SKIP() << "No DRISC endpoint of bank " << bank << " has NOC" << static_cast<int>(noc_id)
+                     << " in stream mode";
+    }
+
+    const CoreCoord logical_core_drisc{bank, *stream_mode_sub};
+    const CoreCoord logical_core_tensix{0, 0};
+    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(logical_core_drisc, CoreType::DRAM);
+    const CoreCoord tensix_virtual =
+        mesh_device_->virtual_core_from_logical_core(logical_core_tensix, CoreType::WORKER);
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const tt_cxy_pair drisc(mesh_device_->build_id(), drisc_virtual);
+    const tt_cxy_pair tensix(mesh_device_->build_id(), tensix_virtual);
+
+    const uint32_t results_addr = tensix_l1_base_;
+    const uint32_t source_addr = tensix_l1_base_ + kWordStride;
+    const uint32_t drisc_write_addr = drisc_l1_base_;
+    const uint32_t drisc_atomic_addr = drisc_l1_base_ + kWordStride;
+
+    cluster.write_core(&kMagicValue, sizeof(uint32_t), tensix, source_addr);
+    cluster.write_core(&kWriteSentinel, sizeof(uint32_t), drisc, drisc_l1_noc_addr_);
+    cluster.write_core(&kAtomicSeed, sizeof(uint32_t), drisc, drisc_l1_noc_addr_ + kWordStride);
+
+    Program program = CreateProgram(*mesh_device_);
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/tensix_plain_addr_to_drisc_l1.cpp",
+        logical_core_tensix,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = noc,
+            .compile_args = {
+                results_addr, source_addr, drisc_virtual.x, drisc_virtual.y, drisc_write_addr, drisc_atomic_addr}});
+    run_workload(std::move(program));
+
+    std::vector<uint32_t> outcomes(2, 0);
+    cluster.read_core(outcomes.data(), 2 * sizeof(uint32_t), tensix, results_addr);
+    uint32_t written = 0;
+    uint32_t incremented = 0;
+    cluster.read_core(&written, sizeof(uint32_t), drisc, drisc_l1_noc_addr_);
+    cluster.read_core(&incremented, sizeof(uint32_t), drisc, drisc_l1_noc_addr_ + kWordStride);
+    log_info(
+        LogTest,
+        "NOC{} plain address to DRISC L1: write outcome {} (word 0x{:X}), atomic outcome {} (word 0x{:X})",
+        noc_id,
+        outcomes[0],
+        written,
+        outcomes[1],
+        incremented);
+
+    EXPECT_EQ(outcomes[0], kAcked) << "The write was not acknowledged";
+    EXPECT_EQ(written, kMagicValue) << "The write did not land in DRISC L1";
+    EXPECT_EQ(outcomes[1], kAcked) << "The atomic increment was not acknowledged";
+    EXPECT_EQ(incremented, kAtomicSeed + 1) << "The atomic increment did not land in DRISC L1";
+}
+
+INSTANTIATE_TEST_SUITE_P(Noc, DramKernelPlainAddrFixture, testing::Values(NOC::NOC_0, NOC::NOC_1));
 
 // Test DRISC reading from Tensix L1
 // Host writes magic value to Tensix L1, then DRISC reads it into DRISC L1

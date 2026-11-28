@@ -99,8 +99,10 @@ inline uint8_t get_router_direction(uint32_t eth_channel) {
 // table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
 // chip instead; the destination-mesh landing later rebuilds the final map.
 inline bool fabric_set_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
-    tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    const tt_l1_ptr routing_l1_info_t* routing_table) {
     const uint8_t mesh_y_size = routing_table->mesh_y_size;
     const uint8_t mesh_x_size = routing_table->mesh_x_size;
     ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
@@ -112,13 +114,22 @@ inline bool fabric_set_unicast_route(
 
     if (dst_mesh_id < MAX_NUM_MESHES && routing_table->my_mesh_id != dst_mesh_id) {
         // Remote final mesh: route to this mesh's exit chip, where the maps decode to LOCAL_DELIVER.
-        auto exit_node_table = reinterpret_cast<tt_l1_ptr uint8_t*>(EXIT_NODE_TABLE_BASE);
-        dst_dev_id = exit_node_table[dst_mesh_id];
+        dst_dev_id = routing_table->exit_node_table[dst_mesh_id];
     }
 
     widen_2d_route_to_chip(
         packet_header, routing_table->route_table_2d.action_vectors, dst_dev_id, mesh_y_size, mesh_x_size);
     return true;
+}
+
+// The same, from this core's own routing table.
+inline bool fabric_set_unicast_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
+    return fabric_set_unicast_route(
+        packet_header,
+        dst_dev_id,
+        dst_mesh_id,
+        reinterpret_cast<const tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE));
 }
 
 // Multicast producer. Encodes the maps for a rectangle given as N/S/E/W extents around an anchor,

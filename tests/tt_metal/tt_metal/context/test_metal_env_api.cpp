@@ -5,14 +5,17 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
+#include <tt_stl/cleanup.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/execution/distributed.hpp>
@@ -547,6 +550,175 @@ TEST_F(MetalEnvSeatLocks, ReleasesEverySeatWhenOneIsHeld) {
             << "metal kept the seat of DRAM core (" << seats_[i].noc0_x << ", " << seats_[i].noc0_y
             << ") with its DRAM programmable cores off";
     }
+}
+
+// TT_METAL_DRAM_KERNEL_SEATS against a real MetalEnv: metal takes the seats it names and leaves every other DRAM core
+// to other owners.
+class MetalEnvDramKernelSeats : public MetalEnvSeatLocks {
+protected:
+    static constexpr const char* seats_var = "TT_METAL_DRAM_KERNEL_SEATS";
+    // Bank 0's free core: a seat every Blackhole product has.
+    static constexpr const char* one_seat = "0:1";
+
+    void SetUp() override {
+        if (const char* value = std::getenv(seats_var)) {
+            saved_seats_ = value;
+        }
+        unsetenv(seats_var);
+        MetalEnvSeatLocks::SetUp();
+    }
+
+    void TearDown() override {
+        if (saved_seats_.has_value()) {
+            setenv(seats_var, saved_seats_->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(seats_var);
+        }
+        MetalEnvSeatLocks::TearDown();
+    }
+
+    // The seat of every DRAM core `env` programs.
+    static std::vector<internal::drisc_service::SeatId> seats_of(MetalEnv& env) {
+        const auto& cluster = MetalEnvAccessor(env).impl().get_cluster();
+        std::vector<internal::drisc_service::SeatId> seats;
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            const uint64_t asic_id = cluster.get_unique_chip_ids().at(chip);
+            for (const CoreCoord& core : cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::NOC0)) {
+                seats.push_back(
+                    {.asic_id = asic_id,
+                     .noc0_x = static_cast<uint32_t>(core.x),
+                     .noc0_y = static_cast<uint32_t>(core.y)});
+            }
+        }
+        return seats;
+    }
+
+    static bool contains(
+        const std::vector<internal::drisc_service::SeatId>& seats, const internal::drisc_service::SeatId& seat) {
+        return std::any_of(seats.begin(), seats.end(), [&](const internal::drisc_service::SeatId& s) {
+            return s.asic_id == seat.asic_id && s.noc0_x == seat.noc0_x && s.noc0_y == seat.noc0_y;
+        });
+    }
+
+    static void expect_metal_env_fails_with(std::string_view message) {
+        try {
+            MetalEnv env;
+            ADD_FAILURE() << "metal started; expected a failure mentioning '" << message << "'";
+        } catch (const std::exception& e) {
+            EXPECT_NE(std::string_view(e.what()).find(message), std::string_view::npos) << e.what();
+        }
+    }
+
+private:
+    std::optional<std::string> saved_seats_;
+};
+
+TEST_F(MetalEnvDramKernelSeats, TakesOnlyTheNamedSeats) {
+    setenv(seats_var, one_seat, /*overwrite=*/1);
+    MetalEnv env;
+    ASSERT_TRUE(dram_cores_on(env));
+    const std::vector<internal::drisc_service::SeatId> reserved = seats_of(env);
+    EXPECT_EQ(reserved.size(), MetalEnvAccessor(env).impl().get_cluster().all_chip_ids().size())
+        << "one seat named, so one DRAM core per chip";
+    for (const internal::drisc_service::SeatId& seat : seats_) {
+        const bool is_reserved = contains(reserved, seat);
+        EXPECT_EQ(internal::drisc_service::SeatLock::try_acquire_client(seat).has_value(), !is_reserved)
+            << "DRAM core (" << seat.noc0_x << ", " << seat.noc0_y << ") of ASIC " << seat.asic_id << " is "
+            << (is_reserved ? "a named seat, so metal holds it" : "not a named seat, so a client can take it");
+    }
+}
+
+TEST_F(MetalEnvDramKernelSeats, FailsWhenANamedSeatIsHeld) {
+    setenv(seats_var, one_seat, /*overwrite=*/1);
+    std::vector<internal::drisc_service::SeatId> reserved;
+    {
+        MetalEnv env;
+        reserved = seats_of(env);
+    }
+    ASSERT_FALSE(reserved.empty());
+    const std::optional<internal::drisc_service::SeatLock> client =
+        internal::drisc_service::SeatLock::try_acquire_client(reserved.front());
+    ASSERT_TRUE(client.has_value()) << "another process holds the named seat";
+    expect_metal_env_fails_with("TT_METAL_DRAM_KERNEL_SEATS names the seat of");
+}
+
+TEST_F(MetalEnvDramKernelSeats, RejectsASeatTheChipLacks) {
+    setenv(seats_var, "99:0", /*overwrite=*/1);
+    expect_metal_env_fails_with("out of range");
+}
+
+TEST_F(MetalEnvDramKernelSeats, RejectsASeatThatIsNotBankColonNoc) {
+    for (const char* value : {"3", "3:", ":1", "3:2", "a:0", "3:1,", "3:1,3:1"}) {
+        setenv(seats_var, value, /*overwrite=*/1);
+        expect_metal_env_fails_with("TT_METAL_DRAM_KERNEL_SEATS");
+    }
+}
+
+// With TT_METAL_CLEAR_L1, opening a device clears the L1 of every DRAM core metal takes. A core metal did not reserve
+// must come through untouched.
+TEST_F(MetalEnvDramKernelSeats, DeviceOpenLeavesOtherDramCoresAlone) {
+    constexpr uint32_t sentinel = 0x5EA7C0DE;
+    constexpr const char* clear_l1_var = "TT_METAL_CLEAR_L1";
+    const char* clear_l1_before = std::getenv(clear_l1_var);
+    const std::optional<std::string> saved_clear_l1 =
+        clear_l1_before != nullptr ? std::optional<std::string>(clear_l1_before) : std::nullopt;
+    const auto restore_clear_l1 = ttsl::make_cleanup([&] {
+        if (saved_clear_l1.has_value()) {
+            setenv(clear_l1_var, saved_clear_l1->c_str(), /*overwrite=*/1);
+        } else {
+            unsetenv(clear_l1_var);
+        }
+    });
+    std::map<ChipId, std::vector<CoreCoord>> programmable;
+    {
+        MetalEnv env;
+        const auto& cluster = MetalEnvAccessor(env).impl().get_cluster();
+        for (const ChipId chip : cluster.all_chip_ids()) {
+            programmable[chip] = cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::TRANSLATED);
+        }
+    }
+
+    setenv(seats_var, one_seat, /*overwrite=*/1);
+    setenv(clear_l1_var, "1", /*overwrite=*/1);
+    MetalEnv env;
+    const auto& cluster = MetalEnvAccessor(env).impl().get_cluster();
+    const uint64_t l1_addr = MetalEnvAccessor(env).impl().get_hal().get_dev_noc_addr(
+        HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
+    const auto is_reserved = [&](ChipId chip, const CoreCoord& core) {
+        const std::vector<CoreCoord> reserved =
+            cluster.get_soc_desc(chip).get_metal_dram_cores(CoordSystem::TRANSLATED);
+        return std::find(reserved.begin(), reserved.end(), core) != reserved.end();
+    };
+
+    std::vector<ChipId> chips;
+    for (const auto& [chip, cores] : programmable) {
+        chips.push_back(chip);
+        for (const CoreCoord& core : cores) {
+            cluster.write_core(&sentinel, sizeof(sentinel), tt_cxy_pair(chip, core), l1_addr);
+        }
+    }
+    {
+        auto devices = distributed::MeshDevice::open_unit_meshes(env, chips);
+        for (auto& [chip, device] : devices) {
+            device->close();
+        }
+    }
+    size_t untouched = 0;
+    for (const auto& [chip, cores] : programmable) {
+        for (const CoreCoord& core : cores) {
+            uint32_t value = 0;
+            cluster.read_core(&value, sizeof(value), tt_cxy_pair(chip, core), l1_addr);
+            if (is_reserved(chip, core)) {
+                EXPECT_NE(value, sentinel)
+                    << "chip " << chip << " DRAM core " << core.str() << " is a named seat, which a device open clears";
+            } else {
+                EXPECT_EQ(value, sentinel) << "chip " << chip << " DRAM core " << core.str()
+                                           << " is not a named seat, yet a device open changed its L1";
+                untouched++;
+            }
+        }
+    }
+    EXPECT_GT(untouched, 0u);
 }
 
 }  // namespace tt::tt_metal

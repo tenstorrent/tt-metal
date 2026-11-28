@@ -19,6 +19,9 @@
 #include <hostdevcommon/fabric_common.h>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
+#include "impl/program/program_impl.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/core_writer.hpp"
@@ -53,6 +56,29 @@ void launch_service_kernel(
     tt_metal::distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), workload, /*blocking=*/false);
 }
 
+std::unique_ptr<tt_metal::Program> launch_service_kernel_on_dram(
+    tt_metal::distributed::MeshDevice& mesh_device,
+    tt_metal::CoreCoord logical_core,
+    tt_metal::NOC noc,
+    uint32_t layout_addr) {
+    auto program = std::make_unique<tt_metal::Program>(tt_metal::CreateProgram(mesh_device));
+    // A DRAM-core kernel is not given the fabric defines (the packet header's routing mode) by its build.
+    const auto kernel = tt_metal::CreateKernel(
+        *program,
+        "tt_metal/fabric/impl/kernels/host_rdma_service.cpp",
+        logical_core,
+        tt_metal::DramConfig{
+            .noc = noc,
+            .defines = mesh_device.impl().metal_context().get_control_plane().get_fabric_kernel_defines(),
+            .opt_level = tt_metal::KernelBuildOptLevel::O2});
+    tt_metal::SetRuntimeArgs(*program, kernel, logical_core, {layout_addr});
+    auto* device = mesh_device.get_devices().front();
+    program->impl().compile(device, /*force_slow_dispatch=*/true);
+    tt_metal::slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, /*force_slow_dispatch=*/true);
+    tt_metal::slow_dispatch::LaunchProgramAsync(*device, *program, /*force_slow_dispatch=*/true);
+    return program;
+}
+
 sabi::Channel inactive_channel_entry(const fabric_connection_info_t& router, uint32_t max_payload) {
     sabi::Channel entry{};
     entry.max_payload = tt::round_down(max_payload, sabi::NOC_ALIGNMENT);
@@ -71,30 +97,59 @@ sabi::Channel inactive_channel_entry(const fabric_connection_info_t& router, uin
 }  // namespace
 
 std::shared_ptr<HostRdmaService> HostRdmaService::create(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core) {
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    tt_metal::CoreCoord logical_core,
+    ServiceCore core) {
     TT_FATAL(mesh_device != nullptr, "The host_rdma service needs a mesh device");
-    return std::shared_ptr<HostRdmaService>(new HostRdmaService(std::move(mesh_device), logical_core));
+    return std::shared_ptr<HostRdmaService>(new HostRdmaService(std::move(mesh_device), logical_core, core));
 }
 
 HostRdmaService::HostRdmaService(
-    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core) :
+    std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device,
+    tt_metal::CoreCoord logical_core,
+    ServiceCore core) :
     mesh_device_(std::move(mesh_device)),
     context_(mesh_device_->impl().metal_context()),
-    cluster_(context_.get_cluster()) {
+    cluster_(context_.get_cluster()),
+    core_(core) {
     const auto& hal = context_.hal();
     const auto& fabric_context = context_.get_control_plane().get_fabric_context();
     TT_FATAL(mesh_device_->get_devices().size() == 1, "The host_rdma service runs on a unit mesh (one chip)");
     chip_ = mesh_device_->get_devices().front()->id();
     node_ = context_.get_control_plane().get_fabric_node_id_from_physical_chip_id(chip_);
-    virtual_core_ = mesh_device_->worker_core_from_logical_core(logical_core);
+    const bool on_dram = core_ == ServiceCore::Dram;
+    const auto hal_core =
+        on_dram ? tt::tt_metal::HalProgrammableCoreType::DRAM : tt::tt_metal::HalProgrammableCoreType::TENSIX;
+    const auto unreserved =
+        on_dram ? tt::tt_metal::HalL1MemAddrType::UNRESERVED : tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED;
+    tt_metal::NOC dram_noc = tt_metal::NOC::NOC_0;
+    if (on_dram) {
+        TT_FATAL(
+            hal.has_programmable_core_type(hal_core),
+            "The host_rdma service on a DRAM core needs DRAM programmable cores");
+        virtual_core_ = mesh_device_->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
+        // The router credits the service at a plain L1 address on its own NoC, which reaches DRAM-core L1 only
+        // through a NIU in stream mode.
+        const auto& router_config = fabric_context.get_builder_context().get_fabric_router_config();
+        dram_noc = router_config.requires_forced_assignment_to_noc1() ? tt_metal::NOC::NOC_1 : tt_metal::NOC::NOC_0;
+        const uint8_t noc2axi_nius = cluster_.get_soc_desc(chip_).get_dram_endpoint_noc_mask(virtual_core_);
+        TT_FATAL(
+            ((noc2axi_nius >> static_cast<uint8_t>(dram_noc)) & 1u) == 0,
+            "DRAM core {} of chip {} serves DRAM on NOC{}, which the fabric routers credit the host_rdma service on",
+            logical_core.str(),
+            chip_,
+            static_cast<uint32_t>(dram_noc));
+    } else {
+        virtual_core_ = mesh_device_->worker_core_from_logical_core(logical_core);
+    }
+    l1_noc_offset_ = hal.get_l1_noc_offset(hal_core);
 
-    const uint32_t l1_base = static_cast<uint32_t>(hal.get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
-    const uint32_t l1_end = l1_base + static_cast<uint32_t>(hal.get_dev_size(
-                                          tt::tt_metal::HalProgrammableCoreType::TENSIX,
-                                          tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
+    const uint32_t l1_base = static_cast<uint32_t>(hal.get_dev_addr(hal_core, unreserved));
+    const uint32_t l1_end = l1_base + static_cast<uint32_t>(hal.get_dev_size(hal_core, unreserved));
     layout_addr_ = tt::align(l1_base, sabi::LAYOUT_ALIGNMENT);
-    const uint32_t staging_addr = tt::align(layout_addr_ + sizeof(sabi::Layout), sabi::LAYOUT_ALIGNMENT);
+    const uint32_t routing_table_addr = tt::align(layout_addr_ + sizeof(sabi::Layout), sabi::LAYOUT_ALIGNMENT);
+    const uint32_t routing_table_bytes = on_dram ? static_cast<uint32_t>(sizeof(routing_l1_info_t)) : 0;
+    const uint32_t staging_addr = tt::align(routing_table_addr + routing_table_bytes, sabi::LAYOUT_ALIGNMENT);
     const uint32_t staging_stride =
         tt::align(static_cast<uint32_t>(fabric_context.get_fabric_channel_buffer_size_bytes()), sabi::LAYOUT_ALIGNMENT);
     TT_FATAL(
@@ -106,19 +161,41 @@ HostRdmaService::HostRdmaService(
     auto layout = std::make_unique<sabi::Layout>();
     layout->header.staging_addr = staging_addr;
     layout->header.staging_stride = staging_stride;
+    if (on_dram) {
+        const auto routing_table_source = mesh_device_->worker_core_from_logical_core(tt_metal::CoreCoord{0, 0});
+        layout->header.routing_table_addr = routing_table_addr;
+        layout->header.routing_table_src_x = static_cast<uint32_t>(routing_table_source.x);
+        layout->header.routing_table_src_y = static_cast<uint32_t>(routing_table_source.y);
+    }
     writer_ = std::make_unique<tt_metal::distributed::CoreWriter>(
-        cluster_, chip_, virtual_core_, staging_addr, /*l1_offset=*/0, "host_rdma service");
+        cluster_, chip_, virtual_core_, staging_addr, l1_noc_offset_, "host_rdma service");
     writer_->write(layout.get(), sizeof(sabi::Layout), layout_addr_);
     tt_driver_atomics::sfence();
-    cluster_.l1_barrier(chip_, {virtual_core_});
+    barrier_service_core();
 
-    launch_service_kernel(*mesh_device_, logical_core, layout_addr_);
+    if (on_dram) {
+        dram_program_ = launch_service_kernel_on_dram(*mesh_device_, logical_core, dram_noc, layout_addr_);
+    } else {
+        launch_service_kernel(*mesh_device_, logical_core, layout_addr_);
+    }
+}
+
+void HostRdmaService::barrier_service_core() const {
+    if (core_ == ServiceCore::Dram) {
+        cluster_.l1_barrier(chip_);
+    } else {
+        cluster_.l1_barrier(chip_, {virtual_core_});
+    }
 }
 
 HostRdmaService::~HostRdmaService() noexcept {
     try {
         publish_word(layout_addr_ + offsetof(sabi::Header, terminate), 1);
-        tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        if (dram_program_ != nullptr) {
+            tt_metal::slow_dispatch::WaitProgramDone(*mesh_device_->get_devices().front(), *dram_program_);
+        } else {
+            tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
+        }
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "host_rdma: stopping the service on chip {} failed: {}", chip_, e.what());
     } catch (...) {
@@ -133,7 +210,7 @@ uint32_t HostRdmaService::channel_addr(uint32_t entry) const {
 
 uint32_t HostRdmaService::read_word(uint32_t addr) const {
     uint32_t value = 0;
-    cluster_.read_reg(&value, tt_cxy_pair(chip_, virtual_core_), addr);
+    cluster_.read_core(&value, sizeof(value), tt_cxy_pair(chip_, virtual_core_), addr + l1_noc_offset_);
     return value;
 }
 
@@ -184,8 +261,11 @@ size_t HostRdmaService::channel_on(chan_id_t eth_chan) {
 
     const sabi::Channel entry = inactive_channel_entry(ch.router, max_payload);
     cluster_.write_core(
-        &entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, virtual_core_), channel_addr(ch.entry));
-    cluster_.l1_barrier(chip_, {virtual_core_});
+        &entry,
+        offsetof(sabi::Channel, queue),
+        tt_cxy_pair(chip_, virtual_core_),
+        channel_addr(ch.entry) + l1_noc_offset_);
+    barrier_service_core();
     publish_word(channel_addr(ch.entry) + offsetof(sabi::Channel, active), 1);
     log_debug(
         tt::LogFabric,
@@ -302,7 +382,10 @@ std::string HostRdmaService::describe() const {
     for (const auto& ch : channels_) {
         sabi::Channel entry{};
         cluster_.read_core(
-            &entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, virtual_core_), channel_addr(ch.entry));
+            &entry,
+            offsetof(sabi::Channel, queue),
+            tt_cxy_pair(chip_, virtual_core_),
+            channel_addr(ch.entry) + l1_noc_offset_);
         out += fmt::format(
             "; eth chan {}: produced {} (host {}), consumed {}, router credits {} ({} slots)",
             ch.eth_chan,
