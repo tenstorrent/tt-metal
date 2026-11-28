@@ -389,6 +389,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalWriteVCSw
 // ========== Packet Sizes Tests ==========
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesSameKernel) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Test ID
     uint32_t test_id = 146;
     bool same_kernel = true;
@@ -400,6 +403,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSiz
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementCoreBidirectionalPacketSizesDifferentKernels) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Test ID
     uint32_t test_id = 147;
     bool same_kernel = false;

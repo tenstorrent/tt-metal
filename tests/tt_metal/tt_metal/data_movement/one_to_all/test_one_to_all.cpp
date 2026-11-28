@@ -977,6 +977,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedDir
 
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     // Parameters
     uint32_t test_case_id = 56;  // Arbitrary test id
 

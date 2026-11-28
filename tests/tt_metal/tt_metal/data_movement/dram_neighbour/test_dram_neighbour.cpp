@@ -420,6 +420,9 @@ using unit_tests::dm::dram_neighbour::run_single_test;
 using unit_tests::dm::dram_neighbour::run_sweep_test;
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourDirectedIdeal) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 502;
     uint32_t num_of_transactions = 1;
     uint32_t num_banks = this->device().num_dram_channels();
@@ -441,6 +444,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourDirectedIdeal
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumPagesSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 503;
     uint32_t num_banks = this->device().num_dram_channels();
     uint32_t max_num_pages = 32;
@@ -462,6 +468,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumPagesSweep
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumBankSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 504;
     uint32_t max_num_banks = this->device().num_dram_channels();
     uint32_t num_pages = 32;
@@ -474,6 +483,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourNumBankSweep)
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     uint32_t test_id = 505;
     uint32_t num_banks = 1;
     uint32_t max_num_pages = 32;
@@ -495,6 +507,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourSingleRowSwee
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     auto logical_grid_size = this->device().logical_grid_size();
 
     uint32_t test_id = 508;
@@ -521,6 +536,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourOneHopSweep) 
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDramNeighbourLoopBackSweep) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Not ported to Quasar: creates a DataMovementKernel, which Quasar rejects";
+    }
     auto logical_grid_size = this->device().logical_grid_size();
 
     uint32_t test_id = 509;
