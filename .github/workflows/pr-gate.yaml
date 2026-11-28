@@ -40,6 +40,13 @@ on:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
         description: "Platform to build and test"
+      reuse-builds-from-sha:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Test the push path: take the ASan build of the merge-queue run of this full commit sha,
+          as a push to main does for its own commit. Use the default platform. Empty: build as before.
   pull_request:
     types:
       - opened
@@ -52,7 +59,7 @@ on:
       - destroyed
   push:
     branches:
-      # Builds on main will populate the shared ccache to speed up builds on branches
+      # find-queue-builds reuses the build of the merge-queue run of the same commit, when one exists
       - main
 
 concurrency:
@@ -120,6 +127,34 @@ jobs:
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
       llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
 
+  # On push (or a dispatch with reuse-builds-from-sha), find the successful
+  # merge_group run of the same commit. The output is that run id, or empty.
+  # asan-build takes the artifacts of that run, or builds when it is empty. The
+  # job runs on the same events as find-changed-files; only its steps are
+  # conditional and fail soft.
+  find-queue-builds:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    runs-on: ubuntu-slim
+    outputs:
+      asan: ${{ steps.find.outputs.asan }}
+    steps:
+      - if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.reuse-builds-from-sha != '') }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        continue-on-error: true
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github/scripts
+      - if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.reuse-builds-from-sha != '') }}
+        id: find
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.reuse-builds-from-sha || github.sha }}
+        # <output>=<caller job id> of the build in the merge_group run.
+        run: .github/scripts/utils/find-merge-queue-builds.sh pr-gate.yaml "$SHA" asan=asan-build
+
   asan-build:
     if: >-
       ${{
@@ -127,7 +162,7 @@ jobs:
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
         ((github.event_name != 'pull_request' && github.event_name != 'merge_group') || needs.find-changed-files.outputs.any-code-changed == 'true')
       }}
-    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files, find-queue-builds]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -160,6 +195,7 @@ jobs:
       basic-ttnn-runtime-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
       manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.asan }}
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
@@ -725,6 +761,7 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
     needs:
+      - find-queue-builds
       - asan-build
       - runtime-smoke-tests
       - ttnn-smoke-tests
@@ -749,7 +786,7 @@ jobs:
         with:
           # verify-time-budgets is required, not optional: it has no build dependency
           # and never skips, so a skip would mean it silently stopped gating.
-          required-jobs: "verify-time-budgets"
+          required-jobs: "verify-time-budgets, find-queue-builds"
           optional-jobs: >-
             asan-build, code-analysis,
             runtime-smoke-tests, ttnn-smoke-tests, runtime-examples, ttnn-examples,

@@ -18,6 +18,14 @@ run-name: >-
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse-builds-from-sha:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Test the push path: take the builds of the merge-queue run of this full commit sha,
+          as a push to main does for its own commit. Empty: build as before.
   pull_request:
     types:
       - opened
@@ -30,7 +38,7 @@ on:
       - destroyed
   push:
     branches:
-      - main # Builds on main will populate the shared ccache to speed up builds on branches
+      - main # find-queue-builds reuses the builds of the merge-queue run of the same commit, when one exists
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
@@ -122,6 +130,39 @@ jobs:
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
+  # On push (or a dispatch with reuse-builds-from-sha), find the successful
+  # merge_group run of the same commit. Each output is that run id for one build
+  # job, or empty. The build jobs take the artifacts of that run; build-sweeps
+  # skips. With empty outputs, the build jobs build. The job runs on the same
+  # events as find-changes; only its steps are conditional and fail soft.
+  find-queue-builds:
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
+    runs-on: ubuntu-slim
+    outputs:
+      release: ${{ steps.find.outputs.release }}
+      asan: ${{ steps.find.outputs.asan }}
+      tsan: ${{ steps.find.outputs.tsan }}
+      sweeps: ${{ steps.find.outputs.sweeps }}
+    steps:
+      - if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.reuse-builds-from-sha != '') }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
+        continue-on-error: true
+        timeout-minutes: 20
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github/scripts
+      - if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.reuse-builds-from-sha != '') }}
+        id: find
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ inputs.reuse-builds-from-sha || github.sha }}
+        # <output>=<caller job id> of the build in the merge_group run.
+        run: |
+          .github/scripts/utils/find-merge-queue-builds.sh merge-gate.yaml "$SHA" \
+            release=build asan=build-asan tsan=build-tsan sweeps=build-sweeps
+
   build:
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
@@ -130,7 +171,7 @@ jobs:
             needs.find-changes.outputs.build-workflows-changed == 'true' ||
             needs.find-changes.outputs.ttsim-ci-changed == 'true'
         }}
-    needs: [find-changes, docker-images, check-harbor]
+    needs: [find-changes, docker-images, check-harbor, find-queue-builds]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -155,6 +196,7 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
       checkout-filter: tree:0
+      use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.release }}
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
@@ -162,7 +204,7 @@ jobs:
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: [find-changes, docker-images, check-harbor]
+    needs: [find-changes, docker-images, check-harbor, find-queue-builds]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -187,6 +229,7 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
       checkout-filter: tree:0
+      use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.tsan }}
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
@@ -194,7 +237,7 @@ jobs:
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: [find-changes, docker-images, check-harbor]
+    needs: [find-changes, docker-images, check-harbor, find-queue-builds]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -219,13 +262,17 @@ jobs:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
       checkout-filter: tree:0
+      use-artifacts-from-run: ${{ needs.find-queue-builds.outputs.asan }}
 
+  # No job takes the output of build-sweeps. It skips when find-queue-builds
+  # finds a queue run that passed it.
   build-sweeps:
-    if: ${{ github.ref_name == 'main' ||
+    if: ${{ needs.find-queue-builds.outputs.sweeps == '' && (
+            github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
+            needs.find-changes.outputs.any-code-changed == 'true')
         }}
-    needs: [find-changes, docker-images, check-harbor]
+    needs: [find-changes, docker-images, check-harbor, find-queue-builds]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
       contents: read
@@ -872,13 +919,13 @@ jobs:
     # changed) is OK. The changes job is there too: when it fails, the gate skips.
     # llk-perf-merge-gate-measure is not: the gate already fails on a measuring leg that did not
     # complete, and a failed warehouse upload or report-only stage 2 must not block.
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
+    needs: [static-checks, docker-images, find-changes, find-queue-builds, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate-measure, llk-perf-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "static-checks, find-changes"
+          required-jobs: "static-checks, find-changes, find-queue-builds"
           optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
