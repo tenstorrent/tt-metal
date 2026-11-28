@@ -55,7 +55,6 @@ from helpers.test_variant_parameters import (
     MATMUL_PACK_BLOCK,
     MATMUL_PHASE_ELIDE,
     MATMUL_REUSE_DIR,
-    MATMUL_ROW_END_FOLD,
     MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
     MATMUL_STREAM_Z,
@@ -428,10 +427,6 @@ def run_perf_math_matmul(
                 two_row_off=two_row_off,
             ),
             *k_loop,
-            *MATMUL_ROW_END_FOLD.for_block(
-                matmul_config.tile_dimensions.ct_dim,
-                matmul_config.tile_dimensions.rt_dim,
-            ),
             *(
                 MATMUL_ROW_MOP.for_block(
                     formats,

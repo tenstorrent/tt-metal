@@ -2642,6 +2642,7 @@ inline constexpr matmul_section_end_cell matmul_main_section_end_cells[] = {
     {DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 2, 1, 2},
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 3, 1, 2},
     {DataFormat::Float32, DataFormat::Float32, DataFormat::Tf32, 1, 2, 2},
+    {DataFormat::Float32, DataFormat::Float16_b, DataFormat::Tf32, 1, 4, 2},
 };
 
 // Blocks that unpack per row (no hoisted row invariants) where a kernel names the block (matmul_block's block keys): there the

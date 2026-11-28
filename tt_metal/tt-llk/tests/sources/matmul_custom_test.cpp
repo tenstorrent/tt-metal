@@ -33,8 +33,14 @@ static_assert(
 #if defined(ARCH_BLACKHOLE) && MATMUL_CUSTOM_MAIN_UNPACK
 #include "llk_unpack_AB_matmul_main_lib.h"
 #define MATMUL_CUSTOM_UNPACK mm_main::
+#define MATMUL_CUSTOM_UNPACK_ARGS
+#elif defined(ARCH_BLACKHOLE)
+// matmul_custom.h: per row, the row mask of 8 tiles
+#define MATMUL_CUSTOM_UNPACK
+#define MATMUL_CUSTOM_UNPACK_ARGS 0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), false, 8u
 #else
 #define MATMUL_CUSTOM_UNPACK
+#define MATMUL_CUSTOM_UNPACK_ARGS
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -97,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    MATMUL_CUSTOM_UNPACK _llk_unpack_AB_matmul_<>(
+                    MATMUL_CUSTOM_UNPACK _llk_unpack_AB_matmul_<MATMUL_CUSTOM_UNPACK_ARGS>(
                         L1_ADDRESS(buffer_A[0]),
                         L1_ADDRESS(buffer_B[0]),
                         j,
