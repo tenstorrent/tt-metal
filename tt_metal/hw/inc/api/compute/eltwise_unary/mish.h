@@ -44,9 +44,14 @@ ALWI void mish_tile(uint32_t idst) {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mish_tile_init() {
+    // Quasar's mish_init loads different exp coefficients for 16- and 32-bit Dest.
+#ifdef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE, is_fp32_dest_acc_en)));
+#else
     MATH(SFPU_UNARY_INIT_FN(mish, sfpu::mish_init, (APPROXIMATION_MODE)));
+#endif
 }
 
 }  // namespace ckernel
