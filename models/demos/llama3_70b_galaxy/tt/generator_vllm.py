@@ -170,6 +170,7 @@ class LlamaForCausalLM(Generator):
         "supports_prefix_caching": True,
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "folds_dp_into_lanes": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -223,6 +224,7 @@ class QwenForCausalLM(Generator):
     model_capabilities = {
         "supports_sample_on_device": True,
         "max_device_top_k": 32,
+        "folds_dp_into_lanes": True,
     }
 
     def __init__(self, *args, **kwargs):
