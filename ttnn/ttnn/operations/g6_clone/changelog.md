@@ -167,6 +167,7 @@
 - **The zone build (operator candidate 1).**
   - Zones stay at every stage boundary and compile only with `G6_CLONE_ZONES` (BB-21). The plain profiled build carries no user zone.
   - The plan reports `zone_build`. Added `test_g6_clone_zone_build`.
+  - The gain exists only in profiled builds, which is how the campaign measures. Without the device profiler, `DeviceZoneScopedN` already compiled to nothing, so unprofiled production kernels were zone-free before and are unchanged. The other three graduations change unprofiled device time as well.
 - **`bank_affine_runs` is the one full-page path.**
   - Each bank's run is split over min(its pages, `BANK_AFFINE_CORES_PER_BANK` = 2) cores of its anchor row, ordered by distance from the middle DRAM column (`bank_row_order`; the middle is derived from the anchor table, not hard-coded). Both kernels address the row endpoint.
   - Deleted:
