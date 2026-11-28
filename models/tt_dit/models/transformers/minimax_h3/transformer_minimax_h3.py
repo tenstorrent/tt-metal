@@ -777,38 +777,34 @@ class MiniMaxH3Transformer3DModel(Module):
             for block in self.transformer_blocks
         ]
 
-    def write_adaln_tables(self, step_inputs: list[tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor]]) -> None:
-        """Rewrite the resident tables in place: every step's rows where its placement puts them, zeros elsewhere.
+    def write_adaln_tables(
+        self, writes: list[tuple[ttnn.Tensor, ttnn.Tensor | None, ttnn.Tensor, ttnn.Tensor]]
+    ) -> None:
+        """Write one schedule's rows into the resident tables in place; the rows `keep` names stay, the rest are zero.
 
-        `step_inputs` are `(timestep, endpoint_timestep, placement)` per step: `forward`'s inputs carrying every
-        role, and the `[capacity, rows]` one-hot (`AdalnRowPlan.placement`) that puts the step's rows at its offset.
-        The rows are the block's own `_modulation_tables` of that step's `temb`, so they match the on-device path.
-        Runs eagerly, outside any trace; nothing it allocates outlives the call, and every op has the same shapes for
-        any schedule (one-hot placement matmuls and adds of disjoint rows, both exact), so no new program is
-        compiled while a trace may be live.
+        `writes` are `(timestep, endpoint_timestep, placement, keep)`, `AdalnRowPlan.write_inputs` on device:
+        `forward`'s inputs for a tile row of slots, the one-hot that puts their table rows at their place, and the
+        0/1 diagonal of the resident rows to keep. The rows are the block's own `_modulation_tables` of those
+        slots' `temb`, so they match the on-device path. Runs eagerly, outside any trace; nothing it allocates
+        outlives the call, and every op has the same shapes for any schedule (one-hot matmuls and adds of
+        disjoint rows, both exact), so no new program is compiled while a trace may be live.
         """
         if self._adaln_tables is None:
             raise RuntimeError("allocate_adaln_tables must run before write_adaln_tables")
-        if not step_inputs:
-            raise ValueError("write_adaln_tables needs at least one step")
-        tembs = [(self.time_embedding(timestep, endpoint), placement) for timestep, endpoint, placement in step_inputs]
-        for block, resident in zip(self.transformer_blocks, self._adaln_tables):
-            content: list[ttnn.Tensor | None] = [None] * NUM_MODULATION_PARAMS
-            for temb, placement in tembs:
+        if not writes:
+            raise ValueError("write_adaln_tables needs at least one write")
+        for timestep, endpoint, placement, keep in writes:
+            temb = self.time_embedding(timestep, endpoint)
+            for block, resident in zip(self.transformer_blocks, self._adaln_tables):
                 for param, table in enumerate(block._modulation_tables(block._compute_adaln_projection(temb))):
                     placed = block._gather_rows(table, placement)
                     ttnn.deallocate(table)
-                    if content[param] is None:
-                        content[param] = placed
-                    else:
-                        total = ttnn.add(content[param], placed)
-                        ttnn.deallocate(content[param])
-                        ttnn.deallocate(placed)
-                        content[param] = total
-            for param, table in enumerate(content):
-                ttnn.copy(table, resident[param])
-                ttnn.deallocate(table)
-        for temb, _ in tembs:
+                    kept = block._gather_rows(resident[param], keep)
+                    total = ttnn.add(kept, placed)
+                    ttnn.deallocate(kept)
+                    ttnn.deallocate(placed)
+                    ttnn.copy(total, resident[param])
+                    ttnn.deallocate(total)
             ttnn.deallocate(temb)
 
     def set_sol_request(self, request: tuple[int, int, int] | None, *, tau: float = 1.0, dense_layers: int = 0) -> None:
