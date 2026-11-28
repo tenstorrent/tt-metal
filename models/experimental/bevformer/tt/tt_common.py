@@ -57,10 +57,12 @@ def device_constant(values, shape, dtype, device):
 
 
 def stack_layers(tensors):
-    """``tensors`` stacked along a new leading axis in L1, where ttnn.stack lands in DRAM. A
-    single tensor gains the axis as a view."""
+    """``tensors`` stacked along a new leading axis in L1, where ttnn.stack lands in DRAM, or in DRAM
+    on a reduced grid (activation_memory_config). A single tensor gains the axis as a view."""
     leading = [ttnn.unsqueeze(t, 0) for t in tensors]
-    return leading[0] if len(leading) == 1 else ttnn.concat(leading, dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if len(leading) == 1:
+        return leading[0]
+    return ttnn.concat(leading, dim=0, memory_config=activation_memory_config(tensors[0].device()))
 
 
 def linear_program_config(device, rows, in_features, out_features, activation=None):
@@ -133,7 +135,8 @@ def l1_linear(x, linear, activation=None, dtype=None):
     output only.
     """
     fp32_output = dtype == ttnn.float32
-    rows = math.prod(list(x.shape)[:-1])
+    # The rows the matmul sees: with its batch fused, each batch entry's rows padded to whole tiles.
+    rows = math.prod(list(x.padded_shape)[:-1])
     return ttnn.linear(
         x,
         linear.weight,
