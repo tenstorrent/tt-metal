@@ -3,8 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""The bus-bar stage (diag/busbar.py) against stand-in loads, a fake sysfs and the
-fake in-band BMC: its step tables, the HSC poll and its lock, and each finding."""
+"""diag/busbar.py against stand-in loads, a fake sysfs and the fake in-band BMC."""
 
 from __future__ import annotations
 

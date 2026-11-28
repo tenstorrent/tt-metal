@@ -11,8 +11,7 @@ are recounted and the links and SEL re-read; a lost chip ends the loads, since e
 
 A load that outlives its step plus bring-up is a hang: the logs are captured, then its process group is
 stopped. Each leg writes its name and boot_id to LEG_FILE, which a reboot keeps, so the next run can say
-the host rebooted during that leg. The power_virus step is the --hook script's ``load power_virus
-<seconds>`` call; with no hook it is a SKIP.
+the host rebooted during that leg. The power_virus step calls the --hook script; with no hook, SKIP.
 """
 from __future__ import annotations
 
@@ -138,7 +137,7 @@ def wait_quiet(stop: threading.Event, sys_root: Path = SYS, cap_s: float | None 
     while True:
         hot = sorted(b for b, mhz in chip_clocks(sys_root).items() if mhz > QUIET_MHZ)
         if not hot or time.monotonic() >= deadline or stop.is_set():
-            return hot
+            return [] if stop.is_set() else hot
         stop.wait(2)
 
 

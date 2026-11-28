@@ -3,9 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""verdict_lines: per fault what, where, its cause and repair, evidence from the
-captures, the final verdict and the repair recommendation. Every row's checks
-are emitted by some stage."""
+"""verdict_lines: each fault's cause and repair, evidence, the verdict and the repair line."""
 
 from __future__ import annotations
 
@@ -66,11 +64,19 @@ CASES = {
 }
 
 
-def _literals(path: Path) -> set[str]:
-    """Every string literal in a module, f-string pieces included."""
-    return {
-        n.value for n in ast.walk(ast.parse(path.read_text())) if isinstance(n, ast.Constant) and type(n.value) is str
-    }
+def _emitted(paths: list[Path]) -> set[str]:
+    """Strings the stages use and the str constants they read; a definition alone does not count."""
+    consts, found, read = {}, set(), set()
+    for tree in (ast.parse(p.read_text()) for p in paths):
+        defs = [a for a in tree.body if isinstance(a, ast.Assign) and type(getattr(a.value, "value", 0)) is str]
+        consts.update((t.id, a.value.value) for a in defs for t in a.targets if isinstance(t, ast.Name))
+        skip = {id(a.value) for a in defs}
+        for n in ast.walk(tree):
+            if type(getattr(n, "value", 0)) is str and isinstance(n, ast.Constant) and id(n) not in skip:
+                found.add(n.value)
+            if isinstance(getattr(n, "ctx", None), ast.Load):
+                read.add(getattr(n, "id", getattr(n, "attr", "")))
+    return found | {v for k, v in consts.items() if k in read}
 
 
 class TestRows(unittest.TestCase):
@@ -87,10 +93,9 @@ class TestRows(unittest.TestCase):
                 self.assertIn(repair, lines[-3])
 
     def test_every_row_check_has_an_emitter(self):
-        """A row may only name a check some stage emits: an exact name needs that
-        literal, a prefix "x*" a literal starting with x (f-strings count)."""
+        """A row's check must be emitted: an exact name, or for "x*" a name starting with x."""
         mods = [*sorted((SUITE_DIR / "diag").glob("*.py")), SUITE_DIR / "diag_runner.py"]
-        found = set().union(*(_literals(m) for m in mods if m.name != "verdict.py"))
+        found = _emitted([m for m in mods if m.name != "verdict.py"])
         for rid, row in ROWS.items():
             for name in row.checks:
                 with self.subTest(rid=rid, check=name):
