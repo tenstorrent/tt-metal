@@ -4988,6 +4988,8 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
     def _situ_glu(self, t1, t2):
         # calculate_situ_glu: softcap(gate, beta_gate) * sigmoid(gate) * softcap(up, beta_up), gate
         # = t1, up = t2; sigmoid takes the raw gate, not the capped one.
+        if math.isnan(float(t1)) or math.isnan(float(t2)):
+            return math.nan
         gate, up = float(t1), float(t2)
         sigmoid = float(torch.sigmoid(torch.tensor(gate, dtype=torch.float32)))
         return (

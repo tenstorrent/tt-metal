@@ -1142,6 +1142,8 @@ BINARY_SPECIALS_READY_OPS: frozenset[MathOperation] = frozenset(
         # (special, special) grid on Blackhole once the harness runs isclose_init.
         MathOperation.SfpuIsclose,
         MathOperation.SfpuIscloseEqualNan,
+        # At every special pair the kernel gives its golden's class, a zero's sign aside.
+        MathOperation.SfpuSituGlu,
     }
 )
 

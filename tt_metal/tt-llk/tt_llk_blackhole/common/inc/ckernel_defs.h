@@ -315,6 +315,12 @@ enum class BinaryOp : std::uint8_t
     ADD           = 0,
     // silu_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
     SILU_GLU = 64,
+    // situ_glu has a Blackhole kernel only: the harness dispatches it on Blackhole.
+    // SITU_GLU is also a kernel define (hybrid_program_factory.cpp): the member is spelled with it set aside.
+#pragma push_macro("SITU_GLU")
+#undef SITU_GLU
+    SITU_GLU = 62,
+#pragma pop_macro("SITU_GLU")
     SUB           = 1,
     MUL           = 2,
     DIV           = 3,

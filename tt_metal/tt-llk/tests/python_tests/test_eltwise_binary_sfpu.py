@@ -243,6 +243,7 @@ _UNREGISTERED_BINARY_OPS = frozenset(
         MathOperation.SfpuRsubInt32,
         MathOperation.SfpuCopyDest,
         MathOperation.SfpuSiluGlu,
+        MathOperation.SfpuSituGlu,
     }
 )
 
@@ -1245,6 +1246,31 @@ SILU_GLU_SWEEP = dict(
 @parametrize(**SILU_GLU_SWEEP)
 def test_eltwise_binary_sfpu_silu_glu(formats, dest_acc, mathop, **run_kwargs):
     # silu_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
+    # Both signs, past each clamp and below where the logistic factor underflows.
+    sfpu_binary(
+        formats,
+        dest_acc,
+        mathop,
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-110.0, high=16.0
+        ),
+        spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-16.0, high=16.0),
+        **run_kwargs,
+    )
+
+
+SITU_GLU_SWEEP = dict(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.SfpuSituGlu],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+
+
+@skip_for_quasar
+@skip_for_wormhole
+@parametrize(**SITU_GLU_SWEEP)
+def test_eltwise_binary_sfpu_situ_glu(formats, dest_acc, mathop, **run_kwargs):
+    # situ_glu(gate, up) with gate = tile0 and up = tile1; Blackhole has the only kernel.
     # Both signs, past each clamp and below where the logistic factor underflows.
     sfpu_binary(
         formats,
@@ -2465,6 +2491,13 @@ _INT_DRIVEN_BINARY_OPS = frozenset(
     }
 )
 
+# Cat-B ops with a Blackhole kernel only.
+_BLACKHOLE_ONLY_EDGE_OPS = frozenset(
+    {
+        MathOperation.SfpuSituGlu,
+    }
+)
+
 # Derived rather than listed: an op joins this sweep by gaining either a registered
 # singularity or a cat-B entry in sfpu_domains. The cat-B half matters for the float ops with
 # no pole -- add, sub, mul, max, min and the comparisons are smooth everywhere, so
@@ -2511,6 +2544,11 @@ def test_eltwise_binary_sfpu_edges(formats, dest_acc, mathop, edge_class):
     why a single tensor holding every pole cannot report which behaviour changed.
     """
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    if (
+        mathop in _BLACKHOLE_ONLY_EDGE_OPS
+        and TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip(reason=f"{mathop.name} has a Blackhole kernel only")
 
     # Cat B. Two independent gates, both must pass: BINARY_SPECIALS_READY_OPS says the golden
     # defines an answer for a non-finite operand, specials_safe() says the pipeline delivers one
