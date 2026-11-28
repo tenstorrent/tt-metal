@@ -18,6 +18,7 @@
 #include <tt-metalium/execution/mesh_command_queue.hpp>
 #include <tt-metalium/memory/tensor/tensor_apis.hpp>
 #include <tt-metalium/memory/tensor/tensor_types.hpp>
+#include <tt-metalium/utils/math.hpp>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -381,6 +382,10 @@ struct bfloat4_tag {};
 struct bfloat8_tag {};
 struct mx_tag {};  // any MX format; the concrete one is output_spec.data_type()
 
+// BFLOAT8_B, BFLOAT4_B and the MX formats are unpacked to float by preprocess_buffers, so they arrive as float.
+template <typename SrcType>
+constexpr bool is_float_source_v = std::is_same_v<SrcType, float> || std::is_same_v<SrcType, bfloat16>;
+
 // Preprocess the storage to unpack the bfloat8/4 or MX tiles into float32.
 tt::tt_metal::DistributedHostBuffer preprocess_buffers(
     const tt::tt_metal::DistributedHostBuffer& input_storage,
@@ -502,7 +507,11 @@ tt::tt_metal::DistributedHostBuffer transform_buffers(
             auto data = buffer.view_as<const SrcType>();
             std::vector<DstType> output_vector(data.size());
             std::transform(data.begin(), data.end(), output_vector.begin(), [](SrcType value) {
-                return static_cast<DstType>(value);
+                if constexpr (is_float_source_v<SrcType> && std::is_integral_v<DstType>) {
+                    return tt::saturating_cast<DstType>(static_cast<float>(value));
+                } else {
+                    return static_cast<DstType>(value);
+                }
             });
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };
