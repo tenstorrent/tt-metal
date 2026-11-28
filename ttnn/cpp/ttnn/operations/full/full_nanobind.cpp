@@ -25,6 +25,8 @@ void bind_full_operation(nb::module_& mod) {
             shape (ttnn.Shape): The shape of the tensor.
             fill_value (float or int): The value to fill the tensor with.
             device (ttnn.MeshDevice): The device on which the tensor will be allocated.
+
+        Keyword Args:
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration of the tensor. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
@@ -37,7 +39,7 @@ void bind_full_operation(nb::module_& mod) {
             >>> filled_tensor = ttnn.moreh_full([2, 2], 7.0, device, dtype=ttnn.bfloat16)
             >>> print(filled_tensor)
             ttnn.Tensor([[[[7.0,  7.0],
-                            [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+                            [7.0,  7.0]]]], shape=Shape([2, 2]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
         )doc";
 
     ttnn::bind_function<"moreh_full">(

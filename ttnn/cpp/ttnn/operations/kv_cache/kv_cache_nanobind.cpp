@@ -62,7 +62,8 @@ void bind_update_cache_for_token_(nb::module_& mod) {
             cache (ttnn.Tensor): the cache tensor to be written to.
             input (ttnn.Tensor): the token tensor to be written to the cache.
             update_index (int): the cache sequence position, less than ``cache.padded_shape[-2]``.
-            batch_offset (int): the batch_offset into the cache tensor.
+            batch_offset (int, optional): the batch_offset into the cache tensor. Defaults to `0`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): compute kernel configuration. Defaults to `None`.
 
 
         Returns:
@@ -90,9 +91,9 @@ void bind_update_cache(nb::module_& mod) {
             * :attr:`cache` (ttnn.Tensor): The cache tensor to be written to.
             * :attr:`input` (ttnn.Tensor): The token tensor to be written to the cache.
             * :attr:`update_idx` (int): The cache sequence position, less than ``cache.padded_shape[-2]``.
-            * :attr:`batch_offset` (int): The batch_offset into the cache tensor. Default = 0 .
 
         Keyword Args:
+            * :attr:`batch_offset` (int): The batch_offset into the cache tensor. Default = 0 .
             * :attr:`compute_kernel_config` Optional[DeviceComputeKernelConfig]
 
         Example:
