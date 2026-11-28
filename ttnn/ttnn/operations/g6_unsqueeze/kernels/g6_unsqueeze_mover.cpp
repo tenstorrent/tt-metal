@@ -44,6 +44,7 @@ void kernel_main() {
     static_assert(face_row_bytes == face_w * sizeof(uint32_t), "each word move carries one 4-byte element");
     static_assert(face_bytes == face_h * face_row_bytes, "a slot is one face");
     static_assert(block_tile_halves >= 1 && block_w_tiles >= 1 && staging_depth >= 1, "block knobs start at 1");
+    static_assert(face_bytes <= NOC_MAX_BURST_SIZE, "each face write is one NoC packet");
 
     constexpr uint32_t slots_per_block = block_w_tiles * block_tile_halves;
     constexpr uint32_t group_bytes = slots_per_block * face_bytes;
@@ -68,26 +69,17 @@ void kernel_main() {
         return remaining < block_w_tiles ? remaining : block_w_tiles;
     };
     auto group_base = [&](uint32_t block_idx) { return slots_base + (block_idx % staging_depth) * group_bytes; };
-    auto face_dst = [&](uint32_t tile_id, uint32_t half) {
-        return out_accessor.get_noc_addr(tile_id, half * out_half_stride_bytes);
-    };
-
-    // First write destination of each resident block, computed in the shadow of its read round trip.
-    uint64_t block_first_dst[staging_depth];
-
     auto gather_rows_block = [&](uint32_t block_idx) {
         DeviceZoneScopedN("G6U-GATHER-ISSUE");
         const uint32_t tile0 = block_first_tile(block_idx);
-        const uint32_t extent = block_extent(block_idx);
+        const uint32_t num_slots = block_extent(block_idx) * block_tile_halves;
         uint32_t slot = group_base(block_idx);
-        for (uint32_t t = 0; t < extent; ++t) {
-            for (uint32_t hl = 0; hl < block_tile_halves; ++hl) {
-                const uint32_t half = first_half + hl;
-                noc_async_read(in_accessor.get_noc_addr(tile0 + t, half * face_bytes), slot, face_row_bytes);
-                slot += face_bytes;
-            }
+        for (uint32_t s = 0; s < num_slots; ++s) {
+            const uint32_t half = first_half + s % block_tile_halves;
+            noc_async_read(
+                in_accessor.get_noc_addr(tile0 + s / block_tile_halves, half * face_bytes), slot, face_row_bytes);
+            slot += face_bytes;
         }
-        block_first_dst[block_idx % staging_depth] = face_dst(tile0, first_half);
     };
 
     auto wait_rows = [&]() {
@@ -101,27 +93,41 @@ void kernel_main() {
         noc_async_writes_flushed();
     };
 
-    auto scatter_store_block = [&](uint32_t block_idx) {
+    // Programs the write command buffer with a face's destination and size; the send that follows the
+    // move then writes only the two address-low registers. Returns the destination's local address.
+    auto arm_face_write = [&](uint32_t tile_id, uint32_t half) {
+        const uint64_t dst = out_accessor.get_noc_addr(tile_id, half * out_half_stride_bytes);
+        noc_async_write_one_packet_set_state(dst, face_bytes);
+        return static_cast<uint32_t>(dst);
+    };
+
+    // All loads are issued before any store so they pipeline instead of each waiting on its store.
+    auto move_row_to_column = [](uint32_t slot) {
+        volatile tt_l1_ptr uint32_t* face = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+        uint32_t row[face_w];
+#pragma GCC unroll 16
+        for (uint32_t j = 1; j < face_w; ++j) {
+            row[j] = face[j];
+        }
+#pragma GCC unroll 16
+        for (uint32_t j = 1; j < face_w; ++j) {
+            face[j * face_w] = row[j];
+        }
+    };
+
+    // Expects the write of the block's first slot armed; arms each next slot while the current face leaves.
+    auto scatter_store_block = [&](uint32_t block_idx, uint32_t armed_dst) {
         DeviceZoneScopedN("G6U-SCATTER-STORE");
         const uint32_t tile0 = block_first_tile(block_idx);
-        const uint32_t extent = block_extent(block_idx);
+        const uint32_t num_slots = block_extent(block_idx) * block_tile_halves;
         uint32_t slot = group_base(block_idx);
-        uint64_t dst = block_first_dst[block_idx % staging_depth];
-        for (uint32_t t = 0; t < extent; ++t) {
-            for (uint32_t hl = 0; hl < block_tile_halves; ++hl) {
-                volatile tt_l1_ptr uint32_t* face = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
-                for (uint32_t j = 1; j < face_w; ++j) {
-                    face[j * face_w] = face[j];
-                }
-                noc_async_write(slot, dst, face_bytes);
-                slot += face_bytes;
-                // Next destination is computed while this face serializes on the NoC.
-                const bool last_half = (hl + 1 == block_tile_halves);
-                if (!last_half) {
-                    dst = face_dst(tile0 + t, first_half + hl + 1);
-                } else if (t + 1 < extent) {
-                    dst = face_dst(tile0 + t + 1, first_half);
-                }
+        for (uint32_t s = 0; s < num_slots; ++s) {
+            move_row_to_column(slot);
+            noc_async_write_one_packet_with_state(slot, armed_dst);
+            slot += face_bytes;
+            if (s + 1 < num_slots) {
+                armed_dst =
+                    arm_face_write(tile0 + (s + 1) / block_tile_halves, first_half + (s + 1) % block_tile_halves);
             }
         }
     };
@@ -129,6 +135,8 @@ void kernel_main() {
     gather_rows_block(0);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         const bool has_next = block_idx + 1 < num_blocks;
+        // Armed in the shadow of the read round trip; nothing below touches the write command buffer before the send.
+        const uint32_t armed_dst = arm_face_write(block_first_tile(block_idx), first_half);
         wait_rows();
         if constexpr (staging_depth > 1) {
             // Next block lands in another slot group while this one is moved and stored.
@@ -139,7 +147,7 @@ void kernel_main() {
                 gather_rows_block(block_idx + 1);
             }
         }
-        scatter_store_block(block_idx);
+        scatter_store_block(block_idx, armed_dst);
         if constexpr (staging_depth == 1) {
             if (has_next) {
                 wait_slot_writes_left();
