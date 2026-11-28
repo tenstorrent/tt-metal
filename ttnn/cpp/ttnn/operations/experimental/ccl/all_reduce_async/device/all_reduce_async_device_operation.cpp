@@ -41,6 +41,15 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
     TT_FATAL(buffer_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
+    TT_FATAL(
+        input_tensor.layout() == Layout::TILE,
+        "AllReduceAsync requires TILE layout for input tensor, got {}",
+        input_tensor.layout());
+    TT_FATAL(
+        buffer_tensor.layout() == Layout::TILE,
+        "AllReduceAsync requires TILE layout for buffer tensor, got {}",
+        buffer_tensor.layout());
+
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
         args.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -64,10 +73,19 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         buffer_tensor.memory_config().shard_spec()->grid.contains(args.output_mem_config.shard_spec()->grid),
         "The output tensor must reside on a subset of the cores of the buffer tensor");
 
+    const uint32_t input_shard_shape_volume =
+        input_tensor.memory_config().shard_spec()->shape[0] * input_tensor.memory_config().shard_spec()->shape[1];
     const uint32_t output_shard_shape_volume =
         args.output_mem_config.shard_spec()->shape[0] * args.output_mem_config.shard_spec()->shape[1];
     const uint32_t buffer_shard_shape_volume =
         buffer_tensor.memory_config().shard_spec()->shape[0] * buffer_tensor.memory_config().shard_spec()->shape[1];
+    TT_FATAL(
+        input_shard_shape_volume >= tt::constants::TILE_HW && output_shard_shape_volume >= tt::constants::TILE_HW,
+        "AllReduceAsync requires input and output shard volumes of at least one 32x32 tile ({}), got input {} and "
+        "output {}",
+        tt::constants::TILE_HW,
+        input_shard_shape_volume,
+        output_shard_shape_volume);
     TT_FATAL(
         output_shard_shape_volume * args.ring_size <= buffer_shard_shape_volume,
         "The shard size for the buffer must be large enough to hold the intermediate tensor. Require at least {} but "

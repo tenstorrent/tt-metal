@@ -294,6 +294,31 @@ def test_all_reduce_async_one_shot_refuses_narrow_tiles(mesh_device, expect_erro
         _ar(mesh_device, inp, buf, sems[0], mem, one_shot=True)
 
 
+@pytest.mark.parametrize("device_params", FABRICS[:1], indirect=True)
+@pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
+@pytest.mark.parametrize("one_shot", [False, True])
+def test_all_reduce_async_refuses_row_major_layout(mesh_device, expect_error, one_shot):
+    """ROW_MAJOR inputs must fail validation with RuntimeError instead of dividing by zero in program creation."""
+    tp, mem, sems, buf = _setup(mesh_device)
+    grid = mem.shard_spec.grid
+    rm_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [1, DIM // grid.num_cores()], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    full, _ = _random(tp, 1, seed=8)
+    inp = ttnn.from_torch(
+        full,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=rm_mem,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+    )
+    with expect_error(RuntimeError, "TILE layout"):
+        _ar(mesh_device, inp, buf, sems[0], rm_mem, one_shot=one_shot)
+
+
 @pytest.mark.parametrize("device_params", [_fabric_params(ttnn.FabricConfig.FABRIC_1D, 16 << 20)], indirect=True)
 @pytest.mark.parametrize("mesh_device", MESH_1X8, indirect=True)
 def test_all_reduce_async_one_shot_latency(mesh_device):
