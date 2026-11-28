@@ -35,7 +35,6 @@ _OPS_WITHOUT_DEST_ACC = {
     MathOperation.Gelu,
     MathOperation.GeluTanh,
     MathOperation.Hardsigmoid,
-    MathOperation.Log,
     MathOperation.Neg,
     MathOperation.Sin,
     MathOperation.Square,

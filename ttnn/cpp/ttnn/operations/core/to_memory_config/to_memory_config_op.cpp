@@ -8,11 +8,13 @@
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_device_operation.hpp"
 #include "ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/types.hpp"
+#include <algorithm>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/discovery/hal.hpp>
 
@@ -125,6 +127,14 @@ bool can_use_interleaved_to_sharded(
     uint32_t scratch_page_size = tt::align(input_unit_size + dram_alignment, dram_alignment);
     constexpr uint32_t num_trids = 4;
     uint32_t total_cb_size = num_trids * scratch_page_size;
+    if (input_tensor.layout() != Layout::TILE) {
+        const uint32_t rows = static_cast<uint32_t>(input_tensor.logical_volume() / input_tensor.logical_shape()[-1]);
+        const uint32_t num_cores = std::min(tt::div_up(rows, shard_spec.shape[0]), shard_spec.grid.num_cores());
+        total_cb_size =
+            ttnn::prim::interleaved_to_sharded_row_major_scratch(
+                input_tensor, input_unit_size, shard_spec.shape[0], output_mem_config.memory_layout(), num_cores)
+                .size_per_node;
+    }
 
     // Input CB: extra L1 only when dtype conversion is needed
     if (convert_df) {
