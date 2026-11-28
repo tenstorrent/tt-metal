@@ -1605,3 +1605,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 03:20 heartbeat: NC.6 agent active; RAM used 63 GB; / 102G free.
 - 03:50 heartbeat: NC.6 agent active; RAM used 63 GB; / 101G free.
 - 04:20 heartbeat: NC.6 (block_keys, block_gather ported; block_max_bf16 running); RAM used 64 GB; / 101G free.
+- 04:27 NC.6 PASS -> 660deda0edd (C++ ttnn.block_max_bf16, block_keys, block_gather). Identical / repeats 0 / no cache growth; ~0.5 ms host a chunk on the block-select path (long contexts: from 163840 compressed keys single, 196608 packed). Accepted. NC.7 next.
+- 04:45 OWNER: nothing should wait on the owner. The 1M packed same-load off/on check is folded into the end check NC.8 (same executed-layers load, no extra load). Paused (stops after NC.7) to edit NC.8.
+- 04:55 OWNER: schedule work in the ledger, no side files. Queued (held) with overseer fix: the model_bringup batch (wo_a bank + C++ ports, one 5120 ladder) and the wq_b / wo_b C++ probe (owner's word). Removed my side drafts under ~/handoff_20261127. The first grouped_matmul native-migrate run and its one-line fix were done by hand, not as a task (my error; NC.1 brought them in as a task). NC.8 gets the 1M packed unit at the pause after NC.7; NC.4 goes back into tasks.yaml as dropped.
+- 04:50 heartbeat: NC.7 agent active; RAM used 65 GB; / 100G free.

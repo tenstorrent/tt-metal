@@ -32,7 +32,13 @@ whole mesh (a TP-dedup cache: owner q = chip-linear r TP + c) or a column (TP-re
 Every wait is bounded (SPIN polls, then the core goes on: a hang guard, not a result; the bit-identity tests see it).
 
 Data movement only: every destination chip's rows are the bytes the all-gather put at the same rows of the segment's
-lane buffer (records are a function of each served row alone, tt/history_gather._pack)."""
+lane buffer (records are a function of each served row alone, tt/history_gather._pack).
+
+NC.7 (OWNER 2026-11-27, native C++ port series): the program runs as the native C++ op ttnn.chunk_program (kind owned
+send: the home and port kernels moved verbatim to ttnn/cpp/ttnn/operations/chunk_program/device/kernels; the ports and
+cores of this module, made once a geometry into a plan): no prepare_program / run_prepared on the call path. The
+Python prepared route stays reachable for the op test only (``OwnedSend.route = "python"``,
+tests/native/test_native_chunk_programs.py)."""
 
 from __future__ import annotations
 
@@ -314,6 +320,8 @@ def links() -> int:
 class OwnedSend:
     """The owned history send of one mesh (module docstring). ``__call__(out, R, axis, entries, dest)``."""
 
+    route = "native"  # NC.7: "python" = the prepared route (tests/native/test_native_chunk_programs.py only)
+
     def __init__(self, mesh, nlinks: int):
         from ttnn.bringup.combine_rf.sparse_all_gather_2d import mesh_plan
 
@@ -346,6 +354,27 @@ class OwnedSend:
             self.port_xy.append((int(w.x), int(w.y)))
         self.nw = -(-self.n // 8)
         self._pp = {}
+        self._nplans = {}  # NC.7: geometry -> the native plan
+
+    def _native_plan(self, R: int, axis: int, page: int, k: int):
+        """NC.7: the ttnn.chunk_program plan of one geometry (_build's ports, cores and constants)."""
+        from .page_copy import K_OWNED, native_plan
+
+        hc = self.cores[0]
+        ports = []
+        for r in range(self.R_mesh):
+            for c in range(self.C):
+                g = []
+                for d in sorted(self.chips[(r, c)]):
+                    p = self.chips[(r, c)][d]
+                    for li in range(self.L):
+                        g += [int(p["peer"][0]), int(p["peer"][1]), int(p["links"][li]), li]
+                ports.append(g)
+        ct = [page, k, self.n, self.C, axis, self.L, NS, self.nw, R, BATCH, SPIN, int(hc.x), int(hc.y)]
+        ct += [len(self.cores) - 1]
+        for pc in self.cores[1:]:
+            ct += [int(pc.x), int(pc.y)]
+        return native_plan(self.mesh, K_OWNED, ct, ports, self.sem_addr)
 
     def _node(self, ch):
         return self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))
@@ -436,8 +465,13 @@ class OwnedSend:
             assert page % 64 == 0, page
         k = max(1, self.payload // page)
         key = (_geom(out), _geom(loc0), int(R), int(axis), page)  # (PB.KR: a page of another size, another program)
-        hit = self._pp.get(key)
-        if hit is None:
+        native = self.route == "native"
+        if native and getattr(self, "_nplans", None) is None:  # (DS41-353: a held instance from before a reload)
+            self._nplans = {}
+        hit = self._nplans.get(key) if native else self._pp.get(key)
+        if hit is None and native:
+            hit = self._nplans[key] = self._native_plan(int(R), int(axis), page, k)
+        elif hit is None:
             md, _ = self._build(out, loc0, int(R), int(axis), page, k)
             nv = 3 * NS + self.nw
             slots = [(kern, (1 << 31) | i) for kern in (0, 1) for i in range(nv)]
@@ -456,6 +490,9 @@ class OwnedSend:
             assert v == NONE or 0 <= v < len(entries), (q, e)
             words[q // 8] |= v << (4 * (q % 8))
         vals = locs + los + his + words
+        if native:
+            ttnn.chunk_program([out, loc0], pp, vals)
+            return
         ttnn.bringup.run_prepared(pp, [out], vals * 2)
 
 

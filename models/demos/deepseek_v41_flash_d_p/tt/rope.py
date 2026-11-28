@@ -432,6 +432,11 @@ class RopeTable:
         out = []
         fast = packed and settings.get("PACKED_HOST_FAST") == "on"
         dyn_rows = glued and dyn("rows")
+        if dyn_rows and not fast:  # NC.7: cos and sin in ONE native program (the same pieces; tt/lane_rows.py)
+            from .lane_rows import glued_rows_many
+
+            c, s_ = glued_rows_many([self.cos, self.sin], start, length)
+            return c, s_
         for t in (self.cos, self.sin):
             if fast:  # PB.3K: each chip its rows of every lane in one program (tt/lane_rows.py)
                 from .lane_rows import lane_rows

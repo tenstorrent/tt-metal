@@ -2075,3 +2075,89 @@
   path's n_tensor is device data (each chip's length); gather / keys have none (addresses only). Nothing new on the host.
 - Not run: `orchestrator measure` (op-level only, owner), any model load, the fork regression suite (owner).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.6 --spec $BRINGUP_SPEC --check`.
+
+## NC.7 (perf, attempt 1): the per-chunk prepared programs to a native C++ op (ttnn.chunk_program)
+
+- OV-82 (which programs run on the shipped path; checked before any port; defaults + the packed gates' switches
+  DS41_PACKED*=on, POS_DYNAMIC=on, PACKED_CHIPS=on default, PACKED_HIST_OWNED=on default):
+  - GluedRows: runs. Single chunk: POS_DYNAMIC=on -> page_copy.dyn("rows") -> rope.RopeTable._rows / compressor
+    CompressRope make one start a GluedStarts piece -> lane_rows.glued_rows (cos then sin, back to back); packed glued
+    chunks: GluedGeo.starts (GluedStarts) -> the same.
+  - PageCopy: runs (page_copy.dyn parts under POS_DYNAMIC=on: DeviceScalars picks, server-order row, window carry,
+    history pack / tail / slab rows, replay rotation; the glued parts on packed chunks).
+  - IdsReorder: runs (single chunk, POS_DYNAMIC=on: model.reorder_ids, adapter's engine input).
+  - GluedIdsReorder: runs (packed_device.glued_dev_ids: glued chunk with its header, POS_DYNAMIC=on; PACKED_CHIPS=on:
+    align > 0, no gather).
+  - Derive: runs (packed_glued.GluedCall: dynamic_on() -> derive(...).begin; keep / ckeep / region / idx / srv; the
+    MoE span's keep under PACKED_MOE=on).
+  - OwnedSend: runs (PACKED_HIST_OWNED=on default with chip-aligned lanes: history_gather.owned_*; PACKED_KEYS_OWNED=on
+    default: owned_keys). Run evidence: logs/WA.4R.shared/WA.4R_test_packed_walls.log lines 18-26 ("PB.HG owned
+    histories: one buffer a source", "PB.KR keys: source 2 rows held ...").
+  - LaneRows: DROPPED. It runs only for a tt/rope.LaneStarts start (PACKED_HOST_FAST=on fixed-lane chunks); nothing in
+    tt/ constructs a LaneStarts (grep: only tests/packed/test_lane_rows.py), and PACKED_CHIPS=on makes every packed
+    chunk a glued one (GluedStarts).
+  - ChipRows: DROPPED. Under PACKED_GLUED_DYNAMIC=on the indexer runs packed_glued._index_dynamic, whose ChipRows calls
+    (_rows_in_rows) run only for a phased pass or a pass > 0; with chip-aligned lanes (PACKED_CHIPS=on, GluedGeo.align)
+    every chip holds one segment from its first row: passes == 1 (asserted, packed_glued.py:180) and the phase
+    (0 - off) % R == 0, so p == 0 and not phased: `direct`, no copy. Its other callers (_index's roll / phase / keep)
+    are the non-dynamic path.
+- Expected saving a chunk (written before the code; perf_guide: host-only change, the same kernels): device ~0 (the
+  fused derive sections run on separate cores of one program: at most -0.1 ms); host ~25-45 us a call (DS41-398 / NC.5:
+  Python prepared 45-90 us -> native 20-45 us) x the calls: single 8192 ~40-80 page copies + 3 rope pairs (6 -> 3
+  calls) + 1 ids reorder = ~1.5-3.5 ms; packed 4 x 2k: + the derive runs (~6-10 -> 1 at begin + the valued region /
+  srv) + 1 glued ids + ~20 owned sends (fabric programs, 32 chips: ~50-100 us saved each) = ~3-5 ms host a chunk.
+- What: one native device op `ttnn.chunk_program(io, plan, values)` (ttnn/cpp/ttnn/operations/chunk_program) with six
+  kinds: PAGE_COPY, GLUED_ROWS (1 or 2 (table, out) pairs a program), IDS_REORDER, GLUED_IDS, DERIVE (sections),
+  OWNED_SEND. Plan once per Python instance / geometry (`page_copy.native_plan`; hash computed once); program key =
+  plan hash + per io its buffer type / layout / page size (sharded: memory config + padded shape, FIX.32); per-call
+  values and io addresses are runtime-arg slots (common args for GluedRows' pieces and OwnedSend's values) rewritten
+  by override_runtime_arguments. Program ranges as the Python MeshProgramDescriptors: whole mesh (page copy), an SP
+  row (glued rows, ids), a chip (derive, owned send). Hand port (DS41-400), not native_migrate: model-internal
+  classes, no op package; the separate checkout was not used.
+- Kernels: page_copy / ids_reorder / glued_ids / owned_* moved verbatim from the Python strings (owned: _COMMON as
+  owned_common.hpp). glued_rows.cpp = the GR_COMMON kernel with NPAIR pairs copied one after the other (each pair the
+  same pages in the same order). derive.cpp = the kernel with @ACCESSORS@ replaced by ONE x_args for every output
+  (all DRAM interleaved: checked by the op; the Python chain's accessors were all equal) and the section switches as
+  defines.
+- Fusions (bit-identical, mismatch 0): (1) RoPE cos + sin of one start in one program: rope.RopeTable._rows (dyn
+  rows) and compressor.CompressRope (glued, dyn) call `lane_rows.glued_rows_many` (falls back to two calls if the
+  tables' geometry differs). (2) Derive (DS41-404): `Derive.begin` runs every value-free section (keep, ckeep, idx)
+  an earlier chunk used, in ONE program, each section on its own cores (region 8 x 2 from (0, 0), single-core sections
+  8 a row after it); region (a layer's masked-carry bits) and srv (which segments write) take values from host chunk
+  state at their call and run alone (the kernel and cores of the Python route). A section first met mid-chunk runs
+  alone and joins from the next chunk on; an idx section registers with its block-select twin (rule 20, see below).
+- Not done: IdsReorder as the embedding's reader (brief: "if simple"): the reorder is a one-core kernel after an SP
+  all-gather; folding it into ttnn.bringup.embedding means a new reader option in that fork that re-derives each row's
+  source and clamps; ~25-40 us host saved at most (one launch). Not simple; the native op already cuts its host.
+- No setting: the allowed paths exclude tt/settings.py (as NC.1-NC.6); each class has `route = "native"`, `"python"`
+  keeps the prepared route reachable for the op test only. LaneRows and ChipRows stay Python prepared programs
+  (not on the shipped path, above).
+- Gate test tests/native/test_native_chunk_programs.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads,
+  ~100 s): 16 cases at the model's calls (page copy: history records 320 B, bf16 tiles, a uint32 row, the ND-sharded
+  served slab; rope 8192 / 5120 / packed 4 x 2k pieces, compressed rope 8192 / 5120 (ratio 4); ids 8192 / 5120;
+  glued ids cap / end with align 256; a whole derive chunk (keep, ckeep 2048, idx plain / block-select / candidate,
+  region, srv 1 and 3 segments; chunk 1 sections alone, chunk 2 the begin program); owned send history (320 B, axis
+  0) and keys (1088 B, axis 1), 4 chip-aligned segments). Mismatch / repeat / cache growth 0 in every case, every
+  in-place call wrote its destination. Gate PASS.
+- Measured (results/NC.7_layer.md; host a warm call native / python, device native / python): page copy 19-29 /
+  54-88 us, device equal; rope pair (cos + sin) 81-94 / 296-341 us, device 5.5-11.4 / 6.3-11.9 us; ids 91-131 /
+  122-172 us (the SP all-gather stays); glued ids 41-42 / 65-66 us; derive chunk 246 / 498 us, device 219 / 285 us;
+  owned send 89-91 / 107-110 us (its Python preamble dominates), device equal. Saving a chunk (call counts estimated,
+  not counted on a model run: op-level only): single 8192 ~40-80 page copies x ~36 us + 2-3 rope pairs x ~215 us +
+  ids ~35 us = ~2.0-3.6 ms host; packed 4 x 2k: the same page copies and rope + derive ~0.25 ms + glued ids ~0.02 ms +
+  ~20 owned sends x ~18 us = ~2.5-4.2 ms host, device -0.07 ms (derive) and ~-1 us a rope pair. Expected 1.5-3.5 /
+  3-5 ms: in range (owned send below its estimate).
+- Cores (rule 18, no matmul): as the Python programs (page copy / rope 4 cores (0..3, 0); ids / glued ids (0, 0);
+  derive sections from (0, 0) (a begin program: region 16 cores + up to ~10 single cores, within 8 x 4); owned send:
+  the gather column, 1 + 4 x links cores).
+- Rule 20, per-chunk values this touches: page copy s0 / d0 / n / nb / ss / ds; GluedRows' pieces (common args);
+  IdsReorder iu / cs / valid; the derive header offset, region mask and srv segment list; the owned send's record
+  buffer addresses, row ranges and chip map (common args): all runtime args rewritten on a program-cache hit (0
+  growth with new values on fresh buffers in the test); the io addresses likewise. Nothing new on the host. Derive's
+  begin program is keyed by its section list: it changes only when a new value-free (kind, params) appears (warm-up;
+  the block-select idx is registered with its plain twin so a request crossing indexer.BSEL_MIN_AUTO does not change
+  it); a new key capacity after warm-up would (one capacity a chunk, DS41-328 / DS41-381). NC.8's strict cold
+  no-rebuild check covers it.
+- Not run: `orchestrator measure` (ab_mode none), any model load (owner: op-level only; NC.8 is the ladder).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.7 --spec $BRINGUP_SPEC --check`; build:
+  `cmake --build build --target install`.

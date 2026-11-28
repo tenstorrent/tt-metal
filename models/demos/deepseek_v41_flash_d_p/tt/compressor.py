@@ -167,11 +167,14 @@ class CompressRope:
         fast = packed and settings.get("PACKED_HOST_FAST") == "on"  # PB.3K: each chip its rows (tt/lane_rows.py)
         if glued and dyn("rows"):  # PB.7C: the glued pieces as runtime values
             fast = True
-        for t in (self.cos, self.sin):
-            if fast and glued:
-                from .lane_rows import glued_rows
+        rows = None
+        if fast and glued:  # NC.7: cos and sin in ONE native program (the same pieces; tt/lane_rows.py)
+            from .lane_rows import glued_rows_many
 
-                sl = glued_rows(t, g0, n)
+            rows = glued_rows_many([self.cos, self.sin], g0, n)
+        for ti, t in enumerate((self.cos, self.sin)):
+            if fast and glued:
+                sl = rows[ti]
             elif fast:
                 from .lane_rows import lane_rows
 

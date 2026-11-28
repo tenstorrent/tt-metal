@@ -28,6 +28,15 @@ writes a persistent output (allocated once, pinned). A program's cache key holds
 The host keeps what decides the op sequence (passes, which calls run, which segments write: from the descriptor it
 holds), never a table. tests/packed/test_glued_derive_ops.py checks every output against the host functions it
 replaces (GluedGeo / GluedCall / Call) on random layouts.
+
+NC.7 (OWNER 2026-11-27, native C++ port series): the programs run as the native C++ op ttnn.chunk_program (kind
+derive: the kernel in ttnn/cpp/ttnn/operations/chunk_program/device/kernels/derive.cpp, one accessor config for its
+DRAM-interleaved outputs, the section switches as defines). ``Derive.begin`` runs, in ONE program on the chunk's
+header, every value-free section (keep, ckeep, idx: no per-call value) that an earlier chunk made, each on its own
+cores (the same kernel and bytes); a section first met mid-chunk (warm-up) runs alone and joins the begin program from
+the next chunk on; region and srv take per-call values from the host's chunk state (the masked carries of a layer,
+which segments write) and run alone at their call. The Python prepared route stays reachable for the op test only
+(``Derive.route = "python"``, tests/native/test_native_chunk_programs.py).
 """
 
 from __future__ import annotations
@@ -442,8 +451,26 @@ def _page_bytes(t: ttnn.Tensor) -> int:
     return int(t.shape[-1]) * eb
 
 
+# NC.7: the derive kernel's section codes (chunk_program_program_factory.cpp derive)
+_CODE = {"keep": 0, "region": 1, "ckeep": 2, "idx": 3, "srv": 4}
+_VALUE_FREE = ("keep", "ckeep", "idx")
+
+
+def _twin(okey: tuple):
+    """NC.7: the other form of a plain indexer's idx section (block 1 <-> the block pre-selection's BSEL_BLOCK), or
+    None (another kind, a candidate indexer)."""
+    kind, params = okey
+    if kind != "idx" or bool(params[5]):
+        return None
+    from .indexer import BSEL_BLOCK
+
+    return (kind, tuple(params[:3]) + ((BSEL_BLOCK if int(params[3]) == 1 else 1),) + tuple(params[4:]))
+
+
 class Derive:
     """The per-chunk derive programs of a mesh (persistent outputs; ``begin`` a chunk, then each output on first use)."""
+
+    route = "native"  # NC.7: "python" = the prepared route (tests/native/test_native_chunk_programs.py only)
 
     def __init__(self, mesh, chunk: int, block: int, align: int = 0):
         self.mesh = mesh
@@ -459,7 +486,9 @@ class Derive:
         self.hdr = None  # (tensor, byte offset) of this chunk's header
         self._up = None  # (the fallback upload of this chunk's header)
         self._ran: dict = {}
-        self.stats = {"chunks": 0, "header_uploads": 0, "runs": 0}
+        self.stats = {"chunks": 0, "header_uploads": 0, "runs": 0, "begin_runs": 0}
+        self._nplans: dict = {}  # NC.7: (sections, ...) -> the native plan
+        self._fused: list = []  # NC.7: the value-free (kind, params) the begin program makes, in first-use order
 
     # ------------------------------------------------------------------ the chunk
     def begin(self, desc, inp=None) -> None:
@@ -481,6 +510,14 @@ class Derive:
             )
             self.stats["header_uploads"] += 1
             self.hdr = (self._up, 0)
+        if getattr(self, "_fused", None) is None:  # (DS41-353: a held instance from before a reload)
+            self._fused, self._nplans = [], {}
+            self.stats.setdefault("begin_runs", 0)
+        if self.route == "native" and self._fused:  # NC.7: every value-free section in ONE program
+            self._run_native(list(self._fused), [])
+            for okey in self._fused:
+                self._ran[okey] = ()
+            self.stats["begin_runs"] += 1
 
     def end(self) -> None:
         self._ran = {}
@@ -616,6 +653,39 @@ class Derive:
         first = 1 + len(outs) + 2
         return md, [(0, first + v) for v in range(nvals)]
 
+    def _section(self, kind: str, params: tuple, nout: int, first_out: int, first_val: int) -> list:
+        """NC.7: a derive section of the native plan (chunk_program_program_factory.cpp derive)."""
+        a = (list(params) + [0] * 6)[:6]
+        cand = kind == "idx" and bool(params[5])
+        bsel = kind == "idx" and _bsel(params)
+        nc = REGION_CORES if kind == "region" else 1
+        nvals = 1 if kind == "region" else GLUED_SEGS if kind == "srv" else 0
+        fast = int(kind == "ckeep" and cwrite_fast())
+        return [_CODE[kind], int(cand), int(bsel), fast, nc] + [int(x) for x in a] + [nout, first_out, nvals, first_val]
+
+    def _run_native(self, okeys: list, values: list) -> None:
+        """NC.7: the sections ``okeys`` ((kind, params) a section; region / srv: the one section, ``values`` its
+        values) in one native program on this chunk's header."""
+        from .page_copy import K_DERIVE, native_plan
+
+        hdr_t, hoff = self.hdr
+        io, secs, vals = [hdr_t], [], [int(hoff)]
+        for kind, params in okeys:
+            outs = self._outputs(kind, params)
+            sec = self._section(kind, params if kind != "region" else (), len(outs), len(io), len(vals))
+            secs.append(sec)
+            io += outs
+            if kind == "region":
+                vals.append(int(values[0]))
+            elif kind == "srv":
+                vals += list(values) + [0] * (GLUED_SEGS - len(values))
+        key = tuple(tuple(x) for x in secs)
+        plan = self._nplans.get(key)
+        if plan is None:
+            ct = [self.chunk, self.sp, self.tp, self.R, self.block, self.align]
+            plan = self._nplans[key] = native_plan(self.mesh, K_DERIVE, ct, secs)
+        ttnn.chunk_program(io, plan, vals)
+
     def run(self, kind: str, params: tuple = (), values: tuple = ()) -> list:
         """The outputs of ``kind`` for this chunk (made once a chunk per (kind, params, values))."""
         params, values = tuple(params), tuple(int(v) for v in values)
@@ -624,6 +694,20 @@ class Derive:
         if self._ran.get(okey) == values:  # (made this chunk with these values; another value set rewrites it)
             return outs
         assert self.hdr is not None, "glued_derive: no chunk header (Derive.begin)"
+        if self.route == "native":
+            self._run_native([okey], list(values))
+            if kind in _VALUE_FREE and okey not in self._fused:  # (from the next chunk on: in the begin program)
+                self._fused.append(okey)
+                twin = _twin(okey)
+                if twin is not None and twin not in self._fused:
+                    # (rule 20: a plain indexer's block pre-selection is a host decision on the chunk's key count
+                    # (indexer.use_block_select); registering both forms at once keeps the begin program's section
+                    # set, and so its program, the same when a long request crosses the threshold after warm-up)
+                    self._outputs(*twin)
+                    self._fused.append(twin)
+            self._ran[okey] = values
+            self.stats["runs"] += 1
+            return outs
         hdr_t, hoff = self.hdr
         hpage = _page_bytes(hdr_t)
         io = [hdr_t] + outs

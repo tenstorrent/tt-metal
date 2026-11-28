@@ -13,7 +13,14 @@ lane's start plus its offset in the lane; 2x2 / 2x4: two lanes an SP row). The p
 the geometry (a per-chip word table, made once, sharded over SP); the 4 lane starts are per-run values (prepared
 program value slots, the same on every chip). Data movement only: page copies (a table row for a ROW_MAJOR table, a
 tile for a TILE one: starts and blocks in whole tile rows), the same bytes as the slices. One program for the mesh, a
-few cores (the rows a chip are few: 1024 TILE rows of 64 columns at most)."""
+few cores (the rows a chip are few: 1024 TILE rows of 64 columns at most).
+
+NC.7 (OWNER 2026-11-27, native C++ port series): GluedRows runs as the native C++ op ttnn.chunk_program (kind glued
+rows: the kernel's common-value form, moved to ttnn/cpp/ttnn/operations/chunk_program/device/kernels/glued_rows.cpp)
+and takes several tables of one geometry in ONE program (``glued_rows_many``: the RoPE cos and sin of one start, the
+same pieces): no prepare_program / run_prepared on the call path. The Python prepared route stays reachable for the op
+test only (``GluedRows.route = "python"``, tests/native/test_native_chunk_programs.py). LaneRows (fixed-lane chunks)
+is not on the shipped path (no tt/ code makes a LaneStarts; NC.7 BREADCRUMBS) and stays a prepared program."""
 
 from __future__ import annotations
 
@@ -306,6 +313,8 @@ class GluedRows:
     slices and the concat of tt/rope.glued_slices are keyed on each piece's rows). The same page copies (the table's
     rows, whole pages), one program for the mesh's SP rows (each its own row index, frozen)."""
 
+    route = "native"  # NC.7: "python" = the prepared route (tests/native/test_native_chunk_programs.py only)
+
     def __init__(self, mesh, table: ttnn.Tensor, n: int):
         self.mesh = mesh
         self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
@@ -323,11 +332,46 @@ class GluedRows:
         assert self.R % self.unit == 0, (self.R, self.unit)
         self.batch = max(1, BATCH_BYTES // (-(-self.page // 64) * 64))
         self._pp = None
+        self._nplans = {}  # NC.7: tables a call -> the native plan
 
     def _out(self) -> ttnn.Tensor:
         return ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, self.R, self.width]), self.dtype, self.layout, self.mesh, DRAM
         )
+
+    def _values(self, tables, starts) -> list:
+        for table in tables:
+            assert tuple(table.shape)[-1] == self.width and table.dtype == self.dtype and table.layout == self.layout
+            for s, k in starts:
+                assert int(s) >= 0 and int(s) + int(k) <= int(table.shape[-2]), (s, k, table.shape)
+        vals = []
+        for ps in glued_pieces(starts, self.n, self.sp, self.unit):
+            w = [len(ps)]
+            for s0, cnt, dd in ps:
+                assert cnt < 65536 and dd < 65536, (cnt, dd)
+                w += [int(s0), int(cnt) | (int(dd) << 16)]
+            vals += w + [0] * (GWORDS - len(w))
+        return vals
+
+    def many(self, tables, starts) -> list:
+        """NC.7: every table's rows of the pieces ``starts`` in ONE native program (the tables of one geometry: the
+        RoPE cos and sin) -> a new tensor a table, each the bytes ``__call__`` makes for it."""
+        tables = list(tables)
+        vals = self._values(tables, starts)
+        outs = [self._out() for _ in tables]
+        if getattr(self, "_nplans", None) is None:  # (DS41-353: a held instance from before a reload)
+            self._nplans = {}
+        plan = self._nplans.get(len(tables))
+        if plan is None:
+            from .page_copy import K_GLUED_ROWS, native_plan
+
+            ct = [self.page, self.ppu, self.batch, NCORES, GWORDS, len(tables)]
+            plan = self._nplans[len(tables)] = native_plan(self.mesh, K_GLUED_ROWS, ct)
+        io = []
+        for t, o in zip(tables, outs):
+            io += [t, o]
+        ttnn.chunk_program(io, plan, vals)
+        return outs
 
     def _build(self, table, out, common: bool = False):
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(NCORES - 1, 0))])
@@ -365,16 +409,9 @@ class GluedRows:
         return md
 
     def __call__(self, table: ttnn.Tensor, starts) -> ttnn.Tensor:
-        assert tuple(table.shape)[-1] == self.width and table.dtype == self.dtype and table.layout == self.layout
-        for s, k in starts:
-            assert int(s) >= 0 and int(s) + int(k) <= int(table.shape[-2]), (s, k, table.shape)
-        vals = []
-        for ps in glued_pieces(starts, self.n, self.sp, self.unit):
-            w = [len(ps)]
-            for s0, cnt, dd in ps:
-                assert cnt < 65536 and dd < 65536, (cnt, dd)
-                w += [int(s0), int(cnt) | (int(dd) << 16)]
-            vals += w + [0] * (GWORDS - len(w))
+        if self.route == "native":
+            return self.many([table], starts)[0]
+        vals = self._values([table], starts)
         out = self._out()
         io = [table, out]
         # PB.9X (COMMON_VALUE_SLOTS=on): the pieces as common value slots (one patch a program, not one a core a chip)
@@ -414,3 +451,21 @@ def glued_rows(table: ttnn.Tensor, starts, n: int) -> ttnn.Tensor:
     if hit is None or hit[0] is not mesh:
         hit = _GBY[key] = (mesh, GluedRows(mesh, table, n))
     return hit[1](table, starts)
+
+
+def glued_rows_many(tables, starts, n: int) -> list:
+    """NC.7: ``[glued_rows(t, starts, n) for t in tables]`` in ONE program when the tables share a geometry (the RoPE
+    cos and sin: tt/rope.py, tt/compressor.py); each output the bytes glued_rows makes for its table."""
+    tables = list(tables)
+    t0 = tables[0]
+    same = all(tuple(t.shape) == tuple(t0.shape) and t.dtype == t0.dtype and t.layout == t0.layout for t in tables[1:])
+    if not same or len(tables) > 2:
+        return [glued_rows(t, starts, n) for t in tables]
+    mesh = t0.device()
+    key = (id(mesh), tuple(t0.shape), t0.dtype, t0.layout, int(n))
+    hit = _GBY.get(key)
+    if hit is None or hit[0] is not mesh:
+        hit = _GBY[key] = (mesh, GluedRows(mesh, t0, n))
+    if hit[1].route != "native":
+        return [hit[1](t, starts) for t in tables]
+    return hit[1].many(tables, starts)

@@ -55,6 +55,7 @@ add_subdirectory(ckv_bfp4_rows)
 add_subdirectory(block_gather)
 add_subdirectory(block_keys)
 add_subdirectory(block_max_bf16)
+add_subdirectory(chunk_program)
 
 # Umbrella target for everything migrated into this file: ttnncpp links this
 # one target instead of enumerating these op libraries itself. Add/remove
@@ -100,6 +101,7 @@ target_link_libraries(
         TTNN::Ops::BlockGather
         TTNN::Ops::BlockKeys
         TTNN::Ops::BlockMaxBf16
+        TTNN::Ops::ChunkProgram
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -151,4 +153,5 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::BlockGather>
         $<TARGET_OBJECTS:TTNN::Ops::BlockKeys>
         $<TARGET_OBJECTS:TTNN::Ops::BlockMaxBf16>
+        $<TARGET_OBJECTS:TTNN::Ops::ChunkProgram>
 )

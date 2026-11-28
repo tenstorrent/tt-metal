@@ -1,0 +1,453 @@
+{
+ "metrics": {
+  "native_cache_growth_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 0
+  },
+  "native_cache_growth_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 0
+  },
+  "native_cache_growth_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 0
+  },
+  "native_cache_growth_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 0
+  },
+  "native_cache_growth_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 0
+  },
+  "native_cache_growth_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 0
+  },
+  "native_cache_growth_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 0
+  },
+  "native_cache_growth_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 0
+  },
+  "native_cache_growth_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 0
+  },
+  "native_cache_growth_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 0
+  },
+  "native_cache_growth_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 0
+  },
+  "native_cache_growth_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 0
+  },
+  "native_cache_growth_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 0
+  },
+  "native_cache_growth_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 0
+  },
+  "native_cache_growth_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 0
+  },
+  "native_cache_growth_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 0
+  },
+  "native_device_us_native_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 7.84
+  },
+  "native_device_us_native_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 11.44
+  },
+  "native_device_us_native_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 219.06
+  },
+  "native_device_us_native_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 27.68
+  },
+  "native_device_us_native_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 27.68
+  },
+  "native_device_us_native_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 27.24
+  },
+  "native_device_us_native_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 31.51
+  },
+  "native_device_us_native_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 159.44
+  },
+  "native_device_us_native_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 76.76
+  },
+  "native_device_us_native_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 44.05
+  },
+  "native_device_us_native_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 1.31
+  },
+  "native_device_us_native_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 5.13
+  },
+  "native_device_us_native_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 6.8
+  },
+  "native_device_us_native_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 7.17
+  },
+  "native_device_us_native_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 5.5
+  },
+  "native_device_us_native_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 6.85
+  },
+  "native_device_us_python_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 8.34
+  },
+  "native_device_us_python_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 11.91
+  },
+  "native_device_us_python_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 284.72
+  },
+  "native_device_us_python_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 27.68
+  },
+  "native_device_us_python_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 27.67
+  },
+  "native_device_us_python_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 26.99
+  },
+  "native_device_us_python_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 31.51
+  },
+  "native_device_us_python_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 159.69
+  },
+  "native_device_us_python_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 76.57
+  },
+  "native_device_us_python_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 44.07
+  },
+  "native_device_us_python_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 1.31
+  },
+  "native_device_us_python_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 5.13
+  },
+  "native_device_us_python_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 6.8
+  },
+  "native_device_us_python_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 8.19
+  },
+  "native_device_us_python_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 6.26
+  },
+  "native_device_us_python_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 7.81
+  },
+  "native_host_us_native_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 81.7
+  },
+  "native_host_us_native_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 82.4
+  },
+  "native_host_us_native_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 246.2
+  },
+  "native_host_us_native_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 41.2
+  },
+  "native_host_us_native_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 40.6
+  },
+  "native_host_us_native_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 89.0
+  },
+  "native_host_us_native_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 89.0
+  },
+  "native_host_us_native_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 88.1
+  },
+  "native_host_us_native_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 88.1
+  },
+  "native_host_us_native_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 19.8
+  },
+  "native_host_us_native_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 19.3
+  },
+  "native_host_us_native_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 19.6
+  },
+  "native_host_us_native_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 19.9
+  },
+  "native_host_us_native_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 86.8
+  },
+  "native_host_us_native_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 90.2
+  },
+  "native_host_us_native_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 83.0
+  },
+  "native_host_us_python_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 300.8
+  },
+  "native_host_us_python_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 300.9
+  },
+  "native_host_us_python_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 500.5
+  },
+  "native_host_us_python_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 63.8
+  },
+  "native_host_us_python_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 63.2
+  },
+  "native_host_us_python_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 117.7
+  },
+  "native_host_us_python_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 117.6
+  },
+  "native_host_us_python_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 107.1
+  },
+  "native_host_us_python_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 106.6
+  },
+  "native_host_us_python_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 55.0
+  },
+  "native_host_us_python_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 54.4
+  },
+  "native_host_us_python_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 54.2
+  },
+  "native_host_us_python_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 55.1
+  },
+  "native_host_us_python_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 306.4
+  },
+  "native_host_us_python_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 328.5
+  },
+  "native_host_us_python_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 303.2
+  },
+  "native_mismatch_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 0.0
+  },
+  "native_mismatch_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 0.0
+  },
+  "native_mismatch_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 0.0
+  },
+  "native_mismatch_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 0.0
+  },
+  "native_mismatch_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 0.0
+  },
+  "native_mismatch_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 0.0
+  },
+  "native_mismatch_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 0.0
+  },
+  "native_mismatch_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 0.0
+  },
+  "native_mismatch_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 0.0
+  },
+  "native_mismatch_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 0.0
+  },
+  "native_mismatch_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 0.0
+  },
+  "native_mismatch_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 0.0
+  },
+  "native_mismatch_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 0.0
+  },
+  "native_mismatch_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 0.0
+  },
+  "native_mismatch_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 0.0
+  },
+  "native_mismatch_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 0.0
+  },
+  "native_repeat_crope5120": {
+   "t": "2026-11-28T04:53:18",
+   "value": 0.0
+  },
+  "native_repeat_crope8192": {
+   "t": "2026-11-28T04:52:51",
+   "value": 0.0
+  },
+  "native_repeat_derive4x2k": {
+   "t": "2026-11-28T04:53:48",
+   "value": 0.0
+  },
+  "native_repeat_gids4x2k_cap": {
+   "t": "2026-11-28T04:53:45",
+   "value": 0.0
+  },
+  "native_repeat_gids4x2k_end": {
+   "t": "2026-11-28T04:53:46",
+   "value": 0.0
+  },
+  "native_repeat_ids5120": {
+   "t": "2026-11-28T04:53:43",
+   "value": 0.0
+  },
+  "native_repeat_ids8192": {
+   "t": "2026-11-28T04:53:42",
+   "value": 0.0
+  },
+  "native_repeat_owned_hist": {
+   "t": "2026-11-28T04:53:51",
+   "value": 0.0
+  },
+  "native_repeat_owned_keys": {
+   "t": "2026-11-28T04:53:53",
+   "value": 0.0
+  },
+  "native_repeat_pc_hist320": {
+   "t": "2026-11-28T04:52:19",
+   "value": 0.0
+  },
+  "native_repeat_pc_row_u32": {
+   "t": "2026-11-28T04:52:22",
+   "value": 0.0
+  },
+  "native_repeat_pc_slab": {
+   "t": "2026-11-28T04:52:23",
+   "value": 0.0
+  },
+  "native_repeat_pc_tile_bf16": {
+   "t": "2026-11-28T04:52:21",
+   "value": 0.0
+  },
+  "native_repeat_rope4x2k": {
+   "t": "2026-11-28T04:53:41",
+   "value": 0.0
+  },
+  "native_repeat_rope5120": {
+   "t": "2026-11-28T04:53:14",
+   "value": 0.0
+  },
+  "native_repeat_rope8192": {
+   "t": "2026-11-28T04:52:47",
+   "value": 0.0
+  }
+ },
+ "task": "NC.7"
+}

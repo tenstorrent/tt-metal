@@ -1,0 +1,117 @@
+{
+ "used": [
+  {
+   "id": "DS41-400",
+   "how": "hand-ported the model-internal prepared programs (kernels verbatim, constants once into a plan, per-call values as runtime-arg slots) instead of native_migrate; the op ttnn.chunk_program follows ttnn.layer_send's structure",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-401",
+   "how": "checked every named program's call site under the shipped settings + the packed gate switches before porting (OV-82): LaneRows and ChipRows dropped with evidence",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-398",
+   "how": "called the C++ op directly (ttnn.chunk_program, no ttnn.bringup wrapper); estimated the host saving from its native vs prepared numbers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-403",
+   "how": "the test matches made outputs to the io by buffer_address (_owned), never by id(), before freeing them",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-353",
+   "how": "the native plans are made lazily with getattr defaults, so a held instance from before an in-place reload never hits a missing attribute",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-277",
+   "how": "program key includes a sharded io tensor's memory config and padded shape (the served slab page copy case)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-385",
+   "how": "compared native vs python host / device times within one run, alternating rounds",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-381",
+   "how": "the rule-20 note on the derive begin program: one key capacity a chunk, so idx params stay stable after warm-up",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to fuse several prepared programs that each run one generated (templated) kernel without changing a byte: one program, a kernel a section on its own cores (now DS41-404)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work: the native programs run the Python programs' kernels on the same cores with the same args; the derive begin program computes only sections a chunk uses (plus the block-select twin of an idx section, a few words a chip); test_native_chunk_programs mismatch 0"
+  },
+  {
+   "id": "OV-82",
+   "answer": "done",
+   "evidence": "BREADCRUMBS NC.7: GluedRows / PageCopy / IdsReorder / GluedIdsReorder / Derive / OwnedSend run (call sites under POS_DYNAMIC=on and the packed gate switches; owned send in logs/WA.4R.shared/WA.4R_test_packed_walls.log:18-26); LaneRows dropped (no tt/ code makes a LaneStarts), ChipRows dropped (_index_dynamic with chip-aligned lanes: passes == 1, packed_glued.py:180, phase 0: no copy)"
+  }
+ ],
+ "cited_only": [
+  "DS41-404"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.7",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T04:54:10",
+  "head": "660deda0edd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.7.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.7_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.7.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_chunk_programs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/glued_derive.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/lane_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/owned_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "ttnn/cpp/ttnn-nanobind/__init__.cpp",
+   "ttnn/cpp/ttnn/operations/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/chunk_program/CMakeLists.txt",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program_nanobind.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_program_factory.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/derive.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/glued_ids.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/glued_rows.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/ids_reorder.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/owned_common.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/owned_home.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/owned_port.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/page_copy.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/sources.cmake"
+  ]
+ }
+}
