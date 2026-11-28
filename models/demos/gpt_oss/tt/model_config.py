@@ -367,8 +367,13 @@ class ModelArgs:
     WEIGHT_CACHE_FORMAT_VERSION = 1
     # Layout version of the fused decode (DRAM-streaming) weights; a marker from an older fused build is rejected.
     FUSED_DECODE_WEIGHTS_VERSION = 4  # 4: QKV stream in K/V-first slot order (wqkv_kvfirst)
-    # Layout version of the batched dense decode MoE weights (experts dense_decode_*).
-    DENSE_MOE_DECODE_WEIGHTS_VERSION = 1
+    # Layout version of the batched dense decode MoE weights (experts dense_decode_*). 2: each expert padded to whole
+    # tiles (dense_decode_p736_*, experts/dense_layout.py); the routed prefill reads them (no routed copy). 3: with
+    # GPT_OSS_DECODE_SPLIT_ROUND_DIR the GPTQ experts in transposed tiles (experts/weights.py dense_gptq_dir); the
+    # marker records that directory (_dense_moe_decode_version). 4: the experts' tiles interleaved
+    # (dense_decode_i736_*, dense_layout.py expert_tile) so the routed prefill reads every expert from all the banks.
+    DENSE_MOE_DECODE_WEIGHTS_VERSION = 4
+
     # Settings that choose which weight values or layouts the cache holds: the marker records them, so a run with other
     # values (another pinned revision of the rounded weights, say) loads the HF weights once and writes its own files
     # instead of trusting a marker for files it does not have. Each group only for the builds that read it: the dense
@@ -390,6 +395,11 @@ class ModelArgs:
     def _settings(names):
         """The variables of names that are set (recorded in the weight-cache marker)."""
         return {k: os.environ[k] for k in names if os.environ.get(k, "").strip()}
+
+    def _dense_moe_decode_version(self):
+        """The marker's batched dense MoE weights entry: the layout version and the GPTQ source they were built from
+        (the raw GPT_OSS_DECODE_SPLIT_ROUND_DIR value, "" for the checkpoint values)."""
+        return f"{self.DENSE_MOE_DECODE_WEIGHTS_VERSION}:{os.environ.get('GPT_OSS_DECODE_SPLIT_ROUND_DIR', '').strip()}"
 
     def weight_cache_is_complete(self, dtype, fused_decode=False, dense_moe=False):
         """True when the on-disk ttnn weight cache for this (model, dtype, mesh shape) was
@@ -434,7 +444,7 @@ class ModelArgs:
         if decode_bf8 and decode_bf8 not in built and "all" not in built:  # "all" wrote every layer's bf8 streams
             # bf8 decode expert streams (fused_decode/config.py) are extra cache files: cold-load once to write them
             return False
-        if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
+        if dense_moe and meta.get("dense_moe_decode_weights") != self._dense_moe_decode_version():
             return False
         if dense_moe and not self._dense_moe_weights_cached(cache_path):
             # A marker can vouch for weights the cache does not hold: it keeps the optional weight sets an earlier
@@ -527,7 +537,7 @@ class ModelArgs:
                             else previous.get("fused_decode_weights", False)
                         ),
                         "dense_moe_decode_weights": (
-                            self.DENSE_MOE_DECODE_WEIGHTS_VERSION
+                            self._dense_moe_decode_version()
                             if dense_moe
                             else previous.get("dense_moe_decode_weights", False)
                         ),

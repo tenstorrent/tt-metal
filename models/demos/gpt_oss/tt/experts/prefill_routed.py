@@ -29,6 +29,21 @@ LoFi and bf16 dest (kFp32DestAccEn = false in unified_routed_expert_ffn_program_
 compute_kernel_config, so this module does not pass one.
 
 Only one sequence per call (batch 1, leading dims all 1); anything else runs the dense prefill path.
+
+TP mode (the batch-1 fused decode model, MLP.indexed_decode with the GPTQ split decode streams): the routed experts
+hold no weights of their own. Every device runs all experts on its TP quarter of the intermediate dimension (768
+padded columns at TP 4), reading the rounded (GPTQ, tile-transposed bfloat4_b) part of the decode experts' gate|up
+and down streams through a host-built page table (stream_pages.py; unified_routed_expert_moe weight_pages). Every
+device computes every (token, expert) pair; its outputs are partial sums over its intermediate quarter, and the same
+closing reduction (all-reduce / reduce-scatter / per-user reduce) sums them. The down bias is non-zero on device 0
+only, so the sum adds it once. Placement (prefill_routed_placement.py) does not apply. The bf16 biases are the values
+decode adds (unpacked from the streams' bias tiles) and cached under their own names.
+
+Dense TP mode (the batch-32 model, MLP.dense_decode): the same TP dispatch, reading the batched dense decode MoE
+weights (experts/weights.py load_dense_decode_expert_weights: gate / up [H, E * 736], down [E * 736, H], DRAM
+width-sharded, normal tiles of the decode weight dtype, each expert's 720 columns zero padded to 23 whole tiles)
+through a page table (stream_pages.py dense_page_table), so prefill computes with the values batch-32 decode reads.
+The biases are copies, made on device, of the dense decode biases (the down bias non-zero on device 0 only).
 """
 
 import hashlib
@@ -48,6 +63,7 @@ from models.demos.gpt_oss.config import Mode
 
 from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .prefill_routed_placement import ROUTED_EXPERT_PLACEMENT, ROUTED_EXPERT_PLACEMENT_DEVICES
+from .tp_route import TpRoute
 
 ROUTED_PREFILL_ENV = "GPT_OSS_ROUTED_PREFILL"
 ROUTED_PREFILL_MIN_SEQ_ENV = "GPT_OSS_ROUTED_PREFILL_MIN_SEQ"
@@ -66,8 +82,10 @@ ROUTED_PREFILL_NUM_EXPERTS = 32
 ROUTED_PREFILL_MIN_SEQ_DEFAULT = 128
 # Tokens per routed chunk: bounds the dispatch / expert-output buffers ([4C, H] bf16 per device). 16384 vs 8192
 # measured 16K 583.2 -> 565.2 ms, 32K 1288.2 -> 1277.4, 64K 3027.4 -> 3004.9, 128K 8085.9 -> 8047.6 (fewer per-chunk
-# fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c).
-ROUTED_PREFILL_CHUNK_DEFAULT = 16384
+# fixed costs); DRAM at 128K: min free 19.4 -> 19.2 GiB per device (L10 lever c). 32768 vs 16384 (one-copy tree, BH 1x4,
+# TP experts): b1 32K 747.1 -> 714.0 ms, 64K 1870.6 -> 1852.4, 128K 5397.7 -> 5364.6; b32 1K 603.8 -> 591.6,
+# 8K 4922 -> 4834.5 (14.6 GB DRAM still free per device with the 32 x 64K KV cache).
+ROUTED_PREFILL_CHUNK_DEFAULT = 32768
 # Chunks of at most this many tokens take their [C, C] prefix-sum operator from a shared [8192, 8192] constant, longer
 # ones from the [chunk, chunk] one, so an 8K prompt reads the 8192 operator in place instead of a per-layer slice copy
 # of the larger one (measured +6 ms TTFT at 8K with only the 16384 operator).
@@ -88,20 +106,27 @@ ROUTED_SCATTER_GROUPS = 32
 # 3072 vs 2048 measured b32 TTFT 512 -1.2%, 1K -0.5%, 2K -0.7%. One block per 16K chunk instead: 32K +0.8%, the
 # reduced block no longer fits L1.)
 ROUTED_COMBINE_BLOCK = 3072
+# Combine block of the batched tensor-parallel prefill (whole users): its bf16 output stays in L1 for the per-user
+# reduce. 48 MiB: an 8K prefill's 8192 x 2880 bf16 block (45 MiB) fits with the following programs' circular buffers.
+TP_COMBINE_L1_BYTES = 48 << 20
 # Largest chunk-size-dependent transient this module places in L1 (per device, interleaved). Above it the tensor goes
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py). The
-# GPTQ layers' files have their own names ("_tt" + source hash) and marker entry (":gptq"), so a GPTQ format change
-# does not need a bump here (which would make every Blackhole 1xN mesh's gpt-oss-20b cache rebuild).
-ROUTED_PREFILL_WEIGHTS_VERSION = 1
+# Version of the routed-expert weight caches the weight-cache completion marker records (model_config.py). 2: the
+# fused decode model's routed experts read the decode streams (TP mode) and cache only their biases.
+ROUTED_PREFILL_WEIGHTS_VERSION = 2
+# Name version of the EP mode's cache files (unchanged by the TP mode).
+ROUTED_EP_FILES_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
+# TP mode: the bias cache files (the weights are the decode streams).
+ROUTED_TP_FILES_VERSION = 1
+ROUTED_TP_CACHE_SUBDIR = "experts_routed_tp"
 # GPT_OSS_PREFILL_GPTQ=1: the bfloat4_b routed prefill experts read the same GPTQ weights as the decode experts
 # (GPT_OSS_DECODE_SPLIT_ROUND_DIR: layer_<L>.pt rounded on the bfloat4_b grid whose 16-value exponent groups run along
-# the INPUT dimension, inside one MXFP4 block). The weights use transposed tiles (ttnn.Tile transpose_tile), so their
-# bfloat4_b groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back
-# as it unpacks them. The tile grid, sharding and reads are unchanged. Prefills the routed path does
+# the INPUT dimension, inside one MXFP4 block). Each weight tile is stored transposed within itself, so its bfloat4_b
+# groups run along the input dimension and hold those values exactly; the expert op transposes the tiles back as it
+# unpacks them (weights_tile_transposed). The tile grid, sharding and reads are unchanged. Prefills the routed path does
 # not take on its own (shorter than its minimum, or not a multiple of 64) are padded into it (MLP.__call__), so every
 # batch-1 prefill reads these weights. The bfloat8_b layers keep the checkpoint values.
 PREFILL_GPTQ_ENV = "GPT_OSS_PREFILL_GPTQ"
@@ -138,11 +163,12 @@ def prefill_gptq_enabled():
     return os.getenv(PREFILL_GPTQ_ENV, "0") == "1"
 
 
-def _weights_tile(transposed):
-    """The expert weights' ttnn.Tile: 32x32, transposed within itself when `transposed` (the GPTQ experts), else None
-    (the default tile). unified_routed_expert_moe reads it from weight tensors, and takes it as weights_tile for
-    table-addressed weights (byte streams, no tile of their own)."""
-    return ttnn.Tile((ttnn.TILE_SIZE, ttnn.TILE_SIZE), transpose_tile=True) if transposed else None
+def tile_transpose(w):
+    """w [R, C] (R, C multiples of 32) with every 32x32 tile transposed in place: tile (i, j) of the result is tile
+    (i, j) of w, transposed. It commutes with a full transpose: tile_transpose(w.T) == tile_transpose(w).T."""
+    R, C = w.shape[-2], w.shape[-1]
+    assert R % 32 == 0 and C % 32 == 0, f"tile_transpose needs tile-aligned dims, got {tuple(w.shape)}"
+    return w.reshape(R // 32, 32, C // 32, 32).transpose(1, 3).reshape(R, C).contiguous()
 
 
 def routed_weights_dtype(layer_idx):
@@ -152,6 +178,55 @@ def routed_weights_dtype(layer_idx):
         return ttnn.bfloat8_b
     layers = {int(v) for v in spec.split(",") if v.strip() != ""}
     return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ROUTED_WEIGHTS_DTYPE
+
+
+def decode_stream_kinds(layer_idx):
+    """(gate|up kind, down kind) of a layer's decode expert streams when both hold a rounded part the routed prefill
+    can read (stream_pages.STREAM_*), else None. Mirrors experts/weights.py: split streams (GPT_OSS_DECODE_EXPERTS_SPLIT)
+    with GPT_OSS_DECODE_SPLIT_RANKS set carry the rounded part, round-only for split_r0 with
+    GPT_OSS_DECODE_SPLIT_ROUND_ONLY, else full [BFP4][BFP2][rounded BFP4] segments."""
+    from ..fused_decode.config import (
+        DECODE_SPLIT_RANKS,
+        DECODE_SPLIT_ROUND_ONLY,
+        decode_experts_split,
+        decode_split_dtype,
+    )
+    from .stream_pages import STREAM_FULL, STREAM_ROUND_ONLY
+
+    if layer_idx is None or DECODE_SPLIT_RANKS is None:
+        return None
+    if decode_experts_split(str(int(layer_idx))) != frozenset(("gate_up", "down")):
+        return None
+    kinds = []
+    for stream in ("gate_up", "down"):
+        dtype = decode_split_dtype(int(layer_idx), stream)
+        kinds.append(STREAM_ROUND_ONLY if DECODE_SPLIT_ROUND_ONLY and dtype == "split_r0" else STREAM_FULL)
+    return tuple(kinds)
+
+
+def routed_tp_stream_supported(layer_idx, decode_weights):
+    """Whether a layer's routed prefill experts read the decode streams (TP mode): the fused decode's expert streams
+    exist (decode_weights), the prefill reads the GPTQ experts (GPT_OSS_PREFILL_GPTQ, the decode streams' rounded
+    part), and both streams carry a rounded part (decode_stream_kinds). Every such layer reads it, the layers of
+    ROUTED_PREFILL_BF8_LAYERS too: their bf8 copy would be a second copy of the experts (with the bf16
+    closing sum the GPTQ values measured better than it, v4 KL 0.0748 vs 0.1001)."""
+    return (
+        decode_weights is not None
+        and prefill_gptq_enabled()
+        and layer_idx is not None
+        and decode_stream_kinds(layer_idx) is not None
+    )
+
+
+def routed_tp_dense_supported(dense_weights):
+    """Whether the routed prefill experts read the batched dense decode MoE weights (dense TP mode): they exist
+    (experts/weights.py DenseDecodeExpertWeights), every expert is whole tiles, and the weight dtype is one the
+    page-table weights take (bfloat4_b / bfloat8_b)."""
+    return (
+        dense_weights is not None
+        and dense_weights.intermediate_padded % ttnn.TILE_SIZE == 0
+        and dense_weights.gate.dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b)
+    )
 
 
 def routed_expert_order(layer_idx, num_experts, num_devices):
@@ -355,11 +430,26 @@ def _bias_dims(num_experts, hidden_size, intermediate_size, state_dict):
 
 
 class RoutedPrefillExperts:
-    """Top-k routed prefill experts, local expert parallelism over the columns of a 1xN mesh."""
+    """Top-k routed prefill experts over the columns of a 1xN mesh: local expert parallelism with weights of their own
+    (EP mode), or every expert's TP shard read from the fused decode's expert streams (TP mode, decode_weights) or from
+    the batched decode's dense expert weights (dense TP mode, dense_weights)."""
 
     def __init__(
-        self, mesh_device, hf_config, state_dict, ccl_manager, mesh_config, tensor_cache_path=None, layer_idx=None
+        self,
+        mesh_device,
+        hf_config,
+        state_dict,
+        ccl_manager,
+        mesh_config,
+        tensor_cache_path=None,
+        layer_idx=None,
+        decode_weights=None,
+        dense_weights=None,
     ):
+        """decode_weights: the fused decode's DecodeExpertWeights (experts/weights.py) of this layer; when
+        routed_tp_stream_supported, the experts read them (TP mode) and state_dict is not used.
+        dense_weights: the batched decode's DenseDecodeExpertWeights of this layer; when routed_tp_dense_supported (and
+        not TP mode), the experts read them (dense TP mode) and state_dict is not used."""
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
@@ -370,7 +460,21 @@ class RoutedPrefillExperts:
         self.num_devices = mesh_device.shape[1]
         self.dispatch_group_size = 1
         self.num_dispatch_groups = self.num_devices
-        self.experts_per_chip = self.num_experts // self.num_devices
+        self.tp_stream = routed_tp_stream_supported(layer_idx, decode_weights)
+        self.tp_dense = not self.tp_stream and routed_tp_dense_supported(dense_weights)
+        # Either TP mode: every device runs every expert on its TP shard of the intermediate dimension.
+        self.tp_mode = self.tp_stream or self.tp_dense
+        # Dtype of the per-device partial sums the closing all-reduce / reduce-scatter adds. TP mode: bfloat16. Every
+        # device's partial is a sum over a quarter of every expert's intermediate columns, and those partials largely
+        # cancel, so rounding each to bf8 before the sum cost accuracy (v4 KL 0.1050 bf8 vs 0.0741 bf16, 8K window
+        # 1.24x vs 0.60x the reference); EP mode partials are whole experts and stay bf8.
+        self.out_dtype = ttnn.bfloat16 if self.tp_mode else ttnn.bfloat8_b
+        if self.tp_mode:
+            assert mesh_config.decode.tp == self.num_devices, "TP mode needs the decode weights sharded over the row"
+        # TP mode: every expert is local (its TP shard) on every device.
+        self.experts_per_chip = self.num_experts if self.tp_mode else self.num_experts // self.num_devices
+        # Extra unified_routed_expert_moe arguments of the TP mode (the page-table weights); empty in EP mode.
+        self._table_kwargs = {}
         self.chunk_size = routed_prefill_chunk()
         # L1 address the expert op's circular buffers must end below (0: the whole L1); set by Model.set_prefill_l1_end
         # when buffers stay resident in L1 (DFlash), so the op fits its blocking around them.
@@ -380,14 +484,18 @@ class RoutedPrefillExperts:
         self.l1_held = 0
         self.min_seq = routed_prefill_min_seq()
         self.num_links = 1
-        self.weights_dtype = routed_weights_dtype(layer_idx)
-        # GPT_OSS_PREFILL_GPTQ: the bfloat4_b layers read the decode experts' GPTQ weights in transposed tiles.
-        self.weights_tile_transposed = prefill_gptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
-        self.weights_tile = _weights_tile(self.weights_tile_transposed)
+        self.weights_dtype = dense_weights.gate.dtype if self.tp_dense else routed_weights_dtype(layer_idx)
+        # GPT_OSS_PREFILL_GPTQ: the bfloat4_b layers read the decode experts' GPTQ weights, tile-transposed. The
+        # dense TP mode reads the batched decode's own weights, in transposed tiles when they hold the GPTQ experts
+        # (DenseDecodeExpertWeights.tile_transposed).
+        if self.tp_dense:
+            self.weights_tile_transposed = dense_weights.tile_transposed
+        else:
+            self.weights_tile_transposed = prefill_gptq_enabled() and self.weights_dtype == ttnn.bfloat4_b
         # The GPTQ source as given (a local directory or a pinned hf:// location): it names the cache files, and is
         # resolved (downloaded) only when the weights are loaded, so a complete cache needs no Hub access.
         gptq_spec = ""
-        if self.weights_tile_transposed:
+        if self.weights_tile_transposed and not self.tp_mode:
             gptq_spec = os.environ.get("GPT_OSS_DECODE_SPLIT_ROUND_DIR", "").strip()
             assert (
                 gptq_spec and layer_idx is not None
@@ -398,15 +506,30 @@ class RoutedPrefillExperts:
         # the contiguous per-device regions of offset_cumsum stay the identity; only the weights follow the order
         # (_load_weights_ordered). Mapping HF ids to slot ids on device instead (tables in HF ids) needs offset_cumsum
         # regions over all E experts, 32*(E - E/N) more dispatch rows: measured +0.6 ms TTFT at 128, +1.5 ms at 512.
-        self.expert_order = routed_expert_order(layer_idx, self.num_experts, self.num_devices)
+        # (TP mode: every device holds every expert's shard, so there is no placement.)
+        self.expert_order = None if self.tp_mode else routed_expert_order(layer_idx, self.num_experts, self.num_devices)
 
         # Device g's table row maps its own experts [g*E/N, (g+1)*E/N) to chip g and every other expert to -1: the
         # histogram mask of masked_bincount and the non-local skip of post_combine_reduce. Each pair is computed
         # once, on the device holding its expert. Width E + 1 (padding sentinel column). Per device: (1, E + 1).
+        # TP mode: every expert is local on every device (each device computes every pair on its shard; no slot is
+        # skipped). Its histogram table counts on device 0 only: offset_cumsum sums the histograms over the row, so
+        # the totals and the regions (one group of all E experts) are then those of one device's pairs, the same on
+        # every device.
         dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
         for g in range(self.num_devices):
             dispatch_table[g, g * self.experts_per_chip : (g + 1) * self.experts_per_chip] = g
+        count_table = dispatch_table
+        if self.tp_mode:
+            dispatch_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
+            for g in range(self.num_devices):
+                dispatch_table[g, : self.num_experts] = g
+            count_table = torch.full((self.num_devices, self.num_experts + 1), -1, dtype=torch.int32)
+            count_table[0, : self.num_experts] = 0
         self._consts = {}
+        # TP mode: the fused routing program (tp_route.py) replaces masked_bincount / offset_cumsum / _pair_positions /
+        # the dispatch scatter.
+        self._tp_route = TpRoute(mesh_device, self.num_experts, self.top_k) if self.tp_mode else None
         # The [C, C] prefix-sum operators are shared across layers (per device: [chunk, chunk], plus [8192, 8192] for
         # chunks of at most ROUTED_PREFIX_TRI_SMALL tokens). Each is built on first use.
         self._prefix_tri = _shared_prefix_tri(mesh_device, self.chunk_size)
@@ -487,12 +610,28 @@ class RoutedPrefillExperts:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
         )
-        global_idx = ttnn.from_torch(
-            ExpertMapping.create_global_expert_idx_table(
+        # masked_bincount's table (the dispatch table itself in EP mode)
+        self.count_table = self.dispatch_table
+        if count_table is not dispatch_table:
+            self.count_table = ttnn.from_torch(
+                count_table,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(None, 0)),
+            )
+        if self.tp_mode:
+            # local expert e is global expert e on every device: [N groups, 1 chip, E]
+            idx_table = torch.arange(self.num_experts, dtype=torch.int32).repeat(self.num_devices, 1, 1)
+        else:
+            idx_table = ExpertMapping.create_global_expert_idx_table(
                 experts_per_chip=self.experts_per_chip,
                 dispatch_group_size=self.dispatch_group_size,
                 num_dispatch_groups=self.num_dispatch_groups,
-            ),
+            )
+        global_idx = ttnn.from_torch(
+            idx_table,
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -500,17 +639,23 @@ class RoutedPrefillExperts:
         )
         self.global_expert_idx_table = ttnn.squeeze(ttnn.squeeze(global_idx, 0), 0)
 
+        if self.tp_stream:
+            self._init_tp_stream(decode_weights, decode_stream_kinds(layer_idx), tensor_cache_path)
+            return
+        if self.tp_dense:
+            self._init_tp_dense(dense_weights)
+            return
+
         cache_dir = None
         if tensor_cache_path is not None:
             cache_dir = Path(tensor_cache_path) / f"{ROUTED_CACHE_SUBDIR}{mesh_device.shape[0]}x{mesh_device.shape[1]}"
         self.cache_dir = cache_dir
-        prefix = f"routed_v{ROUTED_PREFILL_WEIGHTS_VERSION}"
+        prefix = f"routed_v{ROUTED_EP_FILES_VERSION}"
         if self.weights_tile_transposed:
             # Own cache files per GPTQ source. The source as given, not its resolved path: a Hub location names its
             # pinned revision, and the resolved path also holds the machine's Hub cache root, which would give every
             # machine (and the shared CI cache) its own file names.
-            # "_tt": the files hold transposed-tile tensors.
-            prefix += "_tt" + hashlib.sha1(gptq_spec.rstrip("/").encode()).hexdigest()[:10]
+            prefix += "_kt" + hashlib.sha1(gptq_spec.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
         if has_weights and cache_dir is not None and not self._cache_complete(prefix):
@@ -546,10 +691,12 @@ class RoutedPrefillExperts:
                 weights_source, self.num_experts, self.hidden_size, self.intermediate_size
             )
             del weights_source
+            if self.weights_tile_transposed:
+                # HF (out, in) per expert; the loaders transpose to (in, out), which keeps the per-tile transpose.
+                torch_weights = [{k: tile_transpose(v) for k, v in w.items()} for w in torch_weights]
         # TtRoutedExpert only loads/places the weights here (DRAM ND-sharded on Blackhole); forward calls
         # unified_routed_expert_moe directly so the per-expert token bound follows the chunk length.
-        # Transposed tiles take the ordered loader in any order: TtRoutedExpert has no tile argument.
-        if self.expert_order is None and not self.weights_tile_transposed:
+        if self.expert_order is None:
             self.routed_expert = TtRoutedExpert(
                 mesh_device=mesh_device,
                 experts_per_chip=self.experts_per_chip,
@@ -571,6 +718,257 @@ class RoutedPrefillExperts:
             state_dict if has_weights else None, prefix
         )
 
+    def _init_tp_stream(self, decode_weights, kinds, tensor_cache_path):
+        """TP mode: the page table over the decode streams' rounded parts (stream_pages.py) and the bf16 biases."""
+        from ..fused_decode.stream import EXPERT_BANK_ROT
+        from . import stream_pages as sp
+
+        E, H, tile = self.num_experts, self.hidden_size, ttnn.TILE_SIZE
+        banks = self.mesh_device.dram_grid_size().x
+        inter_pad = decode_weights.intermediate_padded
+        assert H % tile == 0 and inter_pad % tile == 0, f"hidden {H} / padded intermediate {inter_pad} not whole tiles"
+        layouts = {
+            s: sp.split_stream_layout(s, kind, E, H, inter_pad, banks, EXPERT_BANK_ROT)
+            for s, kind in zip(("gate_up", "down"), kinds)
+        }
+        streams = {"gate_up": decode_weights.gate_up_stream, "down": decode_weights.down_stream}
+        for s, t in streams.items():
+            shard = t.memory_config().shard_spec.shape
+            assert t.dtype == ttnn.uint8 and shard[0] * shard[1] == layouts[s].bank_bytes, (
+                f"decode {s} stream: {t.dtype}, {shard[0] * shard[1]} bytes per bank; the {layouts[s].kind} layout "
+                f"has {layouts[s].bank_bytes}"
+            )
+        n_gu, n_dn = inter_pad // tile, H // tile
+        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn)  # [E, 2 * (2 n_gu + n_dn)]
+        sp.check_page_table(
+            table,
+            n_gu,
+            n_dn,
+            banks,
+            layouts["gate_up"].k_tiles,
+            layouts["down"].k_tiles,
+            sp.BFP4_BYTES,
+            sp.BFP4_BYTES,
+            sp.BFP4_BYTES,
+            layouts["gate_up"].bank_bytes,
+            layouts["down"].bank_bytes,
+        )
+        # One page (row) per expert, the same table on every device (each device's streams have the same layout).
+        self.weight_pages = ttnn.from_torch(
+            sp.as_uint32_words(table),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self.weights_dtype = ttnn.bfloat4_b
+        self.weights_tile_transposed = True  # the rounded parts' tiles are stored transposed
+        self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
+        self._table_kwargs = dict(
+            weight_pages=self.weight_pages,
+            gate_up_weight_source=streams["gate_up"],
+            down_weight_source=streams["down"],
+            gate_up_k_stride=sp.BFP4_BYTES,
+            down_k_stride=sp.BFP4_BYTES,
+            weights_n_gate_up=n_gu,
+            weights_n_down=n_dn,
+            weights_k_gate_up=layouts["gate_up"].k_tiles,
+            weights_k_down=layouts["down"].k_tiles,
+            weights_dtype=ttnn.bfloat4_b,
+        )
+        self.cache_dir = None
+        if tensor_cache_path is not None:
+            rows, cols = self.mesh_device.shape
+            self.cache_dir = Path(tensor_cache_path) / f"{ROUTED_TP_CACHE_SUBDIR}{rows}x{cols}"
+        self.gate_biases, self.up_biases, self.down_biases = self._load_tp_biases(streams, layouts, table, n_gu, n_dn)
+
+    def _init_tp_dense(self, dense):
+        """Dense TP mode: the page table over the batched decode's dense expert weights (stream_pages.py
+        dense_page_table, from the tensors' own shard specs) and per-expert bias copies of its dense biases."""
+        from . import stream_pages as sp
+
+        E, H, tile = self.num_experts, self.hidden_size, ttnn.TILE_SIZE
+        banks = self.mesh_device.dram_grid_size().x
+        il_pad = dense.intermediate_padded
+        dtype = dense.gate.dtype
+        tile_bytes = {ttnn.bfloat4_b: sp.BFP4_BYTES, ttnn.bfloat8_b: sp.BFP8_BYTES}[dtype]
+        shard_tiles = {}
+        for name, t, k in (("gate", dense.gate, H), ("up", dense.up, H), ("down", dense.down, E * il_pad)):
+            mc = t.memory_config()
+            spec = mc.shard_spec
+            assert (
+                t.dtype == dtype
+                and t.layout == ttnn.TILE_LAYOUT
+                and mc.buffer_type == ttnn.BufferType.DRAM
+                and mc.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+                and spec is not None
+                and spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
+                and spec.shape[0] == k
+                and spec.shape[1] % tile == 0
+            ), f"dense decode {name}: {t.dtype} {t.layout} {mc}; the page table needs DRAM width-sharded {dtype} tiles"
+            # shard i on DRAM bank i: the shard grid is (0, 0)..(banks - 1, 0) in row-major order
+            ranges = [(r.start.x, r.start.y, r.end.x, r.end.y) for r in spec.grid.ranges()]
+            assert ranges == [(0, 0, banks - 1, 0)], f"dense decode {name}: shard grid {spec.grid} is not the banks"
+            shard_tiles[name] = spec.shape[1] // tile
+        assert shard_tiles["gate"] == shard_tiles["up"], shard_tiles
+        assert dense.gate.shape[-1] == E * il_pad and dense.down.shape[-2] == E * il_pad and H % tile == 0
+        n_gu, n_dn = il_pad // tile, H // tile
+        # gate and up are separate buffers at the same address in every bank: the up entries are offsets from gate's
+        # (unified_routed_expert_moe adds them to the gate source's bank base address in 32-bit arithmetic).
+        up_delta = (dense.up.buffer_address() - dense.gate.buffer_address()) % (1 << 32)
+        table = sp.dense_page_table(E, il_pad, H, shard_tiles["gate"], shard_tiles["down"], tile_bytes, up_delta)
+        sp.check_page_table(
+            table,
+            n_gu,
+            n_dn,
+            banks,
+            H // tile,
+            n_gu,
+            shard_tiles["gate"] * tile_bytes,
+            sp.dense_down_k_stride(E, shard_tiles["down"], tile_bytes),
+            tile_bytes,
+            (H // tile) * shard_tiles["gate"] * tile_bytes,  # a bank's shard: K tile rows x shard width
+            (E * il_pad // tile) * shard_tiles["down"] * tile_bytes,
+            up_delta,
+        )
+        self.weight_pages = ttnn.from_torch(
+            sp.as_uint32_words(table),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self.weights_tile_transposed = dense.tile_transposed  # (GPTQ experts: every tile stored transposed)
+        self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
+        # (up is read through the table only; keep the source tensors referenced here)
+        self._dense_sources = (dense.gate, dense.up, dense.down)
+        self._table_kwargs = dict(
+            weight_pages=self.weight_pages,
+            gate_up_weight_source=dense.gate,
+            down_weight_source=dense.down,
+            gate_up_k_stride=shard_tiles["gate"] * tile_bytes,
+            down_k_stride=sp.dense_down_k_stride(E, shard_tiles["down"], tile_bytes),
+            weights_n_gate_up=n_gu,
+            weights_n_down=n_dn,
+            weights_k_gate_up=H // tile,
+            weights_k_down=n_gu,
+            weights_dtype=dtype,
+        )
+        self.cache_dir = None
+        self.gate_biases, self.up_biases, self.down_biases = self._dense_tp_biases(dense, il_pad)
+
+    def _dense_tp_biases(self, dense, il_pad):
+        """Dense TP mode: one (1, N) bf16 TILE bias per expert and projection, copied on device from the dense decode
+        biases (gate / up: row 0 of [32, E * il_pad], expert e's column tiles t * E + e (dense_layout.py expert_tile);
+        down: row e of [E, H], zero off device 0), so the values are exactly those decode adds."""
+        E, H = self.num_experts, self.hidden_size
+        T = il_pad // ttnn.TILE_SIZE
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        out = {}
+
+        def by_expert(rm):
+            # row 0's column tiles [T, E] (interleaved) -> rows [E, T * 32]: expert e's columns in row e (a copy)
+            row = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, 1, E * il_pad], memory_config=dram)
+            row = ttnn.permute(ttnn.reshape(row, (1, T, E, ttnn.TILE_SIZE)), (0, 2, 1, 3), memory_config=dram)
+            return ttnn.reshape(row, (1, 1, E, il_pad))
+
+        # (projection, source, width, (row, first column) of expert e in the by-expert rows)
+        for proj, src, width, at in (
+            ("gate", dense.gate_bias, il_pad, lambda e: (e, 0)),
+            ("up", dense.up_bias, il_pad, lambda e: (e, 0)),
+            ("down", dense.down_bias, H, lambda e: (e, 0)),
+        ):
+            assert src.layout == ttnn.TILE_LAYOUT  # (rm is then a new tensor, freed below)
+            rm = ttnn.to_layout(src, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+            if proj != "down":
+                rm_e = by_expert(rm)
+                ttnn.deallocate(rm)
+                rm = rm_e
+            out[proj] = []
+            for e in range(E):
+                r, c = at(e)
+                piece = ttnn.reshape(
+                    ttnn.slice(rm, [0, 0, r, c], [1, 1, r + 1, c + width], memory_config=dram), (1, width)
+                )
+                out[proj].append(ttnn.to_layout(piece, ttnn.TILE_LAYOUT, memory_config=dram))
+                ttnn.deallocate(piece)
+            ttnn.deallocate(rm)
+        return out["gate"], out["up"], out["down"]
+
+    def _load_tp_biases(self, streams, layouts, table, n_gu, n_dn):
+        """TP mode: one (1, N) bf16 TILE bias per expert and projection (gate / up: this device's n_gu * 32 padded
+        intermediate columns; down: hidden, zero except on device 0), holding the values decode adds. Cached under their
+        own names; without the cache files they are unpacked from the streams (_tp_stream_bias_values), so a warm start
+        needs no HF weights."""
+        E = self.num_experts
+        rows, cols = self.mesh_device.shape
+        projs = ("gate", "up", "down")
+        # The values depend on the checkpoint biases (the cache directory), the neuron orders and the padding.
+        key = "|".join([str(n_gu), str(n_dn), str(layouts["gate_up"].banks)])
+        prefix = f"routed_tp_v{ROUTED_TP_FILES_VERSION}_" + hashlib.sha1(key.encode()).hexdigest()[:10]
+        names = None
+        if self.cache_dir is not None:
+            names = {(e, p): str(self.cache_dir / f"{prefix}.local_{e}_{p}_bias") for e in range(E) for p in projs}
+        cached = names is not None and all(
+            os.path.isfile(f"{n}_dtype_BFLOAT16_layout_TILE.tensorbin") for n in names.values()
+        )
+        values = None
+        if not cached:
+            values = self._tp_stream_bias_values(streams, layouts, table, n_gu, n_dn)
+            if names is not None:
+                try:
+                    self.cache_dir.mkdir(parents=True, exist_ok=True)
+                    writable = os.access(self.cache_dir, os.W_OK)
+                except OSError:
+                    writable = False
+                if not writable:
+                    logger.warning(f"Routed prefill bias cache {self.cache_dir} is not writable; loading without it.")
+                    names = None
+        mapper = ExpertMapping.get_weights_mesh_mapper(self.mesh_device)
+        out = {p: [] for p in projs}
+        for e in range(E):
+            for p in projs:
+                stacked = None
+                if values is not None:  # [devices, E, W] -> [rows, cols, 1, W], device (0, d) = TP shard d
+                    stacked = values[p][:, e].reshape(rows, cols, 1, -1).to(torch.bfloat16)
+                t = ttnn.as_tensor(
+                    stacked,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=mapper,
+                    cache_file_name=None if names is None else names[(e, p)],
+                )
+                out[p].append(ttnn.squeeze(ttnn.squeeze(t, 0), 0))
+        return out["gate"], out["up"], out["down"]
+
+    def _tp_stream_bias_values(self, streams, layouts, table, n_gu, n_dn):
+        """{gate, up: [devices, E, n_gu * 32], down: [devices, E, n_dn * 32]} float32: the bias decode adds per column,
+        unpacked on the host from each device's stream bytes (the rounded part's bias tile, stream_pages.py)."""
+        from ..fused_decode import mxfp4_split as ms
+        from . import stream_pages as sp
+
+        E = self.num_experts
+        banks = layouts["gate_up"].banks
+        gate_e, up_e, down_e = sp.table_entries(table, n_gu, n_dn)
+        vals = {"gate": [], "up": [], "down": []}
+        for s, blocks in (("gate_up", (("gate", gate_e), ("up", up_e))), ("down", (("down", down_e),))):
+            # [devices, rows, banks * 64] uint8 (experts/weights.py _split_stream_tensor), mesh column = TP shard
+            host = ttnn.to_torch(streams[s], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))[0]
+            for h in host:
+                bank_bytes = sp.bank_bytes_from_host(h.reshape(-1, h.shape[-1]), banks)
+                for proj, entries in blocks:
+                    v = sp.stream_column_biases(bank_bytes, entries, layouts[s].k_tiles, ms.unpack_bfp)
+                    vals[proj].append(v.reshape(E, -1))
+            del host
+        out = {p: torch.stack(v) for p, v in vals.items()}
+        # Row-parallel down: decode adds the down bias on the first TP device only, so the closing sum adds it once.
+        assert not out["down"][1:].any(), "decode down stream holds a non-zero bias off device 0"
+        return out
+
     def _cache_complete(self, prefix):
         if self.cache_dir is None or not self.cache_dir.is_dir():
             return False
@@ -587,8 +985,8 @@ class RoutedPrefillExperts:
                     return False
         return True
 
-    def _place_ordered(self, host_slots, memory_config, order=None):
-        """Identity-order host tensors -> device tensors in `order` (default self.expert_order).
+    def _place_ordered(self, host_slots, memory_config):
+        """Identity-order host tensors -> device tensors in self.expert_order.
 
         host_slots[e]: multi-device host tensor of local slot e in the identity order (device d's shard is expert
         d * epc + e, the cached layout). Device d's slot e of the result holds expert expert_order[d * epc + e]: its
@@ -599,7 +997,7 @@ class RoutedPrefillExperts:
         for e in range(epc):
             per_device = []
             for d in range(self.num_devices):
-                o = (order if order is not None else self.expert_order)[d * epc + e]
+                o = self.expert_order[d * epc + e]
                 per_device.append(shards[o % epc][o // epc])
             t = ttnn.from_host_shards(per_device, self.mesh_device.shape)
             t = ttnn.squeeze(ttnn.squeeze(t, 0), 0)
@@ -615,8 +1013,7 @@ class RoutedPrefillExperts:
         cache serves every placement. Without one, the HF weights are permuted and placed directly."""
         rows, cols = self.mesh_device.shape
         epc = self.experts_per_chip
-        order = self.expert_order if self.expert_order is not None else list(range(self.num_experts))
-        if self.cache_dir is None and not self.weights_tile_transposed:
+        if self.cache_dir is None:
             assert torch_weights is not None, "routed weights need HF weights or a cache directory"
             te = TtRoutedExpert(
                 mesh_device=self.mesh_device,
@@ -625,7 +1022,7 @@ class RoutedPrefillExperts:
                 emb_dim=self.hidden_size,
                 hidden_dim=self.intermediate_size,
                 max_tokens=self.chunk_size,
-                torch_weights=[torch_weights[o] for o in order],
+                torch_weights=[torch_weights[o] for o in self.expert_order],
                 torch_biases=None,
                 weights_dtype=self.weights_dtype,
                 weight_cache_path=None,
@@ -649,26 +1046,18 @@ class RoutedPrefillExperts:
                     ws = {"gate": g, "up": u, "down": d}[proj]
                     stacked = torch.stack([w.T.contiguous() for w in ws], dim=0)
                     stacked = stacked.reshape(rows, cols, stacked.shape[1], stacked.shape[2])
-                assert stacked is not None or self.cache_dir is not None, "routed weights need HF weights or a cache"
                 host_slots.append(
                     ttnn.as_tensor(
                         stacked,
                         mesh_mapper=mapper,
                         layout=ttnn.TILE_LAYOUT,
                         dtype=self.weights_dtype,
-                        cache_file_name=None
-                        if self.cache_dir is None
-                        else str(self.cache_dir / f"{prefix}.local_{e}_{proj}"),
-                        tile=self.weights_tile,
+                        cache_file_name=str(self.cache_dir / f"{prefix}.local_{e}_{proj}"),
                     )
                 )
                 del stacked
-            placed[proj] = self._place_ordered(host_slots, weight_mem, order)
+            placed[proj] = self._place_ordered(host_slots, weight_mem)
             del host_slots
-            # The op reads whether the tiles are transposed from the tensors: a placement step that dropped the tile
-            # would make it read the transposed bytes as normal tiles (wrong values, no error).
-            for w in placed[proj]:
-                assert w.tile.transpose_within_face == self.weights_tile_transposed, (proj, w.tile)
         return types.SimpleNamespace(gate_projs=placed["gate"], up_projs=placed["up"], down_projs=placed["down"])
 
     def _load_biases(self, state_dict, prefix):
@@ -740,7 +1129,7 @@ class RoutedPrefillExperts:
         indices: [C, k] uint16 TILE. masked_bincount counts only this device's experts (dispatch table mask);
         offset_cumsum gathers the histograms over the mesh row, where the other devices contribute zero to them."""
         hist = ttnn.experimental.deepseek_prefill.masked_bincount(
-            indices, self.dispatch_table, self.num_experts, self.top_k
+            indices, self.count_table, self.num_experts, self.top_k
         )
         offsets, counts, region_offsets, all_offsets = ttnn.experimental.deepseek_prefill.offset_cumsum(
             hist,
@@ -919,8 +1308,10 @@ class RoutedPrefillExperts:
         ttnn.deallocate(pos)
         return pos_tm, pos_sm
 
-    def _chunk(self, x, indices, weights, out=None, out_start=0):
+    def _chunk(self, x, indices, weights, out=None, out_start=0, block_tokens=None, reduce_block=None):
         """Partial MoE output of this device's experts for one chunk.
+        block_tokens / reduce_block (batched TP prefill): combine block_tokens rows at a time and return
+        reduce_block(block, rows) of each block instead of the blocks (the block is freed after).
 
         x: [1, 1, C, H] (any float dtype, TILE); indices: [C, k] uint16 TILE; weights: [C, k] bf16 TILE.
         Returns the [1, 1, Cs, H] bf8 TILE blocks of the output in token order (ROUTED_COMBINE_BLOCK tokens each, the
@@ -932,9 +1323,13 @@ class RoutedPrefillExperts:
         # A token picks k distinct experts, so one expert holds at most C pairs.
         max_tokens_per_expert = C
 
-        offsets, counts, region_offsets = self._routing(indices)
-
-        ttnn.deallocate(offsets)
+        consts = self._chunk_constants(C)
+        if self._tp_route is not None:
+            # TP mode: counts, regions, pair rows and the row -> token table in one program (tp_route.py)
+            counts, region_offsets, pos_tm, tok_of_row = self._tp_route(indices, consts["spare"])
+        else:
+            offsets, counts, region_offsets = self._routing(indices)
+            ttnn.deallocate(offsets)
         idx_rm = ttnn.reshape(ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT), (1, C, k))
         w_rm = ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT)
         if w_rm.dtype != ttnn.bfloat16:
@@ -942,13 +1337,15 @@ class RoutedPrefillExperts:
 
         # Buffer row of every (token, slot) pair: its expert's region start + its rank among that expert's pairs
         # (token order); pairs whose expert is on another device point at the spare tile past all regions.
-        consts = self._chunk_constants(C)
-        pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
+        if self._tp_route is None:
+            pos_tm, pos_sm = self._pair_positions(indices, region_offsets, consts)  # [C, k] and [1, k*C] uint32 RM
 
         # Dispatch: buffer row -> source token (scatter of the pair's token index to its row); the expert op reads x
         # through it. Rows no pair writes (region padding, the spare tile) read token 0 (the split path: the spare row
         # reads another valid token): finite and never consumed.
-        if consts["scatter_groups"] == 1:
+        if self._tp_route is not None:
+            pass  # (tok_of_row from tp_route)
+        elif consts["scatter_groups"] == 1:
             tok_of_row = ttnn.scatter(consts["row_init"], -1, pos_sm, consts["pair_token"])
             ttnn.deallocate(pos_sm)
             tok_of_row = ttnn.to_layout(tok_of_row, ttnn.ROW_MAJOR_LAYOUT)
@@ -993,6 +1390,8 @@ class RoutedPrefillExperts:
             x_row_index=tok_of_row,
             output_row_major=True,
             zero_output_row=consts["spare"],
+            weights_tile_transposed=self.weights_tile_transposed,
+            **self._table_kwargs,
         )  # [rows, H] bf16 ROW_MAJOR
         ttnn.deallocate(x_rm)
         ttnn.deallocate(tok_of_row)
@@ -1002,7 +1401,10 @@ class RoutedPrefillExperts:
         # from out_rm row pos[t, j] (no [Cs, k, H] gather copy), weights it and skips the non-local slots (dispatch
         # table -1; the spare row they point at is never read). The reduced [Cs, H] block stays in L1, so only its bf8
         # cast is written to DRAM.
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        Cs = block_tokens or self._combine_block(C)
+        # A bf16 output (tensor-parallel experts) is the combine's own dtype: write the block straight to DRAM and use it
+        # as the output, instead of an L1 block that no longer fits plus a bf16 -> bf16 "cast" (a full copy).
+        same_dtype = self.out_dtype == ttnn.bfloat16
         part_mem = _l1_if_fits(Cs * H * 2, self.l1_held)
         pieces = []
         for s in range(0, C, Cs):
@@ -1027,24 +1429,66 @@ class RoutedPrefillExperts:
             for t, owned in block:
                 if owned:
                     ttnn.deallocate(t)
+            if reduce_block is not None:
+                pieces.append(reduce_block(part, e - s))
+                ttnn.deallocate(part)
+                continue
             if out is not None:
                 # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
-                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
+                ttnn.typecast(part, self.out_dtype, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
             else:
-                pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            ttnn.deallocate(part)
+                pieces.append(part if same_dtype else ttnn.typecast(part, self.out_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            if not (out is None and same_dtype):
+                ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
         ttnn.deallocate(w_rm)
         ttnn.deallocate(idx_rm)
         return pieces
 
+    def _reduce_by_chunk(self, x, topk_indices, topk_weights, C, user_len, axis, links, scatter):
+        """Batched prefill in TP mode over more than one chunk, each chunk holding whole users: reduce each chunk's
+        bf16 output as soon as it is produced and concatenate the reduced rows. per_user_reduce works per user, so
+        every user's rows are reduced exactly as in the single-reduce path, but the chunk outputs are not copied into
+        one [S, H] buffer first (a bf16 -> bf16 typecast of every chunk, 0.46 ms per 16K-token chunk); the concat
+        moves only the reduced rows (1/N of them with scatter)."""
+        seq_len = x.shape[-2]
+        # Combine blocks of whole users that fit L1 (TP_COMBINE_L1_BYTES): the reduce then reads its input from L1, and
+        # the combine output never goes to DRAM.
+        users = self._combine_block_users(C, user_len)
+        reduced = []
+        for start in range(0, seq_len, C):
+            n = min(C, seq_len - start)
+            chunk = [_row_view(x, 2, start, n), _row_view(topk_indices, 0, start, n), _row_view(topk_weights, 0, start, n)]
+            reduced += self._chunk(
+                *(t for t, _ in chunk),
+                block_tokens=users * user_len,
+                reduce_block=lambda b, rows: per_user_reduce(b, rows // user_len, axis, links, scatter=scatter),
+            )
+            for t, owned in chunk:
+                if owned:
+                    ttnn.deallocate(t)
+        out = ttnn.concat(reduced, dim=2)
+        for t in reduced:
+            ttnn.deallocate(t)
+        return out
+
+    def _combine_block_users(self, C, user_len):
+        """Whole users per combine block of the batched TP prefill: as many as fit TP_COMBINE_L1_BYTES (at least 1)."""
+        return max(1, min(C // user_len, TP_COMBINE_L1_BYTES // (user_len * self.hidden_size * 2)))
+
+    def _combine_block(self, C):
+        """Tokens per combine block. The blocks keep the bf16 combine output in L1 so that only its cast to the bf8
+        output is written to DRAM; with a bf16 output (tensor-parallel experts) there is no cast, so the whole chunk
+        is one block, written straight to DRAM as the output (no [S, H] copy per layer; 8K TTFT 233.5 -> 231.2 ms)."""
+        return C if self.out_dtype == ttnn.bfloat16 else min(C, ROUTED_COMBINE_BLOCK)
+
     def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False, batch_size=1):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
         topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
         as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
-        Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path; with scatter
+        Returns the MoE output [1, 1, S, H] (self.out_dtype), all-reduced over the mesh row like the dense TP path; with scatter
         (sequence-parallel prefill, S % (32 * N) == 0) only the reduce-scatter half: [1, 1, S / N, H], device d holding
         rows d * S / N onward, bit-identical to those rows of the all-reduce.
 
@@ -1059,7 +1503,20 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        axis = self.mesh_config.tp_axis
+        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
+        user_len = seq_len // batch_size
+        # Batched TP prefill whose combine output does not fit L1 in one block (more than one chunk, or one chunk of
+        # more users than TP_COMBINE_L1_BYTES holds: b32 1K is one 32K chunk of 4 blocks): combine and reduce block by
+        # block, the combine output in L1, instead of one [S, H] DRAM combine output for the reduce to read back.
+        if (
+            batch_size > 1
+            and self.out_dtype == ttnn.bfloat16
+            and C % user_len == 0
+            and (seq_len > C or self._combine_block_users(C, user_len) * user_len < seq_len)
+        ):
+            return self._reduce_by_chunk(x, topk_indices, topk_weights, C, user_len, axis, links, scatter)
+        Cs = self._combine_block(C)
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
         # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
         # block start is a view start.
@@ -1067,7 +1524,7 @@ class RoutedPrefillExperts:
         if seq_len > Cs:
             out = ttnn.empty(
                 (1, 1, seq_len, self.hidden_size),
-                dtype=ttnn.bfloat8_b,
+                dtype=self.out_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1098,14 +1555,13 @@ class RoutedPrefillExperts:
             out = ttnn.concat(outputs, dim=2)
             for t in outputs:
                 ttnn.deallocate(t)
-        axis = self.mesh_config.tp_axis
-        links = batched_reduce_links(self.ccl_manager, axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
         if batch_size > 1:
             reduced = per_user_reduce(out, batch_size, axis, links, scatter=scatter)
             ttnn.deallocate(out)
             return reduced
         if scatter:
-            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links)
+            # (DRAM out: the combine output may be in L1, and the reduced rows become the residual)
+            reduced = ring_reduce_scatter(out, self.mesh_config.tp_axis, links, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(out)
             return reduced
         reduced = ttnn.all_reduce(
@@ -1113,6 +1569,7 @@ class RoutedPrefillExperts:
             num_links=links,
             topology=ttnn.Topology.Ring,
             cluster_axis=self.mesh_config.tp_axis,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(out)
         return ttnn.reshape(reduced, (1, 1, seq_len, self.hidden_size))
