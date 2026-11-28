@@ -76,7 +76,7 @@ def run_gs_demo(efficientnet_model_constructor):
 
     image = cv2.imread(str(img_path))
     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    input_tensor = transform(image)
+    input_tensor = transform(rgb_image)
     input_batch = input_tensor.unsqueeze(0)
 
     with torch.no_grad():
