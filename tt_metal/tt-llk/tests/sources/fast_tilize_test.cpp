@@ -310,9 +310,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>();
         _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
             formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-        _llk_pack_fast_tilize_init_<DstSync::SyncHalf>(use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2, num_faces);
+        _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+            use_32bit_dest, formats.pack_dst, BLOCK_CT_DIM == 1 ? 1 : 2, num_faces, TILE_C_DIM * TILE_R_DIM /*l1_tile_elements*/, formats.pack_src);
         PROFILER_SYNC();
     }
+    // a 16-bit dest read of a Float32/Tf32 pack_src under fp32_dest_acc_en needs a Float16_b packer input, otherwise the
+    // init keeps pack_src (the metal API's llk_pack_fast_tilize_block asserts the same format)
+    LLK_ASSERT_BLOCK(
+        are_packers_configured_correctly(_llk_pack_fast_tilize_pack_src_format_<is_fp32_dest_acc_en>(use_32bit_dest, formats.pack_src), formats.pack_dst));
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -395,7 +400,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
     }
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+        formats.pack_dst, FACE_R_DIM, num_faces, false /* partial_face */, false /* narrow_tile */, formats.pack_src, use_32bit_dest);
+    // the uninit must hand the packer back with the caller's input format
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(formats.pack_src, formats.pack_dst));
 }
 
 #endif
