@@ -36,7 +36,7 @@ def test_cluster_serialize_descriptor():
         pytest.skip(f"Cluster descriptor serialization not available: {e}")
 
 
-# Allowed Blackhole ethernet link speeds, in Gbps.
+# Target speeds bh-erisc ETH firmware accepts (serdes_init.cpp), in Gbps.
 BH_ETH_SPEEDS_GBPS = {40, 100, 200, 330, 350, 370, 400}
 
 
@@ -55,10 +55,9 @@ def test_cluster_ethernet_train_speed_p300():
                 continue
             target = ttnn.cluster.get_ethernet_target_speed(device_id, eth_channel)
             link = f"Device {device_id} channel {eth_channel}"
-            assert speed in BH_ETH_SPEEDS_GBPS, f"{link}: speed {speed} not in {BH_ETH_SPEEDS_GBPS}"
-            assert target is not None, f"{link}: no target speed"
-            # Target 0 requests auto-train, so it does not bound the trained speed
-            assert target == 0 or speed <= target, f"{link}: speed {speed} > target {target}"
+            assert speed > 0, f"{link}: trained link reports speed 0"
+            assert target in BH_ETH_SPEEDS_GBPS, f"{link}: target {target} not in {BH_ETH_SPEEDS_GBPS}"
+            assert speed <= target, f"{link}: speed {speed} > target {target}"
             up_links.append((device_id, eth_channel, speed))
 
     assert up_links, "No ethernet links up on P300"

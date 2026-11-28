@@ -116,8 +116,8 @@ std::optional<std::uint32_t> get_ethernet_train_speed(std::uint32_t device_id, s
 
 /**
  * @brief Target link speed of an ethernet channel, via
- *        @c Cluster::get_ethernet_target_speed. This is the requested speed from
- *        the ethernet boot params. Present in any port state, link up or not.
+ *        @c Cluster::get_ethernet_target_speed. This is set by ethernet
+ *        firmware at boot; 0 if SerDes init did not run on the port.
  *
  * @param device_id Logical chip id (matches @c IDevice::id()).
  * @param eth_channel Logical ethernet channel, after harvesting. Channels are

@@ -216,8 +216,8 @@ void bind_ttnn_cluster(nb::module_& mod) {
         nb::arg("device_id"),
         nb::arg("eth_channel"),
         R"doc(
-            Target link speed of an ethernet channel. This is the requested
-            speed from the ethernet boot params. Present in any port state.
+            Target link speed of an ethernet channel. Set by ethernet firmware
+            at boot; 0 if SerDes init did not run on the port.
 
             Args:
                 device_id (int): Logical chip id.

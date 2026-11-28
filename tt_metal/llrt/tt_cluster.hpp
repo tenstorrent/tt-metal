@@ -276,7 +276,7 @@ public:
     std::optional<uint32_t> get_ethernet_train_speed(ChipId chip_id, EthernetChannel eth_chan) const;
 
     // Returns target link speed in Gbps of logical (post-harvest) `eth_chan`.
-    // This is the requested speed from the boot params. Present in any port state.
+    // Set by ethernet firmware at boot; 0 if SerDes init did not run on the port.
     // nullopt if not supported (Wormhole, simulation, mock).
     // Throws on an invalid chip_id or eth_chan.
     std::optional<uint32_t> get_ethernet_target_speed(ChipId chip_id, EthernetChannel eth_chan) const;
