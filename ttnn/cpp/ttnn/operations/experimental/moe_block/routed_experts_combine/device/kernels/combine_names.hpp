@@ -68,10 +68,17 @@ inline constexpr const char* kWeightCb = "weight_cb";
 inline constexpr const char* kAccumulatorTableCb = "accumulator_table_cb";
 inline constexpr const char* kAccumulatorCb = "accumulator_cb";
 inline constexpr const char* kOutputCb = "output_cb";
+// the finished tokens' indices, compute -> writer, in the order the tokens finish (CB_FINISHED)
+inline constexpr const char* kFinishedCb = "finished_cb";
+// one page the compute's pack thread pushes and its unpack thread waits on: the packer has stored a token's sum
+// (CB_SYNC)
+inline constexpr const char* kSyncCb = "sync_cb";
 
 // ---- shapes ----
 inline constexpr const char* kRowBytes = "row_bytes";
 inline constexpr const char* kRowTiles = "row_tiles";
+// the router's top-k: the rows every real token gets, and so the rows after which an accumulator writes a token out
+inline constexpr const char* kTopK = "top_k";
 inline constexpr const char* kLandingSlotBytes = "landing_slot_bytes";
 inline constexpr const char* kInjectionSlotBytes = "injection_slot_bytes";
 inline constexpr const char* kLandingSlotsPerAccumulator = "landing_slots_per_accumulator";
