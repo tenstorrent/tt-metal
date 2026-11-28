@@ -41,3 +41,5 @@
 {"event":"test_run","status":"pass","tests":"tests/ttnn/unit_tests/operations/g6_sharded_to_interleaved/ (all)","result":"155 passed; default_knobs gate (L1 + >=8 shard pages -> 2 lanes + stagger) bit-exact on all scenarios","ts":"2026-11-28T01:10:44-05:00"}
 {"event":"test_run","kind":"profile+replay","csv":"generated/profiler/reports/2026_11_28_01_10_56","kernel_med_ns":{"p1_default_entry_point":1632,"p1_lanes1":2119,"p2_default":1499.5,"p2_lanes1":1527,"p2l1_default":1271,"p2l1_lanes1":1261},"replay_ns_per_op":{"p1_default":5963,"p1_lanes1":5952,"p2_default":2842,"p2l1_default":2812},"ts":"2026-11-28T01:11:22-05:00"}
 {"event":"test_run","status":"pass","tests":"impl_debug + acceptance after black","result":"86 passed; golden test_golden.py 12/12 earlier","ts":"2026-11-28T01:13:26-05:00"}
+{"event":"tool_use","tool":"Skill","skill":"perf-measure","args":"","ts":"2026-11-28T01:55:33-05:00"}
+{"event":"test_run","status":"pass","tests":"impl_debug + acceptance + trace_replay on the tree left by the interrupted R3 attempt (common RT args only, on-device block derivation)","result":"87 passed","ts":"2026-11-28T01:55:33-05:00"}
