@@ -1,13 +1,18 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// Tilize compute of packer_tilize (ROW_MAJOR bf16 -> TILE bfloat8_b): tilize_block.
+// Tilize compute of the ROW_MAJOR -> TILE regimes: tilize_block.
 //
-// cb_row_stage (bf16 rows as tile pages, reader -> compute) -> unpack-tilize -> pack to bfp8 ->
-// cb_tile_block (bfp8 tile pages, compute -> writer). The packer sets each face row's shared
-// exponent, which is the value conversion this stage exists for. Every block moves the nominal
-// block_rows_tiles tile-rows (the reader pushes them, the writer waits them), so the whole core's
-// work is one helper call of that many tile-rows: tilize init/uninit run once per kernel.
+// cb_row_stage (rows as tile pages, reader -> compute) -> unpack-tilize -> pack -> cb_tile_block
+// (tile pages, compute -> writer).
+// packer_tilize: the stage is bf16 and the output bfp8; the packer sets each face row's shared
+// exponent, which is the value conversion this stage exists for.
+// row_major_to_tile: both CBs are UInt16 views of bf16 bytes, so unpack, MOVA2D and pack move 16-bit
+// integers and every bf16 pattern comes out bit-identical (compute_kernel_hw_startup also keeps the
+// Src zero flag disabled for a UInt16 operand).
+// Every block moves the nominal block_rows_tiles tile-rows (the reader pushes them, the writer waits
+// them), so the whole core's work is one helper call of that many tile-rows: tilize init/uninit run
+// once per kernel.
 
 #include <cstdint>
 

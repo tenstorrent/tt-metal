@@ -24,13 +24,15 @@ A bfloat8_b input is a value conversion, so it adds a compute kernel between the
     sharded_in_place (R4): R3 with cb_tile_window backed on the resident shard (zero-copy); the
                            core assignment and the block are the caller's shard.
 
-A ROW_MAJOR bfloat16 input mirrors R1/R3 with the transfer shapes swapped:
+A ROW_MAJOR bfloat16 input lands its row segments in cb_row_stage as 32-row tile-rows; compute
+tilizes them into cb_tile_block and the writer writes whole tiles:
 
-    row_major_to_tile (R5): one read per live row segment -> cb_row_stage tile-row slots ->
-                           32-B self-aimed copies into tile slots -> cb_tile_block -> whole-tile
-                           writes. Dataflow-only, so bit-exact for every bf16 pattern.
-    packer_tilize    (R6): bfloat8_b output: the row segments land in cb_row_stage, compute
-                           tilizes and packs bfp8 into cb_tile_block, the R5 writer writes tiles.
+    row_major_to_tile (R5): bfloat16 output. Both CBs are declared UInt16: the unpacker, MOVA2D and
+                           packer then move the bf16 bytes as 16-bit integers, so every bf16 pattern
+                           survives (a Float16_b view turns -0.0 and subnormals into +0 and NaN into
+                           +-inf, whatever the Src zero flag).
+    packer_tilize    (R6): bfloat8_b output: the reader conditions the rows for the bfp8 packer
+                           before the push.
 
 Interleaved work unit: one tile of the flattened (tile_row, tile_col) space, split over the grid
 in contiguous row-major tile ranges. Blocks are rectangles cut from a core's range (or its shard)
@@ -70,11 +72,7 @@ SLOT_IMAGE_DEPTH = 3
 # do not add up), else RISC loads/stores. 0: the writer builds the whole image.
 READER_SLOT_EIGHTHS = 5
 WRITER_SLOT_NOC_COPIES = True
-ROW_WINDOW_DEPTH = 2  # R5 tile-row loads resident in cb_row_stage
-# R5: the writer copies the bottom faces of each staged tile-row (its NoC, its RISC) while the reader
-# copies the top faces; off, the reader copies both and cb_row_stage stays reader-private.
-SPLIT_REORDER = True
-TILE_BLOCK_DEPTH = 2  # R3 blocks resident in cb_tile_window (reader -> compute)
+TILE_BLOCK_DEPTH = 2  # R3 blocks in cb_tile_window, R5/R6 blocks in cb_row_stage (reader -> compute)
 # cb_nan_marks pages: the reader can run TILE_BLOCK_DEPTH + ROW_DEPTH blocks ahead of the writer.
 NAN_MARKS_DEPTH = TILE_BLOCK_DEPTH + ROW_DEPTH
 # Target blocks per core; sets block_rows_tiles below its L1 cap so pipeline fill/drain stays near
@@ -108,8 +106,8 @@ PACKER_TILIZE = "packer_tilize"
 SAME_BANK_SLOT_WRITES = "same_bank_slot_writes"
 _FACE_REGIMES = (FACE_DIRECT, SAME_BANK_SLOT_WRITES)
 _UNTILIZE_REGIMES = (PACKER_UNTILIZE, SHARDED_IN_PLACE)
-_COMPUTE_REGIMES = _UNTILIZE_REGIMES + (PACKER_TILIZE,)
 _TO_TILE_REGIMES = (ROW_MAJOR_TO_TILE, PACKER_TILIZE)
+_COMPUTE_REGIMES = _UNTILIZE_REGIMES + _TO_TILE_REGIMES
 
 CB_TILE_WINDOW = 0
 CB_ROW_BLOCK = 1
@@ -131,9 +129,6 @@ _REORDER_TRIDS = 2
 _MAX_TRID = 15
 _MAX_TRID_OUTSTANDING = 255
 assert TILE_WINDOW_DEPTH + _REORDER_TRIDS <= _MAX_TRID
-# R5 tags its tile-row loads the same way; a split reorder adds the writer's two copy trids.
-assert ROW_WINDOW_DEPTH + _REORDER_TRIDS * (2 if SPLIT_REORDER else 1) <= _MAX_TRID
-assert not SPLIT_REORDER or ROW_WINDOW_DEPTH >= 2  # a pushed-ahead slot needs a second page
 assert 2 * READ_BATCH_TILES <= _MAX_TRID_OUTSTANDING  # at most 2 reads per tile per batch
 assert 0 <= READER_SLOT_EIGHTHS <= 8
 assert 1 <= SLOT_READ_DEPTH <= SLOT_READ_DEPTH_MAX <= _MAX_TRID
@@ -211,10 +206,6 @@ def _block_bytes(regime, block_rows_tiles, block_cols_tiles, stage_rows):
     return block_rows_tiles * stage_rows * block_cols_tiles * TILE_ROW_BYTES
 
 
-def _row_stage_tile_row_bytes(block_cols_tiles, stage_rows):
-    return stage_rows * block_cols_tiles * TILE_ROW_BYTES
-
-
 def _nan_marks_page_bytes(block_tiles):
     return _round_up(block_tiles * NAN_MARK_RECORD_BYTES, NAN_MARKS_PAGE_ALIGN)
 
@@ -231,12 +222,7 @@ def _max_block_tiles(regime, stage_rows, out_l1_share, in_tile_bytes, out_tile_b
     if regime == SAME_BANK_SLOT_WRITES:
         per_tile = SLOT_FACES_DEPTH * LEFT_SLOT_BYTES + SLOT_IMAGE_DEPTH * _slot_image_bytes(1, stage_rows, slot_bytes)
         return min((L1_BUDGET_BYTES - out_l1_share) // per_tile, _MAX_TRID_OUTSTANDING // 2)
-    if regime == ROW_MAJOR_TO_TILE:
-        # The row window scales with block_cols_tiles only; charging it per tile bounds it for any
-        # block_rows_tiles >= 1.
-        per_tile = ROW_WINDOW_DEPTH * stage_rows * TILE_ROW_BYTES + ROW_DEPTH * TILE_BYTES
-        return (L1_BUDGET_BYTES - out_l1_share) // per_tile
-    if regime == PACKER_TILIZE:
+    if regime in _TO_TILE_REGIMES:
         return (L1_BUDGET_BYTES - out_l1_share) // (TILE_BLOCK_DEPTH * TILE_BYTES + ROW_DEPTH * out_tile_bytes)
     # The compute regimes' budget keeps the cb_nan_marks page rounding aside.
     marks_budget = L1_BUDGET_BYTES - out_l1_share - NAN_MARKS_DEPTH * NAN_MARKS_PAGE_ALIGN
@@ -373,8 +359,6 @@ class Plan:
             "tile_row_stage_rows": self.tile_row_stage_rows,
             "read_batch_tiles": READ_BATCH_TILES if self.regime == STAGED_REORDER else None,
             "tile_window_depth": TILE_WINDOW_DEPTH if self.regime == STAGED_REORDER else None,
-            "row_window_depth": ROW_WINDOW_DEPTH if self.regime == ROW_MAJOR_TO_TILE else None,
-            "split_reorder": SPLIT_REORDER if self.regime == ROW_MAJOR_TO_TILE else None,
             "slot_image_depth": SLOT_IMAGE_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
             "slot_faces_depth": SLOT_FACES_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
             "slot_read_depth": SLOT_READ_DEPTH if self.regime == SAME_BANK_SLOT_WRITES else None,
@@ -383,7 +367,7 @@ class Plan:
             "reader_slot_eighths": READER_SLOT_EIGHTHS if self.regime == SAME_BANK_SLOT_WRITES else None,
             "writer_slot_noc_copies": WRITER_SLOT_NOC_COPIES if self.regime == SAME_BANK_SLOT_WRITES else None,
             "out_slot_bytes": self.out_slot_bytes,
-            "tile_block_depth": TILE_BLOCK_DEPTH if self.regime in (PACKER_UNTILIZE, PACKER_TILIZE) else None,
+            "tile_block_depth": TILE_BLOCK_DEPTH if self.regime in (PACKER_UNTILIZE,) + _TO_TILE_REGIMES else None,
             "nan_marks_depth": (
                 self.cb_bytes[CB_NAN_MARKS] // self.nan_marks_page_bytes if self.regime in _UNTILIZE_REGIMES else None
             ),
@@ -486,12 +470,7 @@ def compute_plan(
         }
     elif regime == STAGED_REORDER:
         cb_bytes = {CB_TILE_WINDOW: _window_bytes(), CB_ROW_BLOCK: ROW_DEPTH * block_bytes}
-    elif regime == ROW_MAJOR_TO_TILE:
-        cb_bytes = {
-            CB_ROW_STAGE: ROW_WINDOW_DEPTH * _row_stage_tile_row_bytes(block_cols_tiles, stage_rows),
-            CB_TILE_BLOCK: ROW_DEPTH * block_rows_tiles * block_cols_tiles * TILE_BYTES,
-        }
-    elif regime == PACKER_TILIZE:
+    elif regime in _TO_TILE_REGIMES:
         block_tiles = block_rows_tiles * block_cols_tiles
         cb_bytes = {
             CB_ROW_STAGE: TILE_BLOCK_DEPTH * block_tiles * TILE_BYTES,
@@ -590,21 +569,20 @@ class G6ToLayoutProgram:
                 ]
             )
         elif plan.regime in _TO_TILE_REGIMES:
-            reorder = plan.regime == ROW_MAJOR_TO_TILE
-            stage_page_bytes = (
-                _row_stage_tile_row_bytes(plan.block_cols_tiles, plan.tile_row_stage_rows) if reorder else TILE_BYTES
-            )
+            bfp8_out = plan.regime == PACKER_TILIZE
+            # A bf16 output is a byte copy: as UInt16 the Tensix moves the bf16 bytes as integers, the
+            # only datapath on which -0.0, subnormals and NaN payloads come out bit-identical.
+            stage_format = ttnn.bfloat16 if bfp8_out else ttnn.uint16
+            out_format = output_tensor.dtype if bfp8_out else ttnn.uint16
             cbs = [
-                _cb(CB_ROW_STAGE, plan.cb_bytes[CB_ROW_STAGE], stage_page_bytes, all_cores),
-                _cb(CB_TILE_BLOCK, plan.cb_bytes[CB_TILE_BLOCK], plan.out_tile_bytes, all_cores, output_tensor.dtype),
+                _cb(CB_ROW_STAGE, plan.cb_bytes[CB_ROW_STAGE], TILE_BYTES, all_cores, stage_format),
+                _cb(CB_TILE_BLOCK, plan.cb_bytes[CB_TILE_BLOCK], plan.out_tile_bytes, all_cores, out_format),
             ]
             reader_source, writer_source = "g6_to_layout_row_reader.cpp", "g6_to_layout_tile_writer.cpp"
-            split = int(reorder and SPLIT_REORDER)
-            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK, int(reorder), ROW_WINDOW_DEPTH, split]
-            writer_ct_args = geometry_ct_args + [CB_TILE_BLOCK, CB_ROW_STAGE, split, ROW_WINDOW_DEPTH]
-            if not reorder:
-                compute_source = "g6_to_layout_tilize_compute.cpp"
-                compute_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK]
+            reader_ct_args = geometry_ct_args + [CB_ROW_STAGE, int(bfp8_out)]
+            writer_ct_args = geometry_ct_args + [CB_TILE_BLOCK]
+            compute_source = "g6_to_layout_tilize_compute.cpp"
+            compute_ct_args = geometry_ct_args + [CB_ROW_STAGE, CB_TILE_BLOCK]
         elif plan.regime == STAGED_REORDER:
             cbs = [
                 _cb(CB_TILE_WINDOW, plan.cb_bytes[CB_TILE_WINDOW], TILE_BYTES, all_cores),
