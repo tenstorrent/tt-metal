@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// RISC-V performance monitor capture per kernel launch: marker format and emission over the tt-llk tables in
-// perf_counters/riscv_pmc_*.h. The selects come from TT_METAL_PROFILE_RISCV_PMC(_DM) at compile time.
+// RISC-V performance monitor capture per kernel launch, also on the Blackhole active and idle ethernet cores: marker
+// format and emission over the tt-llk tables in perf_counters/riscv_pmc_*.h, selects fixed at compile time.
 
 #pragma once
 
@@ -19,7 +19,7 @@ constexpr uint16_t RISCV_PMC_EVENTS_UPPER_PROFILER_ID = 9096;  // (mhpmevent6 <<
 #if defined(ARCH_BLACKHOLE) && !defined(FW_BUILD) && !defined(DISPATCH_KERNEL) && \
     (defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC))
 #define RISCV_PMC_CORE 1
-#elif defined(ARCH_BLACKHOLE) && defined(FW_BUILD) && defined(COMPILE_FOR_AERISC)
+#elif defined(ARCH_BLACKHOLE) && defined(FW_BUILD) && (defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_IDLE_ERISC))
 #define RISCV_PMC_CORE 1
 #elif defined(ARCH_QUASAR) && defined(FW_BUILD) && (defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_DM))
 #define RISCV_PMC_CORE 1
