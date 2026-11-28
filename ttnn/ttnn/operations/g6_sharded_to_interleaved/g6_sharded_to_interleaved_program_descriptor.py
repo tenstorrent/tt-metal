@@ -239,8 +239,34 @@ def _check_l1_budget(plan, device, memory_config):
         )
 
 
-def _block_extent(cap, extent):
-    return extent if cap is None else min(cap, extent)
+def _common_rt_args(plan, output_tensor, spec):
+    """The writer's common RT args, identical on every core: each core derives its own block, lane rectangle and
+    issue row from its logical coordinates (the kernel mirrors `build_plan`, `_lane_rects`, `issue_first_row`).
+    Per-core unique args are avoided on purpose: the dispatcher writes them core by core on every call, which
+    costs a traced p1 call ~3.3 us whatever their count."""
+    shards_along_cols = math.ceil(plan.tensor_tile_cols / plan.shard_tile_cols)
+    # Shards stack along one tile axis only (height: one shard column; width: one shard row), so shard k
+    # starts k * step along it.
+    row_step, col_step = (plan.shard_tile_rows, 0) if shards_along_cols == 1 else (0, plan.shard_tile_cols)
+    ranges = list(spec.grid.ranges())  # the walk `build_plan` maps shards with, in its order
+    args = [
+        output_tensor.buffer_address(),  # index 0: patched per call by `CachedProgram.bind`
+        plan.shard_tile_rows,
+        plan.shard_tile_cols,
+        plan.tensor_tile_rows,
+        plan.tensor_tile_cols,
+        row_step,
+        col_step,
+        plan.num_shards,
+        plan.knobs.block_tile_rows or 0,
+        plan.knobs.block_tile_cols or 0,
+        plan.issue_period,
+        int(spec.orientation == ttnn.ShardOrientation.ROW_MAJOR),
+        len(ranges),
+    ]
+    for r in ranges:
+        args.extend((r.start.x, r.start.y, r.end.x, r.end.y))
+    return args
 
 
 def create_program_descriptor(input_tensor, output_tensor, plan):
@@ -252,42 +278,25 @@ def create_program_descriptor(input_tensor, output_tensor, plan):
             f"g6_sharded_to_interleaved: output page / aligned page {out_pages} B != input page {plan.page_size} B"
         )
 
-    grid = input_tensor.memory_config().shard_spec.grid
+    spec = input_tensor.memory_config().shard_spec
     cb_input_shard = ttnn.cb_descriptor_from_sharded_tensor(CB_INPUT_SHARD, input_tensor)
 
     knobs = plan.knobs
-    ct_args = [CB_INPUT_SHARD, plan.page_size, knobs.num_write_nocs]
-    ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    common_rt_args = [output_tensor.buffer_address(), plan.shard_tile_cols, plan.tensor_tile_cols]
-
-    lane_rt_args = [ttnn.RuntimeArgs() for _ in range(knobs.num_write_lanes)]
-    for k, (core, block) in enumerate(zip(plan.cores, plan.blocks)):
-        rects = _lane_rects(block, knobs.num_write_lanes) if block is not None else []
-        for lane in range(knobs.num_write_lanes):
-            args = [0, 0, 0, 0, 0, 0, 0]
-            if lane < len(rects) and rects[lane][2] * rects[lane][3] > 0:
-                row_off, col_off, rows, cols = rects[lane]
-                args = [
-                    row_off * plan.shard_tile_cols + col_off,
-                    (block.first_tile_row + row_off) * plan.tensor_tile_cols + block.first_tile_col + col_off,
-                    rows,
-                    cols,
-                    _block_extent(knobs.block_tile_rows, rows),
-                    _block_extent(knobs.block_tile_cols, cols),
-                    issue_first_row(plan, k, rows),
-                ]
-            lane_rt_args[lane][core.x][core.y] = args
+    accessor_ct_args = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    common_rt_args = _common_rt_args(plan, output_tensor, spec)
 
     noc_mode = ttnn.NOC_MODE.DM_DYNAMIC_NOC if knobs.num_write_nocs == 2 else ttnn.NOC_MODE.DM_DEDICATED_NOC
     kernels = []
     for lane in range(knobs.num_write_lanes):
         processor, noc = _LANE_CONFIGS[lane]
+        ct_args = [CB_INPUT_SHARD, plan.page_size, knobs.num_write_nocs, lane, knobs.num_write_lanes]
+        ct_args.extend(accessor_ct_args)
         kernels.append(
             ttnn.KernelDescriptor(
                 kernel_source=str(WRITER_KERNEL),
-                core_ranges=grid,
+                core_ranges=spec.grid,
                 compile_time_args=ct_args,
-                runtime_args=lane_rt_args[lane],
+                runtime_args=ttnn.RuntimeArgs(),
                 common_runtime_args=common_rt_args,
                 config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc, noc_mode=noc_mode),
             )
@@ -319,8 +328,8 @@ _PROGRAMS = {}
 
 
 def program_key(input_tensor, memory_config, knobs=None):
-    """Everything that shapes the plan or the descriptor. Orientation and range order change only
-    per-core RT values (not the C++ program hash), so they must be in this key."""
+    """Everything that shapes the plan or the descriptor. Orientation, range order and shard geometry change only
+    common RT values (not the C++ program hash), so they must be in this key."""
     knobs = resolve_knobs(input_tensor, memory_config, knobs)
     mc = input_tensor.memory_config()
     spec = mc.shard_spec
