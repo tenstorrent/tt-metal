@@ -71,7 +71,19 @@ bool is_block_float(DataType dtype);
 
 // True for the MX formats. Kept separate from is_block_float(): BFP and MX share the "TILE-only,
 // packed on the host" property but use different encodings, packers and supported architectures.
-bool is_mx(DataType dtype);
+constexpr bool is_mx(DataType dtype) {
+    switch (dtype) {
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return true;
+        default: return false;
+    }
+}
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat);

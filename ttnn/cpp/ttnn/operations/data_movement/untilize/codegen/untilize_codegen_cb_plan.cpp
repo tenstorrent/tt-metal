@@ -27,9 +27,7 @@ bool needs_dst_accum(DataType dtype) {
 uint32_t max_block_ct(bool fp32) { return fp32 ? 4 : 8; }
 
 uint32_t planning_tile_size(DataType in_dtype, DataType out_dtype) {
-    return std::max(
-        tt::tile_size(datatype_to_dataformat_converter(in_dtype)),
-        tt::tile_size(datatype_to_dataformat_converter(out_dtype)));
+    return std::max(tt::tile_size(cb_dataformat_for(in_dtype)), tt::tile_size(cb_dataformat_for(out_dtype)));
 }
 
 PaddedGrid padded_grid(const Tensor& input) {

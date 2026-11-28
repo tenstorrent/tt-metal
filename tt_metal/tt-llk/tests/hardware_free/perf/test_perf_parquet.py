@@ -429,3 +429,32 @@ def test_legacy_column_aliases_resolve_a_previous_test_name():
         == PERF_TEST_SCHEMAS["perf_eltwise_unary_typecast"]["aliases"]
     )
     assert legacy_column_aliases(ChipArchitecture.WORMHOLE, "no_such_test") == {}
+
+
+def test_apply_column_aliases_folds_a_duplicate_legacy_column():
+    from helpers.perf.parquet import apply_column_aliases
+
+    df = pd.DataFrame({"input_tile_cnt": [4, 8], "tile_cnt": [4, None]})
+    out, renamed = apply_column_aliases(df, {"input_tile_cnt": "tile_cnt"})
+    assert list(out.columns) == ["tile_cnt"]
+    assert out["tile_cnt"].tolist() == [4, 8]
+    assert renamed == {"input_tile_cnt": "tile_cnt"}
+
+
+def test_apply_column_aliases_keeps_both_columns_that_disagree():
+    from helpers.perf.parquet import apply_column_aliases
+
+    df = pd.DataFrame({"input_tile_cnt": [4], "tile_cnt": [5]})
+    out, renamed = apply_column_aliases(df, {"input_tile_cnt": "tile_cnt"})
+    assert list(out.columns) == ["input_tile_cnt", "tile_cnt"]
+    assert renamed == {}
+
+
+def test_apply_column_aliases_renames_a_legacy_only_column():
+    from helpers.perf.parquet import apply_column_aliases
+
+    out, renamed = apply_column_aliases(
+        pd.DataFrame({"input_tile_cnt": [4]}), {"input_tile_cnt": "tile_cnt"}
+    )
+    assert list(out.columns) == ["tile_cnt"]
+    assert renamed == {"input_tile_cnt": "tile_cnt"}

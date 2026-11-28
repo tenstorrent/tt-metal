@@ -38,7 +38,6 @@ from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
     DEST_SYNC,
-    INPUT_TILE_CNT,
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATH_OP,
@@ -258,11 +257,13 @@ def test_eltwise_binary_broadcast_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt_A),
-            INPUT_TILE_CNT(tile_cnt_A),
             OUTPUT_TILE_CNT(tile_cnt_res),
             NUM_BLOCKS(num_blocks),
+            # The unsuffixed value is output-based, as on WH/BH; the kernel reads the
+            # input_/output_ pair.
             NUM_TILES_IN_BLOCK(
-                input_tiles_in_block,
+                output_tiles_in_block,
+                input_num_tiles_in_block=input_tiles_in_block,
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             NUM_FACES(num_faces),

@@ -7,7 +7,7 @@
     same key as the twin, the llk_pack_block default calls (pack_block 2: blocks under four tiles take the per-tile pack, block-float blocks the closed form) and
     the W offset calls (pack_block 3), from dest index 0, 1, 3 and the last tile that fits;
   * the integer outputs UInt16, UInt32, UInt8 and Int8 that cov3 does not run, same-format, at the same sizes and forms.
-The block size is in num_tiles_in_block and no key repeats one of the other pack perf modules. perf_pack_grid_rows holds the row pack, perf_pack_grid_tiny the tiny tiles.
+The block size is in num_tiles_in_block and no key repeats one of the other pack perf modules. perf_pack_grid_rows holds the row pack.
 """
 
 import pytest

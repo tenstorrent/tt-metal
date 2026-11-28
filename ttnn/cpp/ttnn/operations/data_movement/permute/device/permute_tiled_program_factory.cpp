@@ -27,7 +27,7 @@ uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
 }
 
 uint32_t tile_size(const ttnn::Tensor& input_tensor) {
-    auto dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    auto dataformat = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     return tt::tile_size(dataformat);
 }
 
@@ -101,7 +101,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
     uint32_t num_input_pages_to_read = 2;
@@ -301,7 +301,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
     const auto& output_mesh_tensor = output_tensor.mesh_tensor();
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
     uint32_t num_tiles = detail::num_tiles(input_tensor);
@@ -722,7 +722,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
-    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::cb_dataformat_for(input_tensor.dtype());
     // Each cb_in entry has misalignment spare bytes for the reader to bounce a misaligned source line into place.
     // Quasar's unpacker steps through a DFB one whole tile per entry, so there the reader bounces through a scratchpad.
     const bool bounce_in_scratchpad = (misalignment > 0) && (input_tensor.device()->arch() == tt::ARCH::QUASAR);

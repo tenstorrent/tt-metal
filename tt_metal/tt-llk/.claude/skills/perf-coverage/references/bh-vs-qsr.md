@@ -28,7 +28,7 @@ perf-only `_PERF_AXES`, and the C++ `BinaryOp` or kernel path.
 |---|---|---|
 | Name pairing | One QSR perf versus six functional names | Split wrappers |
 | Axis packaging | `formats_dest_acc` versus `formats` + `dest_acc`; tuple `binary_op_mathop_approx` versus `mathop` + `approx_mode` | Unbundle to BH names |
-| Enum alias | QSR `SfpuElwmulInt` versus BH `SfpuMulInt32` | Keep the QSR member; the test maps it onto the WH/BH kernel |
+| Enum alias | QSR `SfpuElwmulInt` versus BH `SfpuMulInt32` | Sweep `SfpuMulInt32` on both; `MATH_OP` maps the Int32 members to the Quasar `BinaryOp` enumerators |
 | Real ISA | the Quasar int sweep has no shifts; BH int SUB; BH `bcast_dim` | Keep the difference |
 | Family split | BH `div`/`atan2` are separate tests; QSR lumps them into `float` | Split QSR only if the kernel exists; do not invent BH families |
 
@@ -36,7 +36,7 @@ perf-only `_PERF_AXES`, and the C++ `BinaryOp` or kernel path.
 
 Blackhole typically sweeps flat `formats`, `dest_acc`, `mathop`,
 `approx_mode`. Quasar often packs `QuasarSfpuVariant` or
-`(binary_op, mathop, approx)` tuples. Explode the representatives into named
+`(mathop, approx)` tuples. Explode the representatives into named
 axes, keeping the same combinations with callable constraints
 (`helpers.param_config._params_solve_dependencies` resolves callables from
 argument names):
@@ -61,16 +61,16 @@ FLOAT_SWEEP = dict(
 )
 ```
 
-Resolve `QuasarSfpuVariant` and `binary_op = mathop.cpp_enum_value` inside
-the test, not as a sweep axis.
+Resolve `QuasarSfpuVariant` inside the test, not as a sweep axis. The kernel
+enumerator comes from `MATH_OP(mathop=mathop)`, never from a sweep axis.
 
 ## 3. Shared aliases, not Quasar-only enum members
 
 `SfpuGtInt` / `SfpuLtInt` / `SfpuLeInt` / `SfpuGeInt` remain in
 `helpers/llk_params.py` as aliases. They are not sweep values; sweeps use
-`SfpuElwLt/Gt/Le/Ge` on every architecture. `SfpuElwmulInt` stays
-Quasar-only (`BinaryOp::MUL`); the test maps it to `SfpuMulInt32`
-(`MUL_INT32`) and must not treat them as one sweep value. `SfpuCopyDest`
+`SfpuElwLt/Gt/Le/Ge` on every architecture. Quasar sweeps
+`SfpuMulInt32` / `SfpuMaxInt32` / `SfpuMinInt32` like WH/BH; `MATH_OP` emits
+their `BinaryOp::MUL` / `MAX` / `MIN` enumerators on Quasar. `SfpuCopyDest`
 (`COPY_DEST`) is declared only on Quasar. Leave `MathOpType.SFPU_BINARY` as
 it is, and keep a guard that `COPY_DEST` is absent from the WH/BH `BinaryOp`
 enums.

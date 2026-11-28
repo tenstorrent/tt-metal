@@ -53,6 +53,7 @@ tt::tt_metal::PhysicalSystemDescriptor build_grid_mock_psd(
 
 // The PSD a solve over a subset of hosts sees: only `hosts` keep their ASIC descriptors, ranks and topologies,
 // but their ASICs keep every eth link they report, including links to ASICs on hosts outside the subset.
+// Built through the protobuf constructor, as an externally produced descriptor would be.
 tt::tt_metal::PhysicalSystemDescriptor restrict_mock_psd_to_hosts(
     const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<std::string>& hosts);
 

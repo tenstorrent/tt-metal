@@ -19,6 +19,7 @@
 #include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "dataflow/dispatch_fabric2d_reader_ct_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/local_semaphore.hpp"
 
 namespace dspf2d::routing_index {
 
@@ -144,47 +145,11 @@ inline Risc risc_view(const Scratch& c, uint32_t risc) {
     return Risc{base, base + n, base + 2u * n};
 }
 
-// Program semaphores: the runtime resets them on every launch, so a stale value is never read as a signal.
-// Dataflow firmware exposes their base as sem_l1_base; TRISC firmware does not, so a compute RISC reads it
-// from the launch message. BRISC advances launch_msg_rd_ptr only after every RISC of the core finishes, so
-// the pointer names this launch throughout.
-inline uint32_t semaphore_base() {
-#if defined(COMPILE_FOR_TRISC)
-    const uint32_t rd = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
-    const volatile tt_l1_ptr kernel_config_msg_t* cfg = &GET_MAILBOX_ADDRESS_DEV(launch[rd])->kernel_config;
-    return cfg->kernel_config_base[ProgrammableCoreType::TENSIX] + cfg->sem_offset[ProgrammableCoreType::TENSIX];
-#else
-    return reinterpret_cast<uint32_t>(sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)]);
-#endif
-}
+// Program semaphores, by id: the runtime resets them on every launch, so a stale value is never read as a signal.
+inline void signal(uint32_t id, uint32_t value) { local_semaphore::post(local_semaphore::addr(id), value); }
 
-// Same word on every RISC of the core; the L1 alignment is the stride the runtime lays them out at.
-inline volatile tt_l1_ptr uint32_t* semaphore(uint32_t id) {
-    return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_base() + id * L1_ALIGNMENT);
-}
-
-// The fences keep this RISC's earlier stores ahead of the signal and later accesses behind it.
-inline void fence() { asm volatile("fence" ::: "memory"); }
-
-inline void signal(uint32_t id, uint32_t value) {
-    fence();
-    *semaphore(id) = value;
-    fence();
-}
-
-// Invalidate before each poll in case the data cache is enabled. With the watcher enabled, a RISC stuck in
-// this wait shows waypoint RIW (waiting); RID means it got past.
 inline void wait_at_least(uint32_t id, uint32_t value) {
-    WAYPOINT("RIW");
-    volatile tt_l1_ptr uint32_t* sem = semaphore(id);
-    while (true) {
-        invalidate_l1_cache();
-        if (*sem >= value) {
-            break;
-        }
-    }
-    fence();
-    WAYPOINT("RID");
+    local_semaphore::wait_at_least(local_semaphore::addr(id), value);
 }
 
 inline void wait_all_riscs(uint32_t value) {

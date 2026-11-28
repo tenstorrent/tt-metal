@@ -19,6 +19,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+import hashlib
 import random
 import math
 from tracy import signpost
@@ -71,6 +72,15 @@ def gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_
 
 
 random.seed(10)
+
+
+def deterministic_shuffle(items: list, seed: str) -> None:
+    """In-place reproducible shuffle ordered by a SHA-256 hash of seed + index.
+
+    Used for test core-placement permutations (not security sensitive).
+    """
+    indexed = sorted(enumerate(items), key=lambda p: hashlib.sha256(f"{seed}:{p[0]}".encode()).digest())
+    items[:] = [item for _, item in indexed]
 
 
 def num_cores_to_rectangle_grid(num_cores, mesh_device):
@@ -313,7 +323,7 @@ def run_multi_core_matmul_1d(
         # x, y
         if isinstance(grid, tuple):  # Generate random grid
             CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])]
-            random.shuffle(CORE_RANGE)
+            deterministic_shuffle(CORE_RANGE, "rs_matmul_core_range")
         else:  # Use custom grid
             if use_physical_to_logical_mapping:
                 mapping = get_physical_to_logical_core_mapping(mesh_device)

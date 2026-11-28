@@ -66,6 +66,7 @@ void kernel_main() {
     const uint32_t links = get_arg_val<uint32_t>(5);
     // The chip's index among the cache's owners (the plan's block % num_devices); my_rank is its fabric rank.
     const uint32_t my_owner = get_arg_val<uint32_t>(6);
+    const uint32_t local_dir = get_arg_val<uint32_t>(7);  // the direction whose channels also carry this chip's rows
     constexpr uint32_t dest_chip_ids[] = DEST_CHIP_ID;
     constexpr uint32_t dest_mesh_ids[] = DEST_MESH_ID;
 
@@ -96,11 +97,11 @@ void kernel_main() {
 
     // Whether this sender's (link, direction) channel carries `requester`'s rows; called once per requester, in
     // order. The direction is the fabric's next hop, as in the writer, so the completion increments follow the data.
-    // This chip's own rows need no fabric and go to direction 0. Requesters on one direction alternate between the
-    // links.
+    // This chip's own rows need no fabric and go to local_dir, the chip's first direction. Requesters on one
+    // direction alternate between the links.
     uint32_t nth_on_dir = 0;
     auto serves = [&](uint32_t requester) {
-        bool on_dir = dir == 0;
+        bool on_dir = dir == local_dir;
         if (requester != my_rank) {
             on_dir = static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(
                          dest_mesh_ids[requester], dest_chip_ids[requester])) == dir;
