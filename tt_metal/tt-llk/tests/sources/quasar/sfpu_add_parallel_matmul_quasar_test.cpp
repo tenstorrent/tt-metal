@@ -49,15 +49,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_blocks = RT_DIM / rt_block;
 
     // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
-    _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
-        static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
+    // Matmul's hw startup takes the operands reversed: in0 (A) feeds SrcB and in1 (B) feeds SrcA.
+    _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
+        static_cast<DataFormat>(formats.unpack_B_dst), static_cast<DataFormat>(formats.unpack_A_dst));
     {
         START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE != PerfRunType::L1_TO_L1)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         }
-        set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
@@ -297,7 +297,6 @@ void uninit_zone()
 
 #include "ckernel_buf_desc.h"
 #include "llk_pack.h"
-#include "llk_pack_matmul.h"
 #include "params.h"
 
 // Out of line and after run_kernel, so adding the zone leaves run_kernel's code unchanged.
@@ -324,7 +323,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_dest_init_<p_pacr::PACK0, dest_sync>();
     }
+    // matmul_block_init has no pack part on Quasar: the one-tile pack MOP is llk_pack_init's, and pack_block sets the count.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
+    const ckernel::TensorShape output_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces);
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_C[0]), formats.pack_dst);
+    _llk_pack_init_(ckernel::trisc::BFD_ID_PACK0, output_shape);
     {
         START_PERF_MEASURE("INIT")
         // PACK_ISOLATE packs without a math<->pack handshake.
@@ -334,10 +337,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
 
-        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
-            ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces), L1_ADDRESS(buffer_C[0]), formats.pack_dst);
-        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
-        _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
     }
     {
@@ -351,7 +350,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
-                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/, output_shape, rt_block * CT_DIM);
                     // Stands in for the idle math's post, so the section done's SEMGET never underflows.
                     ckernel::trisc::t6_semaphore_post(ckernel::trisc::semaphore::MATH_PACK);
                     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
@@ -365,7 +364,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/);
+                    _llk_pack_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/, output_shape, rt_block * CT_DIM);
                     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
