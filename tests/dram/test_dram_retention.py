@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""GDDR retention and read-disturb test: every DRAM address the allocator leaves free is written once, read later.
+"""GDDR retention and read-disturb test: nearly all of DRAM is written once, then read back later.
 
 The health check runs test_gddr_retention in its weekly and full tiers (PYTESTS["gddr_retention"] in
 tools/scaleout/exabox/health_check_test_suite/diag/device_tests.py), and
@@ -13,9 +13,9 @@ RETENTION_CHIPS lists some (RETENTION_CHIPS=0,5):
 test_gddr_retention writes each bank once with a hashed pattern, then reads and compares all of it in passes that start
 RETENTION_GAPS_S apart (default 2,2,2: reads 2, 4 and 6 s after the write). Every sweep visits a bank in the same
 order, so each address waits the gap. Each failing word is reported in the JSON with its chip, bank, address, expected
-and read values, flipped bits, first failing read and its page's classification. RETENTION_SECONDS keeps reading at the
-last gap until that long after the write; RETENTION_REPS=n reads each chunk n times a pass and counts every failing
-read.
+and read values, flipped bits, first failing read and its page's classification, up to LOG_CAP (112) words a slice per
+read; the rest are counted as unlogged_words. RETENTION_SECONDS keeps reading at the last gap until that long after the
+write; RETENTION_REPS=n reads each chunk n times a pass and counts every failing read.
 
 test_gddr_retention_detects_changes is the negative test. It reads on the same default schedule, whatever
 RETENTION_GAPS_S says. Between the write and the reads a third program flips bits of single words (the first and last
@@ -34,8 +34,9 @@ data-movement RISCs take a contiguous slice each.
 
 The pattern (one hash per 64 B line, XORed per word, unique per bank, address and seed) and the miss classification
 (stale: the previous pattern's data; alias of address bit k: the data at the address with bit k flipped; other) come
-from Nikola Milicevic's DRAM sweep stress test. RETENTION_PATTERNS=2 adds the complement (seed 2m + 1 inverts seed 2m),
-so every cell holds both a 1 and a 0 and a miss can be classified stale.
+from Nikola Milicevic's DRAM sweep stress test. A slice classifies its first RETENTION_DECODE_MAX (4096) bad pages of a
+read; later ones are undecoded. RETENTION_PATTERNS=2 adds the complement (seed 2m + 1 inverts seed 2m), so every cell
+holds both a 1 and a 0 and a miss can be classified stale.
 """
 
 import json
@@ -55,7 +56,7 @@ BANKS = 8
 PAGE_BYTES = 2048
 PAGE_WORDS = PAGE_BYTES // 4
 BARRIER_BYTES = 64
-# Blackhole maps 4080 MiB per bank; the 16 MiB above it is GDDR register space.
+# Blackhole's DRAM bank size, dram_bank_size in its soc descriptor: 4080 MiB.
 DRAM_TOP = 0xFF000000
 ROW_WORDS = 512
 LOG_OFF = 64

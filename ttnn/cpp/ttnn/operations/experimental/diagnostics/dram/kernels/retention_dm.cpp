@@ -113,7 +113,7 @@ FORCE_INLINE bool source_covered(
 }
 
 // Reads what each 64 B line of the page holds at line ^ flip into `raw_addr`, line by line: a page can cross the
-// flipped bit, so its source need not be one block. False if a source line is in the register space past DRAM_TOP.
+// flipped bit, so its source need not be one block. False if a source line is at or past DRAM_TOP, the bank's end.
 FORCE_INLINE bool read_source(uint32_t raw_addr, uint32_t addr, uint32_t words, uint32_t bank, uint32_t flip) {
     bool readable = true;
     for (uint32_t line = 0; readable && line < (words >> 4); ++line) {

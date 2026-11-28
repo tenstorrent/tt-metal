@@ -103,11 +103,11 @@ PYTESTS = {
         "target": "tests/dram/test_dram_act_patterns.py::test_dram_act_all_ctrls_screen",
         "args": ["-s"],
     },
-    # gddr_retention: every DRAM address the allocator leaves free is written
-    # once, then read back and compared 2, 4 and 6 s later. gddr_fast/gddr_full
-    # read each chunk straight back, so they never test retention. The JSON
-    # report, with every failing address and its flipped bits, goes to the
-    # check's log directory.
+    # gddr_retention: 99.9999% of each DRAM bank is written once, then read
+    # back and compared 2, 4 and 6 s later. gddr_fast/gddr_full read each
+    # chunk straight back, so they never test retention. The JSON report, with
+    # the failing addresses and their flipped bits, goes to the check's log
+    # directory.
     "gddr_retention": {
         "target": "tests/dram/test_dram_retention.py::test_gddr_retention",
         "args": ["-s"],
