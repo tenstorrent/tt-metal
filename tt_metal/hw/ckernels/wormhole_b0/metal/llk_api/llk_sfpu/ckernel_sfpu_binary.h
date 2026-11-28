@@ -181,6 +181,15 @@ inline void calculate_sfpu_binary(
         rne_bias = kBf16RneBias;
         rne_mask = kBf16RneMask;
     }
+    // NEXTAFTER: the +inf bit pattern its NaN classifier compares both magnitudes against, and
+    // the smallest step away from zero (one ULP of the entry point's format), held in LREGs across
+    // the loop for the same reason. Loaded only for NEXTAFTER; unassigned otherwise.
+    sfpi::vInt inf_bits;
+    sfpi::vFloat tiny;
+    if constexpr (BINOP == BinaryOp::NEXTAFTER || BINOP == BinaryOp::NEXTAFTER_BF16) {
+        inf_bits = 0x7F800000;
+        tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt((BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1));
+    }
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
@@ -229,20 +238,31 @@ inline void calculate_sfpu_binary(
             // bfloat16 keeps its mantissa in the top 16 bits of the fp32 dest register, so one of
             // its ULPs is 0x10000 there.
             constexpr int kUlpStep = (BINOP == BinaryOp::NEXTAFTER_BF16) ? 0x10000 : 1;
-            // Kept flat, with every value declared up front: the sfpi predication pass does not
-            // survive a v_if nested inside a v_else here.
+            // Every value is declared up front and nothing nests inside a v_else: the sfpi
+            // predication pass does not survive a v_if nested inside a v_else here.
             sfpi::vInt bits = sfpi::as<sfpi::vInt>(in0);
             // A step of zero leaves in0 alone, which is what in0 == in1 wants.
             sfpi::vInt step = 0;
             // The bit pattern grows away from zero for either sign, so the direction of the step
-            // depends on in0's sign as well as on which side in1 lies.
-            v_if(in0 < in1 && in0 >= 0.0f) { step = kUlpStep; }
+            // depends on in0's sign as well as on which side in1 lies. The two sides are not
+            // written symmetrically, and the asymmetry is load-bearing: sfpi lowers `in0 < 0.0f`
+            // to an SFPSETCC on in0's bits, but `in0 <= 0.0f` has no SETCC mode and goes through
+            // an SFPMAD negation, which flushes a denormal in0 to zero. The nested test below
+            // uses that flush-based arm on the in0 > in1 side, so a positive denormal in0 with
+            // in1 < in0 steps one ULP away from in1 (the largest denormal lands on +FLT_MIN); a
+            // sign-bit test there would step it toward zero instead. The in0 < in1 side needs only
+            // the sign bit, so it is one arm plus a flip.
+            v_if(in0 < in1) { step = kUlpStep; }
             v_endif;
-            v_if(in0 < in1 && in0 < 0.0f) { step = -kUlpStep; }
+            v_if(in0 < 0.0f) { step = -step; }
             v_endif;
-            v_if(in0 > in1 && in0 > 0.0f) { step = -kUlpStep; }
-            v_endif;
-            v_if(in0 > in1 && in0 <= 0.0f) { step = kUlpStep; }
+            v_if(in0 > in1) {
+                step = -kUlpStep;
+                // Nested on purpose: the inner SETCC narrows the outer predicate, so the
+                // in1 - in0 difference is formed once for both arms.
+                v_if(in0 <= 0.0f) { step = kUlpStep; }
+                v_endif;
+            }
             v_endif;
             result = sfpi::as<sfpi::vFloat>(bits + step);
             // Equal operands return the target. The direction tests above compare through a
@@ -258,15 +278,17 @@ inline void calculate_sfpu_binary(
             // the sign first is what brings -0.0 into the guard.
             sfpi::vFloat mag_a = sfpi::setsgn(in0, 0);
             sfpi::vFloat mag_b = sfpi::setsgn(in1, 0);
-            sfpi::vFloat tiny = sfpi::as<sfpi::vFloat>(sfpi::vInt(kUlpStep));
-            v_if(mag_a == 0.0f && in1 > 0.0f) { result = tiny; }
-            v_endif;
-            v_if(mag_a == 0.0f && in1 < 0.0f) { result = -tiny; }
-            v_endif;
-            // Equal operands return the target, so two zeros return in1's zero, which is not
-            // always in0's: nextafter(+0, -0) is -0. This runs after the two guards above because
-            // they compare in1 against zero, which is itself unspecified when in1 is negative zero.
-            v_if(mag_a == 0.0f && mag_b == 0.0f) { result = in1; }
+            v_if(mag_a == 0.0f) {
+                // The smallest step toward in1 carries in1's sign, except that a positive in1 the
+                // direction compares flush to zero (+0, +denormal) keeps in0. For a zero in0 those
+                // compares leave step non-zero exactly when in1 is normal or infinite.
+                v_if(in1 < 0.0f || step != 0) { result = sfpi::copysgn(tiny, in1); }
+                v_endif;
+                // Equal operands return the target, so two zeros return in1's zero, which is not
+                // always in0's: nextafter(+0, -0) is -0.
+                v_if(mag_b == 0.0f) { result = in1; }
+                v_endif;
+            }
             v_endif;
             // A NaN in either operand has to propagate, and nothing above arranges that: SFPSETCC
             // is specified only for a comparand that is neither negative zero nor NaN, so the
@@ -276,11 +298,8 @@ inline void calculate_sfpu_binary(
             // reason ckernel_sfpu_isclose.h reads bit patterns for its own Inf/NaN lanes. A
             // widened bfloat16 NaN has that exponent and a non-zero mantissa too, so this serves
             // both entry points unchanged. Last, so it wins over the direction and zero arms.
-            constexpr int32_t kInfBits = 0x7F800000;
-            constexpr int32_t kAbsMask = 0x7FFFFFFF;
-            v_if((bits & kAbsMask) > kInfBits) { result = nan; }
-            v_endif;
-            v_if((sfpi::as<sfpi::vInt>(in1) & kAbsMask) > kInfBits) { result = nan; }
+            // setsgn(x, 0) clears only the sign bit, so the magnitudes above are the masked patterns.
+            v_if(sfpi::as<sfpi::vInt>(mag_a) > inf_bits || sfpi::as<sfpi::vInt>(mag_b) > inf_bits) { result = nan; }
             v_endif;
         }
 
