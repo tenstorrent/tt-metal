@@ -1,0 +1,4 @@
+{
+  "arch": "K2HorizonMoVAQB2ForCausalLM",
+  "main_class": "models.demos.k2_horizon_mova_36b_a4b_qb2.tt.generator_vllm:K2HorizonForCausalLM"
+}
