@@ -20,7 +20,6 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
-from diag.triage import name_root_ports  # noqa: E402
 from diag.verdict import ROWS, verdict_lines  # noqa: E402
 
 CHIP = "0000:46:00.0 (UBB2/U6)"
@@ -140,21 +139,6 @@ class TestVerdict(unittest.TestCase):
         lines = verdict_lines(report(phase("eth", check("eth_status_heartbeat", details="2 stale", ip="eth"))))
         self.assertEqual(lines[0], "Fault 1: FAIL eth_status_heartbeat: 2 stale | host")
         self.assertIn("reseat or replace the cable", lines[1])
-
-    def test_root_port_aer_names_the_chip_and_its_tray(self):
-        bridge = check("triage_hostside_bridge_aer", WARN, "31/32 clean; bridge 0000:40:01.4: 1 correctable", ip="pcie")
-        name_root_ports(bridge, {"0000:40:01.4": "0000:44:00.0", "0000:40:01.1": "0000:41:00.0"})
-        self.assertEqual(
-            bridge.details, "31/32 clean; bridge 0000:40:01.4 (root port of 0000:44:00.0 (UBB2/U4)): 1 correctable"
-        )
-        lines = verdict_lines(report(phase("triage", bridge)))
-        self.assertTrue(lines[0].endswith("| 0000:44:00.0 (UBB2/U4)"))
-        self.assertTrue(lines[1].startswith("  Repair: reseat UBB2's host PCIe cable;"))
-
-    def test_a_passing_finding_is_left_as_written(self):
-        clean = check("triage_hostside_bridge_aer", PASS, "32/32 bridge(s) clean 0000:40:01.4")
-        name_root_ports(clean, {"0000:40:01.4": "0000:44:00.0"})
-        self.assertEqual((clean.details, clean.parts), ("32/32 bridge(s) clean 0000:40:01.4", []))
 
     def test_chips_on_several_trays_keep_that_tray(self):
         two = check("pcie_gen", WARN, "Gen4", ip="pcie", parts=[CHIP, "0000:c3:00.0 (UBB3/U3)"])

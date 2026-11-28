@@ -19,6 +19,7 @@ import threading
 import time
 import types
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -27,7 +28,7 @@ SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 sys.path.insert(0, str(TESTS_DIR))
 
-from diag import busbar, sensors  # noqa: E402
+from diag import busbar, sensors, xchip  # noqa: E402
 from diag.galaxy import expected_bdf, format_bdf  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Phase  # noqa: E402
 from diag.verdict import ROWS, verdict_lines  # noqa: E402
@@ -40,9 +41,7 @@ BDFS = [expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9)]
 
 
 class BusbarCase(SensorCase):
-    """SensorCase's fake BMC, plus a fake sysfs of 32 chips and stand-in loads.
-
-    ``tray_inject`` sets an HSC flag; ``load_variant`` makes a load a python snippet."""
+    """SensorCase's fake BMC, plus a fake sysfs of 32 chips and stand-in loads (``self.loads[kind]`` is a python snippet)."""
 
     def setUp(self):
         super().setUp()
@@ -61,20 +60,16 @@ class BusbarCase(SensorCase):
             (dev.resolve() / "current_link_width").write_text("16\n")
             (dev.resolve() / "hwmon" / "hwmon0").mkdir(parents=True)
             (dev.resolve() / "hwmon" / "hwmon0" / "temp1_input").write_text("45000\n")
-        # The fake BMC answers ipmitool raw; anything else (the --hook script) really runs.
-        run = mock.patch.object(
-            sensors.subprocess, "run", lambda cmd, **kw: (self.fake.run if "raw" in cmd else REAL_RUN)(cmd, **kw)
-        )
-        run.start()
-        self.addCleanup(run.stop)
-        self.loads = {}
-        self.sel = []
-        self.captured = []
+        self.loads, self.sel = {}, []
         for p in (
+            # The fake BMC answers ipmitool raw; anything else (the --hook script) really runs.
+            mock.patch.object(
+                sensors.subprocess, "run", lambda cmd, **kw: (self.fake.run if "raw" in cmd else REAL_RUN)(cmd, **kw)
+            ),
             mock.patch.object(busbar, "LEG_FILE", self.dir / "leg.json"),
             mock.patch.object(busbar, "LOADS", {**busbar.LOADS, **{k: self._load(k) for k in ("didt", "max_util")}}),
             mock.patch.object(busbar, "_read", lambda cmd, _dry: ("\n".join(self.sel), "")),
-            mock.patch.object(busbar, "capture_events", lambda *a: self.captured.append(a)),
+            mock.patch.object(busbar, "capture_events", lambda *a: None),
             mock.patch.object(busbar, "boot_id", lambda: "boot-a"),
             mock.patch.object(busbar, "QUIET_CAP_S", 0.2),
         ):
@@ -82,17 +77,7 @@ class BusbarCase(SensorCase):
             self.addCleanup(p.stop)
 
     def _load(self, kind):
-        def build(_tt_metal, s):
-            code = self.loads.get(kind, "print('ok')")
-            return [sys.executable, "-c", code], {}
-
-        return build
-
-    def tray_inject(self, tray, flag_reg, value, addr=None):
-        self.fake.set(tray, addr or sensors.HSC_ADDRS[0], flag_reg, value)
-
-    def load_variant(self, kind, code):
-        self.loads[kind] = code
+        return lambda _tt_metal, _s: ([sys.executable, "-c", self.loads.get(kind, "print('ok')")], {})
 
     def run_stage(self, steps, hook=None):
         phase = Phase(name="busbar")
@@ -143,8 +128,6 @@ class TestParse(unittest.TestCase):
         self.assertEqual(busbar.hung_chip("Start sync device id: 3\nEnd sync device id: 3\n", self.bdfs), "")
 
     def test_xchip_plugin_fails_and_names_the_odd_chip(self):
-        from diag import xchip
-
         torch = types.SimpleNamespace(equal=lambda a, b: a == b)
         warned = []
         pool = xchip._pool(torch, types.SimpleNamespace(warning=warned.append))(2)
@@ -154,12 +137,8 @@ class TestParse(unittest.TestCase):
         self.assertEqual(list(pool.map(str, [1])), ["1"])
 
     def test_cross_chip_outliers(self):
-        from diag.xchip import cross_chip_outliers
-
-        eq = lambda a, b: a == b
-        self.assertEqual(cross_chip_outliers([1, 1, 2, 1], eq), [2])
-        self.assertEqual(cross_chip_outliers([1, 1, 1], eq), [])
-        self.assertEqual(cross_chip_outliers([1, 3, 1, 3, 3], eq), [0, 2])
+        for outputs, want in (([1, 1, 2, 1], [2]), ([1, 1, 1], []), ([1, 3, 1, 3, 3], [0, 2])):
+            self.assertEqual(xchip.cross_chip_outliers(outputs, lambda a, b: a == b), want)
 
 
 class TestStage(BusbarCase):
@@ -171,9 +150,8 @@ class TestStage(BusbarCase):
         self.assertFalse((self.dir / "leg.json").exists())
 
     def test_loads_run_from_the_tt_metal_checkout(self):
-        self.load_variant("didt", "import os; print(os.getcwd())")
-        here = os.getcwd()
-        self.addCleanup(os.chdir, here)
+        self.loads["didt"] = "import os; print(os.getcwd())"
+        self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.sys)
         self.run_stage(STEPS[:1])
         self.assertEqual((self.dir / "logs" / "busbar_burst1.log").read_text().strip(), str(self.dir))
@@ -185,29 +163,25 @@ class TestStage(BusbarCase):
         self.assertNotIn("busbar", by)
 
     def test_numeric_fault_fails_naming_the_chip(self):
-        self.load_variant("didt", "print('Device 5 output differs from the other chips')")
+        self.loads["didt"] = "print('Device 5 output differs from the other chips')"
         _, by = self.run_stage(STEPS)
         self.assertEqual(by["busbar_numeric"].status, FAIL)
         self.assertEqual(by["busbar_numeric"].parts, [format_bdf(BDFS[5])])
 
     def test_hsc_trip_fails_on_its_tray(self):
-        self.tray_inject(2, 0x79, 0x0040)
+        self.fake.set(2, sensors.HSC_ADDRS[0], 0x79, 0x0040)
         phase, by = self.run_stage(STEPS)
         self.assertEqual(by["busbar_hsc_trip"].status, FAIL)
         self.assertIn("tray 2", by["busbar_hsc_trip"].details)
-        from dataclasses import asdict
-
         report = {"phases": {"busbar": asdict(phase)}}
         self.assertTrue(any(ROWS["F01"].do.replace("that tray", "UBB2") in line for line in verdict_lines(report)))
 
     def test_hang_is_captured_before_the_load_is_stopped(self):
-        self.load_variant("didt", "import time; print('Start sync device id: 6', flush=True); time.sleep(60)")
+        self.loads["didt"] = "import time; print('Start sync device id: 6', flush=True); time.sleep(60)"
         alive = []
-        with mock.patch.object(busbar, "BRINGUP_S", 0.5), mock.patch.object(
-            busbar, "HANG_GRACE_S", 0
-        ), mock.patch.object(busbar, "capture_events", lambda *a: alive.append(True)), mock.patch.object(
-            busbar, "kill_process_group", wraps=busbar.kill_process_group
-        ) as stop:
+        with mock.patch.multiple(
+            busbar, BRINGUP_S=0.5, HANG_GRACE_S=0, capture_events=lambda *a: alive.append(True)
+        ), mock.patch.object(busbar, "kill_process_group", wraps=busbar.kill_process_group) as stop:
             _, by = self.run_stage(STEPS)
         self.assertEqual(alive, [True])
         stop.assert_called_once()
@@ -229,7 +203,6 @@ class TestStage(BusbarCase):
         self.assertEqual(by["busbar_reboot"].details, "host rebooted during chunk25m -> POWER: PSU/feed, see SEL")
 
     def test_new_sel_power_line_is_a_power_fail(self):
-        self.load_variant("didt", "print('ok')")
         orig = busbar._after_step
 
         def after(*a):
@@ -249,7 +222,7 @@ class TestStage(BusbarCase):
 
     def test_link_change_is_a_warn(self):
         dev = (self.sys / "bus" / "pci" / "devices" / BDFS[1]).resolve()
-        self.load_variant("didt", f"open({str(dev / 'current_link_width')!r}, 'w').write('8\\n')")
+        self.loads["didt"] = f"open({str(dev / 'current_link_width')!r}, 'w').write('8\\n')"
         _, by = self.run_stage(STEPS[:1])
         self.assertEqual(by["busbar_pcie_link"].parts, [format_bdf(BDFS[1])])
 
@@ -265,10 +238,9 @@ class TestStage(BusbarCase):
         self.assertEqual((self.dir / "hook.args").read_text().split()[:3], ["load", "power_virus", "5"])
 
     def test_sigterm_stops_the_load_cleanly(self):
-        self.load_variant("didt", "import time; time.sleep(60)")
+        self.loads["didt"] = "import time; time.sleep(60)"
         got = []
-        before = signal.getsignal(signal.SIGTERM)
-        self.addCleanup(signal.signal, signal.SIGTERM, before)
+        self.addCleanup(signal.signal, signal.SIGTERM, signal.getsignal(signal.SIGTERM))
         outer = lambda *_: got.append(1)  # noqa: E731 - the runner's own handler
         signal.signal(signal.SIGTERM, outer)
         timer = threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGTERM))

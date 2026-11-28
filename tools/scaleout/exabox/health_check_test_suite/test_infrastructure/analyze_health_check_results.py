@@ -56,19 +56,11 @@ CHECK_CATEGORY = {
 }
 STRESS_PHASES = {"tests", "retest"}
 
-# Cause class of a WARN/FAIL row, by category. A chip gone from the bus is
-# POWER (12 V lost), POWER-DOWNSTREAM (12 V present, VR power-good low) or
-# PCIE/LINK, and only the tray's power reads tell which: the run sets the row's
-# own cause from them (diag/sensors.py); without one a lost chip is UNKNOWN
-# rather than a guess.
+# Cause class of a WARN/FAIL row, by category. A lost chip is UNKNOWN unless the run set the row's own cause from the
+# tray's power reads (diag/sensors.py).
 CAUSE_BY_CATEGORY = {
-    "pcie": "PCIE/LINK",
-    "eth": "PCIE/LINK",
-    "gddr": "CHIP/BOARD",
-    "asic": "CHIP/BOARD",
-    "firmware": "CHIP/BOARD",
-    "thermal": "CHIP/BOARD",
-    "board": "CHIP/BOARD",
+    **dict.fromkeys(("pcie", "eth"), "PCIE/LINK"),
+    **dict.fromkeys(("gddr", "asic", "firmware", "thermal", "board"), "CHIP/BOARD"),
 }
 CHIP_LOST_CHECKS = {"pcie_enum_count", "asic_location_per_ubb"}
 TRAY_RE = re.compile(r"\((UBB\d)/U\d\)")
@@ -235,12 +227,7 @@ def part_cell(parts: list) -> str:
     """The check's chips, '; '-joined; a tray with all 8 chips listed is named once."""
     trays = [m.group(1) if m else None for m in map(TRAY_RE.search, parts)]
     whole = {t for t in trays if t and trays.count(t) == 8}
-    out = []
-    for p, t in zip(parts, trays):
-        name = f"{t} (all 8 chips)" if t in whole else p
-        if name not in out:
-            out.append(name)
-    return "; ".join(out)
+    return "; ".join(dict.fromkeys(f"{t} (all 8 chips)" if t in whole else p for p, t in zip(parts, trays)))
 
 
 def iter_checks(report: dict, primary_only: bool = True):

@@ -2,13 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCIe AER counters per chip, before and after the run: a link that retrains or
-replays under load counts errors at the chip or its root port long before it
-drops, and the kernel log only shows the ones it rate-limits through.
-
-Reads sysfs only (``aer_dev_correctable``, ``aer_dev_nonfatal``,
-``aer_dev_fatal``, readable by any user), so it needs no privileges.
-"""
+"""PCIe AER counters per chip and root port, before and after the run (sysfs ``aer_dev_*``, no privileges)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -18,13 +12,12 @@ from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .resets import chip_root_ports
 
 PCIE_AER_DIFF = "pcie_aer_diff"  # the check this module emits
-AER_FILES = ("correctable", "nonfatal", "fatal")
 
 
 def _counters(dev: Path) -> dict[str, int]:
     """'<severity> <name>' -> count for one PCIe function; empty when it has no AER."""
     out = {}
-    for sev in AER_FILES:
+    for sev in ("correctable", "nonfatal", "fatal"):
         try:
             text = (dev / f"aer_dev_{sev}").read_text()
         except OSError:
@@ -37,8 +30,7 @@ def _counters(dev: Path) -> dict[str, int]:
 
 
 def read_aer(sys_root: Path = Path("/sys")) -> dict[str, dict[str, int]]:
-    """chip BDF -> its own and its root port's AER counters, keyed 'chip <sev> <name>'
-    and 'root port <sev> <name>'."""
+    """chip BDF -> its own and its root port's counters, keyed 'chip <sev> <name>' and 'root port <sev> <name>'."""
     devices = sys_root / "bus" / "pci" / "devices"
     return {
         chip: {
@@ -51,9 +43,7 @@ def read_aer(sys_root: Path = Path("/sys")) -> dict[str, dict[str, int]]:
 
 
 def check_aer(phase: Phase, before: dict[str, dict[str, int]], after: dict[str, dict[str, int]]) -> None:
-    """Add ``pcie_aer_diff``: FAIL for an uncorrectable (nonfatal or fatal) count that
-    rose during the run, WARN for a correctable one, else PASS; SKIP when sysfs showed
-    no counters. A chip gone by the end is the lost-chip checks' finding, not this one's."""
+    """Add ``pcie_aer_diff``: FAIL if an uncorrectable count rose, WARN if a correctable one did, SKIP with no counters."""
     if not any(before.values()):
         phase.add(Check(name=PCIE_AER_DIFF, status=SKIP, details="skipped: no AER counters in sysfs", ip="pcie"))
         return
@@ -63,26 +53,17 @@ def check_aer(phase: Phase, before: dict[str, dict[str, int]], after: dict[str, 
         if chip in before
     }
     rose = {chip: d for chip, d in rose.items() if d}
-    if not rose:
-        phase.add(
-            Check(
-                name=PCIE_AER_DIFF,
-                status=PASS,
-                details=f"{len(before)} chips and their root ports: no AER count rose during the run",
-                ip="pcie",
-            )
-        )
-        return
     uncorrectable = any(k.split()[-2] != "correctable" for d in rose.values() for k in d)  # sysfs names have no spaces
     phase.add(
         Check(
             name=PCIE_AER_DIFF,
-            status=FAIL if uncorrectable else WARN,
+            status=(FAIL if uncorrectable else WARN) if rose else PASS,
             details="; ".join(
                 f"{format_bdf(chip)}: " + ", ".join(f"{k} +{n}" for k, n in sorted(d.items()))
                 for chip, d in sorted(rose.items())
-            ),
-            data={"rose": rose},
+            )
+            or f"{len(before)} chips and their root ports: no AER count rose during the run",
+            data={"rose": rose} if rose else {},
             ip="pcie",
             parts=[format_bdf(chip) for chip in sorted(rose)],
         )

@@ -45,16 +45,16 @@ def fake_run(outputs: dict[str, tuple[int, str]]):
 
 
 class TestCaptureEvents(unittest.TestCase):
-    def capture(self, outputs: dict[str, tuple[int, str]]) -> dict:
+    def capture(self, run, now=None) -> Phase:
         phase = Phase(name="captures", gates=False)
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(captures, "run", fake_run(outputs)):
-            captures.capture_events(phase, False, Path(d), datetime(2026, 11, 20, tzinfo=timezone.utc))
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(captures, "run", run):
+            captures.capture_events(phase, False, Path(d), now or datetime(2026, 11, 20, tzinfo=timezone.utc))
             self.logs = sorted(p.name for p in Path(d).iterdir())
-        return {c.name: c for c in phase.checks}
+        return phase
 
     def test_lines_of_note_warn_and_name_chips(self):
-        checks = self.capture({"ipmitool": (0, SEL), "journalctl": (0, KERNEL)})
-        sel, kernel = checks["bmc_sel_events"], checks["kernel_events"]
+        phase = self.capture(fake_run({"ipmitool": (0, SEL), "journalctl": (0, KERNEL)}))
+        sel, kernel = phase.checks
         self.assertEqual(sel.status, WARN)
         # The AC loss in March is from before the run.
         self.assertEqual(len(sel.data["lines"]), 1)
@@ -66,8 +66,8 @@ class TestCaptureEvents(unittest.TestCase):
         self.assertEqual(self.logs, ["kernel_events.log", "sel.log"])
 
     def test_quiet_logs_pass(self):
-        checks = self.capture({"ipmitool": (0, ""), "journalctl": (0, "")})
-        self.assertEqual({c.status for c in checks.values()}, {PASS})
+        phase = self.capture(fake_run({"ipmitool": (0, ""), "journalctl": (0, "")}))
+        self.assertEqual({c.status for c in phase.checks}, {PASS})
 
     def test_a_read_that_cannot_run_skips(self):
         def raising(cmd, dry_run=False, **kw):
@@ -77,24 +77,19 @@ class TestCaptureEvents(unittest.TestCase):
             err = "No journal files were found." if "journalctl" in cmd else ""
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr=err)
 
-        unreadable = fake_run(
-            {"ipmitool": (1, "Could not open device\nmore"), "journalctl": (1, "sudo: a password is required")}
-        )
+        bad = {"ipmitool": (1, "Could not open device\nmore"), "journalctl": (1, "sudo: a password is required")}
         for name, run, want in (
-            ("unreadable", unreadable, [SKIP, SKIP]),
+            ("unreadable", fake_run(bad), [SKIP, SKIP]),
             ("no journal", no_journal, [PASS, SKIP]),
             ("missing tool", raising, [SKIP, SKIP]),
         ):
             with self.subTest(name):
-                phase = Phase(name="captures", gates=False)
-                with tempfile.TemporaryDirectory() as d, mock.patch.object(captures, "run", run):
-                    captures.capture_events(phase, False, Path(d), datetime.now(timezone.utc))
-                    logs = sorted(p.name for p in Path(d).iterdir())
+                phase = self.capture(run)
                 self.assertEqual([c.status for c in phase.checks], want)
                 if name == "unreadable":
                     self.assertTrue(phase.checks[0].details.endswith("rc=1: Could not open device"))
                     self.assertIn("password is required", phase.checks[1].details)
-                    self.assertEqual(logs, [])
+                    self.assertEqual(self.logs, [])
 
 
 if __name__ == "__main__":

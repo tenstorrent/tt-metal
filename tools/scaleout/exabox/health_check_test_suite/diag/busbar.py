@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The bus-bar stage: the tier's BUSBAR_STEPS (tiers.py), each a clock-checked
-quiet then one of metal's loads, with the trays' HSCs polled throughout.
+"""The bus-bar stage: the tier's BUSBAR_STEPS (tiers.py), each a clock-checked quiet then one of metal's
+loads, with the trays' HSCs polled throughout.
 
-A weak bus bar or 12 V feed shows as an HSC trip, a chip gone from PCIe, a link
-that trains down, or a chip whose matmul output differs from the other 31 (the
-diag.xchip pytest plugin). After every step the chips are recounted and the links
-and SEL re-read; a lost chip ends the loads, since each needs all 32.
+A weak bus bar or 12 V feed shows as an HSC trip, a chip gone from PCIe, a link that trains down, or a
+chip whose matmul output differs from the other 31 (the diag.xchip plugin). After every step the chips
+are recounted and the links and SEL re-read; a lost chip ends the loads, since each needs all 32.
 
-A load that outlives its step plus bring-up is a hang: the logs are captured,
-then its process group is stopped, which ends all access to the hung chip.
-Each leg writes its name and boot_id to LEG_FILE, which a reboot keeps, so the
-next run can say the host rebooted during that leg. The power_virus step is the
---hook script's ``load power_virus <seconds>`` call; with no hook it is a SKIP.
+A load that outlives its step plus bring-up is a hang: the logs are captured, then its process group is
+stopped. Each leg writes its name and boot_id to LEG_FILE, which a reboot keeps, so the next run can say
+the host rebooted during that leg. The power_virus step is the --hook script's ``load power_virus
+<seconds>`` call; with no hook it is a SKIP.
 """
 from __future__ import annotations
 
@@ -95,13 +93,9 @@ def _pcie_bw(tt_metal: Path, s: int) -> tuple[list[str], dict]:
 
 
 # Each load: (tt_metal, seconds) -> (command, extra env). "power_virus" is the hook's.
-LOADS: dict[str, Callable[[Path, int], tuple[list[str], dict]] | None] = {
-    "didt": _didt,
-    "max_util": _max_util,
-    "allgather": _allgather,
-    "pcie_bw": _pcie_bw,
-    "power_virus": None,
-}
+LOADS: dict[str, Callable[[Path, int], tuple[list[str], dict]] | None] = dict(
+    didt=_didt, max_util=_max_util, allgather=_allgather, pcie_bw=_pcie_bw, power_virus=None
+)
 IP_BY_LOAD = {"pcie_bw": "pcie", "allgather": "eth"}
 
 
@@ -127,10 +121,8 @@ def chip_clocks(sys_root: Path = SYS) -> dict[str, int]:
 
 def links(sys_root: Path = SYS) -> dict[str, str]:
     """Each chip's PCIe link as 'speed xwidth'."""
-    rd = lambda d, f: (d / f).read_text().strip()
-    return _read_by_chip(
-        sys_root, lambda n: f"{rd(n / 'device', 'current_link_speed')} x{rd(n / 'device', 'current_link_width')}"
-    )
+    rd = lambda n, f: (n / "device" / f).read_text().strip()
+    return _read_by_chip(sys_root, lambda n: f"{rd(n, 'current_link_speed')} x{rd(n, 'current_link_width')}")
 
 
 def boot_id() -> str:
@@ -212,15 +204,6 @@ def run_load(
     return ("ok" if p.returncode == 0 else "fail"), p
 
 
-def _step_line(rec: sensors.PollStep) -> dict:
-    """The step's load line: per HSC, its peak current and lowest VIN."""
-    line = {}
-    for (t, a), amps in sorted(rec.peak_a.items()):
-        vin = rec.vin_min.get((t, a))
-        line[f"tray{t}/{a:#04x}"] = f"{amps:.0f} A" + ("" if vin is None else f", VIN min {vin:.2f} V")
-    return line
-
-
 def run_busbar(
     tt_metal: Path,
     steps: tuple,
@@ -296,11 +279,11 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
             log(f"busbar {st.name}: {st.load} {st.load_s} s")
             status, proc = run_load(cmd, env, st.load_s + BRINGUP_S + HANG_GRACE_S, log_path, stop, tt_metal)
         text = log_path.read_text(errors="replace") if log_path.exists() else ""
-        data = {
-            "load": st.load,
-            "seconds": round(time.time() - t0),
-            **_step_line(poll.steps.get(st.name, sensors.PollStep())),
-        }
+        data = {"load": st.load, "seconds": round(time.time() - t0)}
+        rec = poll.steps.get(st.name, sensors.PollStep())
+        for (t, a), amps in sorted(rec.peak_a.items()):  # per HSC: peak current and lowest VIN
+            vin = rec.vin_min.get((t, a))
+            data[f"tray{t}/{a:#04x}"] = f"{amps:.0f} A" + ("" if vin is None else f", VIN min {vin:.2f} V")
         if status == "hang":
             capture_events(phase, False, logs_dir, datetime.fromtimestamp(t0, timezone.utc))
             chip = hung_chip(text, bdfs)
@@ -316,23 +299,16 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
             why = f"{', '.join(bad)} wrong output in {st.name}: {next(iter(bad.values()))}"
             _add(phase, BUSBAR_NUMERIC, FAIL, why, data=data, parts=sorted(bad), ip="asic")
         else:
-            why = f"{st.load} {data['seconds']} s" + ("" if status == "ok" else f", failed (log {log_path})")
-            _add(
-                phase,
-                BUSBAR + st.name,
-                PASS if status == "ok" else FAIL,
-                why,
-                data=data,
-                ip=IP_BY_LOAD.get(st.load, "other"),
-            )
+            ok = status == "ok"
+            why = f"{st.load} {data['seconds']} s" + ("" if ok else f", failed (log {log_path})")
+            _add(phase, BUSBAR + st.name, PASS if ok else FAIL, why, data=data, ip=IP_BY_LOAD.get(st.load, "other"))
         lost, sel0 = _after_step(phase, st.name, missing0, links0, sel0, sys_root)
         if lost:
             break
 
 
 def _after_step(phase, step, missing0, links0, sel0, sys_root) -> tuple[bool, list | None]:
-    """Recount, re-read the links and the SEL: (a chip is gone, so the loads end; the next SEL baseline).
-    A changed link becomes the next baseline."""
+    """Recount, re-read links and SEL: (a chip is gone, so the loads end; the next SEL baseline)."""
     lost = [b for b in recount_chips(sys_root)[1] if b not in missing0]
     if lost:
         why = f"{len(lost)} chip(s) gone from PCIe after {step}: {', '.join(lost)}; the device loads end here"

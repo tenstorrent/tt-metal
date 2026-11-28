@@ -188,37 +188,17 @@ pytest invocations themselves are `TESTS` / `PYTESTS` in `diag/device_tests.py`.
 
 ## Bus-bar stage
 
-After the tests, `daily`, `weekly` and `full` run `diag/busbar.py`: a weak bus
-bar or 12 V feed shows only under load after a quiet. Each tier runs
-`BUSBAR_STEPS[load_mode]` from `tiers.py` (daily `smoke`, weekly `plain`, full
-`full`); the modes share the load kinds and differ only in length (smoke ~0.5
-min; plain ~22 min: two didt bursts, max_util chunks of 1-4 min, a didt step, the
-all-gather matmul, PCIe bandwidth, the power virus; full ~46 min, with a 25 min
-chunk).
-
-The loads are metal's own: `unit_tests_didt_max_util`, the didt matmul with the
-`diag.xchip` pytest plugin (a chip whose output differs from the largest group of
-identical outputs is named), the all-gather matmul and the PCIe bandwidth gtests.
-The power virus step calls `--hook` as `SCRIPT load power_virus <seconds>
-<outdir>`; with no hook it is a SKIP.
-
-The bricks are read once at idle in `run_busbar`: one under 12.1 V is a WARN.
-Throughout the steps a thread polls only the tray HSCs, every 2 s
-(`sensors.poll_hsc`), under the shared I2C lock; a poll that misses more than two
-periods logs the gap and the lock's holder. An HSC trip (OFF, over-current) is a
-FAIL on its tray. Each step's check carries its load line (per HSC: peak A and
-lowest VIN). Before each step the chips' AICLK must fall to 800 MHz or less
-within 5 min (else a WARN naming them). After each step the chips are recounted
-(a lost chip is a FAIL and ends the stage), the PCIe links re-read (a change is a
-WARN), the log parsed for wrong output (a FAIL naming the chip), and the SEL
-re-read. A reboot during a step, seen from the boot_id kept in
-`/var/tmp/health-check-<uid>/busbar_leg.json`, or a new SEL power line is a FAIL
-`host rebooted during <step> -> POWER: PSU/feed, see SEL`. A load past its length
-plus bring-up is a hang: the SEL and kernel log are captured, the chip named from
-the last device sync that never ended, then the load's process group stopped,
-which ends all access to it; the post-test `-glx_reset` clears it. SIGTERM stops
-the running load and ends the stage. `--skip-tests` skips it; `--stage-order`
-runs it when `busbar` is named.
+After the tests, `daily`, `weekly` and `full` run `diag/busbar.py`, the steps of
+`BUSBAR_STEPS[load_mode]` in `tiers.py` (smoke ~0.5 min, plain ~22 min, full ~46
+min; same loads, different lengths): metal's didt max-util and didt matmul (the
+`diag.xchip` plugin names a chip whose output differs from the rest), the
+all-gather matmul, PCIe bandwidth, and the power virus through `--hook` (else a
+SKIP). The bricks are read once at idle (under 12.1 V is a WARN); a thread polls
+the tray HSCs every 2 s under the shared I2C lock (an HSC trip is a FAIL). Before
+each step AICLK must fall to 800 MHz within 5 min; after it the chips are
+recounted (a loss FAILs and ends the stage), PCIe links, wrong output and the SEL
+re-read; a reboot or new SEL power line is a FAIL. A load past its length is a
+hang: SEL and kernel log captured, the chip named, its process group stopped.
 
 ## Triage phase
 
@@ -610,65 +590,36 @@ any tier on a host that has the package.
 
 ## Captures phase
 
-Every tier reads the BMC SEL (`ipmitool sel elist`) and the kernel log since the
-run began (`journalctl -k --since`), with `sudo -n` when not root. Lines that bear
-on a lost chip or tray WARN: SEL FRB, power, voltage, AC loss and watchdog
-records; kernel AER, pciehp, link-down and driver errors, with the chips they
-mention in `parts`. Full output goes to `logs/sel.log` and
-`logs/kernel_events.log`. A read that cannot run (no ipmitool, no sudo, no BMC)
-SKIPs with one line. The phase does not gate: these lines say where to look,
-and the verdict lists them as evidence. lspci, CPLD DIAG and the firmware stack
-come from the sys-triage bundle, firmware versions from the snapshot.
+Every tier saves the BMC SEL and the kernel log since the run began
+(`logs/sel.log`, `logs/kernel_events.log`, `sudo -n` when not root). Power, FRB,
+watchdog, AER, pciehp and link-down lines WARN as evidence; the phase does not
+gate, and a read that cannot run SKIPs with one line.
 
 ## Tray power phase
 
-Every tier reads each tray's power before the run's first reset and again after
-the post-test reset (`diag/sensors.py`), in-band through the BMC
-(`ipmitool raw 0x06 0x52`, as root or with `sudo -n`): both hot-swap controllers'
-VIN, IOUT, STATUS_WORD and STATUS_INPUT, the CPLD's VR power-good byte and, where
-present, the power bricks' VOUT and IOUT (the brick mux is restored after each
-read). Every access takes one lock, `$HSC_I2C_LOCK` (default
-`/tmp/tray-bmc-<uid>.lock`), the same one tray-test uses, so two readers never
-interleave on the bus. Without ipmitool, root or a sudo route the phase prints one
-`skipped: <why>` line and the run goes on.
-
-One `tray_power` check per tray with a finding, else one PASS:
-
-- **FAIL** `POWER`: an HSC reads OFF or over-current, or VIN is under 11 V.
-- **FAIL** `POWER-DOWNSTREAM`: 12 V is good but a VR's power-good is low.
-- **WARN**: VIN_UV_WARN or VIN_UV_FAULT latched during the run, or already set
-  before it; or an HSC did not answer.
-
-A chip lost from the bus on a tray with a `POWER` or `POWER-DOWNSTREAM` reading
-gets that cause in place of `UNKNOWN`. After a run that loaded the chips, the
-phase clears the latches once per HSC with PMBus CLEAR_FAULTS and reads them
-back, so the next run starts clean (`hsc_latch_clear`: WARN if a latch stays
-set). No clear is sent when any HSC reads OFF, when the run had no load, or with
-`--no-hsc-clear`.
+Every tier reads each tray's two HSCs (VIN, IOUT, STATUS_WORD, STATUS_INPUT), the
+CPLD's VR power-good byte and the power bricks through `ipmitool raw 0x06 0x52`
+(root or `sudo -n`) before the first reset and after the post-test reset, under
+`$HSC_I2C_LOCK`, the lock tray-test uses. `tray_power` FAILs `POWER` for an HSC
+OFF, over-current or VIN under 11 V, FAILs `POWER-DOWNSTREAM` for 12 V good with
+a VR's power-good low, and WARNs for an under-voltage latch or an HSC that did not
+answer; a lost chip on such a tray takes that cause. After a loaded run each HSC
+gets CLEAR_FAULTS once (`hsc_latch_clear`), never when one reads OFF or with
+`--no-hsc-clear`. With no route the phase is one `skipped: <why>` line.
 
 ## Verdict
 
-The run ends with one fault per WARN/FAIL check of a gating phase, then the
-final verdict and one repair line, also stored in the report as `verdict`:
+The run ends with one fault per WARN/FAIL check of a gating phase, its cause and
+repair from `verdict.ROWS` (a check no row names gets one by its IP block), the
+WARN captures as `Evidence`, `Final verdict: PASS | WARN | FAIL | INCOMPLETE` and
+one `Repair recommendation:` line, FAIL repairs first:
 
 ```
 Fault 1: FAIL F08 chip missing: PCIe link never trains: pcie_enum_count: 31/32 | 0000:46:00.0 (UBB2/U6)
   Cause: PCIE/LINK
   Repair: tt-smi -glx_reset and recount; if still missing, swap UBB2's host PCIe cable with a neighbour tray's
-Evidence: kernel_events: AER on 46:00.0
 Final verdict: FAIL: 1 fault(s)
-Repair recommendation: Fault 1: tt-smi -glx_reset and recount; ...
 ```
-
-`verdict.ROWS` is the one table of known faults. A row names the checks that
-report it by the constants of the modules that emit them, its cause class
-(`POWER`, `POWER-DOWNSTREAM`, `PCIE/LINK`, `CHIP/BOARD`, `UNKNOWN`) and its
-repair; a cause the power reads set wins over the row's. A check no row names
-gets a repair by its IP block. The same check naming the same chips in several
-snapshots is one fault. `Evidence` lines are the WARN captures. `Final verdict`
-is `PASS`, `WARN: n warning(s)`, `FAIL: n fault(s)`, or `INCOMPLETE (not a
-fault)` when a gating phase errored and nothing failed. The recommendation lists
-FAIL repairs first and merges faults with the same repair.
 
 ## sys-triage phase
 
@@ -760,16 +711,11 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 
 ## Checks (grouped by IP)
 
-A check that finds chips at fault lists them in `parts`, each named by BDF, tray
-and ASIC. In `checks.csv` every WARN/FAIL row also carries `part` (those chips; a
-tray with all 8 listed is named once as `UBBn (all 8 chips)`) and `cause`:
-`PCIE/LINK` for PCIe and ETH checks, `CHIP/BOARD` for GDDR, ASIC, firmware,
-thermal and board checks, and `UNKNOWN` for a chip missing from the bus, a reset
-and a stress test. A missing chip is `POWER` (12 V lost), `POWER-DOWNSTREAM`
-(12 V present, VR power-good low) or `PCIE/LINK` only once the tray's power is
-read: the [tray power phase](#tray-power-phase) sets it from the tray's HSC and
-VR reads, with that reading first in the check's details. Without those reads it
-is never guessed.
+A check that finds chips at fault lists them in `parts` by BDF, tray and ASIC;
+in `checks.csv` each WARN/FAIL row carries `part` (`UBBn (all 8 chips)` for a whole
+tray) and `cause` by IP block. A missing chip is `UNKNOWN` until the
+[tray power phase](#tray-power-phase) reads set `POWER`, `POWER-DOWNSTREAM` or
+`PCIE/LINK`.
 
 ### Board
 | Check | Rule | On fail |

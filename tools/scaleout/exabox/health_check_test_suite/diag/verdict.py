@@ -2,14 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The run's verdict: per fault what failed and where, its cause class and what
-to repair, then the final verdict and one 'Repair recommendation:' line.
-Printed last, so the end of the log says what needs fixing.
-
-ROWS is the one table of known Blackhole Galaxy faults. A row names the checks
-that report the fault by the constants of the modules that emit them, so a row
-cannot name a check nothing emits (tests/test_diag_verdict.py checks it).
-"""
+"""The run's verdict: per fault where, its cause class and repair, then one 'Repair recommendation:' line.
+ROWS names each known fault's checks by the emitting modules' constants (tests/test_diag_verdict.py)."""
 from __future__ import annotations
 
 from collections import Counter
@@ -208,8 +202,7 @@ def _named(names: tuple[str, ...], name: str) -> bool:
 
 
 def row_of(check: dict) -> tuple[str, Row | None]:
-    """(id, row) of the fault a WARN/FAIL check reports, else ("", None).
-    Rows with a test go first, in id order, then the rest."""
+    """(id, row) of the fault a WARN/FAIL check reports, else ("", None); rows with a test go first."""
     for tested in (True, False):
         for rid, row in ROWS.items():
             if (row.when is not None) == tested and _named(row.checks, check["name"]):
@@ -219,9 +212,7 @@ def row_of(check: dict) -> tuple[str, Row | None]:
 
 
 def attribute_power(report: dict, causes: dict[int, TrayCause]) -> None:
-    """Give each WARN/FAIL lost-chip check the cause its tray's power reads show
-    (tray -> TrayCause, from sensors.check_tray_power), with that reading first in
-    its details so the one-line verdict keeps it."""
+    """Give each WARN/FAIL lost-chip check its tray's power cause, that reading first in its details."""
     for phase in report["phases"].values():
         for c in phase["checks"]:
             if c["status"] not in (FAIL, WARN) or c.get("cause") or not _named(LOST + RESET_LOST, c["name"]):
@@ -240,14 +231,8 @@ def _repair(check: dict, row: Row | None) -> str:
 
 
 def verdict_lines(report: dict) -> list[str]:
-    """Per WARN/FAIL check of a gating phase: ``Fault i: STATUS Fxx fault: what |
-    where``, then ``  Cause: X`` and ``  Repair: ...``; ``Evidence:`` per capture
-    of note; ``Final verdict: ...``; last ``Repair recommendation: ...``.
-
-    The same check naming the same chips in several snapshots is one fault.
-    A gating phase that errored with no FAIL leaves the run INCOMPLETE: the
-    unit was not shown faulty, only not fully tested.
-    """
+    """Fault, Cause and Repair lines per WARN/FAIL check of a gating phase (one per check and chips), the
+    Evidence lines, the final verdict (INCOMPLETE when a gating phase errored and nothing failed), the repairs."""
     faults, seen, incomplete = [], set(), []
     for name, phase in report["phases"].items():
         if not phase.get("gates", True):

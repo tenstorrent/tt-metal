@@ -46,8 +46,7 @@ from diag.triage import TRIAGE_TOOLS
 
 @dataclass(frozen=True)
 class Tier:
-    # Pre-test reset loop, in order. Each reset is followed by a root-port
-    # rescan, a recount of the chips by BDF and a fresh snapshot, revalidated.
+    # Pre-test reset loop, in order. Each reset is followed by a rescan, a chip recount and a revalidated snapshot.
     resets: tuple[str, ...] = ()
 
     # Device tests, in order: names from TESTS / PYTESTS.
@@ -91,12 +90,10 @@ class Tier:
     # worth most on a unit that has not been reset since it misbehaved.
     sys_triage: bool = False
 
-    # Diff each chip's and its root port's PCIe AER counters across the run: a
-    # link that replays under load counts errors here long before it drops.
+    # Diff each chip's and its root port's PCIe AER counters across the run.
     aer_diff: bool = False
 
-    # The bus-bar stage (diag/busbar.py): BUSBAR_STEPS[load_mode], after the
-    # tests and before the post-test reset; "" runs none.
+    # The bus-bar stage (diag/busbar.py), BUSBAR_STEPS[load_mode], after the tests; "" runs none.
     load_mode: str = ""
 
 
@@ -113,9 +110,8 @@ def _chunks(*mins: int) -> tuple[Step, ...]:
     return tuple(Step(f"chunk{m}m", 10, "max_util", 60 * m) for m in mins)
 
 
-# Two bursts, max load in growing chunks, a step load, the CCL mix, the PCIe
-# bandwidth reads, then the heavy chunk (the --hook power virus). Plain is under
-# 1800 s of quiet + load; full is plain, longer; smoke runs each load for seconds.
+# Two bursts, max load in growing chunks, a step load, the CCL mix, the PCIe bandwidth reads, then the --hook power
+# virus. Plain is under 1800 s of quiet + load; full is longer; smoke runs each load for seconds.
 _BURSTS = (Step("burst1", 60, "didt", 30), Step("burst2", 60, "didt", 30))
 _TAIL = (
     Step("step", 10, "didt", 90),
@@ -212,10 +208,9 @@ STAGES = ("reset", "busbar", "end", "eth")
 
 
 def select_stages(tier: Tier, order: str) -> Tier:
-    """*tier* cut down to the stages named in *order* (comma-separated; --stage-order): "reset" (its pre-test
-    resets), its tests by name, "busbar" (its bus-bar stage), "end" (its post-test reset) and "eth" (the ETH status
-    read). A stage not named does not run. They must be named in run order; any other order, or a name that is neither a stage nor one of the
-    tier's tests, is a ValueError that names it."""
+    """*tier* cut down to the stages named in *order* (comma-separated; --stage-order): "reset", the tier's tests by
+    name, "busbar", "end" (post-test reset) and "eth". Unnamed stages do not run. A name that is neither a stage nor a
+    test of the tier, or names out of run order, is a ValueError."""
     names = [n for n in order.replace(" ", "").split(",") if n]
     unknown = [n for n in names if n not in STAGES and n not in tier.tests]
     if unknown:

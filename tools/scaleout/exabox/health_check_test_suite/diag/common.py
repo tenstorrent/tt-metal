@@ -31,7 +31,7 @@ def default_tt_metal_path() -> Path:
 
 
 def kill_process_group(proc: subprocess.Popen, grace_s: float) -> None:
-    """SIGTERM then SIGKILL the child's process group (gtest / tt-smi / load children)."""
+    """SIGTERM then SIGKILL the child's process group."""
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
@@ -60,8 +60,7 @@ HOOK_TIMEOUT_S = 1800
 
 
 def call_hook(hook: str | None, event: str, step: str, status: str, outdir: Path, dry_run: bool) -> int:
-    """--hook SCRIPT, called as SCRIPT <event> <step> <status> <outdir>, synchronously: its rc (0 with no hook or in a
-    dry run)."""
+    """Run --hook as SCRIPT <event> <step> <status> <outdir>: its rc (0 with no hook or in a dry run)."""
     if not hook:
         return 0
     if dry_run:

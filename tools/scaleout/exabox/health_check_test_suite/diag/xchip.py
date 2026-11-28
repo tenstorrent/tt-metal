@@ -2,12 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""pytest plugin for the bus-bar stage's didt load (loaded with -p diag.xchip): the cross-chip compare.
+"""pytest plugin for the bus-bar didt load (-p diag.xchip): the cross-chip compare.
 
-Every chip runs the same matmul on the same inputs, so at each determinism check a chip whose output
-is not bit-identical to the largest group of identical outputs is the one at fault. It is logged as
-'Device N output differs from the other chips' and counted as a nondeterministic output, which fails
-the test. The plugin wraps OpTestBase's determinism step from here, so no metal test code changes.
+Every chip runs the same matmul, so at each determinism check a chip whose output differs from the largest
+group of identical outputs is logged as 'Device N output differs from the other chips' and counted as
+nondeterministic, which fails the test. It wraps OpTestBase's determinism step, so no metal code changes.
 """
 
 import concurrent.futures

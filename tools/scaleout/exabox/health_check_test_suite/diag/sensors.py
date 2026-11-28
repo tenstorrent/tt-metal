@@ -2,22 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tray power through the in-band BMC (``ipmitool raw 0x06 0x52``): each tray's two
-hot-swap controllers (HSCs), its CPLD's VR power-good byte and, where the power
-board has them, the power bricks.
-
-A weak bus bar seldom fails the test that sags it, but the HSC latches an input
-under-voltage flag, so the flags are read before and after the load, judged,
-then cleared once per HSC (PMBus CLEAR_FAULTS) so the next run starts clean.
-The same reads tell a lost chip's cause: its tray's 12 V cut (POWER), or 12 V
-good with a VR's power-good low (POWER-DOWNSTREAM).
-
-Every ipmitool call takes one box-wide lock, ``$HSC_I2C_LOCK`` (the lock
-tray-test uses too): overlapping I2C write-reads latch the HSCs' comm-fault bit.
-The only writes are CLEAR_FAULTS and the brick mux's channel select, written
-back after. Needs root or ``sudo -n ipmitool``; without either the reads are one
-'skipped' line.
-"""
+"""Tray power through the in-band BMC (``ipmitool raw 0x06 0x52``, root or ``sudo -n``): each tray's two HSCs,
+its CPLD's VR power-good byte and the power bricks. The HSCs' under-voltage latches are read before and after the
+load, judged, then cleared once (CLEAR_FAULTS); they also tell a lost chip's cause (POWER, POWER-DOWNSTREAM).
+Every call takes ``$HSC_I2C_LOCK``, the lock tray-test uses: overlapping I2C write-reads latch a comm fault.
+The only writes are CLEAR_FAULTS and the brick mux select, restored after."""
 from __future__ import annotations
 
 import fcntl
@@ -60,8 +49,7 @@ VIN_LOW_V = 11.0  # under this, the tray's 12 V is not good, latch or not
 BRICK_BUS, BRICK_MUX = 0x09, 0xEC
 BRICKS = {f"U{n}": ((n - 1) // 2, 0xC0 if n % 2 else 0xC2) for n in range(1, 9)}
 
-READ_TIMEOUT_S = 5
-LOCK_WAIT_S = 10
+READ_TIMEOUT_S, LOCK_WAIT_S = 5, 10
 
 
 def lin11(x: int) -> float:
@@ -89,8 +77,7 @@ class Hsc:
 
 @dataclass
 class TrayPower:
-    """One pass over the trays: (tray, HSC address) -> reading, None when it did not
-    answer; tray -> VR power-good byte; brick -> (VOUT V, IOUT A)."""
+    """One pass over the trays: (tray, HSC address) -> reading or None; tray -> VR power-good; brick -> (V, A)."""
 
     hsc: dict[tuple[int, int], Hsc | None] = field(default_factory=dict)
     vr_pg: dict[int, int | None] = field(default_factory=dict)
@@ -98,8 +85,7 @@ class TrayPower:
 
 
 class Bmc:
-    """The in-band BMC route: ipmitool as root, else under ``sudo -n``. ``why`` says
-    why there is no route; once set, nothing more is sent."""
+    """The in-band BMC route; ``why`` says why there is none, and once set nothing more is sent."""
 
     def __init__(self, dry_run: bool = False):
         self.lock = os.environ.get("HSC_I2C_LOCK") or f"/tmp/tray-bmc-{os.getuid()}.lock"
@@ -108,9 +94,8 @@ class Bmc:
 
     @contextmanager
     def locked(self, wait: float | None = None, who: str = "health check", fatal: bool = True):
-        """Hold the box-wide I2C lock, writing ``who`` into it so a waiting poll can name the holder.
-        Yields False when another holder kept it past ``wait`` (``fatal`` then ends the route) or
-        the lock file cannot be opened (that always ends the route)."""
+        """Hold the box-wide I2C lock, writing ``who`` into it. Yields False when another holder
+        kept it past ``wait`` (``fatal`` then ends the route) or the lock file cannot be opened."""
         wait = LOCK_WAIT_S if wait is None else wait
         try:
             f = open(self.lock, "a+")
@@ -147,8 +132,7 @@ class Bmc:
             return "unknown"
 
     def raw(self, *args: int, lock: bool = True) -> list[int] | None:
-        """One ``ipmitool raw`` call, under the lock unless the caller holds it: the bytes
-        returned, None when it failed. A sudo refusal, a missing sudo or BMC device ends the route."""
+        """One ``ipmitool raw`` call: its bytes, None on failure; no sudo or BMC device ends the route."""
         if self.why:
             return None
         cmd = [*self.cmd, "raw", *(f"{a:#04x}" for a in args)]
@@ -197,9 +181,7 @@ def read_hsc(bmc: Bmc, tray: int, addr: int, lock: bool = True) -> Hsc | None:
 
 
 def read_bricks(bmc: Bmc) -> dict[str, tuple[float | None, float | None]]:
-    """Each brick's VOUT (by its own VOUT_MODE exponent) and IOUT; empty when the box
-    has no brick mux. Per mux channel, under one hold of the lock: save the mux's
-    control byte, select the channel, read its two bricks, write the byte back."""
+    """Each brick's VOUT and IOUT, per mux channel under one lock hold, the mux restored; empty without one."""
     out = {}
     for ch in range(4):
         with bmc.locked() as held:
@@ -209,9 +191,7 @@ def read_bricks(bmc: Bmc) -> dict[str, tuple[float | None, float | None]]:
             try:
                 if bmc.raw(0x06, 0x52, BRICK_BUS, BRICK_MUX, 0x00, 1 << ch, lock=False) is None:
                     continue
-                for name, (c, addr) in BRICKS.items():
-                    if c != ch:
-                        continue
+                for name, addr in ((n, a) for n, (c, a) in BRICKS.items() if c == ch):
                     mode, vout, iout = (
                         bmc.read(BRICK_BUS, addr, r, lock=False) for r in (VOUT_MODE, READ_VOUT, READ_IOUT)
                     )
@@ -261,9 +241,7 @@ class Poll:
 
 
 def poll_hsc(bmc: Bmc, poll: Poll, stop: threading.Event, period: float = POLL_S) -> None:
-    """Every ``period`` s until ``stop``: each HSC under its own short hold of the lock, into
-    ``poll.steps[poll.step]``. A hold not got within a period misses that read; a gap over two
-    periods between reads is logged with the lock's holder."""
+    """Every ``period`` s until ``stop``, each HSC into ``poll.steps[poll.step]``; a gap over two periods is logged."""
     last, blocker = time.monotonic(), ""
     while not stop.is_set() and not bmc.why:
         rec = poll.steps.setdefault(poll.step, PollStep())
@@ -306,9 +284,7 @@ class TrayCause(NamedTuple):
 
 
 def tray_causes(power: TrayPower, before: TrayPower) -> dict[int, TrayCause]:
-    """tray -> TrayCause for each tray whose reads explain a lost chip: POWER for an
-    HSC that tripped or latched a fault during the run (a latch already set before it
-    explains nothing); POWER-DOWNSTREAM for 12 V good on both HSCs with a VR's power-good low."""
+    """tray -> POWER (an HSC tripped or latched during the run) or POWER-DOWNSTREAM (12 V good, a VR's PG low)."""
     out = {}
     for t in HSC_BUS:
         hscs = {a: power.hsc.get((t, a)) for a in HSC_ADDRS}
@@ -329,13 +305,8 @@ def tray_causes(power: TrayPower, before: TrayPower) -> dict[int, TrayCause]:
 
 
 def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str) -> dict[int, TrayCause]:
-    """Read the trays after the load, judge them against *before*, then clear the latches.
-
-    One ``tray_power`` check per tray with a finding: FAIL for a tripped HSC, a low
-    VIN or a VR power-good low, WARN for an under-voltage latch alone (the chips rode
-    through the sag) or an HSC that did not answer; else one PASS. Then
-    ``hsc_latch_clear``, which clears the latches unless *keep* says why not. Returns tray_causes() of the reads after the load.
-    """
+    """One ``tray_power`` check per tray with a finding (FAIL: trip, low VIN or VR PG; WARN: latch or no answer),
+    else one PASS, then ``hsc_latch_clear`` unless *keep* says why not. Returns the tray_causes()."""
     after = read_power(bmc)
     if after is None or before is None:
         log(f"tray power: skipped: {bmc.why}")
@@ -409,8 +380,7 @@ def _as_data(tp: TrayPower, tray: int) -> dict:
 
 
 def _clear_latches(bmc: Bmc, after: TrayPower, keep: str) -> Check:
-    """CLEAR_FAULTS once to each HSC that answered, then STATUS_INPUT/STATUS_WORD re-read.
-    Not sent at all when any HSC reads OFF: clearing it could turn that tray back on."""
+    """CLEAR_FAULTS once to each HSC that answered, then re-read; none when one reads OFF (it could re-power it)."""
 
     def done(status: str, details: str, **data) -> Check:
         log(f"HSC latch clear: {details}")

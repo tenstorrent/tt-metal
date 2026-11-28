@@ -4,11 +4,8 @@
 
 """Host event captures: the BMC SEL and the kernel log since the run began.
 
-Reads only, and evidence rather than findings: a SEL line or a kernel AER line
-says where to look, not what failed, so the phase never votes. The verdict
-cites them under the faults they explain. The rest of the hardware record
-(lspci tree, CPLD DIAG, firmware stack) is the sys-triage bundle's, and the
-firmware versions are the snapshot's; neither is read twice.
+Reads only, and evidence rather than findings: the phase never votes; the verdict cites these under the faults they
+explain.
 """
 from __future__ import annotations
 
@@ -24,20 +21,16 @@ from .common import run, write_command_log
 from .galaxy import name_chips
 from .model import PASS, SKIP, WARN, Check, Phase
 
-# SEL records that bear on a lost chip, tray or host: CPU/BIOS boot failures
-# (FRB), power and voltage events, AC loss and watchdog resets.
+# SEL records that bear on a lost chip, tray or host: boot failures (FRB), power, voltage, AC loss, watchdog.
 SEL_POWER = "AC lost|Power Supply|Power Unit"
 SEL_POWER_RE = re.compile(SEL_POWER, re.IGNORECASE)
 SEL_EVENT_RE = re.compile(rf"FRB|{SEL_POWER}|Voltage|Critical|Watchdog", re.IGNORECASE)
 
-# Kernel lines that mean a chip's PCIe link or driver misbehaved during the run.
+# Kernel lines for a misbehaving PCIe link or driver.
 KERNEL_EVENT_RE = re.compile(r"AER|pciehp|Link Down|tenstorrent.*(error|fail|timeout)", re.IGNORECASE)
 
 # `ipmitool sel elist` dates: "   7 | 11/20/2026 | 10:00:01 | ...".
 SEL_DATE_RE = re.compile(r"^\s*\w+\s*\|\s*(\d\d/\d\d/\d{4})\s*\|")
-
-# Lines kept in the report; the full output is in the log file.
-MAX_LINES = 40
 
 
 def _read(cmd: list[str], dry_run: bool) -> tuple[str | None, str]:
@@ -60,8 +53,7 @@ def _read(cmd: list[str], dry_run: bool) -> tuple[str | None, str]:
 
 
 def _sel_since(line: str, since: datetime) -> bool:
-    """False for a SEL record dated before the run. shortcut: by date with a
-    day's slack, as the BMC clock's zone is unknown; undated records stay."""
+    """False for a SEL record dated before the run (a day's slack: the BMC clock's zone is unknown)."""
     m = SEL_DATE_RE.match(line)
     if not m:
         return True
@@ -72,14 +64,7 @@ def _sel_since(line: str, since: datetime) -> bool:
 
 
 def capture_events(phase: Phase, dry_run: bool, logs_dir: Path, since: datetime) -> None:
-    """Add ``bmc_sel_events`` and ``kernel_events`` to ``phase``.
-
-    * **SKIP**: the read could not run (no ipmitool, no sudo, no BMC), with
-      the one-line reason.
-    * **WARN**: lines that bear on a fault; the kernel check names the chips
-      in ``parts``.
-    * **PASS**: read, nothing of note.
-    """
+    """Add ``bmc_sel_events`` and ``kernel_events``: SKIP when the read cannot run, WARN on lines of note, else PASS."""
     reads = (
         ("bmc_sel_events", ["ipmitool", "sel", "elist"], SEL_EVENT_RE, "sel.log"),
         (
@@ -111,7 +96,7 @@ def capture_events(phase: Phase, dry_run: bool, logs_dir: Path, since: datetime)
                 name=name,
                 status=WARN if lines else PASS,
                 details=details,
-                data={"lines": lines[-MAX_LINES:], "log": str(log_path)},
+                data={"lines": lines[-40:], "log": str(log_path)},
                 ip="other",
                 parts=name_chips(lines),
             )

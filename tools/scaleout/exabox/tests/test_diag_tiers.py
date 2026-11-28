@@ -148,6 +148,19 @@ class TestDiagRunnerCli(unittest.TestCase):
         self.assertIn("--skip-sys-triage", (SUITE_DIR / "diag_runner.py").read_text())
 
 
+def run_weekly(snapshot_text=None, **kw):
+    """A dry-run weekly run_diag; the input snapshot is missing unless snapshot_text is given."""
+    from diag_runner import run_diag
+
+    with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        d = Path(tmp)
+        if snapshot_text is not None:
+            (d / "snap.json").write_text(snapshot_text)
+        return run_diag(
+            "weekly", input_snapshot=d / "snap.json", output=d / "r.json", snapshot_out=d / "s.json", dry_run=True, **kw
+        )
+
+
 class TestStageOrder(unittest.TestCase):
     def test_reset_only(self):
         t = select_stages(TIERS["weekly"], "reset")
@@ -173,19 +186,7 @@ class TestStageOrder(unittest.TestCase):
         self.assertEqual((a.stage_order, a.reset_gate, a.hook), ("reset", "gate --x", "/h.sh"))
 
     def test_empty_input_snapshot_is_not_judged(self):
-        from diag_runner import run_diag
-
-        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            d = Path(tmp)
-            (d / "snap.json").write_text("")
-            _rc, report = run_diag(
-                "weekly",
-                input_snapshot=d / "snap.json",
-                output=d / "r.json",
-                snapshot_out=d / "s.json",
-                dry_run=True,
-                stage_order="end",
-            )
+        _rc, report = run_weekly("", stage_order="end")
         snap = report["phases"]["snapshot"]["checks"]
         self.assertEqual([c["status"] for c in snap if c["name"] == "snapshot_capture"], ["SKIP"])
         self.assertIn("post_test_reset", report["phases"])
@@ -199,25 +200,18 @@ class TestStageOrder(unittest.TestCase):
             phase.add(Check(name="reset_1_glx_reset", status="SKIP", details="reset cannot run: reset gate: busy"))
 
         pre, post, hook = mock.Mock(side_effect=skipped), mock.Mock(side_effect=skipped), mock.Mock()
-        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            d = Path(tmp)
-            with mock.patch.object(diag_runner, "reset_loop", pre), mock.patch.object(
-                diag_runner, "run_post_test_reset", post
-            ), mock.patch.object(diag_runner, "call_hook", hook):
-                _rc, report = diag_runner.run_diag(
-                    "weekly",
-                    input_snapshot=d / "missing.json",
-                    output=d / "r.json",
-                    snapshot_out=d / "s.json",
-                    dry_run=True,
-                    tt_smi_path="/usr/bin/true",
-                    skip_triage=True,  # tray-test passes it with --stage-order and still gets the end reset
-                    skip_qsfp_tests=True,
-                    skip_sys_triage=True,
-                    stage_order="reset,end",
-                    reset_gate="G",
-                    hook="H",
-                )
+        with mock.patch.object(diag_runner, "reset_loop", pre), mock.patch.object(
+            diag_runner, "run_post_test_reset", post
+        ), mock.patch.object(diag_runner, "call_hook", hook):
+            _rc, report = run_weekly(
+                tt_smi_path="/usr/bin/true",
+                skip_triage=True,  # tray-test passes it with --stage-order and still gets the end reset
+                skip_qsfp_tests=True,
+                skip_sys_triage=True,
+                stage_order="reset,end",
+                reset_gate="G",
+                hook="H",
+            )
         self.assertEqual(
             [c.args[:3] for c in hook.call_args_list], [("H", "stage-start", "reset"), ("H", "stage-start", "end")]
         )

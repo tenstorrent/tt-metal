@@ -20,9 +20,11 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 sys.path.insert(0, str(SUITE_DIR / "test_infrastructure"))
+sys.path.insert(0, str(TESTS_DIR))
 
 from diag import retest  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
+from test_diag_tiers import run_weekly  # noqa: E402
 from tiers import TIERS  # noqa: E402
 from analyze_health_check_results import category_for  # noqa: E402
 from utils.report import has_actionable_failure, normalize_health_report  # noqa: E402
@@ -118,7 +120,7 @@ class TestRetest(unittest.TestCase):
         with mock.patch.object(retest, "resolve_tt_smi", return_value="tt-smi"), mock.patch.object(
             resets, "run", side_effect=lambda cmd, *a, **kw: calls.append(cmd)
         ), mock.patch.object(retest, "run_tests") as tests, redirect_stdout(io.StringIO()):
-            snap = retest.run_retest(
+            args = (
                 None,
                 Path("."),
                 ("gddr_act_c3",),
@@ -128,9 +130,8 @@ class TestRetest(unittest.TestCase):
                 False,
                 self.logs,
                 None,
-                gate="sh -c 'echo busy; exit 3'",
-                hook=None,
             )
+            snap = retest.run_retest(*args, gate="sh -c 'echo busy; exit 3'", hook=None)
         self.assertEqual(calls, [])  # tt-smi never ran
         self.assertIsNone(snap)
         tests.assert_not_called()
@@ -142,16 +143,8 @@ class TestRetest(unittest.TestCase):
     def test_the_runner_passes_the_reset_gate_and_hook_to_the_retest(self):
         import diag_runner
 
-        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), mock.patch.object(
-            diag_runner, "run_retest", return_value=None
-        ) as run_retest:
-            d = Path(tmp)
-            diag_runner.run_diag(
-                "weekly",
-                input_snapshot=d / "missing.json",
-                output=d / "r.json",
-                snapshot_out=d / "s.json",
-                dry_run=True,
+        with mock.patch.object(diag_runner, "run_retest", return_value=None) as run_retest:
+            run_weekly(
                 tt_smi_path="/usr/bin/true",
                 skip_triage=True,
                 skip_qsfp_tests=True,
