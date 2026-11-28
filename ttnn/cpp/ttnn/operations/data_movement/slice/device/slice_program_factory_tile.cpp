@@ -7,6 +7,7 @@
 
 #include "ttnn/operations/data_movement/slice/device/slice_metal2_names.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <tt-metalium/utils/work_split.hpp>
@@ -48,7 +49,19 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     // --- Dataflow buffer ---
-    uint32_t num_input_tiles = 2;
+    // Quasar's single NoC charges the full read latency at every barrier and its DM harts are issue-bound on
+    // 2 KB transfers, so there one barrier covers a batch of tiles and the ring holds two batches. The batch
+    // bookkeeping costs a few dozen DM instructions, so the program takes the batched path only when its busiest
+    // core holds 8 or more tiles; a core below that then runs one short batch. The batch is at most 32 tiles, so
+    // the reads in flight behind one barrier stay a fixed count rather than growing with the tensor. The batched
+    // kernels sync the ring explicitly, which needs implicit sync off. WH/BH always keep the one-tile path, which
+    // leaves their kernels and build inputs unchanged.
+    constexpr uint32_t min_tiles_per_core_to_batch = 8;
+    constexpr uint32_t max_tiles_per_batch = 32;
+    const uint32_t max_tiles_per_core = std::max(num_tiles_per_core_group_1, num_tiles_per_core_group_2);
+    const bool batch_tiles = device->arch() == tt::ARCH::QUASAR && max_tiles_per_core >= min_tiles_per_core_to_batch;
+    const uint32_t tiles_per_batch = batch_tiles ? std::min(max_tiles_per_core, max_tiles_per_batch) : 1;
+    uint32_t num_input_tiles = 2 * tiles_per_batch;
 
     DataflowBufferSpec dfb_in{
         .unique_id = TILE_IN,
@@ -100,9 +113,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     KernelSpec reader{
         .unique_id = TILE_READER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-            "reader_unary_unpad_dims_interleaved_start_id.cpp",
+        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "reader_unary_unpad_dims_interleaved_batched.cpp"
+                              : "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "reader_unary_unpad_dims_interleaved_start_id.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -125,12 +139,14 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "src",
                 },
             },
-        .compile_time_args = {{"num_dims", num_dims}},
+        .compile_time_args =
+            batch_tiles ? KernelSpec::CompileTimeArgs{{"num_dims", num_dims}, {"tiles_per_batch", tiles_per_batch}}
+                        : KernelSpec::CompileTimeArgs{{"num_dims", num_dims}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
             },
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/batch_tiles),
         .advanced_options =
             {
                 // Per-core: the id_per_dim seed.
@@ -142,9 +158,10 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
 
     KernelSpec writer{
         .unique_id = TILE_WRITER,
-        .source =
-            "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-            "writer_unary_interleaved_start_id.cpp",
+        .source = batch_tiles ? "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                "writer_unary_interleaved_start_id_batched.cpp"
+                              : "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+                                "writer_unary_interleaved_start_id.cpp",
         .dfb_bindings =
             {
                 DFBBinding{
@@ -160,11 +177,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "dst",
                 },
             },
+        .compile_time_args = batch_tiles ? KernelSpec::CompileTimeArgs{{"pages_per_batch", tiles_per_batch}}
+                                         : KernelSpec::CompileTimeArgs{},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"num_pages", "start_id"},
             },
-        .hw_config = ttnn::create_writer_datamovement_config(),
+        .hw_config = ttnn::create_writer_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/batch_tiles),
     };
 
     // Reader per-core: start_id, num_tiles, and the id_per_dim seed.
