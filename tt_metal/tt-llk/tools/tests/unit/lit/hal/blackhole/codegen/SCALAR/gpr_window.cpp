@@ -30,7 +30,8 @@ extern "C" __attribute__((noinline, used)) void reference_write_tile_header(cons
     ckernel::regfile[ckernel::p_gpr_pack::TILE_HEADER + 1] = 0;
     ckernel::regfile[ckernel::p_gpr_pack::TILE_HEADER + 2] = 0;
     ckernel::regfile[ckernel::p_gpr_pack::TILE_HEADER + 3] = 0;
-    static_cast<void>(ckernel::load_blocking(&ckernel::regfile[ckernel::p_gpr_pack::TILE_HEADER + 3]));
+    // ckernel::sync_regfile_write without its zero store: the volatile read-back waits for the stores to land.
+    [[maybe_unused]] const volatile std::uint32_t written = ckernel::regfile[ckernel::p_gpr_pack::TILE_HEADER + 3];
 }
 
 extern "C" __attribute__((noinline, used)) std::uint32_t read_runtime(const std::uint32_t index)

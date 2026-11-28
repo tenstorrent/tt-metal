@@ -79,7 +79,7 @@ extern "C" __attribute__((noinline, used)) void write_runtime_thread_section(std
 
 extern "C" __attribute__((noinline, used)) void reference_write_runtime_thread_section(std::uint32_t increment)
 {
-    TT_SETC16(19 /*setc16_reg*/, (increment << 8) & 0xffffu);
+    TT_SETC16(19 /*setc16_reg*/, increment << 8);
 }
 
 // Word 64 is emitted once with both runtime fields, before the later constant word.
@@ -151,7 +151,7 @@ extern "C" __attribute__((noinline, used)) void reference_write_mixed_descriptor
 
 // Thread word 5 and state word 5 are separate: one SETC16 for both thread fields
 // even across the GPR transfer, and one RMWCIB for the state field.
-// SetOvrdWithAddr is the top field, so only the SETC16 group mask clips it.
+// SetOvrdWithAddr is the top field, so the checked value reaches SETC16 unmasked.
 extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_address(std::uint32_t base, std::uint32_t override_address)
 {
     cfg::write<cfg::Access::TensixCfgUnit>(
@@ -163,7 +163,7 @@ extern "C" __attribute__((noinline, used)) void write_thread_and_state_same_addr
 
 extern "C" __attribute__((noinline, used)) void reference_write_thread_and_state_same_address(std::uint32_t base, std::uint32_t override_address)
 {
-    TT_SETC16(5 /*setc16_reg*/, ((base & 0x03u) | (override_address << 2)) & 0x07u);
+    TT_SETC16(5 /*setc16_reg*/, (base & 0x03u) | (override_address << 2));
     TTI_RMWCIB0(0x01 /*Mask*/, 1 /*Data*/, 5 /*CfgRegAddr*/);
     TTI_WRCFG(4 /*GprAddress*/, 0 /*wr128b*/, 76 /*CfgReg*/);
 }
