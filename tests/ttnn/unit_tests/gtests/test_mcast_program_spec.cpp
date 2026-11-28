@@ -26,7 +26,7 @@ TEST_F(McastHostFixture, SpecAttachUsesActiveArchitectureNoc) {
 }
 
 TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePrefixes) {
-    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})}, per_core());
     auto spec = spec_pair(2);
     m2::ProgramRunArgs args;
     for (size_t i = 0; i < spec_targets.size(); ++i) {
@@ -71,7 +71,7 @@ TEST_F(McastHostFixture, SpecAttachPopulatesNamedMetadataResourcesAndRuntimePref
 }
 
 TEST_F(McastHostFixture, SpecAttachComposesAndNativeRunArgsCopiesKeepPayloads) {
-    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})}, per_core());
     auto spec = spec_pair();
     m2::ProgramRunArgs args;
     mcast.attach(spec, args, "first", spec_targets);
@@ -161,7 +161,7 @@ TEST_F(McastHostFixture, SpecAttachFailuresLeaveBothObjectsUnchanged) {
 }
 
 TEST_F(McastHostFixture, SpecAttachValidatesUniformVarargSchemaAndNormalizesOverrides) {
-    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})});
+    auto mcast = make_mcast(device_, {GroupInput(grid({0, 0}, {1, 0}), {{0, 0}})}, per_core());
     auto spec = spec_pair();
     spec.kernels[1].advanced_options.num_runtime_varargs_per_node.emplace(CoreCoord{1, 0}, 2);
     m2::ProgramRunArgs args;

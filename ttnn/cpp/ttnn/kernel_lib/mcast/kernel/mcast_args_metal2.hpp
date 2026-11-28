@@ -19,6 +19,7 @@ template <uint32_t BASE>
 struct Metal2McastRuntime {
     uint32_t offset;
     static uint32_t read(uint32_t index) { return get_vararg(BASE + index); }
+    static uint32_t read_common(uint32_t index) { return get_common_vararg(index); }
     static Metal2McastRuntime coordinates(uint32_t index) { return {index}; }
     uint32_t operator[](uint32_t index) const { return read(offset + index); }
 };

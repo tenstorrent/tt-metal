@@ -213,10 +213,7 @@ void McastImpl::attach(
     for (const auto index : indices) {
         auto& kernel = staged.kernels[index];
         const auto nodes = placement(staged, kernel.unique_id);
-        const auto metadata = argument_metadata_(&nodes);
-        const uint32_t words = wire::RuntimeLayout(metadata).words;
         const auto base = uniform_varargs(kernel, nodes);
-        TT_FATAL(base <= std::numeric_limits<uint32_t>::max() - words, "Multicast runtime vararg count overflows");
         auto args = std::find_if(
             staged_args.kernel_run_args.begin(),
             staged_args.kernel_run_args.end(),
@@ -226,6 +223,13 @@ void McastImpl::attach(
             staged_args.kernel_run_args.push_back({.kernel = kernel.unique_id});
             args = std::prev(staged_args.kernel_run_args.end());
         }
+        // The NoC table goes after the caller's common varargs, when their values are already set.
+        auto& common = args->advanced_options.common_runtime_varargs;
+        const uint32_t common_base = kernel.advanced_options.num_common_runtime_varargs;
+        const auto metadata = argument_metadata_(
+            &nodes, common.size() == common_base ? std::optional<uint32_t>(common_base) : std::nullopt);
+        const uint32_t words = wire::RuntimeLayout(metadata).words;
+        TT_FATAL(base <= std::numeric_limits<uint32_t>::max() - words, "Multicast runtime vararg count overflows");
         auto& values = args->advanced_options.runtime_varargs;
         for (const auto& [node, value] : values) {
             TT_FATAL(nodes.contains(node), "Multicast runtime arguments target an unplaced node");
@@ -245,6 +249,10 @@ void McastImpl::attach(
             TT_FATAL(args_for_node.size() == base, "Multicast runtime varargs must match the declared prefix count");
             const auto payload = runtime_args_(node, metadata);
             args_for_node.insert(args_for_node.end(), payload.begin(), payload.end());
+        }
+        if (metadata.grid.derived) {
+            common.insert(common.end(), grid_table_.begin(), grid_table_.end());
+            kernel.advanced_options.num_common_runtime_varargs += grid_table_.size();
         }
         kernel.advanced_options.num_runtime_varargs = base + words;
         kernel.advanced_options.num_runtime_varargs_per_node.clear();

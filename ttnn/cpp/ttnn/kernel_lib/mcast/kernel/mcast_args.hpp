@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/chain_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/mcast_pipe.hpp"
@@ -107,6 +108,18 @@ struct PhysicalSenderAxes {
     }
 };
 
+// A grid-derived channel's NoC table, read from the common runtime args.
+template <typename Runtime, uint32_t BASE>
+struct GridTable {
+    uint32_t operator[](uint32_t index) const { return Runtime::read_common(BASE + index); }
+};
+
+// A grid-derived receiver's one sender, indexed like an explicit coordinate pair.
+struct GridSenderCoordinates {
+    uint32_t xy[mcast_wire::SENDER_COORD_WORDS];
+    FORCE_INLINE uint32_t operator[](uint32_t word) const { return xy[word]; }
+};
+
 template <
     bool PRESENT,
     mcast_wire::ArgumentMetadata METADATA,
@@ -196,10 +209,19 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
                 rotating,
                 sender_mcast_mode,
                 rectangle_capacity ? rectangle_capacity : 1>>>;
+    static constexpr bool grid_derived = METADATA.grid.derived;
+    static_assert(
+        !grid_derived ||
+            (transfer_mode == TransferMode::Multicast && !rotating && rectangle_capacity == 1 &&
+             (!sender_available || (METADATA.mcast.remote_count_known && mcast_wire::concrete(sender_mcast_mode)))),
+        "A grid-derived channel has one fixed sender and one rectangle per group");
     using SenderCoordinates = std::conditional_t<
-        METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs,
-        decltype(Runtime::coordinates(0)),
-        PhysicalSenderAxes<METADATA.coordinates>>;
+        grid_derived,
+        GridSenderCoordinates,
+        std::conditional_t<
+            METADATA.coordinates.encoding == mcast_wire::SenderCoordinateEncoding::ExplicitPairs,
+            decltype(Runtime::coordinates(0)),
+            PhysicalSenderAxes<METADATA.coordinates>>>;
     using ReceiverPipeType = std::conditional_t<
         !receiver_available,
         InactiveReceiverPipe,
@@ -219,27 +241,43 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
     ReceiverPipeType receiver(const Noc& noc) const;
     std::optional<ReceiverPipeType> optional_receiver(const Noc& noc) const;
 
-    uint32_t sender_x() const {
-        static_assert(
-            runtime_layout.sender_coordinates != mcast_wire::OMITTED,
-            "Sender coordinates are unavailable on this placement");
-        return mcast_wire::sender_coordinate(
-            Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, mcast_wire::SENDER_X);
-    }
-    uint32_t sender_y() const {
-        static_assert(
-            runtime_layout.sender_coordinates != mcast_wire::OMITTED,
-            "Sender coordinates are unavailable on this placement");
-        return mcast_wire::sender_coordinate(
-            Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, mcast_wire::SENDER_Y);
-    }
+    uint32_t sender_x() const { return sender_coordinate_(mcast_wire::SENDER_X); }
+    uint32_t sender_y() const { return sender_coordinate_(mcast_wire::SENDER_Y); }
 
 private:
-    uint32_t roles_() const {
-        if constexpr (runtime_layout.roles == mcast_wire::OMITTED) {
-            return METADATA.kernel.roles;
+    using GridTableType = GridTable<Runtime, METADATA.grid.common_base>;
+    // Out of line: every accessor of every grid-derived channel needs it, and inlining each copy grows the kernel.
+    __attribute__((noinline)) static mcast_wire::GridPosition grid_position_() {
+        return mcast_wire::grid_position(METADATA.grid, get_absolute_logical_x(), get_absolute_logical_y());
+    }
+    uint32_t sender_coordinate_(uint32_t axis) const {
+        if constexpr (grid_derived) {
+            static_assert(receiver_available, "Sender coordinates are unavailable on this placement");
+            return mcast_wire::grid_sender_coordinate(GridTableType{}, METADATA.grid, grid_position_(), axis);
         } else {
+            static_assert(
+                runtime_layout.sender_coordinates != mcast_wire::OMITTED,
+                "Sender coordinates are unavailable on this placement");
+            return mcast_wire::sender_coordinate(
+                Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, axis);
+        }
+    }
+    // The receiver pipe's coordinate source: the derived sender, or the runtime-arg view it decodes itself.
+    auto receiver_coordinates_() const {
+        if constexpr (grid_derived) {
+            return GridSenderCoordinates{
+                {sender_coordinate_(mcast_wire::SENDER_X), sender_coordinate_(mcast_wire::SENDER_Y)}};
+        } else {
+            return Runtime::coordinates(runtime_layout.sender_coordinates);
+        }
+    }
+    uint32_t roles_() const {
+        if constexpr (runtime_layout.roles != mcast_wire::OMITTED) {
             return Runtime::read(runtime_layout.roles);
+        } else if constexpr (grid_derived && METADATA.kernel.roles == mcast_wire::DYNAMIC_ROLES) {
+            return mcast_wire::grid_roles(grid_position_());
+        } else {
+            return METADATA.kernel.roles;
         }
     }
     // A declaration-only fallback capacity keeps this unused decoder well-formed for chain-only layouts.
@@ -279,6 +317,7 @@ struct McastArgsImpl<false, METADATA, Runtime, DataReadyBinding, ConsumerReadyBi
 template <uint32_t RT_BASE>
 struct PositionalMcastRuntime {
     static uint32_t read(uint32_t offset) { return get_arg_val<uint32_t>(RT_BASE + offset); }
+    static uint32_t read_common(uint32_t index) { return get_common_arg_val<uint32_t>(index); }
     static const uint32_t* coordinates(uint32_t offset) {
         return reinterpret_cast<const uint32_t*>(get_arg_addr(RT_BASE + offset));
     }

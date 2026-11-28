@@ -355,3 +355,42 @@ def test_group_attention_external_sender_argument_counts(device):
             assert len(kernel.runtime_args[x][y]) == expected_rt
     assert expected_rt < 73
     print(f"Group attention Q10 multicast RT: 73 -> {expected_rt} words/core")
+
+
+# Fixed senders over groups that tile a rectangle: no per-core multicast words, each core derives its sender and its
+# group's rectangle from its logical coordinates and the common-arg NoC table.
+GRID_DERIVED = [
+    GeometryCase(
+        "columns",
+        [([(x, y) for y in range(4)], [(x, 1)]) for x in range(3)],
+    ),
+    GeometryCase(
+        "rows",
+        [([(x, y) for x in range(1, 5)], [(3, y)]) for y in (1, 2)],
+    ),
+    GeometryCase(
+        "half-rows",
+        [([(x0, y), (x0 + 1, y)], [(x0, y)]) for y in range(2) for x0 in (0, 2)],
+    ),
+    GeometryCase("one-group", [([(x, y) for y in range(2) for x in range(3)], [(1, 1)])]),
+    # Staggered lines: line n's sender advances n places along it, wrapping (MMRS's diagonal senders).
+    GeometryCase(
+        "staggered-rows",
+        [([(x, y) for x in range(4)], [((1 + y) % 4, y)]) for y in range(4)],
+    ),
+    GeometryCase(
+        "staggered-columns",
+        [([(x, y) for y in range(4)], [(x, (3 + x) % 4)]) for x in range(3)],
+    ),
+    GeometryCase(
+        "staggered-half-rows",
+        [([(x0, y), (x0 + 1, y)], [(x0 + (y * 2 + x0 // 2) % 2, y)]) for y in range(2) for x0 in (0, 2)],
+    ),
+]
+
+
+@pytest.mark.parametrize("counter", [False, True], ids=["flag", "counter"])
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("case", GRID_DERIVED, ids=[case.name for case in GRID_DERIVED])
+def test_grid_derived_groups(device, noc, counter, case):
+    run_mcast_groups_case(device, case.resolve(device), noc=noc, counter=counter, expect_grid=True)
