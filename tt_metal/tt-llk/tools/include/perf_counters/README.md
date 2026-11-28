@@ -18,6 +18,16 @@ RISC-V performance monitor (the counters inside the cores, not the Tensix banks 
 - `riscv_pmc_hw.h`: the CSR addresses, `read_csr<csr>()`, `write_csr<csr>(value)`, `select` and `zero_counters`, and
   `select_upper` and `zero_counters_upper` for counters 5 and 6 of the Quasar data-movement cores.
 
+NoC interface (NIU) event counters, namespace `llk::perf::noc`:
+
+- `noc_counters_types.h`: `NocCounter` (names), `NocGroup`, group masks, `Entry` = `{counter, register index, group}`
+  and the `noc_counters` table in capture order, the same on every architecture.
+- `noc_counters_blackhole.h`, `noc_counters_wormhole.h`, `noc_counters_quasar.h`: `NIU_STATUS_BASE`, `NIU_NOC_STRIDE`,
+  `NIU_NOCS` and `NIU_DATA_WORD_BYTES`.
+- `noc_counters_inventory.h`: picks the arch header from `ARCH_*`, `selected_regs<GroupMask>()`.
+
+Reference: `docs/performance_counters/noc_counters.md`.
+
 A profiler record carries the raw mhpmevent select, not an ordinal, so `PmcEvent` is only for names: append new
 names, the host decodes a select by looking it up in the arch table. Reference: `docs/performance_counters/riscv_pmc.md`.
 

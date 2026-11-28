@@ -435,6 +435,13 @@ void JitBuildEnv::init(
         }
     }
 
+    if (rtoptions.get_profiler_noc_counters_enabled()) {
+        // The capture is in the BRISC kernel entry and the Quasar DM0 firmware, so every build gets it.
+        TT_ASSERT(rtoptions.get_profiler_enabled());
+        this->defines_ +=
+            "-DPROFILE_NOC_COUNTERS=" + std::to_string(rtoptions.get_profiler_noc_counters_groups()) + " ";
+    }
+
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }

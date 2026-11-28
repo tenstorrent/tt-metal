@@ -15,12 +15,14 @@ from loguru import logger
 
 try:
     from tt_llk_perf import metrics as _mc
+    from tt_llk_perf import noc_counters as _noc_counters
     from tt_llk_perf import riscv_pmc as _riscv_pmc
     from tt_llk_perf.headers import counter_type_names, num_neos
 except ModuleNotFoundError:
     # A source tree puts the repo root and tools/ on PYTHONPATH; the package lives under tt-llk.
     sys.path.append(str(Path(__file__).resolve().parents[2] / "tt_metal" / "tt-llk" / "tools" / "python"))
     from tt_llk_perf import metrics as _mc
+    from tt_llk_perf import noc_counters as _noc_counters
     from tt_llk_perf import riscv_pmc as _riscv_pmc
     from tt_llk_perf.headers import counter_type_names, num_neos
 
@@ -274,6 +276,47 @@ def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Op
                     "mcycle": decoded["mcycle"],
                     "minstret": decoded["minstret"],
                     **decoded["metrics"],
+                }
+            )
+    return pd.DataFrame(out) if out else None
+
+
+def decode_noc_counter_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
+    """One row per tile launch and NoC from the NoC interface counter markers of a device log; tt_llk_perf/noc_counters.py
+    has the marker layout.
+
+    Each row is a dict with device_id (the PCIe slot column), run_host_id, core_x, core_y, risc_type, marker_id,
+    record_time and data. A launch with a pair missing (a full profiler buffer) is skipped.
+    """
+    out = []
+    for (device_id, run_host_id, core_x, core_y, risc_type, time), by_id in _noc_counters.group_launches(rows).items():
+        if not _noc_counters.capture_core(device_arch, risc_type) or _noc_counters.HEADER_MARKER_ID not in by_id:
+            continue
+        pairs = {
+            marker_id - _noc_counters.PAIR_MARKER_ID_BASE: data
+            for marker_id, data in by_id.items()
+            if marker_id != _noc_counters.HEADER_MARKER_ID
+        }
+        try:
+            decoded = _noc_counters.decode_noc_launch(
+                device_arch, _noc_counters.unpack_launch(by_id[_noc_counters.HEADER_MARKER_ID], pairs)
+            )
+        except ValueError as e:
+            logger.warning("Skipping NoC counter launch at {} core {},{}: {}", time, core_x, core_y, e)
+            continue
+        for noc, counts in decoded["counts"].items():
+            out.append(
+                {
+                    "device_id": device_id,
+                    "run_host_id": run_host_id,
+                    "core_x": core_x,
+                    "core_y": core_y,
+                    "risc_type": risc_type,
+                    "record time": time,
+                    "noc": noc,
+                    "word_bytes": decoded["word_bytes"],
+                    **counts,
+                    **decoded["metrics"][noc],
                 }
             )
     return pd.DataFrame(out) if out else None
