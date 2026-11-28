@@ -1,0 +1,211 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""The CPU reference golden of the e2e test (test_e2e_galaxy.py): the package's fp32 reference over a contiguous run
+of layers on the first ``--seq`` tokens of a prompt, in chunks of ``--chunk``. No GPU golden of this model exists.
+
+    python -m models.demos.deepseek_v3_d_p.tests.mistral_large_4.cpu_golden \
+        --prompt prompt.json --out DIR [--seq 5120] [--layers 0-71] [--dump 0,1,...] [--tf-targets 36,40,...]
+
+Writes DIR/chunk_<c>.safetensors per chunk (``L<i>``: the output of each dumped layer, ``final_norm``; ``--dump-dtype``,
+bfloat16 by default, rows in position order; ``L<i>.topk``: the top-k of each ``--dump-topk`` layer, int32 [S, 2048]
+ascending, -1 pads) and, for the last chunk, ``logits`` (fp32, its last LOGITS_ROWS rows), then DIR/meta.json. With
+``--state``, also the KV-cache golden in the prefill trace layout: DIR/metadata.json (``token_ids``) and
+DIR/kv_cache/layer_<i>.safetensors (``kv_latent_cache_layer_<i>``, ``k_rope_cache_layer_<i>``,
+``index_key_cache_layer_<i>``: each layer's state over the whole sequence, ``--state-dtype``; [seq, 0] where it owns none). Holds
+the dense weights in bf16 (about 44 GB for every layer) and streams the routed experts from the checkpoint.
+
+``--experts-dtype bfloat4_b`` (or bfloat8_b) replaces each routed expert matrix by its round trip through that device
+format in the orientation TtExperts tiles it ([in, out], tt/mistral_large_4/experts.py), rounded per expert as a chunk
+uses it; ``--dense-dtype device`` rounds every dense weight (and the LM head) to the dtype and orientation its device
+module stores it in under the current MISTRAL_LARGE_4_* settings. Both default to the unrounded bf16 weights.
+``--round-impl torch`` uses the vectorized emulation, checked bit-exact against ttnn's host round trip on the first
+tensor of each layer (reference/mistral_large_4/device_rounding.py).
+
+``--tf-targets`` prepares a golden for the teacher-forced per-layer test (test_teacher_forced_galaxy.py): each target
+layer i also dumps i - 1 (its input) and i, and the top-k of i (a full-indexer layer, compared) or of its source full
+layer (a shared-index layer, injected). Use with ``--state``: the KV / index-key state is injected and compared too.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import time
+from pathlib import Path
+
+import torch
+
+CHECKPOINT_DIR = "/mnt/models/mistralai/Mistral-Large-4-1T-A52B"
+LOGITS_ROWS = 32
+STATE_DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
+# layers dumped by default: every block variant early, then groups through the stack to the last layer
+DUMP = (0, 1, 2, 3, 4, 7, 8, 15, 16, 17, 18, 31, 35, 36, 39, 40, 47, 55, 63, 67, 70, 71)
+DUMP_DTYPES = {"bfloat16": torch.bfloat16, "float32": torch.float32}
+
+
+class Spec:
+    """The spec fields the reference (reference/mistral_large_4/model.py) reads."""
+
+    def __init__(self, hf_dir: str, max_seq: int):
+        self.hf_dir = Path(hf_dir)
+        self._v = {"reference.weight_dtype": "bfloat16", "shapes.max_seq_len": max_seq}
+
+    def get(self, key, default=None):
+        return self._v.get(key, default)
+
+
+def parse_layers(text: str) -> list[int]:
+    a, _, b = text.partition("-")
+    return list(range(int(a), int(b or a) + 1))
+
+
+def int_list(text: str) -> list[int]:
+    return [int(x) for x in text.split(",") if x.strip()]
+
+
+def tf_dumps(cfg, targets) -> tuple[set, set]:
+    """The layers whose output and whose top-k a teacher-forced check of ``targets`` reads: (i - 1, i) per target; i's
+    own top-k on a full-indexer layer, its source full layer's on a shared-index layer."""
+    assert all(i >= 1 for i in targets), "layer 0's input is the embedding, not a dumped layer"
+    return {j for i in targets for j in (i - 1, i)}, {i if cfg.is_full(i) else cfg.topk_source(i) for i in targets}
+
+
+def prompt_tokens(path: str) -> list[int]:
+    return list(json.loads(Path(path).read_text())["token_ids"])
+
+
+def main(argv=None):
+    from safetensors.torch import save_file
+
+    from models.demos.deepseek_v3_d_p.reference.mistral_large_4.model import Reference
+
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--prompt", required=True, help="a prompt.json with token_ids")
+    p.add_argument("--out", required=True)
+    p.add_argument("--seq", type=int, default=5120)
+    p.add_argument("--chunk", type=int, default=5120)
+    p.add_argument("--layers", default="0-71")
+    p.add_argument("--dump", default=",".join(map(str, DUMP)))
+    p.add_argument("--dump-dtype", default="bfloat16", choices=sorted(DUMP_DTYPES), help="dtype of the L<i> dumps")
+    p.add_argument("--dump-topk", default="", help="layers whose top-k (L<i>.topk) is dumped")
+    p.add_argument("--tf-targets", default="", help="teacher-forced target layers: adds their dumps (module doc)")
+    p.add_argument("--hf-dir", default=CHECKPOINT_DIR)
+    p.add_argument("--state", action="store_true", help="also write the serving golden (kv_cache/, metadata.json)")
+    p.add_argument("--state-dtype", default="float32", choices=sorted(STATE_DTYPES))
+    p.add_argument(
+        "--experts-dtype",
+        default="bfloat16",
+        choices=("bfloat16", "bfloat8_b", "bfloat4_b"),
+        help="routed expert weights as the device stores them (bfloat16: unrounded)",
+    )
+    p.add_argument(
+        "--dense-dtype",
+        default="bfloat16",
+        choices=("bfloat16", "device"),
+        help="device: every dense weight rounded to its device module's dtype (settings.py); bfloat16: unrounded",
+    )
+    p.add_argument("--round-impl", default="ttnn", choices=("ttnn", "torch"), help="BFP round trip implementation")
+    a = p.parse_args(argv)
+    assert a.seq % a.chunk == 0, (a.seq, a.chunk)
+    layers = parse_layers(a.layers)
+    dump = [i for i in int_list(a.dump) if i in layers]
+    if layers[-1] not in dump:
+        dump.append(layers[-1])
+    dump_topk = set(int_list(a.dump_topk))
+    tf_targets = sorted(int_list(a.tf_targets))
+    tokens = prompt_tokens(a.prompt)[: a.seq]
+    assert len(tokens) == a.seq, f"the prompt has {len(tokens)} tokens, need {a.seq}"
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+
+    t0 = time.time()
+    ref = Reference(Spec(a.hf_dir, a.seq), layers=layers, dtype=torch.float32)
+    if tf_targets:
+        assert a.state, "--tf-targets needs --state (the test injects and compares the KV / index-key state)"
+        outs, topks = tf_dumps(ref.cfg, tf_targets)
+        missing = sorted((outs | topks) - set(layers))
+        assert not missing, f"--tf-targets needs layers {missing}, outside --layers {a.layers}"
+        dump = sorted(set(dump) | outs)
+        dump_topk |= topks
+    dump_topk = sorted(i for i in dump_topk if i in layers)
+    bad = [i for i in dump_topk if not ref.cfg.is_full(i)]
+    assert not bad, f"--dump-topk {bad}: shared-index layers reuse their source's top-k; dump the source"
+    rounding, rounder = {}, None
+    if a.experts_dtype != "bfloat16" or a.dense_dtype != "bfloat16":
+        from models.demos.deepseek_v3_d_p.reference.mistral_large_4.device_rounding import (
+            RoundedExperts,
+            Rounder,
+            round_dense,
+        )
+
+        rounder = Rounder(a.round_impl)
+        if a.dense_dtype == "device":
+            from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+
+            rounding["dense"] = round_dense(ref, rounder, settings.get)
+            print(f"dense weights rounded: {rounding['dense']} {rounder.stats()}", flush=True)
+        if a.experts_dtype != "bfloat16":
+            ref.experts = RoundedExperts(ref.experts, a.experts_dtype, rounder)
+    load_s = time.time() - t0
+    state = ref.new_state(a.seq)
+    chunks = a.seq // a.chunk
+    times = []
+    for c in range(chunks):
+        got = {}
+
+        def rec(name, t):
+            if name.endswith(".out") and int(name[1:].split(".")[0]) in dump:
+                got[name.split(".")[0]] = t.detach().to(DUMP_DTYPES[a.dump_dtype]).contiguous()
+            elif name.endswith(".topk") and int(name[1:].split(".")[0]) in dump_topk:
+                got[name] = t.detach().to(torch.int32).contiguous()
+
+        t1 = time.time()
+        final, logits = ref.forward_chunk(
+            tokens[c * a.chunk : (c + 1) * a.chunk],
+            c * a.chunk,
+            state,
+            rec=rec,
+            logits_last_n=LOGITS_ROWS if c == chunks - 1 else 0,
+        )
+        got["final_norm"] = final.to(torch.bfloat16).contiguous()
+        if logits is not None:
+            got["logits"] = logits.float().contiguous()
+        save_file(got, str(out / f"chunk_{c:02d}.safetensors"))
+        times.append(round(time.time() - t1, 1))
+        print(f"chunk {c}: {times[-1]} s" + (f" rounding {rounder.stats()}" if rounder else ""), flush=True)
+    if a.state:
+        (out / "kv_cache").mkdir(exist_ok=True)
+        for i in layers:
+            st = ref.state_tensors(state, i, a.seq)
+            save_file(
+                {f"{n}_cache_layer_{i}": t.to(STATE_DTYPES[a.state_dtype]).contiguous() for n, t in st.items()},
+                str(out / "kv_cache" / f"layer_{i}.safetensors"),
+            )
+        (out / "metadata.json").write_text(json.dumps({"token_ids": tokens, "seq_len": a.seq, "layers": layers}) + "\n")
+    meta = {
+        "hf_dir": a.hf_dir,
+        "prompt": a.prompt,
+        "tokens_sha256": hashlib.sha256(json.dumps(tokens).encode()).hexdigest(),
+        "seq": a.seq,
+        "chunk": a.chunk,
+        "layers": [layers[0], layers[-1]],
+        "dump": dump,
+        "dump_dtype": a.dump_dtype,
+        "dump_topk": dump_topk,
+        "tf_targets": tf_targets,
+        "logits_rows": LOGITS_ROWS,
+        "reference": "fp32 compute, bf16 weights (reference/mistral_large_4/model.py)",
+        "experts_dtype": a.experts_dtype,
+        "dense_dtype": a.dense_dtype,
+        "rounding": {**rounding, **rounder.stats()} if rounder else None,
+        "load_seconds": round(load_s, 1),
+        "chunk_seconds": times,
+    }
+    (out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    print(json.dumps(meta), flush=True)
+
+
+if __name__ == "__main__":
+    main()
