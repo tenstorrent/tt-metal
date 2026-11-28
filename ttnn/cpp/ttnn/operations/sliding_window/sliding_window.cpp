@@ -780,6 +780,78 @@ static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(cons
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
+constexpr int32_t kWormholeNocSizeX = 10;
+constexpr int32_t kWormholeNocSizeY = 12;
+
+static uint32_t wormhole_noc_hops(const CoreCoord& src, uint32_t dst_x, uint32_t dst_y, uint32_t noc) {
+    auto wrap = [](int32_t v, int32_t m) { return static_cast<uint32_t>(((v % m) + m) % m); };
+    const int32_t dx = static_cast<int32_t>(dst_x) - static_cast<int32_t>(src.x);
+    const int32_t dy = static_cast<int32_t>(dst_y) - static_cast<int32_t>(src.y);
+    if (noc == 0) {
+        return wrap(dx, kWormholeNocSizeX) + wrap(dy, kWormholeNocSizeY);
+    }
+    return wrap(-dx, kWormholeNocSizeX) + wrap(-dy, kWormholeNocSizeY);
+}
+
+static std::pair<GatherConfig, GatherConfig> divide_transfers_by_noc_direction(
+    const GatherConfig& input, const CoreCoord& src_xy) {
+    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
+    std::array<std::vector<DestinationTransferPair>, 2> remote;
+    std::array<std::vector<DestinationTransferPair>, 2> local;
+    std::array<uint32_t, 2> sticks = {0, 0};
+    std::vector<DestinationTransferPair> locals;
+    std::vector<DestinationTransferPair> ties;
+    for (const auto& t : all) {
+        if (static_cast<size_t>(t.noc_x) == src_xy.x && static_cast<size_t>(t.noc_y) == src_xy.y) {
+            locals.push_back(t);
+            continue;
+        }
+        const uint32_t h0 = wormhole_noc_hops(src_xy, t.noc_x, t.noc_y, 0);
+        const uint32_t h1 = wormhole_noc_hops(src_xy, t.noc_x, t.noc_y, 1);
+        if (h0 == h1) {
+            ties.push_back(t);
+            continue;
+        }
+        const uint32_t r = h0 < h1 ? 0 : 1;
+        remote[r].push_back(t);
+        sticks[r] += t.size;
+    }
+    for (const auto& t : ties) {
+        const uint32_t r = sticks[0] <= sticks[1] ? 0 : 1;
+        remote[r].push_back(t);
+        sticks[r] += t.size;
+    }
+    for (const auto& t : locals) {
+        const uint32_t light = sticks[0] <= sticks[1] ? 0 : 1;
+        const uint32_t heavy = 1 - light;
+        const uint32_t diff = sticks[heavy] - sticks[light];
+        if (static_cast<uint32_t>(t.size) <= diff || t.size < 2) {
+            local[light].push_back(t);
+            sticks[light] += t.size;
+            continue;
+        }
+        const uint16_t first = static_cast<uint16_t>((t.size + diff) / 2);
+        const uint16_t rest = static_cast<uint16_t>(t.size - first);
+        local[light].push_back({t.noc_x, t.noc_y, t.src_id, t.dst_id, first});
+        sticks[light] += first;
+        if (rest > 0) {
+            local[heavy].push_back(
+                {t.noc_x,
+                 t.noc_y,
+                 static_cast<uint16_t>(t.src_id + first),
+                 static_cast<uint16_t>(t.dst_id + first),
+                 rest});
+            sticks[heavy] += rest;
+        }
+    }
+    std::array<std::vector<DestinationTransferPair>, 2> out;
+    for (uint32_t r = 0; r < 2; r++) {
+        out[r].insert(out[r].end(), local[r].begin(), local[r].end());
+        out[r].insert(out[r].end(), remote[r].begin(), remote[r].end());
+    }
+    return std::make_pair(reduce_flattened_transfers(out[0]), reduce_flattened_transfers(out[1]));
+}
+
 uint32_t sliding_window_shard_row_width(const CoreRangeSet& grid, bool is_block_sharded) {
     if (is_block_sharded) {
         TT_FATAL(!grid.ranges().empty(), "Block-sharded sliding-window grid has no core ranges");
@@ -823,7 +895,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size,
     const CoreRangeSet& shard_grid,
-    ShardOrientation shard_orientation) {
+    ShardOrientation shard_orientation,
+    bool split_by_noc_direction) {
     validate_sliding_window_shard_grid(shard_grid, is_block_sharded, shard_orientation);
     // Same width the validator uses, so a caller cannot pass a stride that disagrees with the grid.
     const uint32_t num_cores_x = sliding_window_shard_row_width(shard_grid, is_block_sharded);
@@ -940,7 +1013,8 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     if (use_blocking) {
         number_of_blocks_per_core.reserve(gather_configs.size());
     }
-    for (const auto& config : gather_configs) {
+    for (uint32_t src_core_id = 0; src_core_id < gather_configs.size(); src_core_id++) {
+        const auto& config = gather_configs[src_core_id];
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
             const auto ordered = reorder_transfers_globally(quantized);
@@ -948,6 +1022,10 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             ordered_gather_configs0.push_back(std::move(first));
             ordered_gather_configs1.push_back(std::move(second));
             number_of_blocks_per_core.push_back(number_of_blocks);
+        } else if (split_by_noc_direction) {
+            auto [first, second] = divide_transfers_by_noc_direction(config, core_id_to_noc_coords(src_core_id));
+            ordered_gather_configs0.push_back(std::move(first));
+            ordered_gather_configs1.push_back(std::move(second));
         } else {
             auto [first, second] = divide_transfers_between_cores(config);
             ordered_gather_configs0.push_back(std::move(first));
