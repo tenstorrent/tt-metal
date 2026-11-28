@@ -33,6 +33,9 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         tilized ? tt::tile_size(input_cb_data_format) : input_tensor.padded_shape()[-1] * input_tensor.element_size();
     const bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     if (sharded && !tilized) {
+        TT_FATAL(
+            input_tensor.memory_config().shard_spec().has_value(),
+            "Copy: sharded input must have shard_spec");
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
     }
 
@@ -45,6 +48,9 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
         uint32_t output_unit_size = tilized ? tt::tile_size(output_cb_data_format)
                                             : input_tensor.padded_shape()[-1] * tt::datum_size(output_cb_data_format);
         if (sharded && !tilized) {
+            TT_FATAL(
+                input_tensor.memory_config().shard_spec().has_value(),
+                "Copy: sharded input must have shard_spec for dtype conversion");
             output_unit_size =
                 input_tensor.memory_config().shard_spec()->shape[1] * tt::datum_size(output_cb_data_format);
         }
