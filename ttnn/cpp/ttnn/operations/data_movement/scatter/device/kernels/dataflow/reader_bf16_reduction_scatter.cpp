@@ -88,7 +88,17 @@ FORCE_INLINE void copy_fp32_temp_to_output(
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
 
-    for (uint32_t copy_i = 0; copy_i < chunk_size; ++copy_i) {
+    uint32_t copy_i = 0;
+    if ((output_l1_write_addr & 3u) == 0) {
+        volatile tt_l1_ptr uint32_t* output_l1_write_ptr32 =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_l1_write_addr);
+        for (; copy_i + 1 < chunk_size; copy_i += 2) {
+            const uint32_t lo = fp32_to_bf16(fp32_temp[copy_i]);
+            const uint32_t hi = fp32_to_bf16(fp32_temp[copy_i + 1]);
+            output_l1_write_ptr32[copy_i >> 1] = lo | (hi << 16);
+        }
+    }
+    for (; copy_i < chunk_size; ++copy_i) {
         output_l1_write_ptr[copy_i] = fp32_to_bf16(fp32_temp[copy_i]);
     }
 }
