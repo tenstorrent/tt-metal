@@ -39,65 +39,32 @@ sfpi_inline void calculate_fmod_int32_body(
 }
 
 template <bool is_fp32_dest_acc_en>
-sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) {
-    // fmod(a, b) = a - trunc(a/b) * b
-
-    sfpi::vFloat a = in0;
-    sfpi::vFloat b = in1;
+sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat a, sfpi::vFloat b) {
+    // fmod(a, b) = a - trunc(a/b) * b, evaluated on |a| and |b| so the corrections
+    // below are sign-independent; the sign of a is applied once at the end.
+    sfpi::vFloat a_abs = sfpi::abs(a);
     sfpi::vFloat b_abs = sfpi::abs(b);
 
-    // Compute reciprocal 1/b
-    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b);
+    sfpi::vFloat recip = ckernel::sfpu::sfpu_reciprocal_iter<2>(b_abs);
+    sfpi::vFloat trunc_div = _trunc_body_(a_abs * recip);
+    sfpi::vFloat result = a_abs - trunc_div * b_abs;
 
-    // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * recip;
-
-    sfpi::vFloat trunc_div = _trunc_body_(div_result);
-
-    // Compute fmod = a - trunc(a/b) * b
-    sfpi::vFloat result = a - trunc_div * b;
-
-    // Post-correction - fmod result must satisfy |result| < |b|
-    // If |result| >= |b|, the truncation was wrong by 1
-    sfpi::vFloat result_abs = sfpi::abs(result);
-
-    // If result >= b, we truncated too low, add/subtract b to correct
-    v_if(result_abs >= b_abs) {
-        // Determine correction direction based on sign of result
-        v_if(result >= sfpi::vFloat(0.0f)) {
-            result = result - b_abs;  // result was positive and too big
-        }
-        v_else {
-            result = result + b_abs;  // result was negative and too big (magnitude)
-        }
-        v_endif;
-    }
+    // The reciprocal error can put trunc(a/b) a unit off (several units for quotients
+    // above 2^22). One step down and two steps up bring the result into [0, |b|) when
+    // trunc is at most one unit too low or two units too high; larger misses stay out
+    // of range.
+    v_if(result >= b_abs) { result = result - b_abs; }
+    v_endif;
+    v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
+    v_endif;
+    v_if(result < sfpi::vFloat(0.0f)) { result = result + b_abs; }
     v_endif;
 
-    // Sign correction - fmod result must have same sign as 'a' (or be zero)
-    // If a > 0 and result < 0, the truncation was 1 too high, need to add b
-    // If a < 0 and result > 0, the truncation was 1 too low, need to subtract b
-    // This fixes cases where a/b ≈ 0.9999999 but rounds to 1 due to reciprocal error
-    v_if(a >= sfpi::vFloat(0.0f)) {
-        // a is positive, result should be >= 0
-        v_if(result < sfpi::vFloat(0.0f)) {
-            result = result + b_abs;  // over-truncated
-        }
-        v_endif;
-    }
-    v_else {
-        // a is negative, result should be <= 0
-        v_if(result > sfpi::vFloat(0.0f)) {
-            result = result - b_abs;  // under-truncated
-        }
-        v_endif;
-    }
-    v_endif;
+    // Finite a == b needs no override: trunc gives 0 or 1 and the corrections yield 0.
+    // a == b = +-inf or NaN gives NaN, as in torch.
 
-    // Handle special cases using conditional assignment (NOT early return!)
-    // When a == b, fmod(a, b) = 0
-    v_if(a == b) { result = sfpi::vFloat(0.0f); }
-    v_endif;
+    // Zero results take the sign of a too: fmod(-4, 2) = -0, as in torch.
+    result = sfpi::copysgn(result, a);
 
     // Handle division by zero - return NaN
     v_if(b == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(std::numeric_limits<float>::quiet_NaN()); }
