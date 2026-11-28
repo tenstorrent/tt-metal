@@ -4,7 +4,7 @@
 
 import ttnn
 from models.tt_cnn.tt.builder import TtConv2d
-from models.experimental.mobileNetV3.tt.utils import _create_conv_config_from_params
+from models.experimental.mobileNetV3.tt.utils import _create_conv_config_from_params, to_row_major
 
 
 class ttnn_SqueezeExcitation:
@@ -48,7 +48,7 @@ class ttnn_SqueezeExcitation:
         self.fc2 = TtConv2d(self.fc2_config, device)
 
     def __call__(self, device, input):
-        input = ttnn.to_layout(input, layout=ttnn.ROW_MAJOR_LAYOUT)
+        input = to_row_major(input)
         scale = self.avgpool(input)
 
         [scale, [_out_height, _out_width]] = self.fc1(scale, return_output_dim=True)
