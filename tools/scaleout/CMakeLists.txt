@@ -60,8 +60,19 @@ target_link_libraries(
     PRIVATE
         enchantum::enchantum
         tt-logger::tt-logger
-        $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
         $<BUILD_INTERFACE:protobuf::libprotobuf>
+)
+
+# yaml-cpp is a static library, and it is already linked into libtt_metal.so and libtt-umd.so (which every consumer
+# of scaleout_tools links, directly or via umd::tt-umd) and exported from them. Linking it into scaleout_tools as
+# well would propagate it to every consumer (the objects of this OBJECT library are linked into them directly),
+# giving each executable a second copy of yaml-cpp that ASan reports as an ODR violation (e.g. on the vtable of
+# YAML::Exception). Take only its headers and resolve the symbols from the shared libraries.
+target_include_directories(
+    scaleout_tools
+    SYSTEM
+    PUBLIC
+        "$<BUILD_INTERFACE:$<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>>"
 )
 
 # Do not export scaleout_tools' symbols from the shared libraries it is linked into (libtt_metal.so
@@ -368,7 +379,6 @@ if(ENABLE_DISTRIBUTED)
             OpenMPI::MPI
             protobuf::libprotobuf
             cxxopts::cxxopts
-            $<BUILD_INTERFACE:yaml-cpp::yaml-cpp>
     )
     target_compile_definitions(generate_rank_bindings PRIVATE OPEN_MPI=1)
 

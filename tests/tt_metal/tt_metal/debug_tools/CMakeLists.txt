@@ -12,12 +12,7 @@ function(create_unit_test_executable)
     tt_reuse_precompile_headers(${exec_name} metal_test_pch)
 
     # Link libraries
-    target_link_libraries(
-        ${exec_name}
-        PRIVATE
-            test_metal_common_libs
-            ttexalens::elf
-    )
+    target_link_libraries(${exec_name} PRIVATE test_metal_common_libs)
 
     # Set include directories
     target_include_directories(
@@ -29,6 +24,17 @@ function(create_unit_test_executable)
             ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_CURRENT_SOURCE_DIR}/common
+    )
+
+    # ttexalens::elf is a static library that is already linked into libtt_metal.so, which this test links
+    # through test_metal_common_libs. Linking it again would put a second copy of it in this executable, which
+    # ASan reports as an ODR violation (e.g. on ttexalens::native_elf::details::SpanStreamBuf's vtable). Take only
+    # its headers and resolve the symbols from libtt_metal.so.
+    target_include_directories(
+        ${exec_name}
+        SYSTEM
+        PRIVATE
+            "$<TARGET_PROPERTY:ttexalens::elf,INTERFACE_INCLUDE_DIRECTORIES>"
     )
 
     # Set runtime output directory
@@ -55,9 +61,6 @@ target_link_libraries(
     unit_tests_inspector
     PRIVATE
         test_metal_common_libs
-        Metalium::Metal::Impl
-        capnp
-        capnp-rpc
         numa
 )
 
@@ -74,6 +77,20 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/common
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+# Metalium::Metal::Impl (an OBJECT library) and Cap'n Proto (a static library) are already inside libtt_metal.so, which
+# this test links through test_metal_common_libs. Linking either of them here as well would embed a second copy in this
+# executable (every impl object, including the generated inspector rpc.capnp.c++, and the capnp/kj runtime), which ASan
+# reports as an ODR violation. Take only their include directories (Impl also provides the generated rpc headers) and
+# resolve the symbols from libtt_metal.so.
+target_include_directories(
+    unit_tests_inspector
+    SYSTEM
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal::Impl,INTERFACE_INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:capnp,INTERFACE_INCLUDE_DIRECTORIES>"
+        "$<TARGET_PROPERTY:capnp-rpc,INTERFACE_INCLUDE_DIRECTORIES>"
 )
 
 # Set runtime output directory
