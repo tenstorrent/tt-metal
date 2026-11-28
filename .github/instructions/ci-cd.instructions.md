@@ -16,6 +16,7 @@ excludeAgent: "cloud-agent"
 ## 🟡 IMPORTANT
 
 - **Indirect runner reassignment**: a change can silently move a job to a different runner even when no `runs-on:` label is edited directly — for example, edits to the pipeline reorg YAML files (`tests/pipeline_reorg/`) or to `sku_config.yaml` that alter how a `sku` resolves to a runner pool. The reorg YAML tooling (@roseli-TT's work) generates the effective `runs-on:` assignment, so a small config change can re-route hardware. Flag any change that touches runner-routing config and verify the effective runner assignment via the pipeline reorg tooling before approving.
+- **Test budget on the job**: the per-test `timeout` from a test yaml (`matrix.test-group.timeout`) belongs on the `timeout-minutes` of the step that runs the test, never on the job. The job clock starts before runner provisioning and the container pull, so a job-level budget charges setup to the test and can cancel a job whose steps all passed. Jobs leave `timeout-minutes` unset and get GitHub's 360 min default, unless a test budget exceeds that. Flag a job-level `timeout-minutes: ${{ matrix.test-group.timeout }}`, and a new job-level `timeout-minutes` on a job that runs tests.
 - **`time_budget.yaml` changes**: any edit to `.github/time_budget.yaml` must include a justification in the PR description explaining the new budget and which jobs drove the change.
 - **`fetch-depth`**: use `fetch-depth: 1` unless full history is explicitly needed (e.g., release tagging, `git describe`). Large repo + full history = slow CI.
 - **Caching**: if a workflow installs Python or C++ dependencies, it should cache them with a key based on `hashFiles('**/requirements*.txt')` or `hashFiles('**/CMakeLists.txt')`.
@@ -25,7 +26,7 @@ excludeAgent: "cloud-agent"
 
 - Reusable workflows (`workflow_call`) for patterns shared across 3+ workflow files — reduces duplication and makes updates atomic.
 - Step names should be descriptive enough to identify failures in the GitHub UI without opening logs.
-- `timeout-minutes` on any job that could hang (hardware-in-loop tests, long compile steps).
+- `timeout-minutes` on any step that could hang (hardware-in-loop tests, long compile steps).
 
 ## Test Yaml Validation (`tests/pipeline_reorg/`)
 
@@ -35,7 +36,7 @@ Test yamls define what runs in CI. Every test entry must include all required ke
 |-----|---------|
 | `name` | Display name in GitHub Actions UI |
 | `cmd` | Exact command to run |
-| `skus` | Mapping of SKU (machine type) to per-SKU settings: `timeout` (maximum job runtime in minutes) and optional `tier`. SKU names must match an entry in `.github/sku_config.yaml` |
+| `skus` | Mapping of SKU (machine type) to per-SKU settings: `timeout` (budget in minutes for the step that runs `cmd`; applied as that step's `timeout-minutes`, not the job's) and optional `tier`. SKU names must match an entry in `.github/sku_config.yaml` |
 | `owner_id` | Slack user ID for failure notification |
 | `team` | Owning team (used for time budget allocation) |
 | `budget_type` | Allowance under the team in `.github/time_budget.yaml` that the timeouts are charged to |
@@ -68,6 +69,7 @@ Flag a test that violates its pipeline's runtime contract (e.g., a 10-minute tes
 - [ ] `permissions:` block present and minimal
 - [ ] Runner-routing changes (direct `runs-on:` edits or indirect reorg/`sku_config.yaml` changes) verified against the pipeline reorg tooling
 - [ ] `time_budget.yaml` changes justified
+- [ ] Test budget (`matrix.test-group.timeout`) on the test step, not the job; no job-level `timeout-minutes` added
 - [ ] `fetch-depth: 1` unless full history required
 - [ ] Test yaml entries have all required keys (`name`, `cmd`, `skus`, `owner_id`, `team`, `budget_type`)
 - [ ] SKU names under `skus` match `.github/sku_config.yaml`

@@ -6,7 +6,7 @@
 #   model: Model identifier for filtering (workflow_dispatch model selection).
 #   model_family: (optional) Human-facing model family for grouping/reporting (e.g. Llama, Qwen, Gemma). Omit when a test spans multiple families.
 #   skus: A mapping of SKU names to their configuration:
-#     timeout: Job timeout in minutes.
+#     timeout: Budget in minutes for the step that runs this test (its timeout-minutes, not the job's).
 #     tier: Model tier (1, 2, or 3) used to filter which pipeline runs this test.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
