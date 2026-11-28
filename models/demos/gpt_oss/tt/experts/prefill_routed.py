@@ -92,9 +92,10 @@ ROUTED_COMBINE_BLOCK = 3072
 # to DRAM, so a larger GPT_OSS_ROUTED_PREFILL_CHUNK still runs instead of overflowing L1; the reduced combine block is
 # bounded by ROUTED_COMBINE_BLOCK (3072 tokens: 17 MiB), which is under it.
 ROUTED_L1_CAP_BYTES = 72 << 20
-# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py).
-# 2: the GPTQ layers' files hold transposed-tile tensors ("_tt"; before, host-transposed normal tiles, "_kt").
-ROUTED_PREFILL_WEIGHTS_VERSION = 2
+# Version of the cached routed-expert weights; the weight-cache completion marker records it (model_config.py). The
+# GPTQ layers' files have their own names ("_tt" + source hash) and marker entry (":gptq"), so a GPTQ format change
+# does not need a bump here (which would make every Blackhole 1xN mesh's gpt-oss-20b cache rebuild).
+ROUTED_PREFILL_WEIGHTS_VERSION = 1
 ROUTED_CACHE_SUBDIR = "experts_routed_ep"
 # GPT_OSS_PREFILL_GPTQ=1: the bfloat4_b routed prefill experts read the same GPTQ weights as the decode experts
 # (GPT_OSS_DECODE_SPLIT_ROUND_DIR: layer_<L>.pt rounded on the bfloat4_b grid whose 16-value exponent groups run along
@@ -508,7 +509,7 @@ class RoutedPrefillExperts:
             # Own cache files per GPTQ source. The source as given, not its resolved path: a Hub location names its
             # pinned revision, and the resolved path also holds the machine's Hub cache root, which would give every
             # machine (and the shared CI cache) its own file names.
-            # "_tt": the files hold transposed-tile tensors (earlier "_kt" files held host-transposed normal tiles).
+            # "_tt": the files hold transposed-tile tensors.
             prefix += "_tt" + hashlib.sha1(gptq_spec.rstrip("/").encode()).hexdigest()[:10]
 
         has_weights = bool(state_dict) and "gate_up_proj" in state_dict
