@@ -425,7 +425,8 @@ void create_program_mcast_in0_in1_descriptor(
     if (in1_is_sharded and in1_is_dram) {
         num_dram_banks = device.num_dram_channels();
         if (in1_is_width_sharded) {
-            per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+            per_core_N_storage = dram_sharded_helpers::get_dram_width_shard_tiles(
+                in1_tensor.shard_spec()->shape[1], in1_tile.get_width(), N, num_dram_banks);
         } else {
             // Height sharded: batches are distributed across DRAM banks
             uint32_t in1_shard_height_in_tiles = in1_tensor.shard_spec()->shape[0] / in1_tile.get_height();
