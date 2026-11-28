@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -237,6 +238,10 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
+        # QK^T and softmax @ V fidelity; unset keeps the op's HiFi2. Only the ring joint SDPA path honours it:
+        # the exp ring path does not pass it.
+        fid = os.environ.get("MINIMAX_H3_SDPA_MM_FIDELITY")
+        self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, fid) if fid else None
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -268,6 +273,7 @@ class MiniMaxH3Attention(Module):
                     k_chunk_size=chunks[cls.name][1],
                     exp_approx_mode=False,
                     min_blocked_pack_tiles=2,
+                    matmul_math_fidelity=self.sdpa_matmul_fidelity,
                 )
                 for cls in LENGTH_CLASSES
             }
@@ -398,6 +404,7 @@ class MiniMaxH3Attention(Module):
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
                 min_blocked_pack_tiles=2,
+                matmul_math_fidelity=self.sdpa_matmul_fidelity if ring else None,
             )
         return self._sdpa_program_configs[key]
 
