@@ -129,6 +129,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         DataFormat math_format = static_cast<DataFormat>(formats.math);
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
+        // the reduce init's ALU config (a column reduce copies nothing back from dest), before the reduce init.
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(math_format, math_format);
         _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
             static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape);
         PROFILER_SYNC();

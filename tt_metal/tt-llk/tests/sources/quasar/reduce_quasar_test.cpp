@@ -16,6 +16,16 @@
 #include "sfpu_stub.h"
 #include "tensor_shape.h"
 
+// reduce_init runs a column SUM/AVG of MxFp4 data and scaler on MxFp4_2x_B (llk_unpack_AB_reduce_init, llk_math_reduce_init).
+// Production's table format for MxFp4 is never a 2x one, so a test that picks a 2x register format keeps it.
+template <PoolType pool_type, ReduceDim reduce_dim>
+inline bool reduce_src_2x(const std::uint32_t data_src, const std::uint32_t scaler_src, const std::uint32_t data_dst)
+{
+    const bool dst_2x = data_dst == static_cast<std::uint32_t>(DataFormat::MxFp4_2x_A) || data_dst == static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B);
+    return pool_type != PoolType::MAX && reduce_dim == ReduceDim::REDUCE_COL && data_src == static_cast<std::uint32_t>(DataFormat::MxFp4) &&
+           scaler_src == static_cast<std::uint32_t>(DataFormat::MxFp4) && !dst_2x;
+}
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "ckernel_buf_desc.h"
@@ -49,7 +59,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto scaler_format    = static_cast<DataFormat>(formats.unpack_B_dst);
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(data_in_srcb ? scaler_format : data_format, data_in_srcb ? data_format : scaler_format);
         const bool data_2x = data_format == DataFormat::MxFp4_2x_A || data_format == DataFormat::MxFp4_2x_B;
-        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, INPUT_NUM_TILES_IN_BLOCK, data_2x /*clear_data_src*/);
+        const bool src_2x  = reduce_src_2x<POOL_TYPE, REDUCE_DIM>(formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst);
+        _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(bfd_a, bfd_b, tensor_shape_A, INPUT_NUM_TILES_IN_BLOCK, data_2x || src_2x /*clear_data_src*/);
+        if (src_2x)
+        {
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_A, false>(formats.unpack_A_src, static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+            _llk_unpack_reconfig_data_format_src_<p_unpacr::UNP_B, false>(formats.unpack_B_src, static_cast<std::uint32_t>(DataFormat::MxFp4_2x_B));
+        }
         PROFILER_SYNC();
     }
     {
@@ -118,8 +134,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
 
-        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(
-            static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math), tensor_shape_A);
+        // reduce_init's ALU config, on the DEST-derived format when the reduce copies back from DEST.
+        const DataFormat src_format = reduce_src_2x<POOL_TYPE, REDUCE_DIM>(formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst) ? DataFormat::MxFp4_2x_B
+                                                                                                                  : static_cast<DataFormat>(formats.math);
+        const DataFormat alu_format =
+            reduce_moves_dest_to_src<POOL_TYPE, REDUCE_DIM>() ? ckernel::math::dest_src_format<is_fp32_dest_acc_en>(src_format) : src_format;
+        _configure_alu_cfg_<AluCfgType::DEFAULT, is_fp32_dest_acc_en>(alu_format, alu_format);
+        _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(src_format, src_format, tensor_shape_A);
         PROFILER_SYNC();
     }
     {
