@@ -78,7 +78,8 @@ def load_inputs(user_input, len_per_batch, instruct):
                 context_text = load_and_cache_context(
                     user_input[i]["context"],
                     cache_dir,
-                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i],
+                    # user_input was replicated batch times, so user slot is i % batch
+                    max_length=(user_input[i]["max_length"]) if batch == 1 else len_per_batch[i % batch],
                 )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
