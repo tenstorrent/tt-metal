@@ -1,143 +1,155 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// g6_unsqueeze mover: the op's only kernel. Row 0 of each input tile becomes column 0 of the
-// matching output tile, bit for bit.
+// g6_unsqueeze mover: one instance per data-movement RISC of a mover core.
 //
-// Per tile: face row 0 of input faces 0 and 1 (lanes 0..15, 16..31) is read into the bases of
-// output faces 0 and 2 of a staging page; in each of those faces word j of face row 0 is copied
-// to row j of column 0; the whole page is written as the output tile.
+// Moves row 0 of input face h of every owned page into column 0 of output face
+// faces_per_face_row*h of the same page id. Each (page, half) is staged in one
+// face slot: a face_row_bytes DRAM read lands in row 0, RISC-V word moves turn
+// that row into column 0 in place, and the whole slot is written as one face.
 //
-// Raw dataflow API, no kernel_lib helper:
-// - copy_tile_column (tile_column_dataflow.hpp) applies one offset to source and destination, so
-//   it copies column to column; here the source is a face row.
-// - noc_async_read_page always transfers the accessor's full page; the load reads one face row.
-// - The lane move is RISC-V word copies, not NoC: a NoC transfer keeps the source offset modulo
-//   16 B, and lane j moves from byte 4j to byte 64j.
+// No kernel_lib helper expresses this: copy_tile_column (tile_column_dataflow.hpp)
+// copies column to column on a DFB tile, and NoC self-copies cannot move single
+// 4-byte values whose source and destination offsets differ modulo the 16-B L1
+// NoC alignment. Values move only as uint32_t loads/stores and NoC copies, so
+// every bit pattern (NaN payloads, -0.0, subnormals) survives.
+//
+// The face slots are single-thread scratch: this RISC both fills and drains
+// them, so the CB carries no reserve/push/wait/pop.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-
-namespace {
-
-// In one face whose face row 0 holds the lanes: word j of row 0 -> row j of column 0, j >= 1.
-// Word 0 is already in place. Sources (row 0) and destinations (rows 1..) are disjoint.
-template <uint32_t face_row_words>
-FORCE_INLINE void face_row_to_column(volatile tt_l1_ptr uint32_t* face) {
-    for (uint32_t j = 1; j < face_row_words; ++j) {
-        face[j * face_row_words] = face[j];
-    }
-}
-
-}  // namespace
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
-    constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t block_w_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t staging_depth_blocks = get_compile_time_arg_val(2);
-    constexpr uint32_t tile_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t face_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(5);
-    constexpr auto input_args = TensorAccessorArgs<6>();
-    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_face_slots = get_compile_time_arg_val(0);
+    constexpr uint32_t first_half = get_compile_time_arg_val(1);
+    constexpr uint32_t block_tile_halves = get_compile_time_arg_val(2);
+    constexpr uint32_t block_w_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t staging_depth = get_compile_time_arg_val(4);
+    constexpr uint32_t face_h = get_compile_time_arg_val(5);
+    constexpr uint32_t face_w = get_compile_time_arg_val(6);
+    constexpr uint32_t face_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t face_row_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t out_half_stride_bytes = get_compile_time_arg_val(9);
+    constexpr uint32_t in_page_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t out_page_bytes = get_compile_time_arg_val(11);
+    constexpr auto in_args = TensorAccessorArgs<12>();
+    constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t face_row_words = face_row_bytes / sizeof(uint32_t);
-    // Lanes 16..31 come from input face 1 and belong in output face 2.
-    constexpr uint32_t upper_lanes_src_offset = face_bytes;
-    constexpr uint32_t upper_lanes_land_offset = 2 * face_bytes;
-    constexpr uint32_t slot_bytes = block_w_tiles * tile_bytes;
-    static_assert(face_row_bytes % sizeof(uint32_t) == 0, "a lane is one 32-bit word");
-    static_assert(face_bytes / face_row_bytes >= face_row_words, "a face needs one row per lane of its face row");
-    static_assert(staging_depth_blocks >= 1, "at least one staging slot");
+    // Destinations j*face_w (j >= 1) never alias sources 1..face_w-1 only for a square face.
+    static_assert(face_h == face_w, "in-place row-to-column move needs square faces");
+    static_assert(face_row_bytes == face_w * sizeof(uint32_t), "each word move carries one 4-byte element");
+    static_assert(face_bytes == face_h * face_row_bytes, "a slot is one face");
+    static_assert(block_tile_halves >= 1 && block_w_tiles >= 1 && staging_depth >= 1, "block knobs start at 1");
 
-    uint32_t input_addr;
-    uint32_t output_addr;
-    uint32_t start_tile;
-    uint32_t core_w_tiles;
-    uint32_t num_blocks;
-    uint32_t staging_base;
+    constexpr uint32_t slots_per_block = block_w_tiles * block_tile_halves;
+    constexpr uint32_t group_bytes = slots_per_block * face_bytes;
+
+    uint32_t in_addr, out_addr, first_tile, core_w_tiles, slots_base;
     {
         DeviceZoneScopedN("G6U-SETUP");
-        input_addr = get_common_arg_val<uint32_t>(0);
-        output_addr = get_common_arg_val<uint32_t>(1);
-        start_tile = get_arg_val<uint32_t>(0);
+        in_addr = get_common_arg_val<uint32_t>(0);
+        out_addr = get_common_arg_val<uint32_t>(1);
+        first_tile = get_arg_val<uint32_t>(0);
         core_w_tiles = get_arg_val<uint32_t>(1);
-        num_blocks = (core_w_tiles + block_w_tiles - 1) / block_w_tiles;
-        staging_base = get_write_ptr(cb_output_tiles);
-    }
-    // Idle tail cores of the rectangle issue no NoC transaction, so nothing is left to drain.
-    if (core_w_tiles == 0) {
-        return;
+        slots_base = get_write_ptr(cb_face_slots);
     }
 
-    const auto input = TensorAccessor(input_args, input_addr, tile_bytes);
+    const auto in_accessor = TensorAccessor(in_args, in_addr, in_page_bytes);
+    const auto out_accessor = TensorAccessor(out_args, out_addr, out_page_bytes);
+    const uint32_t num_blocks = (core_w_tiles + block_w_tiles - 1) / block_w_tiles;
 
-    auto block_extent = [&](uint32_t block_idx) -> uint32_t {
-        return block_idx + 1 < num_blocks ? block_w_tiles : core_w_tiles - block_idx * block_w_tiles;
+    auto block_first_tile = [&](uint32_t block_idx) { return first_tile + block_idx * block_w_tiles; };
+    auto block_extent = [&](uint32_t block_idx) {
+        const uint32_t remaining = core_w_tiles - block_idx * block_w_tiles;
+        return remaining < block_w_tiles ? remaining : block_w_tiles;
     };
-    auto slot_base = [&](uint32_t block_idx) -> uint32_t {
-        return staging_base + (block_idx % staging_depth_blocks) * slot_bytes;
+    auto group_base = [&](uint32_t block_idx) { return slots_base + (block_idx % staging_depth) * group_bytes; };
+    auto face_dst = [&](uint32_t tile_id, uint32_t half) {
+        return out_accessor.get_noc_addr(tile_id, half * out_half_stride_bytes);
     };
 
-    auto load_row_block = [&](uint32_t block_idx) {
-        if (block_idx >= staging_depth_blocks) {
-            // The slot still sources the writes of block block_idx - staging_depth_blocks.
-            DeviceZoneScopedN("G6U-FLUSH-WAIT");
-            noc_async_writes_flushed();
-        }
-        DeviceZoneScopedN("G6U-LOAD-ISSUE");
-        const uint32_t first_tile = start_tile + block_idx * block_w_tiles;
+    // First write destination of each resident block, computed in the shadow of its read round trip.
+    uint64_t block_first_dst[staging_depth];
+
+    auto gather_rows_block = [&](uint32_t block_idx) {
+        DeviceZoneScopedN("G6U-GATHER-ISSUE");
+        const uint32_t tile0 = block_first_tile(block_idx);
         const uint32_t extent = block_extent(block_idx);
-        uint32_t page_addr = slot_base(block_idx);
-        for (uint32_t i = 0; i < extent; ++i, page_addr += tile_bytes) {
-            const uint32_t tile_id = first_tile + i;
-            noc_async_read(input.get_noc_addr(tile_id, 0), page_addr, face_row_bytes);
-            noc_async_read(
-                input.get_noc_addr(tile_id, upper_lanes_src_offset),
-                page_addr + upper_lanes_land_offset,
-                face_row_bytes);
+        uint32_t slot = group_base(block_idx);
+        for (uint32_t t = 0; t < extent; ++t) {
+            for (uint32_t hl = 0; hl < block_tile_halves; ++hl) {
+                const uint32_t half = first_half + hl;
+                noc_async_read(in_accessor.get_noc_addr(tile0 + t, half * face_bytes), slot, face_row_bytes);
+                slot += face_bytes;
+            }
+        }
+        block_first_dst[block_idx % staging_depth] = face_dst(tile0, first_half);
+    };
+
+    auto wait_rows = [&]() {
+        DeviceZoneScopedN("G6U-READ-BARRIER");
+        // Also invalidates the RISC-V L1 cache, so the word moves below see the landed rows.
+        noc_async_read_barrier();
+    };
+
+    auto wait_slot_writes_left = [&]() {
+        DeviceZoneScopedN("G6U-WRITE-FLUSH");
+        noc_async_writes_flushed();
+    };
+
+    auto scatter_store_block = [&](uint32_t block_idx) {
+        DeviceZoneScopedN("G6U-SCATTER-STORE");
+        const uint32_t tile0 = block_first_tile(block_idx);
+        const uint32_t extent = block_extent(block_idx);
+        uint32_t slot = group_base(block_idx);
+        uint64_t dst = block_first_dst[block_idx % staging_depth];
+        for (uint32_t t = 0; t < extent; ++t) {
+            for (uint32_t hl = 0; hl < block_tile_halves; ++hl) {
+                volatile tt_l1_ptr uint32_t* face = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot);
+                for (uint32_t j = 1; j < face_w; ++j) {
+                    face[j * face_w] = face[j];
+                }
+                noc_async_write(slot, dst, face_bytes);
+                slot += face_bytes;
+                // Next destination is computed while this face serializes on the NoC.
+                const bool last_half = (hl + 1 == block_tile_halves);
+                if (!last_half) {
+                    dst = face_dst(tile0 + t, first_half + hl + 1);
+                } else if (t + 1 < extent) {
+                    dst = face_dst(tile0 + t + 1, first_half);
+                }
+            }
         }
     };
 
-    load_row_block(0);
-    // Built while block 0's reads are in flight.
-    const auto output = TensorAccessor(output_args, output_addr, tile_bytes);
-
+    gather_rows_block(0);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        {
-            DeviceZoneScopedN("G6U-LOAD-WAIT");
-            noc_async_read_barrier();
-        }
-        if constexpr (staging_depth_blocks > 1) {
-            if (block_idx + 1 < num_blocks) {
-                load_row_block(block_idx + 1);
+        const bool has_next = block_idx + 1 < num_blocks;
+        wait_rows();
+        if constexpr (staging_depth > 1) {
+            // Next block lands in another slot group while this one is moved and stored.
+            if (has_next) {
+                if (block_idx + 1 >= staging_depth) {
+                    wait_slot_writes_left();
+                }
+                gather_rows_block(block_idx + 1);
             }
         }
-        {
-            DeviceZoneScopedN("G6U-MOVE-STORE-ISSUE");
-            const uint32_t first_tile = start_tile + block_idx * block_w_tiles;
-            const uint32_t extent = block_extent(block_idx);
-            uint32_t page_addr = slot_base(block_idx);
-            for (uint32_t i = 0; i < extent; ++i, page_addr += tile_bytes) {
-                auto* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_addr);
-                face_row_to_column<face_row_words>(page);
-                face_row_to_column<face_row_words>(page + upper_lanes_land_offset / sizeof(uint32_t));
-                // Orders this tile's stores before the NoC reads the page (BH L1 cache).
-                invalidate_l1_cache();
-                noc_async_write_page(first_tile + i, output, page_addr);
-            }
-        }
-        if constexpr (staging_depth_blocks == 1) {
-            if (block_idx + 1 < num_blocks) {
-                load_row_block(block_idx + 1);
+        scatter_store_block(block_idx);
+        if constexpr (staging_depth == 1) {
+            if (has_next) {
+                wait_slot_writes_left();
+                gather_rows_block(block_idx + 1);
             }
         }
     }
 
     {
-        DeviceZoneScopedN("G6U-STORE-WAIT");
+        DeviceZoneScopedN("G6U-WRITE-BARRIER");
         noc_async_write_barrier();
     }
 }
