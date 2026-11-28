@@ -84,7 +84,10 @@ CASES = [
 @pytest.mark.parametrize("case_id,shape,src,dst,layout,mem", CASES, ids=[c[0] for c in CASES])
 def test_g6_typecast_rm_arms(device, case_id, shape, src, dst, layout, mem):
     plan = run(device, shape, src, dst, layout, mem)
-    expected_regime = "rm_pseudo_tile_stream" if layout == RM else "tile_stream"
+    if (src, dst) in pd.BIT_IDENTICAL_ARMS:
+        expected_regime = "pure_copy"  # Perf 1: bit-identical arms are a byte copy in both layouts
+    else:
+        expected_regime = "rm_pseudo_tile_stream" if layout == RM else "tile_stream"
     assert plan["regime"] == expected_regime
 
 
@@ -106,3 +109,24 @@ def test_g6_typecast_refusals(device, expect_error):
     y = ttnn.from_torch(torch.zeros(1, 64, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=RM, device=device)
     with expect_error(ValueError, "ROW_MAJOR"):
         g6_typecast(y, ttnn.bfloat8_b)
+
+
+# Perf 1 — regime R0 `pure_copy`: page mode (pages >= cores), chunk mode (one long page split over cores,
+# sub-chunked when a chunk exceeds the L1 scratch), L1 buffers, both arms, ranks 1..4.
+PURE_COPY_CASES = [
+    ("chunk_long_row", (1, 4096), ttnn.uint32, ttnn.int32, RM, DRAM),
+    ("chunk_rank1_5000", (5000,), ttnn.int32, ttnn.uint32, RM, DRAM),
+    ("chunk_row_65536", (1, 65536), ttnn.uint32, ttnn.int32, RM, DRAM),
+    ("chunk_tile_l1", (1, 1, 32, 128), ttnn.uint32, ttnn.int32, TILE, L1),
+    ("page_rm_l1", (3, 77, 33), ttnn.int32, ttnn.uint32, RM, L1),
+    ("page_rm_many", (2, 4, 64, 256), ttnn.uint32, ttnn.int32, RM, DRAM),
+    ("page_rm_wide_rows", (200, 4096), ttnn.uint32, ttnn.int32, RM, DRAM),
+    ("page_tile_big", (1, 1, 1024, 1024), ttnn.int32, ttnn.uint32, TILE, DRAM),
+    ("page_rank4_small", (2, 3, 5, 7), ttnn.int32, ttnn.uint32, RM, DRAM),
+]
+
+
+@pytest.mark.parametrize("case_id,shape,src,dst,layout,mem", PURE_COPY_CASES, ids=[c[0] for c in PURE_COPY_CASES])
+def test_g6_typecast_pure_copy(device, case_id, shape, src, dst, layout, mem):
+    plan = run(device, shape, src, dst, layout, mem)
+    assert plan["regime"] == "pure_copy"

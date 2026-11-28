@@ -5,8 +5,11 @@ cd /localdev/pmilojevic/campaign/bh-qb-15/slots/chip1; source python_env/bin/act
 side=$1; shift
 for c in "$@"; do
   log=$(mktemp /tmp/g6bench.XXXX)
-  BENCH_SIDE=$side BENCH_CASES=$c TRACY_NO_WEB_SERVER=1 scripts/run_safe_pytest.sh --profile --no-py-zones generated/meta/g6_typecast/bench/bench_cases.py::test_bench > $log 2>&1
-  csv=$(grep -o '/[^ ]*ops_perf_results_[^ ]*\.csv' $log | tail -1)
+  for try in 1 2 3; do  # tracy-capture sometimes crashes (exit 3) with no CSV: re-run
+    BENCH_SIDE=$side BENCH_CASES=$c TRACY_NO_WEB_SERVER=1 scripts/run_safe_pytest.sh --profile --no-py-zones generated/meta/g6_typecast/bench/bench_cases.py::test_bench > $log 2>&1
+    csv=$(grep -o '/[^ ]*ops_perf_results_[^ ]*\.csv' $log | tail -1)
+    [ -n "$csv" ] && break
+  done
   ok=$(grep -c "BENCH_OK\|BENCH_STOCK_CHECK" $log)
   if [ -z "$csv" ]; then echo "$c $side FAIL (log $log)"; tail -5 $log; continue; fi
   line=$(python3 .claude/skills/tooling/scripts/ops_csv.py summary $csv --skip-first 1 2>/dev/null | grep -E "GenericOp|Typecast" | head -1)

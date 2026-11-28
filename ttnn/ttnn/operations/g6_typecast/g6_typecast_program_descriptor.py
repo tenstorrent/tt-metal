@@ -78,6 +78,14 @@ _SRC_UNPACK_TO_DEST = _SRC_32BIT + (ttnn.uint16,)
 _DST_32BIT_DEST = (ttnn.float32, ttnn.int32, ttnn.uint32, ttnn.uint8)
 _NUM_CBS = 64
 
+# Regime R0 `pure_copy` (Perf 1): arms whose source and destination bytes are identical, in both layouts.
+BIT_IDENTICAL_ARMS = {(ttnn.uint32, ttnn.int32), (ttnn.int32, ttnn.uint32)}
+# R0 L1 scratch per core (chunk mode: one buffer; page mode: two slots of half of it).
+COPY_BUF_BYTES = 64 * 1024
+# R0 chunk mode: bytes per core a page is split into when there are fewer pages than cores (knee measured on
+# Q2220 / Q2189 / Q2226: more, smaller chunks lose to the per-core launch cost).
+COPY_CHUNK_TARGET = 1024
+
 # Runtime-arg slots patched on a program-cache hit (common runtime args, one per dataflow kernel).
 _READER_KERNEL_IDX = 0
 _WRITER_KERNEL_IDX = 1
@@ -145,6 +153,8 @@ def _compute_config(in_dtype, out_dtype):
 
 
 def create_program_descriptor(input_tensor, output_tensor):
+    if (input_tensor.dtype, output_tensor.dtype) in BIT_IDENTICAL_ARMS:
+        return _create_copy_program_descriptor(input_tensor, output_tensor)
     if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
         return _create_rm_program_descriptor(input_tensor, output_tensor)
     return _create_tile_program_descriptor(input_tensor, output_tensor)
@@ -426,7 +436,142 @@ def _create_rm_program_descriptor(input_tensor, output_tensor):
     return program_descriptor, plan
 
 
-def patch_buffer_addresses(program_descriptor, input_tensor, output_tensor):
+def _copy_units(num_pages, page_bytes, num_cores, grid_x, align):
+    """R0 work split -> list of (page0, count, off, len), one per core.
+
+    Page mode (pages >= cores): contiguous whole-page ranges. Chunk mode (fewer pages than cores): each page
+    split into per_page = min(ceil(P / COPY_CHUNK_TARGET), cores // pages, grid.x) chunks of `align`-rounded
+    bytes, one chunk per core."""
+    if num_pages >= num_cores:
+        base, rem = divmod(num_pages, num_cores)
+        units, p = [], 0
+        for m in range(num_cores):
+            c = base + (m < rem)
+            units.append((p, c, 0, page_bytes))
+            p += c
+        return units
+    per_page = max(1, min(_div_up(page_bytes, COPY_CHUNK_TARGET), num_cores // num_pages, grid_x))
+    chunk = _div_up(_div_up(page_bytes, per_page), align) * align
+    return [(p, 1, off, min(chunk, page_bytes - off)) for p in range(num_pages) for off in range(0, page_bytes, chunk)]
+
+
+def _bank_row_cores(device, units, dram):
+    """Chunk-mode placement: the core of a chunk of page p sits on the NoC0-optimal worker row of p's DRAM bank
+    (interleaved page p -> bank p % num_banks), nearest free row when that row is full. L1 buffers keep the
+    row-major order from (0,0) (measured: (0,0) is already a fast core for L1)."""
+    grid = device.compute_with_storage_grid_size()
+    if not dram:
+        return [ttnn.CoreCoord(k % grid.x, k // grid.x) for k in range(len(units))]
+    num_banks = ttnn.get_memory_view(device, ttnn.BufferType.DRAM).num_banks
+    best = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    used, cores = set(), []
+    for page, *_ in units:
+        y0 = best[page % num_banks].y
+        for y in sorted(range(grid.y), key=lambda y: abs(y - y0)):
+            free = [x for x in range(grid.x) if (x, y) not in used]
+            if free:
+                used.add((free[0], y))
+                cores.append(ttnn.CoreCoord(free[0], y))
+                break
+    return cores
+
+
+def _create_copy_program_descriptor(input_tensor, output_tensor):
+    """Regime R0 `pure_copy` (Perf 1): bit-identical arms, any layout / rank / buffer. No compute kernel.
+
+    Page mode (pages >= cores): reader (NCRISC/NoC0) + writer (BRISC/NoC1) per core on a 2-slot CB, whole pages.
+    Chunk mode (pages < cores): one mover kernel (BRISC/NoC0) per core, one byte chunk of one page each,
+    cores on the DRAM bank's NoC0-optimal row."""
+    device = input_tensor.device()
+    page_bytes = input_tensor.buffer_aligned_page_size()
+    assert page_bytes == output_tensor.buffer_aligned_page_size()
+    num_pages = input_tensor.buffer_num_pages()
+    assert num_pages == output_tensor.buffer_num_pages()
+    dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+    align = 64 if dram else 16
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    units = _copy_units(num_pages, page_bytes, num_cores, grid.x, align)
+    chunk_mode = num_pages < num_cores
+    if chunk_mode:
+        cores = _bank_row_cores(device, units, dram)
+    else:
+        cores = [ttnn.CoreCoord(k % grid.x, k // grid.x) for k in range(len(units))]
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in cores])
+
+    biggest = max(count * length for (_, count, _, length) in units)
+    max_len = max(length for (*_, length) in units)
+    slots = 1 if chunk_mode else 2
+    slot = min(COPY_BUF_BYTES // slots, biggest)
+    if max_len <= slot:
+        slot = (slot // max_len) * max_len
+    cb = ttnn.CBDescriptor(
+        total_size=slots * slot,
+        core_ranges=core_set,
+        format_descriptors=[
+            ttnn.CBFormatDescriptor(buffer_index=CB_INPUT_TILES, data_format=input_tensor.dtype, page_size=slot)
+        ],
+    )
+    rt = ttnn.RuntimeArgs()
+    for c, u in zip(cores, units):
+        rt[c.x][c.y] = list(u)
+    addrs = [input_tensor.buffer_address(), output_tensor.buffer_address()]
+    src_ct = list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    dst_ct = list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    ct = [page_bytes, CB_INPUT_TILES, slot]
+    if chunk_mode:
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "g6_typecast_copy_mover.cpp"),
+                core_ranges=core_set,
+                compile_time_args=ct + src_ct + dst_ct,
+                runtime_args=rt,
+                common_runtime_args=addrs,
+                defines=_defines(),
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
+                ),
+            )
+        ]
+    else:
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "g6_typecast_copy_reader.cpp"),
+                core_ranges=core_set,
+                compile_time_args=ct + src_ct,
+                runtime_args=rt,
+                common_runtime_args=addrs,
+                defines=_defines(),
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "g6_typecast_copy_writer.cpp"),
+                core_ranges=core_set,
+                compile_time_args=ct + dst_ct,
+                runtime_args=rt,
+                common_runtime_args=addrs,
+                defines=_defines(),
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+        ]
+    program_descriptor = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=[cb])
+    plan = {
+        "regime": "pure_copy",
+        "num_cores": len(cores),
+        "num_pages": num_pages,
+        "chunk_mode": chunk_mode,
+        "units": len(units),
+        "slot_bytes": slot,
+    }
+    return program_descriptor, plan
+
+
+def patch_buffer_addresses(program_descriptor, input_tensor, output_tensor, plan):
     """Program-cache hit: only the buffer addresses change (BB-07)."""
+    if plan["regime"] == "pure_copy":
+        addrs = [input_tensor.buffer_address(), output_tensor.buffer_address()]
+        for kernel in program_descriptor.kernels:
+            kernel.common_runtime_args = addrs
+        return
     program_descriptor.kernels[_READER_KERNEL_IDX].common_runtime_args = [input_tensor.buffer_address()]
     program_descriptor.kernels[_WRITER_KERNEL_IDX].common_runtime_args = [output_tensor.buffer_address()]

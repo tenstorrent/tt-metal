@@ -1,0 +1,27 @@
+Q2220 op FAIL (log /tmp/g6bench.rVom)
+2026-11-28 01:49:36.067 | ERROR    | __main__:main:466 - Tracy capture tool (tracy-capture) exited with code 3 before writing a trace. The profiling stream crashed the capture tool, so NO .tracy was produced. This is a capture-side failure -- the test itself may have passed. Re-run under a debugger/ASan build of tracy-capture to root-cause.
+========================================
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 70; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m09s (9s total, device-lock-acquired -> exit)
+Q2189  op    ok=1 cores=11 med=733.0 B=733 N=- T0=- T1=- T2=-
+Q2226  op    ok=1 cores=4 med=567.0 B=567 N=- T0=- T1=- T2=-
+Q2211  op    ok=1 cores=4 med=568.0 B=568 N=- T0=- T1=- T2=-
+Q2205  op    ok=1 cores=1 med=530.0 B=530 N=- T0=- T1=- T2=-
+Q2214 op FAIL (log /tmp/g6bench.4OkT)
+AssertionError: Device data missing: Op 13312 not present in cpp_device_perf_report.csv for device 0 (trace_id=None)
+========================================
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 1; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m11s (11s total, device-lock-acquired -> exit)
+Q2234  op    ok=1 cores=1 med=518.0 B=518 N=- T0=- T1=- T2=-
+Q2223  op    ok=1 cores=1 med=517.0 B=517 N=- T0=- T1=- T2=-
+Q2208  op    ok=1 cores=1 med=513.0 B=513 N=- T0=- T1=- T2=-
+Q2196  op    ok=1 cores= med= B= N= T0= T1= T2=
+Q2202  op    ok=1 cores=1 med=497.0 B=497 N=- T0=- T1=- T2=-
+Q2199  op    ok=1 cores=1 med=498.0 B=498 N=- T0=- T1=- T2=-
+F321   op    ok=1 cores=1 med=491.0 B=491 N=- T0=- T1=- T2=-
+Q2230  op    ok=1 cores=16 med=636.0 B=636 N=- T0=- T1=- T2=-
+Q2220  op    ok=1 cores=11 med=739.0 B=739 N=- T0=- T1=- T2=-
+Q2214  op    ok=1 cores=1 med=519.0 B=519 N=- T0=- T1=- T2=-
+Q2196  op    ok=1 cores=1 med=507.0 B=507 N=- T0=- T1=- T2=-

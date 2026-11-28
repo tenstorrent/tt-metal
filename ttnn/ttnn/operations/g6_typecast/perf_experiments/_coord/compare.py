@@ -4,9 +4,9 @@ import sys, re
 def load(f):
     d = {}
     for l in open(f):
-        m = re.match(r"(\S+)\s+(\S+)\s+ok=\S+ cores=(\d+) med=([\d.]+) B=(\d+) N=(\d+) T0=(\d+) T1=(\d+) T2=(\d+)", l)
+        m = re.match(r"(\S+)\s+(\S+)\s+ok=\S+ cores=(\d+) med=([\d.]+) B=(\S+) N=(\S+) T0=(\S+) T1=(\S+) T2=(\S+)", l)
         if m:
-            d[m.group(1)] = (int(m.group(3)), float(m.group(4)), *map(int, m.groups()[4:]))
+            d[m.group(1)] = (int(m.group(3)), float(m.group(4)), *m.groups()[4:])
     return d
 
 

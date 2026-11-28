@@ -6,7 +6,9 @@
 Registry model (eval/op_template.py): INPUT_TAGGERS, SUPPORTED, EXCLUSIONS, validate(), entry point.
 Design: op_design.md (regime R1 `tile_stream`: interleaved TILE in -> compute typecast -> interleaved
 TILE out, contiguous tile ranges over the full compute grid; regime R2 `rm_pseudo_tile_stream`: interleaved
-ROW_MAJOR rows gathered by bank runs, converted as dense 1024-value pseudo-tiles, scattered back).
+ROW_MAJOR rows gathered by bank runs, converted as dense 1024-value pseudo-tiles, scattered back; regime R0
+`pure_copy` (Perf 1): the bit-identical arms uint32<->int32 in either layout are a byte copy with no compute
+kernel — whole pages over cores, or one page split in 64 B-aligned chunks over cores placed by DRAM bank).
 """
 
 from __future__ import annotations
@@ -86,8 +88,8 @@ CONVERSION_ARMS = {
     (ttnn.bfloat16, ttnn.bfloat8_b),  # packer only (bfp8_pack_precise)
     (ttnn.bfloat16, ttnn.int32),  # SFPU truncation toward zero
     (ttnn.bfloat16, ttnn.uint8),  # SFPU truncation, low byte
-    (ttnn.uint32, ttnn.int32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
-    (ttnn.int32, ttnn.uint32),  # all 32 bits kept (unpack-to-DEST, no SFPU)
+    (ttnn.uint32, ttnn.int32),  # all 32 bits kept: regime R0 pure byte copy, no compute (Perf 1)
+    (ttnn.int32, ttnn.uint32),  # all 32 bits kept: regime R0 pure byte copy, no compute (Perf 1)
     (ttnn.float32, ttnn.bfloat16),  # SFPU RNE (ties-to-even), fp32 unpacked to DEST
     (ttnn.int32, ttnn.bfloat16),  # SFPU int32 -> fp32 -> bf16 (two roundings, as torch)
     (ttnn.uint16, ttnn.int32),  # SFPU zero-extend (unpack-to-DEST)
@@ -181,6 +183,8 @@ def _cache_key(input_tensor, dtype):
         _pd.READ_INFLIGHT,
         _pd.L1_OP_BUDGET_BYTES,
         _pd.L1_SLACK_BYTES,
+        _pd.COPY_BUF_BYTES,
+        _pd.COPY_CHUNK_TARGET,
         _pd.zones_enabled(),
     )
 
@@ -214,7 +218,7 @@ def g6_typecast(input_tensor, dtype, *, sub_core_grids=None):
         _PROGRAM_CACHE[key] = (program_descriptor, plan)
     else:
         program_descriptor, plan = cached
-        patch_buffer_addresses(program_descriptor, input_tensor, output_tensor)
+        patch_buffer_addresses(program_descriptor, input_tensor, output_tensor, plan)
     last_plan = plan
 
     return ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
