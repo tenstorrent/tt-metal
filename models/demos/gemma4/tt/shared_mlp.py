@@ -24,6 +24,7 @@ from models.demos.gemma4.tt.ccl import (
     ccl_allreduce_fractured,
     ccl_lane_gather_rows,
     ccl_lane_scatter_rows,
+    oneshot_matmul_kwargs,
 )
 from models.demos.gemma4.tt.compute_config import gelu_variant, prefill_linear_compute_kernel_config
 from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag, pipeline_row_for
@@ -40,6 +41,15 @@ _DRAM_SHARD_MLP = os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1") != "0"
 # a P150 (26B-A4B TP=4, trace replay): gate_up 43 -> 19 us, down 25 -> 16 us, same HiFi2 numerics.
 _MLP_GATE_UP_BLOCK_W = int(os.environ.get("GEMMA4_MLP_GATE_UP_BLOCK_W", "8"))  # env overrides for the K-block sweep
 _MLP_DOWN_BLOCK_W = int(os.environ.get("GEMMA4_MLP_DOWN_BLOCK_W", "32"))
+# GEMMA4_MLP_GEGLU_PREFILL (default 1): on prefill rows the GELU of the gate runs inside the multiply (binary_ng's
+# input-a activation: the same SFPU GELU on a 16-bit dest, packed to bf16, then the FPU product) instead of as a
+# separate unary program; bitwise the composite (one Galaxy chip, 12B TP4 [4096, 2 x 3840]: 810 -> 671 us per call
+# with the two slices; 26B [4096, 2 x 544]: 180 -> 109 us). 0 keeps the separate gelu.
+_MLP_GEGLU_PREFILL = os.environ.get("GEMMA4_MLP_GEGLU_PREFILL", "1") != "0"
+# GEMMA4_MLP_GEGLU_PREFILL_FUSED (default 1): where the GLU half is a multiple of 4 tiles (12B / 31B), the same
+# arithmetic as one program over the fused [up | gate] output (custom_ops/geglu_prefill, bitwise the composite),
+# without the two slices
+_MLP_GEGLU_PREFILL_FUSED = os.environ.get("GEMMA4_MLP_GEGLU_PREFILL_FUSED", "1") != "0"
 
 
 def resolve_shared_mlp_intermediate_size(hf_config, state_dict=None, layer_idx=None) -> int:
@@ -70,6 +80,15 @@ def _geglu_fused_rows(x) -> bool:
     and of the lane engine (lanes x 32 gathered rows)."""
     shape = x.shape
     return len(shape) == 4 and int(shape[0]) == 1 and int(shape[1]) == 1 and 1 <= int(shape[2]) <= 4 * TILE_SIZE
+
+
+def _geglu_prefill_fused(gate_up, prefill) -> bool:
+    """GEMMA4_MLP_GEGLU_PREFILL_FUSED on prefill rows the fused program takes in 4-tile units."""
+    if not (_MLP_GEGLU_PREFILL and _MLP_GEGLU_PREFILL_FUSED and prefill) or _geglu_fused_rows(gate_up):
+        return False
+    from models.demos.gemma4.custom_ops.geglu_prefill.op import GegluPrefill, unit_block
+
+    return GegluPrefill.supports(gate_up) and unit_block(int(gate_up.shape[-1]) // (2 * TILE_SIZE)) == 4
 
 
 class SharedMLP:
@@ -313,15 +332,23 @@ class SharedMLP:
             gate_up_sh = self.gate_up_proj(hidden_states, keep_sharded=True)
             hidden_sh = GegluShardedDecode.op(gate_up_sh, self.down_proj.act_memory_config)
             gate_up_sh.deallocate(True)
-            output = self.down_proj(hidden_sh, rows=rows)
+            # GEMMA4_CCL_ONESHOT=1: down keeps its partial sums L1 width-sharded (in the payload dtype) for the
+            # one-shot all-reduce on slot "down" (tt/ccl.py); otherwise the kwargs are empty and the interleaved
+            # output takes the composite all-reduce as before.
+            output = self.down_proj(hidden_sh, rows=rows, **oneshot_matmul_kwargs(self.mesh_config, self.ccl_manager))
             if self._fractured:
                 output = ccl_allreduce_fractured(output, self.mesh_config, self.ccl_manager)
             elif self.mesh_config is not None and self.mesh_config.tp > 1:
-                output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+                output = ccl_allreduce(output, self.mesh_config, self.ccl_manager, slot="down", rows=rows)
             return output
         gate_up = self.gate_up_proj(hidden_states, compute_kernel_config=ckc, prefill=prefill)
         s = gate_up.shape[-2]
-        if flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up) and shard % TILE_SIZE == 0:
+        if _geglu_prefill_fused(gate_up, prefill):
+            from models.demos.gemma4.custom_ops.geglu_prefill import GegluPrefill
+
+            hidden = GegluPrefill.op(gate_up)
+            gate_up.deallocate(True)
+        elif flag("GEMMA4_MLP_GEGLU_FUSED") and _geglu_fused_rows(gate_up) and shard % TILE_SIZE == 0:
             # GEMMA4_MLP_GEGLU_FUSED=1: up * gelu(gate) over the fused [up | gate] output as one program
             # (custom_ops/geglu_decode) instead of slice, slice, gelu, mul on the decode rows (one row tile on the
             # tp shapes, lanes x 32 rows on the lane engine); prefill rows keep the composite chain (measured null).
@@ -336,13 +363,37 @@ class SharedMLP:
 
             # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config): the Tanh variant
             # dropped the E4B full-model PCC from 0.9846 to 0.9578 (gate 0.96) on bh_quietbox_2.
-            gate = ttnn.gelu(gate, variant=gelu_variant())
-            hidden = ttnn.mul(gate, up)
+            if _MLP_GEGLU_PREFILL and prefill and gelu_variant() == ttnn.GeluVariant.Accurate:
+                # GEMMA4_MLP_GEGLU_PREFILL: the Accurate GELU (UnaryOpType.GELU, param 0) as the multiply's input-a
+                # activation, bitwise the separate gelu program
+                hidden = ttnn.mul(
+                    gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)]
+                )
+            else:
+                gate = ttnn.gelu(gate, variant=gelu_variant())
+                hidden = ttnn.mul(gate, up)
             gate.deallocate(True)
             up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = self.down_proj(hidden, compute_kernel_config=ckc, prefill=prefill)
+        # GEMMA4_CCL_ONESHOT=1 on plain-TP decode rows of a DRAM-sharded down: the partial sums stay L1
+        # width-sharded (payload dtype) for the one-shot all-reduce on slot "down" below (tt/ccl.py).
+        rows = int(hidden.shape[-2]) if len(hidden.shape) == 4 else None
+        down_kwargs = (
+            oneshot_matmul_kwargs(self.mesh_config, self.ccl_manager)
+            if (
+                not prefill
+                and not lane_sharded
+                and not self._fractured
+                and isinstance(self.down_proj, DramShardedLinear)
+                and rows is not None
+                and int(hidden.shape[0]) == 1
+                and int(hidden.shape[1]) == 1
+                and 1 <= rows <= TILE_SIZE
+            )
+            else {}
+        )
+        output = self.down_proj(hidden, compute_kernel_config=ckc, prefill=prefill, **down_kwargs)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
@@ -364,6 +415,6 @@ class SharedMLP:
         elif self._fractured:
             output = ccl_allreduce_fractured(output, self.mesh_config, self.ccl_manager)
         elif self.mesh_config is not None and self.mesh_config.tp > 1:
-            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
+            output = ccl_allreduce(output, self.mesh_config, self.ccl_manager, slot="down", rows=rows)
 
         return output

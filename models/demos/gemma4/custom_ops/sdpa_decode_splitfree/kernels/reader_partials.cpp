@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 // Phase 1 reader of sdpa_decode_splitfree. For every unit of this core (splitfree_common.hpp: for_each_unit):
-// the row's page-table row, the row's Q tile row, then per live chunk the transposed K chunk and the V chunk
+// the slice of the row's page-table row the unit's chunks reach, the row's Q tile row (a height-sharded Q is read
+// in place from its shard core through the accessor), then per live chunk the transposed K chunk and the V chunk
 // of the unit's KV group through the double-buffered K / V rings. cur_pos is read once into the compute's CB.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(q, k, v, cur_pos, page_table)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(q, k, v, cur_pos, page_table)
 // runtime args: [core, q_addr, k_addr, v_addr, pos_addr, page_table_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -47,7 +48,8 @@ void kernel_main() {
     }
     CircularBuffer(CB_POS_C).push_back(1);
 
-    // the page-table row of the current unit's row: one reserved page, overwritten per unit, never pushed
+    // the page-table row of the current unit's row: one reserved page, the unit's slice overwritten per unit,
+    // never pushed
     CircularBuffer cb_pt(CB_PT);
     cb_pt.reserve_back(1);
     const uint32_t pt_l1 = cb_pt.get_write_ptr();
@@ -55,10 +57,11 @@ void kernel_main() {
 
     CircularBuffer cb_q(CB_Q);
     for_each_unit(core, pos, [&](uint32_t b, uint32_t g, uint32_t /*bg*/, uint32_t u, const Row& r) {
-        noc.async_read(pt_reader, CoreLocalMem<uint32_t>(pt_l1), PT_STICK, {.page_id = b}, {});
-        noc.async_read_barrier();
+        const uint32_t j_lo = chunk_lo(r, u);
+        const uint32_t j_hi = chunk_hi(r, u);
+        read_page_table_slice<PT_STICK, SK, BLOCK_T, CAP_T>(noc, pt_reader, b, pt_l1, j_lo, j_hi);
 
-        cb_q.reserve_back(DHT);
+        cb_q.reserve_back(DHT);  // the page-table slice and the Q tiles complete under one barrier
         uint32_t q_ptr = cb_q.get_write_ptr();
         for (uint32_t c = 0; c < DHT; ++c) {
             noc.async_read(q_reader, CoreLocalMem<uint32_t>(q_ptr), q_tile_bytes, {.page_id = b * DHT + c}, {});
@@ -67,8 +70,6 @@ void kernel_main() {
         noc.async_read_barrier();
         cb_q.push_back(DHT);
 
-        const uint32_t j_lo = chunk_lo(r, u);
-        const uint32_t j_hi = chunk_hi(r, u);
         for (uint32_t j = j_lo; j <= j_hi; ++j) {
             const uint32_t row0 = j * SK;  // the chunk's first tile row of the virtual sequence
             read_k_chunk<CB_K, DHT, SK, NKV, BLOCK_T, CAP_T, READS>(noc, k_reader, g, row0, page_table);

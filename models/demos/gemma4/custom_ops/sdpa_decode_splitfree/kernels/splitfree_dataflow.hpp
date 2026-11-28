@@ -4,7 +4,8 @@
 // the V chunk reads, the mask tile fills and the causal / window mask generators (copied from
 // ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp and the sdpa
 // dataflow_common.hpp it includes, trimmed to the non-multicast paged path with a full-tile bf16 mask), plus the
-// reads of the cur_pos stick. Every L1 staging address here is a tile or stick start (64-byte aligned).
+// reads of the cur_pos stick, the page-table slice of a unit and the head-row segments of a tile. Every L1 staging
+// address here is a tile or stick start (64-byte aligned) or a 64-byte multiple into one.
 #pragma once
 
 #include <cstdint>
@@ -30,6 +31,46 @@ inline uint32_t virtual_tile_row_to_physical_tile_id(
     const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     return physical_block * block_stride + head_offset + block_row_offset * Wt;
+}
+
+// The page-table entries of row ``row`` that a unit's chunks [j_lo, j_hi] reach (the bounded ring's first
+// capacity_t / block_t blocks), read into the same byte offsets of the row's L1 copy at ``pt_l1``: the walk indexes
+// the row absolutely and never reads an entry outside the slice. The slice widens to 64-byte bounds (the DRAM
+// alignment of both archs), within the stick. Issued only: the caller's read barrier completes it.
+template <uint32_t stick_bytes, uint32_t SK, uint32_t block_t, uint32_t capacity_t, typename PtReader>
+inline void read_page_table_slice(
+    Noc& noc, const PtReader& pt_reader, uint32_t row, uint32_t pt_l1, uint32_t j_lo, uint32_t j_hi) {
+    constexpr uint32_t align = 64;
+    uint32_t e0 = 0;
+    uint32_t e1 = capacity_t / block_t;
+    if constexpr (capacity_t == 0) {
+        e0 = (j_lo * SK) / block_t;
+        e1 = ((j_hi + 1) * SK + block_t - 1) / block_t;
+    }
+    const uint32_t lo = (e0 * 4) & ~(align - 1);
+    uint32_t hi = (e1 * 4 + align - 1) & ~(align - 1);
+    hi = hi < stick_bytes ? hi : stick_bytes;
+    noc.async_read(pt_reader, CoreLocalMem<uint32_t>(pt_l1 + lo), hi - lo, {.page_id = row, .offset_bytes = lo}, {});
+}
+
+// The head rows [r0, r0 + n) of one 32x32 tile of ``elem``-byte data as contiguous byte segments: the rows below 16
+// in faces 0 and 1, the rest in faces 2 and 3 (a face is 16 rows of 16 elements). f(offset_bytes, bytes), at most
+// four calls; every offset and size is a multiple of one face row (64 bytes in fp32).
+template <uint32_t elem, typename F>
+inline void for_each_row_segment(uint32_t r0, uint32_t n, F&& f) {
+    constexpr uint32_t line = 16 * elem;
+    constexpr uint32_t face = 16 * line;
+    const uint32_t r1 = r0 + n;
+    if (r0 < 16) {
+        const uint32_t e = r1 < 16 ? r1 : 16;
+        f(r0 * line, (e - r0) * line);
+        f(face + r0 * line, (e - r0) * line);
+    }
+    if (r1 > 16) {
+        const uint32_t s = r0 > 16 ? r0 : 16;
+        f(2 * face + (s - 16) * line, (r1 - s) * line);
+        f(3 * face + (s - 16) * line, (r1 - s) * line);
+    }
 }
 
 // The cur_pos stick (B int32) into the write region of ``cb`` (reserved once, pushed by the caller when a

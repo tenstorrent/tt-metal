@@ -6,29 +6,40 @@ batch or the cores the row gets (tt-metal#59300), while a lone row still spreads
 Two ``ttnn.generic_op`` programs per call (the trace captures both), sharing a persistent fp32 scratch the model
 allocates once (``allocate_scratch``) and passes in:
 
-1. partials (``kernels/*_partials.cpp``): every (row, KV group, unit) of fixed ``unit`` tokens is assigned to a
-   core by the planner's static mapping (``planner.py``: core ``(u mod M + row*G + group) mod n_cores``, so a
-   row's units sit on consecutive cores whatever the padded batch; independent of ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
+1. partials (``kernels/*_partials.cpp``): a row of ``n_chunks`` chunks splits into at most ``K`` units of
+   ``max(NSUB_MIN, ceil(n_chunks / K))`` chunks, decided on device from the row's own ``cur_pos`` (``planner.py``:
+   ``GEMMA4_SDPA_SPLITFREE_SPLIT`` = K, default 32; one chunk per unit on a sliding layer). Every (row, KV group,
+   unit) is assigned to a core by the planner's static mapping (core ``((u mod M) * stride + row*G + group) mod
+   n_cores``, so a row's units sit on distinct cores whatever the padded batch; the mapping never reads
+   ``cur_pos``). A core walks its units in a fixed order; per live unit it runs the stock flash-decode recurrence
    (``sdpa_flash_decode.cpp``'s chunk body on ``compute_common.hpp``) over the unit's fixed ``chunk``-token
    sub-chunks in ascending order, fp32 statistics and accumulator, masking the chunk that holds ``cur_pos`` (and
    the window start on a sliding layer) exactly as the stock kernels mask it, and writes the unit's (m, l, O) as
-   fp32 tiles to its scratch slot.
-2. combine (``kernels/*_combine.cpp``): one core per (row, group) merges the live units' partials in ascending
-   unit order with the stock correction step, normalises once and writes the group's head rows in bf16.
+   fp32 tiles to its scratch slot -- the group's head rows of each tile only (8x less traffic for 4 of 32 rows).
+   A unit reads the slice of its row's page table its chunks reach, not the whole row.
+2. combine (``kernels/*_combine*.cpp``): jobs (row, group, block of ``CT`` O tiles) on distinct cores (16 jobs
+   per row up to 8 rows on 13x10: ``planner.choose_combine_tiles``) merge the live units' partials in ascending
+   unit order, normalise once and write the group's head rows of the job's tiles in bf16. The merge
+   (``GEMMA4_SDPA_SPLITFREE_COMBINE``): ``stats`` (default, ``compute_combine_stats.cpp``) takes ``M = max_u m_u``
+   first, then accumulates ``w_u l_u`` and ``w_u O_u`` (``w_u = e^((m_u - M) scale)``) in the fp32 dest with
+   the FPU column-broadcast multiply-accumulate, one op per unit and tile; ``pairwise``
+   (``compute_combine.cpp``) is the stock correction step, the earlier op's bits with its unit. Every job of a
+   row replays the row's statistics sequence and every O op is tile-local, so ``CT`` and the job -> core split
+   never change a tile's bits.
 
-Because every unit partial is computed by identical code on identical data in one fixed order, and the merge
-order is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch.
-The chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide
-it, never the batch or the grid); the unit is 4096 tokens (one chunk on a sliding layer): a lone 256K row runs
-64 units on 64 cores of any grid. ``GEMMA4_SDPA_SPLITFREE_UNIT=grid`` derives the unit from the grid instead
-(``planner.derive_unit``: one unit per core for a lone row at the full context, 2048 tokens on 13x10) -- measured
-slower on a 12x10 P150 (256K lone row 1.58 vs 1.31 ms, 128K 1.11 vs 1.05) because the combine merges a row's
-partials serially (~13 us each); it becomes the default once the combine is a tree. Unit and chunk are build
-constants, so every decode graph of one build shares them and a row's bits are the same in every graph (a
-different unit, e.g. ``=grid`` on another grid, is different bits).
+Because every unit partial is computed by identical code on identical data in one fixed order, the unit
+boundaries follow the row's own position and the build constants (chunk, K, NSUB_MIN) alone, and the merge order
+is fixed by the unit indices, the result cannot depend on which core computed what or on the padded batch. The
+chunk is the largest of ``planner.CHUNK_LADDER`` that fits the arch's L1 (head dim and cache format decide it,
+never the batch or the grid). With K = 32 a lone 4K row runs 17 one-chunk units on 17 cores and a 256K row 32
+units of 8192 tokens; the row's bits change with its position where its unit grows (``n_chunks = K*m + 1``), the
+same in every decode graph. ``GEMMA4_SDPA_SPLITFREE_UNIT=<tokens>`` (or ``SPLIT=0``: 4096) keeps the earlier
+fixed unit for A/B and the bit gate.
 
 Contract (the stock ``paged_scaled_dot_product_attention_decode`` call of ``tt/attention/decode.py``):
-``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE interleaved (DRAM or L1), ``k / v [blocks, nkv, block, D]`` bf16 or
+``q [1, B <= 32, Hq <= 32, D]`` bf16 TILE, interleaved (DRAM or L1) or height-sharded in L1 (the fused head ops'
+layout, one user's tile row per shard: read in place through its accessor, no copy; refused when its shard and the
+partials' CBs exceed the L1 budget), ``k / v [blocks, nkv, block, D]`` bf16 or
 bfloat8_b TILE (the cache view may be overridden by ``num_kv_heads`` / ``block_size`` as the stock geometry
 override does), ``page_table [B, max_blocks]`` int32 ROW_MAJOR, ``cur_pos [B]`` int32 ROW_MAJOR (-1 = padding row,
 its output rows untouched), ``scale``, ``sliding_window`` (None: attend everything), ``cache_position_modulo``
@@ -68,6 +79,7 @@ CB_OUT_O, CB_OUT_M, CB_OUT_L = 16, 17, 18
 CB_QK, CB_OUT_IM, CB_OUT_ACC, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD = 24, 25, 26, 27, 28, 29, 30, 31
 CB_IN_M, CB_IN_L, CB_IN_O = 0, 1, 2
 CB_OUT_FINAL, CB_ACC, CB_ACC_2, CB_PREV_SUM_2, CB_EMD_2 = 16, 20, 21, 22, 23
+CB_IN_S, CB_W, CB_M, CB_L = 0, 24, 25, 26  # the stats merge
 
 
 def _f32_bits(x):
@@ -201,8 +213,13 @@ class SdpaDecodeSplitfree:
     ):
         """None when the call is in contract (shapes, formats, the L1 fit of the plan, the scratch capacity),
         else why (the caller keeps the stock op)."""
-        if q.layout != ttnn.TILE_LAYOUT or q.dtype != ttnn.bfloat16 or q.is_sharded():
-            return "q must be a bf16 TILE interleaved tensor"
+        if q.layout != ttnn.TILE_LAYOUT or q.dtype != ttnn.bfloat16:
+            return "q must be a bf16 TILE tensor"
+        q_mem = q.memory_config()
+        if q.is_sharded() and (
+            q_mem.memory_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED or q_mem.buffer_type != ttnn.BufferType.L1
+        ):
+            return "a sharded q must be HEIGHT_SHARDED in L1 (read in place); move it to DRAM"
         if len(q.shape) != 4 or int(q.shape[0]) != 1 or int(q.shape[1]) > P.MAX_ROWS or int(q.shape[2]) > P.MAX_ROWS:
             return f"q must be [1, B <= 32, Hq <= 32, D], got {list(q.shape)}"
         if int(q.shape[3]) % TILE:
@@ -245,7 +262,14 @@ class SdpaDecodeSplitfree:
         except ValueError as e:
             return str(e)
         if not plan.fits:
-            return f"no chunk fits the per-core L1: {plan.describe()}"
+            return f"the circular buffers do not fit the per-core L1: {plan.describe()}"
+        if q.is_sharded():
+            shard_bytes = int(q_mem.shard_spec.shape[0]) * int(q_mem.shard_spec.shape[1]) * 2
+            if plan.partial_cb_bytes + shard_bytes > plan.budget_bytes:
+                return (
+                    f"the L1 q shard ({shard_bytes:,} B) and the partials' CBs ({plan.partial_cb_bytes:,} B) exceed "
+                    f"the {plan.budget_bytes:,} B L1 budget; move q to DRAM"
+                )
         cap = cls.scratch_capacity(scratch)
         if plan.scratch_tiles > cap:
             return f"the scratch holds {cap} fp32 tiles, the call needs {plan.scratch_tiles}: {plan.describe()}"
@@ -337,14 +361,23 @@ class SdpaDecodeSplitfree:
             plan.pair_space,
             plan.stride,
             plan.stride_inv,
+            plan.split,
+            plan.nsub_min,
+            plan.ncb,
+            plan.combine_tiles,
+            int(plan.stats_combine),
+            P.COMBINE_UNIT_BATCH,
         ]
-        assert len(prefix) == 25
+        assert len(prefix) == 31
+        CT = plan.combine_tiles
         defines = [
             ("EXP_APPROX_MODE", "0"),
             ("SUB_EXP_GRANULARITY", str(gran)),
             ("STATS_GRANULARITY", str(gran)),
             ("DHT_GRANULARITY", str(dht_gran)),
         ]
+        # the combine's O blocks are CT tiles: its dest granularity divides CT (never changes a tile's arithmetic)
+        defines2 = defines[:3] + [("DHT_GRANULARITY", str(P.combine_granularity(CT)))]
         cores = row_major_cores(plan.grid, plan.n_cores)
         core_set = core_range_set(cores)
         kv_fmt = k_cache.dtype
@@ -373,14 +406,14 @@ class SdpaDecodeSplitfree:
             dst_full_sync_en=False,
         )
 
-        def kernel(name, ct, rt, config, with_defines=False):
+        def kernel(name, ct, rt, config, kernel_defines=None):
             return ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / name),
                 core_ranges=core_set,
                 compile_time_args=ct,
                 runtime_args=rt,
                 config=config,
-                **({"defines": defines} if with_defines else {}),
+                **({"defines": kernel_defines} if kernel_defines else {}),
             )
 
         # ── phase 1: the unit partials into the scratch ──
@@ -429,7 +462,7 @@ class SdpaDecodeSplitfree:
                 rt_args([cur_pos.buffer_address(), scratch.buffer_address()]),
                 ttnn.WriterConfigDescriptor(),
             ),
-            kernel("compute_partials.cpp", list(prefix), rt_args([]), compute_cfg, with_defines=True),
+            kernel("compute_partials.cpp", list(prefix), rt_args([]), compute_cfg, defines),
         ]
         ttnn.generic_op(
             [q, k_cache, v_cache, cur_pos, page_table, scratch],
@@ -442,18 +475,32 @@ class SdpaDecodeSplitfree:
             ttnn.Shape([1, B, Hq, D]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, out_mem
         )
         cbs2 = [
-            cb(CB_IN_M, 2, F32_TILE, ttnn.float32),
-            cb(CB_IN_L, 2, F32_TILE, ttnn.float32),
-            cb(CB_IN_O, 2 * DHt, F32_TILE, ttnn.float32),
             cb(CB_POS_C, 1, pos_stick, ttnn.int32),
             cb(CB_POS_D, 1, pos_stick, ttnn.int32),
-            cb(CB_OUT_FINAL, DHt, BF16_TILE, ttnn.bfloat16),
-            cb(CB_ACC, DHt, F32_TILE, ttnn.float32),
-            cb(CB_ACC_2, DHt, F32_TILE, ttnn.float32),
-        ] + [
-            cb(i, 1, F32_TILE, ttnn.float32)
-            for i in (CB_PREV_SUM_2, CB_EMD_2, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)
+            cb(CB_OUT_FINAL, CT, BF16_TILE, ttnn.bfloat16),
+            cb(CB_ACC, CT, F32_TILE, ttnn.float32),
         ]
+        if plan.stats_combine:
+            # the row's (m, l) in one batch of 2 * n_slots pages, its w, the O tiles in double-buffered batches of
+            # COMBINE_UNIT_BATCH units x one dest window (planner.combine_cb_bytes)
+            nb = P.combine_granularity(CT)
+            cbs2 += [
+                cb(CB_IN_S, 2 * plan.n_slots, F32_TILE, ttnn.float32),
+                cb(CB_W, plan.n_slots, F32_TILE, ttnn.float32),
+                cb(CB_IN_O, 2 * P.COMBINE_UNIT_BATCH * nb, F32_TILE, ttnn.float32),
+                cb(CB_M, 1, F32_TILE, ttnn.float32),
+                cb(CB_L, 1, F32_TILE, ttnn.float32),
+            ]
+        else:
+            cbs2 += [
+                cb(CB_IN_M, 2, F32_TILE, ttnn.float32),
+                cb(CB_IN_L, 2, F32_TILE, ttnn.float32),
+                cb(CB_IN_O, 2 * CT, F32_TILE, ttnn.float32),
+                cb(CB_ACC_2, CT, F32_TILE, ttnn.float32),
+            ] + [
+                cb(i, 1, F32_TILE, ttnn.float32)
+                for i in (CB_PREV_SUM_2, CB_EMD_2, CB_CUR_MAX, CB_PREV_MAX, CB_CUR_SUM, CB_PREV_SUM, CB_EMD)
+            ]
         reader2_ct = list(prefix)
         for t in (cur_pos, scratch):
             reader2_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -473,7 +520,13 @@ class SdpaDecodeSplitfree:
                 rt_args([cur_pos.buffer_address(), out.buffer_address()]),
                 ttnn.WriterConfigDescriptor(),
             ),
-            kernel("compute_combine.cpp", list(prefix), rt_args([]), compute_cfg, with_defines=True),
+            kernel(
+                "compute_combine_stats.cpp" if plan.stats_combine else "compute_combine.cpp",
+                list(prefix),
+                rt_args([]),
+                compute_cfg,
+                defines2,
+            ),
         ]
         return ttnn.generic_op(
             [scratch, cur_pos, out], ttnn.ProgramDescriptor(kernels=kernels2, semaphores=[], cbs=cbs2)

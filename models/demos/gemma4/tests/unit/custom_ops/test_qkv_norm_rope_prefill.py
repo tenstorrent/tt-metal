@@ -228,6 +228,8 @@ ENVS = (None, "1", "0")
 def _clean(monkeypatch):
     monkeypatch.delenv("GEMMA4_QKV_NORM_ROPE_PREFILL", raising=False)
     monkeypatch.setattr(mo, "_QKV_PREFILL_WH_WARNED", False)
+    # the (1,8) profiles read the cluster type: pinned to the Blackhole Galaxy the (1,8) line was measured on
+    monkeypatch.setattr(mo, "cluster_type_name", lambda: mo.BLACKHOLE_GALAXY_CLUSTER)
     mo.clear_decode_fusion_profile()
     yield
     mo.clear_decode_fusion_profile()

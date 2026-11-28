@@ -7,6 +7,7 @@
 """
 
 import math
+import random
 
 import pytest
 
@@ -223,30 +224,43 @@ def _plan(grid, batch, groups=1, hpg=4, head_dim=512, ctx=CTX_256K, window=None,
     )
 
 
+LEGACY = {sp.UNIT_ENV: "4096"}  # the fixed 4096-token unit of the op before the position-derived unit
+
+
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
 @pytest.mark.parametrize("batch", [1, 8, 32])
 def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
     """Every (row, group, unit) is assigned exactly once by a function of the geometry alone (never of cur_pos);
-    a lone row at 256K and 32 rows at 256K land within one unit per core of each other."""
-    plan = _plan(grid, batch)
-    assert plan.fits and plan.chunk == 256 and plan.unit == 4096 and plan.nsub == 16 and not plan.grid_unit
-    assert plan.max_units == 64 and plan.n_slots == 64 and plan.modulus == min(plan.n_cores, 64)
+    a lone row at 256K and 32 rows at 256K land within two units per core of each other. The default K = 32
+    splits a 256K row into 32 units of 32 chunks, the legacy fixed unit (``GEMMA4_SDPA_SPLITFREE_UNIT=4096``) into
+    64 units of 16."""
+    for legacy in (False, True):
+        _check_mapping(grid, batch, legacy)
+
+
+def _check_mapping(grid, batch, legacy):
+    plan = _plan(grid, batch, env=LEGACY if legacy else None)
+    units = 64 if legacy else 32
+    assert plan.fits and plan.chunk == 256 and plan.split == (0 if legacy else 32)
+    assert plan.nsub == (16 if legacy else 0) and plan.unit == (4096 if legacy else 0)
+    assert plan.max_units == units and plan.n_slots == units and plan.modulus == min(plan.n_cores, units)
+    assert plan.nsub_of(CTX_256K - 1) == (16 if legacy else 32)
     # the same (b, g, u) always goes to the same core, whatever the positions are
     cores = {(b, 0, u): plan.core_of(b, 0, u) for b in range(batch) for u in range(plan.max_units)}
     assert all(0 <= c < plan.n_cores for c in cores.values())
     full = [CTX_256K - 1] * batch
     seen = []
     for c in range(plan.n_cores):
-        units = plan.units_of_core(c, full)
-        assert all(cores[(b, g, u)] == c for b, g, u in units)
-        assert units == sorted(units, key=lambda t: (t[0] * plan.groups + t[1], t[2]))  # ascending bg, then u
-        seen += units
+        units_c = plan.units_of_core(c, full)
+        assert all(cores[(b, g, u)] == c for b, g, u in units_c)
+        assert units_c == sorted(units_c, key=lambda t: (t[0] * plan.groups + t[1], t[2]))  # ascending bg, then u
+        seen += units_c
     assert sorted(seen) == [(b, 0, u) for b in range(batch) for u in range(plan.max_units)]
     counts = [len(plan.units_of_core(c, full)) for c in range(plan.n_cores)]
-    # the stride windows tile the grid within two units per core (32 x 64 = 2048 pairs: 15..17 on 130 cores)
+    # the stride windows tile the grid within two units per core (32 x 32 = 1024 pairs: 7..9 on 130 cores)
     assert max(counts) - min(counts) <= 2 and sum(counts) == batch * plan.max_units
     # the mapping is the same under a different cur_pos: only the live subset changes
-    short = [plan.unit - 1] * batch  # one live unit per row
+    short = [plan.chunk - 1] * batch  # one chunk: one live unit per row
     assert all(plan.core_of(b, 0, 0) == cores[(b, 0, 0)] for b in range(batch))
     assert sum(len(plan.units_of_core(c, short)) for c in range(plan.n_cores)) == batch
     # padding rows have no units
@@ -256,59 +270,51 @@ def test_splitfree_mapping_covers_every_pair_once_and_balances(grid, batch):
 
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
 def test_splitfree_lone_row_spreads_over_the_grid(grid):
-    plan = _plan(grid, 1)
-    busy = [c for c in range(plan.n_cores) if plan.units_of_core(c, [CTX_256K - 1])]
-    assert len(busy) == 64  # 64 units of 4096 tokens, one per core, on both grids
-    assert max(len(plan.units_of_core(c, [CTX_256K - 1])) for c in range(plan.n_cores)) == 1
-    # the same lone row inside a padded batch: its units sit on consecutive cores (core = (u' + bg) mod n), so
-    # the busy core count is the same for B = 1, 8 and 32 on every grid (the earlier p = u'*BG + bg mapping
+    """A lone 256K row: 32 units on 32 distinct cores with the default K (64 with the legacy unit), and the same
+    busy-core count inside a padded batch of 8 or 32 on every grid (the stride mapping)."""
+    full = [CTX_256K - 1]
+    for env, units in ((None, 32), (LEGACY, 64)):
+        plan = _plan(grid, 1, env=env)
+        busy = [c for c in range(plan.n_cores) if plan.units_of_core(c, full)]
+        assert len(busy) == units and max(len(plan.units_of_core(c, full)) for c in busy) == 1
+    # the same lone row inside a padded batch: its units sit on distinct cores (core = (u' * stride + bg) mod n),
+    # so the busy core count is the same for B = 1, 8 and 32 on every grid (the earlier p = u'*BG + bg mapping
     # collapsed a B=32 lone row onto n / gcd(32, n) cores: 15 of 120, 65 of 130, 2 of 64)
     for hg in (grid, (12, 10), (11, 10)):
-        for batch in (8, 32):
-            bp = _plan(hg, batch)
-            pos = [CTX_256K - 1] + [-1] * (batch - 1)
-            bb = [c for c in range(bp.n_cores) if bp.units_of_core(c, pos)]
-            assert len(bb) == min(64, bp.n_cores) and max(len(bp.units_of_core(c, pos)) for c in bb) == 1
-            assert bp.stride >= batch and math.gcd(bp.stride, bp.n_cores) == 1
-            assert bp.stride * bp.stride_inv % bp.n_cores == 1
-            assert bp.core_of(3, 0, 5) == (5 * bp.stride + 3) % bp.n_cores
+        for env, units in ((None, 32), (LEGACY, 64)):
+            for batch in (8, 32):
+                bp = _plan(hg, batch, env=env)
+                pos = [CTX_256K - 1] + [-1] * (batch - 1)
+                bb = [c for c in range(bp.n_cores) if bp.units_of_core(c, pos)]
+                assert len(bb) == min(units, bp.n_cores) and max(len(bp.units_of_core(c, pos)) for c in bb) == 1
+                assert bp.stride >= batch and math.gcd(bp.stride, bp.n_cores) == 1
+                assert bp.stride * bp.stride_inv % bp.n_cores == 1
+                assert bp.core_of(3, 0, 5) == (5 * bp.stride + 3) % bp.n_cores
     assert sp.unit_stride(32, 130) == (33, pow(33, -1, 130)) and sp.unit_stride(32, 120) == (37, pow(37, -1, 120))
     assert sp.unit_stride(32, 64) == (33, pow(33, -1, 64)) and sp.unit_stride(1, 130) == (1, 1)
     assert sp.unit_stride(8, 120) == (11, pow(11, -1, 120)) and sp.unit_stride(4, 1) == (1, 0)
-    # GEMMA4_SDPA_SPLITFREE_UNIT=grid derives the unit from the grid: one unit per core at the full context (128
-    # of 130 cores with 2048 tokens; the harvested 12x10 / 11x10 / 10x10 and a one-core grid, the cap); measured
-    # slower than 4096 on a 12x10 P150 (the serial combine), so it is a mode, not the default
-    gp = _plan(grid, 1, env={sp.UNIT_ENV: "grid"})
-    gb = [c for c in range(gp.n_cores) if gp.units_of_core(c, [CTX_256K - 1])]
-    assert gp.grid_unit and (gp.unit, len(gb)) == {(8, 8): (4096, 64), (13, 10): (2048, 128)}[grid]
-    assert len(gb) >= 0.98 * gp.n_cores and gp.scratch_tiles_bound == gp.batch * gp.groups * gp.n_cores * 18
-    assert sp.derive_unit(256, CTX_256K, 130) == 2048 and sp.derive_unit(256, CTX_256K, 64) == 4096
-    assert sp.derive_unit(256, CTX_256K, 120) == 2304 and sp.derive_unit(256, CTX_256K, 110) == 2560
-    assert sp.derive_unit(256, CTX_256K, 100) == 2816 and sp.derive_unit(256, CTX_256K, 1) == 4096
-    assert sp.derive_unit(256, 4096, 130) == 256 and sp.derive_unit(128, CTX_256K, 64) == 4096
-    assert sp.derive_unit(256, 1 << 20, 130) == 4096
-    for hg, unit, units in (((12, 10), 2304, 114), ((11, 10), 2560, 103), ((10, 10), 2816, 94)):
-        hp = _plan(hg, 1, env={sp.UNIT_ENV: "grid"})
-        hb = [c for c in range(hp.n_cores) if hp.units_of_core(c, [CTX_256K - 1])]
-        assert (hp.unit, hp.max_units, len(hb)) == (unit, units, units) and len(hb) >= 0.9 * hp.n_cores
+    # GEMMA4_SDPA_SPLITFREE_UNIT=grid is retired (the unit follows the row's position); a fixed unit and a K
+    # together are refused; SPLIT=0 is the legacy 4096
+    with pytest.raises(ValueError, match="retired"):  # allow-pytest.raises (pure)
+        _plan(grid, 1, env={sp.UNIT_ENV: "grid"})
+    with pytest.raises(ValueError, match="pins the fixed unit"):  # allow-pytest.raises (pure)
+        _plan(grid, 1, env={sp.UNIT_ENV: "2048", sp.SPLIT_ENV: "16"})
+    assert _plan(grid, 1, env={sp.SPLIT_ENV: "0"}).unit == sp.LEGACY_UNIT
     pinned = _plan(grid, 1, env={sp.UNIT_ENV: "2048"})
-    assert pinned.unit == 2048 and pinned.max_units == 128 and not pinned.grid_unit
-    assert len([c for c in range(pinned.n_cores) if pinned.units_of_core(c, [CTX_256K - 1])]) == min(
-        128, pinned.n_cores
-    )
-    # at 1M tokens every core of the grid carries units (the cap keeps the unit at 4096: 256 units)
+    assert pinned.unit == 2048 and pinned.max_units == 128 and pinned.split == 0
+    assert len([c for c in range(pinned.n_cores) if pinned.units_of_core(c, full)]) == min(128, pinned.n_cores)
+    # at 1M tokens the default still splits a row into 32 units (128 chunks each); the legacy unit puts 256 units
+    # on every core of the grid
     big = _plan(grid, 1, ctx=1 << 20)
-    assert big.max_units == 256 and big.modulus == min(big.n_cores, 256)
-    counts = [len(big.units_of_core(c, [(1 << 20) - 1])) for c in range(big.n_cores)]
+    assert big.max_units == 32 and big.nsub_of((1 << 20) - 1) == 128 and big.unit_of((1 << 20) - 1) == 32768
+    legacy_big = _plan(grid, 1, ctx=1 << 20, env=LEGACY)
+    assert legacy_big.max_units == 256 and legacy_big.modulus == min(legacy_big.n_cores, 256)
+    counts = [len(legacy_big.units_of_core(c, [(1 << 20) - 1])) for c in range(legacy_big.n_cores)]
     assert min(counts) >= 1 and max(counts) - min(counts) <= 1
 
 
 def test_splitfree_chunks_and_masks_follow_cur_pos_like_the_stock():
-    plan = _plan((13, 10), 1)  # the arithmetic below at the default 4096 unit
-    derived = _plan((13, 10), 1, env={sp.UNIT_ENV: "grid"})  # the grid-derived unit halves it: chunks [8u, 8u+7]
-    assert derived.unit == 2048 and derived.live_units(4095) == range(0, 2)
-    assert derived.unit_chunks(1, 4095) == range(8, 16) and derived.unit_chunks(0, 4095) == range(0, 8)
-    assert derived.live_units(CTX_256K - 1) == range(0, 128) and derived.combine_order(0, 0, 4095) == [(0, 0), (1, 1)]
+    plan = _plan((13, 10), 1, env=LEGACY)  # the arithmetic below at the legacy 4096 unit
     # unit u holds chunks [16u, 16u+15]; the chunk holding cur_pos is the tail, later chunks are skipped
     assert plan.live_units(0) == range(0, 1) and plan.unit_chunks(0, 0) == range(0, 1)
     assert plan.live_units(4095) == range(0, 1) and plan.unit_chunks(0, 4095) == range(0, 16)
@@ -319,15 +325,34 @@ def test_splitfree_chunks_and_masks_follow_cur_pos_like_the_stock():
     # the combine walks the live units ascending, each from its own slot
     assert plan.combine_order(0, 0, 8191) == [(0, 0), (1, 1)]
     assert plan.combine_order(3, 0, 4096) == [(0, 3 * 64), (1, 3 * 64 + 1)]
-    assert plan.combine_core(0, 0) == 0 and plan.combine_core(31, 0) == 31
+    assert plan.combine_core(0, 0) == 0 and plan.combine_core(0, 0, 15) == 15  # one O tile per job: 16 jobs
+    # the position's unit (K = 32): one chunk per unit up to 32 chunks, then ceil(n_chunks / 32) chunks
+    split = _plan((13, 10), 1)
+    assert split.live_units(0) == range(0, 1) and split.nsub_of(0) == 1 and split.nsub_of(-1) is None
+    assert split.live_units(4095) == range(0, 16) and split.unit_chunks(15, 4095) == range(15, 16)
+    assert split.live_units(8191) == range(0, 32) and split.nsub_of(8191) == 1
+    assert split.live_units(8192) == range(0, 17) and split.nsub_of(8192) == 2  # 33 chunks: the first transition
+    assert split.unit_chunks(0, 8192) == range(0, 2) and split.unit_chunks(16, 8192) == range(32, 33)
+    assert split.live_units(CTX_256K - 1) == range(0, 32) and split.unit_chunks(31, CTX_256K - 1) == range(992, 1024)
+    assert split.unit_of(CTX_256K - 1) == 8192 and split.unit_of(-1) is None
+    assert split.combine_order(2, 0, 8192) == [(u, 2 * 32 + u) for u in range(17)]
+    # NSUB_MIN floors the unit
+    two = _plan((13, 10), 1, env={sp.MIN_CHUNKS_ENV: "2"})
+    assert two.live_units(4095) == range(0, 8) and two.unit_chunks(7, 4095) == range(14, 16)
+    assert two.live_units(255) == range(0, 1) and two.unit_chunks(0, 255) == range(0, 1)
+    # the position's unit tiles every row whatever the batch and the grid, for K in {16, 32, 64}, NSUB_MIN in {1, 2}
+    for k in (16, 32, 64):
+        for nsub_min in (1, 2):
+            _check_position_unit(k, nsub_min)
 
 
 @pytest.mark.parametrize("grid", GRIDS, ids=["wh_8x8", "bh_13x10"])
 def test_splitfree_sliding_layer(grid):
-    """A 1024-token window on 256-token chunks: one chunk per unit, five slots, the live range follows the
-    position, the window start chunk carries the mask, consecutive live units never share a slot."""
+    """A 1024-token window on 256-token chunks: one chunk per unit (the fixed unit whatever K), five slots, the
+    live range follows the position, the window start chunk carries the mask, consecutive live units never share
+    a slot."""
     plan = _plan(grid, 32, groups=2, hpg=2, head_dim=256, window=1024)
-    assert plan.unit == plan.chunk == 256 and plan.nsub == 1 and plan.n_slots == 5
+    assert plan.unit == plan.chunk == 256 and plan.nsub == 1 and plan.n_slots == 5 and plan.split == 0
     assert plan.max_units == 1024 and plan.modulus == plan.n_cores
     assert plan.row_range(5000) == (15, 19, 3977)  # chunks 15..19 live, window start 3977 inside chunk 15
     assert plan.live_units(5000) == range(15, 20) and plan.live_units(1023) == range(0, 4)
@@ -343,25 +368,29 @@ def test_splitfree_sliding_layer(grid):
     # 320 live units over the grid: a sparse subset of the pair space, so cores carry 0..3 (8x8: 5 each exactly)
     assert sum(counts) == 320 and max(counts) <= 2 * sp.ceil_div(320, plan.n_cores)
     assert all(plan.core_of(b, g, u) == plan.core_of(b, g, u + plan.modulus) for b, g, u in want[:40])
+    assert _plan(grid, 32, groups=2, hpg=2, head_dim=256, window=1024, env={sp.SPLIT_ENV: "64"}) == plan
 
 
 def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
     """The chunk is decided by head dim, cache format and arch (never batch or grid): bfp8 at head_dim 512 takes
     256 on both archs; bf16 still fits 256 on Blackhole (1,362,048 of 1,369,560 B with the fp32 scores and scaler CBs) and
-    drops to 128 on Wormhole; the env caps it; the unit stays 4096 (``=grid`` derives it, never the batch)."""
+    drops to 128 on Wormhole; the env caps it; the unit follows the row's position (K = 32), never the batch."""
     bfp8 = {(g, b): _plan(g, b) for g in GRIDS for b in (1, 32)}
-    assert {p.chunk for p in bfp8.values()} == {256} and {p.unit for p in bfp8.values()} == {4096}
+    assert {p.chunk for p in bfp8.values()} == {256} and {(p.split, p.unit) for p in bfp8.values()} == {(32, 0)}
     assert all(p.fits for p in bfp8.values())
     bf16 = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={})
-    assert bf16.chunk == 256 and bf16.unit == 4096 and bf16.fits and bf16.partial_cb_bytes == 1_362_048
+    assert bf16.chunk == 256 and bf16.split == 32 and bf16.fits and bf16.partial_cb_bytes == 1_362_048
     bf16_qk = sp.plan_splitfree((13, 10), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", env={sp.QK_FP32_ENV: "0"})
     assert bf16_qk.qk_tile_bytes == 2048 and bf16_qk.partial_cb_bytes == 1_343_616 and bf16_qk.chunk == 256
     wh = sp.plan_splitfree((8, 8), 32, 1, 4, 512, CTX_256K, kv_dtype="BFLOAT16", arch="Arch.WORMHOLE_B0", env={})
     assert wh.chunk == 128 and wh.fits and wh.budget_bytes == 1_305_990
+    assert wh.max_units == 32 and wh.nsub_of(CTX_256K - 1) == 64  # 2048 chunks of 128
     capped = _plan((13, 10), 32, env={sp.CHUNK_ENV: "64", sp.UNIT_ENV: "2048"})
     assert capped.chunk == 64 and capped.unit == 2048 and capped.max_units == 128
     with pytest.raises(ValueError, match="multiple of 32"):  # allow-pytest.raises (pure)
         _plan((13, 10), 1, env={sp.CHUNK_ENV: "48"})
+    with pytest.raises(ValueError, match="positive multiple of 1"):  # allow-pytest.raises (pure)
+        _plan((13, 10), 1, env={sp.MIN_CHUNKS_ENV: "0"})
     with pytest.raises(ValueError, match="one core per"):  # allow-pytest.raises (pure)
         sp.plan_splitfree((4, 4), 32, 1, 4, 512, CTX_256K, env={})
     # the bytes behind the choice: bfp8 chunk 256 at head_dim 512 on the Blackhole budget (fp32 scores: 16 KB
@@ -371,35 +400,61 @@ def test_splitfree_chunk_follows_the_l1_budget_not_the_batch():
         p.qk_tile_bytes == 4096 and p.partial_cb_bytes == sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0, 4096) == 870_528
     )
     assert sp.partial_cb_bytes(16, 8, 1088, 0, 128, 0) == 852_096
-    assert p.combine_cb_bytes == sp.combine_cb_bytes(16, 128) == 340_096
-    assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in p.describe()
+    # the combine: 32 rows x 16 O tiles over 130 cores -> jobs of 4 tiles; the stats merge holds a row's 32 (m, l)
+    # and w pages and two O batches of 8 units x 4 tiles; the pairwise merge one unit double-buffered (one job per
+    # row, CT = DHt, is the earlier 340 KB)
+    assert p.combine_tiles == 4 and p.stats_combine
+    assert p.combine_cb_bytes == sp.combine_cb_bytes(4, 128, 32) == 688_256
+    assert sp.combine_cb_bytes(4, 128) == 118_912 and sp.combine_cb_bytes(16, 128) == 340_096
+    assert [sp.combine_granularity(ct) for ct in (1, 2, 3, 4, 6, 8, 16)] == [1, 2, 1, 4, 2, 4, 4]
+    pairwise = _plan((13, 10), 32, env={sp.COMBINE_ENV: "pairwise"})
+    assert (
+        not pairwise.stats_combine
+        and pairwise.combine_cb_bytes == 118_912
+        and "pairwise combine" in pairwise.describe()
+    )
+    with pytest.raises(ValueError, match="COMBINE must be one of"):  # allow-pytest.raises (pure)
+        _plan((13, 10), 32, env={sp.COMBINE_ENV: "tree"})
+    assert [sp.choose_combine_tiles(b, 16, 130) for b in (1, 8, 16, 32)] == [1, 1, 2, 4]
+    assert [sp.choose_combine_tiles(b, 16, 64) for b in (1, 4, 8, 16, 32)] == [1, 1, 2, 4, 8]
+    assert sp.choose_combine_tiles(2 * 32, 8, 130) == 4 and sp.choose_combine_tiles(3, 12, 8) == 6
+    assert _plan((13, 10), 1, env={sp.COMBINE_TILES_ENV: "16"}).combine_tiles == 16
+    with pytest.raises(ValueError, match="must divide"):  # allow-pytest.raises (pure)
+        _plan((13, 10), 1, env={sp.COMBINE_TILES_ENV: "3"})
+    assert "chunk 256, unit max(1, ceil(chunks / 32)) chunks, 32 units, 32 slots" in p.describe()
+    assert "chunk 256 x 16 = unit 4096, 64 units, 64 slots" in _plan((13, 10), 32, env=LEGACY).describe()
+    # the combine jobs cover every (row, group, O tile) once for every CT, one KV group at head_dim 512 and two at 256
+    for grid in SPLIT_GRIDS:
+        for groups, hpg, head_dim in ((1, 4, 512), (2, 2, 256)):
+            _check_combine_jobs(grid, groups, hpg, head_dim)
 
 
 def test_splitfree_scratch_sizes_of_the_galaxy_builds():
-    """Per engine (one chip), 32 padded rows at 256K: 64 slots x 18 fp32 tiles per row for the head_dim-512
-    global layers = 144 MiB whatever the local head count or the grid; the sliding layers (head_dim 256, 2 local
-    KV groups) need 12.5 MiB, so one model scratch takes the global figure. Under ``=grid`` the scratch takes
-    one slot per core (288 MiB on 13x10) so a call on a narrower page table (a smaller unit, up to n_cores
-    units) still fits."""
+    """Per engine (one chip), 32 padded rows at 256K: K = 32 slots x 18 fp32 tiles per row for the head_dim-512
+    global layers = 72 MiB whatever the local head count, the grid or the page table's reach (the legacy fixed
+    4096 unit: 64 slots, 144 MiB); the sliding layers (head_dim 256, 2 local KV groups) need 12.5 MiB, so one model
+    scratch takes the global figure."""
     p31 = _plan((13, 10), 32, groups=1, hpg=4)  # 31B TP8 global: 4 local q heads, one replicated KV head
     p12 = _plan((13, 10), 32, groups=1, hpg=2)  # 12B TP8 global: 2 local q heads
-    assert p31.scratch_tiles == p12.scratch_tiles == 32 * 64 * 18 == 36864
-    assert p31.scratch_bytes == 36864 * 4096 == 150_994_944 and p31.scratch_tiles_bound == 36864
-    assert _plan((8, 8), 32, groups=1, hpg=4).scratch_tiles == 36864
+    assert p31.scratch_tiles == p12.scratch_tiles == 32 * 32 * 18 == 18432
+    assert p31.scratch_bytes == 18432 * 4096 == 75_497_472 and p31.scratch_tiles_bound == 18432
+    assert _plan((8, 8), 32, groups=1, hpg=4).scratch_tiles == 18432
+    legacy = _plan((13, 10), 32, groups=1, hpg=4, env=LEGACY)
+    assert legacy.scratch_tiles == legacy.scratch_tiles_bound == 32 * 64 * 18 == 36864
     sliding = _plan((13, 10), 32, groups=2, hpg=2, head_dim=256, window=1024)
     assert sliding.scratch_tiles == 32 * 2 * 5 * 10 == 3200 and sliding.scratch_bytes == 13_107_200
     specs = [(1, 4, 512, None), (2, 2, 256, 1024)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 36864
-    assert sp.scratch_tiles_for((8, 8), 32, specs, CTX_256K, kv_dtype="BFLOAT16", env={}) == 36864
-    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 64 * 18
-    gm = {sp.UNIT_ENV: "grid"}
-    g31 = _plan((13, 10), 32, groups=1, hpg=4, env=gm)
-    assert (g31.unit, g31.scratch_tiles, g31.scratch_tiles_bound) == (2048, 32 * 128 * 18, 32 * 130 * 18)
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env=gm) == 74880
-    narrow = _plan((13, 10), 32, ctx=33280, env=gm)
-    assert (narrow.unit, narrow.max_units, narrow.scratch_tiles) == (256, 130, 74880)
-    assert all(_plan((13, 10), 32, ctx=c, env=gm).scratch_tiles <= 74880 for c in range(4096, CTX_256K + 1, 4096))
-    # a 128K build halves it; the 31B at TP4 (8 local q heads over one KV group) needs the same
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env={}) == 18432
+    assert sp.scratch_tiles_for((8, 8), 32, specs, CTX_256K, kv_dtype="BFLOAT16", env={}) == 18432
+    assert sp.scratch_tiles_for((13, 10), 1, specs, CTX_256K, env={}) == 32 * 18
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, kv_dtype="BFLOAT8_B", env=LEGACY) == 36864
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={sp.SPLIT_ENV: "64"}) == 32 * 64 * 18
+    # a narrower page table: fewer slots for the call, the K bound for the model; never above it at any reach
+    narrow = _plan((13, 10), 32, ctx=4096)
+    assert (narrow.max_units, narrow.scratch_tiles, narrow.scratch_tiles_bound) == (16, 32 * 16 * 18, 18432)
+    assert all(_plan((13, 10), 32, ctx=c).scratch_tiles <= 18432 for c in range(4096, 2 * CTX_256K + 1, 4096))
+    # a 128K build: the legacy unit halves; the position's unit keeps its K slots
+    assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env=LEGACY) == 32 * 32 * 18
     assert sp.scratch_tiles_for((13, 10), 32, [(1, 8, 512, None)], CTX_256K // 2, env={}) == 32 * 32 * 18
     # the model's own sizing (attach_sdpa_splitfree_scratch, also run by the vLLM generator once the plugin's
     # caches exist): the covered layers and their per-chip specs of the 12B (16 q / 8 kv heads, head_dim 256 /
@@ -423,13 +478,97 @@ def test_splitfree_scratch_sizes_of_the_galaxy_builds():
     )
     covered, specs = splitfree_layer_specs(hf, 48, 4, "1")
     assert covered == {i for i in range(48) if i % 6 == 5} and specs == [(2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # 288 MiB at TP4
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 32 * 18  # 144 MiB at TP4
     covered, specs = splitfree_layer_specs(hf, 48, 4, "2")
     assert covered == set(range(48)) and specs == [(2, 2, 256, 1024), (2, 2, 512, None)]
-    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 64 * 18  # the global figure
+    assert sp.scratch_tiles_for((13, 10), 32, specs, CTX_256K, env={}) == 32 * 2 * 32 * 18  # the global figure
     assert splitfree_layer_specs(hf, 48, 8, "1")[1] == [(1, 2, 512, None)]
     assert splitfree_layer_specs(hf, 12, 16, "2")[1] == [(1, 1, 256, 1024), (1, 1, 512, None)]  # kv replicated
     assert splitfree_layer_specs(hf, 48, 4, "0") == (set(), [])
+
+
+SPLIT_GRIDS = [(8, 8), (12, 10), (13, 10)]
+
+
+def _transition_positions(split, chunk=256, ctx=CTX_256K):
+    """``cur_pos`` at the unit-size transitions of ``K = split`` (the first and last position of ``n_chunks`` in
+    ``{K, K+1, 2K, 2K+1}``) and the edges (-1, 0, 255, 256, the last position)."""
+    out = {-1, 0, 255, 256, ctx - 1}
+    for n in (split, split + 1, 2 * split, 2 * split + 1):
+        out |= {(n - 1) * chunk, n * chunk - 1}
+    return sorted(p for p in out if p < ctx)
+
+
+def _check_position_unit(split, nsub_min):
+    """The position-derived unit for K = ``split`` and NSUB_MIN = ``nsub_min``, the 8x8 / 12x10 / 13x10 grids, B in
+    {1, 4, 8, 16, 32} and random ``cur_pos`` vectors (with -1, 0, 255, 256 and the ``n_chunks`` in {K, K+1, 2K,
+    2K+1} transitions): a row's units tile ``[0, n_chunks)`` contiguously and ascending, at most K of them, all of
+    ``nsub`` chunks but the last; a row's unit chunk lists are the same under every B and grid (a function of its
+    position alone); every live (b, g, u) is visited exactly once across the cores into a distinct slot inside the
+    scratch bound; a lone row's units land on distinct cores."""
+    rng = random.Random(1000 * split + nsub_min)
+    env = {sp.SPLIT_ENV: str(split), sp.MIN_CHUNKS_ENV: str(nsub_min)}
+    special = _transition_positions(split)
+    units_at = {}  # cur_pos -> its unit chunk lists, from the first plan that sees the position
+    for grid in SPLIT_GRIDS:
+        for batch in (1, 4, 8, 16, 32):
+            plan = _plan(grid, batch, env=env)
+            assert (plan.split, plan.nsub_min, plan.nsub, plan.n_slots) == (split, nsub_min, 0, split)
+            assert plan.modulus == min(plan.n_cores, split) and plan.scratch_tiles_bound == batch * split * 18
+            for trial in range(3):
+                pos = [rng.choice(special) if rng.random() < 0.5 else rng.randrange(-1, CTX_256K) for _ in range(batch)]
+                if trial == 0:
+                    pos[0] = CTX_256K - 1
+                for p in pos:
+                    units = [tuple(plan.unit_chunks(u, p)) for u in plan.live_units(p)]
+                    if p < 0:
+                        assert units == [] and plan.nsub_of(p) is None
+                        continue
+                    n_chunks = p // plan.chunk + 1
+                    nsub = plan.nsub_of(p)
+                    assert nsub == max(nsub_min, -(-n_chunks // split)) == sp.nsub_of_chunks(n_chunks, split, nsub_min)
+                    assert [c for chunks in units for c in chunks] == list(range(n_chunks))
+                    assert 1 <= len(units) <= split and all(len(c) == nsub for c in units[:-1])
+                    assert 1 <= len(units[-1]) <= nsub
+                    assert units_at.setdefault(p, units) == units, f"row at {p}: units differ on {grid}, B={batch}"
+                want = [(b, 0, u) for b in range(batch) for u in plan.live_units(pos[b])]
+                seen = [t for c in range(plan.n_cores) for t in plan.units_of_core(c, pos)]
+                assert len(seen) == len(set(seen)) and sorted(seen) == sorted(want)
+                slots = [plan.slot(b, g, u) for b, g, u in want]
+                assert len(set(slots)) == len(slots)
+                assert all(0 <= s < plan.scratch_tiles_bound // plan.tiles_per_slot for s in slots)
+            lone = [CTX_256K - 1] + [-1] * (batch - 1)
+            per_core = [len(plan.units_of_core(c, lone)) for c in range(plan.n_cores)]
+            assert max(per_core) == 1 and sum(per_core) == len(plan.live_units(CTX_256K - 1)) == split
+
+
+def _check_combine_jobs(grid, groups, hpg, head_dim):
+    """The combine jobs (row, group, block of CT O tiles) cover every (row, group, O tile) of the live rows exactly
+    once for every CT dividing DHt, on distinct cores whenever the jobs fit the grid; the default CT is the smallest
+    that fits (a lone row's 16 jobs on 16 cores at head_dim 512), never the batch's rows on one core."""
+    rng = random.Random(groups * 100 + head_dim)
+    dht = head_dim // 32
+    for batch in (1, 4, 8, 16, 32):
+        if batch * groups > grid[0] * grid[1]:
+            continue
+        pos = [rng.choice([-1, 0, 4095, 70000, CTX_256K - 1]) for _ in range(batch)]
+        pos[0] = CTX_256K - 1
+        live = [b for b in range(batch) if pos[b] >= 0]
+        for ct in [d for d in range(1, dht + 1) if dht % d == 0]:
+            plan = _plan(grid, batch, groups=groups, hpg=hpg, head_dim=head_dim, env={sp.COMBINE_TILES_ENV: str(ct)})
+            assert plan.combine_tiles == ct and plan.ncb * ct == dht
+            jobs = [(c, j) for c in range(plan.n_cores) for j in plan.combine_jobs_of_core(c, pos)]
+            tiles = [(b, g, t) for _c, (b, g, blk) in jobs for t in plan.combine_tiles_of(blk)]
+            assert sorted(tiles) == [(b, g, t) for b in live for g in range(groups) for t in range(dht)]
+            assert all(plan.combine_core(b, g, blk) == c for c, (b, g, blk) in jobs)
+            if plan.combine_jobs <= plan.n_cores:
+                assert len({c for c, _j in jobs}) == len(jobs)
+        plan = _plan(grid, batch, groups=groups, hpg=hpg, head_dim=head_dim)
+        ct = plan.combine_tiles
+        assert ct == sp.choose_combine_tiles(batch * groups, dht, plan.n_cores) and plan.combine_jobs <= plan.n_cores
+        assert ct == 1 or batch * groups * dht // (max(d for d in range(1, ct) if dht % d == 0)) > plan.n_cores
+    lone = _plan(grid, 1)
+    assert lone.combine_tiles == 1 and len({lone.combine_core(0, 0, blk) for blk in range(16)}) == 16
 
 
 def test_splitfree_golden_gathers_through_the_page_table():
@@ -465,3 +604,447 @@ def test_splitfree_golden_gathers_through_the_page_table():
                 vv = torch.stack([v[blk, g, off] for blk, off in rows])
                 want = torch.softmax(q[0, b, h] @ kk.T * 0.5, dim=-1) @ vv
                 assert torch.allclose(got[0, b, h], want, atol=1e-5), (window, ring, b, h)
+
+
+# ── sdpa_decode_lse: the stock flash-decode factory's core assignment and tree, re-expressed in python ─────────────
+from models.demos.gemma4.custom_ops.sdpa_decode_lse import planner as lp  # noqa: E402
+
+
+def test_sdpa_decode_lse_tree_merges_every_member_once_and_gives_the_lse():
+    """For every group size up to 64 cores and every chunk count around it: each member's (parent, send round) is a
+    child slot of its parent (so the parent waits exactly once per sender, at that round), parents precede their
+    children (no wait cycle), the rounds stay below ceil(log2 n), the K chunks of ``workload_for_core`` cover the
+    row once, and the kernels' merge along the tree of random per-member partials (raw-score max m, l = sum of
+    exp((s - m) * scale), unnormalised O) gives softmax(scale * s) @ V and ``scale * m + ln(l)`` = logsumexp."""
+    import torch
+
+    torch.manual_seed(0)
+    scale, chunk, D = 0.7, 2, 3
+    for n in range(1, lp.MAX_CORES_PER_HEAD + 1):
+        params = [lp.tree_reduction_params(c, n) for c in range(n)]
+        rounds = lp.tree_rounds(n)
+        assert params[0].is_root and params[0].parent == lp.NONE
+        for c in range(1, n):
+            p = params[c]
+            assert p.parent < c and p.send_at_round < rounds, (n, c)
+            assert params[p.parent].children[p.send_at_round] == c, (n, c)
+        for c in range(n):
+            assert all(ch == lp.NONE or (r < rounds and ch > c) for r, ch in enumerate(params[c].children))
+        for k in sorted({1, max(1, n - 1), n, n + 1, 2 * n + 3}):
+            s = torch.randn(k * chunk, dtype=torch.float64) * 3
+            v = torch.randn(k * chunk, D, dtype=torch.float64)
+            spans = [lp.workload_for_core(k * chunk - 1, c, n, chunk)[2:] for c in range(n)]
+            assert sorted(i for a, b in spans for i in range(a, b)) == list(range(k)), (n, k)
+
+            def merged(c):  # the member's partial after its rounds (writer receives, compute correction_block)
+                a, b = spans[c]
+                keys = slice(a * chunk, b * chunk)
+                m = s[keys].max()
+                p = torch.exp((s[keys] - m) * scale)
+                l, o = p.sum(), p @ v[keys]
+                for child in params[c].children:
+                    if child != lp.NONE and child < k:  # the kernels' "child has data" test
+                        mc, lc, oc = merged(child)
+                        mn = torch.maximum(m, mc)
+                        ea, eb = torch.exp((m - mn) * scale), torch.exp((mc - mn) * scale)
+                        m, l, o = mn, l * ea + lc * eb, o * ea + oc * eb
+                return m, l, o
+
+            m, l, o = merged(0)
+            assert torch.allclose(o / l, torch.softmax(s * scale, 0) @ v), (n, k)
+            assert torch.allclose(scale * m + torch.log(l), torch.logsumexp(s * scale, 0)), (n, k)
+
+
+@pytest.mark.parametrize("grid", GRIDS + [(12, 10), (8, 4)], ids=["wh_8x8", "bh_13x10", "bh_12x10", "glx_8x4"])
+def test_sdpa_decode_lse_plan_is_the_factory_split(grid):
+    """The core plan is the stock factory's (``grid.sdpa_decode_cores_per_head`` mirrors it), groups are contiguous
+    row-major runs with the root first, a group past 64 cores is refused, every per-core argument list has the
+    length the copied kernels parse, the reduction staging holds one block per round, and the served shapes
+    (head_dim 512 bfp8, k chunk 64, caps 16 / 32 / 64) fit the per-core L1."""
+    n_grid = g.grid_cores(grid)
+    for B in (1, 4, 8, 32):
+        for cap in (1, 3, 16, 32, 64, 128):
+            if B > n_grid:
+                continue
+            want = g.sdpa_decode_cores_per_head(n_grid, B, 1, cap)
+            if lp.tree_rounds(want) > lp.MAX_TREE_REDUCTION_ROUNDS:
+                with pytest.raises(ValueError, match="rounds"):  # allow-pytest.raises (pure)
+                    lp.plan_cores(grid, B, cap)
+                continue
+            plan = lp.plan_cores(grid, B, cap)
+            assert plan.cores_per_head == want and plan.active_cores == want * B <= n_grid
+            for b in range(B):
+                grp = plan.group(b)
+                assert [w.member for w in grp] == list(range(want)) and {w.batch for w in grp} == {b}
+                assert grp[0].do_reduce and grp[0].do_output and grp[0].tree.is_root
+            assert [w.core for w in plan.work] == [(i % grid[0], i // grid[0]) for i in range(plan.active_cores)]
+            if B <= 4 and cap in (16, 32, 64):
+                geo = lp.Geometry(
+                    batch=B,
+                    num_q_heads=4,
+                    head_dim=512,
+                    max_blocks=4096,
+                    block_size=64,
+                    num_cache_blocks=4096 * B,
+                    kv_dtype="bfloat8_b",
+                    k_chunk_size=64,
+                    scale=1.0,
+                    cur_pos_stick=64,
+                    page_table_stick=4096 * 4,
+                )
+                full = lp.plan(geo, grid, cap)
+                assert len(full.reader_ct) == lp.READER_CT_SCALARS and len(full.writer_ct) == lp.WRITER_CT_SCALARS
+                assert len(full.compute_ct) == lp.COMPUTE_CT_ARGS
+                stage = [s for s in full.cbs if s.index == lp.CB_INTERMED]
+                assert (stage[0].pages if stage else 0) == (geo.pnht * geo.dht + 2 * geo.pnht) * plan.rounds
+                assert full.cb_total_bytes <= g.sdpa_decode_cb_budget_bytes(), full.describe()
+                addrs = dict(q=1, k=2, v=3, cur_pos=4, page_table=5, out=6, stats=7)
+                rt = lp.runtime_args(geo, full.cores, lambda xy: (xy[0] + 1, xy[1] + 2), addrs)
+                assert set(rt) == {w.core for w in plan.work}
+                for w in plan.work:
+                    reader, writer, compute = rt[w.core]
+                    assert len(reader) == lp.READER_RT_FIXED + 2 * B and reader[0] == 1 and reader[10] == w.batch
+                    assert len(writer) == lp.WRITER_RT_FIXED + 2 * want + 4 * B and writer[:2] == [6, 7]
+                    assert writer[lp.WRITER_RT_FIXED : lp.WRITER_RT_FIXED + want] == [
+                        m.core[0] + 1 for m in plan.group(w.batch)
+                    ]
+                    assert len(compute) == lp.COMPUTE_RT_ARGS and compute[0] == int(w.member == 0)
+
+
+def test_sdpa_decode_lse_merge_of_two_halves_is_the_full_row():
+    """The torch side of the pair split the device test runs: the golden over keys [0, mid) and over [mid, pos]
+    through the page table shifted by mid / block blocks (cur_pos - mid), merged by the LSE formula, equals the
+    golden over [0, pos]; ``lse_from_stats`` reads m at column 0 and l at column 32; a skipped half (-inf) with a
+    garbage output carries no weight."""
+    import torch
+
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+
+    torch.manual_seed(0)
+    blocks, block, D, Hq, B, scale = 24, 32, 64, 4, 3, 0.5
+    k = torch.randn(blocks, 1, block, D)
+    v = torch.randn(blocks, 1, block, D)
+    q = torch.randn(1, B, Hq, D)
+    width = blocks // B
+    table = torch.randperm(blocks).reshape(B, width).to(torch.int32)
+    cur_pos = torch.tensor([width * block - 1, 40, 100])
+    mid = 64
+    shifted = torch.zeros_like(table)
+    shifted[:, : width - mid // block] = table[:, mid // block :]
+    pos_a = torch.where(cur_pos >= mid, torch.full_like(cur_pos, mid - 1), cur_pos)
+    pos_b = torch.where(cur_pos >= mid, cur_pos - mid, torch.full_like(cur_pos, -1))
+    full, lse_full = SdpaDecodeLse.golden(q, k, v, table, cur_pos, scale=scale)
+    out_a, lse_a = SdpaDecodeLse.golden(q, k, v, table, pos_a, scale=scale)
+    out_b, lse_b = SdpaDecodeLse.golden(q, k, v, shifted, pos_b, scale=scale)
+    out_b[0, 1] = float("nan")  # the device leaves a skipped row's output untouched
+    merged, lse_m = SdpaDecodeLse.merge_torch(out_a, lse_a, out_b, lse_b)
+    assert torch.allclose(merged, full, atol=1e-5) and torch.allclose(lse_m, lse_full, atol=1e-5)
+    # the stats layout: [1, B, 32, 64], m at column 0, l at column 32
+    m = torch.randn(1, B, 32) * 4
+    l = torch.rand(1, B, 32) * 100 + 1
+    stats = torch.zeros(1, B, 32, 64)
+    stats[..., 0], stats[..., 32] = m, l
+    got = SdpaDecodeLse.lse_from_stats(stats, Hq, scale)
+    assert torch.allclose(got, scale * m[..., :Hq] + torch.log(l[..., :Hq]))
+
+
+def _lse_geometry(**kw):
+    base = dict(
+        batch=4,
+        num_q_heads=8,
+        head_dim=512,
+        max_blocks=2048,
+        block_size=64,
+        num_cache_blocks=8192,
+        kv_dtype="bfloat8_b",
+        k_chunk_size=64,
+        scale=1.0,
+        cur_pos_stick=64,
+        page_table_stick=8192,
+    )
+    base.update(kw)
+    return lp.Geometry(**base)
+
+
+def test_sdpa_decode_lse_pair_split_refusals_and_plan():
+    """pair_split runs on a 2-D mesh with an even number of columns (the pair is columns (c, c ^ 1), the half is the
+    column's parity) and is refused on a device that is not a mesh, a single-device mesh, a non-2-D shape and an odd
+    column count. The pair plan is the stock plan plus the SDPA_LSE_PAIR_SPLIT define on every kernel and one
+    compile-time arg (the half); without pair_split no define or argument is added."""
+    assert "mesh device" in lp.pair_split_reason(None)
+    assert "single device" in lp.pair_split_reason((1, 1))
+    assert "2-D" in lp.pair_split_reason((8,))
+    for shape in [(1, 3), (2, 3), (4, 1), (8, 1)]:
+        assert "odd" in lp.pair_split_reason(shape), shape
+    for shape in [(1, 2), (1, 8), (2, 4), (8, 4), (4, 8)]:
+        assert lp.pair_split_reason(shape) is None, shape
+    assert [lp.pair_half_of(c) for c in range(8)] == [0, 1] * 4
+    assert [lp.pair_partner((3, c)) for c in range(4)] == [(3, 1), (3, 0), (3, 3), (3, 2)]
+
+    geo = _lse_geometry()
+    stock = lp.plan(geo, (13, 10), 16)
+    pair = lp.plan(geo, (13, 10), 16, pair_split=True)
+    assert not stock.pair_split and stock.dataflow_defines == () and stock.pair_ct(0) == stock.pair_ct(1) == ()
+    assert lp.PAIR_SPLIT_DEFINE not in stock.defines
+    assert pair.defines == stock.defines + (lp.PAIR_SPLIT_DEFINE,) and pair.dataflow_defines == (lp.PAIR_SPLIT_DEFINE,)
+    assert [pair.pair_ct(h) for h in (0, 1)] == [(0,), (1,)]
+    assert (pair.cores, pair.cbs, pair.reader_ct, pair.writer_ct, pair.compute_ct) == (
+        stock.cores,
+        stock.cbs,
+        stock.reader_ct,
+        stock.writer_ct,
+        stock.compute_ct,
+    )
+    assert len(pair.compute_ct) == lp.COMPUTE_CT_ARGS  # the half lands at compute arg COMPUTE_CT_ARGS
+    with pytest.raises(ValueError, match="pair half"):  # allow-pytest.raises (pure)
+        pair.pair_ct(2)
+
+
+def test_sdpa_decode_lse_pair_halves_split_the_row():
+    """The pair split's chunk ranges (``pair_workload_for_core``, the mirror of kernels/pair_split.hpp): half 0 takes
+    chunks [0, ceil(n/2)), half 1 [ceil(n/2), n), together every chunk once; on a device the members with data are a
+    prefix and ``member < half_chunks`` is exactly "has data" (the kernels' active-child test); member 0 ends its
+    half, so the row's last chunk (the causal mask's) sits on the root of the half holding it -- half 1, or half 0
+    of a one-chunk row, whose half 1 is the empty one; no core takes more than ceil(n / (2 * cores)) chunks (the
+    balance of one 2 * cores group); ``pair_key_range`` is the half's chunks clipped to cur_pos."""
+    for k in (32, 64, 128):
+        for cores in (1, 2, 3, 5, 16, 64):
+            positions = {0, 1, k - 2, k - 1, k, k + 36, 2 * k - 1, 2 * k, 3 * k + 5, 4095, 4096, 65536, 131071}
+            positions |= {2 * cores * k - 1, 2 * cores * k, 2 * cores * k + k, cores * k + 3}
+            for cur_pos in sorted(positions):
+                n = -(-(cur_pos + 1) // k)
+                first = (n + 1) // 2
+                seen = []
+                for half in (0, 1):
+                    work = [lp.pair_workload_for_core(cur_pos, c, cores, k, half) for c in range(cores)]
+                    base, cnt = (0, first) if half == 0 else (first, n - first)
+                    assert lp.pair_half_chunks(n, half) == (base, cnt)
+                    assert all(w[0] == n * k // lp.TILE and w[1] == n and w[4] == cnt for w in work), (
+                        k,
+                        cores,
+                        cur_pos,
+                    )
+                    chunks = sorted(i for w in work for i in range(w[2], w[3]))
+                    assert chunks == list(range(base, base + cnt)), (k, cores, cur_pos, half)
+                    assert [w[2] < w[3] for w in work] == [c < cnt for c in range(cores)], (k, cores, cur_pos, half)
+                    assert max(w[3] - w[2] for w in work) <= -(-n // (2 * cores)), (k, cores, cur_pos, half)
+                    if cnt:
+                        assert work[0][3] == base + cnt
+                        if base + cnt == n:  # this half holds the row's last chunk: on its root
+                            assert [c for c, w in enumerate(work) if w[2] <= n - 1 < w[3]] == [0]
+                    lo, hi = lp.pair_key_range(cur_pos, k, half)
+                    want = (base * k, min((base + cnt) * k, cur_pos + 1)) if cnt else (cur_pos + 1, cur_pos + 1)
+                    assert (lo, hi) == want, (k, cur_pos, half)
+                    seen += chunks
+                assert sorted(seen) == list(range(n))
+                assert (n == 1) == (lp.pair_half_chunks(n, 1)[1] == 0)
+    assert lp.pair_key_range(-1, 64, 0) == lp.pair_key_range(-1, 64, 1) == (0, 0)
+
+
+def test_sdpa_decode_lse_group_split_refusals_and_plan():
+    """The group split (``split_parts`` = G over mesh axis ``split_axis``): G = 2 over the columns is the pair (the
+    same refusals and plan); otherwise the split axis must hold a multiple of G devices. A G > 2 plan is the pair plan
+    plus ``SDPA_LSE_SPLIT_PARTS=G`` on every kernel, with one compile-time arg per device (its part, 0..G-1); a G = 2
+    plan carries no parts define."""
+    for shape in [None, (1, 1), (8,), (1, 3), (4, 1)]:
+        assert lp.split_reason(shape, 2, 1) == lp.pair_split_reason(shape)
+    assert lp.split_reason((1, 4), 4, 1) is None and lp.split_reason((1, 8), 4, 1) is None
+    assert lp.split_reason((4, 1), 2, 0) is None and lp.split_reason((4, 1), 4, 0) is None
+    assert "mesh axis 1" in lp.split_reason((1, 6), 4, 1)
+    assert "mesh axis 0" in lp.split_reason((1, 4), 2, 0)
+    assert "mesh device" in lp.split_reason(None, 4, 1)
+    assert [lp.pair_half_of(c, 4) for c in range(8)] == [0, 1, 2, 3] * 2
+
+    geo = _lse_geometry()
+    pair = lp.plan(geo, (13, 10), 16, pair_split=True)
+    assert lp.plan(geo, (13, 10), 16, pair_split=True, split_parts=2) == pair
+    group = lp.plan(geo, (13, 10), 16, pair_split=True, split_parts=4)
+    parts_define = (lp.SPLIT_PARTS_DEFINE, "4")
+    assert group.defines == pair.defines + (parts_define,)
+    assert group.dataflow_defines == (lp.PAIR_SPLIT_DEFINE, parts_define)
+    assert [group.pair_ct(h) for h in range(4)] == [(0,), (1,), (2,), (3,)]
+    assert (group.cores, group.cbs, group.reader_ct, group.writer_ct, group.compute_ct) == (
+        pair.cores,
+        pair.cbs,
+        pair.reader_ct,
+        pair.writer_ct,
+        pair.compute_ct,
+    )
+    with pytest.raises(ValueError, match="pair half"):  # allow-pytest.raises (pure)
+        group.pair_ct(4)
+    with pytest.raises(ValueError, match="split_parts"):  # allow-pytest.raises (pure)
+        lp.plan(geo, (13, 10), 16, pair_split=True, split_parts=1)
+    from pathlib import Path
+
+    hpp = (Path(lp.__file__).parent / "kernels" / "pair_split.hpp").read_text()
+    assert f"#ifndef {lp.SPLIT_PARTS_DEFINE}" in hpp and f"#define {lp.SPLIT_PARTS_DEFINE} 2" in hpp
+
+
+def test_sdpa_decode_lse_group_parts_split_the_row():
+    """The group split's chunk ranges (``pair_workload_for_core(..., parts)``, the mirror of kernels/pair_split.hpp):
+    part p takes chunks [ceil(p n / G), ceil((p + 1) n / G)), the parts together every chunk once (some empty when
+    n < G); G = 2 gives the pair's halves; on a device the members with data are a prefix with ``member <
+    part_chunks`` exactly "has data"; the row's last chunk sits on the root of the part holding it; no core takes
+    more than ceil(ceil(n / G) / cores) chunks; ``pair_key_range`` is the part's chunks clipped to cur_pos."""
+    for parts in (2, 3, 4):
+        for k in (32, 64):
+            for cores in (1, 3, 8, 16):
+                positions = {0, 1, k - 1, k, 2 * k, 3 * k + 5, parts * k - 1, parts * k, 4095, 65536, 86015}
+                positions |= {parts * cores * k - 1, parts * cores * k + k, cores * k + 3}
+                for cur_pos in sorted(positions):
+                    n = -(-(cur_pos + 1) // k)
+                    seen = []
+                    for part in range(parts):
+                        base, cnt = lp.pair_half_chunks(n, part, parts)
+                        if parts == 2:
+                            assert (base, cnt) == lp.pair_half_chunks(n, part)
+                        work = [lp.pair_workload_for_core(cur_pos, c, cores, k, part, parts) for c in range(cores)]
+                        assert all(w[0] == n * k // lp.TILE and w[1] == n and w[4] == cnt for w in work)
+                        chunks = sorted(i for w in work for i in range(w[2], w[3]))
+                        assert chunks == list(range(base, base + cnt)), (parts, k, cores, cur_pos, part)
+                        assert [w[2] < w[3] for w in work] == [c < cnt for c in range(cores)]
+                        assert max(w[3] - w[2] for w in work) <= -(-(-(-n // parts)) // cores)
+                        if cnt:
+                            assert work[0][3] == base + cnt
+                            if base + cnt == n:
+                                assert [c for c, w in enumerate(work) if w[2] <= n - 1 < w[3]] == [0]
+                        lo, hi = lp.pair_key_range(cur_pos, k, part, parts)
+                        want = (base * k, min((base + cnt) * k, cur_pos + 1)) if cnt else (hi, hi)
+                        assert (lo, hi) == want, (parts, k, cur_pos, part)
+                        seen += chunks
+                    assert sorted(seen) == list(range(n))
+
+
+def test_sdpa_decode_lse_group_split_tree_and_merge_give_the_full_row():
+    """G = 4 chips in torch: per part each member's chunks, the group tree with the active-child test (``child <
+    part_chunks``), the root's (m, l, O / l) or the empty-part sentinel, then each chip's weight ``w_c = 1 / sum_j
+    exp(clamp(lse_j - lse_c))`` (the device ``group_merge``): sum_c w_c O_c is softmax(scale * s) @ V."""
+    import torch
+
+    torch.manual_seed(4)
+    scale, k, D, parts = 0.5, 32, 3, 4
+    m_empty = float(torch.tensor(lp.PAIR_EMPTY_M).to(torch.bfloat16))
+    for cores in (1, 2, 3, 5, 8):
+        params = [lp.tree_reduction_params(c, cores) for c in range(cores)]
+        for cur_pos in sorted({0, 5, 31, 32, 40, 95, 96, 130, 200, 4 * cores * k + 7, 9 * cores * k + 70}):
+            s = torch.randn(cur_pos + 1, dtype=torch.float64) * 3
+            v = torch.randn(cur_pos + 1, D, dtype=torch.float64)
+            got = []
+            for part in range(parts):
+                work = [lp.pair_workload_for_core(cur_pos, c, cores, k, part, parts) for c in range(cores)]
+                cnt = work[0][4]
+
+                def merged(c):
+                    keys = slice(work[c][2] * k, min(work[c][3] * k, cur_pos + 1))
+                    m = s[keys].max()
+                    p = torch.exp((s[keys] - m) * scale)
+                    l, o = p.sum(), p @ v[keys]
+                    for child in params[c].children:
+                        if child != lp.NONE and child < cnt:
+                            mc, lc, oc = merged(child)
+                            mn = torch.maximum(m, mc)
+                            ea, eb = torch.exp((m - mn) * scale), torch.exp((mc - mn) * scale)
+                            m, l, o = mn, l * ea + lc * eb, o * ea + oc * eb
+                    return m, l, o
+
+                if work[0][2] == work[0][3]:
+                    assert cnt == 0
+                    m, l, o = torch.tensor(m_empty, dtype=torch.float64), torch.tensor(lp.PAIR_EMPTY_L), torch.zeros(D)
+                else:
+                    m, l, o = merged(0)
+                    o = o / l
+                got.append((scale * m + torch.log(l), o.double()))
+            lse = torch.stack([g[0] for g in got])
+            out = sum(
+                g[1] / torch.exp((lse - g[0]).clamp(-64.0, 64.0)).sum() for g in got
+            )  # w_c O_c, w_c = 1 / sum_j exp(lse_j - lse_c)
+            assert torch.allclose(out, torch.softmax(s * scale, 0) @ v), (cores, cur_pos)
+            assert torch.allclose(torch.logsumexp(lse, 0), torch.logsumexp(s * scale, 0)), (cores, cur_pos)
+
+
+def test_sdpa_decode_lse_pair_split_tree_and_merge_give_the_full_row():
+    """Both chips of a pair in torch: per half, each member's chunks (the causal mask clips the last), the group tree
+    with the pair active-child test (``child < half_chunks``), the root's (m, l, O / l) -- or the empty-half sentinel
+    O = 0, m = bf16(-30000), l = 1 -- then the partner merge ``w_self = sigmoid(lse_self - lse_partner)``,
+    ``O = w_self * O_self + w_partner * O_partner``: softmax(scale * s) @ V, and logaddexp of the halves' lse is the
+    row's logsumexp."""
+    import torch
+
+    torch.manual_seed(1)
+    scale, k, D = 0.5, 32, 3
+    m_empty = float(torch.tensor(lp.PAIR_EMPTY_M).to(torch.bfloat16))
+    for cores in (1, 2, 3, 4, 5, 8):
+        params = [lp.tree_reduction_params(c, cores) for c in range(cores)]
+        for cur_pos in sorted({0, 5, 31, 32, 40, 95, 96, 200, 2 * cores * k + 7, 5 * cores * k + 70}):
+            s = torch.randn(cur_pos + 1, dtype=torch.float64) * 3
+            v = torch.randn(cur_pos + 1, D, dtype=torch.float64)
+            halves = []
+            for half in (0, 1):
+                work = [lp.pair_workload_for_core(cur_pos, c, cores, k, half) for c in range(cores)]
+                cnt = work[0][4]
+
+                def merged(c):  # the member's partial after its rounds (writer receives, compute correction_block)
+                    keys = slice(work[c][2] * k, min(work[c][3] * k, cur_pos + 1))
+                    m = s[keys].max()
+                    p = torch.exp((s[keys] - m) * scale)
+                    l, o = p.sum(), p @ v[keys]
+                    for child in params[c].children:
+                        if child != lp.NONE and child < cnt:  # the pair "child has data" test
+                            mc, lc, oc = merged(child)
+                            mn = torch.maximum(m, mc)
+                            ea, eb = torch.exp((m - mn) * scale), torch.exp((mc - mn) * scale)
+                            m, l, o = mn, l * ea + lc * eb, o * ea + oc * eb
+                    return m, l, o
+
+                if work[0][2] == work[0][3]:  # an empty half: no member has data, the root writes the sentinel
+                    assert cnt == 0 and half == 1 and cur_pos < k
+                    m, l, o = torch.tensor(m_empty, dtype=torch.float64), torch.tensor(lp.PAIR_EMPTY_L), torch.zeros(D)
+                else:
+                    m, l, o = merged(0)
+                    o = o / l
+                halves.append((scale * m + torch.log(l), o.double()))
+            (lse0, o0), (lse1, o1) = halves
+            w0, w1 = torch.sigmoid(lse0 - lse1), torch.sigmoid(lse1 - lse0)
+            assert torch.allclose(w0 * o0 + w1 * o1, torch.softmax(s * scale, 0) @ v), (cores, cur_pos)
+            assert torch.allclose(torch.logaddexp(lse0, lse1), torch.logsumexp(s * scale, 0)), (cores, cur_pos)
+
+
+def test_sdpa_decode_lse_merge_with_an_empty_half_is_the_other_half():
+    """``merge_torch`` with the empty-half sentinel (O = 0 and stats m = -30000, l = 1, read in bf16 through
+    ``lse_from_stats`` like the device's) returns the other half unchanged, in either order, at the model's scale 1
+    and at 1/sqrt(512); the sentinel's lse is finite (no NaN through a 0 weight). The planner's packed bf16
+    patterns are torch's bf16 roundings and are the ones kernels/pair_split.hpp writes."""
+    import re
+    from pathlib import Path
+
+    import torch
+
+    from models.demos.gemma4.custom_ops.sdpa_decode_lse import SdpaDecodeLse
+
+    torch.manual_seed(2)
+    B, Hq, D = 3, 4, 64
+    for scale in (1.0, 512**-0.5):
+        out_a = torch.randn(1, B, Hq, D)
+        lse_a = torch.randn(1, B, Hq) * 10 + 20
+        stats = torch.zeros(1, B, 32, lp.STATS_COLS, dtype=torch.bfloat16)
+        stats[..., 0], stats[..., lp.TILE] = lp.PAIR_EMPTY_M, lp.PAIR_EMPTY_L
+        lse_e = SdpaDecodeLse.lse_from_stats(stats, Hq, scale)
+        assert torch.isfinite(lse_e).all() and (lse_e < -1000).all()
+        empty = torch.zeros(1, B, Hq, D)
+        for out, lse in (
+            SdpaDecodeLse.merge_torch(out_a, lse_a, empty, lse_e),
+            SdpaDecodeLse.merge_torch(empty, lse_e, out_a, lse_a),
+        ):
+            assert torch.equal(out, out_a) and torch.equal(lse, lse_a), scale
+        w_self = torch.sigmoid(lse_a - lse_e)[..., None]
+        assert torch.equal(w_self * out_a + torch.sigmoid(lse_e - lse_a)[..., None] * empty, out_a)
+
+    def bf16_bits(x):
+        return int(torch.tensor([x]).to(torch.bfloat16).view(torch.int16).item()) & 0xFFFF
+
+    assert float(torch.tensor(lp.PAIR_EMPTY_M).to(torch.bfloat16)) == -29952.0
+    assert lp.PAIR_EMPTY_M_PACKED == bf16_bits(lp.PAIR_EMPTY_M) * 0x10001
+    assert lp.PAIR_EMPTY_L_PACKED == bf16_bits(lp.PAIR_EMPTY_L) * 0x10001
+    hpp = (Path(lp.__file__).parent / "kernels" / "pair_split.hpp").read_text()
+    assert re.search(rf"PAIR_EMPTY_M_PACKED = 0x{lp.PAIR_EMPTY_M_PACKED:08X};", hpp)
+    assert re.search(rf"PAIR_EMPTY_L_PACKED = 0x{lp.PAIR_EMPTY_L_PACKED:08X};", hpp)

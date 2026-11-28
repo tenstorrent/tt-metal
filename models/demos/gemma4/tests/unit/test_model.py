@@ -1151,6 +1151,7 @@ def _lane_tensor(mesh_device, mesh_config, rows, width):
     return ttnn.from_torch(hidden, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=mapper)
 
 
+@pytest.mark.gemma4_fresh_mesh  # first collectives on a newly opened mesh
 @parametrize_mesh_with_fabric(mesh_shapes=[(2, 4)], device_params_extra={"l1_small_size": L1_SMALL_SIZE})
 def test_first_time_collectives_keep_worker_l1(mesh_device, reset_seeds):
     tp, ep = mesh_device.shape[1], mesh_device.shape[0]

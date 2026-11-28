@@ -26,9 +26,15 @@ from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.assistant.model import Gemma4AssistantModel
 from models.demos.gemma4.tt.ccl import CCLManager, mesh_tp_axis
 from models.demos.gemma4.tt.mesh_orientation import dispatch_prefill_default
-from models.demos.gemma4.tt.model import Gemma4Model
+from models.demos.gemma4.tt.model import Gemma4Model, apply_build_profile
 from models.demos.gemma4.tt.model_config import Gemma4AssistantArgs, Gemma4ModelArgs
 from models.demos.gemma4.tt.precision import Gemma4Precision
+from models.demos.gemma4.tt.sdpa_pair_split import (
+    group_split_enabled,
+    group_split_mesh,
+    pair_split_enabled,
+    pair_split_mesh,
+)
 
 # Weights gemma4 consumes on the HOST (not just via ttnn.as_tensor) and that therefore must be
 # loaded for real even on a warm cache (see #45400 follow-up analysis of models/demos/gemma4/tt):
@@ -66,7 +72,7 @@ def gemma4_cache_layout(mesh_device, mesh_config):
     from models.demos.gemma4.tt.experts.weights import _expert_parallel_factors
 
     ep, tp, _ep_axis, tp_axis = _expert_parallel_factors(mesh_device, mesh_config)
-    return {
+    layout = {
         # v3: routed experts are stored whole per chip (*_ep{ep}tp{tp}_whole_* fused [up|gate]) instead
         # of intermediate-sliced; the v2 marker certified only the old expert filenames.
         "layout": "v3-experts-whole-ep-tp",
@@ -90,10 +96,21 @@ def gemma4_cache_layout(mesh_device, mesh_config):
         "moe_dispatch_prefill": "1"
         if dispatch_prefill_default(getattr(mesh_device, "shape", None), blackhole=is_blackhole())
         else "0",
-        # The local routed prefill (experts/local_routed_prefill.py) loads the routed experts into the kernel's
-        # per-expert cache files too (layer_<i>.local_routed_<rows>x<cols>.*).
-        "moe_local_routed_prefill": os.environ.get("GEMMA4_MOE_LOCAL_ROUTED_PREFILL", "0"),
+        # The first local routed prefill wrote per-expert cache files of its own (layer_<i>.local_routed_*); the
+        # current one (experts/local_routed_prefill.py) reads the decode copy and writes none, so the key stays at
+        # the value every existing marker carries and no setting of the knob forces a cold load.
+        "moe_local_routed_prefill": "0",
     }
+    # GEMMA4_SDPA_PAIR_SPLIT adds the pair QKV / o_proj copies of the global layers (*_pair_* tensorbins) on a one-row
+    # mesh with even columns: a marker seeded without them must not certify such a build. The key is absent when the
+    # knob is off, so the default identity (and every warm marker) is unchanged.
+    if pair_split_enabled() and pair_split_mesh(getattr(mesh_device, "shape", None)):
+        layout["sdpa_pair_split"] = "v1"
+    # GEMMA4_SDPA_GROUP_SPLIT adds the group view's QKV / o_proj copies (*_pair_* at G = 2, *_group{G}_* above) on a
+    # line mesh; absent when the knob is off, like the pair key.
+    if group_split_enabled() and group_split_mesh(getattr(mesh_device, "shape", None)):
+        layout["sdpa_group_split"] = "v1"
+    return layout
 
 
 # Generator prefill chunk used with CP prefill: 6144 rows per column fill the SDPA grid.
@@ -248,7 +265,9 @@ def create_tt_model(
     # ceiling at long context.
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh, max_seq_len=max_seq_len)
     # The variant must also pin every knob that decides WHICH tensorbin FILENAMES a build needs, not
-    # only their dtype (see gemma4_cache_layout).
+    # only their dtype (see gemma4_cache_layout). The build profile is one of them (the (1,8) line's pair split
+    # adds the pair QKV / o_proj copies), so it is recorded first; Gemma4Model records the same profile again.
+    apply_build_profile(_worker_mesh, model_args)
     _cache_layout = gemma4_cache_layout(mesh_device, mesh_config)
     cache_identity = dict(
         # vLLM hands over the resolved hub snapshot dir, not the HF id: keyed on the plain

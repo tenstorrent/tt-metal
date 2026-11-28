@@ -38,6 +38,23 @@ _DTYPE_BY_NAME = {
 }
 
 
+# A mesh-scoped key: "RxC", optionally "@CLUSTER" (a ttnn.cluster.ClusterType name), or "default".
+_MESH_KEY_RE = r"\d+x\d+(@[A-Z0-9_]+)?|default"
+
+
+def _cluster_scoped(key, mesh_keys) -> bool:
+    """Whether ``key`` is a cluster-scoped form ("RxC@CLUSTER") of one of ``mesh_keys``."""
+    mesh, sep, cluster = str(key).partition("@")
+    return bool(sep) and bool(cluster) and mesh in mesh_keys
+
+
+def _cluster_type_name():
+    """The cluster type's name (``mesh_orientation.cluster_type_name``: the one hook the host tests replace)."""
+    from models.demos.gemma4.tt import mesh_orientation
+
+    return mesh_orientation.cluster_type_name()
+
+
 def dtype_to_str(dtype):
     """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "fp32").
 
@@ -103,8 +120,23 @@ class Gemma4Precision:
         # under the bf16 cache identity with no log line.
         model_entry = table.get(model_key) or {}
 
-        # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get(transposed_key) or model_entry.get("default") or {}
+        # A mesh key may name the machine it was measured on: "RxC@CLUSTER" (CLUSTER a ttnn.cluster.ClusterType name,
+        # e.g. "1x8@BLACKHOLE_GALAXY") applies on that cluster type only and wins over the plain "RxC" key there, so
+        # an entry measured on one machine does not reach another of the same mesh shape (the Galaxy (1,8) engines
+        # vs a P150x8 line or a Wormhole T3K). The cluster type is read only when such a key names this mesh.
+        mesh_keys = (mesh_key, transposed_key)
+        limits_entry = model_entry.get("bfp8_max_context")
+        scoped = [k for k in model_entry if _cluster_scoped(k, mesh_keys)]
+        if isinstance(limits_entry, dict):
+            scoped += [k for k in limits_entry if _cluster_scoped(k, mesh_keys)]
+        cluster = _cluster_type_name() if scoped else None
+        keys = tuple(f"{k}@{cluster}" for k in mesh_keys if cluster) + mesh_keys
+
+        # "default" holds the variant's modules on every mesh; a mesh-shape key (the cluster-scoped one, else the exact
+        # shape, else the transposed one) overrides it module by module, so a mesh entry lists only what differs on
+        # that mesh. A cluster-scoped key counts when present (even empty: nothing differs from "default" there).
+        mesh_entry = next((model_entry[k] for k in keys if k in model_entry and ("@" in k or model_entry[k])), {}) or {}
+        raw = {**(model_entry.get("default") or {}), **mesh_entry}
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:
@@ -116,20 +148,20 @@ class Gemma4Precision:
                 )
             resolved[k] = _DTYPE_BY_NAME[v]
 
-        # Per-module context ceiling for bfp8. bfp8 error accumulates with
-        # sequence length, but NOT uniformly across modules -- MEASURED on 31B /
-        # tp=8 at a true 261,944-token prompt (same commit, build and prompt;
-        # only the override differs):
+        # Per-module context ceiling for bfp8 (``bfp8_max_context``). The 31B declares its (1,8) ceiling for every
+        # machine but the Blackhole Galaxy ("1x8@BLACKHOLE_GALAXY": none): the Galaxy (1,8) engine re-measured it away
+        # (2026-11-10, current tree: bfp8 shared_mlp passes 248K needles on every row, a 255K verbatim echo and 247K
+        # free generation); a P150x8 line or a T3K keeps the measured ceiling until it is re-measured there.
+        # HISTORY, the measurement the ceiling came from, on an older tree
+        # (31B, tp=8, a true 261,944-token prompt; same commit, build and prompt; only the override differs):
         #
         #     attention + shared_mlp bfp8 : degenerate ("...laught laught...")
         #     shared_mlp bfp8 only        : degenerate ("...la la la la...")
         #     attention  bfp8 only        : COHERENT, 16.98 tok/s/u
         #     all bf16                    : COHERENT, 16.15 tok/s/u
         #
-        # So shared_mlp is the module that cannot hold bfp8 at very long context,
-        # and attention can -- keeping it quantized is both faster and closer to
-        # the <=128k configuration. 128k is coherent with BOTH in bfp8, so the
-        # ceiling sits between 131072 and 262144.
+        # On that tree shared_mlp could not hold bfp8 at very long context and attention could; 128k was coherent
+        # with both in bfp8.
         #
         # This was invisible for months because a path-resolution bug (fixed in
         # a73264153281) made snapshot-style model paths miss the override table
@@ -148,9 +180,11 @@ class Gemma4Precision:
         # measured on tp=8; applying it to every mesh hung Gemma4-31B on
         # bh_quietbox_2 (1x4) in model init, because 31B shared_mlp in bf16 at
         # 262144 does not fit on four chips. A mesh with no entry keeps bfp8,
-        # which is what main did before the ceiling existed.
-        if isinstance(limits, dict) and limits and all(re.fullmatch(r"\d+x\d+|default", str(k)) for k in limits):
-            limits = limits.get(mesh_key, limits.get(transposed_key, limits.get("default")))
+        # which is what main did before the ceiling existed. A cluster-scoped key
+        # ("1x8@BLACKHOLE_GALAXY") wins on its cluster, as for the module entries;
+        # an empty one there means no ceiling.
+        if isinstance(limits, dict) and limits and all(re.fullmatch(_MESH_KEY_RE, str(k)) for k in limits):
+            limits = next((limits[k] for k in keys if k in limits), limits.get("default"))
         env_limit = os.environ.get("GEMMA4_BFP8_MAX_CONTEXT")
         if env_limit is not None:
             try:
@@ -171,8 +205,8 @@ class Gemma4Precision:
                 detail = ", ".join(f"{m} (>{l})" for m, l in sorted(downgraded))
                 logger.warning(
                     f"Gemma4 precision: max_seq_len={served} exceeds the bfp8 context ceiling for "
-                    f"{model_key}; downgrading {detail} bfp8 -> bf16 (bfp8 degenerates at very long "
-                    "context). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
+                    f"{model_key}; downgrading {detail} bfp8 -> bf16 (the declared "
+                    "context ceiling). Costs memory/throughput; set GEMMA4_BFP8_MAX_CONTEXT=0 to disable."
                 )
         # Per-module env override (``GEMMA4_PRECISION_EXPERTS=bfp8``, ``GEMMA4_PRECISION_ATTENTION=bf16``, ...):
         # applied last, so it wins over the table and the context ceiling. Unset -> no change. The value lands

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""GegluDecode (custom op) vs the composite ``apply_geglu_fused`` (slice, slice, gelu, mul) and the torch golden."""
+"""GegluDecode (custom op) vs the composite ``apply_geglu_fused`` (slice, slice, gelu, mul) and the torch golden;
+GegluPrefill (the prefill rows of the shared MLP) bitwise against the composite."""
 
 import pytest
 import torch
@@ -71,22 +72,31 @@ def test_geglu_decode_matches_composite(mesh_device, device_params, E, R, I, mem
     assert torch.equal(out2, out), f"cache-hit call differs: max|diff| {(out2 - out).abs().max()}"
 
 
+@pytest.mark.parametrize(
+    "R, I",
+    [(4096, 3840), (2048, 3840), (96, 3840), (2048, 5376), (4096, 544)],
+    ids=["dense12b_tp4_4k", "dense12b_tp4_2k", "dense12b_tp4_96rows", "dense31b_tp4_2k", "shared26b_tp4_4k"],
+)
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
-def test_geglu_decode_perf_vs_composite(mesh_device, device_params):
-    """Host wall per call (dispatch-bound outside tracy); device time from a profiler run of this selector."""
-    import time
+def test_geglu_prefill_bitwise_composite(mesh_device, device_params, R, I):
+    """GegluPrefill is bitwise the composite slice, slice, gelu, mul (and its input-activation form)."""
+    from models.demos.gemma4.custom_ops.geglu_prefill import GegluPrefill
 
     torch.manual_seed(0)
-    x = torch.randn(1, 32, 32, 2 * 704, dtype=torch.bfloat16)
-    tx = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    ITERS = 20
-    for name, fn in (("composite", lambda: apply_geglu_fused(tx)), ("geglu_decode", lambda: GegluDecode.op(tx))):
-        for _ in range(3):
-            fn()
-        ttnn.synchronize_device(mesh_device)
-        t0 = time.perf_counter()
-        for _ in range(ITERS):
-            out = fn()
-        ttnn.synchronize_device(mesh_device)
-        print(f"[perf E32 R32 I704] {name}: host {(time.perf_counter() - t0) / ITERS * 1e6:.1f} us/call", flush=True)
-        ttnn.deallocate(out)
+    x = (torch.randn(1, 1, R, 2 * I) * 2).to(torch.bfloat16)
+
+    def dev(t):
+        return ttnn.from_torch(t, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    tx = dev(x)
+    up = ttnn.slice(tx, [0, 0, 0, 0], [1, 1, R, I])
+    gate = ttnn.slice(tx, [0, 0, 0, I], [1, 1, R, 2 * I])
+    ref = ttnn.to_torch(ttnn.mul(ttnn.gelu(gate, variant=ttnn.GeluVariant.Accurate), up)).float()
+    act = [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0)]
+    ref_act = ttnn.to_torch(ttnn.mul(gate, up, input_tensor_a_activations=act)).float()
+    out = ttnn.to_torch(GegluPrefill.op(tx)).float()
+    print(f"[R{R} I{I}] bitwise composite {torch.equal(out, ref)} activation form {torch.equal(ref_act, ref)}")
+    assert torch.equal(ref_act, ref), f"activation form max|diff| {(ref_act - ref).abs().max()}"
+    assert torch.equal(out, ref), f"GegluPrefill max|diff| vs composite {(out - ref).abs().max()}"
+    # program-cache hit on fresh buffers
+    assert torch.equal(ttnn.to_torch(GegluPrefill.op(dev(x))).float(), out)

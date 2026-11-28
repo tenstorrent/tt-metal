@@ -27,6 +27,10 @@ def pytest_configure(config):
         "markers",
         "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
     )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_fresh_mesh: a newly opened mesh under GEMMA4_TEST_MESH_REUSE=1 (tests/unit/_mesh_reuse.py)",
+    )
 
 
 def pytest_addoption(parser):

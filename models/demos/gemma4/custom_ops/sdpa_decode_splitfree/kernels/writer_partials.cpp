@@ -3,9 +3,11 @@
 // Phase 1 writer of sdpa_decode_splitfree: the reduce scaler and the zero tile once; per unit of this core the
 // masks its chunks take (the causal mask of the chunk holding cur_pos, the window mask of the first live chunk,
 // each a one-block CB the compute pops), then the unit's (O, m, l) fp32 tiles to the scratch slot
-// (b*G + g) * NSLOTS + u % NSLOTS: pages slot*(2+DHt) + {0: m, 1: l, 2..: O}.
+// (b*G + g) * NSLOTS + u % NSLOTS: pages slot*(2+DHt) + {0: m, 1: l, 2..: O}. Only the group's HPG head rows of
+// each tile are written (for_each_row_segment: two 64-byte-line segments per tile while the rows sit in faces 0 /
+// 1), at their offsets in the page: the combine reads those rows alone, so the rest of a slot is never touched.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(cur_pos, scratch)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, scratch)
 // runtime args: [core, pos_addr, scratch_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -45,7 +47,14 @@ void kernel_main() {
     CircularBuffer cb_o(CB_OUT_O);
     CircularBuffer cb_m(CB_OUT_M);
     CircularBuffer cb_l(CB_OUT_L);
-    for_each_unit(core, pos, [&](uint32_t b, uint32_t /*g*/, uint32_t bg, uint32_t u, const Row& r) {
+    // the group's head rows of the fp32 tile at ``src`` to the same offsets of scratch page ``page``
+    auto write_rows = [&](uint32_t g, uint32_t src, uint32_t page) {
+        for_each_row_segment<4>(g * HPG, HPG, [&](uint32_t off, uint32_t bytes) {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(src + off), scratch, bytes, {}, {.page_id = page, .offset_bytes = off});
+        });
+    };
+    for_each_unit(core, pos, [&](uint32_t b, uint32_t g, uint32_t bg, uint32_t u, const Row& r) {
         const uint32_t j_lo = chunk_lo(r, u);
         const uint32_t j_hi = chunk_hi(r, u);
         if constexpr (WINDOW > 0) {
@@ -61,13 +70,12 @@ void kernel_main() {
         cb_o.wait_front(DHT);
         const uint32_t o_ptr = cb_o.get_read_ptr();
         for (uint32_t c = 0; c < DHT; ++c) {
-            noc.async_write(
-                CoreLocalMem<uint32_t>(o_ptr + c * f32_tile), scratch, f32_tile, {}, {.page_id = page0 + 2 + c});
+            write_rows(g, o_ptr + c * f32_tile, page0 + 2 + c);
         }
         cb_m.wait_front(1);
-        noc.async_write(CoreLocalMem<uint32_t>(cb_m.get_read_ptr()), scratch, f32_tile, {}, {.page_id = page0});
+        write_rows(g, cb_m.get_read_ptr(), page0);
         cb_l.wait_front(1);
-        noc.async_write(CoreLocalMem<uint32_t>(cb_l.get_read_ptr()), scratch, f32_tile, {}, {.page_id = page0 + 1});
+        write_rows(g, cb_l.get_read_ptr(), page0 + 1);
         noc.async_write_barrier();
         cb_o.pop_front(DHT);
         cb_m.pop_front(1);

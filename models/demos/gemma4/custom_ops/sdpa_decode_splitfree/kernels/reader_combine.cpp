@@ -1,10 +1,17 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// Phase 2 reader of sdpa_decode_splitfree: for every (row, group) pair of this core (pair bg on core bg mod
-// NCORES) the live units' partials in ascending unit order, each (m, l, O) from its scratch slot into the
-// double-buffered input CBs. cur_pos is read once into the compute's CB.
+// Phase 2 reader of sdpa_decode_splitfree: for every combine job (bg, blk) of this core (splitfree_common.hpp:
+// for_each_combine_job) the live units' partials from their scratch slots, in ascending unit order (the job's O
+// tiles are [blk * CT, (blk + 1) * CT) of a slot's O). Stats merge (STATS): the row's m and l in one batch
+// (m_u at page u - lo, l_u at NSLOTS + u - lo of a 2 * NSLOTS reservation), then per dest window of NB O tiles
+// the units' tiles in batches of UB units (UB * NB pages, the last batch padded): every reservation is a fixed
+// size dividing its CB, so the compute indexes the pages without a wrap. Pairwise merge: per unit its m, l and CT
+// O tiles into the double-buffered input CBs. Only the group's HPG head rows of a tile are read (the rows the
+// partials writer wrote), into the same offsets of the CB page; the other rows of a page keep what an earlier
+// read left there (every merge op is row-local and the writer writes the group's rows alone). cur_pos is read
+// once into the compute's CB.
 //
-// compile-time args: the sf:: prefix (24) + TensorAccessorArgs(cur_pos, scratch)
+// compile-time args: the sf:: prefix (CT_ACCESSORS args) + TensorAccessorArgs(cur_pos, scratch)
 // runtime args: [core, pos_addr, scratch_addr]
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -33,32 +40,69 @@ void kernel_main() {
     }
     CircularBuffer(CB_POS_C).push_back(1);
 
-    CircularBuffer cb_m(CB_IN_M);
-    CircularBuffer cb_l(CB_IN_L);
+    // the group's head rows of scratch page ``page`` into the same offsets of the fp32 tile at ``dst``
+    auto read_rows = [&](uint32_t g, uint32_t page, uint32_t dst) {
+        for_each_row_segment<4>(g * HPG, HPG, [&](uint32_t off, uint32_t bytes) {
+            noc.async_read(
+                scratch, CoreLocalMem<uint32_t>(dst + off), bytes, {.page_id = page, .offset_bytes = off}, {});
+        });
+    };
+
     CircularBuffer cb_o(CB_IN_O);
-    for (uint32_t bg = core; bg < BG; bg += NCORES) {
-        const Row r = row_of(pos[bg / G]);
-        if (!r.live) {
-            continue;
-        }
-        const uint32_t lo = unit_lo(r);
-        const uint32_t hi = unit_hi(r);
-        for (uint32_t u = lo; u <= hi; ++u) {
-            const uint32_t page0 = slot_of(bg, u) * TILES_PER_SLOT;
-            cb_m.reserve_back(1);
-            noc.async_read(scratch, CoreLocalMem<uint32_t>(cb_m.get_write_ptr()), f32_tile, {.page_id = page0}, {});
-            cb_l.reserve_back(1);
-            noc.async_read(scratch, CoreLocalMem<uint32_t>(cb_l.get_write_ptr()), f32_tile, {.page_id = page0 + 1}, {});
-            cb_o.reserve_back(DHT);
-            uint32_t o_ptr = cb_o.get_write_ptr();
-            for (uint32_t c = 0; c < DHT; ++c) {
-                noc.async_read(scratch, CoreLocalMem<uint32_t>(o_ptr), f32_tile, {.page_id = page0 + 2 + c}, {});
-                o_ptr += f32_tile;
+    if constexpr (STATS) {
+        CircularBuffer cb_s(CB_IN_S);
+        for_each_combine_job(core, pos, [&](uint32_t /*b*/, uint32_t g, uint32_t bg, uint32_t blk, const Row& r) {
+            const uint32_t lo = unit_lo(r);
+            const uint32_t n = unit_hi(r) - lo + 1;
+            cb_s.reserve_back(2 * NSLOTS);
+            const uint32_t s_ptr = cb_s.get_write_ptr();
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t page0 = slot_of(bg, lo + i) * TILES_PER_SLOT;
+                read_rows(g, page0, s_ptr + i * f32_tile);
+                read_rows(g, page0 + 1, s_ptr + (NSLOTS + i) * f32_tile);
             }
             noc.async_read_barrier();
-            cb_m.push_back(1);
-            cb_l.push_back(1);
-            cb_o.push_back(DHT);
-        }
+            cb_s.push_back(2 * NSLOTS);
+            for (uint32_t t0 = 0; t0 < CT; t0 += NB) {
+                for (uint32_t i0 = 0; i0 < n; i0 += UB) {
+                    const uint32_t i1 = (i0 + UB < n) ? i0 + UB : n;
+                    cb_o.reserve_back(UB * NB);
+                    uint32_t o_ptr = cb_o.get_write_ptr();
+                    for (uint32_t i = i0; i < i1; ++i) {
+                        const uint32_t page = slot_of(bg, lo + i) * TILES_PER_SLOT + 2 + blk * CT + t0;
+                        for (uint32_t t = 0; t < NB; ++t) {
+                            read_rows(g, page + t, o_ptr);
+                            o_ptr += f32_tile;
+                        }
+                    }
+                    noc.async_read_barrier();
+                    cb_o.push_back(UB * NB);
+                }
+            }
+        });
+    } else {
+        CircularBuffer cb_m(CB_IN_M);
+        CircularBuffer cb_l(CB_IN_L);
+        for_each_combine_job(core, pos, [&](uint32_t /*b*/, uint32_t g, uint32_t bg, uint32_t blk, const Row& r) {
+            const uint32_t lo = unit_lo(r);
+            const uint32_t hi = unit_hi(r);
+            for (uint32_t u = lo; u <= hi; ++u) {
+                const uint32_t page0 = slot_of(bg, u) * TILES_PER_SLOT;
+                cb_m.reserve_back(1);
+                read_rows(g, page0, cb_m.get_write_ptr());
+                cb_l.reserve_back(1);
+                read_rows(g, page0 + 1, cb_l.get_write_ptr());
+                cb_o.reserve_back(CT);
+                uint32_t o_ptr = cb_o.get_write_ptr();
+                for (uint32_t c = 0; c < CT; ++c) {
+                    read_rows(g, page0 + 2 + blk * CT + c, o_ptr);
+                    o_ptr += f32_tile;
+                }
+                noc.async_read_barrier();
+                cb_m.push_back(1);
+                cb_l.push_back(1);
+                cb_o.push_back(CT);
+            }
+        });
     }
 }

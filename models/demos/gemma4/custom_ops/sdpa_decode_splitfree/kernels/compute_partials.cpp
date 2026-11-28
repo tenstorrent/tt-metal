@@ -7,8 +7,8 @@
 // unit's (O, m, l) to the writer. Identical code over identical data in a fixed order on every core and
 // grid: a unit's partial does not depend on who computes it.
 //
-// compile-time args: the sf:: prefix (24); defines EXP_APPROX_MODE, SUB_EXP_GRANULARITY, STATS_GRANULARITY,
-// DHT_GRANULARITY as the stock program factory sets them. runtime args: [core]
+// compile-time args: the sf:: prefix (CT_ACCESSORS args); defines EXP_APPROX_MODE, SUB_EXP_GRANULARITY,
+// STATS_GRANULARITY, DHT_GRANULARITY as the stock program factory sets them. runtime args: [core]
 #define LLK_ZEROFLAG_OUTLINE 1
 
 #include <cstdint>
