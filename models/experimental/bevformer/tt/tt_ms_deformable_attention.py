@@ -102,8 +102,7 @@ class QueryCounts:
     """An attention's full query counts for ``multi_scale_deformable_attn_fused`` on a reduced grid,
     one (bs,) count tensor per shape, None on the full grid.
 
-    Built on the attention's first forward and reused after it: creating a uint32 tensor uploads it
-    from the host, which a trace capture rejects.
+    Built on the attention's first forward and reused after it, which saves a fill op per forward.
     """
 
     def __init__(self):
@@ -114,10 +113,17 @@ class QueryCounts:
             return None
         key = (bs, num_queries)
         if key not in self._counts:
-            self._counts[key] = ttnn.full(
-                (bs,), num_queries, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-            )
+            self._counts[key] = full_query_counts(device, bs, num_queries)
         return self._counts[key]
+
+
+def full_query_counts(device, bs, num_queries):
+    """A (bs,) uint32 tensor of ``num_queries``, filled on the device.
+
+    ttnn.full writes a small uint32 tensor from the host, which a trace capture rejects.
+    """
+    counts = ttnn.empty((bs,), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.fill(counts, num_queries, output_tensor=counts)
 
 
 def multi_scale_deformable_attn_fused(
@@ -195,7 +201,9 @@ def multi_scale_deformable_attn_fused(
     if num_valid_queries_tensor is None and not num_valid_queries and reduced_grid(value.device()):
         # Without counts each core takes its list of tiles as runtime args, which on a few cores
         # outgrows their limit. With counts on device a core gets only its index and derives its run.
-        raise ValueError("a reduced grid needs num_valid_queries_tensor; QueryCounts gives full counts")
+        num_valid_queries_tensor = full_query_counts(
+            value.device(), attention_weights.shape[0], attention_weights.shape[1]
+        )
 
     if value_memory == "dram":
         target_memory_config = ttnn.DRAM_MEMORY_CONFIG
