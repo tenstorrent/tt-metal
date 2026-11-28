@@ -87,6 +87,9 @@ FACE = 16
 COPY_ENTRY_BYTES = 8
 SHARED_READ_SEM = 0  # semaphore id of the rm shared-read handoff
 TILE_ENTRY_BYTES = 16
+# Perf 1: the image path's store list, built in the read shadow: <= 4 merged write runs per output tile (one tile
+# per atom at most), 16 B each. The direct path's write list (12 B per output face-row) fits in the same room.
+STORE_ENTRY_BYTES_PER_ATOM = 64
 CB_ALIGN = 64
 
 # Mover m's NoC (noc_placement knob): reader/writer-native (RISCV_1 on NoC0, RISCV_0 on NoC1). Refinement 2
@@ -260,7 +263,7 @@ def _slot_bytes(atoms, atom_rows, s_bound, face_row_bytes, dram_align):
     return (
         max_copies * (face_row_bytes + dram_align),
         2 * trs * face_row_bytes,
-        max_copies * COPY_ENTRY_BYTES + atoms * TILE_ENTRY_BYTES,
+        max_copies * COPY_ENTRY_BYTES + atoms * (TILE_ENTRY_BYTES + STORE_ENTRY_BYTES_PER_ATOM),
     )
 
 
@@ -537,7 +540,17 @@ def _tile_compile_args(plan, cb_stage, cb_image, cb_plan, mover):  # mover: unus
         cb_stage,
         cb_image,
         cb_plan,
+        int(_store_direct(plan)),
     ]
+
+
+def _store_direct(plan):
+    """Perf 1: tile_face_row with one logical row per output tile (H_out == 1) writes its output face-rows
+    straight from staging (plan-free). Carve-out, not an allow-list: elsewhere the image path's merged writes
+    (2-16 face-rows per write) are needed; tile_element_run pieces are element-granular (inexpressible
+    without the image), and per-face-row writes on H_out > 1 measured slower (host_move_list zero-copy
+    variant: q349 3341 vs 2937 ns with merged writes)."""
+    return plan.regime == "tile_face_row" and plan.dst.H == 1
 
 
 def _rm_compile_args(plan, cb_stage, cb_image, cb_plan, mover):

@@ -2,6 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Perf 1 (planfree_tile_mover, lean_pre_all). Two realizations, chosen at compile time by the geometry:
+//  - kStoreDirect (tile_face_row with H_out == 1: one logical row per output tile, so every output face-row is
+//    its own write even through the image): plan-free. Sources are closed form per (segment, half) with
+//    add-only steps; read runs coalesce consecutive input face-rows; the face-rows are written straight from
+//    staging (no plan, no permute copy, no cache invalidate / fence). The write list is built between the read
+//    issue and the read barrier, in the DRAM read-latency shadow, and issued in a tight loop after it.
+//  - image path (every other geometry): the move-plan walk below, with the merged-run store list likewise
+//    built before the read barrier and issued in a tight loop after the permute.
+// q553 (1,1,6,256)->(1,1,1536) bf16: 1735 -> ~1090 ns. The two run lambdas MUST stay always_inline (GCC
+// outlined them and that alone cost ~300 ns on q553). No raw LLK: dataflow_api NoC calls + TensorAccessor.
+//
 // One g6_reshape mover. A mover owns a contiguous range of output atoms (atom_rows output rows of one
 // output image, in one output tile column) and, block by block, gathers their input face-rows into
 // staging, permutes them into an image laid out in output byte order, and writes the image to DRAM.
@@ -50,7 +61,8 @@ void kernel_main() {
     constexpr uint32_t cb_stage = get_compile_time_arg_val(19);
     constexpr uint32_t cb_image = get_compile_time_arg_val(20);
     constexpr uint32_t cb_plan = get_compile_time_arg_val(21);
-    constexpr auto in_args = TensorAccessorArgs<22>();
+    constexpr bool kStoreDirect = get_compile_time_arg_val(22) != 0;
+    constexpr auto in_args = TensorAccessorArgs<23>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t kFaceRowBytes = kFace * kElem;
@@ -77,10 +89,130 @@ void kernel_main() {
 
     const uint32_t stage_cb_base = get_write_ptr(cb_stage);
     const uint32_t image_cb_base = get_write_ptr(cb_image);
+
+    if constexpr (kStoreDirect) {
+        static_assert(
+            !kStoreDirect || (kHOut == 1 && kFaceRowAligned && kHtOut == 1),
+            "lean path: one row per output tile, face-rows");
+        // Consecutive output rows (atoms of one tile column) are consecutive input rows: runs coalesce.
+        constexpr bool kCoalesce = kWOut == kWIn;
+        uint32_t stage_slot = 0;
+        for (uint32_t a0 = atom_begin; a0 < atom_end; a0 += kBlockAtoms) {
+            const uint32_t a1 = min_u32(a0 + kBlockAtoms, atom_end);
+            const uint32_t stage_base = stage_cb_base + stage_slot * kStageSlotBytes;
+
+            // Write list (in the plan CB): {staging src, dst NoC addr lo, hi} per output face-row, built between the
+            // read issue and the read barrier so the write-side address math hides in the DRAM read latency.
+            uint32_t* const wl_base = reinterpret_cast<uint32_t*>(get_write_ptr(cb_plan));
+            uint32_t* wl = wl_base;
+            // One pass over the block's read runs: issue == true reads them, false lists their face-row writes.
+            auto runs = [&](const bool issue) __attribute__((always_inline)) {
+                uint32_t cursor = stage_base;
+                uint32_t a = a0;
+                while (a < a1) {
+                    const uint32_t tc = a / kBOut;
+                    const uint32_t b0 = a - tc * kBOut;
+                    const uint32_t seg_end = min_u32(a1, (tc + 1) * kBOut);
+                    const uint32_t nrows = seg_end - a;
+                    const uint32_t halves = kWOut - kTile * tc > kFace ? 2 : 1;
+                    for (uint32_t half = 0; half < halves; ++half) {
+                        const uint32_t stream = b0 * kWOut + kTile * tc + kFace * half;
+                        const uint32_t r = stream / kWIn;
+                        uint32_t c = stream - r * kWIn;
+                        uint32_t in_b = r / kHIn;
+                        uint32_t in_h = r - in_b * kHIn;
+                        uint32_t run_page = kNoRun;
+                        uint32_t run_off = 0;
+                        uint32_t run_rows = 0;
+                        uint32_t run_stage = 0;
+                        uint32_t run_b = 0;
+                        auto flush = [&]() __attribute__((always_inline)) {
+                            if (issue) {
+                                noc_async_read_one_packet(
+                                    in.get_noc_addr(run_page, run_off, noc), run_stage, run_rows * kFaceRowBytes, noc);
+                            } else {
+                                for (uint32_t k = 0; k < run_rows; ++k) {
+                                    const uint64_t dst =
+                                        out.get_noc_addr((run_b + k) * kWtOut + tc, half * kFaceBytes, noc);
+                                    wl[0] = run_stage + k * kFaceRowBytes;
+                                    wl[1] = static_cast<uint32_t>(dst);
+                                    wl[2] = static_cast<uint32_t>(dst >> 32);
+                                    wl += 3;
+                                }
+                            }
+                            cursor = run_stage + run_rows * kFaceRowBytes;
+                        };
+                        for (uint32_t i = 0; i < nrows; ++i) {
+                            const uint32_t page = (in_b * kHtIn + in_h / kTile) * kWtIn + c / kTile;
+                            const uint32_t fr_off = (2 * ((in_h % kTile) / kFace) + (c % kTile) / kFace) * kFaceBytes +
+                                                    (in_h % kFace) * kFaceRowBytes;
+                            if (kCoalesce && page == run_page && fr_off == run_off + run_rows * kFaceRowBytes) {
+                                ++run_rows;
+                            } else {
+                                if (run_rows > 0) {
+                                    flush();
+                                }
+                                run_stage = cursor + (((fr_off & (kDramAlign - 1)) - cursor) & (kDramAlign - 1));
+                                run_page = page;
+                                run_off = fr_off;
+                                run_rows = 1;
+                                run_b = b0 + i;
+                            }
+                            c += kRowStepCols;
+                            uint32_t carry = 0;
+                            if (c >= kWIn) {
+                                c -= kWIn;
+                                carry = 1;
+                            }
+                            in_h += kRowStepH + carry;
+                            in_b += kRowStepImages;
+                            if (in_h >= kHIn) {
+                                in_h -= kHIn;
+                                ++in_b;
+                            }
+                        }
+                        flush();
+                        ASSERT(cursor <= stage_base + kStageSlotBytes);
+                    }
+                    a = seg_end;
+                }
+            };
+
+            {
+                DeviceZoneScopedN("g6.gather");
+                if (a0 != atom_begin) {
+                    // The previous block's writes may still source this staging slot.
+                    noc_async_writes_flushed(noc);
+                }
+                runs(true);
+                runs(false);
+            }
+            {
+                DeviceZoneScopedN("g6.await");
+                noc_async_read_barrier(noc);
+            }
+            {
+                DeviceZoneScopedN("g6.store");
+                for (const uint32_t* e = wl_base; e != wl; e += 3) {
+                    noc_async_write_one_packet(e[0], (static_cast<uint64_t>(e[2]) << 32) | e[1], kFaceRowBytes, noc);
+                }
+            }
+            stage_slot = stage_slot + 1 == kStageDepth ? 0 : stage_slot + 1;
+        }
+        {
+            DeviceZoneScopedN("g6.drain");
+            noc_async_write_barrier(noc);
+        }
+        return;
+    }
+
     // Plan page: kMaxCopies copy entries {src L1 addr, (image offset << 8) | bytes}, then the tile table
     // {output page, image offset, lo | hi << 8 | halves << 16, unused} with one entry per output tile.
     volatile tt_l1_ptr uint32_t* copies = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_plan));
     volatile tt_l1_ptr uint32_t* tiles = copies + 2 * kMaxCopies;
+    // lean_pre_all: the image path's store list follows the tile table (<= 4 write runs per output tile).
+    uint32_t* const sl_base =
+        reinterpret_cast<uint32_t*>(get_write_ptr(cb_plan) + (2 * kMaxCopies + 4 * kBlockAtoms) * 4);
 
     uint32_t stage_slot = 0;
     uint32_t image_slot = 0;
@@ -90,6 +222,7 @@ void kernel_main() {
         const uint32_t image_base = image_cb_base + image_slot * kImageSlotBytes;
         uint32_t num_copies = 0;
         uint32_t num_tiles = 0;
+        uint32_t* sl = sl_base;
 
         {
             DeviceZoneScopedN("g6.gather");
@@ -249,6 +382,64 @@ void kernel_main() {
                 a = seg_end;
             }
             close_run();
+            {
+                // Store list, built in the read shadow: {image src, dst NoC addr lo, hi, bytes} per merged write run.
+                // Per output tile, regions f0 f1 f2 f3 in DRAM byte order (f1 / f3 only with two halves),
+                // merged into one write whenever byte-contiguous in the page.
+                for (uint32_t ti = 0; ti < num_tiles; ++ti) {
+                    volatile tt_l1_ptr uint32_t* t = tiles + 4 * ti;
+                    const uint32_t page = t[0];
+                    uint32_t img = image_base + t[1];
+                    const uint32_t lo = t[2] & 0xFF;
+                    const uint32_t hi = (t[2] >> 8) & 0xFF;
+                    const uint32_t halves = t[2] >> 16;
+                    const uint32_t n0 = lo < kFace ? min_u32(hi, kFace) - lo : 0;
+                    const uint32_t n1 = hi > kFace ? hi - max_u32(lo, kFace) : 0;
+                    const uint32_t bot_row = max_u32(lo, kFace) - kFace;
+
+                    uint32_t run_off = 0;
+                    uint32_t run_len = 0;
+                    uint32_t run_img = img;
+                    for (uint32_t face = 0; face < 4; ++face) {
+                        const uint32_t face_half = face & 1;
+                        if (face_half >= halves) {
+                            continue;
+                        }
+                        const uint32_t rows = face < 2 ? n0 : n1;
+                        if (rows == 0) {
+                            continue;
+                        }
+                        const uint32_t off = face * kFaceBytes + (face < 2 ? lo : bot_row) * kFaceRowBytes;
+                        const uint32_t len = rows * kFaceRowBytes;
+                        if (run_len > 0 && off == run_off + run_len) {
+                            run_len += len;
+                        } else {
+                            if (run_len > 0) {
+                                {
+                                    const uint64_t dst = out.get_noc_addr(page, run_off, noc);
+                                    sl[0] = run_img;
+                                    sl[1] = static_cast<uint32_t>(dst);
+                                    sl[2] = static_cast<uint32_t>(dst >> 32);
+                                    sl[3] = run_len;
+                                    sl += 4;
+                                }
+                            }
+                            run_off = off;
+                            run_len = len;
+                            run_img = img;
+                        }
+                        img += len;
+                    }
+                    {
+                        const uint64_t dst = out.get_noc_addr(page, run_off, noc);
+                        sl[0] = run_img;
+                        sl[1] = static_cast<uint32_t>(dst);
+                        sl[2] = static_cast<uint32_t>(dst >> 32);
+                        sl[3] = run_len;
+                        sl += 4;
+                    }
+                }
+            }
         }
 
         {
@@ -264,46 +455,8 @@ void kernel_main() {
 
         {
             DeviceZoneScopedN("g6.store");
-            // Per output tile, regions f0 f1 f2 f3 in DRAM byte order (f1 / f3 only with two halves),
-            // merged into one write whenever byte-contiguous in the page.
-            for (uint32_t ti = 0; ti < num_tiles; ++ti) {
-                volatile tt_l1_ptr uint32_t* t = tiles + 4 * ti;
-                const uint32_t page = t[0];
-                uint32_t img = image_base + t[1];
-                const uint32_t lo = t[2] & 0xFF;
-                const uint32_t hi = (t[2] >> 8) & 0xFF;
-                const uint32_t halves = t[2] >> 16;
-                const uint32_t n0 = lo < kFace ? min_u32(hi, kFace) - lo : 0;
-                const uint32_t n1 = hi > kFace ? hi - max_u32(lo, kFace) : 0;
-                const uint32_t bot_row = max_u32(lo, kFace) - kFace;
-
-                uint32_t run_off = 0;
-                uint32_t run_len = 0;
-                uint32_t run_img = img;
-                for (uint32_t face = 0; face < 4; ++face) {
-                    const uint32_t face_half = face & 1;
-                    if (face_half >= halves) {
-                        continue;
-                    }
-                    const uint32_t rows = face < 2 ? n0 : n1;
-                    if (rows == 0) {
-                        continue;
-                    }
-                    const uint32_t off = face * kFaceBytes + (face < 2 ? lo : bot_row) * kFaceRowBytes;
-                    const uint32_t len = rows * kFaceRowBytes;
-                    if (run_len > 0 && off == run_off + run_len) {
-                        run_len += len;
-                    } else {
-                        if (run_len > 0) {
-                            noc_async_write(run_img, out.get_noc_addr(page, run_off, noc), run_len, noc);
-                        }
-                        run_off = off;
-                        run_len = len;
-                        run_img = img;
-                    }
-                    img += len;
-                }
-                noc_async_write(run_img, out.get_noc_addr(page, run_off, noc), run_len, noc);
+            for (const uint32_t* e = sl_base; e != sl; e += 4) {
+                noc_async_write(e[0], (static_cast<uint64_t>(e[2]) << 32) | e[1], e[3], noc);
             }
         }
 
