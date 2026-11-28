@@ -66,6 +66,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     CUSTOM_MM_CALLS,
+    CUSTOM_MM_CLEAR_SRC,
     CUSTOM_MM_LAYOUT,
     DEST_SYNC,
     IN_FACE_DIMS,
@@ -183,6 +184,7 @@ def _build_custom_mm(
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
     read_transposed=False,
+    clear_src=True,
     *,
     is_perf=False,
     run_types=None,
@@ -282,6 +284,7 @@ def _build_custom_mm(
                 CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(preserve_zero_flag),
                 CUSTOM_MM_TRANSPOSE(transpose),
                 CUSTOM_MM_READ_TRANSPOSED(read_transposed),
+                CUSTOM_MM_CLEAR_SRC(clear_src),
                 CUSTOM_MM_LAYOUT(layout),
                 DEST_SYNC(dest_sync),
             ],
@@ -343,6 +346,7 @@ def _run_custom_mm(
     tile_c=DEFAULT_TILE_C_DIM,
     transpose=False,
     read_transposed=False,
+    clear_src=True,
     *,
     is_perf=False,
     perf_report=None,
@@ -375,6 +379,7 @@ def _run_custom_mm(
         tile_c=tile_c,
         transpose=transpose,
         read_transposed=read_transposed,
+        clear_src=clear_src,
         is_perf=is_perf,
         run_types=run_types,
         loop_factor=loop_factor,
@@ -443,6 +448,13 @@ def test_custom_mm(formats, M, kt, ct):
 )
 def test_custom_mm_fp32_dest(formats, M, kt, ct):
     _run_custom_mm(M, kt, ct, formats, DestAccumulation.Yes)
+
+
+# Every other case runs the default clear_src = true; this one covers the init without the SrcB clear.
+@blackhole_only
+def test_custom_mm_no_clear_src():
+    formats = input_output_formats([DataFormat.Float16_b], same=True)[0]
+    _run_custom_mm(1, 2, 2, formats, DestAccumulation.No, clear_src=False)
 
 
 # A Float16_b output from a 32-bit DEST packs from a Float16_b source. The packer counts its DEST strides in pack

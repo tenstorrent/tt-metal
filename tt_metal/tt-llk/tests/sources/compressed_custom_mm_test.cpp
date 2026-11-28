@@ -121,7 +121,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
 
         // compressed_custom_mm unpack init takes only unpB_face_r_dim (no CT_DIM, unlike custom_mm).
-        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, true /* clear_src */>(in0_face_r_dim);
+        _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */, CUSTOM_MM_CLEAR_SRC>(in0_face_r_dim);
         PROFILER_SYNC();
     }
     {
@@ -180,7 +180,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // compressed_custom_mm is LoFi-only; init takes no MathFidelity template.
         // The Dense layout brings the DEST tile-to-tile stride down from 64 rows to 32, matching the partial-tile packer
         // below and the silicon-validated matmul_custom_compressed_test.cpp.
-        _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense>();
+        _llk_math_compressed_custom_mm_init_<false /* transpose */, CustomMmDestLayout::Dense, CUSTOM_MM_CLEAR_SRC>();
         PROFILER_SYNC();
     }
     {

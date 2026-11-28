@@ -165,8 +165,8 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  * Sets the unpacker X ends, records the MOP and replay buffer the execute runs, and resets the counters.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Only unpB_face_r_dim rows of each
- *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>, default true. Power only. Must match the
+ *                    clear_src of the math init, which gives back the first cleared bank.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
  * @param ct_dim: Output width in tiles, 1 to 34.
@@ -202,12 +202,11 @@ inline void _llk_unpack_AB_custom_mm_init_(
 
     if constexpr (clear_src)
     {
-        // Clear SrcB as we only unpack into 1/8 FPU rows so zeroing them gives power savings
-        // This particular instruction clears both banks after waiting for both of them to be free
-        // It must run alone: a both-bank SrcB clear drops SrcA writes that unpacker 0 makes while it runs
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
-        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK1);
+        // Zero both SrcB banks: only unpB_face_r_dim rows per face are unpacked, so the FPU multiplies zeros in the
+        // rest (power only). One bank at a time: the first clear hands its bank to math, whose init gives it back,
+        // and the second clear waits for that and zeroes the other bank.
+        TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
+        TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
     }
 
     // Reset counters here since reset in the execute API is at the end

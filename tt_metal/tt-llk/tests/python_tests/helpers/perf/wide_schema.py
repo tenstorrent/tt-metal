@@ -243,6 +243,7 @@ DB_SCHEMA = [
     Column("preserve", "bool", True, "configuration"),
     Column("rearm", "bool", True, "configuration"),
     Column("transpose", "bool", True, "configuration"),
+    Column("clear_src", "bool", True, "configuration"),
     Column("in0_tile_r_dim", "int64", True, "configuration"),
     Column("producer_kt", "int64", True, "configuration"),
     Column("reuse_kt", "int64", True, "configuration"),

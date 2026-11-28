@@ -10,9 +10,9 @@
 // so one vector is 4 rows x 8 columns of ONE column parity, Addr>>2 selects the
 // row group, and bit 1 selects even/odd columns.  For a [1, 32] tile only DEST
 // row 0 of each face is live, so lanes 0..7 carry the data and lanes 8..31 read
-// the zeros custom_mm's clear_src left in rows 1..3.  Those lanes are computed
-// and stored back too, but a [1, 32] tile only ever packs row 0, so they are
-// inert.
+// whatever custom_mm left in rows 1..3 (zeros with clear_src, otherwise
+// products of stale SrcB rows).  Those lanes are computed and stored back too,
+// but a [1, 32] tile only ever packs row 0, so they are inert.
 //
 // cos/sin are in the interleaved (Meta) layout, each angle duplicated across
 // the two slots of its pair: cos = (c0,c0,c1,c1,...).  A single even-parity

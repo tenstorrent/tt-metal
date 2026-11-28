@@ -26,7 +26,8 @@
  * @brief Configure the unpack thread for a compressed custom_mm block matmul.
  *
  * @tparam transpose: Transpose the SrcA read, values = <true/false>
- * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>
+ * @tparam clear_src: Zero both SrcB banks once here, values = <true/false>. Must match the clear_src of
+ *                    @ref llk_math_compressed_custom_mm_init.
  * @param operand0: CB of the activations, whose face_r_dim this reads. Its data goes to SrcB.
  * @param operand1: CB of the compressed weights, unused here.
  * @note Call this before @ref llk_unpack_AB_compressed_custom_mm, and again after any other op has run, in

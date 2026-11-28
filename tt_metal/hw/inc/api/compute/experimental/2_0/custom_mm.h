@@ -71,7 +71,7 @@ ALWI void custom_mm_block_init(
     // Match the unpacker's physical ordering, including the source-format
     // caches maintained by current Metal: weights -> SrcA, activations -> SrcB.
     MATH((llk_math_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
-    MATH((_llk_math_custom_mm_init_<transpose, layout>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
+    MATH((_llk_math_custom_mm_init_<transpose, layout, clear_src>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -122,7 +122,8 @@ ALWI void custom_mm_block_init(
         llk_math_pack_sync_init<fp32_dest_acc_en>();
         _llk_math_hw_configure_<fp32_dest_acc_en>(
             static_cast<std::uint32_t>(in1_register_format), unpack_dst_format[in0_id]);
-        _llk_math_custom_mm_init_<transpose, layout>(get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
+        _llk_math_custom_mm_init_<transpose, layout, clear_src>(
+            get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
     }));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
@@ -158,7 +159,7 @@ ALWI void custom_mm_block_init_short(
     constexpr auto in1_register_format = infer_unpack_dst_format_2op<F1, F0>(DST_ACCUM_MODE);
     UNPACK((_llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim, S1.total_num_faces())));
-    MATH((_llk_math_custom_mm_init_<transpose, layout>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
+    MATH((_llk_math_custom_mm_init_<transpose, layout, clear_src>(S0.face_r_dim, ct_dim, S1.total_num_faces())));
 
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
@@ -189,7 +190,8 @@ ALWI void custom_mm_block_init_short(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_init_<transpose, layout>(get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
+        _llk_math_custom_mm_init_<transpose, layout, clear_src>(
+            get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
     }));
 
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
@@ -224,7 +226,8 @@ ALWI void custom_mm_block_init_short(
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
-        _llk_math_custom_mm_init_<transpose, layout>(get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
+        _llk_math_custom_mm_init_<transpose, layout, clear_src>(
+            get_operand_face_r_dim(in0_id), ct_dim, S1.total_num_faces());
     }));
 
     PACK((_llk_pack_custom_mm_init_<layout>(infer_pack_reg_fmt(FO, fp32_dest_acc_en))));

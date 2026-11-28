@@ -792,6 +792,16 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
 
 
 @dataclass
+class CUSTOM_MM_CLEAR_SRC(TemplateParameter):
+    """``CUSTOM_MM_CLEAR_SRC``: the clear_src the custom_mm / compressed_custom_mm unpack and math inits run with."""
+
+    clear_src: bool = True
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool CUSTOM_MM_CLEAR_SRC = {str(self.clear_src).lower()};"
+
+
+@dataclass
 class CUSTOM_MM_LAYOUT(TemplateParameter):
     """``CUSTOM_MM_LAYOUT``: the ckernel::CustomMmDestLayout a custom_mm test kernel runs, as its underlying value."""
 

@@ -68,7 +68,7 @@ ALWI void custom_mm_block_init(
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
     MATH((llk_math_hw_configure<fp32_dest_acc_en>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_custom_mm_init<transpose, layout>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, layout, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, PackMode::Default>(out_cb_id)));
     PACK((llk_pack_hw_configure<fp32_dest_acc_en>(out_cb_id)));
@@ -111,7 +111,7 @@ ALWI void custom_mm_block_init_short(
     const std::uint32_t ct_dim = 1) {
     UNPACK((llk_unpack_AB_custom_mm_init<transpose, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    MATH((llk_math_custom_mm_init<transpose, layout>(in0_cb_id, in1_cb_id, ct_dim)));
+    MATH((llk_math_custom_mm_init<transpose, layout, clear_src>(in0_cb_id, in1_cb_id, ct_dim)));
 
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }

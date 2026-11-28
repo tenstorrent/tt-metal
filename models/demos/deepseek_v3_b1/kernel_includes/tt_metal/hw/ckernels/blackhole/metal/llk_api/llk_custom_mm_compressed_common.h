@@ -264,7 +264,8 @@ template <
 inline void custom_mm_compressed_block_init_short(
     const uint32_t in0_cb_id, const uint32_t in1_cb_id, const uint32_t out_cb_id) {
     llk_unpack_AB_custom_mm_compressed_init<use_barrier, ct_dim>(in0_cb_id, in1_cb_id);
-    MATH((llk_math_custom_mm_init<false, dest_layout>(in0_cb_id, in1_cb_id, ct_dim)));
+    // The unpack init above does not clear SrcB, so math has no cleared bank to give back.
+    MATH((llk_math_custom_mm_init<false, dest_layout, false /* clear_src */>(in0_cb_id, in1_cb_id, ct_dim)));
     PACK((ckernel::_llk_pack_custom_mm_init_<dest_layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 

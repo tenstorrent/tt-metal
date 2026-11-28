@@ -45,7 +45,7 @@ ALWI void compressed_custom_mm_block_init_short(
         S1.face_r_dim == 16 && S1.face_c_dim == 16 && S1.num_faces_r_dim == 2 && S1.num_faces_c_dim == 2,
         "compressed_custom_mm: in1 tile shape must be [32, 32]");
     UNPACK((_llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(S0.face_r_dim)));
-    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout>()));
+    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout, clear_src>()));
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 
@@ -65,7 +65,7 @@ ALWI void compressed_custom_mm_block_init_short(
         const auto in0_id = get_operand_id(in0_cb_id);
         _llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(get_operand_face_r_dim(in0_id));
     }));
-    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout>()));
+    MATH((_llk_math_compressed_custom_mm_init_<transpose, layout, clear_src>()));
     PACK((_llk_pack_custom_mm_init_<layout>(pack_src_format[get_output_id(out_cb_id)])));
 }
 

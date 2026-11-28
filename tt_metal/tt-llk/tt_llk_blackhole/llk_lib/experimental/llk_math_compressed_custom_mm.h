@@ -51,9 +51,10 @@ inline void _llk_math_compressed_custom_mm_mop_config_()
  * @tparam transpose: Transpose in1 faces during the multiply.
  * @tparam layout: DEST layout of the output tiles: Default, Dense or Compact, see CustomMmDestLayout. Pack with the
  *                 same layout through @ref _llk_pack_custom_mm_init_.
+ * @tparam clear_src: Must match the clear_src of the unpack init: give back the SrcB bank its first clear hands over.
  * @note On the unpack thread, pair with @ref _llk_unpack_AB_compressed_custom_mm_init_.
  */
-template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default>
+template <bool transpose = false, CustomMmDestLayout layout = CustomMmDestLayout::Default, bool clear_src = true>
 inline void _llk_math_compressed_custom_mm_init_()
 {
     // There is no split accumulation: finalizing it after a skipped (bfp0) weight tile waits on a SrcA bank the
@@ -62,6 +63,14 @@ inline void _llk_math_compressed_custom_mm_init_()
     // The same address mods as plain custom_mm: only the per-tile metadata walk in the execute differs.
     custom_mm_configure_addrmod<transpose, layout>();
     _llk_math_compressed_custom_mm_mop_config_();
+
+    if constexpr (clear_src)
+    {
+        // Give back the SrcB bank that the unpack init's first clear handed over.
+        // MATH first, so the previous op's last SrcB flip has landed before SRCB_VLD is tested.
+        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCB_VLD);
+        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+    }
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 }

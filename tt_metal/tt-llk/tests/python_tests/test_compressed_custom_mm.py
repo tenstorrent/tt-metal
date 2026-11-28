@@ -54,6 +54,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
+    CUSTOM_MM_CLEAR_SRC,
     IN_FACE_DIMS,
     NUM_FACES,
     TILE_COUNT,
@@ -149,6 +150,7 @@ def _run_compressed_custom_mm(
     run_types=None,
     loop_factor=1,
     max_ulp=None,
+    clear_src=True,
 ):
     ct_dim, kt_dim, in0_rows = ct_kt_rows
     rt_dim = 1  # compressed_custom_mm contract: rt_dim is always 1
@@ -206,7 +208,7 @@ def _run_compressed_custom_mm(
         test_config_kwargs=dict(
             test_name="sources/compressed_custom_mm_test.cpp",
             formats=formats,
-            templates=[],
+            templates=[CUSTOM_MM_CLEAR_SRC(clear_src)],
             runtimes=[
                 # num_faces_A is in0's active face count and num_faces_B is in1's full 4; the kernel CROSSES them into the
                 # unpB / unpA slots. num_faces is the pack count.
@@ -260,6 +262,12 @@ def _run_compressed_custom_mm(
         formats.output_format,
         **accuracy_gate,
     ), "Assert against golden failed"
+
+
+# Every other case runs the default clear_src = true; this one covers the init without the SrcB clear.
+@blackhole_only
+def test_compressed_custom_mm_no_clear_src():
+    _run_compressed_custom_mm(COMPRESSED_MM_FORMATS[0], (2, 2, 1), clear_src=False)
 
 
 @blackhole_only
