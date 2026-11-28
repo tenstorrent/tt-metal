@@ -49,7 +49,16 @@ static void open_and_close_device() {
     }
 }
 
+// The Quasar simulator library initializes once per load and stays loaded after the cluster closes.
+static bool on_quasar_simulator() {
+    auto& context = MetalContext::instance();
+    return context.rtoptions().get_simulator_enabled() && context.get_cluster().arch() == tt::ARCH::QUASAR;
+}
+
 TEST(TensixReleaseOwnership, BasicReleaseOwnership) {
+    if (on_quasar_simulator()) {
+        GTEST_SKIP() << "Reopens the cluster in one process, which the Quasar simulator does not support";
+    }
     // Open and close a device
     open_and_close_device();
 
@@ -61,6 +70,9 @@ TEST(TensixReleaseOwnership, BasicReleaseOwnership) {
 }
 
 TEST(TensixReleaseOwnership, ReleaseOwnershipWithSubprocess) {
+    if (on_quasar_simulator()) {
+        GTEST_SKIP() << "Reopens the cluster in one process, which the Quasar simulator does not support";
+    }
     // Open and close a device in the parent process
     open_and_close_device();
 
