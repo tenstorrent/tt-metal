@@ -1,0 +1,55 @@
+Q2227  base       ok=1 cores=1 med=635.0 B=569 N=279 T0=347 T1=160 T2=360
+Q2227  rlw        ok=1 cores=1 med=563.0 B=508 N=243 T0=288 T1=133 T2=217
+Q2221  rlw        ok=1 cores=32 med=1053.0 B=1050 N=658 T0=705 T1=304 T2=391
+Q2221  base       ok=1 cores=32 med=1118.0 B=1113 N=682 T0=757 T1=327 T2=551
+Q2194  base       ok=1 cores=16 med=1038.0 B=1027 N=603 T0=681 T1=259 T2=507
+Q2194  rlw        ok=1 cores=16 med=974.0 B=969 N=572 T0=614 T1=230 T2=333
+F318   rlw        ok=1 cores=32 med=1469.0 B=1466 N=790 T0=862 T1=1126 T2=384
+F318   base       ok=1 cores=32 med=1521.0 B=1516 N=816 T0=936 T1=1181 T2=541
+F320   base       ok=1 cores=49 med=1767.0 B=1764 N=1054 T0=1180 T1=1426 T2=545
+F320   rlw        ok=1 cores=49 med=1699.0 B=1697 N=1020 T0=1089 T1=1353 T2=387
+Q2229  rlw        ok=1 cores=4 med=1301.0 B=1237 N=476 T0=499 T1=927 T2=238
+Q2229  base       ok=1 cores=4 med=1360.0 B=1284 N=501 T0=565 T1=979 T2=403
+Q2231  base       ok=1 cores=4 med=1050.0 B=982 N=509 T0=563 T1=661 T2=401
+Q2231  rlw        ok=1 cores=4 med=994.0 B=916 N=469 T0=501 T1=607 T2=237
+Q2228 rlw FAIL (log /tmp/lcsbench.b9LP)
+Q2228  base       ok=1 cores=4 med=1413.0 B=1361 N=534 T0=646 T1=1077 T2=399
+Q2230  base       ok=1 cores=4 med=1051.0 B=978 N=539 T0=640 T1=234 T2=402
+Q2230 rlw FAIL (log /tmp/lcsbench.AVg2)
+F321 rlw FAIL (log /tmp/lcsbench.RKWn)
+F321 base FAIL (log /tmp/lcsbench.5NYy)
+Q2185  base       ok=1 cores=110 med=34692.0 B=34653 N=15879 T0=16004 T1=12467 T2=34078
+Q2185 rlw FAIL (log /tmp/lcsbench.SEI4)
+P39 rlw FAIL (log /tmp/lcsbench.Vp6q)
+P39    base       ok=1 cores=110 med=17192.0 B=17153 N=16646 T0=16764 T1=15971 T2=16784
+Q2203 base FAIL (log /tmp/lcsbench.ypec)
+Q2203  rlw        ok=1 cores=64 med=1176.0 B=1172 N=776 T0=826 T1=303 T2=390
+Q2189  rlw        ok=1 cores=1 med=54056.0 B=53982 N=26701 T0=27025 T1=27024 T2=27104
+Q2189 base FAIL (log /tmp/lcsbench.rNe0)
+Q2228 rlw FAIL (log /tmp/lcsbench.z0sH)
+Q2230  rlw        ok=1 cores=4 med=979.0 B=901 N=498 T0=553 T1=204 T2=244
+F321   rlw        ok=1 cores=1 med=893.0 B=804 N=432 T0=486 T1=179 T2=218
+F321   base       ok=1 cores=1 med=921.0 B=826 N=433 T0=539 T1=210 T2=379
+Q2185  rlw        ok=1 cores=110 med=35004.0 B=34958 N=15443 T0=15567 T1=12136 T2=34256
+P39    rlw        ok=1 cores=110 med=16887.0 B=16840 N=16345 T0=16444 T1=15735 T2=16487
+Q2203  base       ok=1 cores=64 med=1244.0 B=1241 N=811 T0=887 T1=330 T2=555
+Q2189 base FAIL (log /tmp/lcsbench.ahvk)
+Q2228  rlw        ok=1 cores=4 med=1353.0 B=1271 N=495 T0=556 T1=1010 T2=234
+Q2189  base       ok=1 cores=1 med=54060.0 B=53999 N=26700 T0=27044 T1=27040 T2=27113
+F317   rlw        ok=1 cores=110 med=366317.0 B=366281 N=358127 T0=358161 T1=358776 T2=349047
+F317 base FAIL (log /tmp/lcsbench.z1Sa)
+F317   base       ok=1 cores=110 med=364315.0 B=364268 N=353248 T0=353308 T1=353932 T2=348679
+Q2198 base_rw FAIL (log /tmp/lcsbench.ZBcB)
+Q2221 base_rw FAIL (log /tmp/lcsbench.JzBQ)
+F318 base_rw FAIL (log /tmp/lcsbench.FWsS)
+Q2198  base_rw    ok=1 cores=1 med=903.0 B=848 N=441 T0=519 T1=161 T2=359
+Q2221  base_rw    ok=1 cores=32 med=1067.0 B=1063 N=654 T0=726 T1=329 T2=560
+F318   base_rw    ok=1 cores=32 med=1492.0 B=1492 N=781 T0=912 T1=1154 T2=544
+Q2198  chain_caller ok=1 cores=1 med=884.0 B=821 N=441 T0=484 T1=141 T2=215
+Q2221  chain_caller ok=1 cores= med= B= N= T0= T1= T2=
+F318   chain_caller ok=1 cores=32 med=1456.0 B=1456 N=784 T0=860 T1=1113 T2=381
+Q2229  chain_caller ok=1 cores=4 med=1303.0 B=1241 N=478 T0=515 T1=924 T2=234
+Q2221  chain_caller ok=1 cores=32 med=1055.0 B=1055 N=665 T0=710 T1=310 T2=387
+Q2231  chain_caller ok=1 cores=4 med=991.0 B=919 N=475 T0=504 T1=611 T2=239
+Q2228  chain_caller ok=1 cores=4 med=1372.0 B=1301 N=501 T0=610 T1=1049 T2=394
+Q2227  chain_caller ok=1 cores= med= B= N= T0= T1= T2=

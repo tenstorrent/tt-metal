@@ -1,0 +1,23 @@
+Q2227  base       ok=1 cores=1 med=627.0 B=570 N=278 T0=342 T1=161 T2=358
+Q2227  raw_lean   ok=1 cores=1 med=620.0 B=560 N=280 T0=322 T1=133 T2=217
+Q2221  base       ok=1 cores=32 med=1116.0 B=1113 N=691 T0=766 T1=328 T2=553
+Q2221  raw_lean   ok=1 cores=32 med=1099.0 B=1097 N=698 T0=748 T1=299 T2=387
+Q2194  base       ok=1 cores=16 med=1033.0 B=1027 N=599 T0=672 T1=255 T2=490
+Q2194  raw_lean   ok=1 cores=16 med=1019.0 B=1018 N=607 T0=652 T1=229 T2=324
+F318   base       ok=1 cores=32 med=1525.0 B=1525 N=819 T0=944 T1=1188 T2=544
+F318   raw_lean   ok=1 cores=32 med=1513.0 B=1513 N=824 T0=903 T1=1163 T2=387
+F320   base       ok=1 cores=49 med=1766.0 B=1759 N=1054 T0=1175 T1=1418 T2=547
+F320   raw_lean   ok=1 cores=49 med=1746.0 B=1744 N=1057 T0=1121 T1=1383 T2=385
+Q2229 base FAIL (log /tmp/lcsbench.GeJn)
+Q2229  raw_lean   ok=1 cores=4 med=1347.0 B=1272 N=508 T0=540 T1=967 T2=237
+Q2231  base       ok=1 cores=4 med=1054.0 B=979 N=503 T0=567 T1=662 T2=398
+Q2231  raw_lean   ok=1 cores=4 med=1039.0 B=964 N=501 T0=548 T1=647 T2=245
+Q2228  base       ok=1 cores=4 med=1422.0 B=1373 N=531 T0=650 T1=1090 T2=389
+Q2228  raw_lean   ok=1 cores=4 med=1399.0 B=1324 N=537 T0=590 T1=1043 T2=236
+Q2230 base FAIL (log /tmp/lcsbench.hVrx)
+Q2230  raw_lean   ok=1 cores=4 med=1030.0 B=953 N=540 T0=595 T1=207 T2=251
+F321 base FAIL (log /tmp/lcsbench.b5Up)
+F321   raw_lean   ok=1 cores=1 med=899.0 B=811 N=433 T0=490 T1=179 T2=218
+Q2229  base       ok=1 cores=4 med=1369.0 B=1289 N=503 T0=569 T1=987 T2=410
+Q2230  base       ok=1 cores=4 med=1052.0 B=985 N=540 T0=653 T1=228 T2=406
+F321 base FAIL (log /tmp/lcsbench.kKgh)

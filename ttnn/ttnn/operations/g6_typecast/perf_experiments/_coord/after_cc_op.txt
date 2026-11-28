@@ -1,0 +1,14 @@
+Q2198 op FAIL (log /tmp/g6bench.pi4T)
+2026-11-28 01:54:57.712 | ERROR    | __main__:main:466 - Tracy capture tool (tracy-capture) exited with code 3 before writing a trace. The profiling stream crashed the capture tool, so NO .tracy was produced. This is a capture-side failure -- the test itself may have passed. Re-run under a debugger/ASan build of tracy-capture to root-cause.
+========================================
+SAFE_PYTEST_RESULT: FAIL (pytest exit code: 70; wrapper exit: 1)
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m08s (8s total, device-lock-acquired -> exit)
+Q2221  op    ok=1 cores=32 med=1092.0 B=1089 N=690 T0=744 T1=308 T2=383
+F318   op    ok=1 cores=32 med=1501.0 B=1501 N=819 T0=896 T1=1152 T2=381
+Q2229  op    ok=1 cores= med= B= N= T0= T1= T2=
+Q2231  op    ok=1 cores=4 med=1044.0 B=965 N=508 T0=550 T1=649 T2=238
+Q2185  op    ok=1 cores=110 med=34926.0 B=34877 N=15490 T0=15605 T1=12600 T2=34296
+Q2198  op    ok=1 cores=1 med=935.0 B=870 N=474 T0=527 T1=140 T2=216
+Q2229  op    ok=1 cores=4 med=1351.0 B=1271 N=507 T0=546 T1=956 T2=239
+Q2227  op    ok=1 cores=1 med=607.0 B=556 N=274 T0=322 T1=141 T2=219
