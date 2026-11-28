@@ -5,15 +5,25 @@
 """Phase 2 (pre-test reset stability loop) and phase 4 (post-test reset)."""
 from __future__ import annotations
 
+import shlex
 import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
-from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
+from .common import (
+    call_hook,
+    emit_result,
+    emit_running,
+    log,
+    print_phase_summary,
+    run,
+    run_with_timeout,
+    write_command_log,
+)
 from .eth_status import read_pcie_functions
 from .galaxy import EXPECTED_BDFS, EXPECTED_CHIP_COUNT, format_bdf
-from .model import FAIL, PASS, WARN, Check, Phase
+from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import validate_snapshot
 
@@ -63,6 +73,18 @@ def recount_chips(sys_root: Path = Path("/sys")) -> tuple[int, list[str]]:
     return len(answering), [format_bdf(b) for b in EXPECTED_BDFS if b not in answering]
 
 
+def reset_gate(cmd: str | None) -> str:
+    """Why the --reset-gate command refuses a reset now (its last output line), or "" when it allows it."""
+    if not cmd:
+        return ""
+    try:
+        rc, out, err, _ = run_with_timeout(shlex.split(cmd), 300)
+    except OSError as e:
+        return f"reset gate did not run: {e}"
+    last = (out + err).strip().splitlines()
+    return "" if rc == 0 else f"reset gate: {last[-1] if last else f'rc {rc}'}"
+
+
 def reset_loop(
     tt_smi: str,
     plan: Sequence[str],
@@ -72,9 +94,13 @@ def reset_loop(
     post_reset_phases: list | None = None,
     logs_dir: Path | None = None,
     sys_root: Path = Path("/sys"),
+    gate: str | None = None,
+    hook: str | None = None,
 ) -> None:
     """Run each reset of the plan, then rescan the chips' root ports and recount
-    the chips by BDF.
+    the chips by BDF. Before each reset the *gate* command runs (a refusal skips
+    it and the rest); chips still missing get a second reset, then the *hook*'s
+    "after" event and one more recount.
 
     If `snapshot_out` and `post_reset_phases` are provided, a fresh snapshot is
     taken + validated after each reset iteration, and appended to
@@ -99,8 +125,15 @@ def reset_loop(
         print_phase_summary(sp.name, asdict(sp))
 
     ports = set() if dry_run else set(chip_root_ports(sys_root).values())
-    for i, flag in enumerate(plan):
-        check_name = f"reset_{i+1}_{flag.lstrip('-')}"
+
+    def _glx(check_name: str, flag: str) -> list[str] | None:
+        """One reset as *check_name*, then the rescan and recount: the chips still missing, or None when the reset gate
+        refused it (a SKIP that says why)."""
+        why = "" if dry_run else reset_gate(gate)
+        if why:
+            log(f"{check_name}: reset cannot run: {why}")
+            phase.add(Check(name=check_name, status=SKIP, details=f"reset cannot run: {why}", ip="other"))
+            return None
         emit_running(check_name)
         t0 = time.time()
         cp = run([tt_smi, flag], dry_run=dry_run, capture_output=True, text=True)
@@ -147,12 +180,44 @@ def reset_loop(
                 parts=missing,
             )
         )
+        return missing
+
+    for i, flag in enumerate(plan):
+        check_name = f"reset_{i+1}_{flag.lstrip('-')}"
+        first = len(phase.checks)
+        missing = _glx(check_name, flag)
+        if missing is None:
+            break
+        retried = bool(missing)
+        if missing:  # a second round for chips still missing
+            missing = _glx(f"{check_name}_round2", flag)
+            if missing is None:
+                break
+        if missing:  # still missing: the hook's turn (a caller's site power cycle), then one more rescan and recount
+            outdir = (logs_dir or Path(".")) / check_name
+            rc = call_hook(hook, "after", check_name, FAIL, outdir, dry_run)
+            if hook and not dry_run:
+                rescan_root_ports(ports, sys_root)
+                _, missing = recount_chips(sys_root)
+                said = f"after the hook (rc {rc}): " + (
+                    f"still missing {', '.join(missing)}" if missing else "all back"
+                )
+                phase.add(
+                    Check(name=f"recount_{check_name}", status=FAIL if missing else PASS, details=said, parts=missing)
+                )
+        if retried and not missing:  # brought back by the retry or the hook: what failed before it is a warning
+            for c in phase.checks[first:]:
+                if c.status == FAIL:
+                    c.status, c.details = WARN, f"{c.details} (back after a retry)"
         # Post-reset snapshot: validate the unit's state after this iteration.
         # Skipped on dry-run / offline.
         _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")
         # Bail if a reset broke enumeration — no point chasing the rest
         if missing:
-            log(f"Reset {i+1} broke enumeration ({post_count}/{EXPECTED_CHIP_COUNT}); stopping reset loop")
+            log(
+                f"Reset {i+1} broke enumeration ({EXPECTED_CHIP_COUNT - len(missing)}/{EXPECTED_CHIP_COUNT});"
+                " stopping reset loop"
+            )
             break
 
 
@@ -217,7 +282,14 @@ def fold_post_reset_snapshots(report: dict, post_reset_phases: list[tuple[str, P
         report["phases"]["snapshot"]["status"] = PASS
 
 
-def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Phase, dry_run: bool) -> None:
+def run_post_test_reset(
+    tt_smi_path: str | None,
+    plan: Sequence[str],
+    phase: Phase,
+    dry_run: bool,
+    gate: str | None = None,
+    hook: str | None = None,
+) -> None:
     """Reset the unit between the tests and the triage phase.
 
     Deliberately bare: reset_loop() is called without snapshot_out /
@@ -228,7 +300,7 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     """
     try:
         tt_smi = resolve_tt_smi(tt_smi_path)
-        reset_loop(tt_smi, plan, phase, dry_run)
+        reset_loop(tt_smi, plan, phase, dry_run, gate=gate, hook=hook)
     except Exception as e:
         phase.error = repr(e)
         phase.add(Check(name="post_test_reset", status=FAIL, details=repr(e), ip="other"))
@@ -238,16 +310,23 @@ def run_post_test_reset(tt_smi_path: str | None, plan: Sequence[str], phase: Pha
     # snapshot — but nothing runs after this one, so a reset that broke
     # enumeration here would leave no trace on the verdict. Restate the
     # outcome under a name that counts.
-    broke = [c.name for c in phase.checks if c.status == FAIL]
+    # The last check is the unit's state: a FAIL before it was brought back by a second reset or the hook.
+    broke = [c.name for c in phase.checks if c.status in (FAIL, WARN)]
+    last = phase.checks[-1] if phase.checks else None
+    status, details = PASS, f"unit healthy after {' '.join(plan)}"
+    if last is not None and (
+        last.status == FAIL or (last.status == SKIP and any(c.status == FAIL for c in phase.checks))
+    ):
+        status, details = FAIL, f"post-test reset left the unit degraded: {', '.join(broke)}"
+    elif last is not None and last.status == SKIP:
+        status, details = SKIP, f"did not run: {last.details}"
+    elif broke:
+        status, details = WARN, f"chips back only after a retry ({', '.join(broke)} failed)"
     phase.add(
         Check(
             name="post_test_reset_ok",
-            status=FAIL if broke else PASS,
-            details=(
-                f"post-test reset left the unit degraded: {', '.join(broke)}"
-                if broke
-                else f"unit healthy after {' '.join(plan)}"
-            ),
+            status=status,
+            details=details,
             ip="other",
         )
     )

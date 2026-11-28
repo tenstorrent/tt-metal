@@ -38,7 +38,7 @@ if _SUITE_DIR not in sys.path:
 
 from diag.aer import check_aer, read_aer  # noqa: E402
 from diag.captures import capture_events  # noqa: E402
-from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
+from diag.common import call_hook, default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -58,7 +58,7 @@ from diag.snapshot_checks import validate_snapshot  # noqa: E402
 from diag.sys_triage import SYS_TRIAGE_BIN, run_sys_triage  # noqa: E402
 from diag.triage import TRIAGE_DIR_ENV, TRIAGE_SUBDIR, default_triage_dir, run_triage  # noqa: E402
 from diag.verdict import attribute_power, verdict_lines  # noqa: E402
-from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_stages  # noqa: E402
 
 
 def build_diag_arg_parser() -> argparse.ArgumentParser:
@@ -158,6 +158,18 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep the tray HSCs' under-voltage latches after a run that loaded the chips "
         "(default: read and report them, then clear them once with PMBus CLEAR_FAULTS).",
+    )
+    ap.add_argument(
+        "--stage-order",
+        help="Run only these stages, named in run order: reset, the tier's tests by name, end (the post-test "
+        "reset), eth.",
+    )
+    ap.add_argument("--reset-gate", metavar="CMD", help="Run before each reset; a non-zero exit skips that reset.")
+    ap.add_argument(
+        "--hook",
+        metavar="SCRIPT",
+        help="Called as SCRIPT <event> <step> <status> <outdir>, synchronously: stage-start at the reset and end "
+        "stages, after at a reset that leaves chips missing (then the chips are recounted).",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -268,6 +280,9 @@ def run_diag(
     bmc_user: str | None = None,
     bmc_password: str | None = None,
     hsc_clear: bool = True,
+    stage_order: str | None = None,
+    reset_gate: str | None = None,
+    hook: str | None = None,
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
 ) -> tuple[int, dict]:
@@ -284,6 +299,9 @@ def run_diag(
     if tier not in TIERS:
         raise ValueError(f"unknown tier {tier!r}; expected one of: {', '.join(TIERS)}")
     plan = TIERS[tier]
+    if stage_order is not None:
+        plan = select_stages(plan, stage_order)
+        log(f"--stage-order: running {stage_order}")
     if tt_metal_path is None:
         tt_metal_path = default_tt_metal_path()
 
@@ -305,14 +323,20 @@ def run_diag(
     try:
         if input_snapshot:
             log(f"using input snapshot: {input_snapshot}")
-            snap = json.loads(input_snapshot.read_text())
+            text = input_snapshot.read_text().strip()
+            snap = json.loads(text) if text else {}
         else:
             tt_smi = resolve_tt_smi(tt_smi_path)
             version = detect_tt_smi_version(tt_smi)
             report["tt_smi_version"] = ".".join(str(x) for x in version) if version else None
             log(f"using tt-smi: {tt_smi} (version={report['tt_smi_version']})")
             snap = take_snapshot(tt_smi, snapshot_out)
-        report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        if snap:
+            report["detected_board_rev"] = validate_snapshot(snap, snap_phase)
+        else:  # a caller that took its own snapshot (one stage at a time) passes an empty one: nothing to judge
+            snap_phase.add(
+                Check(name="snapshot_capture", status=SKIP, details=f"not judged: {input_snapshot} is empty")
+            )
     except Exception as e:
         snap_phase.error = repr(e)
         snap_phase.add(Check(name="snapshot_capture", status=FAIL, details=repr(e)))
@@ -346,6 +370,7 @@ def run_diag(
     elif not plan.resets:
         reset_phase.add(Check(name="reset_loop", status=SKIP, details=f"no pre-test resets for tier '{tier}'"))
     else:
+        call_hook(hook, "stage-start", "reset", "-", logs_dir, dry_run)
 
         def _resets() -> None:
             reset_loop(
@@ -356,11 +381,13 @@ def run_diag(
                 snapshot_out=snap_out_for_resets,
                 post_reset_phases=post_reset_phases,
                 logs_dir=logs_dir,
+                gate=reset_gate,
+                hook=hook,
             )
 
         _guarded(reset_phase, "reset_loop", FAIL, _resets)
     # reset_loop prints its own per-reset lines as they run; rollup line only.
-    _finish(report, reset_phase, t0, summary=False)
+    _finish(report, reset_phase, t0, summary=False, all_skip_stays_skip=True)
     fold_post_reset_snapshots(report, post_reset_phases)
     # Taken after the resets, which re-enumerate the chips and so restart their counters.
     aer_before = read_aer() if plan.aer_diff and not dry_run else {}
@@ -419,12 +446,13 @@ def run_diag(
     # Phase 4: post-test reset. Its job is to hand phase 5 a freshly reset unit
     # and to guarantee the triage probes, which open every chip read-write,
     # never run concurrently with the tests.
-    post_test_plan = () if (skip_triage or skip_reset) else plan.post_test_resets
+    post_test_plan = () if skip_reset or (skip_triage and stage_order is None) else plan.post_test_resets
     if post_test_plan:
         post_reset_phase = Phase(name="post_test_reset")
         t0 = time.time()
-        run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run)
-        _finish(report, post_reset_phase, t0, summary=False)
+        call_hook(hook, "stage-start", "end", "-", logs_dir, dry_run)
+        run_post_test_reset(tt_smi_path, post_test_plan, post_reset_phase, dry_run, reset_gate, hook)
+        _finish(report, post_reset_phase, t0, summary=False, all_skip_stays_skip=True)
 
     # Phase 4b: the trays' power after the load and the resets, judged against the
     # reads before them; its causes name why a chip went missing. The latches are
@@ -591,7 +619,13 @@ def run_diag(
 
 
 def main() -> int:
-    args = build_diag_arg_parser().parse_args()
+    ap = build_diag_arg_parser()
+    args = ap.parse_args()
+    if args.stage_order is not None:
+        try:
+            select_stages(TIERS[DEPRECATED_TIER_ALIASES.get(args.tier, args.tier)], args.stage_order)
+        except ValueError as e:
+            ap.error(str(e))
     rc, _report = run_diag(
         tier=args.tier,
         dry_run=args.dry_run,
@@ -614,6 +648,9 @@ def main() -> int:
         bmc_user=args.bmc_user,
         bmc_password=args.bmc_password,
         hsc_clear=not args.no_hsc_clear,
+        stage_order=args.stage_order,
+        reset_gate=args.reset_gate,
+        hook=args.hook,
         output=args.output,
         snapshot_out=args.snapshot_out,
     )

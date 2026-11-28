@@ -27,7 +27,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
 sys.path.insert(0, str(SUITE_DIR))
 
-from tiers import DEPRECATED_TIER_ALIASES, TIERS  # noqa: E402
+from tiers import DEPRECATED_TIER_ALIASES, TIERS, select_stages  # noqa: E402
 
 ACCEPTED = set(TIERS) | set(DEPRECATED_TIER_ALIASES)
 
@@ -145,6 +145,49 @@ class TestDiagRunnerCli(unittest.TestCase):
         # that predates the sys-triage phase, and drops the phase's flags if it
         # is missing. The parser has to stay in that file for the probe to work.
         self.assertIn("--skip-sys-triage", (SUITE_DIR / "diag_runner.py").read_text())
+
+
+class TestStageOrder(unittest.TestCase):
+    def test_reset_only(self):
+        t = select_stages(TIERS["weekly"], "reset")
+        self.assertEqual(
+            (t.resets, t.tests, t.retest, t.post_test_resets, t.eth_status), (TIERS["weekly"].resets, (), (), (), False)
+        )
+
+    def test_tests_and_end(self):
+        t = select_stages(TIERS["weekly"], "gddr_full, eth_link_up,end")
+        self.assertEqual((t.resets, t.tests, t.post_test_resets), ((), ("gddr_full", "eth_link_up"), ("-glx_reset",)))
+
+    def test_unknown_or_out_of_order_is_refused(self):
+        for order in ("busbar", "end,reset", "eth_link_up,gddr_full"):
+            with self.subTest(order), self.assertRaises(ValueError):
+                select_stages(TIERS["weekly"], order)
+
+    def test_cli_flags_parse(self):
+        from diag_runner import build_diag_arg_parser
+
+        a = build_diag_arg_parser().parse_args(
+            ["--tier", "weekly", "--stage-order", "reset", "--reset-gate", "gate --x", "--hook", "/h.sh"]
+        )
+        self.assertEqual((a.stage_order, a.reset_gate, a.hook), ("reset", "gate --x", "/h.sh"))
+
+    def test_empty_input_snapshot_is_not_judged(self):
+        from diag_runner import run_diag
+
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            d = Path(tmp)
+            (d / "snap.json").write_text("")
+            _rc, report = run_diag(
+                "weekly",
+                input_snapshot=d / "snap.json",
+                output=d / "r.json",
+                snapshot_out=d / "s.json",
+                dry_run=True,
+                stage_order="end",
+            )
+        snap = report["phases"]["snapshot"]["checks"]
+        self.assertEqual([c["status"] for c in snap if c["name"] == "snapshot_capture"], ["SKIP"])
+        self.assertIn("post_test_reset", report["phases"])
 
 
 if __name__ == "__main__":

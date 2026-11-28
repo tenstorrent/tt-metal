@@ -164,6 +164,35 @@ DEPRECATED_TIER_ALIASES: dict[str, str] = {
 }
 
 
+STAGES = ("reset", "end", "eth")
+
+
+def select_stages(tier: Tier, order: str) -> Tier:
+    """*tier* cut down to the stages named in *order* (comma-separated; --stage-order): "reset" (its pre-test
+    resets), its tests by name, "end" (its post-test reset) and "eth" (the ETH status read). A stage not named does
+    not run. They must be named in run order; any other order, or a name that is neither a stage nor one of the
+    tier's tests, is a ValueError that names it."""
+    names = [n for n in order.replace(" ", "").split(",") if n]
+    unknown = [n for n in names if n not in STAGES and n not in tier.tests]
+    if unknown:
+        raise ValueError(f"--stage-order {order!r}: {', '.join(unknown)} is neither a stage nor a test of the tier")
+    rank = {n: i for i, n in enumerate(("reset", *tier.tests, "end", "eth"))}
+    if names != sorted(names, key=rank.get):
+        raise ValueError(
+            f"--stage-order {order!r}: the stages run in the order {','.join(sorted(names, key=rank.get))}"
+        )
+    tests = tuple(t for t in tier.tests if t in names)
+    return replace(
+        tier,
+        resets=tier.resets if "reset" in names else (),
+        tests=tests,
+        retest=tuple(t for t in tier.retest if t in tests),
+        post_test_resets=(tier.post_test_resets or RESET_FLAGS) if "end" in names else (),
+        eth_status="eth" in names,
+        eth_summary=tier.eth_summary and "eth" in names,
+    )
+
+
 def _validate() -> None:
     problems = []
     for name, tier in TIERS.items():

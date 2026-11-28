@@ -37,6 +37,28 @@ def run(cmd: list[str], dry_run: bool = False, **kw) -> subprocess.CompletedProc
     return subprocess.run(cmd, **kw)
 
 
+HOOK_TIMEOUT_S = 1800
+
+
+def call_hook(hook: str | None, event: str, step: str, status: str, outdir: Path, dry_run: bool) -> int:
+    """--hook SCRIPT, called as SCRIPT <event> <step> <status> <outdir>, synchronously: its rc (0 with no hook or in a
+    dry run)."""
+    if not hook:
+        return 0
+    if dry_run:
+        log(f"[dry-run] {hook} {event} {step} {status} {outdir}")
+        return 0
+    outdir.mkdir(parents=True, exist_ok=True)
+    try:  # a site power cycle and boot fit in the bound; a hung hook is rc 124
+        return subprocess.run([hook, event, step, status, str(outdir)], check=False, timeout=HOOK_TIMEOUT_S).returncode
+    except subprocess.TimeoutExpired:
+        log(f"hook {hook} {event} {step} timed out after {HOOK_TIMEOUT_S} s")
+        return 124
+    except OSError as e:
+        log(f"hook {hook} did not run: {e}")
+        return 127
+
+
 def as_text(v) -> str:
     """TimeoutExpired carries whatever was buffered; normalize bytes-or-str."""
     if v is None:
