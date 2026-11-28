@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/buffer_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
@@ -322,6 +323,41 @@ FORCE_INLINE void fabric_write_unidir(
     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
     perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes, pkt_hdr);
     noc_async_writes_flushed();
+}
+
+// The Noc overloads below flush on the given NoC. The overloads without a Noc are kept for the Quasar
+// ring_attention_all_gather writer.
+template <typename AddrGenType>
+FORCE_INLINE void fabric_write_unidir(
+    const Noc& noc,
+    uint32_t dest_id,
+    AddrGenType addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    size_t l1_read_addr,
+    uint32_t payload_size_bytes,
+    uint32_t offset = 0) {
+    tt::tt_fabric::linear::to_noc_unicast_write(payload_size_bytes, pkt_hdr, dest_id, addrgen, offset);
+    perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes, pkt_hdr);
+    noc.async_writes_flushed();
+}
+
+template <typename AddrGenType>
+FORCE_INLINE void scatter_fabric_write_unidir(
+    const Noc& noc,
+    uint32_t first_id,
+    uint32_t second_id,
+    AddrGenType addrgen,
+    volatile PACKET_HEADER_TYPE* pkt_hdr,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
+    size_t l1_read_addr,
+    uint16_t payload_size,
+    uint32_t offset0 = 0,
+    uint32_t offset1 = 0) {
+    tt::tt_fabric::linear::to_noc_unicast_scatter_write(
+        payload_size, pkt_hdr, first_id, second_id, addrgen, offset0, offset1);
+    perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size * 2, pkt_hdr);
+    noc.async_writes_flushed();
 }
 
 template <typename AddrGenType>
