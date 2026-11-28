@@ -76,7 +76,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
         }
-        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(bfd_unpack, num_tiles_per_unpack);
+        _llk_unpack_unary_broadcast_operands_init_<UNPACKER_ENGINE_SEL, BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(
+            bfd_unpack, tensor_shape, num_tiles_per_unpack);
 
         PROFILER_SYNC();
     }

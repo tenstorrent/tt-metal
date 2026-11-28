@@ -128,6 +128,7 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @tparam unpack_to_dest: Route unpack to dest (UNP_A) vs SrcB (UNP_B), values = <true/false>
  * @tparam acc_to_dest: The math side accumulates the broadcast into dest; not supported with unpack_to_dest.
  * @param buf_desc_id: Buffer descriptor for the UNPACR source.
+ * @param tensor_shape: Tile shape of the source; only 32x32 is supported.
  * @param num_tiles: Number of tiles in the outer unpack loop.
  * @note On the math thread, pair with @ref _llk_math_eltwise_unary_broadcast_init_ (T1) with matching
  *       BROADCAST_TYPE/EN_32BIT_DEST/unpack_to_dest/acc_to_dest.
@@ -135,8 +136,12 @@ inline void _llk_unpack_unary_broadcast_operands_mop_config_(const std::uint32_t
  * @note @ref _llk_unpack_unary_broadcast_operands_ is the matching execute call on this thread.
  */
 template <std::uint32_t UNP_SEL, BroadcastType BROADCAST_TYPE, bool EN_32BIT_DEST, bool unpack_to_dest = false, bool acc_to_dest = false>
-inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
+inline void _llk_unpack_unary_broadcast_operands_init_(const std::uint32_t buf_desc_id, const TensorShape tensor_shape, const std::uint32_t num_tiles)
 {
+    // The MOP does not scale the L1 tile index by the face count, so only full tiles work (tt-metal #47597).
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+        "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     _llk_unpack_unary_broadcast_operands_mop_config_<UNP_SEL, BROADCAST_TYPE, EN_32BIT_DEST, unpack_to_dest, acc_to_dest>(buf_desc_id, num_tiles);
