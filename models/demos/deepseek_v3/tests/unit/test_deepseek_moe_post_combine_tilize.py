@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 import torch
 from loguru import logger
@@ -149,3 +151,25 @@ def test_deepseek_moe_post_combine_tilize_shard_orientation(device, input_shape,
 
     torch_output = ttnn.to_torch(tt_output).to(torch.bfloat16).reshape(input_shape)
     assert torch.equal(torch_output, torch_input)
+
+
+def test_deepseek_moe_post_combine_tilize_rejects_unaligned_dim_minus_2(device, expect_error):
+    """The output tile-pads dim[-2] while the shard grid is sized from the flat upper dims, so [8, 1, 4, W]
+    would count one shard row where the buffer has eight; most shards would never be written."""
+    output_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=[32, 1024],
+            grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 0))}),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_input = ttnn.from_torch(
+        torch.rand((8, 1, 4, 7168), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
+    )
+    with expect_error(RuntimeError, re.escape("requires dim[-2] (4) to be a multiple of 32")):
+        ttnn.experimental.deepseek_moe_post_combine_tilize(tt_input, output_memory_config=output_memory_config)

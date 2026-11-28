@@ -109,8 +109,9 @@ void kernel_main() {
                 } else {
                     // Read weight value — if zero, skip (but always process at least one
                     // expert so the accumulator gets initialized with valid data)
+                    // The weight is bf16 in the low halfword; the high halfword is page padding.
                     uint32_t weight_val = read_tile_value(cb_weights_id, 0, 0);
-                    skip_expert = (weight_val == 0) && !first_active;
+                    skip_expert = (weight_val & 0x7FFF) == 0 && !first_active;
                 }
 
                 if (skip_expert) {
