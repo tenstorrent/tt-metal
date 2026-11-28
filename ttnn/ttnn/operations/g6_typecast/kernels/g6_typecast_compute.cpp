@@ -18,19 +18,19 @@
 // (Perf 1), so setup is paid once per kernel as the design intends.
 // Conversion arms (typecast.h): bf16->fp32 and bf16->bf8b in the packer; bf16->int32 SFPU truncation;
 // fp32->bf16 SFPU RNE (ties-to-even); uint16->int32 SFPU zero-extend.
-// int32->bf16 is composed as Typecast<Int32,Float32> -> Typecast<Float32,Float16_b> in ONE chain (shared
-// dst-sync window): the direct Int32->Float16_b LLK arm rounds fp32->bf16 ties half-away (SFP_STOCH_RND),
-// so it gets e.g. 257 -> 258 and 33685505 -> 33816576 wrong; torch rounds through float32 with RNE twice.
-// With two SFPU elements the chain re-inits each per tile (their constant registers conflict).
+// int32->bf16: the direct Int32->Float16_b LLK arm rounds fp32->bf16 ties half-away (SFP_STOCH_RND), so it
+// gets e.g. 33685505 -> 33816576 wrong; torch rounds through float32 with RNE twice. Perf 1 replaced the exact
+// but non-hoistable Typecast<Int32,Float32> -> Typecast<Float32,Float16_b> pair (re-init per tile) with ONE
+// custom element, Int32ToBf16Rne (g6_typecast_int32_bf16_sfpu.hpp, raw-LLK justification there).
 
 #include <cstdint>
 #include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/tile_move_copy.h"
 #include "g6_typecast_zones.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "g6_typecast_int32_bf16_sfpu.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
@@ -42,9 +42,7 @@ void kernel_main() {
     using namespace compute_kernel_lib;
     constexpr auto in_df = dfb_l1_format<cb_input_tiles>();
     constexpr auto out_df = dfb_l1_format<cb_output_tiles>();
-    constexpr InputSpec in_spec = input(cb_input_tiles, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block);
-    constexpr OutputSpec out_spec = output(cb_output_tiles, ReservePolicy::Upfront, PushPolicy::AtEnd);
-    // Later blocks: the first block's call already emitted init + reconfig (Caller-owned from then on).
+    // Every block: the caller emitted the inits, hw_startup the data formats (Caller-owned, reconfig disabled).
     constexpr InputSpec in_spec_hoisted = input(
         cb_input_tiles, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block, DataFormatReconfig::Disabled);
     constexpr OutputSpec out_spec_hoisted =
@@ -55,43 +53,31 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_input_tiles, cb_output_tiles);
 
-    // Arm selection: int32 -> bf16 needs the two-step (two-rounding) composition, every other arm is one
-    // Typecast element.
+    // Arm selection: every arm is ONE chain element. int32 -> bf16 uses the custom single-init RNE element
+    // (g6_typecast_int32_bf16_sfpu.hpp, raw-LLK justification there); every other arm is Typecast<in, out>.
     constexpr uint32_t df_int32 = static_cast<uint32_t>(DataFormat::Int32);
-    constexpr uint32_t df_fp32 = static_cast<uint32_t>(DataFormat::Float32);
     constexpr uint32_t df_bf16 = static_cast<uint32_t>(DataFormat::Float16_b);
-    constexpr bool two_step_int32_to_bf16 = in_df == df_int32 && out_df == df_bf16;
+    constexpr bool int32_to_bf16 = in_df == df_int32 && out_df == df_bf16;
+    auto element = []() {
+        if constexpr (int32_to_bf16) {
+            return Int32ToBf16Rne<>{};
+        } else {
+            return Typecast<in_df, out_df>{};
+        }
+    };
     // Perf 1 (lean_compute_startup): the element inits are emitted ONCE by the caller right after hw_startup,
     // and EVERY block, the first included, runs Caller-owned with data-format reconfig disabled:
     // compute_kernel_hw_startup already programmed unpack/math/pack for exactly these two CBs, so the
     // InitReconfigOwner::Chain first call only re-emitted the same reconfig (Q2198 with the lean dataflow:
-    // 903 -> 884 ns; pack thread busy 359 -> ~218 ns). The int32 -> bf16 two-step chain cannot be hoisted
-    // (two SFPU inits share a constant register) and keeps the chain-owned init every block.
-    auto convert = [&](auto owner_tag, const auto& shape, auto copy, auto pack) {
-        constexpr InitReconfigOwner owner = decltype(owner_tag)::value;
-        if constexpr (two_step_int32_to_bf16) {
-            (void)owner;
-            eltwise_chain<InitReconfigOwner::Chain>(
-                shape, copy, Typecast<df_int32, df_fp32>{}, Typecast<df_fp32, df_bf16>{}, pack);
-        } else {
-            eltwise_chain<owner>(shape, copy, Typecast<in_df, out_df>{}, pack);
-        }
-    };
-    using ChainOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Chain>;
-    using CallerOwned = std::integral_constant<InitReconfigOwner, InitReconfigOwner::Caller>;
+    // 903 -> 884 ns; pack thread busy 359 -> ~218 ns).
+    copy_init(cb_input_tiles);
+    decltype(element())::init();
 
-    if constexpr (!two_step_int32_to_bf16) {
-        copy_init(cb_input_tiles);
-        typecast_tile_init<in_df, out_df>();
-    }
     G6_ZONE("CONVERT");
     for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
         const uint32_t block_extent = (core_tiles - done < block_tiles) ? (core_tiles - done) : block_tiles;
         const auto shape = IterationShape::tiles(block_extent).block_size(block_extent);
-        if (two_step_int32_to_bf16 && done == 0) {
-            convert(ChainOwned{}, shape, CopyTile<in_spec>{dfb_in}, PackTile<out_spec>{dfb_out});
-        } else {
-            convert(CallerOwned{}, shape, CopyTile<in_spec_hoisted>{dfb_in}, PackTile<out_spec_hoisted>{dfb_out});
-        }
+        eltwise_chain<InitReconfigOwner::Caller>(
+            shape, CopyTile<in_spec_hoisted>{dfb_in}, element(), PackTile<out_spec_hoisted>{dfb_out});
     }
 }
