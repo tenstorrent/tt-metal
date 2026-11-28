@@ -177,7 +177,6 @@ target_sources(
             pad/pad_nanobind.hpp
             pad/device/pad_device_operation.hpp
             pad/device/pad_device_operation_types.hpp
-            pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp
             pad/device/pad_rm_reader_writer_multi_core_default_program_factory.hpp
             pad/device/pad_rm_reader_writer_program_factory.hpp
             pad/device/pad_rm_sharded_height_only_program_factory.hpp

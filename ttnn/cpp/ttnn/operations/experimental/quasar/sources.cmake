@@ -114,7 +114,6 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     # pad
     pad/pad.cpp
     pad/device/pad_device_operation.cpp
-    pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
     pad/device/pad_rm_reader_writer_multi_core_default_program_factory.cpp
     pad/device/pad_rm_reader_writer_program_factory.cpp
     pad/device/pad_rm_sharded_height_only_program_factory.cpp

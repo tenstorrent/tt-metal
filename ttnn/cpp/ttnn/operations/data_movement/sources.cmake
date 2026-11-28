@@ -62,7 +62,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     non_zero_indices/device/non_zero_indices_program_factory.cpp
     non_zero_indices/non_zero_indices.cpp
     pad/device/pad_device_operation.cpp
-    pad/device/pad_rm_reader_writer_multi_core_program_factory.cpp
     pad/device/pad_rm_reader_writer_multi_core_default_program_factory.cpp
     pad/device/pad_rm_reader_writer_program_factory.cpp
     pad/device/pad_rm_sharded_height_only_program_factory.cpp

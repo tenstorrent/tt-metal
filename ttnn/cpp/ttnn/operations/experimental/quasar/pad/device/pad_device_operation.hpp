@@ -13,7 +13,6 @@
 
 #include "ttnn/operations/experimental/quasar/pad/device/pad_device_operation_types.hpp"
 
-#include "ttnn/operations/experimental/quasar/pad/device/pad_rm_reader_writer_multi_core_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_rm_reader_writer_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_rm_sharded_height_only_program_factory.hpp"
@@ -29,7 +28,6 @@ struct PadDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        PadRmReaderWriterMultiCoreProgramFactory,
         PadRmReaderWriterMultiCoreDefaultProgramFactory,
         PadRmReaderWriterProgramFactory,
         PadRmShardedHeightOnlyProgramFactory,

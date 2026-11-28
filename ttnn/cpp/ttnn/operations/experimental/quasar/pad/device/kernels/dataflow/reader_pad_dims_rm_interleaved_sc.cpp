@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 port of pad's row-major reader, shared by PadRmReaderWriterProgramFactory (single core)
-// and PadRmReaderWriterMultiCoreProgramFactory (resnet-shaped multi core).  The device-side NoC +
-// TensorAccessor logic is identical to the legacy reader_pad_dims_rm_interleaved.cpp; only the
-// resource bindings are migrated to the Metal 2.0 namespaces (dfb::/tensor::/args::).
+// Metal 2.0 port of pad's row-major reader, used by PadRmReaderWriterProgramFactory (single core).
+// The device-side NoC + TensorAccessor logic is identical to the legacy
+// reader_pad_dims_rm_interleaved.cpp; only the resource bindings are migrated to the Metal 2.0
+// namespaces (dfb::/tensor::/args::).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
