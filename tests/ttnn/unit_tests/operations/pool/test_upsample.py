@@ -423,6 +423,45 @@ def test_bilinear_multi_core(
     assert passing
 
 
+@pytest.mark.parametrize(
+    "batch_size, num_channels, height, width, scale_h, scale_w",
+    (
+        (1, 64, 32, 32, 2, 2),
+        (1, 64, 64, 32, 2, 2),
+        (2, 32, 32, 32, 2, 2),
+        (1, 32, 16, 32, 2, 3),
+    ),
+)
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_bilinear_interleaved_autoshard_layout(
+    device, batch_size, num_channels, height, width, scale_h, scale_w, layout
+):
+    # the interleaved input is auto height-sharded across the cores, so a tiled input needs shards of whole tiles
+    # whatever N*H*W / num_cores comes out to on the device grid
+    torch.manual_seed(0)
+    torch_input_nhwc = torch.rand((batch_size, height, width, num_channels), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_nhwc, device=device, layout=layout)
+    torch_result = golden_upsample(input_tensor=torch_input_nhwc, scale_factor=(scale_h, scale_w), mode="bilinear")
+
+    output_tensor = ttnn.to_torch(ttnn.upsample(input_tensor, (scale_h, scale_w), mode="bilinear"))
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
+    logger.info(pcc_msg)
+    assert torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=5e-2)
+    assert passing
+
+
+@pytest.mark.parametrize("input_shape_nhwc", [(1, 8, 5, 32), (1, 32, 32, 16)])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_bilinear_rejects_padded_tile_input(device, input_shape_nhwc, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.rand(input_shape_nhwc, dtype=torch.bfloat16), device=device, layout=ttnn.TILE_LAYOUT
+    )
+    with expect_error(RuntimeError, "Tiled input must be tile-aligned"):
+        ttnn.upsample(input_tensor, 2, mode="bilinear")
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "scale_h, scale_w",

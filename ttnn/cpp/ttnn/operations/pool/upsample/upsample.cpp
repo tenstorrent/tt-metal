@@ -70,8 +70,13 @@ static tt::tt_metal::MemoryConfig compute_bilinear_autoshard_memory_config(const
     const uint32_t total_input_sticks = input_shape[0] * input_shape[1] * input_shape[2];
     const uint32_t max_num_cores = compute_grid_size.x * compute_grid_size.y;
     TT_FATAL(total_input_sticks > 0, "upsample: input shape {} must be non-empty", input_shape);
-    const uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
-    const uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
+    uint32_t num_shards = std::min(max_num_cores, total_input_sticks);
+    uint32_t shard_height = tt::round_up(total_input_sticks, num_shards) / num_shards;
+    if (input_tensor.layout() == tt::tt_metal::Layout::TILE) {
+        // a tiled shard must hold whole tiles, so round the height up to the tile height and use fewer cores
+        shard_height = tt::round_up(shard_height, input_tensor.tensor_spec().tile().get_height());
+        num_shards = tt::div_up(total_input_sticks, shard_height);
+    }
 
     const tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec(
         tt::tt_metal::num_cores_to_corerangeset(num_shards, compute_grid_size, true),
@@ -132,6 +137,12 @@ ttnn::Tensor upsample(
 
     // For bilinear mode, call halo preprocessing step before the upsample operation
     if (mode == "bilinear") {
+        // same check as the device op, done here because the autoshard and halo below run before it
+        TT_FATAL(
+            input_tensor.layout() != tt::tt_metal::Layout::TILE ||
+                input_tensor.padded_shape() == input_tensor.logical_shape(),
+            "Tiled input must be tile-aligned (no padding difference)");
+
         // Autoshard if needed
         ttnn::Tensor input_for_halo = input_tensor;
         tt::tt_metal::MemoryConfig output_mem_config_to_use = mem_config;
