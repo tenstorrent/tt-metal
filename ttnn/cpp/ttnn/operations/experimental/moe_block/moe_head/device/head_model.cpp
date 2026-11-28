@@ -127,6 +127,7 @@ std::vector<uint32_t> HeadModel::segment_order(const Coord& coord) const {
     const auto [shards, carry] = shard_order(coord);
     const uint32_t segments = x_segments_per_shard;
     std::vector<uint32_t> out;
+    out.reserve(shards.size() * segments);
     for (uint32_t segment = 0; segment < segments; ++segment) {  // (my own shard's, in K order)
         out.push_back(shards[0] * segments + segment);
     }
