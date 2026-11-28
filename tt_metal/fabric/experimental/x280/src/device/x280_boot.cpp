@@ -13,6 +13,7 @@
 #include "x280_address_map.h"
 #include "x280_hart_protocol.h"
 
+#include <array>
 #include <fstream>
 
 namespace x280::detail {
@@ -120,6 +121,64 @@ void TileImpl::set_reset_vectors_unlocked(uint64_t entry_addr) {
                 "ASIC reset.");
         }
     }
+}
+
+void TileImpl::set_rnmi_handlers_unlocked(bool install) {
+    const auto tile = core();
+    const uint64_t entry = install ? X280_IDLE_RNMI_ENTRY_ADDR : 0;
+    const uint64_t exc = install ? X280_IDLE_RNMI_EXC_ADDR : 0;
+    const std::array<uint32_t, 4> words = {
+        static_cast<uint32_t>(entry),
+        static_cast<uint32_t>(entry >> 32),
+        static_cast<uint32_t>(exc),
+        static_cast<uint32_t>(exc >> 32)};
+
+    transport().write_reg32(id().chip_id, tile, kRnmiTrigger, 0);
+    for (uint32_t hart = 0; hart < kHartsPerTile; hart++) {
+        const uint64_t base = kRnmiHandlerBase + hart * kRnmiHandlerStride;
+        for (uint32_t i = 0; i < words.size(); i++) {
+            transport().write_reg32(id().chip_id, tile, base + i * sizeof(uint32_t), words[i]);
+        }
+    }
+
+    const uint32_t trigger = transport().read_reg32(id().chip_id, tile, kRnmiTrigger);
+    if (trigger != 0) {
+        fail("RNMI trigger word did not clear: " + format_readback_values(0, trigger) + ". Reset was not released.");
+    }
+    for (uint32_t hart = 0; hart < kHartsPerTile; hart++) {
+        const uint64_t base = kRnmiHandlerBase + hart * kRnmiHandlerStride;
+        for (uint32_t i = 0; i < words.size(); i++) {
+            const uint32_t seen = transport().read_reg32(id().chip_id, tile, base + i * sizeof(uint32_t));
+            if (seen != words[i]) {
+                fail(
+                    "RNMI handler word " + std::to_string(i) + " of hart " + std::to_string(hart) +
+                    " did not take: " + format_readback_values(words[i], seen) +
+                    ". Reset was not released: a stray RNMI would jump to an unverified address.");
+            }
+        }
+    }
+}
+
+std::string TileImpl::rnmi_not_installed_unlocked() const {
+    const auto tile = core();
+    for (uint32_t hart = 0; hart < kHartsPerTile; hart++) {
+        const uint64_t base = kRnmiHandlerBase + hart * kRnmiHandlerStride;
+        const uint64_t entry = transport().read_reg32(id().chip_id, tile, base + 0) |
+                               (static_cast<uint64_t>(transport().read_reg32(id().chip_id, tile, base + 4)) << 32);
+        const uint64_t exc = transport().read_reg32(id().chip_id, tile, base + 8) |
+                             (static_cast<uint64_t>(transport().read_reg32(id().chip_id, tile, base + 12)) << 32);
+        if (entry != X280_IDLE_RNMI_ENTRY_ADDR || exc != X280_IDLE_RNMI_EXC_ADDR) {
+            return "hart " + std::to_string(hart) + " RNMI handlers are " + hex(entry) + " / " + hex(exc) +
+                   ", not the resident idle's " + hex(X280_IDLE_RNMI_ENTRY_ADDR) + " / " +
+                   hex(X280_IDLE_RNMI_EXC_ADDR) + ": the tile was booted without them";
+        }
+    }
+    const uint64_t marker = transport().read_u64(id().chip_id, tile, X280_IDLE_RNMI_MAGIC_ADDR);
+    if (!idle_rnmi_marker_matches(marker)) {
+        return "the resident idle's RNMI marker reads " + hex(marker) + ", not " + hex(X280_IDLE_RNMI_MAGIC) +
+               ": the idle in LIM does not carry this runtime's handler";
+    }
+    return {};
 }
 
 void TileImpl::zero_hart_protocol_unlocked() {

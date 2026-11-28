@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -260,6 +261,21 @@ TEST(IdleImage, RejectsAnEmptyImage) {
 // UMD sorts its L2CPU cores by Y, giving {(8,3),(8,5),(8,7),(8,9)}; the hardware
 // numbering is {0:(8,3), 1:(8,9), 2:(8,5), 3:(8,7)}. Conflating them selects the
 // wrong tile while looking entirely plausible.
+TEST(IdleImage, TheRnmiEntryIsRecognisedByItsMarker) {
+    std::vector<uint8_t> image(0x300, 0);
+    EXPECT_FALSE(idle_image_has_rnmi_entry(image.data(), image.size()));
+    const uint64_t marker = X280_IDLE_RNMI_MAGIC;
+    std::memcpy(image.data() + X280_IDLE_RNMI_MAGIC_OFFSET, &marker, sizeof(marker));
+    EXPECT_TRUE(idle_image_has_rnmi_entry(image.data(), image.size()));
+    // An image that ends before the exception entry cannot carry the handler.
+    EXPECT_FALSE(idle_image_has_rnmi_entry(image.data(), X280_IDLE_RNMI_EXC_OFFSET));
+    EXPECT_FALSE(idle_image_has_rnmi_entry(nullptr, image.size()));
+    EXPECT_TRUE(idle_rnmi_marker_matches(marker));
+    // Another protocol version's handler is not this runtime's.
+    EXPECT_FALSE(idle_rnmi_marker_matches(marker ^ (1ull << 32)));
+    EXPECT_FALSE(idle_rnmi_marker_matches(~0ull));
+}
+
 TEST(TileNumbering, MatchesTheDocumentedTable) {
     EXPECT_EQ(hw_l2cpu_from_noc0(8, 3), 0);
     EXPECT_EQ(hw_l2cpu_from_noc0(8, 9), 1);

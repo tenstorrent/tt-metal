@@ -13,6 +13,7 @@
 #include <compare>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace x280 {
@@ -38,6 +39,12 @@ struct ActiveRunRequest {
     // previous run's block, which LIM keeps.
     uint64_t args_addr = 0;
     uint64_t args_bytes = 0;
+
+    // Opt-in escalation. When the bounded cleanup of this session times out
+    // (a hart does not answer STOP, or does not re-arm resident idle), the
+    // runtime revives all four harts with an RNMI instead of latching the tile
+    // unhealthy. The runtime's destructor sweep honours it too.
+    bool revive_on_cleanup_timeout = false;
 };
 
 bool hart_running(const HartState& hart, uint64_t run_value);
@@ -124,9 +131,95 @@ enum class CleanupOutcome {
     UnknownSession,
     AlreadyRestoring,
     Failed,
+    // The session did not answer within the bound and its request opted in to
+    // revive_on_cleanup_timeout: every hart was taken back to resident idle by
+    // an RNMI. The tile is healthy; the image did not complete its contract.
+    Revived,
 };
 
 const char* to_string(CleanupOutcome outcome);
+
+// ---------------------------------------------------------------------------
+// Revive: RNMI back to resident idle
+// ---------------------------------------------------------------------------
+
+inline constexpr uint32_t kAllHartsMask = (1u << kHartsPerTile) - 1;
+
+struct ReviveRequest {
+    // Bit h selects hart h. Must be all four harts while a session is live:
+    // a session is a whole-tile execution.
+    uint32_t hart_mask = kAllHartsMask;
+
+    // Bounds the wait for the selected harts' acknowledgement, and separately
+    // the wait for resident idle to re-arm afterwards. Must be positive.
+    std::chrono::milliseconds timeout{100};
+};
+
+enum class ReviveOutcome {
+    // Every selected hart took the RNMI and all four harts are resident idle.
+    // The tile is healthy.
+    Revived,
+    // A selected hart did not take the RNMI within the bound: it is inside an
+    // access that never completes (a NoC load to a target that does not
+    // answer), or stopped by CEASE. Not recoverable in software; the tile is
+    // unhealthy and needs an ASIC reset.
+    NotResponding,
+    // Every selected hart took the RNMI, but resident idle did not re-arm
+    // within the bound on all four harts. The tile is unhealthy.
+    NotReArmed,
+    // The RNMI handler registers or the resident idle's RNMI marker do not
+    // match: the tile was booted by an idle image without the handler, or by
+    // another loader. Nothing was written.
+    NotInstalled,
+    // The tile is held in reset; there is nothing to revive.
+    NotReleased,
+    // A submission, a cleanup or another revive holds the tile, or an
+    // exclusive (pinned-input) session is live. Nothing was written.
+    Busy,
+    // The tile belongs to another runtime.
+    WrongRuntime,
+    // A zero mask, bits above the tile's harts, a partial mask while a session
+    // is live, or a non-positive timeout. Nothing was written.
+    InvalidRequest,
+    // A raw read came back all ones, or the transport failed before any write.
+    InvalidObservation,
+    Failed,
+};
+
+const char* to_string(ReviveOutcome outcome);
+
+struct RevivedHart {
+    uint32_t hart_id = 0;
+    bool requested = false;
+    // The handler ran: revive_count moved.
+    bool acknowledged = false;
+    // mnepc and mncause the handler recorded: where the hart was. The cause
+    // carries X280_REVIVE_CAUSE_EXCEPTION for a fault inside the handler.
+    uint64_t revive_epc = 0;
+    uint64_t revive_cause = 0;
+    // The hart's three records before the trigger, including the trap record
+    // the handler clears, and after.
+    HartState before;
+    HartState after;
+};
+
+struct ReviveResult {
+    ReviveOutcome outcome = ReviveOutcome::Failed;
+    std::array<RevivedHart, kHartsPerTile> harts{};
+    // The per-hart run-status word (cease / wfi bits) read before the trigger.
+    uint32_t run_status_before = 0;
+    uint32_t run_status_after = 0;
+    std::chrono::milliseconds timeout{0};
+    // Host trigger write -> the last selected hart's revive_count seen moved.
+    std::chrono::microseconds trigger_to_ack{0};
+    // Host trigger write -> the inspection that confirmed resident idle.
+    std::chrono::microseconds trigger_to_idle{0};
+    std::string error;
+
+    bool revived() const { return outcome == ReviveOutcome::Revived; }
+};
+
+std::string describe(const ReviveResult& result);
 
 struct CleanupResult {
     CleanupOutcome outcome = CleanupOutcome::Failed;
@@ -138,10 +231,42 @@ struct CleanupResult {
     // outcome is Failed or ReturnAcknowledgementFailed.
     std::string error;
 
-    bool cleaned_up() const { return outcome == CleanupOutcome::ReturnedToIdle; }
+    // Set when the restoration escalated to a revive, whatever its outcome.
+    std::optional<ReviveResult> revive;
+
+    // The tile is back in resident idle and healthy, either through the
+    // image's acknowledged return or through a revive. Callers that need to
+    // know which read the outcome.
+    bool cleaned_up() const { return outcome == CleanupOutcome::ReturnedToIdle || outcome == CleanupOutcome::Revived; }
 };
 
 std::string describe(const CleanupResult& result);
+
+// Pure revive rules (no device I/O).
+
+struct ReviveRequestCheck {
+    bool ok = false;
+    std::string reason;
+};
+
+// A non-zero mask within the tile's harts, a positive timeout, and the full
+// mask when a session is live.
+ReviveRequestCheck validate_revive_request(const ReviveRequest& request, bool session_live);
+
+// The handler ran on this hart since `count_before` was read.
+bool hart_revive_acknowledged(const HartState& hart, uint32_t count_before);
+
+// Acknowledged, and resident idle re-armed on this hart.
+bool hart_revived(const HartState& hart, uint32_t count_before);
+
+// The trigger word with `mask` set or cleared, every other bit preserved.
+uint32_t rnmi_trigger_set(uint32_t current, uint32_t mask);
+uint32_t rnmi_trigger_clear(uint32_t current, uint32_t mask);
+
+// The cleanup outcomes a revive_on_cleanup_timeout request escalates: a hart
+// that did not answer STOP, or did not re-arm idle. Never an unreadable tile
+// or a failed transport.
+bool cleanup_escalates_to_revive(CleanupOutcome outcome);
 
 // Runtime-wide monotonic id naming one active-firmware execution the runtime
 // owns. Zero is never issued, so a default-constructed id names no execution.

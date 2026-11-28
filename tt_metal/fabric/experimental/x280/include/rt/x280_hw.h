@@ -93,7 +93,10 @@ static inline void x280_pause(void) { __asm__ volatile(".word 0x0100000F" ::: "m
  * (see rt/x280_idle.h); WFI would strand it, because host NOC writes raise no
  * interrupt on this part.
  *
- * boot/entry.S emits the same encoding at the end of its trap handler.
+ * It is also the one exit X280Runtime::revive cannot recover: a ceased hart
+ * takes no RNMI (measured), so the tile needs an ASIC reset. The per-hart
+ * protocol's trap path in boot/entry.S parks in WFI instead for that reason;
+ * standalone images still CEASE there.
  *
  * The loop is inside the helper on purpose: CEASE is emitted as a raw word, so
  * the compiler cannot know it does not return, and without the loop callers

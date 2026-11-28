@@ -9,12 +9,13 @@
  * without a chip-level reset, so the host loads a small resident idle FW into
  * the lowest 4 KiB of LIM once per chip reset (src/lim_idle.c) and then
  * ping-pongs control with successive active firmwares. An active FW that parks
- * instead of jumping back strands the L2CPU out of reset with no recovery short
- * of `tt-smi -r`.
+ * instead of jumping back leaves the session to X280Runtime::revive, which
+ * takes the hart back with an RNMI, and the image's result is lost.
  *
  * WFI is not an alternative: host NOC writes raise no interrupt on this part, so
- * a WFI-parked hart never wakes. Nor is CEASE, which stops the hart until the
- * next reset. The only correct exit is to jump to the idle FW's _start.
+ * a WFI-parked hart never wakes on its own. Nor is CEASE, which stops the hart
+ * until the next reset and takes no RNMI. The only correct exit is to jump to
+ * the idle FW's _start.
  *
  * Static inline so each freestanding firmware target can use it directly.
  */

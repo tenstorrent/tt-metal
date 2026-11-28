@@ -51,9 +51,10 @@ public:
     NocWindowResult program_noc_window(uint32_t index, const TranslatedCoord& target, const NocWindow2M& window);
     NocWindowResult read_noc_window(uint32_t index) const;
 
-    // Latched false by a restoration that could not confirm resident idle, or
-    // by a submission that failed after clearing the per-hart records. Never
-    // cleared in software.
+    // Latched false by a restoration that could not confirm resident idle, by
+    // a submission that failed after clearing the per-hart records, or by a
+    // failed revive. Set true again only by a revive that confirmed all four
+    // harts in resident idle.
     bool healthy() const;
     std::optional<std::array<HartState, kHartsPerTile>> failure_hartstates() const;
 
@@ -80,6 +81,17 @@ public:
     // Fills `result` and returns whether resident idle was confirmed within
     // `timeout`. Reset stays released on failure.
     bool confirm_resident_idle_unlocked(std::chrono::milliseconds timeout, BootResult& result);
+
+    // RNMI revive of the harts in `mask`: the whole host side of
+    // X280Runtime::revive below the session registry. Takes the chip lock per
+    // step and the tile's revive reservation for the whole call. `owned` names
+    // the live session this revive ends (the caller claimed it), or is empty
+    // when no session is live. That session's slot is released either way;
+    // the tile is healthy after Revived and unhealthy, with the snapshot
+    // kept, after any outcome that wrote to it or ended a session. A refusal
+    // before the first write leaves a tile with no session as it was. Never
+    // throws.
+    ReviveResult revive_harts(uint32_t mask, std::chrono::milliseconds timeout, SessionId owned) noexcept;
 
 private:
     friend class ActiveSessionImpl;
@@ -125,6 +137,13 @@ private:
     // attach_session is the reservation authority for the one execution slot
     // this tile has. The runtime mints the id; this only commits or refuses it.
     SessionAttachOutcome attach_session(SessionId id);
+
+    // The revive reservation. begin_revive refuses while another revive holds
+    // the tile, or while a session other than `owned` holds the slot.
+    // end_revive releases it, completes `owned` if it still holds the slot,
+    // and sets the health latch from `restored`.
+    bool begin_revive(SessionId owned);
+    void end_revive(SessionId owned, bool restored, const std::array<HartState, kHartsPerTile>& hartstates);
     bool complete_session(SessionId id, bool restored, const std::array<HartState, kHartsPerTile>& hartstates);
     bool session_active() const;
 
@@ -144,6 +163,16 @@ private:
     void load_idle_image_unlocked(const std::vector<uint8_t>& image);
     void set_reset_vectors_unlocked(uint64_t entry_addr);
 
+    // Caller must hold ChipImpl::lock(). Writes every hart's RNMI handler pair
+    // (the resident idle's fixed entries when `install`, zero otherwise) and a
+    // zero trigger word, and reads them back. Before the reset release only:
+    // the handlers must be in place before a hart can take an RNMI.
+    void set_rnmi_handlers_unlocked(bool install);
+
+    // Caller must hold ChipImpl::lock(). Empty when the handler registers name
+    // the resident idle's entries and its LIM marker matches; otherwise why not.
+    std::string rnmi_not_installed_unlocked() const;
+
     // Caller must hold ChipImpl::lock(). Zeroes all twelve protocol cache
     // lines, which only a cold boot may do: resident idle publishes its four
     // IDLE records once on entry, so clearing them on a live tile leaves
@@ -161,6 +190,7 @@ private:
     TileIdentity identity_;
     mutable std::mutex session_mutex_;
     bool session_active_ = false;
+    bool reviving_ = false;
     SessionId active_session_id_;
     bool healthy_ = true;
     std::optional<std::array<HartState, kHartsPerTile>> failure_hartstates_;
@@ -185,6 +215,10 @@ public:
     void load_idle_image(const std::vector<uint8_t>& image);
     void load_active_image(const std::vector<uint8_t>& image);
     uint32_t read_l2cpu_reset_raw() const;
+    // The tile's register file (reset vectors, RNMI, scratch) at its high
+    // alias, through the same register path production code uses.
+    uint32_t read_reg32(uint64_t addr) const;
+    void write_reg32(uint64_t addr, uint32_t value);
 
 private:
     TileImpl* tile_;

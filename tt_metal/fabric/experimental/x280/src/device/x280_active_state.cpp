@@ -23,7 +23,7 @@ constexpr std::array<const char*, 6> kWaitOutcomeNames = {
     "failed",
 };
 
-constexpr std::array<const char*, 8> kCleanupOutcomeNames = {
+constexpr std::array<const char*, 9> kCleanupOutcomeNames = {
     "returned_to_idle",
     "still_running_active_fw",
     "return_acknowledgement_failed",
@@ -31,6 +31,20 @@ constexpr std::array<const char*, 8> kCleanupOutcomeNames = {
     "invalid_observation",
     "unknown_session",
     "already_restoring",
+    "failed",
+    "revived",
+};
+
+constexpr std::array<const char*, 10> kReviveOutcomeNames = {
+    "revived",
+    "not_responding",
+    "not_rearmed",
+    "not_installed",
+    "not_released",
+    "busy",
+    "wrong_runtime",
+    "invalid_request",
+    "invalid_observation",
     "failed",
 };
 
@@ -160,6 +174,66 @@ const char* to_string(CleanupOutcome outcome) { return enum_name(outcome, kClean
 
 const char* to_string(EnqueueOutcome outcome) { return enum_name(outcome, kEnqueueOutcomeNames); }
 
+const char* to_string(ReviveOutcome outcome) { return enum_name(outcome, kReviveOutcomeNames); }
+
+ReviveRequestCheck validate_revive_request(const ReviveRequest& request, bool session_live) {
+    ReviveRequestCheck check;
+    if (request.hart_mask == 0) {
+        check.reason = "revive hart mask is zero";
+        return check;
+    }
+    if ((request.hart_mask & ~kAllHartsMask) != 0) {
+        check.reason = "revive hart mask " + hex(request.hart_mask) + " names a hart outside the tile's " +
+                       std::to_string(kHartsPerTile);
+        return check;
+    }
+    if (request.timeout.count() <= 0) {
+        check.reason = "revive timeout is " + std::to_string(request.timeout.count()) + " ms; it must be positive";
+        return check;
+    }
+    if (session_live && request.hart_mask != kAllHartsMask) {
+        check.reason = "a live session is a whole-tile execution: reviving harts " + hex(request.hart_mask) +
+                       " would leave the others in its image with nothing owning them";
+        return check;
+    }
+    check.ok = true;
+    return check;
+}
+
+bool hart_revive_acknowledged(const HartState& hart, uint32_t count_before) {
+    return hart.observation_valid && hart.state.revive_count != count_before;
+}
+
+bool hart_revived(const HartState& hart, uint32_t count_before) {
+    return hart_revive_acknowledged(hart, count_before) && hart_resident_idle(hart);
+}
+
+uint32_t rnmi_trigger_set(uint32_t current, uint32_t mask) { return current | mask; }
+
+uint32_t rnmi_trigger_clear(uint32_t current, uint32_t mask) { return current & ~mask; }
+
+bool cleanup_escalates_to_revive(CleanupOutcome outcome) {
+    return outcome == CleanupOutcome::StillRunningActiveFw || outcome == CleanupOutcome::IdleNotReArmed;
+}
+
+std::string describe(const ReviveResult& result) {
+    std::ostringstream out;
+    out << to_string(result.outcome) << " timeout=" << result.timeout.count() << "ms"
+        << " ack=" << result.trigger_to_ack.count() << "us idle=" << result.trigger_to_idle.count() << "us"
+        << " run_status " << hex(result.run_status_before) << "->" << hex(result.run_status_after);
+    if (!result.error.empty()) {
+        out << " error=" << result.error;
+    }
+    for (const auto& hart : result.harts) {
+        if (!hart.requested) {
+            continue;
+        }
+        out << " hart " << hart.hart_id << (hart.acknowledged ? " revived" : " no-ack")
+            << " epc=" << hex(hart.revive_epc) << " cause=" << hex(hart.revive_cause);
+    }
+    return out.str();
+}
+
 // A result that failed before any record was read carries a default-constructed
 // array, whose four zeroed entries would render as four unreadable hart 0s.
 // Every path that reads the tile numbers the harts it read.
@@ -189,6 +263,9 @@ std::string describe(const CleanupResult& result) {
     out << to_string(result.outcome) << " timeout=" << result.timeout.count() << "ms";
     if (!result.error.empty()) {
         out << " error=" << result.error;
+    }
+    if (result.revive) {
+        out << " revive(" << describe(*result.revive) << ')';
     }
     if (records_were_read(result.hartstates)) {
         out << ' ' << describe(result.hartstates);

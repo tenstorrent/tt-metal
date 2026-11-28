@@ -21,9 +21,12 @@ x280_add_image(NAME firmware SOURCES src/main.c)
 # Pinned-input preparation, a trusted artifact compiled with exactly one operation define.
 x280_add_image(NAME firmware-pinned-input-prepare SOURCES src/x280_pinned_input.c DEFINES X280_PINNED_INPUT_BUILD_PREPARE=1)
 # Test-only images: the atomics micro-benchmark, which the active-image contract also runs, and
-# the deliberate non-conformer that traps and CEASEs hart 2.
+# the deliberate non-conformer that traps hart 2.
 x280_add_image(NAME firmware-atomic-bench SOURCES src/atomic_bench.c)
 x280_add_image(NAME firmware-active-session-fault SOURCES src/active_session_fault.c DEFINES X280_ACTIVE_FAULT_HART=2)
+# Test-only: leaves the contract per hart (WFI or spin with interrupts off, exception loop, NoC burst,
+# trap) so that only X280Runtime::revive recovers it.
+x280_add_image(NAME firmware-strand SOURCES src/strand.c)
 
 add_test(
     NAME x280_image_layout
@@ -220,8 +223,9 @@ set_target_properties(
 add_test(NAME x280_runtime_host_tests COMMAND x280_runtime_host_tests)
 
 # _x280_device_test(<name> <source>...): a gtest executable over x280_device and Metal. Executables
-# stay separate where a test must not share a process: prime is destructive, active_failure
-# retains a fault, and shape, pll and pinned_input change chip state behind an opt-in.
+# stay separate where a test must not share a process: prime is destructive, active_failure and
+# revive strand harts on purpose (and revive them), and shape, pll and pinned_input change chip state
+# behind an opt-in.
 function(_x280_device_test name)
     add_executable(${name} ${ARGN})
     target_include_directories(
@@ -254,6 +258,7 @@ _x280_device_test(x280_runtime_device_tests
 )
 _x280_device_test(x280_runtime_coordinate_tests tests/device/test_x280_coordinates.cpp)
 _x280_device_test(x280_active_failure_test tests/device/test_x280_active_failure_hw.cpp)
+_x280_device_test(x280_revive_test tests/device/test_x280_revive_hw.cpp)
 _x280_device_test(x280_prime_test tests/device/test_x280_prime_hw.cpp)
 _x280_device_test(x280_shape_test tests/device/test_x280_shape_hw.cpp)
 _x280_device_test(x280_pinned_input_test tests/device/test_x280_pinned_input_hw.cpp)
