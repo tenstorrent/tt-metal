@@ -53,7 +53,7 @@ void write_padding(size_t bytes, FILE* file, std::string_view filename) {
         return;
     }
     static constexpr std::array<std::byte, kTensorDataAlignment> zeros{};
-    TT_FATAL(bytes < zeros.size(), "Padding of {} bytes exceeds the {}-byte alignment", bytes, zeros.size());
+    TT_FATAL(bytes < zeros.size(), "Padding of {} bytes must be less than the {}-byte alignment", bytes, zeros.size());
     safe_fwrite_bytes(zeros.data(), bytes, file, filename, "padding");
 }
 

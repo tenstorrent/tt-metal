@@ -64,10 +64,11 @@ def _get_collective_groups(mesh_shape, cluster_axis):
 
     if cluster_axis is None:
         return [list(range(math.prod(mesh_shape)))]
+    requested_axis = cluster_axis
     if cluster_axis < 0:
         cluster_axis += len(mesh_shape)
     if cluster_axis < 0 or cluster_axis >= len(mesh_shape):
-        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {mesh_shape}")
+        raise ValueError(f"Collective axis {requested_axis} is invalid for mesh shape {mesh_shape}")
 
     groups = {}
     for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
@@ -686,10 +687,11 @@ def _golden_function_moe_routing_remap(
     non_zero_indices = torch.nonzero(routing_weights_tensor.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
 
+    requested_axis = cluster_axis
     if cluster_axis < 0:
         cluster_axis += len(_ttnn_golden_mesh_shape)
     if cluster_axis < 0 or cluster_axis >= len(_ttnn_golden_mesh_shape):
-        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {_ttnn_golden_mesh_shape}")
+        raise ValueError(f"Collective axis {requested_axis} is invalid for mesh shape {_ttnn_golden_mesh_shape}")
     member_stride = 1
     for dimension in _ttnn_golden_mesh_shape[cluster_axis + 1 :]:
         member_stride *= dimension

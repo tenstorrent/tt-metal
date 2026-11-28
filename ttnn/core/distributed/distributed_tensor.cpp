@@ -693,7 +693,7 @@ TensorToMesh TensorToMesh::create(const MeshShape& mesh_shape, const MeshMapperC
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_shape);
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_shape.mesh_size(),
-        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        "The size of the supplied mesh shape {} exceeds the device shape size {}",
         distributed_shape,
         mesh_shape);
     TT_FATAL(
@@ -713,7 +713,7 @@ TensorToMesh TensorToMesh::create(const MeshDevice& mesh_device, const MeshMappe
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
-        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        "The size of the supplied mesh shape {} exceeds the device shape size {}",
         distributed_shape,
         mesh_device.shape());
     TT_FATAL(
@@ -745,7 +745,7 @@ MeshToTensor MeshToTensor::create(const MeshDevice& mesh_device, const MeshCompo
     const auto distributed_shape = config.mesh_shape_override.value_or(mesh_device.shape());
     TT_FATAL(
         distributed_shape.mesh_size() <= mesh_device.shape().mesh_size(),
-        "The size of the supplied mesh shape {} does not match the device shape size {}",
+        "The size of the supplied mesh shape {} exceeds the device shape size {}",
         distributed_shape,
         mesh_device.shape());
     TT_FATAL(

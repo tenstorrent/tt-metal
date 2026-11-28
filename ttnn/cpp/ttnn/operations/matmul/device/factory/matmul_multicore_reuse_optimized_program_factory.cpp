@@ -91,7 +91,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     if (fp32_dest_acc_en) {
         TT_FATAL(
             out_subblock_h * out_subblock_w <= 4,
-            "Total number of tiles in a subblock must be less than 4 when in fp32_dest_acc mode");
+            "Total number of tiles in a subblock must be at most 4 when in fp32_dest_acc mode");
     }
 
     // Broadcast batch dims are read in place, so the work is split over the output's batches.
