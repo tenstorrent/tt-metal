@@ -189,7 +189,7 @@ case "${MODEL}" in
     case "${CONFIG}" in
       *_4x4)
         # 4x4 stages, two per galaxy, bound by tt-run discovery as for Kimi-K3 below: 8 stages for sc4, two
-        # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 1, 2560-token chunks
+        # (all 78 layers) for sc1. glm53_4x4.json holds the layout: SP=4 on mesh axis 0, 2560-token chunks
         # (640 tokens per chip, GLM's 8x4 per-chip load), TP-deduped KV and the slots it fits. Its 1064960
         # window is a multiple of the deduped cache's 16 x 256 = 4096-token bank quantum and of the chunk.
         # The trunk runs that manifest; the MTP variants export its layout over their own, keeping their

@@ -1,6 +1,6 @@
 ---
-# Runs the Shadow PR Gate on every merge-queue entry. Its checks are not
-# required.
+# Runs the Shadow PR Gate and Shadow Merge Gate on every merge-queue entry.
+# Their checks are not required.
 triggers:
   - id: shadow-pr-gate-merge-queue
     kind: automatic
@@ -12,8 +12,9 @@ triggers:
       supersede: never
     # Stop when the entry leaves the queue (tenstorrent/torrentci#3276).
     on-ref-retired: cancel
-    # Lower priority than pull request work (100).
-    priority: 160
+    # Merge-queue entries gate merges, so they outrank pull-request runs (100);
+    # lower number runs first.
+    priority: 64
     targets:
       jobs: []
-      dashboards: [shadow-pr-gate]
+      dashboards: [shadow-pr-gate, shadow-merge-gate]

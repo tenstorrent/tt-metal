@@ -394,7 +394,8 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.nd_shard_spec().has_value(),
                     "Output memory config is sharded but no shard spec or nd shard spec is provided");
                 uint32_t output_dtype_size = input_tensor_a.element_size();
-                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B) {
+                if (input_tensor_a.dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                    tt::tt_metal::is_mx(input_tensor_a.dtype())) {
                     output_dtype_size = 2;
                 }
                 uint32_t output_shard_width;

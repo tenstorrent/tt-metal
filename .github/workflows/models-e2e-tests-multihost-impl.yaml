@@ -74,9 +74,6 @@ jobs:
       TTRUN_CWD: /ci/models-e2e-${{ github.run_id }}-${{ strategy.job-index }}/ttrun-cwd
       TRIAGE_OUTPUT_DIR: /ci/triage_output/${{ github.run_id }}-${{ github.run_attempt }}/models-e2e-${{ strategy.job-index }}
       TTRUN_PY: /home/user/tt-metal/ttnn/ttnn/distributed/ttrun.py
-      # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
-      # downloaded. Requires the token's HF account to have accepted the model's license.
-      HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
     strategy:
       fail-fast: false
       matrix:
@@ -109,9 +106,25 @@ jobs:
         shell: bash
         run: mkdir -p "$PIPELINE_DIR"
 
+      # Short-lived HF read token from GitHub OIDC (no stored secret). Directly before the
+      # test step so the 60-minute token lifetime starts late.
+      # Only schedule and workflow_dispatch runs on main get a token; other runs warn and
+      # continue without one.
+      - name: 🤗 Get Hugging Face token (OIDC)
+        id: hf-oidc
+        timeout-minutes: 5
+        uses: tenstorrent/.github/actions/hf-oidc-token@hf-oidc-token-v1.0.0 # immutable release, commit d31c308a8c85847acb5c6f5f0a48d58ecf962d33
+        with:
+          resource: ${{ vars.HF_OIDC_RESOURCE }}
+          if-no-token: warn
+
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          # Forwarded to the mpirun ranks (PRTE_MCA_prte_fwd_environment) so gated HF models can be
+          # downloaded. Requires the HF account of the OIDC identity to have accepted the model's license.
+          HF_TOKEN: ${{ steps.hf-oidc.outputs.token }}
         # Automapper cmds cd to $PIPELINE_DIR/ttrun-cwd (empty NFS dir) themselves.
         # Keep runtime compilation and tt-run working directory on a single source root.
         uses: ./.github/actions/run-with-log
@@ -119,6 +132,10 @@ jobs:
           working-directory: /home/user/tt-metal
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
+            # Best effort: tests do not inherit the OIDC request variables. The wrapper shell
+            # (run-with-log) keeps them in its own environment.
+            unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+
             # Store command safely using heredoc
             CMD=$(cat << 'EOF'
             ${{ matrix.test-group.cmd }}

@@ -49,31 +49,38 @@ CoreRangeSet to_range_set(const std::vector<CoreCoord>& cores) {
     return CoreRangeSet(ranges);
 }
 
-// Sender w serves channel w / kSendersPerChannel; channel c = link * kDirections + dir.
+// Sender w serves channel w / kSendersPerChannel; channel c = link * directions.size() + d sends towards directions[d].
+// The senders come first in the grid, so sender 0 (the sync core the fences address on every chip) is the same core on
+// every chip, however many directions a chip has.
 struct CoreLayout {
     uint32_t links = 0;
+    std::vector<FabricDirection> directions;
     std::vector<CoreCoord> senders;
     std::vector<CoreCoord> muxes;
     CoreRangeSet sender_range;
     CoreRangeSet mux_range;
 
-    uint32_t channels() const { return links * kDirections; }
+    uint32_t num_directions() const { return static_cast<uint32_t>(directions.size()); }
+    uint32_t channels() const { return links * num_directions(); }
     uint32_t num_senders() const { return static_cast<uint32_t>(senders.size()); }
+    const FabricDirection& direction_of(uint32_t channel) const { return directions[channel % num_directions()]; }
 };
 
-CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links) {
+CoreLayout core_layout(const CoreRangeSet& grid, uint32_t links, std::vector<FabricDirection> directions) {
     TT_FATAL(links >= 1 && links <= 2, "the sparse KV push supports 1 or 2 links, got {}", links);
+    TT_FATAL(!directions.empty(), "the sparse KV push found no fabric neighbour");
     const auto cores = corerange_to_cores(grid, std::nullopt, true);
-    const uint32_t senders = links * kDirections * kSendersPerChannel;
+    const auto dirs = static_cast<uint32_t>(directions.size());
+    const uint32_t senders = links * dirs * kSendersPerChannel;
     TT_FATAL(
-        cores.size() >= cores_needed(links),
+        cores.size() >= cores_needed(links, dirs),
         "the sparse KV push needs {} sender + {} mux cores, the grid has {}",
         senders,
-        links * kDirections,
+        links * dirs,
         cores.size());
-    CoreLayout layout{.links = links};
+    CoreLayout layout{.links = links, .directions = std::move(directions)};
     layout.senders.assign(cores.begin(), cores.begin() + senders);
-    layout.muxes.assign(cores.begin() + senders, cores.begin() + cores_needed(links));
+    layout.muxes.assign(cores.begin() + senders, cores.begin() + cores_needed(links, dirs));
     layout.sender_range = to_range_set(layout.senders);
     layout.mux_range = to_range_set(layout.muxes);
     return layout;
@@ -111,18 +118,6 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(mesh_ids)},
         {"FABRIC_2D", "1"},
     };
-}
-
-// The chip's four torus neighbours, in channel direction order.
-std::vector<tt::tt_metal::distributed::MeshCoordinate> torus_neighbors(
-    const tt::tt_metal::distributed::MeshDeviceView& mesh_view,
-    const tt::tt_metal::distributed::MeshCoordinate& coord) {
-    const auto [neighbors, directions] =
-        ttnn::operations::ccl::common::get_neighbors(mesh_view, coord, tt::tt_fabric::Topology::Torus, std::nullopt);
-    TT_FATAL(
-        neighbors.size() == kDirections && std::all_of(directions.begin(), directions.end(), [](bool d) { return d; }),
-        "the sparse KV push needs all four torus neighbours");
-    return neighbors;
 }
 
 std::vector<uint32_t> reader_compile_args(
@@ -173,13 +168,14 @@ std::vector<uint32_t> reader_runtime_args(
     const CoreLayout& layout, uint32_t sender, uint32_t my_rank, uint32_t my_owner) {
     const uint32_t channel = sender / kSendersPerChannel;
     return {
-        channel / kDirections,  // link
-        channel % kDirections,  // direction
+        channel / layout.num_directions(),  // link
+        layout.direction_of(channel).eth_direction,
         my_rank,
         sender % kSendersPerChannel,
         kSendersPerChannel,
         layout.links,
-        my_owner};
+        my_owner,
+        layout.directions.front().eth_direction};  // the channels of the first direction also carry this chip's rows
 }
 
 std::vector<uint32_t> writer_runtime_args(
@@ -193,8 +189,8 @@ std::vector<uint32_t> writer_runtime_args(
     const auto sync_core = mesh_device->worker_core_from_logical_core(layout.senders[0]);
     std::vector<uint32_t> rt = {
         sender,
-        channel % kDirections,
-        channel / kDirections,
+        layout.direction_of(channel).eth_direction,
+        channel / layout.num_directions(),
         sub,
         my_rank,
         static_cast<uint32_t>(sync_core.x),
@@ -253,8 +249,10 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const uint32_t my_rank = ttnn::operations::ccl::common::get_linearized_index(coord, mesh_view);
     // The plan owns block b on owner b % num_devices; the cache stripes blocks along sp_axis first.
     const uint32_t my_owner = params.sp_axis == 0 ? my_rank : coord[1] * mesh_view.shape()[0] + coord[0];
-    const auto neighbors = torus_neighbors(mesh_view, coord);
-    const auto layout = core_layout(params.core_grid, params.num_links);
+    // validate_config checked these routes; this chip's entry is its directions.
+    const auto& routes = fabric_routes(mesh_device, params.num_links);
+    TT_FATAL(routes.ok(), "the sparse KV push cannot route on this mesh: {}", routes.problem);
+    const auto layout = core_layout(params.core_grid, params.num_links, routes.chips.at(my_rank));
     const auto mux = mux_config(mesh_device, desc, layout);
     const auto defines = kernel_defines(mesh_device);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
@@ -330,8 +328,8 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
         rt.append(mux.get_fabric_mux_run_time_args(
             *mesh_device,
             mesh_device->get_fabric_node_id(coord),
-            mesh_device->get_fabric_node_id(neighbors[c % kDirections]),
-            c / kDirections,
+            mesh_device->get_fabric_node_id(layout.direction_of(c).neighbor),
+            layout.direction_of(c).links[c / layout.num_directions()],
             desc,
             layout.muxes[c]));
         mux_kernel.emplace_runtime_args(layout.muxes[c], rt);

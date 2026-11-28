@@ -60,7 +60,12 @@ MATMUL_FORMATS = input_output_formats(
     ]
 )
 DEST_SYNC_MODES = [DestSync.Half, DestSync.Full]
+# math_matmul_test.cpp never configures stochastic rounding, so perf holds it at No and does
+# not sweep it.
 STOCHASTIC_ROUNDING_MODES = [StochasticRounding.No]
+PERF_MATMUL_CONFIG_AXES = tuple(
+    axis for axis in MATMUL_CONFIG_AXES if axis != "stochastic_rnd"
+)
 
 # Dest-fill RT x CT from dest capacity, dest occupancy blocks, and half-dest
 # mid-fill when they fit. KT 1 and 4 (long-K lives on perf_matmul).
@@ -169,10 +174,19 @@ TINY_TILES_MATMUL_COMBINATIONS = [
 ]
 
 
+def _perf_config_columns(config):
+    """The ``PERF_MATMUL_CONFIG_AXES`` values of ``config``."""
+    return tuple(
+        column
+        for axis, column in zip(MATMUL_CONFIG_AXES, matmul_config_columns(config))
+        if axis in PERF_MATMUL_CONFIG_AXES
+    )
+
+
 def _rows(fidelities, configs, throttle, num_blocks, row_mop):
-    """(math_fidelity, *MATMUL_CONFIG_AXES, throttle, num_blocks, row_mop) rows."""
+    """(math_fidelity, *PERF_MATMUL_CONFIG_AXES, throttle, num_blocks, row_mop) rows."""
     return (
-        (fidelity, *matmul_config_columns(config), throttle, num_blocks, row_mop)
+        (fidelity, *_perf_config_columns(config), throttle, num_blocks, row_mop)
         for config in configs
         for fidelity in fidelities
     )
@@ -201,7 +215,13 @@ ALL_TEST_PARAMS = list(
 @pytest.mark.perf
 @parametrize(
     **flat_axes(
-        ("math_fidelity", *MATMUL_CONFIG_AXES, "throttle", "num_blocks", "row_mop"),
+        (
+            "math_fidelity",
+            *PERF_MATMUL_CONFIG_AXES,
+            "throttle",
+            "num_blocks",
+            "row_mop",
+        ),
         ALL_TEST_PARAMS,
     )
 )
@@ -210,7 +230,6 @@ def test_perf_math_matmul(
     formats,
     dest_acc,
     dest_sync,
-    stochastic_rnd,
     dst_index,
     input_tile_dimensions,
     ct_dim,
@@ -238,7 +257,7 @@ def test_perf_math_matmul(
         formats,
         dest_acc,
         dest_sync,
-        stochastic_rnd,
+        StochasticRounding.No,
         dst_index,
         input_tile_dimensions,
         ct_dim,
