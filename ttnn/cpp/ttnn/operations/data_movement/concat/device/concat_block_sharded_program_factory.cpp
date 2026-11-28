@@ -14,7 +14,7 @@
 #include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
@@ -90,7 +90,8 @@ ttnn::device_operation::ProgramArtifacts ConcatBlockShardedProgramFactory::creat
     std::vector<uint32_t> input_shard_h(num_input_tensors);
     std::vector<uint32_t> input_shard_w(num_input_tensors);
 
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*output.device()).node_local_mem_alignment();
 
     for (uint32_t i = 0; i < num_input_tensors; i++) {
         const auto& ss = input_tensors[i].shard_spec().value();

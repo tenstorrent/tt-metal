@@ -13,6 +13,7 @@
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt_stl/assert.hpp>
@@ -33,7 +34,11 @@ constexpr uint64_t kMaxCbPages = std::numeric_limits<uint16_t>::max();
 constexpr std::array<uint32_t, 4> kLcmWriteBatches = {8, 4, 2, 1};
 
 // Program creation starts every CB at a DRAM-aligned address, so a CB takes its size rounded up to that alignment.
-uint64_t cb_footprint(uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); }
+uint64_t cb_footprint(uint64_t bytes, uint32_t dram_alignment) { return tt::round_up(bytes, dram_alignment); }
+
+uint32_t dram_alignment_of(const Tensor& input) {
+    return tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment();
+}
 
 uint64_t volume_before_last(const ttnn::Shape& shape) {
     return std::accumulate(shape.cbegin(), shape.cend() - 1, uint64_t{1}, std::multiplies<>());
@@ -70,7 +75,7 @@ std::optional<TileRowsChoice> fit_tile_rows(
     if (fits(planned)) {
         return planned;
     }
-    return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits);
+    return plan_tile_rows_fitting(input.logical_shape(), logical_output_shape, fits, dram_alignment_of(input));
 }
 
 }  // namespace
@@ -202,7 +207,7 @@ std::optional<LcmPlan> lcm_tile_geometry(
     return plan;
 }
 
-std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
+std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget, uint32_t dram_alignment) {
     // The in and mid CBs hold a whole chunk. The out CB must take what the two kernels move without wrapping: compute
     // tilizes Wt_out tiles in one write and the writer reads a batch from one offset, so its depth is a multiple of
     // both. The batched writer holds one batch while it waits for the next, so compute still needs Wt_out free slots
@@ -210,13 +215,14 @@ std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
     // (writer_interleaved.cpp); the Wt_out - 1 is compute packing a whole Wt_out tile row at once. The unbatched
     // writer waits only on an empty CB. Each batch offers two depths, a whole chunk's output and its minimum, so small
     // moves of the L1 frontier keep the same program and its cache key.
-    const uint64_t in_mid_bytes = 2 * cb_footprint(static_cast<uint64_t>(plan.chunk_tiles) * plan.tile_bytes);
+    const uint64_t in_mid_bytes =
+        2 * cb_footprint(static_cast<uint64_t>(plan.chunk_tiles) * plan.tile_bytes, dram_alignment);
     for (const uint32_t batch : kLcmWriteBatches) {
         const uint64_t unit = std::lcm(plan.wt_out, batch);
         const uint64_t needed = batch == 1 ? plan.wt_out : 2ull * batch + plan.wt_out - 1;
         for (const uint64_t depth :
              {tt::round_up(std::max<uint64_t>(plan.chunk_tiles, needed), unit), tt::round_up(needed, unit)}) {
-            if (in_mid_bytes + cb_footprint(depth * plan.tile_bytes) <= l1_budget) {
+            if (in_mid_bytes + cb_footprint(depth * plan.tile_bytes, dram_alignment) <= l1_budget) {
                 plan.out_cb_depth = static_cast<uint32_t>(depth);
                 plan.write_batch = batch;
                 return plan;
@@ -229,17 +235,20 @@ std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget) {
 std::optional<TileMappedChoice> fit_tile_mapped(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, uint64_t l1_budget) {
     const uint32_t tile_bytes = tile_bytes_of(input);
+    const uint32_t dram_alignment = dram_alignment_of(input);
     const auto layout = tile_mapped_layout(
         input.logical_shape(),
         logical_output_shape,
         static_cast<uint32_t>(input.element_size()),
         tile_bytes,
         grid_cores,
-        l1_budget);
+        l1_budget,
+        dram_alignment);
     if (!layout.has_value()) {
         return std::nullopt;
     }
-    return TileMappedChoice{.layout = *layout, .input_depth = tile_mapped_input_depth(*layout, tile_bytes, l1_budget)};
+    return TileMappedChoice{
+        .layout = *layout, .input_depth = tile_mapped_input_depth(*layout, tile_bytes, l1_budget, dram_alignment)};
 }
 
 std::optional<TileChoice> live_tile_choice(
@@ -250,7 +259,7 @@ std::optional<TileChoice> live_tile_choice(
             return TileChoice{std::move(*rows)};
         }
     } else if (planned.tile_route == TileRoute::Lcm && planned.lcm.has_value()) {
-        if (auto lcm = fit_lcm(*planned.lcm, free_l1)) {
+        if (auto lcm = fit_lcm(*planned.lcm, free_l1, dram_alignment_of(input))) {
             return TileChoice{*lcm};
         }
     }
@@ -301,23 +310,23 @@ std::optional<RmPlan> rm_geometry(
     const uint64_t split_sticks = plan.split_by_old ? num_old_sticks : num_new_sticks;
     plan.split = count_units(grid_cores, static_cast<uint32_t>(split_sticks));
 
-    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
     plan.cb_page = plan.can_coalesce ? plan.new_stick : tt::round_up(plan.new_stick, l1_alignment);
     plan.scratch_bytes = plan.can_coalesce ? 0 : kRmScratchSticks * (plan.old_aligned + kRmScratchSlackBytes);
     return plan;
 }
 
-std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
+std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget, uint32_t dram_alignment) {
     const uint32_t max_sticks = std::max(plan.split.units_group1, plan.split.units_group2);
     // CB pages produced by one split stick; a push is always a whole number of these.
     const uint64_t pages_per_split_stick = plan.split_by_old ? plan.ratio : 1;
     const uint64_t full_depth = static_cast<uint64_t>(max_sticks) * pages_per_split_stick * (plan.can_coalesce ? 1 : 2);
-    const uint64_t scratch_footprint = plan.scratch_bytes == 0 ? 0 : cb_footprint(plan.scratch_bytes);
+    const uint64_t scratch_footprint = plan.scratch_bytes == 0 ? 0 : cb_footprint(plan.scratch_bytes, dram_alignment);
     // Bytes the stick CB may take: live L1, and no more pages than the 16-bit CB page counters hold. Rounded down to
     // the CB alignment, a ring that fits it also fits once aligned.
     const uint64_t ring_l1 = l1_budget > scratch_footprint ? l1_budget - scratch_footprint : 0;
-    const uint64_t ring_budget =
-        tt::round_down(std::min(ring_l1, kMaxCbPages * plan.cb_page), tt::tt_metal::hal::get_dram_alignment());
+    const uint64_t ring_budget = tt::round_down(std::min(ring_l1, kMaxCbPages * plan.cb_page), dram_alignment);
 
     uint64_t depth = full_depth;
     plan.push_sticks = 0;
@@ -348,7 +357,7 @@ std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget) {
         }
     }
     plan.cb_depth = static_cast<uint32_t>(depth);
-    plan.l1_bytes = cb_footprint(depth * plan.cb_page) + scratch_footprint;
+    plan.l1_bytes = cb_footprint(depth * plan.cb_page, dram_alignment) + scratch_footprint;
     return plan;
 }
 
@@ -397,7 +406,8 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
     }
 
     const uint32_t slab_bytes = std::min(plan.slab, plan.new_stick);
-    plan.slot = tt::round_up(slab_bytes, tt::tt_metal::hal::get_l1_alignment());
+    plan.slot = tt::round_up(
+        slab_bytes, tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment());
     // A slab spans at most slab_bytes / old_stick + 2 input pages, one window each.
     plan.region_stride =
         tt::round_up(slab_bytes + ((slab_bytes / plan.old_stick) + 2) * 2 * plan.in_alignment, plan.in_alignment);
@@ -405,12 +415,13 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
     return plan;
 }
 
-std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget) {
+std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget, uint32_t dram_alignment) {
     plan.batch = 0;
     for (uint32_t batch = kMaxSlabBatch; batch >= 1; batch /= 2) {
         // One extra alignment unit lets the reader align the scratch base up.
         const uint32_t scratch = (batch * plan.region_stride) + plan.in_alignment;
-        const uint64_t bytes = cb_footprint(scratch) + cb_footprint(2ull * batch * plan.slot);
+        const uint64_t bytes =
+            cb_footprint(scratch, dram_alignment) + cb_footprint(2ull * batch * plan.slot, dram_alignment);
         if (bytes <= l1_budget) {
             plan.batch = batch;
             plan.scratch_bytes = scratch;
@@ -431,8 +442,9 @@ std::optional<RmChoice> live_rm_choice(
     uint32_t grid_cores,
     const LaunchPlan& planned) {
     const uint64_t free_l1 = get_max_l1_space(input);
+    const uint32_t dram_alignment = dram_alignment_of(input);
     if (planned.rm.has_value()) {
-        if (auto stick = fit_rm(*planned.rm, free_l1)) {
+        if (auto stick = fit_rm(*planned.rm, free_l1, dram_alignment)) {
             return RmChoice{*stick};
         }
     }
@@ -441,7 +453,7 @@ std::optional<RmChoice> live_rm_choice(
             ? planned.rm_arbitrary
             : rm_arbitrary_geometry(input, logical_output_shape, planned.out_aligned_page, output_buffer, grid_cores);
     if (slab.has_value()) {
-        if (auto fitted = fit_rm_arbitrary(*slab, free_l1)) {
+        if (auto fitted = fit_rm_arbitrary(*slab, free_l1, dram_alignment)) {
             return RmChoice{*fitted};
         }
     }

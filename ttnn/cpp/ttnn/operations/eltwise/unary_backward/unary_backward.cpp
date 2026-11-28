@@ -31,7 +31,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <cstdint>
 
 namespace ttnn {
@@ -832,8 +832,9 @@ std::vector<Tensor> acosh_bw(
     Tensor in_rsqrt =
         ttnn::rsqrt(ttnn::subtract(in_sq, 1.0f, std::nullopt, output_mem_config), false, output_mem_config);
     Tensor grad_a = ttnn::multiply(grad, in_rsqrt, std::nullopt, output_mem_config);
-    float t_nan = tt::tt_metal::hal::get_nan();
-    float t_inf = tt::tt_metal::hal::get_inf();
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
+    float t_nan = props.sfpu_nan();
+    float t_inf = props.sfpu_inf();
 
     Tensor check_condition =
         ttnn::multiply(ttnn::signbit(grad, output_mem_config), -1.0f, std::nullopt, output_mem_config);

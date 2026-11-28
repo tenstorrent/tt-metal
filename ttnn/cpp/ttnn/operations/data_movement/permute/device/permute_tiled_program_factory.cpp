@@ -6,7 +6,7 @@
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <vector>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -82,9 +82,9 @@ ttsl::SmallVector<uint32_t> get_inverse_permutation(const ttsl::SmallVector<uint
 }
 
 uint32_t get_buffer_alignment(const ttnn::Tensor& tensor) {
-    return (
-        tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM ? tt::tt_metal::hal::get_dram_alignment()
-                                                                               : tt::tt_metal::hal::get_l1_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*tensor.device());
+    return tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM ? props.dram_alignment()
+                                                                                  : props.node_local_mem_alignment();
 }
 
 }  // namespace detail

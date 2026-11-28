@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -171,9 +171,9 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewRMProgramFactory::create_pro
     const uint32_t num_dest_write_slots = num_dest_write_slots_for(*device, page_plan);
     const uint32_t scratch_size1 = dest_slot_size_bytes * num_dest_write_slots;
 
-    const uint32_t write_alignment =
-        dst_buffer->is_dram() ? tt::tt_metal::hal::get_dram_alignment() : tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t noc_write_align = std::min(write_alignment, tt::tt_metal::hal::get_l1_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*device);
+    const uint32_t write_alignment = dst_buffer->is_dram() ? props.dram_alignment() : props.node_local_mem_alignment();
+    const uint32_t noc_write_align = std::min(write_alignment, props.node_local_mem_alignment());
     const uint32_t dest_write_size_bytes =
         pages_noc_aligned ? dest_page_size_bytes : tt::align(dest_page_size_bytes, noc_write_align);
 

@@ -13,6 +13,7 @@
 #include <tt-metalium/workload/legacy/circular_buffer_constants.h>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -579,7 +580,11 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileRowsProgramFactory::create_wo
         "ReshapeCodegen: neither a tile-row plan nor the segment map fits the {} B of L1 free per core below the "
         "lowest L1 allocation; free L1 tensors or use the native reshape",
         ttnn::operations::data_movement::get_max_l1_space(input));
-    auto plan = rcg::build_tile_rows_plan(in_shape, out_shape, *chosen);
+    auto plan = rcg::build_tile_rows_plan(
+        in_shape,
+        out_shape,
+        *chosen,
+        tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment());
     const rcg::TileRowsLayout layout = plan.layout;
     TT_ASSERT(tensor_return_value.mesh_buffer().num_pages() == layout.num_output_pages);
 
@@ -620,7 +625,8 @@ tt::tt_metal::WorkloadDescriptor ReshapeCodegenTileMappedProgramFactory::create_
         static_cast<uint32_t>(input.element_size()),
         tile_bytes,
         num_cores,
-        layout.sliced);
+        layout.sliced,
+        tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment());
     const auto map_owner = upload_table(std::move(plan.table), layout.num_rows, layout.page_words(), input);
     return table_workload(
         map_owner,

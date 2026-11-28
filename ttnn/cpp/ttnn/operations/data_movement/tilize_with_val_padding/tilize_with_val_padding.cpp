@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 using namespace tt::tt_metal;
 
@@ -120,7 +120,8 @@ ttnn::Tensor tilize_with_val_padding(
     uint32_t num_tiles_per_row = output_padded_shape[-1] / tt::constants::TILE_WIDTH;
 
     // Fold in the block factory's c_1 staging CB so routing sees the true CB budget.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).dram_alignment();
     const uint32_t staging_bytes_per_tile = input_single_tile_size / tt::constants::TILE_HEIGHT;
     const uint32_t fixed_staging_bytes = 2 * dram_alignment;
 

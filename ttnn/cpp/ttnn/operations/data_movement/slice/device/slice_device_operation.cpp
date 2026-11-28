@@ -17,7 +17,7 @@
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 
 using namespace tt::tt_metal;
 
@@ -208,6 +208,7 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.input.layout() == Layout::ROW_MAJOR && output_spec.logical_shape().volume() != 0) {
         const bool rank1_unstrided = tensor_args.input.padded_shape().rank() == 1 && !has_step;
         const uint32_t element_size = tensor_args.input.element_size();
+        const auto props = tt::tt_metal::experimental::get_device_properties(*tensor_args.input.device());
         const auto check_rank1_nd_shard_aligned = [&](const tt::tt_metal::MemoryConfig& mc,
                                                       const ttnn::Shape& padded_shape,
                                                       const char* which,
@@ -216,8 +217,9 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             if (!nd.has_value() || nd->shard_shape.rank() != 1) {
                 return;
             }
-            const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM ? ::hal::get_dram_alignment()
-                                                                                          : ::hal::get_l1_alignment();
+            const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
+                                           ? props.dram_alignment()
+                                           : props.node_local_mem_alignment();
             const uint32_t shard_bytes = nd->shard_shape[0] * element_size;
             if (shard_bytes % alignment == 0) {
                 return;
@@ -435,7 +437,9 @@ SliceDeviceOperation::program_factory_t SliceDeviceOperation::select_program_fac
         // Misaligned W-begin needs SliceRmProgramFactory's tt_memmove fixup (issue #50714).
         const uint32_t begins_bytes_last =
             args.slice_start.rank() > 0 ? args.slice_start[-1] * input.element_size() : 0u;
-        const bool w_begin_aligned = (begins_bytes_last % ::hal::get_l1_alignment()) == 0;
+        const uint32_t l1_alignment =
+            tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment();
+        const bool w_begin_aligned = (begins_bytes_last % l1_alignment) == 0;
         const bool height_sharded_in_out_no_step =
             input.is_sharded() &&
             input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&

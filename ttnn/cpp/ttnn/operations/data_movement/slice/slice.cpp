@@ -59,7 +59,7 @@ inline bool needs_rm_composite_input(
     if (is_bw_sharded(input.memory_config())) {
         // Only W misalignment breaks the per-shard page split; irregular H is fine.
         return has_nontile_w(input) || width_begin_nonzero ||
-               has_subaligned_shard_row(input.memory_config(), input.element_size());
+               has_subaligned_shard_row(*input.device(), input.memory_config(), input.element_size());
     }
     // Require a spec: no-spec HEIGHT output triggers needs_sharded_output_reshard → composite anyway.
     const bool stays_on_sharded_fast_path =
@@ -75,7 +75,9 @@ inline bool needs_rm_composite_output(const ttnn::Tensor& input, const tt::tt_me
     if (input.layout() != Layout::ROW_MAJOR || !is_bw_sharded(output_mc)) {
         return false;
     }
-    return has_nontile_w(input) || has_subaligned_shard_row(output_mc, input.element_size());
+    // Host tensors carry no device to read the L1 alignment from; they never take the native sharded path.
+    return has_nontile_w(input) || (input.storage_type() == StorageType::DEVICE &&
+                                    has_subaligned_shard_row(*input.device(), output_mc, input.element_size()));
 }
 
 // Sharded-no-spec output that can't seed from the input (not sharded, or layout differs);

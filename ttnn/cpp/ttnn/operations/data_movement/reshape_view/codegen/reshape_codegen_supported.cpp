@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/mesh/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
@@ -209,10 +209,11 @@ struct NativeRmScratch {
     uint64_t dest_slot = 0;
     uint64_t kernels = 1;
     bool pages_noc_aligned = false;
+    uint64_t dram_alignment = 1;
 
     uint64_t footprint(uint64_t slots) const {
-        const uint64_t alignment = tt::tt_metal::hal::get_dram_alignment();
-        return kernels * (tt::round_up(source_scratch, alignment) + tt::round_up(dest_slot * slots, alignment));
+        return kernels *
+               (tt::round_up(source_scratch, dram_alignment) + tt::round_up(dest_slot * slots, dram_alignment));
     }
 };
 
@@ -227,7 +228,8 @@ NativeRmScratch native_rm_scratch(
         .source_scratch = 2 * (((old_stick - 1) & ~uint64_t{63}) + kNativeSourceReadSlack),
         .dest_slot = ((new_stick - 1) & ~uint64_t{63}) + kNativeDestSlotSlack,
         .kernels = two_kernels ? uint64_t{2} : uint64_t{1},
-        .pages_noc_aligned = old_stick % kNativeNocAlignment == 0 && new_stick % kNativeNocAlignment == 0};
+        .pages_noc_aligned = old_stick % kNativeNocAlignment == 0 && new_stick % kNativeNocAlignment == 0,
+        .dram_alignment = tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment()};
 }
 
 // Native's row-major kernel fits the scratch and destination ring it selects in `budget`. Native picks its ring from
@@ -319,6 +321,7 @@ public:
         logical_output_shape_(logical_output_shape),
         output_mem_config_(output_mem_config),
         num_cores_(num_cores),
+        dram_alignment_(tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment()),
         output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)),
         out_aligned_page_(output_aligned_page(input, output_spec_)),
         stick_(rm_geometry(input, logical_output_shape, out_aligned_page_, num_cores_)),
@@ -336,6 +339,7 @@ public:
         logical_output_shape_(logical_output_shape),
         output_mem_config_(output_mem_config),
         num_cores_(num_cores),
+        dram_alignment_(tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment()),
         output_spec_(reshape_codegen::output_spec(input, logical_output_shape, output_mem_config)),
         out_aligned_page_(plan.out_aligned_page),
         stick_(plan.rm),
@@ -347,12 +351,12 @@ public:
     const tt::tt_metal::TensorSpec& output_spec() const { return output_spec_; }
 
     std::optional<RmPlan> fit_stick(uint64_t l1_budget) const {
-        return stick_.has_value() ? fit_rm(*stick_, l1_budget) : std::nullopt;
+        return stick_.has_value() ? fit_rm(*stick_, l1_budget, dram_alignment_) : std::nullopt;
     }
 
     std::optional<RmArbitraryPlan> fit_slab(uint64_t l1_budget) {
         const auto& slab_geometry = slab();
-        return slab_geometry.has_value() ? fit_rm_arbitrary(*slab_geometry, l1_budget) : std::nullopt;
+        return slab_geometry.has_value() ? fit_rm_arbitrary(*slab_geometry, l1_budget, dram_alignment_) : std::nullopt;
     }
 
     // Whether the smallest stick or slab plan fits `l1_budget`, as live_rm_choice tries them.
@@ -382,6 +386,7 @@ private:
     const ttnn::Shape& logical_output_shape_;
     const tt::tt_metal::MemoryConfig& output_mem_config_;
     uint32_t num_cores_;
+    uint32_t dram_alignment_;
     tt::tt_metal::TensorSpec output_spec_;
     uint32_t out_aligned_page_;
     std::optional<RmPlan> stick_;
@@ -435,8 +440,9 @@ const char* unsupported_reason(
         return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
     const auto& in_shape = input.logical_shape();
+    const uint32_t dram_alignment = tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment();
     if (plan == nullptr) {
-        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+        const bool within_caps = plan_tile_rows(in_shape, logical_output_shape, dram_alignment).has_value() ||
                                  lcm_tile_geometry(input, logical_output_shape, num_cores).has_value() ||
                                  segment_map_within_caps(input, logical_output_shape, num_cores);
         return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
@@ -447,7 +453,8 @@ const char* unsupported_reason(
         const uint32_t tile_bytes =
             input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
         const auto fits = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
-        if (fits(plan->tile_rows) || plan_tile_rows_fitting(in_shape, logical_output_shape, fits).has_value()) {
+        if (fits(plan->tile_rows) ||
+            plan_tile_rows_fitting(in_shape, logical_output_shape, fits, dram_alignment).has_value()) {
             return nullptr;
         }
     } else if (plan->tile_route == TileRoute::Lcm) {
@@ -457,7 +464,7 @@ const char* unsupported_reason(
         if (!lcm_bit_exact(input.dtype())) {
             return kLcmDtypeViolation;
         }
-        if (fit_lcm(*plan->lcm, budget).has_value()) {
+        if (fit_lcm(*plan->lcm, budget, dram_alignment).has_value()) {
             return nullptr;
         }
     } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
@@ -495,7 +502,10 @@ std::optional<LaunchPlan> plan_codegen(
     // Tile rows and LCM where they beat native, then tile rows, the segment map and LCM where they do not.
     const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
     std::optional<LaunchPlan> rows;
-    if (auto tile_rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
+    if (auto tile_rows = plan_tile_rows(
+            input.logical_shape(),
+            logical_output_shape,
+            tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment())) {
         LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*tile_rows)};
         if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
             rows = std::move(plan);
@@ -530,7 +540,8 @@ bool segment_map_within_caps(const Tensor& input, const ttnn::Shape& logical_out
         logical_output_shape,
         static_cast<uint32_t>(input.element_size()),
         input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype())),
-        num_cores);
+        num_cores,
+        tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment());
 }
 
 bool is_demoted(

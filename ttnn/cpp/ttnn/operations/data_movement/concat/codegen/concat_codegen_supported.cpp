@@ -8,7 +8,7 @@
 
 #include <tt-metalium/memory/buffer/buffer.hpp>
 #include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
@@ -73,7 +73,8 @@ bool fits_32_bit_geometry(const std::vector<Tensor>& input_tensors, uint32_t dim
         }
     }
     const uint64_t out_width = dim + 1 == rank ? concat_extent : first_shape[kLastAxis];
-    const uint64_t alignment = std::max(tt::tt_metal::hal::get_l1_alignment(), tt::tt_metal::hal::get_dram_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*first.device());
+    const uint64_t alignment = std::max(props.node_local_mem_alignment(), props.dram_alignment());
     const uint64_t out_stick_bytes = out_width * first.element_size();
     return (out_stick_bytes + alignment - 1) / alignment * alignment <= UINT32_MAX;
 }
@@ -149,21 +150,22 @@ CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::Con
 
     // A slot offset inside the CB is a NoC destination for the reads, so it must be legal for every source's transport;
     // the writer's page pitch in the output buffer follows the output's transport alignment.
-    uint32_t cb_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto props = tt::tt_metal::experimental::get_device_properties(*first.device());
+    uint32_t cb_alignment = props.node_local_mem_alignment();
     if (attrs.output_mem_config.buffer_type() == BufferType::DRAM) {
-        cb_alignment = std::max(cb_alignment, tt::tt_metal::hal::get_dram_alignment());
+        cb_alignment = std::max(cb_alignment, props.dram_alignment());
     }
     uint32_t max_input_page = 0;
     for (const Tensor& input : input_tensors) {
         if (input.memory_config().buffer_type() == BufferType::DRAM) {
-            cb_alignment = std::max(cb_alignment, tt::tt_metal::hal::get_dram_alignment());
+            cb_alignment = std::max(cb_alignment, props.dram_alignment());
         }
         max_input_page = std::max(max_input_page, static_cast<uint32_t>(input.mesh_buffer().aligned_page_size()));
     }
 
     if (concats_width(input_tensors, attrs)) {
         // The two-input reader stages through a scratch page with one L1 alignment of slack.
-        const uint32_t scratch_slack = has_two_inputs(input_tensors) ? tt::tt_metal::hal::get_l1_alignment() : 0;
+        const uint32_t scratch_slack = has_two_inputs(input_tensors) ? props.node_local_mem_alignment() : 0;
         return CbPages{
             .out_page = tt::round_up(out_stick, cb_alignment), .scratch_page = max_input_page + scratch_slack};
     }
@@ -172,15 +174,19 @@ CbPages cb_pages(const std::vector<Tensor>& input_tensors, const ttnn::prim::Con
 
 namespace {
 
-uint64_t footprint_bytes(const CbPages& pages, const BatchPlan& batches) {
+// Every CB starts on the allocator's alignment, the larger of the device's L1 and DRAM alignments.
+uint64_t cb_start_alignment_of(const Tensor& input) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
+    return std::max(props.node_local_mem_alignment(), props.dram_alignment());
+}
+
+uint64_t footprint_bytes(const CbPages& pages, const BatchPlan& batches, uint64_t cb_start_alignment) {
     const uint64_t out_bytes =
         static_cast<uint64_t>(cb_depth(batches.read_batch, batches.write_batch)) * pages.out_page;
     if (pages.scratch_page == 0) {
         return out_bytes;
     }
     // Every CB starts on the allocator's alignment, so the scratch CB sits behind the padding of the output CB.
-    const uint64_t cb_start_alignment =
-        std::max(tt::tt_metal::hal::get_l1_alignment(), tt::tt_metal::hal::get_dram_alignment());
     return tt::round_up(out_bytes, cb_start_alignment) + pages.scratch_page;
 }
 
@@ -188,15 +194,16 @@ uint64_t footprint_bytes(const CbPages& pages, const BatchPlan& batches) {
 
 uint64_t cb_footprint_bytes(
     const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, const BatchPlan& batches) {
-    return footprint_bytes(cb_pages(input_tensors, attrs), batches);
+    return footprint_bytes(cb_pages(input_tensors, attrs), batches, cb_start_alignment_of(input_tensors.front()));
 }
 
 // The plan runs inside the per-call program hash, so the page geometry is derived once, not per halving step.
 std::optional<BatchPlan> plan_batches(
     const std::vector<Tensor>& input_tensors, const ttnn::prim::ConcatCodegenParams& attrs, uint64_t budget) {
     const CbPages pages = cb_pages(input_tensors, attrs);
+    const uint64_t start_alignment = cb_start_alignment_of(input_tensors.front());
     BatchPlan batches{kBatch, kBatch};
-    while (footprint_bytes(pages, batches) > budget) {
+    while (footprint_bytes(pages, batches, start_alignment) > budget) {
         if (batches.read_batch == 1 && batches.write_batch == 1) {
             return std::nullopt;
         }

@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -59,8 +59,9 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     auto stick_size = W * a.element_size();
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
-    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
-    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
+    const auto props = tt::tt_metal::experimental::get_device_properties(*a.device());
+    uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, props.node_local_mem_alignment());
+    uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, props.dram_alignment());
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
@@ -118,7 +119,7 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
     // pad_align: a realignment staging area, allocated only when the reader can actually take one of
     // the two branches that use it. Registration and binding stay gated on needs_pad_align_dfb /
     // PAD_ALIGN_DFB — an unbound declared scratchpad is rejected at program creation.
-    bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
+    bool unaligned = stick_size_padded_aligned % props.dram_alignment() != 0;
     const bool needs_pad_align_dfb = stick_size_padded_front != 0 || unaligned;
     if (needs_pad_align_dfb) {
         scratchpads.push_back(ScratchpadSpec{

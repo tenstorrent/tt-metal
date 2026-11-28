@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -226,7 +226,8 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 // Hal::get_read_alignment is unreachable from TTNN (same limitation noted in
                 // all_gather.cpp), so this is conservative on Quasar.
                 const uint32_t element_size = first_input.element_size();
-                const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+                const uint32_t l1_alignment =
+                    tt::tt_metal::experimental::get_device_properties(*first_input.device()).node_local_mem_alignment();
                 uint32_t prefix_w = 0;
                 for (size_t i = 0; i + 1 < tensor_args.input_tensors.size(); i++) {
                     prefix_w += tensor_args.input_tensors[i].logical_shape()[-1];
@@ -624,9 +625,11 @@ uint32_t rm_width_concat_common_alignment(
             t.storage_type());
         align = std::max<uint32_t>(align, t.mesh_buffer().alignment());
     }
+    TT_FATAL(!tensors.empty(), "ttnn.concat: expected at least one input tensor");
+    const auto props = tt::tt_metal::experimental::get_device_properties(*tensors.front().device());
     const uint32_t out_align = output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
+                                   ? props.dram_alignment()
+                                   : props.node_local_mem_alignment();
     return std::max(align, out_align);
 }
 

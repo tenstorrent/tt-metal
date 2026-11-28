@@ -15,7 +15,7 @@
 #include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
 namespace ttnn::operations::experimental::quasar {
@@ -120,16 +120,17 @@ inline bool has_nontile_w(const ttnn::Tensor& input) {
 }
 
 // has_subaligned_shard_row covers only legacy B/W specs; a true ND spec's shard row is its last dim.
-inline bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
-    if (ttnn::operations::data_movement::has_subaligned_shard_row(mc, element_size)) {
+inline bool has_subaligned_shard_row(
+    const tt::tt_metal::distributed::MeshDevice& device, const tt::tt_metal::MemoryConfig& mc, uint32_t element_size) {
+    if (ttnn::operations::data_movement::has_subaligned_shard_row(device, mc, element_size)) {
         return true;
     }
     if (!is_nd_sharded(mc)) {
         return false;
     }
-    const uint32_t alignment = mc.buffer_type() == tt::tt_metal::BufferType::DRAM
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
+    const uint32_t alignment =
+        mc.buffer_type() == tt::tt_metal::BufferType::DRAM ? props.dram_alignment() : props.node_local_mem_alignment();
     return (mc.nd_shard_spec()->shard_shape[-1] * element_size) % alignment != 0;
 }
 
@@ -163,7 +164,7 @@ inline bool needs_rm_composite_input(
         }
         const auto spec = rm_staging_spec(input, staging_mc);
         const uint32_t element_size = spec.data_type() == input.dtype() ? input.element_size() : 2;
-        return width_begin_nonzero || has_subaligned_shard_row(staging_mc, element_size) ||
+        return width_begin_nonzero || has_subaligned_shard_row(*input.device(), staging_mc, element_size) ||
                has_squeezed_rm_row_pages(spec);
     }
     if (input.layout() != Layout::ROW_MAJOR || !input.is_sharded()) {
@@ -172,12 +173,13 @@ inline bool needs_rm_composite_input(
     if (is_rm_bw_sharded(input.memory_config())) {
         // Only W misalignment breaks the per-shard page split; irregular H is fine.
         return has_nontile_w(input) || width_begin_nonzero ||
-               has_subaligned_shard_row(input.memory_config(), input.element_size());
+               has_subaligned_shard_row(*input.device(), input.memory_config(), input.element_size());
     }
     // SliceRmProgramFactory applies the width-begin to the buffer base, which only lands inside the row
     // when the row is a single page.
     if (is_nd_sharded(input.memory_config()) &&
-        (width_begin_nonzero || has_subaligned_shard_row(input.memory_config(), input.element_size()) ||
+        (width_begin_nonzero ||
+         has_subaligned_shard_row(*input.device(), input.memory_config(), input.element_size()) ||
          has_squeezed_rm_row_pages(input.tensor_spec()))) {
         return true;
     }
@@ -203,7 +205,7 @@ inline bool needs_rm_composite_output(
         return false;
     }
     const uint32_t element_size = tile_staged && input.dtype() == DataType::BFLOAT8_B ? 2 : input.element_size();
-    if ((!tile_staged && has_nontile_w(input)) || has_subaligned_shard_row(output_mc, element_size)) {
+    if ((!tile_staged && has_nontile_w(input)) || has_subaligned_shard_row(*input.device(), output_mc, element_size)) {
         return true;
     }
     // A shard wider than what is left of the row pads the output row past the input's, and the kernels

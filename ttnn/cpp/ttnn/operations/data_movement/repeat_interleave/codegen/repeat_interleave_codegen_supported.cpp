@@ -7,7 +7,7 @@
 #include <algorithm>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -20,10 +20,9 @@ uint32_t normalize_dim(int32_t dim, uint32_t ndim) {
     return static_cast<uint32_t>(dim >= 0 ? dim : dim + static_cast<int32_t>(ndim));
 }
 
-uint32_t page_alignment(const MemoryConfig& memory_config) {
+uint32_t page_alignment(const tt::tt_metal::MetalDeviceProperties& props, const MemoryConfig& memory_config) {
     using tt::tt_metal::BufferType;
-    return memory_config.buffer_type() == BufferType::L1 ? tt::tt_metal::hal::get_l1_alignment()
-                                                         : tt::tt_metal::hal::get_dram_alignment();
+    return memory_config.buffer_type() == BufferType::L1 ? props.node_local_mem_alignment() : props.dram_alignment();
 }
 
 }  // namespace
@@ -34,9 +33,10 @@ RmCbBudget rm_cb_budget(const Tensor& input, const std::optional<MemoryConfig>& 
     const MemoryConfig& out_config = output_mem_config.value_or(input.memory_config());
     // Reader and writer each page a whole stick through the same slot, so the slot has to satisfy
     // the stricter of the two sides' page alignments.
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     const uint32_t slot_stride = std::max(
-        tt::round_up(stick_size, page_alignment(input.memory_config())),
-        tt::round_up(stick_size, page_alignment(out_config)));
+        tt::round_up(stick_size, page_alignment(props, input.memory_config())),
+        tt::round_up(stick_size, page_alignment(props, out_config)));
 
     // get_max_l1_space() measures down from the lowest occupied compute L1 address when there is
     // one, so the budget excludes L1 already held by resident buffers instead of assuming everything

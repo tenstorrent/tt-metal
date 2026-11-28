@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -41,7 +41,8 @@ ProgramDescriptor MoeRoutingRemapDeviceOperation::SingleCore::create_descriptor(
     const auto num_cluster_experts = routing_weights.logical_shape()[-1];
     const uint32_t non_zero_per_device = non_zero_weight_size / expert_parallel_size;
 
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*routing_weights.device()).node_local_mem_alignment();
 
     const auto routing_weight_page_size_bytes = routing_weights.tensor_spec().compute_page_size_bytes();
     const auto aligned_routing_weight_page_size_bytes = tt::align(routing_weight_page_size_bytes, l1_alignment);

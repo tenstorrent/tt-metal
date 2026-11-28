@@ -9,7 +9,7 @@
 
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/workload/legacy/host_api.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
@@ -211,7 +211,8 @@ Tensor compute_reshape_mapping_host_tensor(
     const Shape& input_shape,
     const Shape& output_shape,
     const std::array<uint32_t, 2>& tile_shape,
-    const std::array<uint32_t, 2>& face_shape) {
+    const std::array<uint32_t, 2>& face_shape,
+    const uint32_t l1_alignment) {
     Dims tile_dims_input(input_shape, tile_shape), tile_dims_output(output_shape, tile_shape);
 
     std::vector<std::vector<SegmentMapData>> mapping_vector;
@@ -229,7 +230,7 @@ Tensor compute_reshape_mapping_host_tensor(
         })->size();
 
     // Ensure that map data is always aligned
-    max_input_segments += max_input_segments % (tt::tt_metal::hal::get_l1_alignment());
+    max_input_segments += max_input_segments % l1_alignment;
 
     // initialize to 0 because that will be checked by the kernel as a stopping condition
     std::vector<uint32_t> flat_mapping_vector(SegmentMapData::size * num_output_pages * max_input_segments, 0);
@@ -298,7 +299,13 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
 
     // Host-compute and upload the input->output page-mapping tensor.
     Tensor mapping_tensor = detail::compute_reshape_mapping_host_tensor(
-                                num_input_pages, num_output_pages, input_shape, output_shape, tile_shape, face_shape)
+                                num_input_pages,
+                                num_output_pages,
+                                input_shape,
+                                output_shape,
+                                tile_shape,
+                                face_shape,
+                                tt::tt_metal::experimental::get_device_properties(*device).node_local_mem_alignment())
                                 .to_device(device);
 
     const uint32_t mapping_page_size = mapping_tensor.logical_shape()[-1];

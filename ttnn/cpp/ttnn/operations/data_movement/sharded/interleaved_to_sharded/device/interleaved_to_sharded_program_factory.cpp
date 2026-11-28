@@ -14,7 +14,7 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 
 using namespace tt::constants;
@@ -34,6 +34,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     Tensor& output_tensor) {
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     // Keep explicit bool init to match legacy behavior which forced it true
     bool keep_l1_aligned = true;  // operation_attributes.keep_l1_aligned;
 
@@ -108,7 +109,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             input_unit_size - (tt::round_up(num_units_per_row, input_unit_size) - num_units_per_row);
         // Adjust accordingly to l1 alignment, do it for all archs
         if (keep_l1_aligned) {
-            padded_offset_bytes = tt::align(input_unit_size, hal::get_l1_alignment());
+            padded_offset_bytes = tt::align(input_unit_size, props.node_local_mem_alignment());
         } else {
             padded_offset_bytes = tt::align(input_unit_size, input.mesh_buffer().alignment());
         }
@@ -159,8 +160,8 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
         });
     }
 
-    uint32_t dram_alignment = hal::get_dram_alignment();
-    uint32_t l1_alignment = hal::get_l1_alignment();
+    uint32_t dram_alignment = props.dram_alignment();
+    uint32_t l1_alignment = props.node_local_mem_alignment();
     uint32_t num_trids = 4;
     // The scratchpad stages DRAM (64B) reads down to L1 (16B) alignment. See issue #34414. Only the
     // row-major reader has a use for it -- the tile reader never receives a handle to it -- so the

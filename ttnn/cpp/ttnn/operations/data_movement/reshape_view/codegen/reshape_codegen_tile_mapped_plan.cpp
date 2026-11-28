@@ -10,7 +10,6 @@
 #include <utility>
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -217,7 +216,7 @@ std::vector<uint32_t> slice_bounds(
     return bounds;
 }
 
-uint32_t entries_alignment() { return std::max<uint32_t>(1, tt::tt_metal::hal::get_dram_alignment() / kEntryBytes); }
+uint32_t entries_alignment(uint32_t dram_alignment) { return std::max<uint32_t>(1, dram_alignment / kEntryBytes); }
 
 struct Candidates {
     std::optional<TileMappedLayout> unsliced;
@@ -226,13 +225,18 @@ struct Candidates {
 };
 
 Candidates plan_candidates(
-    const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
+    const Shape3& in,
+    const Shape3& out,
+    uint32_t element_bytes,
+    uint32_t tile_bytes,
+    uint32_t num_cores,
+    uint32_t dram_alignment) {
     Candidates candidates;
     const uint64_t pages = tile_pages(out);
     if (pages == 0 || pages > kMaxPlannedOutTiles) {
         return candidates;
     }
-    const uint32_t alignment = entries_alignment();
+    const uint32_t alignment = entries_alignment(dram_alignment);
     std::vector<SegmentMapData> segments;
     uint32_t max_entries = 1;
     uint32_t max_reads = 0;
@@ -278,15 +282,21 @@ Candidates plan_candidates(
 }
 
 Candidates cached_candidates(
-    const Shape3& in, const Shape3& out, uint32_t element_bytes, uint32_t tile_bytes, uint32_t num_cores) {
+    const Shape3& in,
+    const Shape3& out,
+    uint32_t element_bytes,
+    uint32_t tile_bytes,
+    uint32_t num_cores,
+    uint32_t dram_alignment) {
     using Key = std::array<uint64_t, 10>;
     static PlanMemo<Key, Candidates> memo(kLayoutCacheEntries);
 
-    const Key key{in.c, in.h, in.w, out.c, out.h, out.w, element_bytes, tile_bytes, num_cores, entries_alignment()};
+    const Key key{
+        in.c, in.h, in.w, out.c, out.h, out.w, element_bytes, tile_bytes, num_cores, entries_alignment(dram_alignment)};
     if (auto hit = memo.find(key)) {
         return *hit;
     }
-    auto candidates = plan_candidates(in, out, element_bytes, tile_bytes, num_cores);
+    auto candidates = plan_candidates(in, out, element_bytes, tile_bytes, num_cores, dram_alignment);
     memo.insert(key, candidates);
     return candidates;
 }
@@ -312,17 +322,20 @@ std::optional<TileMappedLayout> tile_mapped_layout(
     uint32_t element_bytes,
     uint32_t tile_bytes,
     uint32_t num_cores,
-    uint64_t l1_budget) {
+    uint64_t l1_budget,
+    uint32_t dram_alignment) {
     const auto shapes = normalize_pair(in_shape, out_shape);
     if (!shapes) {
         return std::nullopt;
     }
-    const auto candidates = cached_candidates(shapes->first, shapes->second, element_bytes, tile_bytes, num_cores);
+    const auto candidates =
+        cached_candidates(shapes->first, shapes->second, element_bytes, tile_bytes, num_cores, dram_alignment);
     // The sliced map page can be smaller than the per-tile one, so it may fit where the per-tile map does not.
-    if (candidates.sliced && tile_mapped_input_depth(*candidates.sliced, tile_bytes, l1_budget) > 0) {
+    if (candidates.sliced && tile_mapped_input_depth(*candidates.sliced, tile_bytes, l1_budget, dram_alignment) > 0) {
         return candidates.sliced;
     }
-    if (candidates.unsliced && tile_mapped_input_depth(*candidates.unsliced, tile_bytes, l1_budget) > 0) {
+    if (candidates.unsliced &&
+        tile_mapped_input_depth(*candidates.unsliced, tile_bytes, l1_budget, dram_alignment) > 0) {
         return candidates.unsliced;
     }
     return std::nullopt;
@@ -333,7 +346,8 @@ bool tile_mapped_within_caps(
     const ttnn::Shape& out_shape,
     uint32_t element_bytes,
     uint32_t tile_bytes,
-    uint32_t num_cores) {
+    uint32_t num_cores,
+    uint32_t dram_alignment) {
     const auto shapes = normalize_pair(in_shape, out_shape);
     if (!shapes) {
         return false;
@@ -343,10 +357,11 @@ bool tile_mapped_within_caps(
     if (pages == 0 || pages > kMaxPlannedOutTiles) {
         return false;
     }
-    if (pages * tt::round_up(max_segments_per_page(in, out), entries_alignment()) * kEntryBytes <= kMaxMapBytes) {
+    if (pages * tt::round_up(max_segments_per_page(in, out), entries_alignment(dram_alignment)) * kEntryBytes <=
+        kMaxMapBytes) {
         return true;
     }
-    return cached_candidates(in, out, element_bytes, tile_bytes, num_cores).unsliced.has_value();
+    return cached_candidates(in, out, element_bytes, tile_bytes, num_cores, dram_alignment).unsliced.has_value();
 }
 
 TileMappedPlan build_tile_mapped_plan(
@@ -355,11 +370,12 @@ TileMappedPlan build_tile_mapped_plan(
     uint32_t element_bytes,
     uint32_t tile_bytes,
     uint32_t num_cores,
-    bool sliced) {
+    bool sliced,
+    uint32_t dram_alignment) {
     const auto shapes = normalize_pair(in_shape, out_shape);
     TT_FATAL(shapes.has_value(), "Reshape shapes differ in volume");
     const auto& [in, out] = *shapes;
-    const auto candidates = cached_candidates(in, out, element_bytes, tile_bytes, num_cores);
+    const auto candidates = cached_candidates(in, out, element_bytes, tile_bytes, num_cores, dram_alignment);
     const auto& layout = sliced ? candidates.sliced : candidates.unsliced;
     TT_FATAL(layout.has_value(), "Reshape tile map exceeds its size caps");
 
@@ -398,10 +414,11 @@ TileMappedPlan build_tile_mapped_plan(
     return plan;
 }
 
-uint32_t tile_mapped_input_depth(const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget) {
+uint32_t tile_mapped_input_depth(
+    const TileMappedLayout& layout, uint32_t tile_bytes, uint64_t l1_budget, uint32_t dram_alignment) {
     // Map, input and scratch CBs, each DRAM-aligned like native's map page, input tile and output tile. This map's
     // segments are native's merged by input tile, so at depth 1 the unsliced map never needs more L1 than native.
-    const auto footprint = [](uint64_t bytes) { return tt::round_up(bytes, tt::tt_metal::hal::get_dram_alignment()); };
+    const auto footprint = [dram_alignment](uint64_t bytes) { return tt::round_up(bytes, dram_alignment); };
     const uint64_t fixed = footprint(layout.page_bytes()) + footprint(tile_bytes);
     for (const uint32_t depth : kPipelinedDepths) {
         if (fixed + footprint(static_cast<uint64_t>(depth) * tile_bytes) <= l1_budget) {

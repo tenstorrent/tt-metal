@@ -75,20 +75,26 @@ struct TileRowsChoice {
     std::shared_ptr<const TileRowsSchedule> schedule;
 };
 
-// nullopt when the shapes are not a tile-row permutation or the plan exceeds its size caps. Memoized on the shapes
-// and the source cap.
+// nullopt when the shapes are not a tile-row permutation or the plan exceeds its size caps. Memoized on the shapes,
+// the source cap and the DRAM alignment, which sets the table page size.
 std::optional<TileRowsChoice> plan_tile_rows(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t max_in = kTileRowsMaxIn);
+    const ttnn::Shape& in_shape,
+    const ttnn::Shape& out_shape,
+    uint32_t dram_alignment,
+    uint32_t max_in = kTileRowsMaxIn);
 
 // The first plan that `fits`, trying the full plan, then smaller source caps, then each cap again with a single
 // staged batch; nullopt when none fits. Lowering the cap shrinks batches whose output tiles each need few sources;
 // a single staged batch halves the staged CB of shapes, such as a head split, where every output tile needs 32.
 std::optional<TileRowsChoice> plan_tile_rows_fitting(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const std::function<bool(const TileRowsChoice&)>& fits);
+    const ttnn::Shape& in_shape,
+    const ttnn::Shape& out_shape,
+    const std::function<bool(const TileRowsChoice&)>& fits,
+    uint32_t dram_alignment);
 
 // The plan `choice` describes; reuses its schedule when set.
 TileRowsPlan build_tile_rows_plan(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice);
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice, uint32_t dram_alignment);
 
 // Per-core CB bytes of the program built from `choice`.
 uint64_t tile_rows_l1_bytes(const TileRowsChoice& choice, uint32_t tile_bytes);

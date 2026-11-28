@@ -10,7 +10,6 @@
 #include <limits>
 #include <numeric>
 
-#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -168,9 +167,9 @@ std::vector<Batch> make_batches(const PlanInputs& p, uint32_t max_out, uint32_t 
     return batches;
 }
 
-uint32_t page_align_words() { return std::max<uint32_t>(16, tt::tt_metal::hal::get_dram_alignment() / 4); }
+uint32_t page_align_words(uint32_t dram_alignment) { return std::max<uint32_t>(16, dram_alignment / 4); }
 
-TileRowsLayout layout_of(const PlanInputs& p, const std::vector<Batch>& batches) {
+TileRowsLayout layout_of(const PlanInputs& p, const std::vector<Batch>& batches, uint32_t dram_alignment) {
     TileRowsLayout layout;
     for (const auto& b : batches) {
         layout.in_slots = std::max<uint32_t>(layout.in_slots, static_cast<uint32_t>(b.ins.size()));
@@ -179,7 +178,7 @@ TileRowsLayout layout_of(const PlanInputs& p, const std::vector<Batch>& batches)
     layout.max_runs = p.max_runs;
     layout.num_batches = static_cast<uint32_t>(batches.size());
     const uint32_t words = kTileRowsHeaderWords + layout.in_slots + layout.out_slots * layout.entry_words();
-    layout.page_words = tt::round_up(words, page_align_words());
+    layout.page_words = tt::round_up(words, page_align_words(dram_alignment));
     layout.num_input_pages = static_cast<uint32_t>(tile_pages(p.in));
     layout.num_output_pages = static_cast<uint32_t>(p.out_pages);
     return layout;
@@ -210,7 +209,8 @@ struct TileRowsSchedule {
 
 namespace tile_rows_planner {
 
-std::optional<TileRowsChoice> choose(std::shared_ptr<const PlanInputs> inputs, uint32_t max_in) {
+std::optional<TileRowsChoice> choose(
+    std::shared_ptr<const PlanInputs> inputs, uint32_t max_in, uint32_t dram_alignment) {
     auto schedule = std::make_shared<TileRowsSchedule>();
     schedule->inputs = std::move(inputs);
     const PlanInputs& p = *schedule->inputs;
@@ -222,7 +222,7 @@ std::optional<TileRowsChoice> choose(std::shared_ptr<const PlanInputs> inputs, u
             batch_reads += b.ins.size();
         }
         choice = TileRowsChoice{
-            .layout = layout_of(p, schedule->batches),
+            .layout = layout_of(p, schedule->batches, dram_alignment),
             .max_out = max_out,
             .max_in = max_in,
             .runs = p.runs,
@@ -245,18 +245,22 @@ std::optional<TileRowsChoice> choose(std::shared_ptr<const PlanInputs> inputs, u
 // depends only on the shapes, the source cap and the DRAM alignment. Entries drop their schedule to stay small.
 // `prepared` carries the per-shape walk across calls for the same shapes; it is filled only on a miss.
 std::optional<TileRowsChoice> memoized_choice(
-    const Shape3& in, const Shape3& out, uint32_t max_in, std::shared_ptr<const PlanInputs>& prepared) {
+    const Shape3& in,
+    const Shape3& out,
+    uint32_t max_in,
+    uint32_t dram_alignment,
+    std::shared_ptr<const PlanInputs>& prepared) {
     using Key = std::array<uint64_t, 8>;
     static PlanMemo<Key, std::optional<TileRowsChoice>> memo(kChoiceMemoEntries);
 
-    const Key key{in.c, in.h, in.w, out.c, out.h, out.w, max_in, page_align_words()};
+    const Key key{in.c, in.h, in.w, out.c, out.h, out.w, max_in, page_align_words(dram_alignment)};
     if (auto hit = memo.find(key)) {
         return std::move(*hit);
     }
     if (!prepared) {
         prepared = std::make_shared<const PlanInputs>(prepare(in, out));
     }
-    auto choice = choose(prepared, max_in);
+    auto choice = choose(prepared, max_in, dram_alignment);
     auto entry = choice;
     if (entry) {
         entry->schedule.reset();
@@ -268,18 +272,21 @@ std::optional<TileRowsChoice> memoized_choice(
 }  // namespace tile_rows_planner
 
 std::optional<TileRowsChoice> plan_tile_rows(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t max_in) {
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, uint32_t dram_alignment, uint32_t max_in) {
     using namespace tile_rows_planner;
     const auto shapes = permutation_shapes(in_shape, out_shape);
     if (!shapes || exceeds_caps(shapes->second)) {
         return std::nullopt;
     }
     std::shared_ptr<const PlanInputs> prepared;
-    return memoized_choice(shapes->first, shapes->second, max_in, prepared);
+    return memoized_choice(shapes->first, shapes->second, max_in, dram_alignment, prepared);
 }
 
 std::optional<TileRowsChoice> plan_tile_rows_fitting(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const std::function<bool(const TileRowsChoice&)>& fits) {
+    const ttnn::Shape& in_shape,
+    const ttnn::Shape& out_shape,
+    const std::function<bool(const TileRowsChoice&)>& fits,
+    uint32_t dram_alignment) {
     using namespace tile_rows_planner;
     const auto shapes = permutation_shapes(in_shape, out_shape);
     if (!shapes || exceeds_caps(shapes->second)) {
@@ -288,7 +295,7 @@ std::optional<TileRowsChoice> plan_tile_rows_fitting(
     std::shared_ptr<const PlanInputs> prepared;
     for (const uint32_t staged_batches : {kTileRowsStagedBatches, 1u}) {
         for (const uint32_t max_in : kMaxInSteps) {
-            auto choice = memoized_choice(shapes->first, shapes->second, max_in, prepared);
+            auto choice = memoized_choice(shapes->first, shapes->second, max_in, dram_alignment, prepared);
             if (!choice) {
                 continue;
             }
@@ -302,7 +309,7 @@ std::optional<TileRowsChoice> plan_tile_rows_fitting(
 }
 
 TileRowsPlan build_tile_rows_plan(
-    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice) {
+    const ttnn::Shape& in_shape, const ttnn::Shape& out_shape, const TileRowsChoice& choice, uint32_t dram_alignment) {
     using namespace tile_rows_planner;
     std::shared_ptr<const TileRowsSchedule> schedule = choice.schedule;
     if (!schedule) {
@@ -317,7 +324,7 @@ TileRowsPlan build_tile_rows_plan(
     const auto& batches = schedule->batches;
     const TileFacts& tiles = p.tiles;
 
-    TileRowsPlan plan{.layout = layout_of(p, batches)};
+    TileRowsPlan plan{.layout = layout_of(p, batches, dram_alignment)};
     const TileRowsLayout& layout = plan.layout;
     plan.table.assign(static_cast<size_t>(layout.num_batches) * layout.page_words, 0);
 

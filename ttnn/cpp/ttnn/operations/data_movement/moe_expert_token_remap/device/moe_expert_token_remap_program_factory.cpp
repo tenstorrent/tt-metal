@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/workload/legacy/tensor_accessor_args.hpp>
@@ -35,7 +35,8 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
 
     const auto experts_per_device = output_mapping_tensor.logical_shape()[-1];
 
-    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto l1_alignment =
+        tt::tt_metal::experimental::get_device_properties(*mapping_tensor.device()).node_local_mem_alignment();
 
     const auto mapping_page_size_bytes = mapping_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);

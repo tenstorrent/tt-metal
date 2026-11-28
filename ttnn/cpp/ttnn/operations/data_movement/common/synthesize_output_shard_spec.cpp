@@ -10,7 +10,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/utils/work_split.hpp>
 
@@ -157,6 +156,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     uint64_t tensor_width,
     const CoreCoord& compute_grid_size,
     TensorMemoryLayout memory_layout,
+    uint32_t l1_alignment,
     RmPageAlignmentMode mode) {
     // TILE inputs land tile-aligned pages by construction; RM alignment coupling is the only concern.
     if (input_layout != tt::tt_metal::Layout::ROW_MAJOR) {
@@ -166,7 +166,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     if (tensor_width == 0) {
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
-    const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
+    const uint64_t l1_page_align = static_cast<uint64_t>(l1_alignment);
     auto rm_page_valid = [&](uint64_t shard_width) {
         const uint64_t page = shard_width * static_cast<uint64_t>(element_size_bytes);
         return page != 0 && (page % l1_page_align) == 0 && (tensor_width % shard_width) == 0;

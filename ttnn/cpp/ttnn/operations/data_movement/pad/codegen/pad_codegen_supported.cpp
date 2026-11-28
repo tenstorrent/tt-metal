@@ -14,7 +14,7 @@
 #include <tt-metalium/data_formats/bfloat16.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include <tt-metalium/mesh/legacy/device.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include <tt-metalium/data_formats/data_format.hpp>
 #include <tt_stl/assert.hpp>
@@ -156,7 +156,9 @@ bool output_covers_input(const Tensor& input, const ttnn::prim::PadCodegenParams
 
 uint32_t dram_aligned_tile_bytes(const Tensor& input, DataType dtype) {
     const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
-    return tt::round_up(input.tensor_spec().tile().get_tile_size(format), tt::tt_metal::hal::get_dram_alignment());
+    return tt::round_up(
+        input.tensor_spec().tile().get_tile_size(format),
+        tt::tt_metal::experimental::get_device_properties(*input.device()).dram_alignment());
 }
 
 uint64_t cb_footprint_bytes(const Tensor& input, const ttnn::prim::PadCodegenParams& attrs, const BatchPlan& batches) {

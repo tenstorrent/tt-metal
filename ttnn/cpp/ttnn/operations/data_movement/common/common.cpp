@@ -24,7 +24,7 @@
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include <tt-metalium/memory/buffer/mesh_buffer.hpp>
 #include <tt-metalium/memory/buffer/buffer_distribution_spec.hpp>
@@ -991,7 +991,10 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
     return row_bytes;
 }
 
-bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size) {
+bool has_subaligned_shard_row(
+    const tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::MemoryConfig& memory_config,
+    uint32_t element_size) {
     if (!memory_config.shard_spec().has_value()) {
         return false;
     }
@@ -1000,9 +1003,10 @@ bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, u
         layout != tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
     const uint32_t alignment = (memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM)
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
+                                   ? props.dram_alignment()
+                                   : props.node_local_mem_alignment();
     return (memory_config.shard_spec()->shape[1] * element_size) % alignment != 0;
 }
 
@@ -1016,7 +1020,8 @@ bool may_split_rows(const tt::tt_metal::MemoryConfig& memory_config) {
 
 }  // namespace detail
 
-bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec) {
+bool has_subaligned_split_row(
+    const tt::tt_metal::distributed::MeshDevice& device, const tt::tt_metal::TensorSpec& spec) {
     const auto& memory_config = spec.memory_config();
     if (spec.layout() != tt::tt_metal::Layout::ROW_MAJOR || !detail::may_split_rows(memory_config)) {
         return false;
@@ -1033,9 +1038,10 @@ bool has_subaligned_split_row(const tt::tt_metal::TensorSpec& spec) {
     if (shard_width >= spec.padded_shape()[-1]) {
         return false;
     }
+    const auto props = tt::tt_metal::experimental::get_device_properties(device);
     const uint32_t alignment = (memory_config.buffer_type() == tt::tt_metal::BufferType::DRAM)
-                                   ? tt::tt_metal::hal::get_dram_alignment()
-                                   : tt::tt_metal::hal::get_l1_alignment();
+                                   ? props.dram_alignment()
+                                   : props.node_local_mem_alignment();
     return spec.compute_page_size_bytes() % alignment != 0;
 }
 
@@ -1077,8 +1083,9 @@ bool has_folded_split_row(const tt::tt_metal::TensorSpec& spec) {
     return squeezed.first[-1] != pages_per_row;
 }
 
-bool needs_interleaved_row_staging(const tt::tt_metal::TensorSpec& spec) {
-    return has_subaligned_split_row(spec) || has_folded_split_row(spec);
+bool needs_interleaved_row_staging(
+    const tt::tt_metal::distributed::MeshDevice& device, const tt::tt_metal::TensorSpec& spec) {
+    return has_subaligned_split_row(device, spec) || has_folded_split_row(spec);
 }
 
 namespace detail {
@@ -1218,7 +1225,8 @@ BlockSplitInputs block_split_inputs(
     // Fold the staging buffer (bytes/tile + fixed) into the limit or the region overruns L1. Only
     // the tilize direction has one, so untilize budgets the input/output pair alone.
     const uint32_t max_l1_size = get_max_l1_space(input_tensor);
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t dram_alignment =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).dram_alignment();
     const uint32_t staging_bytes_per_tile = has_staging ? (input_single_tile_size / tile_height) : 0;
     const uint32_t fixed_staging_bytes = has_staging ? (2 * dram_alignment) : 0;
     const uint32_t budget_for_tiles = (max_l1_size > fixed_staging_bytes) ? (max_l1_size - fixed_staging_bytes) : 0;

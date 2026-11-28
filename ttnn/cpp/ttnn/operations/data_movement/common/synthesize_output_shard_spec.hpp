@@ -51,6 +51,7 @@ std::optional<tt::tt_metal::ShardSpec> shrink_shard_for_rm_page_alignment(
     uint64_t tensor_width,
     const tt::tt_metal::CoreCoord& compute_grid_size,
     tt::tt_metal::TensorMemoryLayout memory_layout,
+    uint32_t l1_alignment,
     RmPageAlignmentMode mode = RmPageAlignmentMode::Strict);
 
 // Rescales a true-ND shard spec to fit a sliced output shape, keeping the orientation/distribution

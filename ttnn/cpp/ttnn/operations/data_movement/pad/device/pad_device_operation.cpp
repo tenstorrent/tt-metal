@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "pad_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -186,7 +186,8 @@ void PadDeviceOperation::validate_on_program_cache_miss(
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
         const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
+        const uint32_t alignment_requirement =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
         TT_FATAL(
             page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",
@@ -201,7 +202,8 @@ void PadDeviceOperation::validate_on_program_cache_miss(
                 ? operation_attributes.output_mem_config.shard_spec().value().shape[1]
                 : operation_attributes.output_mem_config.nd_shard_spec().value().shard_shape[-1];
         uint32_t output_page_size_bytes = output_shard_width * input_tensor.element_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
+        const uint32_t alignment_requirement =
+            tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
         TT_FATAL(
             output_page_size_bytes == tt::align(output_page_size_bytes, alignment_requirement),
             "Output row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes",

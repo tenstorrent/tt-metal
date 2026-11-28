@@ -11,7 +11,7 @@
 #include <tuple>
 #include <tt-metalium/utils/work_split.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/utils/math.hpp>
@@ -71,12 +71,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input_tensor.device());
     auto src_buffer_alignment = input_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto dst_buffer_alignment = output_tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % src_buffer_alignment;
@@ -184,12 +185,13 @@ SliceDfbSizing compute_dfb_size(
     const Shape& output_tensor_start,
     const uint32_t num_sticks_per_core_group_1,
     const uint32_t num_sticks_per_core_group_2) {
+    const auto props = tt::tt_metal::experimental::get_device_properties(*input.device());
     auto src_buffer_alignment = input.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     auto dst_buffer_alignment = output.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? ::hal::get_dram_alignment()
-                                    : ::hal::get_l1_alignment();
+                                    ? props.dram_alignment()
+                                    : props.node_local_mem_alignment();
     const auto single_alignment = std::max(src_buffer_alignment, dst_buffer_alignment);
     auto alignment = single_alignment;
 

@@ -247,7 +247,7 @@ std::optional<LcmPlan> lcm_tile_geometry(
 
 // `plan` with the largest write batch, then the deepest output CB, whose CBs fit `l1_budget`; nullopt when a one-tile
 // batch at its smallest depth does not.
-std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget);
+std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget, uint32_t dram_alignment);
 
 // The segment map fitted to `l1_budget`, nullopt when it exceeds its size caps or does not fit with one input slot.
 std::optional<TileMappedChoice> fit_tile_mapped(
@@ -260,7 +260,7 @@ std::optional<TileMappedChoice> fit_tile_mapped(
 std::optional<RmPlan> rm_geometry(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
 
-std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget);
+std::optional<RmPlan> fit_rm(RmPlan plan, uint64_t l1_budget, uint32_t dram_alignment);
 
 std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
     const Tensor& input,
@@ -269,7 +269,7 @@ std::optional<RmArbitraryPlan> rm_arbitrary_geometry(
     tt::tt_metal::BufferType output_buffer,
     uint32_t grid_cores);
 
-std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget);
+std::optional<RmArbitraryPlan> fit_rm_arbitrary(RmArbitraryPlan plan, uint64_t l1_budget, uint32_t dram_alignment);
 
 // The row-major program the factory builds: the stick program at the deepest CB that fits the L1 free below the
 // lowest live allocation, else the slab program at the largest batch that does; nullopt when neither fits. Same

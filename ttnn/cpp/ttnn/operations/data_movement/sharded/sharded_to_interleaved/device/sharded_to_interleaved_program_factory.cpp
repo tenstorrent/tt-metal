@@ -11,6 +11,7 @@
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/data_movement/sharded/sharded_common.hpp"
 #include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/utils/math.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -270,7 +271,9 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     uint32_t padded_shard_width = tt::align(output_unit_size, dst_buffer->alignment());
     if (is_blackhole or is_l1_aligned) {
         if (!dst_is_dram or is_l1_aligned) {
-            padded_shard_width = tt::align(output_unit_size, hal::get_l1_alignment());
+            padded_shard_width = tt::align(
+                output_unit_size,
+                tt::tt_metal::experimental::get_device_properties(*input.device()).node_local_mem_alignment());
         }
     }
 

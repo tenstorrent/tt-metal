@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
-#include <tt-metalium/discovery/hal.hpp>
+#include <tt-metalium/experimental/mesh_device_properties.hpp>
 #include <tt-metalium/data_formats/tile_constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -170,7 +170,8 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         TILE_HEIGHT);
 
-    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    const uint32_t alignment_requirement =
+        tt::tt_metal::experimental::get_device_properties(*input_tensor.device()).node_local_mem_alignment();
     if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
         uint32_t l1_address_increment_size =
