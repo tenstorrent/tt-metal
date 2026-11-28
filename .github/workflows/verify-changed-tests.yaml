@@ -516,7 +516,13 @@ jobs:
             if [[ '${{ matrix.leg.gate_packages }}' != 'true' \
                 && '${{ matrix.leg.gate_workdir }}' != 'tt_metal/tt-llk' \
                 && '${{ matrix.leg.gate_workdir }}' != tt_metal/tt-llk/* ]]; then
-              export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ matrix.leg.gate_pytest_deselect }} ${PYTEST_ADDOPTS:-}"
+              # Dump every thread's stack if one test runs past 80% of the step budget (clamped
+              # to [60s, 20min]), so a hang killed by timeout-minutes names the test. It only
+              # prints, and unlike pytest-timeout it fires while a ttsim C++ call holds the GIL.
+              faulthandler_timeout=$(( ${{ matrix.leg.timeout || 30 }} * 48 ))
+              if (( faulthandler_timeout > 1200 )); then faulthandler_timeout=1200; fi
+              if (( faulthandler_timeout < 60 )); then faulthandler_timeout=60; fi
+              export PYTEST_ADDOPTS="-p no:timeout -o faulthandler_timeout=$faulthandler_timeout -n 4 ${{ matrix.leg.gate_pytest_deselect }} ${PYTEST_ADDOPTS:-}"
             fi
             CMD=$(cat <<'GATE_CMD_EOF'
             ${{ matrix.leg.cmd }}

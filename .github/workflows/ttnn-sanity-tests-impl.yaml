@@ -457,7 +457,14 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
+            # Dump every thread's stack if one test runs past 80% of the step budget (clamped
+            # to [60s, 20min]), so a hang killed by timeout-minutes names the test. It only
+            # prints, and unlike pytest-timeout it fires while a ttsim C++ call holds the GIL.
+            sim_step_minutes="${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}"
+            faulthandler_timeout=$(( ${sim_step_minutes:-30} * 48 ))
+            if (( faulthandler_timeout > 1200 )); then faulthandler_timeout=1200; fi
+            if (( faulthandler_timeout < 60 )); then faulthandler_timeout=60; fi
+            export PYTEST_ADDOPTS="-p no:timeout -o faulthandler_timeout=$faulthandler_timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
             # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
             # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
             # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
@@ -467,7 +474,7 @@ jobs:
             # multi-line cmd would be masked by a later line that passes.
             export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
             # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
-            export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
+            export SERIAL_ADDOPTS="-p no:timeout -o faulthandler_timeout=$faulthandler_timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
             # Wrap the whole sim run in the host-load sidecar so its usage report covers both
             # the parallel run and any serial re-run. Written to /work/mem_report.json (even
             # on failure — emitted before the sidecar exits) so the Upload mem report step
