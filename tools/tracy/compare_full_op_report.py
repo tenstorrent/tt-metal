@@ -146,7 +146,7 @@ def compare_cells(
     if len_a != len_b:
         differences.append(f"Row count mismatch: {len_a} rows vs {len_b} rows")
         if len(differences) >= max_differences:
-            return differences
+            return differences, allowed_headers
 
     # include header comparison
     all_rows_a = [headers_a] + rows_a if headers_a else rows_a
@@ -173,7 +173,7 @@ def compare_cells(
         if cols_a != cols_b:
             differences.append(f"Row {row_index + 1} column count mismatch: {cols_a} columns vs {cols_b} columns")
             if len(differences) >= max_differences:
-                return differences
+                return differences, allowed_headers
 
         shared_col_count = min(cols_a, cols_b)
 
