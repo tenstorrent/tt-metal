@@ -11,7 +11,7 @@ from models.experimental.blazepose.demo.blazebase import resize_pad, denormalize
 from models.experimental.blazepose.demo.blazepose import BlazePose
 from models.experimental.blazepose.demo.blazepose_landmark import BlazePoseLandmark
 
-from models.experimental.blazepose.demo.visualization import draw_detections, draw_landmarks, draw_roi, POSE_CONNECTIONS
+from models.experimental.blazepose.visualization import draw_detections, draw_landmarks, draw_roi, POSE_CONNECTIONS
 
 """
 BlazePose is a two stage pipeline. (1, 896, 12) - is a regressor output for the first detector stage.
