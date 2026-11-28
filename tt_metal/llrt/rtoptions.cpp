@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -153,6 +154,8 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH,  // NoC events report path
     TT_METAL_PROFILE_PERF_COUNTERS,                // Enable Performance Counter profiling
+    TT_METAL_PROFILE_RISCV_PMC,                    // Enable RISC-V baby-core HPM counters
+    TT_METAL_PROFILE_RISCV_PMC_DM,                 // Event selects of the Quasar data-movement cores
     TT_METAL_MEM_PROFILER,                         // Enable memory/buffer profiling
     TT_METAL_TRACE_PROFILER,                       // Enable trace profiling
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
@@ -322,6 +325,32 @@ std::string to_lower_copy(std::string value) {
     return value;
 }
 
+// One to max_count comma separated values, hex or decimal; strtoull rather than sscanf because selects routinely have
+// bit 31 set.
+std::vector<uint32_t> parse_u32_list(const char* name, const char* value, size_t max_count) {
+    std::vector<uint32_t> out;
+    const char* cursor = value;
+    while (true) {
+        char* end = nullptr;
+        errno = 0;
+        const unsigned long long parsed = std::strtoull(cursor, &end, 0);
+        const bool ok = end != cursor && errno == 0 && parsed <= std::numeric_limits<uint32_t>::max() &&
+                        (*end == '\0' || (*end == ',' && out.size() + 1 < max_count));
+        if (!ok) {
+            TT_THROW(
+                "{}=\"{}\" could not be parsed. Expected one to {} comma separated 32-bit integers (hex accepted).",
+                name,
+                value,
+                max_count);
+        }
+        out.push_back(static_cast<uint32_t>(parsed));
+        if (*end == '\0') {
+            return out;
+        }
+        cursor = end + 1;
+    }
+}
+
 std::string to_upper_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return std::toupper(ch); });
     return value;
@@ -414,6 +443,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     TT_FATAL(
         !(get_feature_enabled(RunTimeDebugFeatureDprint) && get_profiler_enabled()),
         "Cannot enable both debug printing and profiling");
+    TT_FATAL(
+        !(get_profiler_riscv_pmc_enabled() && get_streaming_profiler_enabled()),
+        "TT_METAL_PROFILE_RISCV_PMC writes into the device profiler buffers and cannot be combined with "
+        "TT_METAL_STREAMING_PROFILER.");
     // The DRAM (TT_METAL_DEVICE_PROFILER) and streaming (TT_METAL_STREAMING_PROFILER) device profilers are
     // mutually exclusive modes: their device producers overlay the same L1 profiler region with different
     // layouts, and their hosts would both drive it. Refuse here, at MetalContext construction, before any
@@ -431,6 +464,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
         "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
         "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
+    // Trace-only profiling points every Tensix RISC at the first RISC's buffer, where the counter markers collide.
+    TT_FATAL(
+        !(get_profiler_riscv_pmc_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_RISCV_PMC cannot be combined with TT_METAL_TRACE_PROFILER.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -1261,6 +1298,53 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 this->profiler_enabled = true;
             }
             break;
+
+        // TT_METAL_PROFILE_RISCV_PMC
+        // RISC-V performance monitor of the Tensix baby cores: BRISC, NCRISC and TRISC0/1/2 on Blackhole,
+        // the TRISCs and data-movement cores on Quasar. Value is the mhpmevent3 and optional mhpmevent4 select, comma
+        // separated, hex or decimal (eight 4-bit pipeline-domain nibbles each). See
+        // tt_metal/tt-llk/docs/performance_counters/riscv_pmc.md. Default: disabled Usage: export
+        // TT_METAL_PROFILE_RISCV_PMC=0x10110111,0xA0000000
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
+            const std::vector<uint32_t> ev = parse_u32_list("TT_METAL_PROFILE_RISCV_PMC", value, 2);
+            const uint32_t ev3 = ev[0];
+            const uint32_t ev4 = ev.size() > 1 ? ev[1] : 0;
+            if (ev3 == 0 && ev4 == 0) {
+                TT_THROW(
+                    "TT_METAL_PROFILE_RISCV_PMC has both event selects zero, which leaves both "
+                    "counters disabled in hardware. Unset the variable instead.");
+            }
+            if (ev3 == ev4) {
+                TT_THROW("TT_METAL_PROFILE_RISCV_PMC gives both counters the same select {:#x}.", ev3);
+            }
+            this->profiler_riscv_pmc_event3 = ev3;
+            this->profiler_riscv_pmc_event4 = ev4;
+            this->profiler_riscv_pmc_enabled = true;
+            this->profiler_enabled = true;
+            break;
+        }
+
+        // TT_METAL_PROFILE_RISCV_PMC_DM
+        // Quasar data-movement cores only: their mhpmevent3 to mhpmevent6 selects, (event mask << 8) | event set,
+        // comma separated, one to four values. Only read together with TT_METAL_PROFILE_RISCV_PMC. Unset leaves
+        // the counters idle, so only mcycle and minstret are captured on those cores.
+        // Usage: export TT_METAL_PROFILE_RISCV_PMC_DM=0x201,0x801,0x202,0x402
+        case EnvVarID::TT_METAL_PROFILE_RISCV_PMC_DM: {
+            std::vector<uint32_t> ev = parse_u32_list("TT_METAL_PROFILE_RISCV_PMC_DM", value, 4);
+            for (size_t i = 0; i < ev.size(); ++i) {
+                for (size_t j = i + 1; j < ev.size(); ++j) {
+                    if (ev[i] != 0 && ev[i] == ev[j]) {
+                        TT_THROW("TT_METAL_PROFILE_RISCV_PMC_DM gives two counters the same select {:#x}.", ev[i]);
+                    }
+                }
+            }
+            ev.resize(4, 0);
+            this->profiler_riscv_pmc_dm_event3 = ev[0];
+            this->profiler_riscv_pmc_dm_event4 = ev[1];
+            this->profiler_riscv_pmc_dm_event5 = ev[2];
+            this->profiler_riscv_pmc_dm_event6 = ev[3];
+            break;
+        }
 
         // TT_METAL_TRACE_PROFILER
         // Enables trace profiler for detailed execution tracing.

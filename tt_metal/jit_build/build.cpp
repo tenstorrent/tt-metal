@@ -415,6 +415,25 @@ void JitBuildEnv::init(
         }
         this->defines_ += "-DPROFILE_PERF_COUNTERS=" + std::to_string(perf_counter_mode) + " ";
     }
+    if (rtoptions.get_profiler_riscv_pmc_enabled()) {
+        // The hooks are in the Tensix kernel entries and the ethernet and Quasar firmware, so every build gets it.
+        TT_ASSERT(rtoptions.get_profiler_enabled());
+        TT_FATAL(
+            this->arch_ == tt::ARCH::BLACKHOLE || this->arch_ == tt::ARCH::QUASAR,
+            "TT_METAL_PROFILE_RISCV_PMC is only supported on Blackhole and Quasar, not {}",
+            tt::arch_to_str(this->arch_));
+        this->defines_ += "-DPROFILE_RISCV_PMC=1 ";
+        for (const auto& [name, select] : {
+                 std::pair{"EV3", rtoptions.get_profiler_riscv_pmc_event3()},
+                 std::pair{"EV4", rtoptions.get_profiler_riscv_pmc_event4()},
+                 std::pair{"DM_EV3", rtoptions.get_profiler_riscv_pmc_dm_event3()},
+                 std::pair{"DM_EV4", rtoptions.get_profiler_riscv_pmc_dm_event4()},
+                 std::pair{"DM_EV5", rtoptions.get_profiler_riscv_pmc_dm_event5()},
+                 std::pair{"DM_EV6", rtoptions.get_profiler_riscv_pmc_dm_event6()},
+             }) {
+            this->defines_ += fmt::format("-DPROFILE_RISCV_PMC_{}={}u ", name, select);
+        }
+    }
 
     if (rtoptions.get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";

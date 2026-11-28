@@ -15,11 +15,13 @@ from loguru import logger
 
 try:
     from tt_llk_perf import metrics as _mc
+    from tt_llk_perf import riscv_pmc as _riscv_pmc
     from tt_llk_perf.headers import counter_type_names, num_neos
 except ModuleNotFoundError:
     # A source tree puts the repo root and tools/ on PYTHONPATH; the package lives under tt-llk.
     sys.path.append(str(Path(__file__).resolve().parents[2] / "tt_metal" / "tt-llk" / "tools" / "python"))
     from tt_llk_perf import metrics as _mc
+    from tt_llk_perf import riscv_pmc as _riscv_pmc
     from tt_llk_perf.headers import counter_type_names, num_neos
 
 OpDict = Dict[str, Any]
@@ -229,6 +231,52 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
     except (KeyError, TypeError, AttributeError) as e:
         logger.exception("Failed to extract perf counter events: %s", e)
     return None
+
+
+def decode_riscv_pmc_markers(rows: List[Dict[str, Any]], device_arch: str) -> Optional[pd.DataFrame]:
+    """One row per core launch from the RISC-V monitor markers of a device log; tt_llk_perf/riscv_pmc.py has the
+    marker layout.
+
+    Each row is a dict with device_id (the PCIe slot column), run_host_id, core_x, core_y, risc_type, marker_id,
+    record_time and data. A mesh op gives every chip one run_host_id, so launches are keyed by device too. The streams
+    of a core are paired in time order, so a stream cut short by a full profiler buffer yields fewer rows.
+    """
+    all_ids = _riscv_pmc.MARKER_IDS + _riscv_pmc.UPPER_MARKER_IDS
+    streams: Dict[Tuple, Dict[int, List[Tuple[int, int]]]] = {}
+    for row in rows:
+        marker_id = int(row["marker_id"])
+        if marker_id not in all_ids:
+            continue
+        key = (row["device_id"], row["run_host_id"], row["core_x"], row["core_y"], row["risc_type"])
+        streams.setdefault(key, {i: [] for i in all_ids})[marker_id].append((int(row["record_time"]), int(row["data"])))
+    out = []
+    for (device_id, run_host_id, core_x, core_y, risc_type), by_id in streams.items():
+        kind = _riscv_pmc.core_kind(device_arch, risc_type)
+        if kind is None:
+            continue
+        counts, cycles, events = (sorted(by_id[i]) for i in _riscv_pmc.MARKER_IDS)
+        counts_upper, events_upper = (sorted(by_id[i]) for i in _riscv_pmc.UPPER_MARKER_IDS)
+        for n, ((time, c), (_, y), (_, e)) in enumerate(zip(counts, cycles, events)):
+            cu = counts_upper[n][1] if n < len(counts_upper) else 0
+            eu = events_upper[n][1] if n < len(events_upper) else 0
+            decoded = _riscv_pmc.decode_launch(device_arch, kind, _riscv_pmc.unpack_launch(c, y, e, cu, eu))
+            out.append(
+                {
+                    "device_id": device_id,
+                    "run_host_id": run_host_id,
+                    "core_x": core_x,
+                    "core_y": core_y,
+                    "risc_type": risc_type,
+                    "record time": time,
+                    "event3": decoded["event3"],
+                    "event4": decoded["event4"],
+                    **{k: decoded[k] for k in ("event5", "event6") if k in decoded},
+                    "mcycle": decoded["mcycle"],
+                    "minstret": decoded["minstret"],
+                    **decoded["metrics"],
+                }
+            )
+    return pd.DataFrame(out) if out else None
 
 
 def print_counter_statistics_summary(perf_counter_df: pd.DataFrame, device_id: int) -> None:

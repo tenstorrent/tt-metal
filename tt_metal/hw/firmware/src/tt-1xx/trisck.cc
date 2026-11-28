@@ -21,6 +21,7 @@
 #include "api/remote_circular_buffer.h"
 #endif
 #include "internal/debug/stack_usage.h"
+#include "internal/profiler/riscv_pmc.hpp"
 
 #include "sanitizer/api.h"
 
@@ -91,7 +92,9 @@ uint32_t _start() {
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");
+    RiscvPmcBegin();
     run_kernel();
+    RiscvPmcEnd();
     WAYPOINT("KD");
     EARLY_RETURN_FOR_DEBUG_EXIT;
 #endif
