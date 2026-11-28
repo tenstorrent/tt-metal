@@ -148,17 +148,14 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        # Mean of 3 main CI runs 2026-10-20..22 (19.25M-19.30M). #57208 runs tt_dit Linear inputs of up to 128 rows as
-        # a 1D mcast matmul; previous target 23.75M.
-        "wormhole": 19_270_000,
-        # Mean of bh_p150 main CI runs 2026-10-20..21 (9.465M, 9.469M) after #57208; previous target 11.72M.
-        "blackhole": 9_467_000,
+        # 19.27M / 9.467M scaled by -9.7% (wh_n150) / -10.1% (P100), median of 3 runs; re-center from CI.
+        "wormhole": 17_400_000,
+        "blackhole": 8_513_000,
     },
     "clip_encoder_2": {
-        # Mean of 3 main CI runs 2026-10-20..22 (63.57M-63.80M) after #57208; previous target 88.53M.
-        "wormhole": 63_681_000,
-        # Mean of bh_p150 main CI runs 2026-10-20..21 (35.22M, 35.24M) after #57208; previous target 42.90M.
-        "blackhole": 35_231_000,
+        # 63.681M / 35.231M scaled by -14.0% (wh_n150) / -13.3% (P100), median of 3 runs; re-center from CI.
+        "wormhole": 54_750_000,
+        "blackhole": 30_534_000,
     },
 }
 
