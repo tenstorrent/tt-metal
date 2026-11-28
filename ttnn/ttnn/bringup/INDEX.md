@@ -94,7 +94,7 @@ that use it. Its `CHANGELOG.md` has the source path and SHA and every change.
   Consider instead of: ttnn.experimental.nlp_create_qkv_heads, ttnn.experimental.nlp_create_q_heads_split. -> nlp_create_qkv_heads/README.md
 - `ttnn.bringup.slice_write` (slice_write): the stock slice_write with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
   Consider instead of: ttnn.experimental.slice_write. -> slice_write/README.md
-- `ttnn.bringup.embedding` (embedding): the stock ttnn.embedding with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
+- `ttnn.bringup.embedding` (embedding): the stock ttnn.embedding with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap). Opt-in server order (`server_start` / `server_valid` / `clamp_max`, NC.9): every mesh row's ids in the server's row order in, each chip's natural-order rows out (the ids reorder as the reader, start / valid runtime values).
   Consider instead of: ttnn.embedding. -> embedding/README.md
 - `ttnn.bringup.nlp_concat_heads` (nlp_concat_heads): the stock nlp_concat_heads with `max_grid` (its cores inside a rectangle: a Galaxy's 110-core cap).
   Consider instead of: ttnn.experimental.nlp_concat_heads. -> nlp_concat_heads/README.md

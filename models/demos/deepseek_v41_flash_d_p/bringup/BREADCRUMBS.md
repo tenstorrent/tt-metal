@@ -2263,3 +2263,50 @@
   program-cache overrides; layout, knobs and core set are load / compile time (the cold strict no-rebuild: 0 builds).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate QB.1 --spec $BRINGUP_SPEC --check`; the test
   alone: `gate QB.1 --check --unit QB.1#test_wqb_offon` (~7 min on the resident runner, model load included).
+
+## NC.9 (perf, attempt 1): the remaining tiny-op fusions (NATIVE_FUSIONS on | off)
+
+- Shipped-path check (defaults + the packed gate switches; DS41-401):
+  - (1) IdsReorder -> embedding: RUNS. ENGRAM_DEVICE=off (default) and POS_DYNAMIC=on: adapter.py:312 calls
+    model.reorder_ids on every single-request chunk that starts at layer 0.
+  - (2) history_gather.tails_finish's page_copy + slice_write: DROPPED, not on the shipped path. Its only caller is
+    gather_hide.Hide.tails (gather_hide.py:593), which returns before it when the source has an owned group
+    (gather_hide.py:562-569, PB.HG). Every packed chunk is chip-aligned (PACKED_CHIPS=on) and HISTORY_FORMAT=bfp4 +
+    PACKED_HIST_OWNED=on make GluedCall.owned true (packed_glued.py:1056), so owned_begin registers every gathered
+    source (history_gather.py:713). NC.8's logs show the owned path ("PB.HG owned histories: one buffer a source",
+    logs/NC.8.shared/NC.8_test_no_rebuild.log:214).
+  - (3) compressor._write_from's replay rotation: RUNS under DECODER_SKIP=decode (the packed gates' value) on a chunk
+    whose global_write_start falls inside it (dyn("replay"): POS_DYNAMIC=on). Twice a replay chunk and layer (ckv and
+    index keys).
+  - (4) attention._ring_carry_pages' zeros + rows: RUNS (dyn("pages")), but only for a carry at 0 < start < 128 (n < 128:
+    a slot continued after a first chunk shorter than the window). Rare; fused anyway (the same new kind as (3)).
+- Expected saving a chunk (perf_guide: host-bound launches, the same bytes; written after the design, before any device
+  run): (1) one launch fewer (the IdsReorder kernel) and one [1, W] ids tensor fewer: ~25-40 us host, ~5-10 us device,
+  single 8192 only; (3) ~15-25 us host + ~10-20 us device a pair x 2 a replay layer; (4) the same a rare carry. A
+  steady single 8192 chunk: ~0.03 ms; a replay chunk ~0.5-1 ms (21 / 40 compressed layers x 2 pairs). Small, as asked.
+- What: (1) ttnn.bringup.embedding option server_start / server_valid / clamp_max (fork CHANGELOG NC.9): the fused
+  reader reads natural unit d of its mesh row where the IdsReorder kernel reads it (head / tail / middle cases verbatim)
+  and clamps (positions >= valid, ids > vocab - 1); one program a mesh row (EmbeddingsServerOrderProgramFactory, a
+  Metal 2.0 mesh-workload spec factory), start / valid as common runtime args rewritten on every hit (DS41-407).
+  Model: reorder_ids returns a page_copy.ServerIds under NATIVE_FUSIONS=on; model.embed calls IdsReorder.embed (the
+  SP all-gather into the kept buffer, then the embedding). (3) and (4): page_copy.page_copy_many -> ttnn.chunk_program
+  kind PAGE_MULTI (kernel page_multi.cpp: page_copy.cpp's loop a segment, the segments' pages split over the same 4
+  cores; one accessor config for the sources, one for the destinations, checked by the op; a different geometry falls
+  back to separate calls).
+- Switch: NATIVE_FUSIONS (tt/settings.py, default on, read per call): off = NC.7's sequence.
+- Gate test tests/native/test_native_fusions.py (BATCH_SHARED, BATCH_LAYERS none; held mesh, 0 model loads, ~15 s):
+  emb8192 / emb5120 (two (start, valid) sets, ids past the vocabulary), rot ckv 8192 / idx 8192 / ckv 5120 / ckv ratio
+  128, carry (n 96 / 32). Mismatch / repeat / cache growth 0 in every case. Gate unit PASS.
+- Measured (results/NC.9_layer.md; host a warm call today -> fused; device today -> fused): emb 163-165 -> 133-134 us
+  (the all-gather included), device 42-48 -> 34-36 us; rotation 67-73 -> 51-54 us, device 3.9-72 -> 2.5-50 us (by
+  size); carry 71.6 -> 56.7 us, device 6.0 -> 4.1 us. In the expected range.
+- Cores (rule 18, no matmul): embedding unchanged (max_grid, the stock split); PAGE_MULTI 4 cores (0..3, 0) as page copy.
+- Rule 20, per-chunk values this touches: the embedding's server_start / server_valid (-> iu, cs, valid) are common
+  runtime args rewritten on every program-cache hit, never in the key (attribute_names); the mesh row is a per-program
+  constant. PAGE_MULTI's s0 / d0 / n per segment and the io addresses are runtime-arg slots (chunk_program's patch
+  list). Nothing new on the host; 0 growth on new values on fresh buffers (test).
+- Gotcha: the embedding wrapper reshapes the output to [batch, W, D]; under server order batch is 1 (not SP).
+- Not run: orchestrator measure (ab_mode none), any model load (owner: op-level only), the embedding fork's
+  regression (NATIVE_PORT_RULES: none on the 8x4; the fork carries no source tests yet).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate NC.9 --spec $BRINGUP_SPEC --check`; build:
+  `cmake build && cmake --build build --target install` (re-configure: a new kernel file joins chunk_program's glob).

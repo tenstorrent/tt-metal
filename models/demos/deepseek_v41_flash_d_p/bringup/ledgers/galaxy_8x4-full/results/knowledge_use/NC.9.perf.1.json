@@ -1,0 +1,92 @@
+{
+ "used": [
+  {
+   "id": "DS41-401",
+   "how": "checked each fusion's path under the defaults + packed gate switches before porting; dropped (2) tails_finish (owned histories return before it; NC.8 log shows PB.HG owned path)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-400",
+   "how": "hand-ported into the existing native ops (chunk_program kind PAGE_MULTI, an embedding fork option) instead of native_migrate",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-404",
+   "how": "kept page_copy.cpp's loop unchanged a segment in page_multi.cpp (one program, the bytes of the separate copies) rather than a new copy scheme",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-403",
+   "how": "the test compares and frees made tensors by route, not by id() of io (no caller output buffers reused)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-385",
+   "how": "judged host / device us only fused vs today alternated within one run (rounds alternating the routes)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "How a Metal 2.0 (ProgramSpec) op takes per-call runtime values and per-mesh-coordinate args without a rebuild (attribute_names hash exclusion + MeshWorkloadSpecFactory override): added as DS41-407",
+  "chunk_program's kernels are found by a configure-time glob: a new kernel file needs a cmake re-configure before the install build"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the embedding reads the gathered ids in place (no ids tensor); PAGE_MULTI copies exactly the segments' pages (tests/native/test_native_fusions.py, results/NC.9_layer.md)"
+  }
+ ],
+ "cited_only": [
+  "DS41-407"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "NC.9",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-28T09:38:48",
+  "head": "733474611e8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.9.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/NC.9_layer.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/NC.9.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/native/test_native_fusions.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/chunk_program_nanobind.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_device_operation_types.hpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/chunk_program_program_factory.cpp",
+   "ttnn/cpp/ttnn/operations/chunk_program/device/kernels/page_multi.cpp",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/embedding/CHANGELOG.md",
+   "ttnn/ttnn/bringup/embedding/README.md",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation.cpp",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation.hpp",
+   "ttnn/ttnn/bringup/embedding/device/embedding_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/embedding/device/embeddings_fused_program_factory.cpp",
+   "ttnn/ttnn/bringup/embedding/device/embeddings_fused_program_factory.hpp",
+   "ttnn/ttnn/bringup/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
+   "ttnn/ttnn/bringup/embedding/embedding.cpp",
+   "ttnn/ttnn/bringup/embedding/embedding.hpp",
+   "ttnn/ttnn/bringup/embedding/embedding_nanobind.cpp"
+  ]
+ }
+}

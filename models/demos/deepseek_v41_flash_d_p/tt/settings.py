@@ -1820,6 +1820,15 @@ TABLE = {
         "continued one, a pulled-back partial last chunk with a replay). Bit-identical to off. off = the slices (one "
         "program a position / slot / history length) and the host ids re-upload",
     ),
+    "NATIVE_FUSIONS": Setting(
+        "on",
+        ("on", "off"),
+        "NC.9 (OWNER 2026-11-28, the remaining tiny-op fusions), read per call (a call-time switch). on = the engine's "
+        "ids put into natural order by the embedding's own reader (ttnn.bringup.embedding server_start / server_valid "
+        "/ clamp_max: no IdsReorder kernel, no ids tensor), and the page copies into one destination done in one "
+        "ttnn.chunk_program (tt/page_copy.page_copy_many: the replay rotation's two, the window carry's zeros + rows). "
+        "Bit-identical to off. off = NC.7's sequence (IdsReorder then the embedding; one page copy a piece)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

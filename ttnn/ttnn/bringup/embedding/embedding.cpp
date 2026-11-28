@@ -22,7 +22,15 @@ ttnn::Tensor embedding(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    std::optional<uint32_t> server_start,
+    std::optional<uint32_t> server_valid,
+    std::optional<uint32_t> clamp_max) {
+    // NC.9 server order: all three or none
+    const bool server_order = server_start.has_value();
+    TT_FATAL(
+        server_order == server_valid.has_value() && server_order == clamp_max.has_value(),
+        "embedding: server_start, server_valid and clamp_max go together");
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::bringup::EmbeddingsType::PADDED;
     }
@@ -37,6 +45,7 @@ ttnn::Tensor embedding(
 
     // If indices tensor is 1 dimensional, batch size is 1
     auto batch_size = (input_tensor.logical_shape().rank() == 1) ? 1 : input_tensor.logical_shape()[0];
+    const auto out_batch = server_order ? 1u : batch_size;  // (server order: the chip's own rows of every row's ids)
     auto sentence_size = input_tensor.logical_shape()[-1];
     auto embedding_input_tensor = input_tensor;
     if (input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
@@ -67,12 +76,15 @@ ttnn::Tensor embedding(
         memory_config,
         pad_token,
         optional_output_tensor,
-        max_grid);
+        max_grid,
+        clamp_max,
+        server_start.value_or(0),
+        server_valid.value_or(0));
     // Don't include batch_size if there was none
     if (original_input_rank == 1) {
         embeddings = ttnn::reshape(embeddings, Shape({sentence_size, hidden_embedding_dim}));
     } else {
-        embeddings = ttnn::reshape(embeddings, Shape({batch_size, sentence_size, hidden_embedding_dim}));
+        embeddings = ttnn::reshape(embeddings, Shape({out_batch, sentence_size, hidden_embedding_dim}));
     }
     embeddings = ttnn::to_layout(embeddings, layout.value_or(weight_arg.layout()));
     if (embeddings.layout() == ttnn::TILE_LAYOUT && embeddings.dtype() != dtype.value_or(weight.dtype())) {

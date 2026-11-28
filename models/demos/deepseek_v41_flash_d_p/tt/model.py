@@ -105,6 +105,7 @@ from .layout import (
 )
 from .mhc import NG, build_hc
 from .norm import TtDistributedRmsNorm, build_norm
+from .page_copy import ServerIds
 from .q_a import TtAttnInProj, TtQa
 from .residual import build_residual
 from .rope import RopeTable, indexer_glue
@@ -2167,6 +2168,18 @@ class TtDS41Model:
         and never reach a cache) -> layer 0's input: the embedding on all 4 streams, the pending pre one-hot.
         ``dev_ids`` (POS_DYNAMIC=on, MB.2): those ids already on the device ([1, W] uint32 a chip, ``reorder_ids``;
         consumed): no upload."""
+        if isinstance(dev_ids, ServerIds):  # NC.9 (NATIVE_FUSIONS=on): the reorder is the embedding's reader
+            e = self._ids_reorder.embed(
+                dev_ids.inp,
+                dev_ids.start,
+                dev_ids.valid,
+                self.embed_w,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=DRAM,
+                max_grid=max_grid(),
+            )
+            return self._embed_rest(e)
         if dev_ids is not None:
             pass
         elif self._emb_ids is not None:  # P.87 (ENGRAM_DEVICE=on): the lookup's natural-order device ids (pinned)
@@ -2182,11 +2195,17 @@ class TtDS41Model:
     def reorder_ids(self, inp, start: int, valid: int):
         """POS_DYNAMIC=on (MB.2): the engine's device input (uint32 [SP, 1, W], the server's order) -> each chip's
         natural-order embedding ids [1, W] on the device (tt/page_copy.IdsReorder; positions >= ``valid`` and ids past
-        the vocabulary -> vocab - 1, as ``_host_emb_ids``). A new tensor (``embed(dev_ids=)`` consumes it)."""
+        the vocabulary -> vocab - 1, as ``_host_emb_ids``). A new tensor (``embed(dev_ids=)`` consumes it).
+        NATIVE_FUSIONS=on (NC.9): a ``ServerIds`` (the engine's input, start, valid; nothing on the device yet), which
+        ``embed`` turns into the natural-order rows with the reorder as the embedding's reader (same bytes)."""
+        from .page_copy import fused
+
         if getattr(self, "_ids_reorder", None) is None:
             from .page_copy import IdsReorder
 
             self._ids_reorder = IdsReorder(self.mesh, self.chunk, self.vocab)
+        if fused():  # NC.9 (NATIVE_FUSIONS=on): no ids tensor; ``embed`` reads the engine's input in server order
+            return ServerIds(inp, int(start), int(valid))
         return self._ids_reorder(inp, start, valid)
 
     def _host_emb_ids(self, tokens: torch.Tensor):

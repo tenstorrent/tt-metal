@@ -1267,8 +1267,9 @@ class TtWindowCache:
         res = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, WINDOW, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
         )
-        page_copy(self.tables.zero_carry, res, 0, 0, WINDOW - n)
-        page_copy(out, res, 0, WINDOW - n, n)
+        from .page_copy import page_copy_many  # NC.9: the zeros and the rows in one program
+
+        page_copy_many([(self.tables.zero_carry, res, 0, 0, WINDOW - n), (out, res, 0, WINDOW - n, n)])
         dealloc(out)
         return res
 

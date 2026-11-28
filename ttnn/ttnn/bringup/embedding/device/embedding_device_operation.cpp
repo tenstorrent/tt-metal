@@ -16,6 +16,9 @@ namespace ttnn::prim::bringup {
 
 EmbeddingsDeviceOperation::program_factory_t EmbeddingsDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (operation_attributes.clamp_max.has_value()) {  // NC.9 server order
+        return EmbeddingsServerOrderProgramFactory{};
+    }
     if (tensor_args.input_tensor_arg.layout() == ttnn::TILE_LAYOUT) {
         return EmbeddingsTilizedIndicesProgramFactory{};
     }
@@ -91,6 +94,23 @@ void EmbeddingsDeviceOperation::validate_on_program_cache_miss(
                 "shard");
         }
     }
+    if (operation_attributes.clamp_max.has_value()) {  // NC.9 server order
+        const auto& mesh_shape = a.device()->shape();
+        TT_FATAL(
+            operation_attributes.tilized && a.layout() == Layout::ROW_MAJOR && a.dtype() == DataType::UINT32,
+            "embedding server order: uint32 ROW_MAJOR ids, a TILE output");
+        TT_FATAL(
+            a.padded_shape()[0] == mesh_shape[0],
+            "embedding server order: the ids of every mesh row ([SP, 1, W], SP {}), got {}",
+            mesh_shape[0],
+            a.padded_shape());
+        TT_FATAL(
+            operation_attributes.embeddings_type == EmbeddingsType::GENERIC,
+            "embedding server order: GENERIC embeddings only");
+        TT_FATAL(
+            !is_sharded(operation_attributes.output_mem_config.memory_layout()),
+            "embedding server order: an interleaved output");
+    }
     if (a.layout() == Layout::ROW_MAJOR) {
         TT_FATAL(a.padded_shape()[1] == 1 && a.padded_shape()[2] == 1, "Only dim 0 && 3 for the input can be non 1");
     }
@@ -116,7 +136,8 @@ tt::tt_metal::TensorSpec EmbeddingsDeviceOperation::compute_output_specs(
     const auto& input_tensor = tensor_args.input_tensor_arg;
     const auto& weight_tensor = tensor_args.weight_arg;
     auto num_output_embeddings = input_tensor.logical_shape()[-1];
-    auto batch_num = input_tensor.logical_shape()[0];
+    // (NC.9 server order: every mesh row's ids in, the chip's own rows out)
+    auto batch_num = operation_attributes.clamp_max.has_value() ? 1 : input_tensor.logical_shape()[0];
     auto num_embedding_dims = weight_tensor.logical_shape()[-1];
 
     ttnn::Shape output_shape({batch_num, 1, num_output_embeddings, num_embedding_dims});
@@ -147,7 +168,10 @@ Tensor embedding(
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<uint32_t>& pad_token,
     const std::optional<Tensor>& optional_output_tensor,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    std::optional<uint32_t> clamp_max,
+    uint32_t server_start,
+    uint32_t server_valid) {
     using OperationType = EmbeddingsDeviceOperation;
     auto memory_config = output_mem_config.value_or(input_tensor_arg.memory_config());
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -156,6 +180,9 @@ Tensor embedding(
         .embeddings_type = embeddings_type,
         .pad_token = pad_token,
         .max_grid = max_grid,
+        .clamp_max = clamp_max,
+        .server_start = server_start,
+        .server_valid = server_valid,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_arg = input_tensor_arg,

@@ -15,7 +15,7 @@ std::shared_ptr<const operations::chunk_program::ChunkPlan> chunk_program_plan(
     const std::vector<std::vector<uint32_t>>& groups,
     const std::vector<uint32_t>& sems) {
     namespace cp = operations::chunk_program;
-    TT_FATAL(kind <= static_cast<uint32_t>(cp::ChunkKind::OWNED_SEND), "chunk_program_plan: unknown kind {}", kind);
+    TT_FATAL(kind <= static_cast<uint32_t>(cp::ChunkKind::PAGE_MULTI), "chunk_program_plan: unknown kind {}", kind);
     auto p = std::make_shared<cp::ChunkPlan>();
     p->kind = static_cast<cp::ChunkKind>(kind);
     p->rows = rows;
