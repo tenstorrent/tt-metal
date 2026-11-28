@@ -83,12 +83,12 @@ class TestGtestGrading(unittest.TestCase):
                 self.assertTrue(check.data["env_overrides"]["TT_MESH_GRAPH_DESC_PATH"].endswith(MGD))
                 self.assertEqual(check.data["testcases"]["passed"], 1)
 
-    def test_all_skipped_is_not_run(self):
+    def test_all_skipped_is_fail(self):
         # eth_link_up as it was before it set slow dispatch: its test skips and
         # gtest exits 0, having tested nothing.
         with mock.patch.dict(TESTS, {"eth_link_up": {"filter": "*TensixDeploymentEthernet*LinkUp", "ip": "eth"}}):
             check = self.run_fake(["eth_link_up"])["eth_link_up"]
-        self.assertEqual(check.status, WARN)
+        self.assertEqual((check.status, check.ip, check.parts), (FAIL, "other", []))
         self.assertTrue(check.details.startswith("not run: skipped: fast dispatch to active ethernet"), check.details)
         self.assertIn("passed=0 failed=0 skipped=1", check.details)
 

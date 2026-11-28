@@ -232,7 +232,7 @@ class TestStage(BusbarCase):
         for until, want in (
             (None, during),  # a leg file with no end
             (time.time() + 3600, during),  # booted before the leg's end
-            (1, (WARN, "host rebooted after chunk25m ended; see SEL")),  # booted after it
+            (1, (WARN, "host booted after chunk25m's window; see SEL")),  # booted after it
         ):
             with self.subTest(until=until):
                 leg = {"leg": "chunk25m", "boot_id": "boot-old", **({} if until is None else {"until": until})}

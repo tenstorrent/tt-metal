@@ -233,6 +233,7 @@ class TestPostTestResetOk(unittest.TestCase):
         skip = Check(name="reset_1_glx_reset", status=SKIP, details="reset cannot run: reset gate: busy")
         for checks, status in (
             ([ok], PASS),
+            ([skip], SKIP),
             ([fail], FAIL),
             ([fail, ok], FAIL),
             ([fail, skip], FAIL),

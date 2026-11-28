@@ -485,11 +485,14 @@ def run_tests(
         failures += sorted(in_flight)
         dt = time.time() - t0
 
-        # No test matched, all skipped, or the suite setup threw: not run, naming why.
+        # No test matched or the suite setup threw: not run, naming why. All skipped tested nothing: FAIL.
         details = (
             f"filter={filt} rc={rc} dur={dt:.1f}s passed={passed} failed={failed} skipped={skipped} log={log_path}"
         )
         status, details = grade(rc, passed, failed, log_path, details)
+        ip = spec["ip"]
+        if details.startswith("not run: skipped:"):
+            status, ip = FAIL, "other"  # no part of the box was tested, so none is blamed
         suffix = f"({dt:.1f}s)"
         if status != PASS:
             suffix += f"  passed={passed} failed={failed} skipped={skipped}"
@@ -506,7 +509,7 @@ def run_tests(
         parts: list[str] = []
         if status == FAIL:
             details, parts = name_faults(log_path, details, data)
-        phase.add(Check(name=name, status=status, details=details, data=data, ip=spec["ip"], parts=parts))
+        phase.add(Check(name=name, status=status, details=details, data=data, ip=ip, parts=parts))
 
 
 def run_bench(

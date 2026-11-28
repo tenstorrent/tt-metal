@@ -200,7 +200,7 @@ def check_last_boot(phase: Phase) -> None:
             why = f"host rebooted during {name} -> POWER: PSU/feed, see SEL"
             _add(phase, BUSBAR_REBOOT, FAIL, why, data=leg, ip="other", cause="POWER")
         else:
-            _add(phase, BUSBAR_REBOOT, WARN, f"host rebooted after {name} ended; see SEL", data=leg, ip="other")
+            _add(phase, BUSBAR_REBOOT, WARN, f"host booted after {name}'s window; see SEL", data=leg, ip="other")
     LEG_FILE.unlink(missing_ok=True)
 
 

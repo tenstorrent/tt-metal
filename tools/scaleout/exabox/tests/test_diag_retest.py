@@ -185,8 +185,9 @@ class TestTierRetest(unittest.TestCase):
                 self.assertIn(t, tier.tests, name)
 
     def test_act_tests_are_retested(self):
-        self.assertIn("gddr_act_c3", TIERS["weekly"].retest)
-        self.assertIn("gddr_act_all", TIERS["full"].retest)
+        eth = ("eth_link_up", "eth_bandwidth", "eth_data_integrity")
+        self.assertEqual(TIERS["weekly"].retest, ("gddr_full", "gddr_act_c3") + eth)
+        self.assertEqual(TIERS["full"].retest, ("gddr_full", "gddr_act_all") + eth)
         # gddr_act_all runs both of gddr_act_c3's passes.
         self.assertNotIn("gddr_act_c3", TIERS["full"].tests)
 

@@ -20,7 +20,7 @@ sys.path.insert(0, str(SUITE_DIR))
 from diag.model import FAIL, PASS, SKIP, WARN, Check, Phase  # noqa: E402
 from diag.snapshot_checks import fw_bundles  # noqa: E402
 from diag.triage import name_root_ports  # noqa: E402
-from diag.verdict import ROWS, verdict_lines  # noqa: E402
+from diag.verdict import NOT_DETECTED, ROWS, verdict_lines  # noqa: E402
 
 CHIP = "0000:46:00.0 (UBB2/U6)"
 TRAY2 = [f"0000:4{u}:00.0 (UBB2/U{u})" for u in range(1, 9)]
@@ -109,6 +109,8 @@ class TestRows(unittest.TestCase):
                 cause = c.cause or ROWS[rid].cause
                 self.assertEqual(lines[1:-3], [f"  Cause: {cause}"] * bool(cause))
                 self.assertIn(repair, lines[-3])
+                if rid in ("F04", "F05", "F06", "F08"):  # a lost chip is reset and recounted before any repair
+                    self.assertIn("tt-smi -glx_reset and recount", lines[-3])
                 if rid == "F02":  # a latch alone is watched, not reset
                     self.assertNotIn("glx_reset", lines[-3])
 
@@ -123,6 +125,13 @@ class TestRows(unittest.TestCase):
                         self.assertTrue(any(s.startswith(name[:-1]) for s in found))
                     else:
                         self.assertIn(name, found)
+
+    def test_every_fault_id_is_a_row_or_listed_as_not_detected(self):
+        self.assertEqual({f"F{i:02}" for i in range(1, 30)} - ROWS.keys(), NOT_DETECTED.keys())
+        doc = (SUITE_DIR / "HEALTH_CHECK.md").read_text()
+        listed = doc[doc.index("Not detected yet, so no row:") :].split("\n\n")[0]
+        for rid in NOT_DETECTED:
+            self.assertIn(f"{rid} (", listed)
 
     def test_a_definition_alone_is_not_an_emit(self):
         for src, want in {
@@ -147,6 +156,7 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(
             lines[0], f"Fault 1: FAIL F08 chip missing: PCIe link never trains: pcie_enum_count: 31/32 | {CHIP}"
         )
+        self.assertTrue(lines[2].startswith("  Repair: tt-smi -glx_reset and recount; "), lines[2])
         self.assertEqual(
             lines[3:], ["Final verdict: FAIL: 1 fault(s)", f"Repair recommendation: Fault 1: {lines[2][10:]}"]
         )

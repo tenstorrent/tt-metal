@@ -149,8 +149,9 @@ removed, and under fast dispatch each eth test skips itself and exits 0. Gtests
 get the single-Galaxy `TT_MESH_GRAPH_DESC_PATH` unless set: without it every test skips.
 
 A gtest check passes only if at least one of its test cases passed, as a pytest
-check does. A run that passed and failed nothing (no match, all skipped, suite
-setup or conftest failed) is a WARN `not run: <reason>` with the counts. A test
+check does. A gtest run whose tests all skipped is a FAIL; one that passed and failed
+nothing otherwise (no match, suite setup or conftest failed) is a WARN `not run: <reason>`
+with the counts. A test
 that started and never ended counts as failed.
 
 `weekly`/`full` add `eth_data_integrity` (DRAM data sent over every link, compared
@@ -617,6 +618,10 @@ once (`hsc_latch_clear`), never when one reads OFF or with `--no-hsc-clear`. Wit
 The run ends with one fault per WARN/FAIL check of a gating phase, its cause and repair from `verdict.ROWS` (a check
 no row names gets one by its IP block), the WARN captures as `Evidence`, `Final verdict: PASS | WARN | FAIL |
 INCOMPLETE` and one `Repair recommendation:` line, FAIL repairs first.
+
+Not detected yet, so no row: F12 (in-box Ethernet link hang under load), F15 (Ethernet core open timeout while the
+QSFP peer is down) and F16 (fabric set-up hang or whole-box stall); such a failure gets its IP block's repair.
+F17 (numeric errors at a marginal Vmin) falls under F19, F23 (GDDR address alias) under F21.
 
 ## sys-triage phase
 

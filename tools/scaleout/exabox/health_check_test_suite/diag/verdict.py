@@ -234,6 +234,15 @@ ROWS: dict[str, Row] = {
     "F29": Row("NOC data errors", _tests(NOC_INTEGRITY), "CHIP/BOARD", _BOARD),
 }
 
+# Known faults with no row: why. Such a failure gets its IP block's repair (DO_BY_IP).
+NOT_DETECTED = {
+    "F12": "in-box Ethernet link hang under load: not detected yet",
+    "F15": "Ethernet core open timeout while the QSFP peer is down: not detected yet",
+    "F16": "fabric set-up hang or whole-box stall: not detected yet",
+    "F17": "numeric errors at a marginal Vmin: graded as F19",
+    "F23": "GDDR address alias: graded as F21",
+}
+
 # A check no row names: what to do by its IP block.
 DO_BY_IP = {
     "pcie": _PCIE,
