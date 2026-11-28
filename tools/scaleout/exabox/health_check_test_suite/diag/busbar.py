@@ -12,6 +12,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import datetime, timezone
@@ -40,6 +41,7 @@ BUSBAR_QUIET_CLOCK = "busbar_quiet_clock"
 BUSBAR_REBOOT = "busbar_reboot"
 
 QUIET_MHZ = 800  # a quiet counts only once every chip's AICLK is at or under this
+VMIN_RAISED_MV = 760  # a stored vdd_min at or over this is already raised
 QUIET_CAP_S = 300
 BRINGUP_S = 600  # a load's bring-up and compile, on top of its step length
 HANG_GRACE_S = 60  # past the load's own --timeout: only a chip that never answers is a hang
@@ -109,6 +111,26 @@ def _read_by_chip(sys_root: Path, read: Callable[[Path], str]) -> dict[str, str]
 def chip_clocks(sys_root: Path = SYS) -> dict[str, int]:
     """Each chip's AICLK in MHz."""
     return _read_by_chip(sys_root, lambda n: int((n / "tt_aiclk").read_text().split()[0]))
+
+
+# Each chip's stored vdd_min (mV) from its SPI firmware table (cmfwcfg chip_limits); reads only.
+_VDD_MIN_PY = """import pyluwen
+for c in pyluwen.detect_chips():
+    try:
+        print(c.get_pci_bdf(), c.as_bh().decode_boot_fs_table("cmfwcfg")["chip_limits"]["vdd_min"])
+    except Exception:
+        pass
+"""
+
+
+def stored_vdd_min() -> dict[str, int]:
+    """Each chip's stored vdd_min in mV by formatted BDF; {} where pyluwen cannot read it."""
+    try:
+        cp = subprocess.run([sys.executable, "-c", _VDD_MIN_PY], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    pairs = (ln.split() for ln in cp.stdout.splitlines())
+    return {format_bdf(p[0]): int(p[1]) for p in pairs if len(p) == 2 and p[1].isdigit()}
 
 
 def links(sys_root: Path = SYS) -> dict[str, str]:
@@ -183,9 +205,16 @@ def check_last_boot(phase: Phase) -> None:
 
 
 def run_load(
-    cmd: list[str], env: dict, timeout_s: float, log_path: Path, stop: threading.Event, cwd: Path
+    cmd: list[str],
+    env: dict,
+    timeout_s: float,
+    log_path: Path,
+    stop: threading.Event,
+    cwd: Path,
+    tick: Callable[[], None] = lambda: None,
 ) -> tuple[str, subprocess.Popen | None]:
-    """Run one load from cwd to its log: "ok", "fail", "stopped" (SIGTERM), or "hang" (left running for the capture)."""
+    """Run one load from cwd to its log, calling tick each second: "ok", "fail", "stopped" (SIGTERM), or "hang"
+    (left running for the capture)."""
     with open(log_path, "w") as f:
         try:
             p = subprocess.Popen(
@@ -201,6 +230,7 @@ def run_load(
             return "stopped", p
         if time.monotonic() > deadline:
             return "hang", p
+        tick()
         stop.wait(1)
     return ("ok" if p.returncode == 0 else "fail"), p
 
@@ -257,6 +287,7 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
     _, missing0 = recount_chips(sys_root)
     links0, boot0 = links(sys_root), boot_id()
     sel0 = sel_power_lines(False)
+    peak: dict[str, int] = {}  # each chip's highest AICLK during the step's load
     LEG_FILE.parent.mkdir(parents=True, exist_ok=True)
     for st in steps:
         poll.step = f"{st.name} quiet"
@@ -272,6 +303,7 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
         until = t0 + st.load_s + BRINGUP_S + HANG_GRACE_S + BOOT_S
         LEG_FILE.write_text(json.dumps({"leg": st.name, "boot_id": boot0, "t": t0, "until": until}))
         log_path = logs_dir / f"busbar_{st.name}.log"
+        peak.clear()
         if st.load == "power_virus":
             if not hook:
                 _add(phase, BUSBAR + st.name, SKIP, "no --hook: the power virus slot is empty")
@@ -283,7 +315,8 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
         else:
             cmd, env = LOADS[st.load](tt_metal, st.load_s)
             log(f"busbar {st.name}: {st.load} {st.load_s} s")
-            status, proc = run_load(cmd, env, st.load_s + BRINGUP_S + HANG_GRACE_S, log_path, stop, tt_metal)
+            tick = lambda: peak.update({b: max(m, peak.get(b, 0)) for b, m in chip_clocks(sys_root).items()})
+            status, proc = run_load(cmd, env, st.load_s + BRINGUP_S + HANG_GRACE_S, log_path, stop, tt_metal, tick)
         text = log_path.read_text(errors="replace") if log_path.exists() else ""
         data = {"load": st.load, "seconds": round(time.time() - t0)}
         rec = poll.steps.get(st.name, sensors.PollStep())
@@ -302,7 +335,12 @@ def _run_steps(tt_metal, steps, phase, poll, hook, stop, logs_dir, sys_root) -> 
             break
         bad = numeric_faults(text, bdfs)
         if bad:
-            why = f"{', '.join(bad)} wrong output in {st.name}: {next(iter(bad.values()))}"
+            # The clock the load ran at and the stored vdd_min say whether a vdd_min raise can still fix it.
+            vmin = stored_vdd_min()
+            data["aiclk_mhz"] = {b: peak[b] for b in bad if b in peak}
+            data["vdd_min_mv"] = {b: vmin[b] for b in bad if b in vmin}
+            at = "; ".join(f"{b} AICLK {data['aiclk_mhz'].get(b, '?')} MHz, vdd_min {vmin.get(b, '?')} mV" for b in bad)
+            why = f"{', '.join(bad)} wrong output in {st.name} ({at}): {next(iter(bad.values()))}"
             _add(phase, BUSBAR_NUMERIC, FAIL, why, data=data, parts=sorted(bad), ip="asic")
         else:
             ok = status == "ok"

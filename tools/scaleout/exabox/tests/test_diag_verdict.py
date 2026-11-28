@@ -60,13 +60,16 @@ CASES = {
     "F11": (check("pcie_read", parts=[CHIP]), "swap UBB2's host PCIe cable"),
     "F13": (check("eth_status_links_down", details=f"{CHIP} ch4, TRACE port 2 down"), "a trace port stays"),
     "F14": (check("eth_status_links_down", details=f"{CHIP} ch8, QSFP-DD port 5 down"), "QSFP-DD cable on those"),
+    "F18": (check("busbar_numeric", data={"vdd_min_mv": {CHIP: 760}}, parts=[CHIP]), "board"),
     "F19": (check("didt_matmul_galaxy_after_reset", parts=[CHIP]), "vdd_min to 760 mV"),
+    "F20": (check("busbar_numeric", data={"aiclk_mhz": {CHIP: 1350}, "vdd_min_mv": {CHIP: 700}}), "vdd_min to 760 mV"),
     "F21": (check("gddr_act_c3", parts=[CHIP]), "replace UBB2's board"),
     "F22": (check("gddr_dbi_fw", WARN, "FW bundle 19.16.0.0 is older than 19.17.1"), "flash firmware 19.17.1"),
     "F24": (check("busbar_hang", parts=[CHIP]), "if that chip hangs again, replace UBB2's board"),
     "F25": (check("busbar_reboot", cause="POWER"), "PSUs and power feed"),
     "F26": (check("busbar_quiet_clock", WARN, parts=[CHIP]), "same firmware bundle"),
     "F27": (check("asic_thermal_precheck", WARN, "hot", parts=[CHIP]), "UBB2's fans and airflow"),
+    "F28": (check("psu_ac_lost", WARN, cause="POWER"), "AC feed and cord of the PSU"),
     "F29": (check("noc_integrity_after_reset", parts=[CHIP]), "replace UBB2's board"),
 }
 
@@ -185,6 +188,10 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(lines[-2], "Final verdict: WARN: 1 warning(s)")
         dram = check("dram_status", WARN, "ch3", ip="gddr", parts=[CHIP])
         self.assertIn("Repair: re-run", verdict_lines(report(phase("snapshot", dram)))[2])
+
+    def test_one_chip_below_the_raised_vdd_min_still_gets_the_raise(self):
+        c = check("busbar_numeric", data={"vdd_min_mv": {CHIP: 760, "0000:c3:00.0 (UBB3/U3)": 700}}, parts=[CHIP])
+        self.assertIn("F19", verdict_lines(report(phase("busbar", c)))[0])
 
     def test_chips_on_several_trays_keep_that_tray(self):
         two = check("pcie_gen", WARN, "Gen4", ip="pcie", parts=[CHIP, "0000:c3:00.0 (UBB3/U3)"])

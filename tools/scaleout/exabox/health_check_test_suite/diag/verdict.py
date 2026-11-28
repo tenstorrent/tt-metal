@@ -19,7 +19,10 @@ from .busbar import (
     BUSBAR_PCIE_LINK,
     BUSBAR_QUIET_CLOCK,
     BUSBAR_REBOOT,
+    QUIET_MHZ,
+    VMIN_RAISED_MV,
 )
+from .captures import PSU_AC_LOST
 from .device_tests import (
     DIDT_MATMUL_GALAXY,
     GDDR_ACT_ALL,
@@ -77,6 +80,11 @@ def _says(words: str) -> Callable[[dict], bool]:
     return lambda c: words in (c.get("details") or "")
 
 
+def _per_chip(check: dict, key: str) -> list[int]:
+    """The per-chip values the check's data holds under key."""
+    return list(((check.get("data") or {}).get(key) or {}).values())
+
+
 def _tests(*names: str) -> tuple[str, ...]:
     """Device test checks, and their retest after the reset (name + RETEST_SUFFIX)."""
     return tuple(n + "*" for n in names)
@@ -94,6 +102,7 @@ GDDR = _tests(GDDR_ACT_C3, GDDR_ACT_ALL, GDDR_FAST, GDDR_FULL) + (
 _REGLOW = "tt-smi -glx_reset and recount"
 _PCIE = "reseat that tray's host PCIe cable; swap it with a neighbour tray's to see if the fault follows"
 _BOARD = "re-run; if it repeats on the same chip, replace that tray's board"
+_VMIN = f"raise that chip's vdd_min to {VMIN_RAISED_MV} mV and retest"
 
 ROWS: dict[str, Row] = {
     "F01": Row(
@@ -177,12 +186,21 @@ ROWS: dict[str, Row] = {
         "reseat, then replace, the QSFP-DD cable on those ports",
         _says("QSFP-DD"),
     ),
-    # F19 also covers numeric errors at Vmin (F17): same compare, same vdd_min repair.
-    "F19": Row(
-        "bf16/bf8 DIDT numeric errors",
-        _tests(DIDT_MATMUL_GALAXY) + (BUSBAR_NUMERIC,),
+    "F18": Row(
+        "numeric errors with vdd_min already raised",
+        (BUSBAR_NUMERIC,),
         "CHIP/BOARD",
-        "raise that chip's vdd_min to 760 mV and retest",
+        "vdd_min is already raised: replace that tray's board",
+        lambda c: min(_per_chip(c, "vdd_min_mv"), default=0) >= VMIN_RAISED_MV,
+    ),
+    # F19 also covers numeric errors at Vmin (F17): same compare, same vdd_min repair.
+    "F19": Row("bf16/bf8 DIDT numeric errors", _tests(DIDT_MATMUL_GALAXY) + (BUSBAR_NUMERIC,), "CHIP/BOARD", _VMIN),
+    "F20": Row(
+        f"numeric errors above {QUIET_MHZ} MHz",
+        (BUSBAR_NUMERIC,),
+        "CHIP/BOARD",
+        _VMIN,
+        lambda c: max(_per_chip(c, "aiclk_mhz"), default=0) > QUIET_MHZ,
     ),
     "F21": Row("GDDR fault", GDDR, "CHIP/BOARD", _BOARD),
     "F22": Row(
@@ -207,6 +225,12 @@ ROWS: dict[str, Row] = {
         "flash the same firmware bundle to every chip and re-run; if it repeats, replace that tray's board",
     ),
     "F27": Row("overheating", (ASIC_THERMAL_PRECHECK,), "", "check that tray's fans and airflow"),
+    "F28": Row(
+        "PSU lost AC input",
+        (PSU_AC_LOST,),
+        "POWER",
+        "check the AC feed and cord of the PSU the SEL names, then replace that PSU; re-run",
+    ),
     "F29": Row("NOC data errors", _tests(NOC_INTEGRITY), "CHIP/BOARD", _BOARD),
 }
 

@@ -36,6 +36,7 @@ from test_diag_sensors import SensorCase  # noqa: E402
 from tiers import BUSBAR_STEPS, TIERS, Step, select_stages  # noqa: E402
 
 REAL_RUN = subprocess.run
+STORED_VDD_MIN = busbar.stored_vdd_min  # the stage tests stub it
 BDFS = [expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9)]
 
 
@@ -59,7 +60,7 @@ class BusbarCase(SensorCase):
             (dev.resolve() / "current_link_width").write_text("16\n")
             (dev.resolve() / "hwmon" / "hwmon0").mkdir(parents=True)
             (dev.resolve() / "hwmon" / "hwmon0" / "temp1_input").write_text("45000\n")
-        self.loads, self.sel = {}, []
+        self.loads, self.sel, self.vdd_min = {}, [], {}
         for p in (
             # The fake BMC answers ipmitool raw; anything else (the --hook script) really runs.
             mock.patch.object(
@@ -71,6 +72,7 @@ class BusbarCase(SensorCase):
             mock.patch.object(busbar, "capture_events", lambda *a: None),
             mock.patch.object(busbar, "boot_id", lambda: "boot-a"),
             mock.patch.object(busbar, "QUIET_CAP_S", 0.2),
+            mock.patch.object(busbar, "stored_vdd_min", lambda: self.vdd_min),
         ):
             p.start()
             self.addCleanup(p.stop)
@@ -166,6 +168,31 @@ class TestStage(BusbarCase):
         _, by = self.run_stage(STEPS)
         self.assertEqual(by["busbar_numeric"].status, FAIL)
         self.assertEqual(by["busbar_numeric"].parts, [format_bdf(BDFS[5])])
+
+    def test_numeric_fault_carries_the_load_clock(self):
+        clk = self.sys / "class" / "tenstorrent" / "tenstorrent!5" / "tt_aiclk"
+        self.loads["didt"] = (
+            f"import time; open({str(clk)!r}, 'w').write('1350'); time.sleep(1.5); open({str(clk)!r}, 'w').write('800')"
+            "; print('Device 5 output differs from the other chips')"
+        )
+        _, by = self.run_stage(STEPS[:1])
+        chip = format_bdf(BDFS[5])
+        self.assertEqual(by["busbar_numeric"].data["aiclk_mhz"], {chip: 1350})
+        self.assertIn("AICLK 1350 MHz", by["busbar_numeric"].details)
+
+    def test_numeric_fault_carries_the_stored_vdd_min(self):
+        chip = format_bdf(BDFS[5])
+        self.vdd_min = {chip: 760, format_bdf(BDFS[6]): 700}
+        self.loads["didt"] = "print('Device 5 output differs from the other chips')"
+        _, by = self.run_stage(STEPS[:1])
+        self.assertEqual(by["busbar_numeric"].data["vdd_min_mv"], {chip: 760})
+        self.assertIn("vdd_min 760 mV", by["busbar_numeric"].details)
+
+    def test_stored_vdd_min_reads_each_chip(self):
+        out = f"{BDFS[0]} 760\n{BDFS[1]} 700\nno pyluwen\n"
+        done = subprocess.CompletedProcess([], 0, stdout=out, stderr="")
+        with mock.patch.object(busbar.subprocess, "run", lambda *a, **kw: done):
+            self.assertEqual(STORED_VDD_MIN(), {format_bdf(BDFS[0]): 760, format_bdf(BDFS[1]): 700})
 
     def test_hsc_trip_fails_on_its_tray(self):
         self.fake.set(2, sensors.HSC_ADDRS[0], 0x79, 0x0040)

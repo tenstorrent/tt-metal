@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -22,6 +23,7 @@ sys.path.insert(0, str(SUITE_DIR))
 
 from diag import captures  # noqa: E402
 from diag.model import PASS, SKIP, WARN, Phase  # noqa: E402
+from diag.verdict import verdict_lines  # noqa: E402
 
 SEL = """\
    0 | 03/02/2026 | 08:00:00 | Power Unit #0x03 | AC lost | Asserted
@@ -90,6 +92,31 @@ class TestCaptureEvents(unittest.TestCase):
                     self.assertTrue(phase.checks[0].details.endswith("rc=1: Could not open device"))
                     self.assertIn("password is required", phase.checks[1].details)
                     self.assertEqual(self.logs, [])
+
+
+class TestPsuAc(unittest.TestCase):
+    OLD = "   0 | 11/28/2026 | 08:00:00 | Power Supply PS1 | Power Supply AC lost | Asserted"
+    NEW = "   1 | 11/28/2026 | 10:30:00 | Power Supply PS2 | Power Supply AC lost | Asserted"
+
+    def psu(self, before, after) -> Phase:
+        phase = Phase(name="psu_ac")
+        captures.check_psu_ac(phase, before, after)
+        return phase
+
+    def test_ac_lost_during_the_run_warns_as_power(self):
+        phase = self.psu([self.OLD], [self.OLD, self.NEW])
+        c = phase.checks[0]
+        self.assertEqual((c.name, c.status, c.cause), (captures.PSU_AC_LOST, WARN, "POWER"))
+        self.assertIn("1 PSU AC-lost record", c.details)
+        self.assertIn("PS2", c.details)
+        phase.rollup()
+        lines = verdict_lines({"phases": {"psu_ac": asdict(phase)}})
+        self.assertIn("PSU lost AC input", lines[0])
+        self.assertIn("AC feed and cord of the PSU", "\n".join(lines))
+
+    def test_ac_lost_earlier_the_same_day_passes_and_no_sel_skips(self):
+        self.assertEqual(self.psu([self.OLD], [self.OLD]).checks[0].status, PASS)
+        self.assertEqual(self.psu(None, [self.NEW]).checks[0].status, SKIP)
 
 
 if __name__ == "__main__":

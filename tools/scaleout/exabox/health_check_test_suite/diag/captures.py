@@ -23,6 +23,9 @@ SEL_POWER = "AC lost|Power Supply|Power Unit"
 SEL_POWER_RE = re.compile(SEL_POWER, re.IGNORECASE)
 SEL_EVENT_RE = re.compile(rf"FRB|{SEL_POWER}|Voltage|Critical|Watchdog", re.IGNORECASE)
 
+PSU_AC_LOST = "psu_ac_lost"
+AC_LOST_RE = re.compile(r"AC lost", re.IGNORECASE)
+
 # Kernel lines for a misbehaving PCIe link or driver.
 KERNEL_EVENT_RE = re.compile(r"AER|pciehp|Link Down|tenstorrent.*(error|fail|timeout)", re.IGNORECASE)
 
@@ -98,3 +101,17 @@ def capture_events(phase: Phase, dry_run: bool, logs_dir: Path, since: datetime)
                 parts=name_chips(lines),
             )
         )
+
+
+def check_psu_ac(phase: Phase, before: list[str] | None, after: list[str] | None) -> None:
+    """PSU_AC_LOST from the SEL power records read at the run's start and end: WARN on AC-lost records added during the
+    run (the feed's fault, not the unit's), PASS on none, SKIP when either read could not run."""
+    if before is None or after is None:
+        phase.add(Check(name=PSU_AC_LOST, status=SKIP, details="no SEL read", ip="other"))
+        return
+    lost = [ln for ln in after if AC_LOST_RE.search(ln) and ln not in set(before)]
+    details = f"{len(lost)} PSU AC-lost record(s) added to the SEL during the run" + (
+        f": {lost[-1][:160]}" if lost else ""
+    )
+    cause = "POWER" if lost else ""
+    phase.add(Check(name=PSU_AC_LOST, status=WARN if lost else PASS, details=details, ip="other", cause=cause))

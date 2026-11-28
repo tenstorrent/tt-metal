@@ -37,8 +37,8 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.aer import check_aer, read_aer  # noqa: E402
-from diag.busbar import run_busbar  # noqa: E402
-from diag.captures import capture_events  # noqa: E402
+from diag.busbar import run_busbar, sel_power_lines  # noqa: E402
+from diag.captures import PSU_AC_LOST, capture_events, check_psu_ac  # noqa: E402
 from diag.common import call_hook, default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
@@ -308,6 +308,7 @@ def run_diag(
         tt_metal_path = default_tt_metal_path()
 
     started = datetime.now(timezone.utc)
+    sel_before = sel_power_lines(dry_run)  # PSU AC loss counts only records added after this
     report = {
         "tool_version": "0.3.0-draft",
         "tier": tier,
@@ -594,6 +595,10 @@ def run_diag(
     t0 = time.time()
     _guarded(captures_phase, "captures", SKIP, lambda: capture_events(captures_phase, dry_run, logs_dir, started))
     _finish(report, captures_phase, t0, summary=True, all_skip_stays_skip=True)
+    # A PSU that lost AC during the run gates: the run's loads ran on a short feed.
+    psu_phase = Phase(name="psu_ac")
+    _guarded(psu_phase, PSU_AC_LOST, SKIP, lambda: check_psu_ac(psu_phase, sel_before, sel_power_lines(dry_run)))
+    _finish(report, psu_phase, time.time(), summary=True, all_skip_stays_skip=True)
 
     # Phase 8: the sys-triage bundle, when the host has the package. After the
     # QSFP tests for the same reason they follow triage: it opens every chip
