@@ -439,6 +439,21 @@ public:
     Rhs rhs;
 };
 
+// TODO: #58443 Remove the duplicate ckernel::sync_regfile_write.
+/**
+ * @brief Wait until earlier RISC stores to the GPR window have landed.
+ *
+ * Storing the GPR's read-back to a volatile local needs the loaded value, so the RISC stalls until the load,
+ * and the stores before it to the same window, complete. Unlike the ckernel original, the local is
+ * initialized from the read-back, which saves its zero store.
+ *
+ * @param index: GPR whose read-back orders the stores.
+ */
+inline __attribute__((always_inline)) void wait_for_gpr_stores(const std::uint32_t index)
+{
+    [[maybe_unused]] const volatile std::uint32_t written = ckernel::regfile[index];
+}
+
 } // namespace detail
 
 /** @brief Set a GPR to a compile-time 32-bit value. */
@@ -491,7 +506,7 @@ inline __attribute__((always_inline)) void set(const hal::Gpr<Index> destination
         ckernel::regfile[destination.index] = value;
         if constexpr (C == Completion::Wait)
         {
-            static_cast<void>(ckernel::load_blocking(&ckernel::regfile[destination.index]));
+            detail::wait_for_gpr_stores(destination.index);
         }
     }
 }

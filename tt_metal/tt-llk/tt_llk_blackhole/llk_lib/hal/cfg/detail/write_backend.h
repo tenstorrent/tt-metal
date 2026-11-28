@@ -35,7 +35,7 @@ inline __attribute__((always_inline)) void write_thread_word(const std::uint32_t
 {
     LLK_ASSERT(section < F.count, "section index out of range for this register");
     LLK_ASSERT(value <= ThreadCfgWordMask, "prepacked thread CFG value exceeds 16 bits");
-    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value & ThreadCfgWordMask);
+    TTI_SETC16(F.addr32(static_cast<Sec>(section)), value);
 }
 
 /**
@@ -188,8 +188,10 @@ inline __attribute__((always_inline)) void write_word(const std::uint32_t value,
     else if constexpr (Scope == RegisterScope::Thread)
     {
         // SETC16 replaces the complete thread word. Bits absent from Mask are
-        // written as zero, matching the existing single-field API.
-        TT_SETC16(Addr, ((value << Shamt) & Mask) & ThreadCfgWordMask);
+        // written as zero, matching the existing single-field API. Field values
+        // are checked against their widths, so the data reaches SETC16 unmasked.
+        static_assert((Mask & ~ThreadCfgWordMask) == 0u, "thread CFG fields must lie in the low 16 bits of their word");
+        TT_SETC16(Addr, value << Shamt);
     }
     else
     {

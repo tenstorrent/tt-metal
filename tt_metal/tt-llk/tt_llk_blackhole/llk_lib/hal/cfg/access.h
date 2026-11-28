@@ -208,7 +208,9 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & detail::ThreadCfgWordMask);
+            static_assert((F.mask(S) & ~detail::ThreadCfgWordMask) == 0u, "thread CFG field must lie in the low 16 bits of its word");
+            // The value is checked against the field width above, so it reaches SETC16 unmasked, as in production.
+            TT_SETC16(cfg_word_addr, value << F.shamt(S));
         }
         else
         {

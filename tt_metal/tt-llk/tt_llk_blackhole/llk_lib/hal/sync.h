@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/helpers.h"
+#include "utils/memory_ordering.h"
 #include "utils/operation.h"
 #include "utils/validate.h"
 
@@ -547,7 +548,7 @@ inline __attribute__((always_inline)) void semaphore(const StallTarget targets, 
  */
 inline __attribute__((always_inline)) void thread_idle()
 {
-    ckernel::store_blocking(&ckernel::pc_buf_base[detail::CoprocessorDoneCheck], 0);
+    hal::detail::store_blocking(&ckernel::pc_buf_base[detail::CoprocessorDoneCheck], 0);
 }
 
 /**
@@ -557,7 +558,7 @@ inline __attribute__((always_inline)) void thread_idle()
  */
 inline __attribute__((always_inline)) void mop_expander_idle()
 {
-    ckernel::store_blocking(&ckernel::pc_buf_base[detail::MopExpanderDoneCheck], 0);
+    hal::detail::store_blocking(&ckernel::pc_buf_base[detail::MopExpanderDoneCheck], 0);
 }
 
 } // namespace wait
@@ -701,14 +702,14 @@ template <Riscv From>
 [[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read()
 {
     static_assert(detail::is_valid(From), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
-    return ckernel::load_blocking(&ckernel::mailbox_base[hal::to_underlying(From)][0]);
+    return hal::detail::load_blocking(&ckernel::mailbox_base[hal::to_underlying(From)][0]);
 }
 
 /** @brief Take the next value sent by a runtime-selected RISC, waiting until one arrives. */
 [[nodiscard]] inline __attribute__((always_inline)) std::uint32_t read(const Riscv from)
 {
     LLK_ASSERT(detail::is_valid(from), "mailbox RISC must be Brisc, Unpack, Math, or Pack");
-    return ckernel::load_blocking(&ckernel::mailbox_base[hal::to_underlying(from)][0]);
+    return hal::detail::load_blocking(&ckernel::mailbox_base[hal::to_underlying(from)][0]);
 }
 
 /** @brief Return whether RISC From has sent a value that is not read yet, without waiting. */
