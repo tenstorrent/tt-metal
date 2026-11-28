@@ -4,7 +4,8 @@
 
 /*
  * This kernel computes rmsnorm statistics.
-For rmsnorm it computes E(x**2) and returns it as a one tile wide output
+For rmsnorm it computes the sum of x^2 over the row and returns it as a
+one tile wide output with the sum in the leftmost column per tile row
  */
 
 #include <cstdint>
