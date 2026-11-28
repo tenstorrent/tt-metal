@@ -258,6 +258,12 @@ class TestPostTestResetOk(unittest.TestCase):
             (SKIP, "did not run: reset cannot run: reset gate: busy"),
         )
 
+    def test_gate_and_hook_reach_the_reset_loop(self):
+        loop = mock.Mock()
+        with mock.patch.object(resets, "reset_loop", loop), mock.patch.object(resets, "resolve_tt_smi", lambda p: "s"):
+            resets.run_post_test_reset(None, ("-glx_reset",), Phase(name="p"), False, gate="g", hook="h")
+        self.assertEqual((loop.call_args.kwargs.get("gate"), loop.call_args.kwargs.get("hook")), ("g", "h"))
+
 
 if __name__ == "__main__":
     unittest.main()

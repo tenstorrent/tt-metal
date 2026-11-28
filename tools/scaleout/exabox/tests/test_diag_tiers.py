@@ -22,6 +22,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 TESTS_DIR = Path(__file__).resolve().parent
 SUITE_DIR = TESTS_DIR.parent / "health_check_test_suite"
@@ -188,6 +189,44 @@ class TestStageOrder(unittest.TestCase):
         snap = report["phases"]["snapshot"]["checks"]
         self.assertEqual([c["status"] for c in snap if c["name"] == "snapshot_capture"], ["SKIP"])
         self.assertIn("post_test_reset", report["phases"])
+
+    def test_run_diag_wires_order_gate_and_hook(self):
+        import diag_runner
+
+        from diag.model import Check
+
+        def skipped(_tt_smi, _plan, phase, *_a, **_kw):
+            phase.add(Check(name="reset_1_glx_reset", status="SKIP", details="reset cannot run: reset gate: busy"))
+
+        pre, post, hook = mock.Mock(side_effect=skipped), mock.Mock(side_effect=skipped), mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            d = Path(tmp)
+            with mock.patch.object(diag_runner, "reset_loop", pre), mock.patch.object(
+                diag_runner, "run_post_test_reset", post
+            ), mock.patch.object(diag_runner, "call_hook", hook):
+                _rc, report = diag_runner.run_diag(
+                    "weekly",
+                    input_snapshot=d / "missing.json",
+                    output=d / "r.json",
+                    snapshot_out=d / "s.json",
+                    dry_run=True,
+                    tt_smi_path="/usr/bin/true",
+                    skip_triage=True,  # tray-test passes it with --stage-order and still gets the end reset
+                    skip_qsfp_tests=True,
+                    skip_sys_triage=True,
+                    stage_order="reset,end",
+                    reset_gate="G",
+                    hook="H",
+                )
+        self.assertEqual(
+            [c.args[:3] for c in hook.call_args_list], [("H", "stage-start", "reset"), ("H", "stage-start", "end")]
+        )
+        self.assertEqual((pre.call_args.kwargs["gate"], pre.call_args.kwargs["hook"]), ("G", "H"))
+        self.assertEqual(post.call_args.args[1:], (("-glx_reset",), mock.ANY, True, "G", "H"))
+        self.assertEqual([c["name"] for c in report["phases"]["tests"]["checks"]], ["tests"])  # no tests in the order
+        self.assertNotIn("retest", report["phases"])
+        # A reset phase that only skipped stays SKIP (all_skip_stays_skip), not PASS.
+        self.assertEqual([report["phases"][p]["status"] for p in ("reset_loop", "post_test_reset")], ["SKIP", "SKIP"])
 
 
 if __name__ == "__main__":
