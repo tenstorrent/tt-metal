@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "tt-metalium/workload/legacy/kernel_types.hpp"
-#include "tt-metalium/workload/legacy/tensor_accessor_args.hpp"
+#include <optional>
 #include "tt-metalium/utils/work_split.hpp"
 #include "grid_sample_utils.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -12,25 +11,26 @@
 #include <tt-metalium/workload/legacy/host_api.hpp>
 #include <tt-metalium/discovery/hal.hpp>
 #include <tt-metalium/utils/math.hpp>
-#include <tt-metalium/workload/legacy/program_descriptors.hpp>
 #include "ttnn/operations/experimental/quasar/grid_sample/device/grid_sample_device_operation.hpp"
 
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
 
-ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
+ttnn::device_operation::ProgramArtifacts GridSampleNearestProgramFactory::create_program_artifacts(
     const GridSampleParams& operation_attributes, const GridSampleInputs& tensor_args, Tensor& output_tensor) {
     const Tensor& input_tensor = tensor_args.input_tensor;
     const Tensor& grid_tensor = tensor_args.grid;
     const bool use_precomputed_grid = operation_attributes.use_precomputed_grid;
     const bool align_corners = operation_attributes.align_corners;
 
+    const auto& input_mesh_tensor = input_tensor.mesh_tensor();
+    const auto& grid_mesh_tensor = grid_tensor.mesh_tensor();
+    const auto& output_mesh_tensor = output_tensor.mesh_tensor();
     const bool is_sharded = grid_tensor.is_sharded();
-    ProgramDescriptor desc;
 
     // Data formats and device
-    const auto [input_cb_data_format, grid_cb_data_format, output_cb_data_format] = std::make_tuple(
+    const auto [input_dfb_data_format, grid_dfb_data_format, output_dfb_data_format] = std::make_tuple(
         tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(grid_tensor.dtype()),
         tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype()));
@@ -73,148 +73,222 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             all_cores, num_cores, output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
     }
 
-    uint32_t cb_idx = tt::CBIndex::c_0;
+    // ---- Resource names ----
+    const TensorParamName INPUT{"input"};
+    const TensorParamName GRID{"grid"};
+    const TensorParamName OUTPUT{"output"};
+    const DFBSpecName GRID_0{"grid_0"};  // grid sticks for writer 0 (and writer 1 too, when the grid is sharded)
+    const DFBSpecName GRID_1{"grid_1"};  // grid sticks for writer 1 when the grid is interleaved
+    const DFBSpecName FILL{"fill"};      // a zeroed stick copied in for out-of-range samples
+    const DFBSpecName OUT_DFB{"out"};
+    const KernelSpecName WRITER_0{"writer_0"};
+    const KernelSpecName WRITER_1{"writer_1"};
 
-    // Create CBs
+    // Create DFBs
     // Sharded grid rows are stored at the buffer's aligned page size, so stride by the aligned stick size too.
     const uint32_t grid_stick_size = get_aligned_stick_size(grid_shape, grid_tensor);
-    const uint32_t grid_cb_index0 = cb_idx++;
-    const uint32_t grid_cb_num_pages0 = is_sharded ? grid_nsticks_per_core : 1;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = grid_cb_num_pages0 * grid_stick_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(grid_cb_index0),
-            .data_format = grid_cb_data_format,
-            .page_size = grid_stick_size,
-        }}},
-        .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
+    const uint32_t grid_dfb_num_pages0 = is_sharded ? grid_nsticks_per_core : 1;
+    std::vector<DataflowBufferSpec> dfbs;
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = GRID_0,
+        .entry_size = grid_stick_size,
+        .num_entries = grid_dfb_num_pages0,
+        .data_format_metadata = grid_dfb_data_format,
+        .borrowed_from = is_sharded ? std::optional<TensorParamName>{GRID} : std::nullopt,
     });
 
-    uint32_t grid_cb_index1 = DUMMY_CB_ID;
     // Nearest mode has support for DRAM interleaved grid and sharded output
-    if (enable_split_reader && !is_sharded) {
-        grid_cb_index1 = cb_idx++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = grid_stick_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(grid_cb_index1),
-                .data_format = grid_cb_data_format,
-                .page_size = grid_stick_size,
-            }}},
+    const bool has_grid_1 = enable_split_reader && !is_sharded;
+    if (has_grid_1) {
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = GRID_1,
+            .entry_size = grid_stick_size,
+            .num_entries = 1,
+            .data_format_metadata = grid_dfb_data_format,
         });
     }
 
-    const uint32_t output_cb_page_size =
+    const uint32_t output_dfb_page_size =
         static_cast<uint32_t>(static_cast<float>(output_shape[-1]) * output_tensor.element_size());
-    const uint32_t output_cb_pages = output_nsticks_per_core;
+    const uint32_t output_dfb_pages = output_nsticks_per_core;
 
-    // Fill CB - single page to hold pre-filled stick
-    const uint32_t fill_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(fill_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
+    // Fill DFB - single page to hold pre-filled stick
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = FILL,
+        .entry_size = output_dfb_page_size,
+        .num_entries = 1,
+        .data_format_metadata = output_dfb_data_format,
     });
 
-    const uint32_t output_cb_index = cb_idx++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = output_cb_pages * output_cb_page_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(output_cb_index),
-            .data_format = output_cb_data_format,
-            .page_size = output_cb_page_size,
-        }}},
-        .buffer = output_tensor.buffer(),
+    dfbs.push_back(DataflowBufferSpec{
+        .unique_id = OUT_DFB,
+        .entry_size = output_dfb_page_size,
+        .num_entries = output_dfb_pages,
+        .data_format_metadata = output_dfb_data_format,
+        .borrowed_from = OUTPUT,
     });
 
     // Prepare stick size arguments with proper names
     const uint32_t input_stick_size = get_aligned_stick_size(input_shape, input_tensor);
 
     // Writer for nearest mode with sharded grid - matches sharded reader argument structure
-    std::vector<uint32_t> writer_compile_time_args = {
-        grid_cb_index0,                              // ct_arg[0]: grid_cb_index
-        output_cb_index,                             // ct_arg[1]: output_cb_index (replaces scalar_cb_index)
-        input_stick_size,                            // ct_arg[2]: input_stick_size
-        grid_stick_size,                             // ct_arg[3]: grid_stick_size
-        input_height,                                // ct_arg[4]: input_height
-        input_width,                                 // ct_arg[5]: input_width
-        grid_batching_factor,                        // ct_arg[6]: grid_batching_factor
-        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[7]: grid_dtype
-        grid_hw,                                     // ct_arg[8]: grid_hw
-        use_precomputed_grid ? 1U : 0U,              // ct_arg[9]: use_precomputed_grid
-        align_corners ? 1U : 0U,                     // ct_arg[10]: align_corners
-        enable_split_reader ? 1U : 0U,               // ct_arg[11]: split_reader (same as reader)
-        0U,                                          // ct_arg[12]: reader_id (will be set per core)
-        grid_nsticks_per_core,                       // ct_arg[13]: grid_nsticks_per_core
-        is_sharded ? 1U : 0U,                        // ct_arg[14]: is_sharded
-        fill_cb_index,                               // ct_arg[15]: fill_cb_index
-        input_shape[0]                               // ct_arg[16]: batch_size
+    KernelSpec::CompileTimeArgs writer_compile_time_args = {
+        {"input_stick_nbytes", input_stick_size},
+        {"grid_stick_nbytes", grid_stick_size},
+        {"input_height", input_height},
+        {"input_width", input_width},
+        {"grid_batching_factor", grid_batching_factor},
+        {"grid_dtype", static_cast<uint32_t>(grid_tensor.dtype())},
+        {"grid_hw", grid_hw},
+        {"use_precomputed_grid", use_precomputed_grid ? 1U : 0U},
+        {"align_corners", align_corners ? 1U : 0U},
+        {"split_reader", enable_split_reader ? 1U : 0U},  // same as reader
+        {"reader_id", 0U},                                // set per writer below
+        {"grid_nsticks_per_core", grid_nsticks_per_core},
+        {"is_sharded", is_sharded ? 1U : 0U},
+        {"batch_size", input_shape[0]},
     };
 
-    // Add tensor accessor args for input tensor (17 compile time args offset)
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+    // When the grid is interleaved the writers read it page by page through the grid tensor; when it
+    // is sharded they read it in place from the grid DFB (borrowed from the grid shard) instead.
+    KernelSpec::CompilerOptions::Defines writer_defines;
+    Group<TensorBinding> writer_tensor_bindings = {
+        TensorBinding{
+            .tensor_parameter_name = INPUT,
+            .accessor_name = "input",
+        },
+    };
     if (!is_sharded) {
-        tt::tt_metal::TensorAccessorArgs(*grid_tensor.buffer()).append_to(writer_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(writer_compile_time_args);
+        writer_defines.emplace("GRID_INTERLEAVED", "1");
+        writer_tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = GRID,
+            .accessor_name = "grid",
+        });
+    }
+    const Group<std::string> writer_runtime_arg_names =
+        is_sharded ? Group<std::string>{"global_grid_stick_start"} : Group<std::string>{"start_page_id"};
+
+    // The two writers split the work between them (alternating grid points) on every node. The fill and
+    // output DFBs, and the grid DFB when it is the shared grid shard, are touched by both without FIFO ops,
+    // so writer 0 binds them as producer and writer 1 as consumer. With a single writer (or a grid DFB of
+    // its own) a writer binds the DFB both ways.
+    auto shared_dfb_bindings = [&](const DFBSpecName& dfb_name, const std::string& accessor, bool is_writer_0) {
+        Group<DFBBinding> bindings;
+        if (is_writer_0 || !enable_split_reader) {
+            bindings.push_back(DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = accessor,
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            });
+        }
+        if (!is_writer_0 || !enable_split_reader) {
+            bindings.push_back(DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = accessor,
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            });
+        }
+        return bindings;
+    };
+    auto self_loop_bindings = [&](const DFBSpecName& dfb_name, const std::string& accessor) {
+        return Group<DFBBinding>{
+            DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = accessor,
+                .endpoint_type = DFBEndpointType::PRODUCER,
+            },
+            DFBBinding{
+                .dfb_spec_name = dfb_name,
+                .accessor_name = accessor,
+                .endpoint_type = DFBEndpointType::CONSUMER,
+            },
+        };
+    };
+    auto append = [](Group<DFBBinding>& to, Group<DFBBinding> from) {
+        for (auto& b : from) {
+            to.push_back(std::move(b));
+        }
+    };
+
+    std::vector<KernelSpec> kernels;
+    {
+        Group<DFBBinding> writer0_dfb_bindings;
+        if (is_sharded) {
+            append(writer0_dfb_bindings, shared_dfb_bindings(GRID_0, "grid", true));
+        } else {
+            append(writer0_dfb_bindings, self_loop_bindings(GRID_0, "grid"));
+        }
+        append(writer0_dfb_bindings, shared_dfb_bindings(FILL, "fill", true));
+        append(writer0_dfb_bindings, shared_dfb_bindings(OUT_DFB, "out", true));
+        auto writer0_compile_time_args = writer_compile_time_args;
+        kernels.push_back(KernelSpec{
+            .unique_id = WRITER_0,
+            .source = "ttnn/cpp/ttnn/operations/experimental/quasar/grid_sample/device/kernels/dataflow/"
+                      "writer_grid_sample_nearest_sharded.cpp",
+            .compiler_options = {.defines = writer_defines},
+            .dfb_bindings = std::move(writer0_dfb_bindings),
+            .tensor_bindings = writer_tensor_bindings,
+            .compile_time_args = std::move(writer0_compile_time_args),
+            .runtime_arg_schema = {.runtime_arg_names = writer_runtime_arg_names},
+            // BRISC on NOC 0 (neither the reader nor the writer default).
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0,
+                            .noc = NOC::RISCV_0_default,
+                        },
+                },
+        });
     }
 
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/quasar/grid_sample/device/kernels/dataflow/"
-        "writer_grid_sample_nearest_sharded.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = writer_compile_time_args;
-    writer_desc.config = DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = tt::tt_metal::NOC::RISCV_0_default,
-    };
-
-    KernelDescriptor writer1_desc;
     if (enable_split_reader) {
+        Group<DFBBinding> writer1_dfb_bindings;
+        if (is_sharded) {
+            append(writer1_dfb_bindings, shared_dfb_bindings(GRID_0, "grid", false));
+        } else {
+            append(writer1_dfb_bindings, self_loop_bindings(GRID_1, "grid"));
+        }
+        append(writer1_dfb_bindings, shared_dfb_bindings(FILL, "fill", false));
+        append(writer1_dfb_bindings, shared_dfb_bindings(OUT_DFB, "out", false));
         auto writer1_compile_time_args = writer_compile_time_args;
-        writer1_compile_time_args[0] = is_sharded ? grid_cb_index0 : grid_cb_index1;  // ct_arg[0]: grid_cb_index1
-        writer1_compile_time_args[12] = 1;                                            // ct_arg[12]: reader_id = 1
-
-        writer1_desc.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/quasar/grid_sample/device/kernels/dataflow/"
-            "writer_grid_sample_nearest_sharded.cpp";
-        writer1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-        writer1_desc.core_ranges = all_cores;
-        writer1_desc.compile_time_args = std::move(writer1_compile_time_args);
-        writer1_desc.config = DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-        };
+        writer1_compile_time_args["reader_id"] = 1U;
+        kernels.push_back(KernelSpec{
+            .unique_id = WRITER_1,
+            .source = "ttnn/cpp/ttnn/operations/experimental/quasar/grid_sample/device/kernels/dataflow/"
+                      "writer_grid_sample_nearest_sharded.cpp",
+            .compiler_options = {.defines = writer_defines},
+            .dfb_bindings = std::move(writer1_dfb_bindings),
+            .tensor_bindings = writer_tensor_bindings,
+            .compile_time_args = std::move(writer1_compile_time_args),
+            .runtime_arg_schema = {.runtime_arg_names = writer_runtime_arg_names},
+            // NCRISC on NOC 1 (neither the reader nor the writer default).
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .config_1xx =
+                        DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_1,
+                            .noc = NOC::RISCV_1_default,
+                        },
+                },
+        });
     }
 
     // Set runtime arguments
+    KernelRunArgs writer0_run_args{.kernel = WRITER_0};
+    KernelRunArgs writer1_run_args{.kernel = WRITER_1};
     if (is_sharded) {
         for (uint32_t i = 0; i < num_cores; i++) {
             const CoreCoord& core = logical_cores[i];
 
             // Runtime arguments for sharded reader
-            writer_desc.emplace_runtime_args(
-                core,
-                {
-                    input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                    i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
-                });
+            AddRuntimeArgsForNode(
+                writer0_run_args.runtime_arg_values, core, {{"global_grid_stick_start", i * grid_nsticks_per_core}});
             if (enable_split_reader) {
-                writer1_desc.emplace_runtime_args(
+                AddRuntimeArgsForNode(
+                    writer1_run_args.runtime_arg_values,
                     core,
-                    {
-                        input_tensor.buffer(),     // rt_arg[0]: input_buffer_address
-                        i * grid_nsticks_per_core  // rt_arg[1]: grid_stick_offset
-                    });
+                    {{"global_grid_stick_start", i * grid_nsticks_per_core}});
             }
         }
     } else {
@@ -224,38 +298,52 @@ ProgramDescriptor GridSampleNearestProgramFactory::create_descriptor(
             const CoreCoord& core = logical_cores[i];
             const uint32_t grid_sticks = grid_nsticks_per_core;
 
-            // Runtime arguments for interleaved reader - expanded row by row
-            writer_desc.emplace_runtime_args(
-                core,
-                {
-                    input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
-                    grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
-                    grid_sticks,            // rt_arg[2]: grid_sticks
-                    grid_processed          // rt_arg[3]: grid_processed
-                });
+            // Runtime arguments for interleaved reader
+            AddRuntimeArgsForNode(writer0_run_args.runtime_arg_values, core, {{"start_page_id", grid_processed}});
             if (enable_split_reader) {
                 // For split reader in nearest mode, second writer needs same runtime args
                 // The kernel logic handles the split internally via reader_id
-                writer1_desc.emplace_runtime_args(
-                    core,
-                    {
-                        input_tensor.buffer(),  // rt_arg[0]: input_buffer_address
-                        grid_tensor.buffer(),   // rt_arg[1]: grid_buffer_address
-                        grid_sticks,            // rt_arg[2]: grid_sticks
-                        grid_processed          // rt_arg[3]: grid_processed
-                    });
+                AddRuntimeArgsForNode(writer1_run_args.runtime_arg_values, core, {{"start_page_id", grid_processed}});
             }
 
             grid_processed += grid_sticks;
         }
     }
 
-    desc.kernels.push_back(std::move(writer_desc));
+    Group<KernelSpecName> wu_kernels = {WRITER_0};
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args.push_back(std::move(writer0_run_args));
     if (enable_split_reader) {
-        desc.kernels.push_back(std::move(writer1_desc));
+        wu_kernels.push_back(WRITER_1);
+        run_args.kernel_run_args.push_back(std::move(writer1_run_args));
     }
+    run_args.tensor_args = {
+        {INPUT, input_mesh_tensor},
+        {GRID, grid_mesh_tensor},
+        {OUTPUT, output_mesh_tensor},
+    };
 
-    return desc;
+    ProgramSpec spec{
+        .name = "grid_sample_nearest",
+        .kernels = std::move(kernels),
+        .dataflow_buffers = std::move(dfbs),
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT, .spec = input_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = GRID, .spec = grid_mesh_tensor.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output_mesh_tensor.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "grid_sample_nearest",
+                    .kernels = std::move(wu_kernels),
+                    .target_nodes = all_cores,
+                },
+            },
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

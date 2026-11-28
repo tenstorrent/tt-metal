@@ -9,6 +9,10 @@
 #include <ttnn/cpp/ttnn/operations/pool/device/kernels/pool_kernels_common.hpp>
 #include "../grid_sample_reader_common.hpp"
 // experimental headers already included via grid_sample_reader_common.hpp
+#include "experimental/kernel_args.h"
+
+// GRID_INTERLEAVED is defined when the grid tensor is interleaved (read here page by page through
+// tensor::grid); it is absent when the grid is sharded (read in place from the borrowed dfb::grid).
 
 // Process single grid point for nearest neighbor - adapted from common utilities
 template <
@@ -19,7 +23,7 @@ template <
     uint32_t input_height,
     uint32_t input_width,
     uint32_t input_stick_nbytes,
-    uint32_t output_cb_index,
+    uint32_t output_dfb_id,
     typename TensorAccessor,
     typename GridPtrType,
     typename OutputDFB>
@@ -141,53 +145,46 @@ ALWI void advance_grid_index(
 
 void kernel_main() {
     // Compile time arguments - same as sharded reader
-    constexpr uint32_t grid_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_index = get_compile_time_arg_val(1);  // output instead of scalar
-    constexpr uint32_t input_stick_nbytes = get_compile_time_arg_val(2);
-    constexpr uint32_t grid_stick_nbytes = get_compile_time_arg_val(3);
-    constexpr uint32_t input_height = get_compile_time_arg_val(4);
-    constexpr uint32_t input_width = get_compile_time_arg_val(5);
-    constexpr uint32_t grid_batching_factor = get_compile_time_arg_val(6);
-    constexpr uint32_t grid_dtype = get_compile_time_arg_val(7);
-    constexpr uint32_t grid_hw = get_compile_time_arg_val(8);
-    constexpr uint32_t use_precomputed_grid = get_compile_time_arg_val(9);
-    constexpr uint32_t align_corners = get_compile_time_arg_val(10);
-    constexpr uint32_t split_reader = get_compile_time_arg_val(11);
-    constexpr uint32_t reader_id = get_compile_time_arg_val(12);
-    constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
-    constexpr uint32_t is_sharded = get_compile_time_arg_val(14);
-    constexpr uint32_t fill_cb_index = get_compile_time_arg_val(15);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(16);
+    // dfb::out is the output (instead of the bilinear reader's scalar buffer)
+    constexpr uint32_t input_stick_nbytes = get_arg(args::input_stick_nbytes);
+    constexpr uint32_t grid_stick_nbytes = get_arg(args::grid_stick_nbytes);
+    constexpr uint32_t input_height = get_arg(args::input_height);
+    constexpr uint32_t input_width = get_arg(args::input_width);
+    constexpr uint32_t grid_batching_factor = get_arg(args::grid_batching_factor);
+    constexpr uint32_t grid_dtype = get_arg(args::grid_dtype);
+    constexpr uint32_t grid_hw = get_arg(args::grid_hw);
+    constexpr uint32_t use_precomputed_grid = get_arg(args::use_precomputed_grid);
+    constexpr uint32_t align_corners = get_arg(args::align_corners);
+    constexpr uint32_t split_reader = get_arg(args::split_reader);
+    constexpr uint32_t reader_id = get_arg(args::reader_id);
+    constexpr uint32_t grid_nsticks_per_core = get_arg(args::grid_nsticks_per_core);
+    constexpr uint32_t is_sharded = get_arg(args::is_sharded);
+    constexpr uint32_t batch_size = get_arg(args::batch_size);
 
-    uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
-    uint32_t grid_addr = 0;
     uint32_t start_page_id = 0;
-    if constexpr (is_sharded) {
-        // Runtime arguments - same as sharded reader
-        input_addr = get_arg_val<uint32_t>(0);
-        global_grid_stick_start = get_arg_val<uint32_t>(1);
-    } else {
-        input_addr = get_arg_val<uint32_t>(0);
-        grid_addr = get_arg_val<uint32_t>(1);
-        start_page_id = get_arg_val<uint32_t>(3);
-        global_grid_stick_start = start_page_id;
-    }
+#ifndef GRID_INTERLEAVED
+    // Runtime arguments - same as sharded reader
+    global_grid_stick_start = get_arg(args::global_grid_stick_start);
+#else
+    start_page_id = get_arg(args::start_page_id);
+    global_grid_stick_start = start_page_id;
+#endif
 
     // Input tensor accessor for remote NOC reads - same as sharded reader
-    constexpr auto input_tensor_args = TensorAccessorArgs<17>();
-    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr);
+    const auto input_tensor_accessor = TensorAccessor(tensor::input);
 
-    constexpr auto grid_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
-    const auto grid_tensor_accessor = TensorAccessor(grid_tensor_args, grid_addr);
+#ifdef GRID_INTERLEAVED
+    const auto grid_tensor_accessor = TensorAccessor(tensor::grid);
+#endif
 
     // Calculate starting batch from global grid stick position
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
     // Get local grid data base address (already in L1)
-    DataflowBuffer grid_dfb(grid_cb_index);
-    DataflowBuffer output_dfb(output_cb_index);
-    DataflowBuffer fill_dfb(fill_cb_index);
+    DataflowBuffer grid_dfb(dfb::grid);
+    DataflowBuffer output_dfb(dfb::out);
+    DataflowBuffer fill_dfb(dfb::fill);
     Noc noc;
 
     const uint32_t l1_grid_base_addr = grid_dfb.get_write_ptr();
@@ -224,11 +221,11 @@ void kernel_main() {
 
         uint32_t batch_offset = curr_batch * input_height * input_width;
 
-        if constexpr (!is_sharded) {
-            noc.async_read(
-                grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
-            noc.async_read_barrier();
-        }
+#ifdef GRID_INTERLEAVED
+        noc.async_read(
+            grid_tensor_accessor, grid_dfb, grid_stick_nbytes, {.page_id = grid_stick_idx + start_page_id}, {});
+        noc.async_read_barrier();
+#endif
         uint32_t output_write_offset =
             grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes;
 
@@ -242,7 +239,7 @@ void kernel_main() {
                 input_height,
                 input_width,
                 input_stick_nbytes,
-                output_cb_index>(
+                dfb::out>(
                 noc,
                 grid_stick_ptr,
                 in_grid_row_idx,

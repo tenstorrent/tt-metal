@@ -27,10 +27,10 @@ ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
     return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
 }
 
-template <uint32_t scalar_cb_index>
+template <uint32_t scalar_dfb_id>
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    if constexpr (get_dataformat(scalar_cb_index) == DataFormat::Float32) {
+    if constexpr (get_dataformat(scalar_dfb_id) == DataFormat::Float32) {
         // BFLOAT16 bits are the high 16 bits of the equivalent FLOAT32 value.
         ptr[0] = static_cast<uint32_t>(val) << 16;
         ptr[1] = static_cast<uint32_t>(val1) << 16;
@@ -137,7 +137,7 @@ struct GridCoordinateReader {
 // Input data reading template - handles both tensor accessor and direct NOC reads.
 // Reads a single chunk slice of the 4 corner sticks for one grid point.
 // - read_bytes: bytes to copy per corner (chunk width)
-// - write_stride: distance between consecutive corners in the destination CB page
+// - write_stride: distance between consecutive corners in the destination DFB page
 // - src_byte_offset: byte offset within the source stick (= c_i * input_chunk_nbytes)
 template <typename TensorAccessorT, typename DFB>
 ALWI void read_four_corner_inputs(
@@ -286,9 +286,9 @@ ALWI void read_four_corner_inputs_with_fill(
 //
 // When in_nblocks_c > 1 the channel dimension is split into chunks of at most
 // input_chunk_nbytes bytes (= MAX_TILES_PER_REDUCTION * TILE_WIDTH * elem_size). For each chunk we
-// reserve one input CB page, NOC-read the c_i-th slice of all 4 corner sticks, and push that page
+// reserve one input DFB page, NOC-read the c_i-th slice of all 4 corner sticks, and push that page
 // to the compute kernel, which iterates over the same in_nblocks_c chunks. The scalar (bilinear
-// weights) CB is pushed once per grid point since the weights are shared across chunks.
+// weights) DFB is pushed once per grid point since the weights are shared across chunks.
 template <
     uint32_t grid_dtype,
     bool use_precomputed_grid,
@@ -299,8 +299,8 @@ template <
     uint32_t in_nblocks_c,
     uint32_t input_chunk_nbytes,
     bool last_chunk_partial,
-    uint32_t input_cb_index,
-    uint32_t scalar_cb_index,
+    uint32_t input_dfb_id,
+    uint32_t scalar_dfb_id,
     typename TensorAccessor,
     typename GridPtrType,
     typename InputDFB,
@@ -377,10 +377,10 @@ ALWI void process_grid_point(
     }
 
     // Store bilinear interpolation weights for this grid point. The same weights apply to every
-    // channel chunk, so we push the scalar CB only once.
+    // channel chunk, so we push the scalar DFB only once.
     scalar_dfb.reserve_back(1);
     const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
-    fill_four_val<scalar_cb_index>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+    fill_four_val<scalar_dfb_id>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     scalar_dfb.push_back(1);
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the
