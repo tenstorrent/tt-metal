@@ -1,0 +1,65 @@
+diff --git a/kernels/g6_clone_reader.cpp b/kernels/g6_clone_reader.cpp
+index 8f1ffd0035e..e209994d292 100644
+--- a/kernels/g6_clone_reader.cpp
++++ b/kernels/g6_clone_reader.cpp
+@@ -1,7 +1,10 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// g6_clone reader, issue-path variant "lean" (perf experiment issue_path). Same CT/RT layout, split and
++// g6_clone reader, issue-path variant "lean2" (perf experiment issue_path): "lean" plus a peeled first request
++// that skips the command-buffer polls (idle at kernel start), and a barrier without the L1-cache fence (this RISC
++// never reads the bytes it lands).
++// Base description ("lean"): Same CT/RT layout, split and
+ // traffic as the op's reader (kernels/g6_clone_reader.cpp); only the cost of issuing changes:
+ //  - first block: no cb_reserve_back. The firmware zeroes the CB's sync registers before every launch, so the
+ //    CB is empty at kernel start and holds cb_depth_blocks >= 1 blocks;
+@@ -76,11 +79,36 @@ FORCE_INLINE void load_block(
+             }
+         } else {
+             constexpr bool one_packet_pages = !logical_rows && page_bytes <= NOC_MAX_BURST_SIZE;
+-            if constexpr (one_packet_pages) {
++            uint32_t packets = 0;
++            uint32_t i = 0;
++            if (first_block) {
++                // The kernel's first request: the read command buffer is idle, no poll. The page needs no wrap
++                // (page 0 of the walk is start_page + rotate < range end) and no walk reset.
++                const uint64_t page_noc_addr = x_accessor.get_noc_addr(first_page);
++                if constexpr (logical_rows) {
++                    const g6_clone::PagePieces& pieces = walk.pieces();
++                    g6_issue::read_packet<true, true>(
++                        page_noc_addr + pieces.offset0, l1_write_addr + pieces.offset0, pieces.length0);
++                    ++packets;
++                    if (pieces.length1 != 0) {
++                        g6_issue::read_packet<true>(
++                            page_noc_addr + pieces.offset1, l1_write_addr + pieces.offset1, pieces.length1);
++                        ++packets;
++                    }
++                    walk.advance();
++                } else if constexpr (one_packet_pages) {
++                    g6_issue::read_set_len<true>(page_bytes);
++                    g6_issue::read_packet<false, true>(page_noc_addr, l1_write_addr, page_bytes);
++                    ++packets;
++                } else {
++                    packets += g6_issue::read_span(page_noc_addr, l1_write_addr, page_bytes);
++                }
++                l1_write_addr += page_bytes;
++                i = 1;
++            } else if constexpr (one_packet_pages) {
+                 g6_issue::read_set_len(page_bytes);
+             }
+-            uint32_t packets = 0;
+-            for (uint32_t i = 0; i < block_extent; ++i) {
++            for (; i < block_extent; ++i) {
+                 uint32_t page = first_page + i;
+                 if constexpr (bank_stagger) {
+                     // The rotated walk wraps once, from the range's end back to its start.
+@@ -123,7 +151,7 @@ FORCE_INLINE void load_block(
+                 noc_async_read_barrier(other_noc);
+             }
+         } else {
+-            g6_issue::reads_barrier();
++            g6_issue::reads_barrier<false>();
+         }
+     }
+     push.push<cb_page_staging, block_pages>();

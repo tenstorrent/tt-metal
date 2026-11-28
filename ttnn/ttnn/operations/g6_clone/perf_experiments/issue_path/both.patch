@@ -1,0 +1,688 @@
+diff --git a/kernels/g6_clone_issue.hpp b/kernels/g6_clone_issue.hpp
+new file mode 100644
+index 00000000000..ad010abfe62
+--- /dev/null
++++ b/kernels/g6_clone_issue.hpp
+@@ -0,0 +1,165 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Issue-path primitives of the g6_clone perf experiment "cheaper per-transfer issue".
++//
++// Raw NoC command-buffer writes, by design: they bypass noc_async_read / noc_async_read_page /
++// noc_async_write / noc_async_write_page (api/dataflow/dataflow_api.h; there is no kernel_lib helper for a
++// DRAM <-> CB page copy, op_design.md "Helpers considered and rejected"). The mechanism exploited:
++//  - a request's static fields (CTRL, coordinate, length) and even its addresses can be written into the
++//    command buffer long before the request is sent; the send is then one store (NOC_CMD_CTRL). The writer arms
++//    its first write while it waits for the reader, so after the CB handshake only that store is left;
++//  - the software issue counters the barriers compare against are bumped once per block, not per request;
++//  - a request whose length is the block's constant page size does not rewrite NOC_AT_LEN_BE.
++// Dedicated-NoC mode only (the op's default); a kernel built in DM_DYNAMIC_NOC keeps the dataflow API path.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++namespace g6_issue {
++
++constexpr uint32_t WRITE_CTRL_BASE = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_RESP_MARKED;
++
++FORCE_INLINE uint32_t coord_of(uint64_t noc_addr) {
++    return (uint32_t)(noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK;
++}
++
++// ---------------------------------------------------------------------------------------------------------
++// Reads (read_cmd_buf; in dedicated mode its CTRL is the firmware's static read config, never rewritten).
++// ---------------------------------------------------------------------------------------------------------
++
++// Wait for the read command buffer, then set the length of the reads that follow without a length.
++// skip_poll: the buffer is known idle (nothing sent on it since its last ready poll, or since kernel start:
++// the previous kernel returned with every read flushed, so every request had left the buffer).
++template <bool skip_poll = false>
++FORCE_INLINE void read_set_len(uint32_t len) {
++    if constexpr (!skip_poll) {
++        while (!noc_cmd_buf_ready(noc_index, read_cmd_buf));
++    }
++    NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_AT_LEN_BE, len);
++}
++
++// One read packet. with_len = false: the length register already holds this packet's length.
++template <bool with_len, bool skip_poll = false>
++FORCE_INLINE void read_packet(uint64_t src_noc_addr, uint32_t dst_l1, uint32_t len) {
++    if constexpr (!skip_poll) {
++        while (!noc_cmd_buf_ready(noc_index, read_cmd_buf));
++    }
++    NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_RET_ADDR_LO, dst_l1);
++    NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_noc_addr);
++    NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, coord_of(src_noc_addr));
++    if constexpr (with_len) {
++        NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_AT_LEN_BE, len);
++    }
++    NOC_CMD_BUF_WRITE_REG(noc_index, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
++}
++
++// A span of any length as packets; returns the packet count (the caller bumps the counter once).
++FORCE_INLINE uint32_t read_span(uint64_t src_noc_addr, uint32_t dst_l1, uint32_t len) {
++    uint32_t packets = 0;
++    while (len > NOC_MAX_BURST_SIZE) {
++        read_packet<true>(src_noc_addr, dst_l1, NOC_MAX_BURST_SIZE);
++        src_noc_addr += NOC_MAX_BURST_SIZE;
++        dst_l1 += NOC_MAX_BURST_SIZE;
++        len -= NOC_MAX_BURST_SIZE;
++        ++packets;
++    }
++    read_packet<true>(src_noc_addr, dst_l1, len);
++    return packets + 1;
++}
++
++FORCE_INLINE void count_reads(uint32_t packets) { noc_reads_num_issued[noc_index] += packets; }
++
++template <bool invalidate = true>
++FORCE_INLINE void reads_barrier() {
++    while (!ncrisc_noc_reads_flushed(noc_index));
++    if constexpr (invalidate) {
++        invalidate_l1_cache();
++    }
++}
++
++// ---------------------------------------------------------------------------------------------------------
++// Writes (write_cmd_buf).
++// ---------------------------------------------------------------------------------------------------------
++
++// Program one write packet, CTRL included, without sending it. On return the command buffer is idle and holds
++// the request; nothing may issue on write_cmd_buf before write_fire().
++FORCE_INLINE void write_arm(uint32_t vc, uint32_t src_l1, uint64_t dst_noc_addr, uint32_t len) {
++    while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CTRL, WRITE_CTRL_BASE | NOC_CMD_STATIC_VC(vc));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO, src_l1);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, coord_of(dst_noc_addr));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, len);
++}
++
++FORCE_INLINE void write_fire() { NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ); }
++
++// One write packet after write_arm (CTRL stays). with_len = false: the length register already holds it.
++template <bool with_len>
++FORCE_INLINE void write_packet(uint32_t src_l1, uint64_t dst_noc_addr, uint32_t len) {
++    while (!noc_cmd_buf_ready(noc_index, write_cmd_buf));
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_TARG_ADDR_LO, src_l1);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_RET_ADDR_COORDINATE, coord_of(dst_noc_addr));
++    if constexpr (with_len) {
++        NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_AT_LEN_BE, len);
++    }
++    NOC_CMD_BUF_WRITE_REG(noc_index, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
++}
++
++FORCE_INLINE uint32_t write_span(uint32_t src_l1, uint64_t dst_noc_addr, uint32_t len) {
++    uint32_t packets = 0;
++    while (len > NOC_MAX_BURST_SIZE) {
++        write_packet<true>(src_l1, dst_noc_addr, NOC_MAX_BURST_SIZE);
++        src_l1 += NOC_MAX_BURST_SIZE;
++        dst_noc_addr += NOC_MAX_BURST_SIZE;
++        len -= NOC_MAX_BURST_SIZE;
++        ++packets;
++    }
++    write_packet<true>(src_l1, dst_noc_addr, len);
++    return packets + 1;
++}
++
++FORCE_INLINE void count_writes(uint32_t packets) {
++    noc_nonposted_writes_num_issued[noc_index] += packets;
++    noc_nonposted_writes_acked[noc_index] += packets;
++}
++
++FORCE_INLINE void writes_flushed() {
++    while (!ncrisc_noc_nonposted_writes_sent(noc_index));
++    invalidate_l1_cache();
++}
++
++FORCE_INLINE void writes_barrier() {
++    while (!ncrisc_noc_nonposted_writes_flushed(noc_index));
++    invalidate_l1_cache();
++}
++
++// ---------------------------------------------------------------------------------------------------------
++// CB handshake with the expensive part off the critical path.
++// ---------------------------------------------------------------------------------------------------------
++
++// The producer is the only writer of tiles_received: read it before the data lands, store it after.
++struct EarlyPush {
++    volatile tt_reg_ptr uint32_t* received_ptr;
++    uint32_t next;
++
++    FORCE_INLINE EarlyPush(uint32_t cb, uint32_t num_pages) :
++        received_ptr(get_cb_tiles_received_ptr(cb)), next(received_ptr[0] + num_pages) {}
++
++    template <uint32_t cb, uint32_t num_pages>
++    FORCE_INLINE void push() {
++        received_ptr[0] = next;
++        LocalCBInterface& cbi = get_local_cb_interface(cb);
++        cbi.fifo_wr_ptr += num_pages * cbi.fifo_page_size;
++        if (cbi.fifo_wr_ptr == cbi.fifo_limit) {
++            cbi.fifo_wr_ptr -= cbi.fifo_size;
++        }
++    }
++};
++
++}  // namespace g6_issue
+diff --git a/kernels/g6_clone_reader.cpp b/kernels/g6_clone_reader.cpp
+index c253f835a6d..8f1ffd0035e 100644
+--- a/kernels/g6_clone_reader.cpp
++++ b/kernels/g6_clone_reader.cpp
+@@ -1,27 +1,25 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// g6_clone reader (NCRISC, NoC0): load_block over this core's run of page ids
+-// start_page + i * page_stride.
+-//
+-// Raw dataflow by design: no kernel_lib helper moves DRAM pages into a CB behind one
+-// barrier per block (op_design.md, "Helpers considered and rejected"). The bytes never
+-// reach an unpacker, so every bit pattern of every dtype survives.
++// g6_clone reader, issue-path variant "lean" (perf experiment issue_path). Same CT/RT layout, split and
++// traffic as the op's reader (kernels/g6_clone_reader.cpp); only the cost of issuing changes:
++//  - first block: no cb_reserve_back. The firmware zeroes the CB's sync registers before every launch, so the
++//    CB is empty at kernel start and holds cb_depth_blocks >= 1 blocks;
++//  - rotate (RT arg 2) is read only with bank_stagger (the host passes 0 otherwise);
++//  - consecutive-page walks issue raw read packets (g6_clone_issue.hpp): a full page of at most one packet costs
++//    RET/TARG/COORD + SEND, its length programmed once per block; the issue counter is bumped once per block;
++//  - the push reads the CB's tiles-received register before the barrier, so after the data lands it is one store.
++// Raw NoC register writes bypass noc_async_read_page / noc_async_read (dataflow_api.h); there is no kernel_lib
++// helper for this copy (op_design.md, "Helpers considered and rejected"). A bank run (one transfer per block)
++// keeps noc_async_read: its issue cost is one request per 16 KB. DM_DYNAMIC_NOC (noc_split) keeps the op's code.
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "g6_clone_zones.hpp"
+ #include "g6_clone_page_pieces.hpp"
++#include "g6_clone_issue.hpp"
+ 
+ namespace {
+ 
+-// One block: reserve the nominal block, issue the block's reads back to back, one barrier,
+-// push the nominal block. A ragged block narrows only the reads, so every push is
+-// block_pages and the CB ring closes on its capacity (cb_depth_blocks * block_pages).
+-// A bank run (page_stride = bank count) sits back to back in one bank, so it is one read, addressed
+-// to the bank's endpoint on bank_endpoint_noc's table (the one on this core's row), with its request
+-// on virtual channel bank_vc. With noc_split, the block's last other_noc_pages pages come back on the
+-// other NoC instead.
+-// With logical_rows, each page moves only its logical pieces to their own in-page offsets.
+ template <
+     uint32_t cb_page_staging,
+     uint32_t block_pages,
+@@ -30,6 +28,7 @@ template <
+     uint8_t bank_endpoint_noc,
+     bool bank_stagger,
+     bool noc_split,
++    uint32_t page_bytes,
+     typename Accessor,
+     typename Walk>
+ FORCE_INLINE void load_block(
+@@ -40,16 +39,18 @@ FORCE_INLINE void load_block(
+     uint32_t range_start,
+     uint32_t range_pages,
+     uint32_t bank_vc,
+-    uint32_t other_noc_pages) {
++    uint32_t other_noc_pages,
++    bool first_block) {
+     constexpr uint8_t other_noc = 1 - noc_index;
+     {
+         G6C_ZONE("g6c_rd_reserve");
+-        cb_reserve_back(cb_page_staging, block_pages);
++        if (!first_block) {
++            cb_reserve_back(cb_page_staging, block_pages);
++        }
+     }
++    uint32_t l1_write_addr = get_write_ptr(cb_page_staging);
+     {
+         G6C_ZONE("g6c_rd_issue");
+-        const uint32_t page_bytes = x_accessor.get_aligned_page_size();
+-        uint32_t l1_write_addr = get_write_ptr(cb_page_staging);
+         if constexpr (page_stride != 1) {
+             ASSERT(
+                 x_accessor.num_contiguous_pages(first_page, first_page + (block_extent - 1) * page_stride + 1) ==
+@@ -74,6 +75,11 @@ FORCE_INLINE void load_block(
+                 noc_async_read(bank_noc_addr, l1_write_addr, block_extent * page_bytes, noc_index, bank_vc);
+             }
+         } else {
++            constexpr bool one_packet_pages = !logical_rows && page_bytes <= NOC_MAX_BURST_SIZE;
++            if constexpr (one_packet_pages) {
++                g6_issue::read_set_len(page_bytes);
++            }
++            uint32_t packets = 0;
+             for (uint32_t i = 0; i < block_extent; ++i) {
+                 uint32_t page = first_page + i;
+                 if constexpr (bank_stagger) {
+@@ -85,31 +91,42 @@ FORCE_INLINE void load_block(
+                         page -= range_pages;
+                     }
+                 }
++                const uint64_t page_noc_addr = x_accessor.get_noc_addr(page);
+                 if constexpr (logical_rows) {
+                     const g6_clone::PagePieces& pieces = walk.pieces();
+-                    const uint64_t page_noc_addr = x_accessor.get_noc_addr(page);
+-                    noc_async_read<NOC_MAX_BURST_SIZE>(
++                    g6_issue::read_packet<true>(
+                         page_noc_addr + pieces.offset0, l1_write_addr + pieces.offset0, pieces.length0);
++                    ++packets;
+                     if (pieces.length1 != 0) {
+-                        noc_async_read<NOC_MAX_BURST_SIZE>(
++                        g6_issue::read_packet<true>(
+                             page_noc_addr + pieces.offset1, l1_write_addr + pieces.offset1, pieces.length1);
++                        ++packets;
+                     }
+                     walk.advance();
++                } else if constexpr (one_packet_pages) {
++                    g6_issue::read_packet<false>(page_noc_addr, l1_write_addr, page_bytes);
++                    ++packets;
+                 } else {
+-                    noc_async_read_page(page, x_accessor, l1_write_addr);
++                    packets += g6_issue::read_span(page_noc_addr, l1_write_addr, page_bytes);
+                 }
+                 l1_write_addr += page_bytes;
+             }
++            g6_issue::count_reads(packets);
+         }
+     }
++    g6_issue::EarlyPush push(cb_page_staging, block_pages);
+     {
+         G6C_ZONE("g6c_rd_barrier");
+-        noc_async_read_barrier();
+-        if constexpr (noc_split) {
+-            noc_async_read_barrier(other_noc);
++        if constexpr (page_stride != 1) {
++            noc_async_read_barrier();
++            if constexpr (noc_split) {
++                noc_async_read_barrier(other_noc);
++            }
++        } else {
++            g6_issue::reads_barrier();
+         }
+     }
+-    cb_push_back(cb_page_staging, block_pages);
++    push.push<cb_page_staging, block_pages>();
+ }
+ 
+ }  // namespace
+@@ -125,6 +142,7 @@ void kernel_main() {
+     constexpr bool per_core_vc = get_compile_time_arg_val(7) != 0;
+     constexpr uint32_t walk_ct_base = 8;
+     constexpr auto x_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
++    constexpr uint32_t page_bytes = x_args.get_aligned_page_size();
+     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
+     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
+     static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
+@@ -132,31 +150,44 @@ void kernel_main() {
+     static_assert(!noc_split || page_stride != 1, "g6_clone: only a bank run splits over both NoCs");
+     static_assert(!noc_split || NOC_MODE == DM_DYNAMIC_NOC, "g6_clone: issuing on both NoCs needs DM_DYNAMIC_NOC");
+     static_assert(!per_core_vc || page_stride != 1, "g6_clone: only a bank run picks its VC per core");
++    static_assert(
++        page_stride != 1 || NOC_MODE == DM_DEDICATED_NOC, "g6_clone issue_path: raw reads need DM_DEDICATED_NOC");
+ 
+     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+     const uint32_t start_page = get_arg_val<uint32_t>(0);
+     const uint32_t num_pages_this_core = get_arg_val<uint32_t>(1);
+-    // bank_stagger: the walk starts `rotate` pages into the range, so the grid's first requests
+-    // spread over the banks, and wraps once (0 without bank_stagger).
+-    const uint32_t rotate = get_arg_val<uint32_t>(2);
+-    // Bank runs only: the request VC (RT arg 3 with per_core_vc, else the API default), and how many
+-    // pages of each block the other NoC carries (RT arg 4 with noc_split, else none).
++    const uint32_t rotate = bank_stagger ? get_arg_val<uint32_t>(2) : 0;
+     const uint32_t bank_vc = per_core_vc ? get_arg_val<uint32_t>(3) : NOC_UNICAST_WRITE_VC;
+     const uint32_t other_noc_pages = noc_split ? get_arg_val<uint32_t>(4) : 0;
+ 
+-    // Page size comes from the accessor args (the buffer's aligned page), the same value
+-    // the host used as the CB page size.
+     const auto x_accessor = TensorAccessor(x_args, x_addr);
+     g6_clone::PartialTileWalk<walk_ct_base> walk(start_page + rotate);
+ 
+-    const uint32_t num_blocks_this_core = (num_pages_this_core + block_pages - 1) / block_pages;
+     uint32_t first_page = start_page + rotate;
+     uint32_t pages_left = num_pages_this_core;
+-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
++    bool first_block = true;
++    while (pages_left != 0) {
+         const uint32_t block_extent = pages_left < block_pages ? pages_left : block_pages;
+-        load_block<cb_page_staging, block_pages, logical_rows, page_stride, bank_endpoint_noc, bank_stagger, noc_split>(
+-            x_accessor, walk, first_page, block_extent, start_page, num_pages_this_core, bank_vc, other_noc_pages);
++        load_block<
++            cb_page_staging,
++            block_pages,
++            logical_rows,
++            page_stride,
++            bank_endpoint_noc,
++            bank_stagger,
++            noc_split,
++            page_bytes>(
++            x_accessor,
++            walk,
++            first_page,
++            block_extent,
++            start_page,
++            num_pages_this_core,
++            bank_vc,
++            other_noc_pages,
++            first_block);
+         first_page += block_extent * page_stride;
+         pages_left -= block_extent;
++        first_block = false;
+     }
+ }
+diff --git a/kernels/g6_clone_writer.cpp b/kernels/g6_clone_writer.cpp
+index c423edc3e42..5301610cc13 100644
+--- a/kernels/g6_clone_writer.cpp
++++ b/kernels/g6_clone_writer.cpp
+@@ -1,25 +1,55 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+ // SPDX-License-Identifier: Apache-2.0
+ 
+-// g6_clone writer (BRISC, NoC1): store_block over this core's run of page ids
+-// start_page + i * page_stride, then drain_writes.
+-//
+-// Raw dataflow by design: no kernel_lib helper writes a CB block to DRAM pages behind one
+-// flush per block (op_design.md, "Helpers considered and rejected").
++// g6_clone writer, issue-path variant "armed" (perf experiment issue_path). Same CT/RT layout, split and
++// traffic as the op's writer (kernels/g6_clone_writer.cpp); only the cost of issuing changes:
++//  - before each cb_wait_front the block's first write packet is fully programmed into write_cmd_buf (CTRL,
++//    addresses, coordinate, length): the source slot (get_read_ptr) and the destination page are known before the
++//    reader pushes. After the handshake the send is one store (NOC_CMD_CTRL);
++//  - the block's other packets are raw write packets that keep CTRL (and the length, for whole pages of at most
++//    one packet), and the issue counters are bumped once per block.
++// Raw NoC register writes bypass noc_async_write_page / noc_async_write (dataflow_api.h); there is no kernel_lib
++// helper for this copy (op_design.md, "Helpers considered and rejected"). DM_DYNAMIC_NOC (noc_split) keeps the
++// op's code.
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "g6_clone_zones.hpp"
+ #include "g6_clone_page_pieces.hpp"
++#include "g6_clone_issue.hpp"
+ 
+ namespace {
+ 
+-// One block: wait for the nominal block, issue the block's writes back to back, flush so the
+-// slot's bytes have left L1 before the reader may refill it, pop the nominal block.
+-// out has x's spec, so a bank run of x is a bank run of out and lands as one write, addressed to the
+-// bank's endpoint on bank_endpoint_noc's table: the reader's endpoint, on this core's row. It rides
+-// virtual channel bank_vc; with noc_split, the block's last other_noc_pages pages leave on the other NoC.
+-// With logical_rows, each page writes back only the logical pieces the reader landed; the
+-// output's padding is left as allocated.
++// The op's store_block, unchanged: the noc_split path (DM_DYNAMIC_NOC).
++template <
++    uint32_t cb_page_staging,
++    uint32_t block_pages,
++    uint8_t bank_endpoint_noc,
++    uint32_t page_bytes,
++    typename Accessor>
++FORCE_INLINE void store_block_split(
++    const Accessor& out_accessor, uint32_t first_page, uint32_t block_extent, uint32_t bank_vc, uint32_t other_noc_pages) {
++    constexpr uint8_t other_noc = 1 - noc_index;
++    cb_wait_front(cb_page_staging, block_pages);
++    const uint32_t l1_read_addr = get_read_ptr(cb_page_staging);
++    const uint64_t bank_noc_addr = out_accessor.get_noc_addr(first_page, 0, bank_endpoint_noc);
++    const uint32_t own_extent = block_extent - (other_noc_pages < block_extent ? other_noc_pages : block_extent);
++    const uint32_t own_bytes = own_extent * page_bytes;
++    if (own_bytes != 0) {
++        noc_async_write(l1_read_addr, bank_noc_addr, own_bytes, noc_index, bank_vc);
++    }
++    if (own_extent != block_extent) {
++        noc_async_write(
++            l1_read_addr + own_bytes,
++            bank_noc_addr + own_bytes,
++            (block_extent - own_extent) * page_bytes,
++            other_noc,
++            bank_vc);
++    }
++    noc_async_writes_flushed();
++    noc_async_writes_flushed(other_noc);
++    cb_pop_front(cb_page_staging, block_pages);
++}
++
+ template <
+     uint32_t cb_page_staging,
+     uint32_t block_pages,
+@@ -27,7 +57,7 @@ template <
+     uint32_t page_stride,
+     uint8_t bank_endpoint_noc,
+     bool bank_stagger,
+-    bool noc_split,
++    uint32_t page_bytes,
+     typename Accessor,
+     typename Walk>
+ FORCE_INLINE void store_block(
+@@ -37,75 +67,103 @@ FORCE_INLINE void store_block(
+     uint32_t block_extent,
+     uint32_t range_start,
+     uint32_t range_pages,
+-    uint32_t bank_vc,
+-    uint32_t other_noc_pages) {
+-    constexpr uint8_t other_noc = 1 - noc_index;
+-    {
+-        G6C_ZONE("g6c_wr_wait");
+-        cb_wait_front(cb_page_staging, block_pages);
+-    }
+-    {
++    uint32_t bank_vc) {
++    constexpr bool one_packet_pages = !logical_rows && page_bytes <= NOC_MAX_BURST_SIZE;
++    const uint32_t l1_block = get_read_ptr(cb_page_staging);
++    uint32_t packets = 1;
++    if constexpr (page_stride != 1) {
++        // A bank run: the block is one span in one bank.
++        ASSERT(
++            out_accessor.num_contiguous_pages(first_page, first_page + (block_extent - 1) * page_stride + 1) ==
++            block_extent);
++        const uint64_t bank_noc_addr = out_accessor.get_noc_addr(first_page, 0, bank_endpoint_noc);
++        const uint32_t bytes = block_extent * page_bytes;
++        const uint32_t first_len = bytes < NOC_MAX_BURST_SIZE ? bytes : NOC_MAX_BURST_SIZE;
++        g6_issue::write_arm(bank_vc, l1_block, bank_noc_addr, first_len);
++        {
++            G6C_ZONE("g6c_wr_wait");
++            cb_wait_front(cb_page_staging, block_pages);
++        }
+         G6C_ZONE("g6c_wr_issue");
+-        const uint32_t page_bytes = out_accessor.get_aligned_page_size();
+-        uint32_t l1_read_addr = get_read_ptr(cb_page_staging);
+-        if constexpr (page_stride != 1) {
+-            ASSERT(
+-                out_accessor.num_contiguous_pages(first_page, first_page + (block_extent - 1) * page_stride + 1) ==
+-                block_extent);
+-            const uint64_t bank_noc_addr = out_accessor.get_noc_addr(first_page, 0, bank_endpoint_noc);
+-            if constexpr (noc_split) {
+-                const uint32_t own_extent =
+-                    block_extent - (other_noc_pages < block_extent ? other_noc_pages : block_extent);
+-                const uint32_t own_bytes = own_extent * page_bytes;
+-                if (own_bytes != 0) {
+-                    noc_async_write(l1_read_addr, bank_noc_addr, own_bytes, noc_index, bank_vc);
+-                }
+-                if (own_extent != block_extent) {
+-                    noc_async_write(
+-                        l1_read_addr + own_bytes,
+-                        bank_noc_addr + own_bytes,
+-                        (block_extent - own_extent) * page_bytes,
+-                        other_noc,
+-                        bank_vc);
++        g6_issue::write_fire();
++        if (bytes != first_len) {
++            packets += g6_issue::write_span(l1_block + first_len, bank_noc_addr + first_len, bytes - first_len);
++        }
++    } else {
++        // Page 0 of the block, wrapped like the loop below wraps.
++        uint32_t page = first_page;
++        if constexpr (bank_stagger) {
++            if (page >= range_start + range_pages) {
++                if (page == range_start + range_pages) {
++                    walk = Walk(range_start);
+                 }
+-            } else {
+-                noc_async_write(l1_read_addr, bank_noc_addr, block_extent * page_bytes, noc_index, bank_vc);
++                page -= range_pages;
+             }
++        }
++        const uint64_t page0_noc_addr = out_accessor.get_noc_addr(page);
++        if constexpr (logical_rows) {
++            const g6_clone::PagePieces& pieces = walk.pieces();
++            g6_issue::write_arm(bank_vc, l1_block + pieces.offset0, page0_noc_addr + pieces.offset0, pieces.length0);
+         } else {
+-            for (uint32_t i = 0; i < block_extent; ++i) {
+-                uint32_t page = first_page + i;
+-                if constexpr (bank_stagger) {
+-                    // The rotated walk wraps once, from the range's end back to its start.
+-                    if (page >= range_start + range_pages) {
+-                        if (page == range_start + range_pages) {
+-                            walk = Walk(range_start);
+-                        }
+-                        page -= range_pages;
++            g6_issue::write_arm(
++                bank_vc, l1_block, page0_noc_addr, page_bytes < NOC_MAX_BURST_SIZE ? page_bytes : NOC_MAX_BURST_SIZE);
++        }
++        {
++            G6C_ZONE("g6c_wr_wait");
++            cb_wait_front(cb_page_staging, block_pages);
++        }
++        G6C_ZONE("g6c_wr_issue");
++        g6_issue::write_fire();
++        // The rest of page 0.
++        if constexpr (logical_rows) {
++            const g6_clone::PagePieces& pieces = walk.pieces();
++            if (pieces.length1 != 0) {
++                g6_issue::write_packet<true>(
++                    l1_block + pieces.offset1, page0_noc_addr + pieces.offset1, pieces.length1);
++                ++packets;
++            }
++            walk.advance();
++        } else if constexpr (!one_packet_pages) {
++            packets += g6_issue::write_span(
++                l1_block + NOC_MAX_BURST_SIZE, page0_noc_addr + NOC_MAX_BURST_SIZE, page_bytes - NOC_MAX_BURST_SIZE);
++        }
++        // Pages 1.. of the block.
++        uint32_t l1_read_addr = l1_block + page_bytes;
++        for (uint32_t i = 1; i < block_extent; ++i) {
++            page = first_page + i;
++            if constexpr (bank_stagger) {
++                if (page >= range_start + range_pages) {
++                    if (page == range_start + range_pages) {
++                        walk = Walk(range_start);
+                     }
++                    page -= range_pages;
+                 }
+-                if constexpr (logical_rows) {
+-                    const g6_clone::PagePieces& pieces = walk.pieces();
+-                    const uint64_t page_noc_addr = out_accessor.get_noc_addr(page);
+-                    noc_async_write<NOC_MAX_BURST_SIZE>(
+-                        l1_read_addr + pieces.offset0, page_noc_addr + pieces.offset0, pieces.length0);
+-                    if (pieces.length1 != 0) {
+-                        noc_async_write<NOC_MAX_BURST_SIZE>(
+-                            l1_read_addr + pieces.offset1, page_noc_addr + pieces.offset1, pieces.length1);
+-                    }
+-                    walk.advance();
+-                } else {
+-                    noc_async_write_page(page, out_accessor, l1_read_addr);
++            }
++            const uint64_t page_noc_addr = out_accessor.get_noc_addr(page);
++            if constexpr (logical_rows) {
++                const g6_clone::PagePieces& pieces = walk.pieces();
++                g6_issue::write_packet<true>(
++                    l1_read_addr + pieces.offset0, page_noc_addr + pieces.offset0, pieces.length0);
++                ++packets;
++                if (pieces.length1 != 0) {
++                    g6_issue::write_packet<true>(
++                        l1_read_addr + pieces.offset1, page_noc_addr + pieces.offset1, pieces.length1);
++                    ++packets;
+                 }
+-                l1_read_addr += page_bytes;
++                walk.advance();
++            } else if constexpr (one_packet_pages) {
++                g6_issue::write_packet<false>(l1_read_addr, page_noc_addr, page_bytes);
++                ++packets;
++            } else {
++                packets += g6_issue::write_span(l1_read_addr, page_noc_addr, page_bytes);
+             }
++            l1_read_addr += page_bytes;
+         }
+     }
++    g6_issue::count_writes(packets);
+     {
+         G6C_ZONE("g6c_wr_flush");
+-        noc_async_writes_flushed();
+-        if constexpr (noc_split) {
+-            noc_async_writes_flushed(other_noc);
+-        }
++        g6_issue::writes_flushed();
+     }
+     cb_pop_front(cb_page_staging, block_pages);
+ }
+@@ -123,6 +181,7 @@ void kernel_main() {
+     constexpr bool per_core_vc = get_compile_time_arg_val(7) != 0;
+     constexpr uint32_t walk_ct_base = 8;
+     constexpr auto out_args = TensorAccessorArgs<walk_ct_base + g6_clone::PARTIAL_TILE_CT_ARGS>();
++    constexpr uint32_t page_bytes = out_args.get_aligned_page_size();
+     static_assert(page_stride == 1 || page_stride == NUM_DRAM_BANKS, "g6_clone: a run steps 1 page or 1 bank cycle");
+     static_assert(page_stride == 1 || !logical_rows, "g6_clone: logical_rows walks consecutive page ids");
+     static_assert(bank_endpoint_noc < NUM_NOCS, "g6_clone: bank_endpoint_noc names a NoC");
+@@ -130,35 +189,35 @@ void kernel_main() {
+     static_assert(!noc_split || page_stride != 1, "g6_clone: only a bank run splits over both NoCs");
+     static_assert(!noc_split || NOC_MODE == DM_DYNAMIC_NOC, "g6_clone: issuing on both NoCs needs DM_DYNAMIC_NOC");
+     static_assert(!per_core_vc || page_stride != 1, "g6_clone: only a bank run picks its VC per core");
++    static_assert(noc_split || NOC_MODE == DM_DEDICATED_NOC, "g6_clone issue_path: raw writes need DM_DEDICATED_NOC");
+ 
+     const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+     const uint32_t start_page = get_arg_val<uint32_t>(0);
+     const uint32_t num_pages_this_core = get_arg_val<uint32_t>(1);
+-    // bank_stagger: the walk starts `rotate` pages into the range, so the grid's first requests
+-    // spread over the banks, and wraps once (0 without bank_stagger).
+-    const uint32_t rotate = get_arg_val<uint32_t>(2);
+-    // Bank runs only: the write VC (RT arg 3 with per_core_vc, else the API default), and how many
+-    // pages of each block the other NoC carries (RT arg 4 with noc_split, else none).
++    const uint32_t rotate = bank_stagger ? get_arg_val<uint32_t>(2) : 0;
+     const uint32_t bank_vc = per_core_vc ? get_arg_val<uint32_t>(3) : NOC_UNICAST_WRITE_VC;
+     const uint32_t other_noc_pages = noc_split ? get_arg_val<uint32_t>(4) : 0;
+ 
+     const auto out_accessor = TensorAccessor(out_args, out_addr);
+     g6_clone::PartialTileWalk<walk_ct_base> walk(start_page + rotate);
+ 
+-    const uint32_t num_blocks_this_core = (num_pages_this_core + block_pages - 1) / block_pages;
+     uint32_t first_page = start_page + rotate;
+     uint32_t pages_left = num_pages_this_core;
+-    for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
++    while (pages_left != 0) {
+         const uint32_t block_extent = pages_left < block_pages ? pages_left : block_pages;
+-        store_block<
+-            cb_page_staging,
+-            block_pages,
+-            logical_rows,
+-            page_stride,
+-            bank_endpoint_noc,
+-            bank_stagger,
+-            noc_split>(
+-            out_accessor, walk, first_page, block_extent, start_page, num_pages_this_core, bank_vc, other_noc_pages);
++        if constexpr (noc_split) {
++            store_block_split<cb_page_staging, block_pages, bank_endpoint_noc, page_bytes>(
++                out_accessor, first_page, block_extent, bank_vc, other_noc_pages);
++        } else {
++            store_block<
++                cb_page_staging,
++                block_pages,
++                logical_rows,
++                page_stride,
++                bank_endpoint_noc,
++                bank_stagger,
++                page_bytes>(out_accessor, walk, first_page, block_extent, start_page, num_pages_this_core, bank_vc);
++        }
+         first_page += block_extent * page_stride;
+         pages_left -= block_extent;
+     }
+@@ -166,9 +225,11 @@ void kernel_main() {
+     // The next program starts right after this one returns: every write must be acked.
+     {
+         G6C_ZONE("g6c_wr_drain");
+-        noc_async_write_barrier();
+         if constexpr (noc_split) {
++            noc_async_write_barrier();
+             noc_async_write_barrier(1 - noc_index);
++        } else {
++            g6_issue::writes_barrier();
+         }
+     }
+ }
