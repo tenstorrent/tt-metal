@@ -214,3 +214,164 @@
   - `tt_metal/third_party/tt_ops_code_gen` shows as modified in the working tree. It is not part of this change.
 - **Tests added**: `test_g6_to_layout_slot_writes.py::test_read_ring_knobs` (6 tests). It checks bit-exact output with NaN-poisoned padding at read depth 3, adaptive max 4, and depth 2 + adaptive 4 + stagger, on a ragged 12-block-per-core shape and on c286. These cases pin the ring's landing-page arithmetic.
   - The probe `probes/test_probe_r4_variant.py` swaps the kernel directory, knobs, NoCs and a row-weighted split for measurement.
+
+## Perf 1 — loss groups G1–G4 of generated/meta/g6_to_layout/rounds/r01_findings.txt
+- **Date**: 2026-11-27
+- **Goal**: beat stock `ttnn.to_layout` on every production scenario; bit-exact; SUPPORTED unchanged. The flagged case 308 already wins (9.4×), so it is a guard here. Device kernel ns, Blackhole p150b, chip 2. Every "stock" number below comes from the same process as the op's (bench `BENCH_IMPL=both`, median of launches 2–12).
+
+### Measured breakdown (before)
+Cumulative ablation (payload stubbed, synchronization kept; `perf1/ablate.sh` probe) and zones:
+
+| Case | Full | Ablation steps | Ranked bottleneck |
+|---|---:|---|---|
+| c2036 R1 `[1,1024,2560]` | 46.1 µs | no reorder copies 26.3 · reads only 14.4 · writes only 18.9 · copies only 26.7 · sync only 2.5 | the 64 self-aimed 32-B NoC copies per tile on NCRISC (load_reorder_block 45.3k of 47.6k cyc), then the read/write overlap (1–2 blocks per core) |
+| c49 R5 `[1,128,256,128]` L1 | 39.2 µs | no copies 17.7 · reads only 15.9 · copies only 28.6 · sync only 5.5 | the face-half copies on both DM RISCs; after them the row-read issue (reads alone ≈ stock's whole op) |
+| c277 R5 `[1,64,128,256]` DRAM | 38.4 µs | no copies 30.1 · reads only 23.0 · writes only 15.1 · copies only 14.3 · sync 2.8 | row reads, then copies |
+| small cells | — | c2025 (1 tile per core): read ~400 cyc + reorder 1960 + 32 row writes 1560 (~49 cyc each) + barrier 207 | serial chain: reorder copies, then per-row NoC issue (~48–54 cyc per row write: c2006, c29, c37 alike) |
+| c37 R4 bf8b HEIGHT | 9.28 µs | writer waits 1456 + whole-shard NaN marks 2060 cyc, then 96 writes (5016 cyc) | the writer starts only after the whole shard's NaN scan |
+| c29 R3 bf8b L1 | 4.84 µs | median core 4060 cyc, max 6005 (2-block cores) | writes of the cores that straddle two tile-rows |
+
+The data-movement rooflines did not gate any of these: the reorder stage is RISC-issue-bound, not at a NoC or DRAM ceiling. My measurements agree with the operator's findings, with one correction to candidate 1's blocker (see below).
+
+### Portfolio (one `perf-part-optimizer` each, `perf_experiments/<slug>/`)
+| Idea | Verdict | Focus before → after (ns) | Domain / exceptions |
+|---|---|---|---|
+| `tensix_untilize_bf16`: R1's reorder on the Tensix | **WIN** | c2036 46,130 → 26,910 (stock 29,020) | Bit-exact only with **UInt16 CBs**. Float16_b plus a preserve-pinned Src zero flag alters 509/65536 patterns: -0.0 and subnormals become +0 and NaN becomes ±inf in unpack/pack, whatever the flag. Measured regressions: c297 +14% (later fixed by the row-issue idea) and the tiny H=1 cells +3–6% |
+| `tensix_tilize_bf16`: R5's reorder on the Tensix | **WIN** | c49 39,179 → 14,960 (stock 16,304) | UInt16 CBs (Float16_b alters 522/65536). No exceptions. c277/c301/c272/c30 stay read-bound |
+| `row_noc_issue`: cheap per-row NoC issue (reader + writer twin) | **WIN** | c2025 3,729 → 3,086 (stock 2,464) | `state_bulk`: bank cursor, stateful cmd buf, counters bumped once; 48 → 28 cyc per row. Nulls: per-core bank rotation; run-major coalescing (c297 0.85×, c273 0.93×). Hazard: full-grid fast L1 reads collapse |
+| `bf8b_tile_row_pipeline`: R3/R4 marks per tile-row, write-then-check, NoC checkerboard | **WIN** | c37 9,347 → 5,066 (stock 6,904) | No measured exceptions. The cheap-scan variant was slower; live-face untilize was not built (c20 is writer-bound) |
+| `small_tensor_split`: work split for few tiles per core | **WIN on the old DM path, superseded** | c2025 3,800 → 2,241 (16-row bands) | R1 sub-tile bands need the DM reorder that the Tensix untilize deleted. The R3 no-straddle split targeted c29, which now beats stock without it. Nulls: whole tile-rows per core (c2006 103 µs), fewer cores (c2025 +31%) |
+
+### What graduated (commits `6cb5fb3e6f8`, `11cfdb9743a`, `14d737c29ef`, `c916a6e95a1`, `4227f032a38`)
+- **R5 on the Tensix tilize.** It runs R6's reader, the tilize compute and the tile writer, with both CBs UInt16. Domain: every bf16 RM→TILE cell, no carve-out. Deleted: `load_and_reorder`, `g6_to_layout_face_copies.hpp`, the writer's `split_reorder` path, `ROW_WINDOW_DEPTH` and `SPLIT_REORDER`.
+- **R1 on the Tensix untilize.** It runs R3's reader (live face-prefix reads kept: whole tiles made c294 27.3 vs 18.8 µs), the untilize compute and the row writer, with both CBs UInt16. Block columns are capped at 8 when H < 32 (c294 20.7 → 18.8 µs). Domain: every bf16 TILE→RM cell with more than one tile column. Deleted: `g6_to_layout_staged_reader.cpp`, `READ_BATCH_TILES` and `TILE_WINDOW_DEPTH`, and the writer's `tiled_stage` argument. Added `test_g6_to_layout_all_bf16_patterns.py`: all 65536 patterns, both directions, DRAM and L1, aligned, ragged and H=1 (20/20).
+- **Row NoC issue.** `kernels/g6_to_layout_row_issue.hpp` serves the row writer (R1/R3/R4) and the row reader (R5/R6). A sharded accessor, a segment over 16 KB, or a single row takes the plain path inside the helper. Row reads from an L1 source are token-bucket paced (`L1_ROW_READ_GRID_BYTES_PER_CYCLE = 780`, one tile-row of burst). Unpaced, c38 went 28.6 → 37.3 µs. A plain gap without the burst cost c21/c45 +11%/+23%. The reader twin is about flat (DRAM −1..−3%, L1 ±1%); the writer twin is the win.
+- **bf8b tile-row pipeline.** There is one cb_nan_marks page per tile-row (16-B summary header plus records). The writer consumes per tile-row, writes first, and patches and rewrites only a tile-row that holds a NaN. The per-tile-row wait also serves R1.
+- **NoC checkerboard (host-side).** Cores with odd logical x + y get reader NoC1 / writer NoC0 through a second pair of kernel descriptors; there is no in-kernel NoC switch. It applies to R3, R4, R5 and R6, and to R1 at ≤ 4 tiles per core. **Carve-outs, each earned by a measured regression:**
+  - R1 above 4 tiles per core: c283 362 → 412, c295 11.7 → 12.4, c304 2691 → 2789, c2036 26.4 → 27.3, c1998 7.54 → 7.82 µs. c2017, at 4 tiles per core, is flat.
+  - R2/R7: Refinement 3 measured NoC0 run writes at 1497 vs 866 µs.
+  - Measured slower and not adopted: x-only parity, y-only parity, a writer-only swap and an all-cores swap.
+
+### Whole op, all 80 scenarios
+Op after vs stock, same process. "Op before" is the operator's A/B at b01ab79f10d (my own baselines agree within 2%: c2036 46.1, c2025 3.78, c49 40.6 with zone sums, c2006 5.66, c277 39.3, c29 4.84, c2038 3.63, c37 9.28, c20 1.39 µs).
+- **Before:** 55 slower than stock.
+- **After:** 51 faster by > 3%, 20 within ±3% with the op not slower, 9 slower.
+  - Within noise: c1981 1.000, c1978 1.003, c1987 1.005, c295 1.008, c276 1.016, c304/c306 1.020.
+  - **Material losses: c49 1.066 and c277 1.031.**
+
+| group | case | shape | op before (A/B, ns) | op after (ns) | stock (same run, ns) | after/stock |
+|---|---|---|---:|---:|---:|---:|
+| G1a | c1998 | 2x128x2560 | 14,000 | 7,539 | 8,746 | 0.862 |
+| G1a | c2025 | 1x32x512 | 3,760 | 2,141 | 2,459 | 0.871 |
+| G1a | c2009 | 1x256x2560 | 13,900 | 7,648 | 8,752 | 0.874 |
+| G1a | c287 | 1x256x128 | 3,720 | 2,219 | 2,531 | 0.877 |
+| G1a | c2003 | 1x32x2560 | 3,640 | 2,404 | 2,736 | 0.879 |
+| G1a | c2023 | 1x32x1536 | 3,560 | 2,304 | 2,595 | 0.888 |
+| G1a | c1992 | 1x64x512 | 3,760 | 2,220 | 2,499 | 0.888 |
+| G1a | c1990 | 1x64x1536 | 3,690 | 2,493 | 2,791 | 0.893 |
+| G1a | c2040 | 1x128x2560 | 8,010 | 4,436 | 4,747 | 0.934 |
+| G1a | c273 | 1x64x128x32 | 6,770 | 5,399 | 5,727 | 0.943 |
+| G1a | c2012 | 1x96x2560 | 6,970 | 3,791 | 3,990 | 0.950 |
+| G1a | c292 | 32x5120 | 5,640 | 3,165 | 3,321 | 0.953 |
+| G1a | c2017 | 1x160x2560 | 9,490 | 5,485 | 5,578 | 0.983 |
+| G1a | c271 | 1x2048x128 | 7,050 | 4,013 | 4,061 | 0.988 |
+| G1a | c2006 | 1x64x2560 | 5,670 | 3,145 | 3,159 | 0.996 |
+| G1b | c283 | 1x512x1024x64 | 517,890 | 360,980 | 399,764 | 0.903 |
+| G1b | c2028 | 8x128x2560 | 46,160 | 26,260 | 28,593 | 0.918 |
+| G1b | c305 | 1x1024x2048x64 | 2,022,950 | 1,540,575 | 1,663,419 | 0.926 |
+| G1b | c2036 | 1x1024x2560 | 45,990 | 26,464 | 28,379 | 0.933 |
+| G1b | c1995 | 16x128x2560 | 85,240 | 53,549 | 56,466 | 0.948 |
+| G1b | c1984 | 1x3872x2560 | 147,040 | 99,959 | 102,803 | 0.972 |
+| G1b | c2031 | 1x4096x2560 | 153,150 | 104,841 | 106,608 | 0.983 |
+| G1b | c280 | 1x256x512x256 | 391,540 | 301,535 | 306,311 | 0.984 |
+| G1b | c282 | 1x512x1024x128 | 748,790 | 650,762 | 660,748 | 0.985 |
+| G1b | c284 | 1x512x1024x128 | 748,570 | 650,762 | 660,748 | 0.985 |
+| G1b | c281 | 1x256x512x128 | 194,020 | 160,005 | 162,014 | 0.988 |
+| G1b | c300 | 1x256x256x256 | 202,500 | 152,412 | 154,138 | 0.989 |
+| G1b | c274 | 1x64x128x256 | 34,840 | 21,906 | 22,075 | 0.992 |
+| G1b | c275 | 1x64x128x256 | 34,910 | 21,906 | 22,075 | 0.992 |
+| G1b | c278 | 1x64x128x256 | 34,740 | 21,906 | 22,075 | 0.992 |
+| G1b | c303 | 1x512x1024x256 | 1,532,060 | 1,222,096 | 1,229,415 | 0.994 |
+| G1b | c279 | 1x128x256x256 | 107,910 | 78,566 | 78,933 | 0.995 |
+| G1b | c298 | 1x128x256x256 | 108,160 | 78,566 | 78,933 | 0.995 |
+| G1b | c299 | 1x128x256x256 | 108,120 | 78,566 | 78,933 | 0.995 |
+| G1b | c302 | 1x128x256x256 | 108,170 | 78,566 | 78,933 | 0.995 |
+| G1b | c2020 | 8x1024x2560 | 271,790 | 206,584 | 206,980 | 0.998 |
+| G1b | c1981 | 8x4096x2560 | 968,750 | 804,776 | 804,570 | 1.000 |
+| G1b | c1978 | 16x4096x2560 | 1,782,900 | 1,602,773 | 1,598,166 | 1.003 |
+| G1b | c1987 | 16x1024x2560 | 503,780 | 411,621 | 409,767 | 1.005 |
+| G1b | c295 | 1x8192x128 | 17,790 | 11,731 | 11,633 | 1.008 |
+| G1b | c276 | 1x128x128x256 | 60,060 | 41,003 | 40,362 | 1.016 |
+| G1b | c304 | 1x1024x2048x128 | 2,960,290 | 2,681,241 | 2,627,776 | 1.020 |
+| G1b | c306 | 1x1024x2048x128 | 2,933,450 | 2,681,241 | 2,627,776 | 1.020 |
+| G2 | c45 | 1x32x128x256 | 10,700 | 5,313 | 9,681 | 0.549 |
+| G2 | c21 | 1x32x64x256 | 7,080 | 4,430 | 5,544 | 0.799 |
+| G2 | c38 | 1x128x256x256 | 65,450 | 29,063 | 32,527 | 0.894 |
+| G2 | c30 | 1x64x128x256 | 21,370 | 9,127 | 9,624 | 0.948 |
+| G2 | c49 | 1x128x256x128 | 39,160 | 17,307 | 16,233 | 1.066 |
+| G3 | c272 | 1x64x128x32 | 16,720 | 10,110 | 15,641 | 0.646 |
+| G3 | c301 | 1x128x256x256 | 129,230 | 90,544 | 97,690 | 0.927 |
+| G3 | c277 | 1x64x128x256 | 38,760 | 26,895 | 26,085 | 1.031 |
+| G4 | c37 | 1x64x128x256 | 9,290 | 4,727 | 6,911 | 0.684 |
+| G4 | c2038 | 1x32x2560 | 3,520 | 2,118 | 2,559 | 0.828 |
+| G4 | c29 | 1x32x64x256 | 4,870 | 3,228 | 3,544 | 0.911 |
+| G4 | c20 | 1x1x1x256 | 1,420 | 1,286 | 1,296 | 0.992 |
+| guard | c270 | 1x1x1x512 | 1,560 | 1,498 | 20,201 | 0.074 |
+| guard | c2024 | 8x1x512 | 2,170 | 2,190 | 21,899 | 0.100 |
+| guard | c286 | 1x1024x1024x3 | 271,460 | 272,650 | 2,585,121 | 0.105 |
+| guard | c308 | 1x2048x2048x3 | 1,101,820 | 1,118,687 | 10,334,393 | 0.108 |
+| guard | c1991 | 16x1x512 | 3,190 | 3,079 | 22,817 | 0.135 |
+| guard | c289 | 1x1x1x256 | 1,420 | 1,458 | 10,450 | 0.140 |
+| guard | c291 | 1x1x1x196 | 1,440 | 1,467 | 9,266 | 0.158 |
+| guard | c312 | 1x1x1x207 | 1,440 | 1,469 | 9,250 | 0.159 |
+| guard | c16 | 1x1x1x256 | 1,650 | 1,667 | 10,344 | 0.161 |
+| guard | c310 | 1x1x1x185 | 1,460 | 1,438 | 8,023 | 0.179 |
+| guard | c269 | 1x512 | 1,480 | 1,547 | 7,599 | 0.204 |
+| guard | c1989 | 16x1x1536 | 6,610 | 6,499 | 27,382 | 0.237 |
+| guard | c2022 | 8x1x1536 | 4,370 | 5,190 | 14,454 | 0.359 |
+| guard | c288 | 1x256 | 1,430 | 1,536 | 4,059 | 0.378 |
+| guard | c311 | 1x207 | 1,450 | 1,545 | 3,642 | 0.424 |
+| guard | c290 | 1x196 | 1,450 | 1,547 | 3,642 | 0.425 |
+| guard | c309 | 1x185 | 1,420 | 1,496 | 3,236 | 0.462 |
+| guard | c48 | 1x64x128x128 | 5,970 | 3,168 | 6,741 | 0.470 |
+| guard | c296 | 1x128x256x32 | 63,940 | 38,045 | 63,952 | 0.595 |
+| guard | c43 | 1x128x256x32 | 13,450 | 9,113 | 15,252 | 0.597 |
+| guard | c293 | 1x1x131072 | 19,220 | 18,798 | 25,337 | 0.742 |
+| guard | c294 | 1x131072 | 19,050 | 18,769 | 25,275 | 0.743 |
+| guard | c2026 | 8x1x2560 | 4,030 | 4,066 | 5,426 | 0.749 |
+| guard | c1993 | 16x1x2560 | 7,010 | 7,201 | 9,527 | 0.756 |
+| guard | c297 | 1x128x256x32 | 16,700 | 16,713 | 17,301 | 0.966 |
+
+
+### Guard set and regressions against the commit before this pass
+- Golden 91/91 after every graduation.
+- Unit tests pass: 31 + 8 + 11 + 33 + 20 + 20, plus the new all-patterns test 20/20.
+- c308 is 1,118,687 ns (before 1,101,820, +1.5%, noise) and c286 272,650 (271,460); R7 is untouched.
+- c296 leads stock by 40% (was 1%); c297 leads by 3.4% (was 3%).
+- **Measured regressions accepted, with reasons:**
+  - **Tiny H=1 TILE→RM cells, +4 to +7% (70–100 ns).** c269 1,480 → 1,547; c288 1,430 → 1,536; c290 1,450 → 1,547; c309 1,420 → 1,496; c311 1,450 → 1,545. The cause is the compute kernel's fixed cost on 6–16-tile cells. They still beat stock by 2.1–4.9×. A carve-out would bring back the deleted DM reorder as a second R1 path, and that dual path is not worth 70–100 ns.
+  - **c2022 `[8,1,1536]` RM→TILE, 4,370 → 5,190 ns (stock 14,454).** This comes from the NoC checkerboard: 5,153 with it vs 4,236 without. Its siblings gain from it (c1989 6.63 → 6.36, c272 16.2 → 10.0), and no predicate separates them other than fencing this one shape.
+  - c1993 7,010 → 7,201 (+2.7%, noise edge).
+
+### Remaining headroom (measured, not closed)
+- **c49 (L1 RM→TILE, 256-B rows), 1.066×.** It is 15,457 ns without the checkerboard and 17,307 with it, while c30 is 9,127 with it and 10,782 without (stock 9,624). One of the two loses to stock either way, so the unified rule (checkerboard on) stands.
+- **c277 (DRAM RM→TILE), 1.031×.** It is bound by row reads: 512-B pages, ~74 per core, and reads alone took 23 µs before this pass.
+- **The large DRAM-bound G1b cells (c304/c306/c276/c1978/c1987/c1981/c295)** sit at 1.00–1.02× of stock, all at 1.1–1.2× of the DRAM roofline. Bank-run write coalescing would need a run-major stage, and the packer cannot produce one.
+
+### Operator candidates
+- **operator candidate 1: graduated.** Both reorders moved to the Tensix (`tensix_untilize_bf16`, `tensix_tilize_bf16`). The preserve-zero flag did not close the blocker: the Float16_b unpack/pack path itself turns -0.0 and subnormals into +0 and NaN into ±inf, which is 509/522 patterns either way. UInt16 CB views of the bf16 bytes did close it (0/65536). Before → after: c2036 46,192 → 26,464 ns, c49 39,199 → 17,307 (15,457 before the checkerboard), c277 38,615 → 26,895.
+- **operator candidate 2: not graduated.** With the reorder on the packer, more column blocks per core are slower on c2036. Capping block columns at 12/8/6/4 gave 26.6 / 27.2–27.6 / 28.9 / 30.0 µs vs 26.0–26.9 at 1×24, so the writer's wait is no longer the limit. The H < 32 cap of 8 did graduate: c294 20.7 → 18.8 µs. Before → after: c2036 46,192 → 26,464 ns, from candidate 1.
+- **operator candidate 3: graduated** (`bf8b_tile_row_pipeline`, plus the NoC checkerboard from the same experiment). c37 9,266 → 4,727 ns: 6,499 from the per-tile-row marks alone, the rest from the checkerboard.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `noc_async_write` + `TensorAccessor::get_noc_addr` (per row) | capability | No dataflow API rewrites only the target coordinate of a stateful write command, so each row to the next interleaved bank pays a full 6-register command, a divide by the bank count and two counter updates in L1 (~48 cyc per row). The command register is written raw instead, and the issued/acked counters are bumped once per call. | c2025 3,729 (accessor) | c2025 3,086 (whole op, row-issue experiment) | `kernels/g6_to_layout_row_issue.hpp:119` (counters `:125`) |
+| `noc_async_read` + `TensorAccessor::get_noc_addr` (per row) | capability | The same gap for reads: there is no coordinate-only update of a stateful read command, and no way to issue N reads with one counter bump (`noc_async_read_inc_num_issued` exists but does not pair with a per-row coordinate change). | c49 issue 47.6 cyc per read | 30.0 cyc per read | `kernels/g6_to_layout_row_issue.hpp:165` (counter `:171`) |
+
+The Tensix untilize and tilize paths use `compute_kernel_lib::untilize` / `tilize` unchanged: the bit-exactness comes from the host's UInt16 CB format, not from raw LLK.
+
+- **Issues encountered:**
+  - The shell exported `TT_METAL_HOME` / `PYTHONPATH` pointing at `/localdev/pmilojevic/tt-metal`; every run here exported the slot root.
+  - Tracy's capture tool crashed after about a third of the passing bench runs; the device CSV survives, and `perf1/dev_median.py` reads kernel spans from it.
+  - The repo hook forbids a module-level `import torch` under `ttnn/ttnn`, and the experiment tests now use `pytest.importorskip("torch")`.
