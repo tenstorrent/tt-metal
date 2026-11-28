@@ -7,299 +7,220 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "utils/helpers.h"
 #include "utils/operation.h"
 #include "utils/validate.h"
 
 namespace hal::pack
 {
 
-/** @brief Select how a data transfer resolves its configuration and address-counter contexts. */
-enum class ContextControl : std::uint8_t
+/**
+ * @brief Select the Dst rows a data transfer reads, relative to its start row.
+ *
+ * Each enabled read interface packs one Dst row; only the masks the Blackhole ISA supports are listed.
+ */
+enum class ReadInterfaces : std::uint8_t
 {
-    Direct                   = 0b00, // contexts come from the descriptor fields
-    HardwareCounter          = 0b01, // contexts come from the RTL flops; a tile-closing transfer advances them
-    HardwareCounterReset     = 0b10, // reset the RTL-flop context and treat this transfer as a NOP
-    HardwareCounterNoAdvance = 0b11  // contexts come from the RTL flops without advancing them
+    All      = 0b0000, ///< Rows 0 to 3; with DatumOverride::Zero, the X-range zero mode instead.
+    Row0     = 0b0001, ///< Row 0.
+    Row0To1  = 0b0011, ///< Rows 0 and 1.
+    Row0To2  = 0b0111, ///< Rows 0 to 2.
+    Row0And2 = 0b0101, ///< Rows 0 and 2.
+    Row1And3 = 0b1010  ///< Rows 1 and 3.
 };
 
-/** @brief Select which transfers get zero-padded rows. */
-enum class RowPadding : std::uint8_t
+/** @brief Select whether transferred datums keep their Dst values or are packed as zeros read from nothing. */
+enum class DatumOverride : bool
 {
-    None            = 0b000,
-    AllTransfers    = 0b001,
-    NonConcatenated = 0b010,
-    FinalOnly       = 0b011
+    None = false,
+    Zero = true
 };
 
-/** @brief Select the granularity a padded row is filled to. */
-enum class PaddingAlignment : std::uint8_t
+/** @brief Select whether the read interfaces read adjacent Dst rows or rows 8 apart. */
+enum class DestAccess : bool
 {
-    PerRow,
-    To16Datums
+    RowMajor = false,
+    Strided  = true ///< Rows 8 apart (16 with remapped addresses), for untilize.
 };
 
-/** @brief Select the Dest row order the read interfaces walk. */
-enum class DestAccess : std::uint8_t
+/** @brief Select whether the next transfer continues the current output row or starts a new one. */
+enum class Concatenation : bool
 {
-    RowMajor, // rows 0, 1, 2, 3
-    Strided   // rows 0, 8, 16, 24 (untilize)
+    NewRow = false,
+    Append = true
 };
 
-/** @brief Select whether transferred datums retain their values or become zero (ZeroWrite). */
-enum class DatumOverride : std::uint8_t
+/** @brief Select whether a transfer closes the tile. */
+enum class TileBoundary : bool
 {
-    None,
-    Zero
-};
-
-/** @brief Select whether a transfer opens a new output row or appends to the previous one. */
-enum class Concatenation : std::uint8_t
-{
-    NewRow,
-    Append
-};
-
-/** @brief Select whether a transfer closes the tile (flush write-aligners, zero-pad to 16B). */
-enum class TileBoundary : std::uint8_t
-{
-    NotLast,
-    Last
+    NotLast = false,
+    Last    = true ///< Flush the output buffers to L1; the next transfer starts at fresh output addresses.
 };
 
 /**
- * @brief Describe one packer data transfer (PACR).
+ * @brief Describe the options of one PACR data transfer from Dst to L1.
  *
- * Blackhole has one packer with four Dest-read interfaces; @ref interfaces is their 4-bit
- * participation mask, where zero selects all four (under @ref DatumOverride::Zero a zero mask
- * instead activates the documented special mode). The hard span rules live in the packer
- * CFG state, outside this instruction.
+ * Formats, L1 address, edge masking and the Dst read position remain in packer configuration and
+ * address-counter state.
  */
-struct DataTransfer
+class Transfer
 {
-    std::uint8_t address_modifier      = 0; // 2-bit ADDR_MOD_PACK index
-    ContextControl context             = ContextControl::Direct;
-    std::uint8_t configuration_context = 0; // [0, 3]; Direct context only
-    std::uint8_t counter_context       = 0; // [0, 2]; used when override_thread_id is set
-    bool override_thread_id            = false;
-    std::uint8_t interfaces            = 0; // 4-bit Dest-read interface mask; 0 = all
-    DatumOverride datum_override       = DatumOverride::None;
-    DestAccess dest_access             = DestAccess::RowMajor;
-    RowPadding padding                 = RowPadding::None;
-    PaddingAlignment alignment         = PaddingAlignment::PerRow;
-    Concatenation concatenation        = Concatenation::NewRow;
-    TileBoundary boundary              = TileBoundary::NotLast;
-
-    /** @brief Encode the transfer. */
-    constexpr hal::Operation get_operation() const;
+public:
+    std::uint8_t address_modifier = 0;                     ///< ADDR_MOD_PACK section applied after the transfer, in [0, 3].
+    ReadInterfaces interfaces     = ReadInterfaces::All;   ///< Dst rows read, relative to the start row.
+    DatumOverride datum_override  = DatumOverride::None;   ///< Whether datums keep their values or become zero.
+    DestAccess dest_access        = DestAccess::RowMajor;  ///< Adjacent or strided Dst rows.
+    Concatenation concatenation   = Concatenation::NewRow; ///< Whether the next transfer continues this output row.
+    TileBoundary boundary         = TileBoundary::NotLast; ///< Whether this transfer closes the tile.
 };
-
-/**
- * @brief Pipeline-ordered register write through the packer (PACR_SETREG, write flavor).
- *
- * The written 32-bit value must have been staged with @ref RegisterWriteValue. The target
- * address forms as {0xFFB, REG_ADDR[11:10], stream_id, REG_ADDR[9:0], 2'b00} from one of the
- * four preprogrammed TDMA address slots.
- *
- * @note No LLK call site exists; the stall-disable chicken bit is never encoded.
- */
-struct RegisterWrite
-{
-    std::uint8_t address_slot = 0; // [0, 3] preprogrammed TDMA addresses
-    std::uint8_t stream_id    = 0; // 6-bit stream id / register address bits [17:12]
-
-    /** @brief Encode the write. */
-    constexpr hal::Operation get_operation() const;
-};
-
-/** @brief Stage one 16-bit half of the value a @ref RegisterWrite writes (PACR_SETREG, load flavor). */
-struct RegisterWriteValue
-{
-    bool high_half      = false;
-    std::uint16_t value = 0;
-
-    /** @brief Encode the staging operation. */
-    constexpr hal::Operation get_operation() const;
-};
-
-/**
- * @brief Describe the packer edge window: datum offsets that zero the X-Y plane's edges (SETPKEDGOF).
- *
- * @note The Blackhole and Wormhole LLKs drive edge zeroing through the PCK_EDGE_OFFSET /
- *       TILE_ROW_SET_MAPPING CFG path instead (Quasar and its firmware use this instruction);
- *       wrapped for cross-architecture parity.
- */
-struct EdgeWindow
-{
-    std::uint8_t x_start = 0; // 4-bit offsets
-    std::uint8_t x_end   = 0;
-    std::uint8_t y_start = 0;
-    std::uint8_t y_end   = 0;
-
-    /** @brief Encode the operation. */
-    constexpr hal::Operation get_operation() const;
-};
-
-/** @brief Encode a flush of the packer's non-empty write-aligners with no new data (PACR Flush). */
-constexpr hal::Operation flush_write_aligners_operation()
-{
-    return hal::detail::make_operation(TT_OP_PACR(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 /* Flush */, 0));
-}
-
-/** @brief Flush the packer's non-empty write-aligners with no new data (PACR Flush). */
-inline __attribute__((always_inline)) void flush_write_aligners()
-{
-    hal::detail::run_immediate<flush_write_aligners_operation()>();
-}
-
-/** @brief Encode a clear of the packer exponent histogram (CLREXPHIST). */
-constexpr hal::Operation clear_exponent_histogram_operation()
-{
-    return hal::detail::make_operation(TT_OP_CLREXPHIST);
-}
-
-/** @brief Clear the packer exponent histogram (CLREXPHIST). */
-inline __attribute__((always_inline)) void clear_exponent_histogram()
-{
-    hal::detail::run_immediate<clear_exponent_histogram_operation()>();
-}
 
 namespace detail
 {
-
-constexpr bool is_valid(const DataTransfer transfer)
+constexpr bool is_valid(const ReadInterfaces interfaces)
 {
-    return transfer.address_modifier < 4u && static_cast<std::uint8_t>(transfer.context) < 4u && transfer.configuration_context < 4u &&
-           transfer.counter_context < 3u && transfer.interfaces < 16u && static_cast<std::uint8_t>(transfer.padding) < 4u &&
-           (transfer.alignment == PaddingAlignment::PerRow || transfer.padding != RowPadding::None);
+    return interfaces == ReadInterfaces::All || interfaces == ReadInterfaces::Row0 || interfaces == ReadInterfaces::Row0To1 ||
+           interfaces == ReadInterfaces::Row0To2 || interfaces == ReadInterfaces::Row0And2 || interfaces == ReadInterfaces::Row1And3;
 }
 
-constexpr std::uint32_t encode(const DataTransfer transfer)
+constexpr bool is_valid(const DatumOverride override)
 {
-    const std::uint32_t row_pad_zero = static_cast<std::uint32_t>(transfer.padding) | (transfer.alignment == PaddingAlignment::To16Datums ? 0b100u : 0u);
+    return override == DatumOverride::None || override == DatumOverride::Zero;
+}
+
+constexpr bool is_valid(const DestAccess access)
+{
+    return access == DestAccess::RowMajor || access == DestAccess::Strided;
+}
+
+constexpr bool is_valid(const Concatenation concatenation)
+{
+    return concatenation == Concatenation::NewRow || concatenation == Concatenation::Append;
+}
+
+constexpr bool is_valid(const TileBoundary boundary)
+{
+    return boundary == TileBoundary::NotLast || boundary == TileBoundary::Last;
+}
+
+constexpr bool is_valid(const Transfer options)
+{
+    return hal::detail::is_valid(options.address_modifier, 2) && is_valid(options.interfaces) && is_valid(options.datum_override) &&
+           is_valid(options.dest_access) && is_valid(options.concatenation) && is_valid(options.boundary);
+}
+
+inline constexpr __attribute__((always_inline)) void validate(const Transfer options)
+{
+    hal::detail::require(hal::detail::is_valid(options.address_modifier, 2), "PACR address modifier must be in [0, 3]");
+    hal::detail::require(is_valid(options.interfaces), "PACR read interfaces must be a ReadInterfaces value");
+    hal::detail::require(is_valid(options.datum_override), "PACR datum override must be None or Zero");
+    hal::detail::require(is_valid(options.dest_access), "PACR Dst access must be RowMajor or Strided");
+    hal::detail::require(is_valid(options.concatenation), "PACR concatenation must be NewRow or Append");
+    hal::detail::require(is_valid(options.boundary), "PACR tile boundary must be NotLast or Last");
+}
+
+constexpr std::uint32_t transfer_operation(const Transfer options)
+{
     return TT_OP_PACR(
-        transfer.configuration_context,
-        row_pad_zero,
-        transfer.dest_access == DestAccess::Strided ? 1u : 0u,
-        transfer.address_modifier,
-        transfer.counter_context,
-        transfer.datum_override == DatumOverride::Zero ? 1u : 0u,
-        transfer.interfaces,
-        transfer.override_thread_id ? 1u : 0u,
-        transfer.concatenation == Concatenation::Append ? 1u : 0u,
-        static_cast<std::uint32_t>(transfer.context),
-        0u /* Flush: see flush_write_aligners */,
-        transfer.boundary == TileBoundary::Last ? 1u : 0u);
+        0 /*CfgContext*/,
+        0 /*RowPadZero*/,
+        hal::to_underlying(options.dest_access) /*DstAccessMode*/,
+        options.address_modifier /*AddrMod*/,
+        0 /*AddrCntContext*/,
+        hal::to_underlying(options.datum_override) /*ZeroWrite*/,
+        hal::to_underlying(options.interfaces) /*ReadIntfSel*/,
+        0 /*OvrdThreadId*/,
+        hal::to_underlying(options.concatenation) /*Concat*/,
+        0 /*CtxtCtrl*/,
+        0 /*Flush*/,
+        hal::to_underlying(options.boundary) /*Last*/);
 }
-
-constexpr bool is_valid(const RegisterWrite write)
-{
-    return write.address_slot < 4u && write.stream_id < 64u;
-}
-
-constexpr std::uint32_t encode(const RegisterWrite write)
-{
-    return TT_OP_PACR_SETREG(1u /* Push */, 0u, 0u, 0u /* stall normally */, write.address_slot, write.stream_id, 1u /* Flush: required */, 0u);
-}
-
-constexpr bool is_valid(const RegisterWriteValue)
-{
-    return true;
-}
-
-constexpr std::uint32_t encode(const RegisterWriteValue value)
-{
-    // Load flavor: bit 22 selects it, bits 18:3 carry the half's value, bit 2 selects the half.
-    const std::uint32_t fields = (1u << 22) | (static_cast<std::uint32_t>(value.value) << 3) | (value.high_half ? 1u << 2 : 0u);
-    return TT_OP(0x4a, fields);
-}
-
-constexpr bool is_valid(const EdgeWindow window)
-{
-    return window.x_start < 16u && window.x_end < 16u && window.y_start < 16u && window.y_end < 16u;
-}
-
-constexpr std::uint32_t encode(const EdgeWindow window)
-{
-    return TT_OP_SETPKEDGOF(window.y_end, window.y_start, window.x_end, window.x_start);
-}
-
-inline constexpr __attribute__((always_inline)) void validate(const DataTransfer transfer)
-{
-    hal::detail::require(transfer.address_modifier < 4u, "PACR address modifier selects one of four ADDR_MOD_PACK sections");
-    hal::detail::require(static_cast<std::uint8_t>(transfer.context) < 4u, "PACR context control must be a ContextControl value");
-    hal::detail::require(transfer.configuration_context < 4u, "PACR configuration context must be in [0, 3]");
-    hal::detail::require(transfer.counter_context < 3u, "PACR address-counter context must be in [0, 2]");
-    hal::detail::require(transfer.interfaces < 16u, "PACR Dest-read interface selection is a 4-bit mask");
-    hal::detail::require(static_cast<std::uint8_t>(transfer.padding) < 4u, "PACR row padding must be a RowPadding value");
-    hal::detail::require(
-        transfer.alignment == PaddingAlignment::PerRow || transfer.padding != RowPadding::None, "16-datum padding alignment requires row padding");
-}
-
-inline constexpr __attribute__((always_inline)) void validate(const RegisterWrite write)
-{
-    hal::detail::require(write.address_slot < 4u, "PACR_SETREG address slot must be in [0, 3]");
-    hal::detail::require(write.stream_id < 64u, "PACR_SETREG stream id is 6 bits");
-}
-
-inline constexpr __attribute__((always_inline)) void validate(const EdgeWindow window)
-{
-    hal::detail::require(is_valid(window), "SETPKEDGOF edge offsets are four bits each");
-}
-
 } // namespace detail
 
-/** @brief Return whether a packer descriptor is encodable. */
-constexpr bool is_valid(const DataTransfer transfer)
+/** @brief Return whether data-transfer options can be encoded. */
+constexpr bool is_valid(const Transfer options)
 {
-    return detail::is_valid(transfer);
+    return detail::is_valid(options);
 }
 
-constexpr bool is_valid(const RegisterWrite write)
+/**
+ * @brief Issue or encode the operations of the Blackhole packer.
+ *
+ * Blackhole has one packer with four Dst read interfaces. Template forms check their options at compile
+ * time and issue one immediate instruction; runtime forms check them with LLK_ASSERT.
+ *
+ * @code
+ * Packer0.transfer<Transfer {.interfaces = ReadInterfaces::Row0To1, .boundary = TileBoundary::Last}>();
+ *
+ * constexpr std::uint32_t pack_row = Packer0.operation().transfer<Transfer {.address_modifier = 1}>();
+ * @endcode
+ */
+class Packer
 {
-    return detail::is_valid(write);
+public:
+    /** @brief Encode the packer's operations without issuing them, for MOP or replay use. */
+    class Operations
+    {
+    public:
+        /**
+         * @brief Encode a data transfer.
+         *
+         * @tparam Options: Data-transfer options.
+         */
+        template <Transfer Options>
+        [[nodiscard]] constexpr hal::Operation transfer() const;
+
+        /**
+         * @brief Encode a runtime-selected data transfer.
+         *
+         * @param options: Data-transfer options.
+         * @note Invalid options fail constant evaluation; at runtime, enable LLK assertions to diagnose them.
+         */
+        [[nodiscard]] constexpr hal::Operation transfer(Transfer options) const;
+    };
+
+    /** @brief Return an encoding view of the packer. */
+    [[nodiscard]] constexpr Operations operation() const
+    {
+        return {};
+    }
+
+    /**
+     * @brief Issue a data transfer.
+     *
+     * @tparam Options: Data-transfer options.
+     */
+    template <Transfer Options>
+    inline __attribute__((always_inline)) void transfer() const
+    {
+        hal::detail::run_immediate<Operations {}.transfer<Options>()>();
+    }
+
+    /**
+     * @brief Issue a runtime-selected data transfer.
+     *
+     * @param options: Data-transfer options.
+     * @note Enable LLK assertions to diagnose invalid options; disabled assertions add no runtime check.
+     */
+    inline __attribute__((always_inline)) void transfer(const Transfer options) const
+    {
+        hal::run(operation().transfer(options));
+    }
+};
+
+/** @brief The Blackhole packer. */
+inline constexpr Packer Packer0 {};
+
+template <Transfer Options>
+constexpr hal::Operation Packer::Operations::transfer() const
+{
+    static_assert(is_valid(Options), "invalid PACR data-transfer options");
+    return hal::detail::make_operation(detail::transfer_operation(Options));
 }
 
-constexpr bool is_valid(const EdgeWindow window)
+constexpr hal::Operation Packer::Operations::transfer(const Transfer options) const
 {
-    return detail::is_valid(window);
-}
-
-inline constexpr __attribute__((always_inline)) hal::Operation DataTransfer::get_operation() const
-{
-    detail::validate(*this);
-    return hal::detail::make_operation(detail::encode(*this));
-}
-
-inline constexpr __attribute__((always_inline)) hal::Operation RegisterWrite::get_operation() const
-{
-    detail::validate(*this);
-    return hal::detail::make_operation(detail::encode(*this));
-}
-
-inline constexpr __attribute__((always_inline)) hal::Operation RegisterWriteValue::get_operation() const
-{
-    return hal::detail::make_operation(detail::encode(*this));
-}
-
-inline constexpr __attribute__((always_inline)) hal::Operation EdgeWindow::get_operation() const
-{
-    detail::validate(*this);
-    return hal::detail::make_operation(detail::encode(*this));
-}
-
-/** @brief Issue a compile-time packer descriptor as one immediate instruction. */
-template <auto Descriptor>
-inline __attribute__((always_inline)) void run()
-{
-    static_assert(detail::is_valid(Descriptor), "invalid packer descriptor");
-    hal::detail::run_immediate<Descriptor.get_operation()>();
-}
-
-/** @brief Issue a runtime-selected packer descriptor. */
-template <typename Descriptor>
-inline __attribute__((always_inline)) void run(const Descriptor descriptor)
-{
-    hal::run(descriptor.get_operation());
+    detail::validate(options);
+    return hal::detail::make_operation(detail::transfer_operation(options));
 }
 
 } // namespace hal::pack
