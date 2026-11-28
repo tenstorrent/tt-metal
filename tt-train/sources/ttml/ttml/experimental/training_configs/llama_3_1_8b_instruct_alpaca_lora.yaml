@@ -1,0 +1,41 @@
+# LoRA fine-tuning of Llama 3.1 8B Instruct on Alpaca, on a single chip.
+#
+#   python -m ttml.experimental.trainer \
+#     --config tt-train/sources/ttml/ttml/experimental/training_configs/llama_3_1_8b_instruct_alpaca_lora.yaml
+model:
+  name: meta-llama/Llama-3.1-8B-Instruct
+  lora:
+    r: 4
+    alpha: 8
+    target_modules: [q_proj, k_proj, v_proj, o_proj]
+  gradient_checkpointing: true
+
+dataset:
+  id: alpaca
+
+optimizer:
+  type: adamw
+  lr: 1.0e-4
+  weight_decay: 0.01
+
+device:
+  mesh: [1, 1]
+
+max_length: 256
+batch_size: 4
+seed: 0
+stopping_criteria:
+  type: step
+  limit: 500
+
+metrics:
+  train:
+    frequency: 10
+  validation:
+    frequency: 50
+
+checkpoint:
+  save_strategy:
+    type: step
+    frequency: 100
+    project_dir: runs/llama_3_1_8b_instruct_alpaca_lora

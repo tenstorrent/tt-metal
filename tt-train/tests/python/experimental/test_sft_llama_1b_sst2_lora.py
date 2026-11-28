@@ -1,0 +1,250 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""The Llama 3.2 1B Instruct SST-2 LoRA recipe, run as ``python -m ttml.experimental.trainer`` runs it, for two steps:
+it trains, validates, logs the metrics of both, and saves PEFT adapter checkpoints that rotate and load back.
+The runs read only the first examples of each SST-2 split, so validation is a few batches, not 872 examples.
+
+The model is read from ``unsloth/Llama-3.2-1B-Instruct``, a non-gated mirror of the recipe's gated
+``meta-llama/Llama-3.2-1B-Instruct``: CI has no ``HF_TOKEN``. It and SST-2 are downloaded unless they are cached.
+"""
+
+import gc
+import json
+import math
+import shutil
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+import ttml
+import ttml.experimental
+import ttml.experimental.trainer.implementations.base as trainer_base
+from ttml.experimental.datasets.provider.sft import IGNORED_INDEX, SST2Provider, load_tokenizer
+from ttml.experimental.models.provider import LlamaProvider
+from ttml.experimental.models.utils.checkpoint import ADAPTER_CONFIG, ADAPTER_WEIGHTS, read_adapter
+from ttml.experimental.models.utils.hub import load_hf_config
+from ttml.experimental.trainer.__main__ import main
+from ttml.experimental.trainer.configs import load_config
+from ttml.experimental.trainer.managers.checkpoint import HISTORY_FILE
+from ttml.experimental.trainer.managers.logging import TrainingLogger
+from ttml.experimental.trainer.utils import TRAINER_STATE
+
+RECIPE = Path(ttml.experimental.__file__).parent / "training_configs" / "llama_3_2_1b_instruct_sst2_lora.yaml"
+MODEL_SOURCE = "unsloth/Llama-3.2-1B-Instruct"  # not gated
+# The version the runs record: the real one depends on how ttnn is installed, and is None without a package.
+TT_METAL_VERSION = "0.0.0-test"
+STEPS = 2
+# The examples read of each split: enough train batches that every run stays in epoch 0.
+SPLIT_SIZES = {"train": 256, "validation": 64}
+
+pytestmark = [pytest.mark.requires_device, pytest.mark.slow]
+
+_load_raw_dataset = SST2Provider._load_raw_dataset
+
+
+def load_head(provider: SST2Provider):
+    """The first ``SPLIT_SIZES`` examples of the provider's split, in place of ``SST2Provider._load_raw_dataset``."""
+    raw = _load_raw_dataset(provider)
+    return raw.select(range(min(len(raw), SPLIT_SIZES[provider.split])))
+
+
+def run_recipe(overrides: list[str]) -> SimpleNamespace:
+    """Run the recipe with ``--set`` overrides, on the first ``SPLIT_SIZES`` examples of each split; return the
+    ``(metrics, step)`` it logged and the messages it logged."""
+    logged = SimpleNamespace(metrics=[], messages=[])
+    log_metrics, info = TrainingLogger.log_metrics, TrainingLogger.info
+
+    def record_metrics(self, metrics, step=None, commit=True):
+        if metrics:
+            logged.metrics.append((dict(metrics), step))
+        log_metrics(self, metrics, step=step, commit=commit)
+
+    def record_message(self, message):
+        logged.messages.append(message)
+        info(self, message)
+
+    # The trainer opens its own single-chip mesh; another module's device must not be open.
+    ttml.close_device_mesh()
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(TrainingLogger, "log_metrics", record_metrics)
+            patch.setattr(TrainingLogger, "info", record_message)
+            patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
+            patch.setattr(LlamaProvider, "model_source", lambda self: MODEL_SOURCE)
+            patch.setattr(trainer_base, "tt_metal_version", lambda: TT_METAL_VERSION)
+            main(["--config", str(RECIPE), *(arg for override in overrides for arg in ("--set", override))])
+    finally:
+        gc.collect()
+        ttml.close_device_mesh()
+    return logged
+
+
+@pytest.fixture(scope="module")
+def recipe(tmp_path_factory):
+    """The recipe's run, cut to two steps that each log, validate and save a checkpoint; keeping only the last."""
+    project = tmp_path_factory.mktemp("sst2_lora")
+    overrides = [
+        f"stopping_criteria.limit={STEPS}",
+        "metrics.train.frequency=1",
+        "metrics.validation.frequency=1",
+        f"checkpoint.save_strategy.project_dir={project}",
+        "checkpoint.save_strategy.frequency=1",
+        "checkpoint.rotation_strategy.type=last",
+        "checkpoint.rotation_strategy.keep_n=1",
+    ]
+    logged = run_recipe(overrides)
+    config = load_config(RECIPE, overrides)
+    checkpoints = project / "checkpoints"
+    return SimpleNamespace(config=config, checkpoints=checkpoints, last=last_checkpoint(checkpoints), logged=logged)
+
+
+def last_checkpoint(checkpoints: Path) -> Path:
+    """The checkpoint of the run's last step: the last one ``checkpoint_history.json`` lists."""
+    return Path(json.loads((checkpoints / HISTORY_FILE).read_text())["checkpoints"][-1]["path"])
+
+
+def logged_values(logged, name: str) -> dict[int, float]:
+    """The values of the metric ``name`` the run logged, by step."""
+    return {step: metrics[name] for metrics, step in logged.metrics if name in metrics}
+
+
+def test_logs_the_train_and_validation_losses(recipe):
+    train, val = logged_values(recipe.logged, "train/loss"), logged_values(recipe.logged, "val/loss")
+    assert sorted(train) == [1, 2], "train/loss is logged every step"
+    # Before the first step too.
+    assert sorted(val) == [0, 1, 2], "val/loss is logged before training and every step"
+    for name, value in [*train.items(), *val.items()]:
+        assert math.isfinite(value) and value > 0, f"{name}: {value}"
+    assert sorted(logged_values(recipe.logged, "train/epoch")) == [1, 2]
+
+
+def hf_validation_loss(config) -> float:
+    """The base model's loss on the run's validation examples, as HF computes a causal-LM loss: fp32 on the CPU, the
+    mean over each batch's response tokens, averaged over the batches as the trainer averages them."""
+    import torch
+    from transformers import AutoModelForCausalLM
+
+    tokenizer = load_tokenizer(MODEL_SOURCE)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SST2Provider, "_load_raw_dataset", load_head)
+        examples = list(SST2Provider(config, "validation", tokenizer).examples)
+    model = AutoModelForCausalLM.from_pretrained(MODEL_SOURCE, dtype=torch.float32).eval()
+
+    losses = []
+    with torch.no_grad():
+        for start in range(0, len(examples), config.batch_size):
+            batch = examples[start : start + config.batch_size]
+            length = max(len(example["input_ids"]) for example in batch)
+            input_ids = torch.full((len(batch), length), tokenizer.pad_token_id)
+            labels = torch.full((len(batch), length), IGNORED_INDEX)
+            attention_mask = torch.zeros((len(batch), length), dtype=torch.long)
+            for row, example in enumerate(batch):
+                n = len(example["input_ids"])
+                input_ids[row, :n] = torch.tensor(example["input_ids"])
+                labels[row, :n] = torch.tensor(example["labels"])
+                attention_mask[row, :n] = 1
+            losses.append(model(input_ids=input_ids, attention_mask=attention_mask, labels=labels).loss.item())
+    del model
+    gc.collect()
+    return float(np.mean(losses))
+
+
+def test_the_untrained_adapters_validate_as_the_base_model(recipe):
+    """lora_B starts at zero, so the model the step-0 validation runs is the base model, and its val/loss is the base
+    model's loss as HF computes it: a check of the shift, the mask, the cross-entropy and the model's forward. Both
+    sides read their labels from the provider, so test_sft_batching.py checks the labels."""
+    val_loss = logged_values(recipe.logged, "val/loss")[0]
+    # The device runs bf16 and HF fp32; the two losses differ by about 0.04%.
+    assert val_loss == pytest.approx(hf_validation_loss(recipe.config), rel=0.01)
+
+
+def test_saves_every_step_and_keeps_the_last_checkpoint(recipe):
+    """Step 1's checkpoint is saved, then rotated away once step 2's is saved."""
+    saved = [m.removeprefix("Saved checkpoint: ") for m in recipe.logged.messages if m.startswith("Saved checkpoint: ")]
+    removed = [message for message in recipe.logged.messages if message.startswith("Removed old checkpoint: ")]
+    assert len(saved) == 2 and Path(saved[0]).name.startswith("checkpoint_step1_epoch0_"), saved
+    assert Path(saved[0]).parent == recipe.checkpoints, saved
+    assert saved[1] == str(recipe.last) and recipe.last.name.startswith(f"checkpoint_step{STEPS}_epoch0_"), saved
+    assert removed == [f"Removed old checkpoint: {saved[0]}"]
+    # Nothing left of a save: no staging directory, nor the one a save replaced.
+    assert sorted(path.name for path in recipe.checkpoints.iterdir()) == sorted([HISTORY_FILE, recipe.last.name])
+
+
+def test_a_checkpoint_carries_the_metrics_of_its_step(recipe):
+    last = recipe.last
+    metrics = {"train/loss": logged_values(recipe.logged, "train/loss")[STEPS]}
+    metrics["val/loss"] = logged_values(recipe.logged, "val/loss")[STEPS]
+
+    state = json.loads((last / TRAINER_STATE).read_text())
+    assert (state["step"], state["epoch"], state["metrics"]) == (STEPS, 0, metrics)
+    assert state["format"] == {"type": "hf"}
+    assert state["base_model"] == {"name_or_path": recipe.config.model.name}
+    assert state["config"] == recipe.config.model_dump(mode="json")
+    assert state["tt_metal_version"] == TT_METAL_VERSION
+    (entry,) = json.loads((recipe.checkpoints / HISTORY_FILE).read_text())["checkpoints"]
+    assert (entry["name"], entry["path"], entry["step"], entry["metrics"]) == (last.name, str(last), STEPS, metrics)
+
+
+def test_the_last_checkpoint_is_a_peft_adapter(recipe):
+    last = recipe.last
+    lora = recipe.config.model.lora
+    hf_config = load_hf_config(MODEL_SOURCE)
+    hidden, heads, kv_heads = (hf_config[k] for k in ("hidden_size", "num_attention_heads", "num_key_value_heads"))
+    head_dim = hf_config.get("head_dim") or hidden // heads
+    rows = {"q_proj": heads * head_dim, "k_proj": kv_heads * head_dim, "v_proj": kv_heads * head_dim, "o_proj": hidden}
+    assert sorted(rows) == sorted(lora.target_modules), "premise: the recipe adapts q, k, v and o"
+
+    assert (last / ADAPTER_CONFIG).is_file() and (last / ADAPTER_WEIGHTS).is_file()
+    adapter = read_adapter(last)
+    expected_shapes = {}
+    for layer in range(hf_config["num_hidden_layers"]):
+        for projection, out_features in rows.items():
+            module = f"base_model.model.model.layers.{layer}.self_attn.{projection}"
+            expected_shapes[f"{module}.lora_A.weight"] = (
+                lora.r,
+                heads * head_dim if projection == "o_proj" else hidden,
+            )
+            expected_shapes[f"{module}.lora_B.weight"] = (out_features, lora.r)
+    assert {name: value.shape for name, value in adapter.tensors.items()} == expected_shapes
+    assert all(np.isfinite(value).all() for value in adapter.tensors.values())
+    # lora_B starts at zero, so two steps must have moved it.
+    assert all(value.any() for name, value in adapter.tensors.items() if name.endswith("lora_B.weight"))
+
+    config = adapter.config
+    assert config["peft_type"] == "LORA" and config["task_type"] == lora.task_type
+    assert (config["r"], config["lora_alpha"]) == (lora.r, lora.alpha)
+    assert config["target_modules"] == sorted(lora.target_modules)
+    # PEFT loads the base model from where the weights are.
+    assert config["base_model_name_or_path"] == MODEL_SOURCE
+
+
+def test_a_run_initialized_from_the_checkpoint_starts_from_its_adapters(recipe, tmp_path):
+    """One step at a learning rate of 0 keeps the weights the run loaded, so its checkpoint is the one it started
+    from. The run saves to the project_dir it started from, and keeps that checkpoint."""
+    init = tmp_path / "checkpoints" / recipe.last.name
+    shutil.copytree(recipe.last, init)
+    logged = run_recipe(
+        [
+            "stopping_criteria.limit=1",
+            "optimizer.lr=0",
+            "metrics.validation.frequency=0",
+            f"checkpoint.init_strategy.path={init}",
+            f"checkpoint.save_strategy.project_dir={tmp_path}",
+        ]
+    )
+
+    (saved_path,) = [
+        m.removeprefix("Saved checkpoint: ") for m in logged.messages if m.startswith("Saved checkpoint: ")
+    ]
+    assert Path(saved_path).parent == init.parent and Path(saved_path).name.startswith("checkpoint_step1_epoch0_")
+    assert last_checkpoint(init.parent) == Path(saved_path)
+    started_from, saved = read_adapter(recipe.last), read_adapter(saved_path)
+    assert sorted(saved.tensors) == sorted(started_from.tensors)
+    for name, value in started_from.tensors.items():
+        np.testing.assert_array_equal(saved.tensors[name], value, err_msg=name)
+    # The saved adapters equal the ones it started from, so the step-2 trainer_state tells the kept checkpoint apart.
+    assert (init / TRAINER_STATE).read_text() == (recipe.last / TRAINER_STATE).read_text()

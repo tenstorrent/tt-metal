@@ -2,23 +2,26 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load HuggingFace Llama safetensors weights into a Python Llama model."""
+"""Load HuggingFace Llama safetensors weights into a Python Llama model, and export them back."""
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 from contextlib import ExitStack
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator, Sequence
 
+import ml_dtypes
 import numpy as np
 from safetensors import safe_open
 
 import ttnn
 import ttml
-from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
+from ttml.common.utils import permute_proj_rows, resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
 from . import Llama, LlamaConfig, compute_swiglu_intermediate_size
@@ -191,24 +194,33 @@ def _global_shape(param, shard_dim: int | None, mesh_size: int) -> tuple[int, in
     )
 
 
+# (blocks, one per source) -> blocks of the same shapes.
+BlockTransform = Callable[..., list[np.ndarray]]
+
+
 @dataclass(frozen=True)
 class _Rule:
     """One parameter and the checkpoint tensors that feed it, in fused-block order."""
 
     param: str
     sources: tuple[str, ...]
-    # (arrays) -> blocks of the same shapes, when the checkpoint layout is not what the parameter wants.
-    transform: Callable[..., list[np.ndarray]] | None = None
     # What the assembled sources must measure when the parameter is tile-padded above them (the
     # vocab); None means they must match the parameter exactly.
     source_shape: tuple[int, int] | None = None
     # The rows each source must have, for a fused parameter: a short block next to a long one still
     # fills the parameter. None for a single source, whose rows the parameter's shape already fixes.
     block_rows: tuple[int, ...] | None = None
+    # The checkpoint's blocks -> the parameter's, when the checkpoint layout is not what the parameter wants.
+    # A LoRA adapter's B is mapped by it too, so on an adapted layer it must act on rows alone, whatever the columns.
+    transform: BlockTransform | None = None
+    # The parameter's blocks -> the checkpoint's: the inverse of `transform`, for export.
+    inverse: BlockTransform | None = None
 
     def __post_init__(self) -> None:
         if len(self.sources) > 1 and len(self.block_rows or ()) != len(self.sources):
             raise ValueError(f"{self.param}: a fused rule needs block_rows for each of its {len(self.sources)} sources")
+        if (self.transform is None) != (self.inverse is None):
+            raise ValueError(f"{self.param}: a transform needs its inverse, to export the parameter back")
 
 
 def _load_plan(
@@ -243,11 +255,19 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
     q_rows, kv_rows = config.num_attention_heads * head_dim, config.num_key_value_heads * head_dim
     intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
 
+    # HF's half-split RoPE rows <-> TTML's interleaved pairs, for q and k; V is not rotated.
     def rope_unpermute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
         return [
             unpermute_proj_rows(q, config.num_attention_heads),
             unpermute_proj_rows(k, config.num_key_value_heads),
-            v,  # V is not rotated
+            v,
+        ]
+
+    def rope_permute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
+        return [
+            permute_proj_rows(q, config.num_attention_heads),
+            permute_proj_rows(k, config.num_key_value_heads),
+            v,
         ]
 
     for layer in range(config.num_hidden_layers):
@@ -258,8 +278,9 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
         yield _Rule(
             f"{param}/attention/qkv_linear/weight",
             tuple(f"{hf}.self_attn.{p}_proj.weight" for p in ("q", "k", "v")),
-            transform=rope_unpermute,
             block_rows=(q_rows, kv_rows, kv_rows),
+            transform=rope_unpermute,
+            inverse=rope_permute,
         )
         yield _Rule(f"{param}/attention/out_linear/weight", (f"{hf}.self_attn.o_proj.weight",))
         # Block order is the contract with swiglu_packed, which reads [gate | up].
@@ -397,3 +418,202 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
         left_at_init=tuple(sorted(_biases(parameter_names))),
         unused=tuple(sorted(name for name in unused if not name.endswith(_NOT_WEIGHTS))),
     )
+
+
+@dataclass(frozen=True)
+class HfTensor:
+    """One tensor of a HuggingFace Llama checkpoint, held as a block of rows of a TTML parameter."""
+
+    name: str  # as HF names it, e.g. "model.layers.0.self_attn.q_proj.weight"
+    shape: tuple[int, ...]  # its HF shape: 1-D for norm weights, [out, in] otherwise
+
+    @property
+    def rows(self) -> int:
+        """The rows it fills in the parameter: the loader reads a 1-D tensor (a norm weight) as one row."""
+        return self.shape[0] if len(self.shape) == 2 else 1
+
+
+@dataclass(frozen=True)
+class HfTensors:
+    """The HF tensors one TTML parameter holds as blocks of its rows, in order, and how their rows are laid out."""
+
+    tensors: tuple[HfTensor, ...]
+    # The HF blocks -> the parameter's, of the same shapes; None when the parameter holds them as HF does.
+    transform: BlockTransform | None = None
+    # The parameter's blocks -> the HF ones: the inverse of `transform`.
+    inverse: BlockTransform | None = None
+
+
+def _hf_name(canonical: str) -> str:
+    return canonical if canonical == "lm_head.weight" else f"model.{canonical}"
+
+
+def hf_layout(model: Llama) -> dict[str, HfTensors]:
+    """Map each parameter of *model* to the HF tensors its rows hold, in order.
+
+    The table ``load_from_safetensors`` loads by: a fused parameter holds several tensors (``qkv_linear``
+    q, k and v; ``w_gate_up`` gate and up), a vocab-padded one holds fewer rows than it has, and a tied
+    embedding appears once. Shapes are global, as if *model* were not sharded.
+    """
+    parameters = model.parameters()
+    tp = _tp_axis()
+    mesh_size = tp.size if tp else 1
+    layout = {}
+    for rule in _rules(model.config, set(parameters)):
+        param = parameters[rule.param]
+        rows, cols = rule.source_shape or _global_shape(param, _sharded_dim(param, tp, rule.param), mesh_size)
+        block_rows = rule.block_rows or (rows,)
+        tensors = tuple(
+            HfTensor(_hf_name(source), (cols,) if source.endswith("norm.weight") else (block, cols))
+            for source, block in zip(rule.sources, block_rows)
+        )
+        layout[rule.param] = HfTensors(tensors, transform=rule.transform, inverse=rule.inverse)
+    return layout
+
+
+def split_hf_tensors(array: np.ndarray, held: HfTensors) -> dict[str, np.ndarray]:
+    """The HF tensors one parameter holds, from its ``[rows, cols]`` values: the inverse of how
+    ``load_from_safetensors`` assembles them. Rows past the tensors (vocab padding) are dropped, and
+    each tensor is a copy, never a view of *array*."""
+    rows = [tensor.rows for tensor in held.tensors]
+    if array.ndim != 2 or array.shape[0] < sum(rows):
+        raise RuntimeError(
+            f"{[t.name for t in held.tensors]}: need a 2-D array of at least {sum(rows)} rows, got {array.shape}"
+        )
+    blocks = np.split(array[: sum(rows)], np.cumsum(rows)[:-1])
+    if held.inverse is not None:
+        blocks = held.inverse(*blocks)
+    return {tensor.name: block.reshape(tensor.shape).copy() for tensor, block in zip(held.tensors, blocks)}
+
+
+# What a model directory needs besides the weights to load with AutoModelForCausalLM / AutoTokenizer.
+_HF_CONFIG_FILES = (
+    "config.json",
+    "generation_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "chat_template.jinja",
+)
+
+
+_WEIGHTS_NAME = "model.safetensors"
+_WEIGHTS_INDEX_NAME = "model.safetensors.index.json"
+
+# A parameter's stored dtype, as numpy writes it. float16 is not stored, but the loader reads it, so an
+# explicit ``dtype`` may still ask for it.
+_STORED_DTYPES = {
+    ttnn.DataType.FLOAT32: np.dtype(np.float32),
+    ttnn.DataType.BFLOAT16: np.dtype(ml_dtypes.bfloat16),
+}
+_EXPORT_DTYPES = frozenset((*_STORED_DTYPES.values(), np.dtype(np.float16)))
+
+
+def _export_dtype(dtype: np.dtype | type | None, stored: set[np.dtype]) -> np.dtype:
+    """The numpy dtype to write. *dtype* overrides; otherwise the one dtype the parameters share."""
+    if dtype is not None:
+        try:
+            resolved = np.dtype(dtype)
+        except TypeError:
+            resolved = None
+        if resolved not in _EXPORT_DTYPES:
+            names = ", ".join(sorted(item.name for item in _EXPORT_DTYPES))
+            raise ValueError(f"dtype must be one of {names}; the loader reads those back. Got {dtype!r}")
+        return resolved
+    if len(stored) != 1:
+        names = ", ".join(sorted(item.name for item in stored)) or "none"
+        raise ValueError(f"parameters are stored as {names}; pass dtype to write them as one dtype")
+    return next(iter(stored))
+
+
+def export_hf_model(
+    model: Llama,
+    out_dir: str | os.PathLike,
+    hf_source_dir: str | os.PathLike | None = None,
+    max_shard_size: int | str = "5GB",
+    dtype: np.dtype | type | None = None,
+) -> Path:
+    """Write *model* as a HuggingFace Llama model directory, the inverse of ``load_from_safetensors``.
+
+    The weights are written as *dtype* (float32, float16, or bfloat16; by default the dtype the parameters are
+    stored in), with HF tensor names: q/k rows are permuted back, fused parameters split, vocab padding dropped,
+    and a tied embedding written once. They're laid out as ``save_pretrained`` lays them out: one
+    ``model.safetensors``, or shards of at most *max_shard_size* (``model-00001-of-00004.safetensors``, ...) with
+    ``model.safetensors.index.json``. Each shard is written as soon as its tensors are read, so the host holds
+    about one shard. The config and tokenizer files of *hf_source_dir* (the checkpoint *model* was loaded from)
+    are copied alongside, so the directory loads with ``AutoModelForCausalLM.from_pretrained``.
+
+    Raises:
+        NotImplementedError: a parameter is sharded (TP or FSDP); only replicated models are exported. Or the model
+            has a parameter with no HF tensor to write it to (an attention bias): the export would drop it.
+        ValueError: *dtype* is not float32, float16, or bfloat16; or it was left unset and the parameters are
+            stored as more than one dtype, or as a dtype this export cannot write.
+    """
+    from huggingface_hub import split_state_dict_into_shards_factory
+    from safetensors.numpy import save_file
+
+    parameters = model.parameters()
+    layout = hf_layout(model)
+    if unmapped := sorted(set(parameters) - set(layout)):
+        detail = "".join(f"\n  {name}" for name in unmapped)
+        raise NotImplementedError(
+            f"export_hf_model has no HF tensor to write these parameters to, and would drop them:{detail}"
+        )
+    stored: set[np.dtype] = set()
+    for name in layout:
+        param = parameters[name]
+        if not ttml.Sharding.from_tensor(param).is_fully_replicated:
+            raise NotImplementedError(f"{name}: sharded; export_hf_model reads replicated parameters only")
+        if dtype is None:
+            if (numpy_dtype := _STORED_DTYPES.get(param.dtype())) is None:
+                raise ValueError(
+                    f"{name}: stored as {param.dtype()}; pass dtype to export it as float32, float16, or bfloat16"
+                )
+            stored.add(numpy_dtype)
+    written = _export_dtype(dtype, stored)
+    shapes = {tensor.name: tensor.shape for held in layout.values() for tensor in held.tensors}
+    bytes_per_element = written.itemsize
+    split = split_state_dict_into_shards_factory(
+        shapes,
+        get_storage_size=lambda shape: int(np.prod(shape)) * bytes_per_element,
+        filename_pattern="model{suffix}.safetensors",
+        max_shard_size=max_shard_size,
+    )
+
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    # A previous export's shards would be loaded alongside these.
+    stale = [out_path / _WEIGHTS_NAME, out_path / _WEIGHTS_INDEX_NAME, *out_path.glob("model-*-of-*.safetensors")]
+    for path in stale:
+        path.unlink(missing_ok=True)
+
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+    shards = iter(split.filename_to_tensors.items())
+    shard = next(shards, None)
+    pending: dict[str, np.ndarray] = {}
+    for name, held in layout.items():
+        # Replicated: every device holds the same values, concatenated along dim 0 by the composer.
+        values = parameters[name].to_numpy(ttnn.DataType.FLOAT32, composer=composer)
+        for hf_name, value in split_hf_tensors(values.reshape(-1, *values.shape[-2:])[0], held).items():
+            pending[hf_name] = value.astype(written, copy=False)
+        del values
+        # Tensors come in shard order, so a shard is complete once its last tensor is read.
+        while shard is not None and all(tensor in pending for tensor in shard[1]):
+            filename, names = shard
+            tensors = {tensor: pending.pop(tensor) for tensor in names}
+            save_file(tensors, str(out_path / filename), metadata={"format": "pt"})
+            shard = next(shards, None)
+    if split.is_sharded:
+        index = {
+            "metadata": {"total_parameters": sum(int(np.prod(shape)) for shape in shapes.values()), **split.metadata},
+            "weight_map": split.tensor_to_filename,
+        }
+        (out_path / _WEIGHTS_INDEX_NAME).write_text(json.dumps(index, indent=2, sort_keys=True) + "\n")
+    if hf_source_dir is not None:
+        for file_name in _HF_CONFIG_FILES:
+            source = Path(hf_source_dir) / file_name
+            if source.is_file():
+                shutil.copy2(source, out_path / file_name)
+    return out_path

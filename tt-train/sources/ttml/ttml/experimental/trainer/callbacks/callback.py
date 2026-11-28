@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+from typing import Any, Iterable, Union
+
+
+class Callback:
+    """Hooks into ``Trainer.train`` and ``Trainer.validate``, called in the order listed here, then the hooks
+    for a failed ``Trainer.setup`` or ``Trainer.train``.
+
+    Every hook is a no-op, so a subclass overrides only what it needs. ``CallbackHandler`` calls a hook only
+    on callbacks that have it, so a callback need not subclass this at all.
+
+    A hook may raise to end training: the exception goes to every callback's ``on_train_error`` and then out
+    of ``train()``.
+
+    A loss a hook gets (``loss``, ``window_loss``, ``val_loss``) may be a device tensor, which must not outlive
+    the device that ``trainer.cleanup`` closes. Read it with ``trainer.loss_to_float`` in the hook and keep the
+    float, not the loss. A callback that sums losses across hooks keeps the sum in ``trainer.callback_handler.state``,
+    never on itself: ``cleanup`` frees that state, while the callback's own ``on_train_error`` doesn't run if an
+    earlier callback's raises.
+    """
+
+    def on_train_start(self, trainer: Any) -> None:
+        pass
+
+    def on_train_epoch_start(self, trainer: Any) -> None:
+        pass
+
+    def on_train_batch_start(self, trainer: Any, batch: Any) -> None:
+        pass
+
+    def on_forward_start(self, trainer: Any, batch: Any) -> None:
+        pass
+
+    def on_forward_end(self, trainer: Any, loss: Any) -> None:
+        pass
+
+    def on_backward_start(self, trainer: Any, loss: Any) -> None:
+        pass
+
+    def on_backward_end(self, trainer: Any, loss: Any) -> None:
+        pass
+
+    def on_optimizer_step_start(self, trainer: Any) -> None:
+        pass
+
+    def on_optimizer_step_end(self, trainer: Any, window_loss: Any) -> None:
+        """``window_loss`` is the mean loss of the step's micro-batches, a loss to read and not keep (see above)."""
+
+    def on_step_end(self, trainer: Any, global_step: int) -> None:
+        pass
+
+    def on_train_batch_end(self, trainer: Any) -> None:
+        pass
+
+    def on_train_epoch_end(self, trainer: Any) -> None:
+        pass
+
+    def on_train_end(self, trainer: Any) -> None:
+        """Only after the loop completes; a failed or stopped run calls ``on_train_error`` instead.
+
+        If an ``on_train_end`` raises, every callback then gets ``on_train_error``, also those whose ``on_train_end``
+        already ran.
+        """
+
+    def on_validation_start(self, trainer: Any) -> None:
+        pass
+
+    def on_validation_batch_start(self, trainer: Any, batch: Any) -> None:
+        pass
+
+    def on_validation_batch_end(self, trainer: Any, batch: Any, loss: Any) -> None:
+        pass
+
+    def on_validation_end(self, trainer: Any, val_loss: Any) -> None:
+        """``val_loss`` is the mean loss of the validation batches, a loss to read and not keep (see above)."""
+
+    def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
+        """``setup`` failed and will re-raise ``exception``; ``trainer.logger`` is ``None`` if it failed first.
+
+        If it raises, the callbacks after it don't get ``on_setup_error``, and ``setup`` raises its exception, with
+        ``exception`` as its ``__context__``.
+        """
+
+    def on_train_error(self, trainer: Any, exception: BaseException) -> None:
+        """``train`` failed, was interrupted or a hook stopped it, and ``train`` will re-raise ``exception``.
+
+        If it raises, the callbacks after it don't get ``on_train_error``, and ``train`` raises its exception, with
+        ``exception`` as its ``__context__``.
+        """
+
+
+class CallbackHandler:
+    """Calls a hook on every callback that has it, in order. A hook that raises, an error hook too, stops the
+    dispatch: the exception propagates and the callbacks after it don't get the hook."""
+
+    def __init__(self, trainer: Any, callbacks: Union[Any, Iterable[Any], None] = None) -> None:
+        self.trainer = trainer
+        if callbacks is None:
+            callbacks = []
+        elif isinstance(callbacks, Callback):
+            callbacks = [callbacks]
+        self.callbacks = list(callbacks)
+        # What callbacks keep across hooks during a run, device tensors included, each under keys of its own.
+        # `Trainer.cleanup` clears it before closing the device, whichever error hooks ran.
+        self.state: dict[str, Any] = {}
+
+    def __call__(self, hook: str, *args: Any, **kwargs: Any) -> None:
+        for callback in self.callbacks:
+            method = getattr(callback, hook, None)
+            if method is not None:
+                method(self.trainer, *args, **kwargs)
