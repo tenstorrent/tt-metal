@@ -141,6 +141,43 @@ def test_ldexp_fp32(device):
     assert status
 
 
+def test_ldexp_fp32_special_values(device):
+    tiny = torch.finfo(torch.float32).tiny
+    inf, nan = float("inf"), float("nan")
+    pairs = [
+        (tiny, 128.0),
+        (-tiny, 128.0),
+        (2.0**-100, 200.0),
+        (inf, -128.0),
+        (-inf, -128.0),
+        (8.0, -128.0),
+        (3.0, -130.0),
+        (2.0**127, -150.0),
+        (2.0**100, -226.0),
+        (5.0, 3.0),
+        (0.0, 128.0),
+        (inf, -150.0),
+        (inf, inf),
+        (1.0, -inf),
+        (inf, -inf),
+        (1.0, nan),
+        (1.0, -nan),
+        (nan, 3.0),
+        (0.0, inf),
+        (-0.0, 3.0),
+    ]
+    x_torch = torch.tensor([[p[0] for p in pairs]], dtype=torch.float32)
+    y_torch = torch.tensor([[p[1] for p in pairs]], dtype=torch.float32)
+    z_torch = ttnn.get_golden_function(ttnn.ldexp)(x_torch, y_torch)
+    z_torch = torch.where(z_torch.abs() < tiny, 0.0, z_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.ldexp(x_tt, y_tt))
+    assert torch.equal(torch.isnan(tt_out), torch.isnan(z_torch)), f"{tt_out} != {z_torch}"
+    finite = ~torch.isnan(z_torch)
+    assert torch.equal(tt_out[finite], z_torch[finite]), f"{tt_out} != {z_torch}"
+
+
 def test_bias_gelu_fp32(device):
     x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
     y_torch = torch.tensor([[2, 3, 4, 5]], dtype=torch.float32)
