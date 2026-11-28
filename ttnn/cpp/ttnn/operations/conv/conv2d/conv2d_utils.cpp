@@ -1432,9 +1432,17 @@ bool auto_enable_kernel_folding(
     std::array<uint32_t, 2>& kernel_size,
     std::array<uint32_t, 2>& stride,
     std::array<uint32_t, 2>& dilation,
-    std::array<uint32_t, 4>& padding_n4) {
+    std::array<uint32_t, 4>& padding_n4,
+    sliding_window::PaddingMode padding_mode) {
     validate_stride(stride);
+    // ttnn::fold pads with zeros and leaves the folded conv with no padding, so the halo, the only step that applies
+    // padding_mode, never sees it. Padding can therefore be folded only when the mode is Zeros.
+    const bool is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
+    const bool padding_is_foldable = is_zero_padding || padding_mode == sliding_window::PaddingMode::Zeros;
     if (!enable_folding_.has_value()) {
+        if (!padding_is_foldable) {
+            return false;
+        }
         if (stride[0] != kernel_size[0] || stride[1] != kernel_size[1]) {
             return false;
         }
@@ -1450,11 +1458,16 @@ bool auto_enable_kernel_folding(
         if (input_padded_height % stride[0] != 0 || input_padded_width % stride[1] != 0) {
             return false;
         }
-        auto is_zero_padding = padding_n4[0] == 0 && padding_n4[1] == 0 && padding_n4[2] == 0 && padding_n4[3] == 0;
         return (
             (input_memory_config.is_dram() && (input_layout == Layout::ROW_MAJOR || is_zero_padding)) ||
             (input_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED));
     }
+    // With stride 1 nothing is folded (fold_input_tensor_if_required needs a stride > 1), so only check real folds.
+    const bool folds = enable_folding_.value() && (stride[0] > 1 || stride[1] > 1);
+    TT_FATAL(
+        !folds || padding_is_foldable,
+        "Conv2D kernel stride folding pads with zeros, so it does not support padding_mode=Replicate with non-zero "
+        "padding. Leave enable_kernel_stride_folding unset or set it to false.");
     return enable_folding_.value();
 }
 Tensor fold_input_tensor_if_required(
@@ -1482,7 +1495,8 @@ Tensor fold_input_tensor_if_required(
         kernel_size,
         stride,
         dilation,
-        padding_n4);
+        padding_n4,
+        conv_config.padding_mode);
 
     if (conv_config.enable_kernel_stride_folding.value() && (stride[0] > 1 || stride[1] > 1)) {
         auto folding_result = compute_kernel_stride_folding_params(
