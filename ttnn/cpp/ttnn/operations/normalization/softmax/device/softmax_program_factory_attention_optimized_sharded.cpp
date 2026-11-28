@@ -52,7 +52,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat mask_cb_data_format =
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask->dtype()) : tt::DataFormat::Float16_b;
-    const tt::DataFormat fused_attention_scale_cb_data_format = tt::DataFormat::Float16_b;
+    // The fused scale holds one scalar per tile, so it follows the input dtype like the max scaler
+    // does: a float32 input keeps a float32 scale instead of truncating it to bfloat16.
+    const tt::DataFormat fused_attention_scale_cb_data_format =
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat max_scaler_cb_data_format =
         in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const tt::DataFormat sum_scaler_cb_data_format =
