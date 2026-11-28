@@ -62,7 +62,10 @@ void kernel_main() {
     constexpr uint32_t cb_image = get_compile_time_arg_val(20);
     constexpr uint32_t cb_plan = get_compile_time_arg_val(21);
     constexpr bool kStoreDirect = get_compile_time_arg_val(22) != 0;
-    constexpr auto in_args = TensorAccessorArgs<23>();
+    // Some core of the program splits its atoms' halves over its two movers (else halves are [0, 2) everywhere,
+    // folded at compile time: the runtime half bound measured +3% on single-half cells such as f78).
+    constexpr bool kHalfSplit = get_compile_time_arg_val(23) != 0;
+    constexpr auto in_args = TensorAccessorArgs<24>();
     constexpr auto out_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t kFaceRowBytes = kFace * kElem;
@@ -82,6 +85,10 @@ void kernel_main() {
     const uint32_t out_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t atom_begin = get_arg_val<uint32_t>(0);
     const uint32_t atom_end = atom_begin + get_arg_val<uint32_t>(1);
+    // Face-column halves [half_lo, half_hi) of each atom this mover handles: [0, 2) = whole atoms; the sub-atom
+    // split (Perf 1, two_mover_split) gives both movers of a core the same atoms and mover m the half [m, m + 1).
+    const uint32_t half_lo = kHalfSplit ? get_arg_val<uint32_t>(2) : 0;
+    const uint32_t half_hi = kHalfSplit ? get_arg_val<uint32_t>(3) : 2;
 
     const auto in = TensorAccessor(in_args, in_addr, kTileBytes);
     const auto out = TensorAccessor(out_args, out_addr, kTileBytes);
@@ -115,7 +122,7 @@ void kernel_main() {
                     const uint32_t seg_end = min_u32(a1, (tc + 1) * kBOut);
                     const uint32_t nrows = seg_end - a;
                     const uint32_t halves = kWOut - kTile * tc > kFace ? 2 : 1;
-                    for (uint32_t half = 0; half < halves; ++half) {
+                    for (uint32_t half = half_lo; half < min_u32(halves, half_hi); ++half) {
                         const uint32_t stream = b0 * kWOut + kTile * tc + kFace * half;
                         const uint32_t r = stream / kWIn;
                         uint32_t c = stream - r * kWIn;
@@ -306,7 +313,7 @@ void kernel_main() {
 
                 // Face-column walk: all rows of half 0, then all rows of half 1, so consecutive output
                 // face-rows of one face column pull consecutive face-rows of one input face column.
-                for (uint32_t half = 0; half < halves; ++half) {
+                for (uint32_t half = half_lo; half < min_u32(halves, half_hi); ++half) {
                     const uint32_t n = min_u32(kFace, col_left - kFace * half);
                     const uint64_t stream = static_cast<uint64_t>(row_begin) * kWOut + kTile * tc + kFace * half;
                     const uint32_t r = static_cast<uint32_t>(stream / kWIn);
@@ -409,6 +416,10 @@ void kernel_main() {
                         if (rows == 0) {
                             continue;
                         }
+                        if (face_half < half_lo || face_half >= half_hi) {  // the partner mover's half
+                            img += rows * kFaceRowBytes;
+                            continue;
+                        }
                         const uint32_t off = face * kFaceBytes + (face < 2 ? lo : bot_row) * kFaceRowBytes;
                         const uint32_t len = rows * kFaceRowBytes;
                         if (run_len > 0 && off == run_off + run_len) {
@@ -430,7 +441,7 @@ void kernel_main() {
                         }
                         img += len;
                     }
-                    {
+                    if (run_len > 0) {
                         const uint64_t dst = out.get_noc_addr(page, run_off, noc);
                         sl[0] = run_img;
                         sl[1] = static_cast<uint32_t>(dst);

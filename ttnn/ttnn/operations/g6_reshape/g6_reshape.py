@@ -234,7 +234,7 @@ class _Plan(_CoreRangesMixin):
     max_copies: int
     grid_x: int
     num_cores: int
-    roles: tuple  # per mover: tuple of ((x, y), atom_begin, atom_count)
+    roles: tuple  # per mover: tuple of ((x, y), atom_begin, atom_count, half_lo, half_hi)
 
     @property
     def l1_bytes_per_core(self):
@@ -272,9 +272,15 @@ def _core_bytes(stage_slot, image_slot, plan):
     return MOVERS_PER_CORE * (STAGE_DEPTH * stage_slot + IMAGE_DEPTH * image_slot + plan)
 
 
-def _split_atoms(atoms_total, grid):
+def _split_atoms(atoms_total, grid, two_halves=None, atoms_share_tiles=False):
     """Atoms [0, atoms_total) over min(max_cores, atoms_total) cores taken row-major from the grid, each
-    core's range split over its movers. Returns (num_cores, roles per mover, max atoms of any mover)."""
+    core's range split over its movers. Returns (num_cores, roles per mover, max atoms of any mover).
+
+    Tile regimes pass two_halves(atom) -> bool; each role is then (xy, begin, count, half_lo, half_hi). Sub-atom
+    half split (Perf 1, two_mover_split): both movers take the core's whole atom range and mover m does face-column
+    half m. Carve-outs, each measured: atoms with one half (W_out % 32 in 1..16, only the last tile column, i.e.
+    the core's last atom) would idle mover 1 (f120 +14%); with one atom per output tile (dst H <= atom_rows) and
+    several atoms per core, both movers would walk every tile of the core (q364 +13%)."""
     max_cores = grid.x * grid.y if MAX_CORES is None else min(MAX_CORES, grid.x * grid.y)
     num_cores = min(max_cores, atoms_total)
     roles = [[] for _ in range(MOVERS_PER_CORE)]
@@ -283,9 +289,20 @@ def _split_atoms(atoms_total, grid):
         begin = i * atoms_total // num_cores
         count = (i + 1) * atoms_total // num_cores - begin
         xy = (i % grid.x, i // grid.x)
+        if (
+            two_halves is not None
+            and MOVERS_PER_CORE == 2
+            and count > 0
+            and two_halves(begin + count - 1)
+            and (count == 1 or atoms_share_tiles)
+        ):
+            for m in range(2):
+                roles[m].append((xy, begin, count, m, m + 1))
+            max_mover_atoms = max(max_mover_atoms, count)
+            continue
         for m in range(MOVERS_PER_CORE):
             share = count // MOVERS_PER_CORE + (1 if m < count % MOVERS_PER_CORE else 0)
-            roles[m].append((xy, begin, share))
+            roles[m].append((xy, begin, share) + ((0, 2) if two_halves is not None else ()))
             begin += share
             max_mover_atoms = max(max_mover_atoms, share)
     return num_cores, tuple(tuple(r) for r in roles), max_mover_atoms
@@ -328,9 +345,15 @@ def _make_plan(in_shape, out_shape, elem, grid, dram_align):
 
     # The ownership atom: rows sharing one DRAM-alignment word of a face never split across movers.
     atom_rows = max(1, dram_align // face_row_bytes)
-    atoms_total = dst.Wt * dst.B * -(-dst.H // atom_rows)
+    atoms_per_col = dst.B * -(-dst.H // atom_rows)
+    atoms_total = dst.Wt * atoms_per_col
 
-    num_cores, roles, max_mover_atoms = _split_atoms(atoms_total, grid)
+    num_cores, roles, max_mover_atoms = _split_atoms(
+        atoms_total,
+        grid,
+        two_halves=lambda a: dst.W - TILE * (a // atoms_per_col) > FACE,
+        atoms_share_tiles=dst.H > atom_rows,
+    )
 
     # Unrounded footprint is linear in atoms, so one atom gives the BB-05 cap on block_atoms.
     block_atoms, (stage_slot, image_slot, plan_bytes) = _fit_block_atoms(
@@ -541,6 +564,7 @@ def _tile_compile_args(plan, cb_stage, cb_image, cb_plan, mover):  # mover: unus
         cb_image,
         cb_plan,
         int(_store_direct(plan)),
+        int(any(role[4] - role[3] == 1 for roles in plan.roles for role in roles)),  # kHalfSplit
     ]
 
 
@@ -605,8 +629,8 @@ def _build_descriptor(plan, input_tensor, output_tensor):
         stage_bytes = (MOVERS_PER_CORE * plan.stage_bytes if mover == 0 else 0) if shared_read else plan.stage_bytes
         compile_args = [*compile_args_fn(plan, stage_cb, cb_image, cb_plan, mover), *in_accessor, *out_accessor]
         runtime_args = ttnn.RuntimeArgs()
-        for i, ((x, y), begin, count) in enumerate(plan.roles[mover]):
-            runtime_args[x][y] = plan.mover_runtime_args(mover, i) if row_major else [begin, count]
+        for i, ((x, y), *role_args) in enumerate(plan.roles[mover]):
+            runtime_args[x][y] = plan.mover_runtime_args(mover, i) if row_major else role_args
         config = ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc)
         kernels.append(
             ttnn.KernelDescriptor(
@@ -704,7 +728,7 @@ def describe_plan(input_tensor: ttnn.Tensor, shape) -> dict:
     for mover in range(MOVERS_PER_CORE):
         _, processor = MOVERS[mover]
         noc = MOVER_NOCS[mover]
-        for xy, begin, count in plan.roles[mover]:
+        for xy, begin, count, *_ in plan.roles[mover]:
             roles.append(
                 {
                     "core": xy,
