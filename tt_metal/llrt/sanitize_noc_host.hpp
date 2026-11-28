@@ -109,7 +109,8 @@ static void watcher_sanitize_host_noc(
     } else if (
         coord_found_p(soc_d.get_cores(CoreType::DRAM, CoordSystem::NOC0), core) ||
         coord_found_p(virtual_dram_cores, core)) {
-        if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core) && addr >= dram_l1_noc_offset) {
+        if (dram_l1_available && coord_found_p(virtual_dram_hw_cores, core) &&
+            (addr >= dram_l1_noc_offset || (addr <= UINT32_MAX && debug_valid_reg_addr(hal, addr, lbytes)))) {
             if (!debug_valid_dram_l1_addr(hal, addr, lbytes)) {
                 print_stack_trace();
                 TT_THROW("Host watcher: bad {} dram L1 address {}", what, noc_address(core, addr, lbytes));
