@@ -90,6 +90,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
+#include "llk_sfpu/llk_math_unary_max_min_sfpu_entry.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
@@ -315,13 +316,18 @@ void init_unary_sfpu_operation_quasar()
     {
         init_square();
     }
+    // exp/recip/rsqrt_tile_init run the op's init callback, which re-runs the common SFPU init before its constants.
+    else if constexpr (OPERATION == SfpuType::exponential)
+    {
+        exp_init<APPROX, 0x3F800000, true /* CLAMP_NEGATIVE */, is_fp32_dest_acc_en>();
+    }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        _init_rsqrt_<APPROX>();
+        rsqrt_init<APPROX>();
     }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
-        _init_reciprocal_<APPROX>();
+        recip_init<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -340,9 +346,22 @@ void init_unary_sfpu_operation_quasar()
     {
         init_typecast();
     }
-    else if constexpr (is_trig_op(OPERATION))
+    // The trig *_tile_init calls take the op's own init with the kernel's APPROX.
+    else if constexpr (OPERATION == SfpuType::sine)
     {
-        init_trigonometry<OPERATION, is_fp32_dest_acc_en>();
+        sine_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        cosine_init<APPROX>();
+    }
+    else if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
+    {
+        init_inverse_hyperbolic<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == SfpuType::atanh)
+    {
+        init_atanh<APPROX, is_fp32_dest_acc_en>();
     }
     else if constexpr (OPERATION == SfpuType::tan)
     {
@@ -839,7 +858,7 @@ void call_unary_sfpu_operation_quasar(
                 is_fp32_dest_acc_en,
                 TILE_SHAPE,
                 calculate_exponential,
-                (APPROX, is_fp32_dest_acc_en, false /*SCALE_EN*/, ITERATIONS),
+                (APPROX, is_fp32_dest_acc_en, false /*SCALE_EN*/, ITERATIONS, true /* CLAMP_NEGATIVE */),
                 dst_index,
                 vector_mode,
                 p_sfpu::kCONST_1_FP16B);
@@ -862,7 +881,16 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_relu_, (ITERATIONS), dst_index, vector_mode);
+        // relu_tile runs relu_min with a zero threshold.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            _relu_min_,
+            (sfpi::vFloat, APPROX, ITERATIONS, std::uint32_t),
+            dst_index,
+            vector_mode,
+            0 /* threshold */);
     }
     else if constexpr (OPERATION == SfpuType::lrelu)
     {
@@ -900,7 +928,14 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_sqrt_, (true /* APPROX */, ITERATIONS), dst_index, vector_mode);
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_sqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, false /* FAST_APPROX */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
@@ -917,7 +952,13 @@ void call_unary_sfpu_operation_quasar(
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         SFPU_UNARY_CALL_TINY_TILE(
-            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_rsqrt, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode);
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_rsqrt,
+            (APPROX, ITERATIONS, is_fp32_dest_acc_en, false /* FAST_APPROX */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -1007,12 +1048,13 @@ void call_unary_sfpu_operation_quasar(
 #else
         constexpr std::uint32_t UNARY_MAX_MIN_FLOAT_SCALAR = 0x00000000; // 0.0 (fp32)
 #endif
+        static_assert(ITERATIONS == 8, "unary_max_tile / unary_min_tile run the kernel with its default ITERATIONS");
         SFPU_UNARY_CALL_TINY_TILE(
             DST_SYNC,
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_unary_max_min,
-            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, DataFormat::Float32, APPROX, ITERATIONS),
+            (OPERATION == SfpuType::unary_max /* IS_MAX_OP */, APPROX),
             dst_index,
             vector_mode,
             UNARY_MAX_MIN_FLOAT_SCALAR);
@@ -1026,19 +1068,28 @@ void call_unary_sfpu_operation_quasar(
         constexpr std::uint32_t UNARY_MAX_MIN_INT32_SCALAR = 1000;
 #endif
 #ifdef SFPU_UNARY_MAX_MIN_SIGN_MAGNITUDE
-        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = true;
-#else
-        constexpr bool UNARY_MAX_MIN_SIGN_MAGNITUDE = false;
-#endif
+        // A sign-magnitude Int32 Dest has no compute API route.
         SFPU_UNARY_CALL_TINY_TILE(
             DST_SYNC,
             is_fp32_dest_acc_en,
             TILE_SHAPE,
             calculate_unary_max_min,
-            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, UNARY_MAX_MIN_SIGN_MAGNITUDE),
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, DataFormat::Int32, APPROX, ITERATIONS, true /* SIGN_MAGNITUDE_FORMAT */),
             dst_index,
             vector_mode,
             UNARY_MAX_MIN_INT32_SCALAR);
+#else
+        static_assert(ITERATIONS == 8, "unary_max_int32_tile / unary_min_int32_tile run the kernel with its default ITERATIONS");
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            TILE_SHAPE,
+            calculate_unary_max_min_int32,
+            (OPERATION == SfpuType::unary_max_int32 /* IS_MAX_OP */, false /* IS_UINT */, APPROX),
+            dst_index,
+            vector_mode,
+            UNARY_MAX_MIN_INT32_SCALAR);
+#endif
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
@@ -1050,21 +1101,9 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
-        if constexpr (TYPECAST_IN_FORMAT == DataFormat::Float32 && TYPECAST_OUT_FORMAT == DataFormat::UInt16)
-        {
-            // Dedicated TTI kernel: names the FP32 load and UInt16 store formats explicitly
-            // rather than letting HW imply them (implied SrcA/SrcB formats are always disabled,
-            // see _llk_math_srcAB_hw_configure_).
-            // Walks Dest through ADDR_MOD_7 + _incr_counters_ instead of ADDR_MOD_6.
-            SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, _calculate_typecast_fp32_to_uint16_, (ITERATIONS), dst_index, vector_mode);
-        }
-        else
-        {
-            // Same functor typecast_tile uses. UInt16 → Float32 is dispatched inside
-            // calculate_typecast to _calculate_typecast_uint16_to_fp32_.
-            SFPU_UNARY_CALL_TINY_TILE(
-                DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
-        }
+        // typecast_tile's functor for every pair; it dispatches UInt16 -> Float32 inside calculate_typecast.
+        SFPU_UNARY_CALL_TINY_TILE(
+            DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
@@ -1370,7 +1409,8 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::i0)
     {
-        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_i0, (APPROX, ITERATIONS), dst_index, vector_mode);
+        static_assert(ITERATIONS == 8, "i0_tile runs calculate_i0 with its default ITERATIONS");
+        SFPU_UNARY_CALL_TINY_TILE(DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_i0, (APPROX), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::i1)
     {
