@@ -215,8 +215,28 @@ class TestTrayPower(SensorCase):
             self.assertIsNone(sensors.Bmc().read(0x11, 0x40, sensors.STATUS_WORD))
         self.assertEqual(self.fake.calls, [])
 
+    def test_lock_held_elsewhere_says_why_in_the_skipped_row(self):
+        import fcntl
+
+        before = sensors.read_power(sensors.Bmc())
+        with open(os.environ["HSC_I2C_LOCK"], "a") as f, mock.patch.object(sensors, "LOCK_WAIT_S", 0.1):
+            fcntl.flock(f, fcntl.LOCK_EX)
+            phase, _, _ = self.judge(before)
+        check = phase.checks[0]
+        self.assertEqual((check.status, check.details), (SKIP, "skipped: I2C lock busy after 0.1 s"))
+
 
 class TestLostTrayCause(SensorCase):
+    def test_trip_and_new_flags_come_with_the_cause(self):
+        before = sensors.read_power(sensors.Bmc())
+        self.fake.set(3, 0x42, 0x7C, 0x20)  # VIN_UV_WARN alone
+        self.fake.set(3, 0x42, 0x79, 0x2000)
+        self.fake.set(2, 0x40, 0x79, 0x0050)  # OFF + IOUT_OC_FAULT
+        causes = sensors.tray_causes(sensors.read_power(sensors.Bmc()), before)
+        self.assertEqual((causes[3].trip, causes[3].new), (False, {0x42: ["VIN_UV_WARN"]}))
+        self.assertTrue(causes[2].trip)
+        self.assertEqual(causes[2].new[0x40], sensors.read_hsc(sensors.Bmc(), 2, 0x40).flags)
+
     def test_lost_tray_is_judged_power(self):
         before = sensors.read_power(sensors.Bmc())
         self.fake.set(2, 0x40, 0x79, 0x0050)  # OFF + IOUT_OC_FAULT

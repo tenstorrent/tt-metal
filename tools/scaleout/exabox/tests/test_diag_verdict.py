@@ -69,6 +69,19 @@ class TestVerdict(unittest.TestCase):
         self.assertIn("re-run", lines[2])
         self.assertEqual(lines[-1], "Final verdict: FAIL: 2 fault(s), 1 warning(s)")
 
+    def test_latch_only_power_warning_says_to_watch_the_feed(self):
+        latch = Check(
+            name="tray_power",
+            status=WARN,
+            cause="POWER",
+            ip="board",
+            parts=["0000:41:00.0 (UBB2/U1)"],
+            details="UBB2: HSC 0x40: VIN_UV_WARN set during the run",
+        )
+        line = verdict_lines(report(phase("tray_power", latch)))[0]
+        self.assertIn("| watch UBB2's 12 V feed; if its under-voltage latch sets again", line)
+        self.assertNotIn("glx_reset", line)
+
     def test_non_gating_phases_are_evidence_only(self):
         lines = verdict_lines(
             report(

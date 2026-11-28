@@ -27,6 +27,7 @@ import subprocess
 import time
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from .common import log
 from .galaxy import expected_bdf, format_bdf
@@ -103,8 +104,8 @@ class Bmc:
 
     @contextmanager
     def locked(self):
-        """Hold the box-wide I2C lock; yields False when another holder kept it past LOCK_WAIT_S,
-        or when the lock file cannot be opened (which ends the route)."""
+        """Hold the box-wide I2C lock; yields False when another holder kept it past LOCK_WAIT_S
+        or when the lock file cannot be opened (either ends the route)."""
         try:
             f = open(self.lock, "a")
         except OSError as e:
@@ -119,6 +120,7 @@ class Bmc:
                     break
                 except BlockingIOError:
                     if time.monotonic() > deadline:
+                        self.why = f"I2C lock busy after {LOCK_WAIT_S:g} s"
                         yield False
                         return
                     time.sleep(0.1)
@@ -229,29 +231,37 @@ def _tripped(h: Hsc | None) -> bool:
     return bool(h and (TRIPS & set(h.flags) or (h.vin is not None and h.vin < VIN_LOW_V)))
 
 
-def tray_causes(power: TrayPower, before: TrayPower) -> dict[int, tuple[str, str]]:
-    """tray -> (cause, why) for each tray whose reads explain a lost chip: POWER for an
+class TrayCause(NamedTuple):
+    cause: str
+    why: str
+    trip: bool  # an HSC tripped or a VR's power-good is low: the tray lost its 12 V, not just sagged
+    new: dict[int, list[str]]  # HSC address -> flags set during the run
+
+
+def tray_causes(power: TrayPower, before: TrayPower) -> dict[int, TrayCause]:
+    """tray -> TrayCause for each tray whose reads explain a lost chip: POWER for an
     HSC that tripped or latched a fault during the run (a latch already set before it
     explains nothing); POWER-DOWNSTREAM for 12 V good on both HSCs with a VR's power-good low."""
     out = {}
     for t in HSC_BUS:
         hscs = {a: power.hsc.get((t, a)) for a in HSC_ADDRS}
-        pre = {a: before.hsc.get((t, a)) for a in HSC_ADDRS}
-        bad = [
-            f"HSC {a:#04x} {h}"
-            for a, h in hscs.items()
-            if _tripped(h) or (h and set(h.flags) - set(pre[a].flags if pre[a] else ()))
-        ]
+        new = {}
+        for a, h in hscs.items():
+            pre = before.hsc.get((t, a))
+            if h and (fresh := [f for f in h.flags if f not in (pre.flags if pre else ())]):
+                new[a] = fresh
+        tripped = any(_tripped(h) for h in hscs.values())
+        bad = [f"HSC {a:#04x} {h}" for a, h in hscs.items() if _tripped(h) or new.get(a)]
         pg = power.vr_pg.get(t)
         if bad:
-            out[t] = ("POWER", f"UBB{t} 12 V: {'; '.join(bad)}")
+            out[t] = TrayCause("POWER", f"UBB{t} 12 V: {'; '.join(bad)}", tripped, new)
         elif all(hscs.values()) and pg is not None and pg != VR_PG_ALL:
             vins = ", ".join(f"{h.vin:.2f} V" for h in hscs.values() if h.vin is not None)
-            out[t] = ("POWER-DOWNSTREAM", f"UBB{t} 12 V good ({vins}) but VR power-good {pg:#04x}")
+            out[t] = TrayCause("POWER-DOWNSTREAM", f"UBB{t} 12 V good ({vins}) but VR power-good {pg:#04x}", True, new)
     return out
 
 
-def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str) -> dict[int, tuple[str, str]]:
+def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str) -> dict[int, TrayCause]:
     """Read the trays after the load, judge them against *before*, then clear the latches.
 
     One ``tray_power`` check per tray with a finding: FAIL for a tripped HSC, a low
@@ -275,24 +285,21 @@ def check_tray_power(phase: Phase, bmc: Bmc, before: TrayPower | None, keep: str
     found = False
     for t in HSC_BUS:
         notes, unread = [], []
+        cause, why, trip, new = causes.get(t, TrayCause("", "", False, {}))
         for a in HSC_ADDRS:
             pre, post = before.hsc.get((t, a)), after.hsc[(t, a)]
             if post is None:
                 unread.append(f"HSC {a:#04x} did not answer")
                 continue
-            old = set(pre.flags) if pre else set()
-            new = [f for f in post.flags if f not in old]
-            held = [f for f in post.flags if f in old]
-            if new:
+            held = [f for f in post.flags if f not in new.get(a, ())]
+            if a in new:
                 was = f"{pre.word:#06x}/{pre.inp:#04x}" if pre else "not read"
                 notes.append(
-                    f"HSC {a:#04x}: {', '.join(new)} set during the run "
+                    f"HSC {a:#04x}: {', '.join(new[a])} set during the run "
                     f"(STATUS_WORD/STATUS_INPUT {was} -> {post.word:#06x}/{post.inp:#04x})"
                 )
             if held:
                 notes.append(f"HSC {a:#04x}: {', '.join(held)} already set before the run")
-        cause, why = causes.get(t, ("", ""))
-        trip = cause == "POWER-DOWNSTREAM" or any(_tripped(after.hsc[(t, a)]) for a in HSC_ADDRS)
         if not (notes or cause or unread):
             continue
         found = True

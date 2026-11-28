@@ -6,9 +6,14 @@
 then one final line. Printed last, so the end of the log says what needs fixing."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .eth_summary import _one_line
 from .galaxy import parse_bdf_physical
 from .model import FAIL, WARN
+
+if TYPE_CHECKING:
+    from .sensors import TrayCause
 
 _LOST = "tt-smi -glx_reset and recount; if still missing, check that tray's 12 V and its host PCIe cable"
 
@@ -27,6 +32,9 @@ DO_BY_IP = {
 }
 DEFAULT_DO = "see the check's details and its log"
 
+# A tray_power WARN with a POWER cause is an under-voltage latch alone (no trip). A lost chip has its own row.
+DO_LATCH = "watch that tray's 12 V feed; if its under-voltage latch sets again, fix its bus bar or power cable"
+
 # What to do once the tray's power reads (diag/sensors.py) give the cause.
 DO_BY_CAUSE = {
     "POWER": "fix that tray's 12 V feed (bus bar, power cable, HSC), then tt-smi -glx_reset and recount",
@@ -42,9 +50,9 @@ def _lost(check: dict) -> bool:
     return check["name"] in DO_BY_CHECK or check["name"].startswith("reset_")
 
 
-def attribute_power(report: dict, causes: dict[int, tuple[str, str]]) -> None:
+def attribute_power(report: dict, causes: dict[int, TrayCause]) -> None:
     """Give each WARN/FAIL lost-chip check the cause its tray's power reads show
-    (tray -> (cause, why), from sensors.check_tray_power), with that reading first in
+    (tray -> TrayCause, from sensors.check_tray_power), with that reading first in
     its details so the one-line verdict keeps it."""
     for phase in report["phases"].values():
         for c in phase["checks"]:
@@ -52,13 +60,15 @@ def attribute_power(report: dict, causes: dict[int, tuple[str, str]]) -> None:
                 continue
             trays = sorted({pos[0] for pos in map(parse_bdf_physical, c.get("parts") or []) if pos} & set(causes))
             if trays:
-                c["cause"] = causes[trays[0]][0]
-                c["details"] = "; ".join(causes[t][1] for t in trays) + " — " + c["details"]
+                c["cause"] = causes[trays[0]].cause
+                c["details"] = "; ".join(causes[t].why for t in trays) + " — " + c["details"]
 
 
 def _do(check: dict) -> str:
     """What to do, with 'that tray' made the tray when every chip at fault is on one."""
-    if check.get("cause") in DO_BY_CAUSE:
+    if check["name"] == "tray_power" and check["status"] == WARN and check.get("cause") == "POWER":
+        do = DO_LATCH
+    elif check.get("cause") in DO_BY_CAUSE:
         do = DO_BY_CAUSE[check["cause"]]
     elif check["name"].startswith("reset_"):
         do = _LOST
