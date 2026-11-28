@@ -22,7 +22,7 @@ class TtDecoder(LightweightModule):
         self.device = device
 
         self.norm_groups = 32
-        self.norm_eps = 1e-5
+        self.norm_eps = 1e-6
 
         self.stride = (1, 1)
         self.padding = (1, 1)
