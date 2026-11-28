@@ -121,12 +121,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // An output taller than one Dest section runs as blocks of rt_block rows, one section each.
     const std::uint32_t rt_block   = matmul_rows_per_dest_section<dest_sync, is_fp32_dest_acc_en>(RT_DIM, CT_DIM);
     const std::uint32_t num_blocks = RT_DIM / rt_block;
+    // compute_kernel_hw_startup work: production runs it before the op's init, so it stays out of INIT.
+    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+    {
+        _llk_math_pack_sync_init_<dest_sync>();
+    }
     {
         START_PERF_MEASURE("INIT")
-        // Only end-to-end and math-isolate runs use the FPU→PACK dest-dvalid
-        // handshake.
-        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
+            // Math isolate keeps the FPU→PACK dest-dvalid producer setup.
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
@@ -166,11 +170,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // One Dest section per block of rt_block x CT_DIM output tiles.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR * num_blocks; loop++)
             {
+                _llk_math_wait_for_dest_available_();
                 for (std::uint32_t i = 0; i < KT_DIM; i++)
                 {
                     _llk_math_matmul_block_(CT_DIM, rt_block);
                 }
-                _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -212,10 +217,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             set_up_zero_dest_dvalid_handshake_for_pack();
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
-        {
-            set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
-        }
 
         ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(output_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
         constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
@@ -246,8 +247,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
+                    _llk_packer_wait_for_math_done_();
                     _llk_pack_matmul_(0 /*start_math_dest_tile_idx*/, block * rt_block * CT_DIM /*start_l1_tile_idx*/, output_shape);
-                    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, dest_sync, is_fp32_dest_acc_en>();
                 }
             }
         }
