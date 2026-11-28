@@ -336,6 +336,14 @@ def test_scalar_tensor_arithmetic(input_shapes, device, op_name, dtype, layout):
     output = ttnn.to_torch(ttnn_fn(scalar, input_tensor))
 
     assert_with_pcc(torch_fn(scalar, torch_input), output, 0.999)
+    # The ULP threshold was measured on TILE bf16 at [1, 1, 320, 384] (test_scalar_tensor_golden_matches_device),
+    # so only that configuration is checked here; other layouts and shapes stay PCC-only until measured on a device.
+    if dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT and input_shapes == torch.Size([1, 1, 320, 384]):
+        assert_with_ulp(
+            expected_result=torch_fn(scalar, torch_input),
+            actual_result=output,
+            ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD,
+        )
 
 
 @pytest.mark.parametrize("scalar", (7, -13, 2, 100))
@@ -458,6 +466,11 @@ def test_scalar_tensor_div_float_rounding(device, rounding_mode, ttnn_dtype, tor
     scalar = 3.14
     quotient = ttnn.to_torch(ttnn.div(scalar, input_tensor))
     assert_with_pcc(scalar / torch_input, quotient, 0.999)
+    if torch_dtype == torch.bfloat16:
+        # Same configuration as test_scalar_tensor_golden_matches_device (TILE bf16, 320x384, div by 3.14).
+        assert_with_ulp(
+            expected_result=scalar / torch_input, actual_result=quotient, ulp_threshold=_SCALAR_FIRST_ULP_THRESHOLD
+        )
 
     rounded = ttnn.to_torch(ttnn.div(scalar, input_tensor, rounding_mode=rounding_mode))
     expected = torch.floor(quotient) if rounding_mode == "floor" else torch.trunc(quotient)
