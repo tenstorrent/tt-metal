@@ -105,6 +105,10 @@ class MiniMaxH3VaeConfig:
         self.token_overlap = (-self.token_drop) % self.tokens_chunk_size
         self.frame_overlap = max(self.token_overlap * self.temporal_compression_ratio - self.frame_pre_padding, 0)
 
+    def num_decode_chunks(self, latent_frames: int) -> int:
+        """Chunks a latent this long decodes into, its last one padded up to a whole chunk."""
+        return -(-(latent_frames + self.token_drop) // self.tokens_chunk_size) - int(self.token_drop > 0)
+
     @classmethod
     def from_pretrained(cls, path: str | os.PathLike) -> "MiniMaxH3VaeConfig":
         cfg = json.loads((Path(path) / "config.json").read_text())
@@ -1643,9 +1647,7 @@ class MiniMaxH3Vae:
         ``clip_length`` frames and the last one its cross-fade tail.
         """
         config = self.config
-        num_chunks = math.ceil((latent_frames + config.token_drop) / config.tokens_chunk_size) - int(
-            config.token_drop > 0
-        )
+        num_chunks = config.num_decode_chunks(latent_frames)
         frames, ratio = num_chunks * config.clip_length + config.frame_overlap, config.spatial_compression_ratio
         host_buffers.reserve((frames, latent_height * ratio * 3 // 2, latent_width * ratio))
 
@@ -1663,7 +1665,7 @@ class MiniMaxH3Vae:
 
         num_tokens = z_BCTHW.shape[2] + config.token_drop
         pad_tokens = (-num_tokens) % chunk_size
-        num_chunks = (num_tokens + pad_tokens) // chunk_size - int(config.token_drop > 0)
+        num_chunks = config.num_decode_chunks(z_BCTHW.shape[2])
         # The pixel frames the repeated padding latents produce, cut off the end.
         intra_tail = config.clip_length % temporal_ratio
         tokens_before_pad = z_BCTHW.shape[2]
