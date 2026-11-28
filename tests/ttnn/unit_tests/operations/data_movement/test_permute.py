@@ -1156,6 +1156,26 @@ def test_permute_rm_from_folded_nd_shard_rows(device, dtype):
     assert_exact(x.permute(0, 1, 3, 2), ttnn.to_torch(output), signed_zeros=False)
 
 
+@pytest.mark.parametrize(
+    "orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+    ids=["row_major", "col_major"],
+)
+def test_transpose_wh_sharded_offset_core_grid(device, orientation):
+    torch.manual_seed(0)
+    shape = (1, 1, 128, 64)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    torch_expected = torch_input.transpose(-2, -1)
+
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 2))})
+    shard_spec = ttnn.ShardSpec(grid, (32, 64), orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    tt_output = ttnn.transpose(tt_input, -2, -1, memory_config=mem_config)
+    output_torch = ttnn.to_torch(tt_output)
+
+    assert_with_pcc(torch_expected, output_torch, 0.9999)
 # INT8 -128 regression (#67429): the Int8 CB format is sign-magnitude, so unpack/pack turned -128 into 0.
 # Tile routing (interleaved): the last-two swap (0,1,3,2) goes to ttnn::transpose, which reaches
 # TransposeWHProgramFactory; the other tile cases reach prim::permute.
