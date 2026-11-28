@@ -180,7 +180,7 @@ class DenseDecodeExpertWeights:
     tile_transposed: gate / up / down hold the GPTQ experts (dense_gptq_dir) with every tile stored transposed
     within itself (ttnn.Tile transpose_tile: the tensors' own tile spec, so ttnn.matmul transposes them back), so each
     bfloat4_b exponent group runs along K and holds those values exactly; the custom kernels reading them
-    (dense_gu_*, the grouped MoE gmoe_*) and the routed prefill (weights_tile_transposed) transpose them back too.
+    (dense_gu_*, the grouped MoE gmoe_*) and the routed prefill (weights_tile) transpose them back too.
     The routed prefill experts read gate / up / down through a page table (prefill_routed.py, TP mode)."""
 
     gate: ttnn.Tensor
