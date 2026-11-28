@@ -1,0 +1,11 @@
+# Reference environment for tests/golden/make_goldens.py: a separate venv (Python 3.12), not tt-metal's python_env.
+# These are the pins the committed test floors were set on (CPU fp32 goldens from tafsut 0.1.0 on torch 2.14.1).
+#
+#   uv venv --python 3.12 <ref-venv>
+#   uv pip install --python <ref-venv>/bin/python -r models/experimental/tafsut_forecast/tests/golden/requirements.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
+tafsut==0.1.0
+numpy==2.5.4
+safetensors==0.8.0
+huggingface-hub==2.3.0
