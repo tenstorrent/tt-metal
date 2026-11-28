@@ -1,47 +1,52 @@
 # L1 Ledger: g6_unsqueeze
 
-The schema and audits are defined in `.claude/references/l1-footprint-discipline.md`. The blocking axes come from `op_design.md` → Blocking Model: `w_tiles`, `lane`, `n_rows`, `new_axis`.
+Schema and audits: `.claude/references/l1-footprint-discipline.md`. Block axes are those of `op_design.md` → Blocking Model: `lead`, `w_tile`, `tile_half`, `face_lane`, `new_axis`.
 
-## CB table
+Inventory. Each mover needs exactly one buffer.
+- No input-row buffer: the 64-B gather lands in row 0 of the destination face slot, and the row → column move happens in place inside that slot (Rule 3, patterns 1 and 2).
+- No output buffer: the slot is the source of the face write.
+- No compute CBs: there is no compute kernel.
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
-| `cb_output_tiles` (page = `tile_bytes`) | `staging_depth_blocks * block_w_tiles` | `staging_depth_blocks * block_w_tiles` pages. At depth 2, slot `b` drains its writes while slot `b+1` receives its reads. At depth 1, `block_w_tiles` pages. Production (p1, p2): 1 page. | `{w_tiles: spans → block_w_tiles × staging_depth_blocks; lane: spans → one whole tile page (the 32 lanes land at a 64 B stride in faces 0 and 2, and the store writes the page as one 4096 B transfer); n_rows: spans → 1 (contract domain, host-validated); new_axis: none (extent 1, carries no data)}` | Float32: a dataflow-only payload that never passes through DEST (no compute kernel, so `fp32_dest_acc_en` does not apply). It is the tensor's own format, as the output ABI requires. | mover (NoC reads of the row segments, then the in-place word move) | mover (NoC whole-tile writes) | Whole kernel. A slot is live from `load_row_block(b)` until `store_block(b)`'s writes are flushed (depth 2) or barriered (`drain_stores`). | Shares with nothing, because no other CB exists. The row-segment buffer was removed by landing each segment at the base of the output face that receives it: pattern 1, pack into the destination. The move then runs in place (pattern 2), with sources `{F+4 .. F+60}` and destinations `{F+64 .. F+960}` disjoint for each `F ∈ {0, 2048}`. Capacity exceeds the 128 B of logical values per page by the transfer quantum: the store moves the whole 4096 B page in one transaction (lamp `write_shape` in `op_design.md`). |
+| `cb_mover0_face_slots` | `staging_depth · block_w_tiles · block_tile_halves` pages of `face_bytes`. Phase 0, p1 and p2: `1 · 1 · 1` = 1 page = 1024 B. | = capacity. A block's slots are gathered together, moved, and written; each slot is live from its gather until its write has left L1. With `staging_depth = 2`, two blocks are live at once by construction. | `{lead: streams → 1 (extent 1), w_tile: spans → block_w_tiles · staging_depth, tile_half: spans → block_tile_halves, face_lane: spans → face_h rows of one face (16 values in column 0), new_axis: streams → 1 (extent 1)}` | Float32. A dataflow-only payload that never passes through DEST (there is no compute kernel), so audit 2 does not apply. The output ABI is float32. | `mover0` (RISCV_1, NoC0) | `mover0` (RISCV_1, NoC0) | whole kernel run | Cannot share with `cb_mover1_face_slots`: that CB is live at the same time on another thread, and CB ownership allows one thread per role. A page is a whole face, 16× the 64 B of values it carries. Reason: transfer quantum. The output face is the smallest single write holding its 16 column-0 rows. A 64-B page would turn each face write into 16 writes (regime `column_strip_writes`, rejected). |
+| `cb_mover1_face_slots` | `staging_depth · block_w_tiles · block_tile_halves` pages of `face_bytes`. Phase 0, p1 and p2: 1 page = 1024 B. | = capacity, for the same reason as `cb_mover0_face_slots` | `{lead: streams → 1 (extent 1), w_tile: spans → block_w_tiles · staging_depth, tile_half: spans → block_tile_halves, face_lane: spans → face_h rows of one face (16 values in column 0), new_axis: streams → 1 (extent 1)}` | Float32, dataflow-only (as above) | `mover1` (RISCV_0, NoC1) | `mover1` (RISCV_0, NoC1) | whole kernel run | Cannot share with `cb_mover0_face_slots`: the two lifetimes coincide and the owning threads differ. The page is a whole face for the same transfer-quantum reason. With `movers_per_core = 1` this CB does not exist and `cb_mover0_face_slots` carries `block_tile_halves = 2`. |
 
 ## Symbol table
 
 | Symbol | Bound | Predicate / source that establishes it |
 |--------|-------|----------------------------------------|
-| `tile_bytes` | 4096 | 32×32 float32 tile, `ttnn.tile_size(ttnn.float32)`. SUPPORTED holds float32 only, and the host refuses any tile shape other than 32×32. |
-| `L1_BUDGET_BYTES` | 1347776 | contract BB-05, `docs/explorations/g6_unsqueeze/sources/local/contract.md` section 5 (`l1_free_bytes`) |
-| `max_single_block_tiles` | `floor(L1_BUDGET_BYTES / tile_bytes)` = 329 | derived from the two above |
-| `max_double_block_tiles` | `floor(L1_BUDGET_BYTES / (2 * tile_bytes))` = 164 | derived from the same two |
-| `tensor_w_tiles` | `ceil(W / 32)`, unbounded: the contract sets no upper limit on `W` | Appears in no capacity expression. It sets only the core count and the per-core extent. |
-| `core_w_tiles_max` | `ceil(tensor_w_tiles / num_work_cores)` | the larger group of `ttnn.split_work_to_cores`. It appears in no capacity expression directly. |
-| `block_w_tiles` | `core_w_tiles_max` if `core_w_tiles_max <= max_single_block_tiles`; otherwise `ceil(core_w_tiles_max / ceil(core_w_tiles_max / max_double_block_tiles))`, which is `<= 164` | `_plan()` on the host, the single source. Passed as a CT arg. |
-| `staging_depth_blocks` | 1 if `core_w_tiles_max <= max_single_block_tiles`, otherwise 2 | `_plan()` on the host, using the same predicate |
+| `face_bytes` | `face_h · face_w · elem_bytes` = 1024 | `face_h = face_w = 16` (`tile_constants.h:21-22`); `elem_bytes = 4` because SUPPORTED dtype = float32 |
+| `face_row_bytes` | `face_w · elem_bytes` = 64 | as above; must be a multiple of the 64-B DRAM read alignment (host assert) |
+| `block_w_tiles` | `1 ≤ block_w_tiles ≤ block_w_tiles_cap` | plan function: `min(max_core_w_tiles, block_w_tiles_cap)` |
+| `block_w_tiles_cap` | `floor(op_l1_budget_bytes / (movers_per_core · staging_depth · block_tile_halves · face_bytes))` = 658 at Phase 0 | L1 mechanism cap (op_design.md → Mechanism caps) |
+| `staging_depth` | ∈ {1, 2}; Phase 0 = 1 | host constant |
+| `movers_per_core` | ∈ {1, 2}; Phase 0 = 2 | host constant |
+| `block_tile_halves` | `tile_halves / movers_per_core` ∈ {2, 1}; Phase 0 = 1 | derived |
+| `op_l1_budget_bytes` | 1347776 | spec rule BB-05 (L1 the model leaves to the op) |
+| `tensor_w_tiles`, `core_w_tiles` | unbounded (W has no upper limit) | in no capacity expression. They reach the kernel only as the per-core page count, which the block loop divides into `num_blocks_this_core` blocks. |
 
 ## Total per-core footprint
 
-`L1_op = staging_depth_blocks * block_w_tiles * tile_bytes`
+`L1(core) = movers_per_core · staging_depth · block_w_tiles · block_tile_halves · face_bytes = tile_halves · staging_depth · block_w_tiles · face_bytes`
 
-- **Single-block branch** (`core_w_tiles_max <= 329`). This holds for every `W <= 32 * 329 * MAX_CORES`. Then `L1_op = core_w_tiles_max * 4096 <= 1347584 <= L1_BUDGET_BYTES`.
-- **Multi-block branch.** `L1_op = 2 * block_w_tiles * 4096 <= 2 * 164 * 4096 = 1343488 <= L1_BUDGET_BYTES`.
-- **Production.** p1 and p2 both give `1 * 1 * 4096 = 4096` B per core.
-- **Scaling.** The footprint is linear in `block_w_tiles` (the `w_tiles` extent knob) and in `staging_depth_blocks` (the depth knob). Beyond the clamp it is independent of `tensor_w_tiles`, so no unbounded op dimension appears.
+- Scales linearly with `block_w_tiles` and `staging_depth`. It does not depend on `movers_per_core`, which only redistributes the halves between RISCs, nor on any op dimension.
+- Phase 0, p1 and p2: `2 · 1 · 1 · 1024` = **2048 B** per mover core. Cores outside the mover rectangle use 0 B.
+- Largest reachable (huge W, block clamped): `2 · 1 · 658 · 1024` = 1347584 B ≤ 1347776 B.
 
 ## Data-movement budget
 
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
-| `input_tensor` | The logical row crosses once, as `2 * tensor_w_tiles` reads of 64 B = `tensor_w_tiles * 128` B (p1 2048 B, p2 1024 B). Padding rows 1..31 cross 0 times. | Only face row 0 of faces 0 and 1 is read, and it lands directly in the destination staging page, so nothing is re-read. Each tile is owned by exactly one core. | 0 |
-| `output` | once: `tensor_w_tiles` writes of 4096 B (p1 65536 B, p2 32768 B) | Every output tile is written once, as a whole page, by the core that loaded its input tile. | 0 |
+| input `x` | Once, for row 0 only: `2 · face_row_bytes` = 128 B per page, in 2 reads. p1: 2048 B of 65536 B allocated; p2: 1024 B of 32768 B. | Each face row is read once by the mover that owns its half. The 64-B read granule is exactly one face row, so no padding row (rows 1–31) crosses. | none |
+| output | Once, for faces 0 and 2 only: `2 · face_bytes` = 2048 B per page, in 2 writes. p1: 32768 B of 65536 B; p2: 16384 B of 32768 B. | Each output face that holds a value is written once from its slot. Faces 1 and 3 are pure padding and are never written. | none |
+| (core-local L1) | — | 15 word moves (60 B read, 60 B written) per (page, half), done by RISC-V loads and stores | — |
 
-Totals per call:
+Totals per tier:
 
-| Case | DRAM read | DRAM write | Cross-core | Core-local L1 (move) |
-|------|-----------|------------|------------|----------------------|
-| p1 `[1, 512]` | 2048 B (32 transactions) | 65536 B (16 transactions) | 0 | 16 × 30 word loads and stores, 30 per core |
-| p2 `[1, 256]` | 1024 B (16 transactions) | 32768 B (8 transactions) | 0 | 8 × 30 word loads and stores, 30 per core |
+| Case | DRAM | Cross-core NoC | Core-local L1 (RISC-V moves) |
+|------|------|----------------|------------------------------|
+| p1 `(1,512)` | 34816 B in 64 transactions (32 reads × 64 B, 32 writes × 1024 B) | 0 B | 1920 B read + 1920 B written over 16 cores |
+| p2 `(1,256)` | 17408 B in 32 transactions | 0 B | 960 B + 960 B over 8 cores |
 
-> Cheapest-traffic split considered: `w_tiles` across cores. Inside that split, the byte-cheapest write shape (faces 0 and 2 only) writes `tensor_w_tiles × 2048` B instead of `× 4096` B (p1: −32768 B DRAM write, +16 write transactions; p2: −16384 B, +8). Implemented: `w_tiles` across cores with whole-tile writes. The implemented split is the cheapest split: no candidate split moves fewer bytes, and none has cross-core traffic. The byte-cheaper write shape inside it trades bytes for transactions; it is recorded as perf lamp `write_shape` in `op_design.md`, not as a deferred split.
+> Cheapest-traffic split considered: `w_tile` across cores × `tile_half` across each core's two data-movement RISCs — 0 B delta per tier; it is the DRAM-boundary minimum for one-transaction face writes. Implemented: the same split, so the implemented split is the cheapest. Deferred: nothing on traffic grounds. `role_split_pipeline` (a deferred regime row) moves the same bytes and changes only which NoC carries reads and writes at DRAM-bound W, which no golden shape reaches.
