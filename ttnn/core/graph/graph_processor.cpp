@@ -1351,10 +1351,10 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
 namespace {
 
 // The capture that end_graph_capture and end_graph_capture_to_file end: the innermost GraphProcessor on this thread's
-// tracker stack. It need not be on top. The first device opened in a process pushes the device's memory tracker
-// (ShmTrackingProcessor), which stays for good, so a device opened after begin_graph_capture (as when a capture begins
-// before tt-train or a test opens its device) sits above the capture. Throws, changing nothing, when no capture is
-// active: popping the top unchecked would then remove that memory tracker.
+// tracker stack. It need not be on top. With TT_METAL_SHM_TRACKING_DISABLED=0, the first device opened in a process
+// pushes the device's memory tracker (ShmTrackingProcessor), which stays for good, so a device opened after
+// begin_graph_capture (as when a capture begins before tt-train or a test opens its device) sits above the capture.
+// Throws, changing nothing, when no capture is active: popping the top unchecked would then remove that memory tracker.
 std::shared_ptr<GraphProcessor> innermost_graph_capture() {
     const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
     for (const auto& processor : std::views::reverse(processors)) {

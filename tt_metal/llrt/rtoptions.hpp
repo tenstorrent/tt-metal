@@ -491,8 +491,7 @@ class RunTimeOptions {
 
     static const TraceAllocationOptions& get_trace_allocation_options();
 
-    // Disable shared memory tracking for tt-smi
-    bool shm_tracking_disabled = false;
+    bool shm_tracking_disabled = true;
     bool shm_verbose = false;
 
     SanitizerSettings sanitizer_settings;

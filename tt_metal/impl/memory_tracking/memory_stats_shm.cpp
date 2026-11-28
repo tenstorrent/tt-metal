@@ -27,7 +27,7 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose) :
     asic_id_(asic_id),
     device_id_(device_id),
-    // Per-PID tracking is enabled by default and disabled by TT_METAL_SHM_TRACKING_DISABLED=1.
+    // Per-PID tracking is off unless TT_METAL_SHM_TRACKING_DISABLED=0.
     // The flag is captured once at construction (passed in by Device::initialize from its
     // MetalContext's rtoptions) -- it's a process-wide debug toggle, no need to look it up
     // again per allocation.

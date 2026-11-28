@@ -6,6 +6,7 @@ set(UNIT_TESTS_DEVICE_SMOKE_SOURCES
     test_rtoptions_fw_src_brisc.cpp
     test_rtoptions_qsr_s1_simulator.cpp
     test_rtoptions_riscv_debug_info.cpp
+    test_rtoptions_shm_tracking.cpp
     test_rtoptions_simulator_dram_uncapped.cpp
     test_configure_without_launch.cpp
     test_device_cluster_api.cpp
