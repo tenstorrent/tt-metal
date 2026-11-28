@@ -370,7 +370,7 @@ def run_diag(
         else:
 
             def _retest() -> None:
-                snap_phase = run_retest(
+                snap_phases = run_retest(
                     tt_smi_path,
                     tt_metal_path,
                     plan.retest,
@@ -380,8 +380,10 @@ def run_diag(
                     dry_run,
                     logs_dir,
                     snap_out_for_resets,
+                    boots=dict(plan.retest_boots),
                 )
-                if snap_phase is not None:
+                # In round order: normalize_health_report() judges the run on the last.
+                for snap_phase in snap_phases:
                     report["phases"][snap_phase.name] = asdict(snap_phase)
 
             _guarded(retest_phase, "retest", FAIL, _retest)

@@ -271,7 +271,7 @@ run_test() {
 }
 
 # run_tests: runs one round of every per-iteration test (NOC and DIDT run once, separately, after all iterations).
-# Sets last_eth_ok, last_dram_ok, last_dram_act_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
+# Sets last_eth_ok, last_dram_ok, last_dram_act_ok, last_retention_ok, last_pcie_read_ok, last_pcie_write_ok (1=pass, 0=fail).
 # Returns 1 if any test failed, 0 otherwise.
 run_tests() {
 	failures=0
@@ -286,6 +286,12 @@ run_tests() {
 	# Boot-dependent fault: run every iteration.
 	run_test 'DRAM ACT test' env STRESS_OUT_DIR="$LOGDIR" $PYTHON -m pytest tests/dram/test_dram_act_patterns.py::test_dram_act_c3_screen -s -q -p no:randomly &&
 		last_dram_act_ok=1 || last_dram_act_ok=0
+
+	# The DRAM tests read each chunk straight back; this one writes nearly all of DRAM, then reads it 2, 4 and 6 s later.
+	# Without --skip-reset every iteration starts from a reset, so each run sees a fresh GDDR training.
+	run_test 'DRAM retention test' env RETENTION_OUT_DIR="$LOGDIR/dram_retention" PYTHONUNBUFFERED=1 \
+		$PYTHON -m pytest tests/dram/test_dram_retention.py::test_gddr_retention -s &&
+		last_retention_ok=1 || last_retention_ok=0
 
 	run_test 'PCIe read test' run_benchmark ./build/tools/mem_bench --benchmark_filter='Device Reading Host/size:1073741824/page_size:32768/readers:1/writers:0/host_copy:0/iterations:5/manual_time' --device-id=0 &&
 		last_pcie_read_ok=1 || last_pcie_read_ok=0
@@ -322,6 +328,7 @@ iterations_run=0
 eth_pass=0
 dram_pass=0
 dram_act_pass=0
+retention_pass=0
 pcie_read_pass=0
 pcie_write_pass=0
 
@@ -342,6 +349,7 @@ do
 		last_eth_ok=0
 		last_dram_ok=0
 		last_dram_act_ok=0
+		last_retention_ok=0
 		last_pcie_read_ok=0
 		last_pcie_write_ok=0
 		iteration_failures=$((iteration_failures + 1))
@@ -357,6 +365,7 @@ do
 	eth_pass=$((eth_pass + last_eth_ok))
 	dram_pass=$((dram_pass + last_dram_ok))
 	dram_act_pass=$((dram_act_pass + last_dram_act_ok))
+	retention_pass=$((retention_pass + last_retention_ok))
 	pcie_read_pass=$((pcie_read_pass + last_pcie_read_ok))
 	pcie_write_pass=$((pcie_write_pass + last_pcie_write_ok))
 	if [ "$CONTINUE_ON_FAILURE" -eq 0 ] && [ "$iteration_failures" -gt 0 ]
@@ -413,6 +422,7 @@ emit "$(printf '%-20s %s' 'Board resets:'     "$((iterations_run - reset_failure
 emit "$(printf '%-20s %s' 'Ethernet tests:'  "$eth_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM tests:'      "$dram_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'DRAM ACT test:'   "$dram_act_pass/$iterations_run iterations passed")"
+emit "$(printf '%-20s %s' 'DRAM retention:'  "$retention_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe read test:'  "$pcie_read_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'PCIe write test:' "$pcie_write_pass/$iterations_run iterations passed")"
 emit "$(printf '%-20s %s' 'NOC tests:'       "$([ "$noc_ok" -eq 1 ] && echo passed || echo failed)")"

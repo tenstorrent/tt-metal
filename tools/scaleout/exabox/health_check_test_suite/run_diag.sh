@@ -19,7 +19,8 @@
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   weekly          3 resets (1x -r then 2x -glx_reset) + full GDDR patterns + eth link_up
 #                   + eth bandwidth + didt matmul stress (pytest, galaxy mesh)
-#                   + gddr_act_c3 GDDR ACT screen (pytest); if it passed: -glx_reset + snapshot + rerun
+#                   + gddr_act_c3 GDDR ACT screen (pytest); if it and gddr_retention passed:
+#                     -glx_reset + snapshot + both again, then 3 more rounds of gddr_retention alone
 #                   + post-test -glx_reset + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   full            weekly with gddr_act_all in place of gddr_act_c3 (also rerun after -glx_reset)
@@ -51,7 +52,9 @@ Tiers:
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
-                  + didt matmul stress (pytest) + gddr_act_c3 (pytest, rerun after -glx_reset if it passed)
+                  + didt matmul stress (pytest) + gddr_act_c3 (pytest)
+                  + if gddr_act_c3 and gddr_retention passed: both rerun after -glx_reset,
+                    then gddr_retention 3 more times, each after -glx_reset
                   + post-test reset + triage + QSFP tests
   full            weekly with gddr_act_all in place of gddr_act_c3
                   + sys-triage: everything, for the logs on a DIIM ticket
